@@ -13,20 +13,20 @@ uniform sampler2D depth_tex : hint_depth_texture, repeat_disable, filter_nearest
 uniform sampler2D foam_tex : repeat_enable, filter_linear_mipmap_anisotropic;
 
 group_uniforms water;
-uniform vec3 deep_color : source_color = vec3(0.012, 0.16, 0.25);
-uniform vec3 scatter_color : source_color = vec3(0.03, 0.50, 0.52);
-uniform vec3 sss_color : source_color = vec3(0.10, 0.95, 0.70);
+uniform vec3 deep_color : source_color = vec3(0.0, 0.20, 0.34);
+uniform vec3 scatter_color : source_color = vec3(0.0, 0.58, 0.60);
+uniform vec3 sss_color : source_color = vec3(0.16, 0.95, 0.72);
 uniform vec3 absorption = vec3(0.42, 0.085, 0.07); // per metre
-uniform float turbidity = 0.16;       // how fast the body colour builds with depth
+uniform float turbidity = 0.12;       // how fast the body colour builds with depth
 uniform float refraction_strength = 0.35;
 uniform float sss_strength = 1.0;
-uniform float reflectivity = 1.0;
+uniform float reflectivity = 0.75;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.95, 0.98, 0.96);
-uniform float foam_crest_start = 0.80; // Jacobian below this starts to foam
-uniform float foam_crest_full = 0.42;
+uniform float foam_crest_start = 0.92; // Jacobian below this starts to foam
+uniform float foam_crest_full = 0.62;
 uniform float foam_scale = 0.085;
-uniform float shore_foam_depth = 0.9;
+uniform float shore_foam_depth = 1.3;
 group_uniforms sun;
 uniform float glint_sharpness = 900.0;
 uniform float glint_strength = 6.0;
@@ -102,9 +102,18 @@ void fragment() {
 	vec2 r1 = texture(detail_tex, v_rest * 0.110 + vec2(0.031, 0.017) * sea_time).rg;
 	vec2 r2 = texture(detail_tex, v_rest.yx * 0.041 + vec2(-0.012, 0.019) * sea_time).rg;
 	vec2 r3 = texture(detail_tex, v_rest * 0.0113 + vec2(0.004, -0.003) * sea_time).rg;
-	vec2 ripple = (r1 - 0.5) * 0.9 + (r2 - 0.5) * 1.2 + (r3 - 0.5) * 1.0;
-	float ripple_amt = mix(0.16, 0.42, storm);
-	vec3 N = normalize(n_geo + vec3(ripple.x, 0.0, ripple.y) * ripple_amt);
+	float fine = smoothstep(0.35, 0.03, fp);
+	vec2 rip_fine = (r1 - 0.5) * fine;
+	vec2 ripple = rip_fine * 0.8 + (r2 - 0.5) * 1.2 * smoothstep(1.2, 0.1, fp) + (r3 - 0.5) * 1.0;
+	// wind patches: gusts roughen the water in slow-moving blotches
+	float gust = texture(foam_tex, v_rest * 0.0037 + vec2(0.0011, 0.0007) * sea_time).g;
+	gust = smoothstep(0.2, 0.8, gust);
+	float ripple_amt = mix(0.14, 0.36, storm) * mix(0.45, 1.5, gust);
+	// calm seas get their swell slopes exaggerated for shading only, so long
+	// low waves still read as forms (no height is added)
+	float exag = mix(1.8, 1.0, smoothstep(0.0, 0.6, storm));
+	vec3 n_shade = normalize(vec3(n_geo.x * exag, n_geo.y, n_geo.z * exag));
+	vec3 N = normalize(n_shade + vec3(ripple.x, 0.0, ripple.y) * ripple_amt);
 	float rough_var = lost_var + 0.0006 + 0.0025 * storm;
 
 	vec3 L = normalize(sun_dir);
@@ -146,16 +155,22 @@ void fragment() {
 		behind *= 1.0 + caus * 1.6 * smoothstep(0.0, 0.3, L.y) * (sun_light.g + 0.1);
 
 		// crest mask: pinched and high water is thin, so light gets through
-		float amp_ref = max(sea_amp_scale * 1.6, 0.3);
-		float crest = clamp((1.0 - jac) * 1.6, 0.0, 1.0) * 0.6 + smoothstep(0.1, 1.0, v_height / amp_ref) * 0.6;
+		float amp_ref = max(sea_amp_scale * 2.3, 0.3);
+		float h_rel = v_height / amp_ref;
+		float crest = clamp((1.0 - jac) * 1.8, 0.0, 1.0) * 0.55 + smoothstep(0.15, 1.1, h_rel) * 0.65;
 		crest = clamp(crest, 0.0, 1.0);
 		float facing = 1.0 - max(dot(N, V), 0.0);
 		float back_lit = pow(max(dot(V, -normalize(L + N * 0.35)), 0.0), 3.0);
-		vec3 body = mix(deep_color, scatter_color, clamp(0.10 + 0.55 * crest + 0.30 * facing * facing, 0.0, 1.0)) * light;
-		body += sss_color * sun_light * sss_strength * crest * (0.10 + 1.1 * back_lit) * (0.35 + 0.65 * facing);
+		// slopes turned to the light are brighter, troughs sink into the deep colour
+		float slope_light = dot(n_shade, normalize(L + vec3(0.0, 0.6, 0.0)));
+		float k = 0.08 + 0.34 * smoothstep(-0.9, 1.1, h_rel) + 0.30 * crest + 0.25 * facing * facing;
+		k *= mix(1.0, 0.15, smoothstep(100.0, 1200.0, dist));
+		vec3 body = mix(deep_color, scatter_color, clamp(k, 0.0, 1.0)) * light * mix(0.70, 1.20, smoothstep(0.80, 1.0, slope_light));
+		body += sss_color * sss_strength * crest * (light * 0.40 + sun_light * 1.2 * back_lit) * (0.35 + 0.65 * facing);
 
 		// depth-based absorption: shallows stay see-through and turquoise
-		float path = thick + vdepth * 0.6;
+		// mostly vertical depth, so shallows stay clear even at grazing view angles
+		float path = vdepth * 1.5 + min(thick, 10.0) * 0.12;
 		vec3 trans = exp(-absorption * path);
 		float fill = 1.0 - exp(-turbidity * path);
 		vec3 shallow_tint = scatter_color * light * 0.9;
@@ -173,11 +188,13 @@ void fragment() {
 
 		// --- stylized sun glint: a crisp core plus a soft sheen, widened by roughness
 		vec3 H = normalize(L + V);
-		float ndh = max(dot(N, H), 0.0);
+		// sparkle normal: extra fine ripples so the glint breaks into glitter
+		vec3 n_spark = normalize(N + vec3(rip_fine.x, 0.0, rip_fine.y) * 1.1 + vec3(r2.x - 0.5, 0.0, r2.y - 0.5) * 0.5);
+		float ndh = max(dot(n_spark, H), 0.0);
 		float sharp = 1.0 / (1.0 / glint_sharpness + rough_var * 2.2);
 		float core = pow(ndh, sharp);
-		float glint = smoothstep(0.35, 0.75, core) * (glint_sharpness / (sharp + glint_sharpness)) * 2.0;
-		glint += pow(ndh, sharp * 0.12) * 0.18;
+		float glint = smoothstep(0.30, 0.60, core) * (glint_sharpness / (sharp + glint_sharpness)) * 2.0;
+		glint += pow(max(dot(N, H), 0.0), sharp * 0.2) * 0.05;
 		col += sun_light * glint * glint_strength * (0.2 + 0.8 * fres) * smoothstep(-0.02, 0.05, L.y);
 
 		// --- foam: breaking crests (Jacobian) with a lagged copy for trails
@@ -185,8 +202,8 @@ void fragment() {
 		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac);
 		float j1 = sea_jacobian_lod(v_rest, sea_time - 1.1, max(fp * 2.5, 5.0));
 		float j2 = sea_jacobian_lod(v_rest, sea_time - 2.6, max(fp * 2.5, 5.0));
-		float f_trail = max(smoothstep(foam_crest_start, foam_crest_full, j1 + 0.03) * 0.62,
-				smoothstep(foam_crest_start, foam_crest_full, j2 + 0.05) * 0.36);
+		float f_trail = max(smoothstep(foam_crest_start, foam_crest_full, j1 + 0.02) * 0.72,
+				smoothstep(foam_crest_start, foam_crest_full, j2 + 0.04) * 0.46);
 		float crest_foam = max(f_now, f_trail);
 		// wind streaks: a little standing foam in rough weather
 		float blot = texture(foam_tex, v_rest * 0.013 + vec2(0.002, 0.001) * sea_time).g;
@@ -196,8 +213,9 @@ void fragment() {
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
 		float vd0 = max(v_world.y - sw0.y, 0.0);
 		float shore = 1.0 - smoothstep(0.0, shore_foam_depth, vd0);
-		float band = 0.5 + 0.5 * sin(vd0 * 9.0 / shore_foam_depth + sea_time * 1.6 + blot * 5.0);
-		float shore_foam = shore * shore * (0.55 + 0.45 * band) + smoothstep(0.22, 0.0, vd0) * 0.6;
+		// wash lines sweeping in towards the beach, plus a solid lip at contact
+		float band = 0.5 + 0.5 * sin(vd0 * 11.0 / shore_foam_depth + sea_time * 1.3 + blot * 6.0);
+		float shore_foam = shore * (0.25 + 0.75 * band * band) * 0.9 + smoothstep(0.30, 0.0, vd0) * 0.75;
 		shore_foam *= step(scene_z, surf_z + 60.0);
 
 		vec2 fuv = v_rest * foam_scale;
@@ -209,7 +227,7 @@ void fragment() {
 		// thin foam lets the water colour through: reads as paint, not as noise
 		col = mix(col, foam_lit, foam * 0.92);
 
-		alpha_edge = smoothstep(0.0, 0.10, thick0);
+		alpha_edge = smoothstep(0.0, 0.06, thick0);
 		col = mix(texture(screen_tex, SCREEN_UV).rgb, col, alpha_edge);
 
 		// --- fade into the sky at the horizon
@@ -222,7 +240,8 @@ void fragment() {
 		vec3 T = refract(I, Nd, 1.333);
 		float cos_i = max(dot(V, Nd), 0.0);
 		vec3 Rd = reflect(I, Nd);
-		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * 0.9;
+		// the mirror outside Snell's window: reflects the deep, shaded by the waves
+		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * (0.55 + 1.6 * pow(1.0 - abs(Rd.y), 3.0));
 		if (dot(T, T) < 1e-5) {
 			col = mirror; // total internal reflection outside Snell's window
 		} else {
@@ -248,7 +267,7 @@ void fragment() {
 		// foam seen from below reads as a darker, soft patch
 		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac);
 		col *= 1.0 - 0.45 * f_now;
-		col = uw_apply(col, dist, I);
+		col = uw_apply(col, dist, I) + uw_shafts(cam, I, dist, FRAGCOORD.xy);
 	}
 	ALBEDO = col;
 }

@@ -11,9 +11,7 @@ render_mode unshaded, depth_test_disabled, depth_draw_never, cull_disabled, fog_
 uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linear;
 uniform sampler2D depth_tex : hint_depth_texture, repeat_disable, filter_nearest;
 uniform float waterline_active = 0.0; // 1 while the camera is close to the surface
-uniform float shaft_strength = 0.55;
-uniform float caustic_strength = 1.4;
-uniform int shaft_steps = 10;
+uniform float caustic_strength = 0.9;
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -58,24 +56,7 @@ void fragment() {
 	}
 	col = uw_apply(col, dist, dir);
 
-	// sun shafts: march the view ray, look each sample up in the caustic field
-	float tmax = min(dist, 36.0);
-	float jitter = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-	float shaft = 0.0;
-	for (int i = 0; i < shaft_steps; i++) {
-		float t = (float(i) + jitter) / float(shaft_steps) * tmax;
-		vec3 p = cam + dir * t;
-		float d = -p.y;
-		if (d > 0.0) {
-			vec2 q = p.xz + L.xz * (d / sun_up);
-			float a = textureLod(detail_tex, q * 0.031 + vec2(0.006, 0.004) * sea_time, 2.0).b;
-			float b = textureLod(detail_tex, q.yx * 0.023 - vec2(0.005, 0.007) * sea_time + 0.5, 2.0).b;
-			shaft += (a + b) * (a + b) * exp(-d * 0.09) * exp(-t * 0.07);
-		}
-	}
-	shaft *= tmax / float(shaft_steps) * 0.09;
-	float toward = 0.35 + 0.65 * pow(max(dot(dir, L), 0.0), 2.0);
-	col += uw_fog_color * sun_light * shaft * shaft_strength * toward * smoothstep(0.0, 0.25, L.y);
+	col += uw_shafts(cam, dir, dist, FRAGCOORD.xy);
 
 	// waterline: a thin dark-then-bright lip where the surface meets the lens
 	col = mix(base, col, cover);

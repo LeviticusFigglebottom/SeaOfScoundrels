@@ -59,10 +59,10 @@ def equalize(a):
 
 def ripple_normal(rng):
     # Wind chop: mid and high frequencies, slightly sharpened crests.
-    h1, gx1, gy1 = periodic_waves(rng, 48, 3, 14, 1.1)
-    h2, gx2, gy2 = periodic_waves(rng, 64, 12, 40, 1.3)
-    gx = gx1 + 0.55 * gx2
-    gy = gy1 + 0.55 * gy2
+    h1, gx1, gy1 = periodic_waves(rng, 40, 2, 9, 1.0)
+    h2, gx2, gy2 = periodic_waves(rng, 48, 8, 22, 1.3)
+    gx = gx1 + 0.30 * gx2
+    gy = gy1 + 0.30 * gy2
     # Texture-space slope -> normal. Scale picked so slopes use the 8-bit range well.
     sc = 0.5 / np.percentile(np.hypot(gx, gy), 99.5)
     nx = np.clip(-gx * sc, -1, 1)

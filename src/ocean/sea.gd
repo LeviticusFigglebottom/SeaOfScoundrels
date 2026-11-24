@@ -44,7 +44,7 @@ const WAVE_TABLE: Array[Array] = [
 
 ## Calm-to-storm amplitude multipliers, blended by Weather.storminess.
 ## Calm: a gentle long swell about 1 m high. Storm: 6 to 12 m seas.
-const AMP_CALM := 0.5
+const AMP_CALM := 0.65
 const AMP_STORM := 2.6
 
 ## Seconds of wave time. Host-owned.

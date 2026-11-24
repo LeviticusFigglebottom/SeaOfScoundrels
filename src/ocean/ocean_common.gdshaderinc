@@ -11,8 +11,10 @@ global uniform vec3 ambient_color;
 uniform sampler2D detail_tex : repeat_enable, filter_linear_mipmap_anisotropic;
 
 uniform vec3 uw_fog_color : source_color = vec3(0.02, 0.36, 0.42);
-uniform vec3 uw_extinction = vec3(0.20, 0.075, 0.062); // per metre, red dies first
+uniform vec3 uw_extinction = vec3(0.150, 0.050, 0.040); // per metre, red dies first
 uniform float uw_cam_depth = 0.0; // metres the camera is below the surface (>0 under)
+uniform float uw_shaft_strength = 2.6;
+uniform int uw_shaft_steps = 10;
 
 // Analytic sky used for reflections and the Snell window.
 vec3 ocean_sky(vec3 dir) {
@@ -40,11 +42,37 @@ vec3 uw_ambient(vec3 dir) {
 	float deep = exp(-max(uw_cam_depth, 0.0) * 0.035);
 	// A soft bloom of light around the refracted sun direction.
 	float toward_sun = pow(max(dot(dir, normalize(sun_dir + vec3(0.0, 1.2, 0.0))), 0.0), 6.0);
-	return uw_fog_color * light * deep * (mix(0.30, 1.15, up * up) + 0.5 * toward_sun);
+	return uw_fog_color * light * deep * (mix(0.30, 1.35, up * up) + 0.8 * toward_sun);
 }
 
 // Fog a colour seen through d metres of water along dir.
 vec3 uw_apply(vec3 col, float d, vec3 dir) {
 	vec3 tr = exp(-uw_extinction * d);
 	return col * tr + uw_ambient(dir) * (1.0 - tr);
+}
+
+// Sun shafts seen from under water: march the view ray and look each sample up
+// in a soft, slowly drifting light field projected along the sun direction.
+// Both the underwater pass and the surface underside add this, so they match.
+vec3 uw_shafts(vec3 cam, vec3 dir, float dist, vec2 frag) {
+	vec3 L = normalize(sun_dir);
+	float sun_up = max(L.y, 0.2);
+	float tmax = min(dist, 40.0);
+	float jitter = fract(52.9829189 * fract(dot(frag, vec2(0.06711056, 0.00583715))));
+	float shaft = 0.0;
+	for (int i = 0; i < uw_shaft_steps; i++) {
+		float t = (float(i) + jitter) / float(uw_shaft_steps) * tmax;
+		vec3 p = cam + dir * t;
+		float d = -p.y;
+		if (d > 0.0) {
+			vec2 q = p.xz + L.xz * (d / sun_up);
+			float a = textureLod(detail_tex, q * 0.037 + vec2(0.006, 0.004) * sea_time, 2.5).b;
+			float b = textureLod(detail_tex, q.yx * 0.029 - vec2(0.005, 0.007) * sea_time + 0.5, 2.5).b;
+			float beam = smoothstep(0.10, 0.55, a + b);
+			shaft += beam * exp(-d * 0.10) * exp(-t * 0.06);
+		}
+	}
+	shaft *= tmax / float(uw_shaft_steps) * 0.11;
+	float toward = 0.30 + 0.70 * pow(max(dot(dir, L), 0.0), 2.0);
+	return uw_fog_color * ocean_sun_light() * shaft * uw_shaft_strength * toward * smoothstep(0.0, 0.25, L.y);
 }

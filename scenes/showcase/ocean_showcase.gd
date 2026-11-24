@@ -8,6 +8,7 @@ extends Node3D
 ##   amp=<float>     override Sea.amp_scale
 ##   t=<seconds>     starting wave time
 ##   scale=<0.25..1> 3D render scale (faster software captures)
+##   clock=<seconds> start the scripted camera this far into its move
 ##   wire=1          wireframe ocean (mesh inspection)
 
 const ISLAND_POS := Vector3(70.0, 0.0, -60.0)
@@ -25,7 +26,7 @@ const LOOKS := {
 	"noon": {
 		"elev": 52.0, "azim": 35.0, "storm": 0.0,
 		"sun": Color(1.0, 0.96, 0.86), "sun_energy": 1.25,
-		"horizon": Color(0.62, 0.80, 0.92), "zenith": Color(0.13, 0.36, 0.78),
+		"horizon": Color(0.52, 0.76, 0.93), "zenith": Color(0.07, 0.30, 0.74),
 		"ambient": Color(0.42, 0.55, 0.68),
 	},
 	"sunset": {
@@ -36,9 +37,9 @@ const LOOKS := {
 	},
 	"storm": {
 		"elev": 28.0, "azim": 60.0, "storm": 1.0,
-		"sun": Color(0.55, 0.62, 0.60), "sun_energy": 0.7,
-		"horizon": Color(0.36, 0.43, 0.42), "zenith": Color(0.10, 0.14, 0.16),
-		"ambient": Color(0.26, 0.33, 0.33),
+		"sun": Color(0.78, 0.84, 0.80), "sun_energy": 0.9,
+		"horizon": Color(0.47, 0.55, 0.53), "zenith": Color(0.13, 0.18, 0.21),
+		"ambient": Color(0.34, 0.42, 0.43),
 	},
 }
 
@@ -71,6 +72,7 @@ func _ready() -> void:
 		Sea.amp_scale = float(_args["amp"])
 		Weather.storminess = inverse_lerp(Sea.AMP_CALM, Sea.AMP_STORM, Sea.amp_scale)
 	Sea.time = float(_args.get("t", "40.0"))
+	_clock = float(_args.get("clock", "0.0"))
 
 	_cam = Camera3D.new()
 	_cam.fov = 65.0
@@ -293,8 +295,8 @@ func _update_camera() -> void:
 			_look(p, ISLAND_POS + Vector3(-36.0, 0.0, 12.0))
 		"underwater":
 			# over the island's slope, looking up towards the sun and the surface
-			var p := ISLAND_POS + Vector3(-52.0 + t * 0.5, -3.6 + t * 0.15, 20.0)
-			_look(p, ISLAND_POS + Vector3(-36.0, 1.0 + t * 0.3, 6.0))
+			var p := ISLAND_POS + Vector3(-57.0 + t * 0.5, -2.4 + t * 0.1, 22.0)
+			_look(p, ISLAND_POS + Vector3(-45.0, 4.5 + t * 0.2, 12.0))
 		"waterline":
 			# lens bobbing through the surface
 			var p := ISLAND_POS + Vector3(-50.0, 0.0, 24.0)
