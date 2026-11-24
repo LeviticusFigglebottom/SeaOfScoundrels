@@ -14,13 +14,14 @@ SEED = 1717
 DECK_Y = 1.1          # main deck
 QDECK_Y = 2.0         # quarterdeck (aft of QDECK_Z)
 QDECK_Z = 3.0
-HOLD_Y = -0.6         # hold floor (one constant: stairs, table, props and collision follow it)
+HOLD_Y = float(os.environ.get('SLOOP_HOLD_Y', '-0.6'))   # hold floor per spec. Everything below deck follows this one value
+                      # (stairs, table and bilge markers, props, ribs, collision). -0.85 gives 1.85 m headroom under the main deck.
 MAST_Z = -1.0
 YARD_Y = 9.0
 MAST_TOP = DECK_Y + 14.0
 TH = 0.16             # hull plank thickness
 STATIONS = {
-    "Station_Bilge": ((0, -0.6, -2.1), 0),            # extra (not in the spec): the bail/pump spot in the hold
+    "Station_Bilge": ((0, HOLD_Y, -2.1), 0),            # extra (not in the spec): the bail/pump spot in the hold
 
     "Station_Helm": ((0, 2.0, 5.2), 0),
     "Station_SailLength": ((-1.9, 1.1, 0.5), 0),
@@ -28,7 +29,7 @@ STATIONS = {
     "Station_Anchor": ((0, 1.1, -4.6), 0),
     "Station_CannonPort": ((-2.0, 1.1, -1.5), 90),        # yaw so that -Z faces -X
     "Station_CannonStarboard": ((2.0, 1.1, -1.5), -90),   # -Z faces +X
-    "Station_MapTable": ((0, -0.6, 2.5), 0),
+    "Station_MapTable": ((0, HOLD_Y, 2.5), 0),
     "Station_Ladder_Port": ((-2.3, 0, 2.0), 0),
     "Station_Ladder_Starboard": ((2.3, 0, 2.0), 0),
 }
@@ -765,7 +766,7 @@ def build_hull(mb):
             x = hull_b(2.0, y)
             cbox(mb, (sg * (x + 0.07), y, 2.0), (0.14, 0.07, 0.62), 'wood', C_CREAM if y > 0.1 else C_DARK, 0.02)
         for dz in (-0.33, 0.33):
-            pts = [(sg * (hull_b(2.0, y) + 0.03), y, 2.0 + dz) for y in (-0.4, 0.0, 0.4, 0.8, 1.26)]
+            pts = [(sg * (hull_b(2.0, y) + 0.03), y, 2.0 + dz) for y in (-0.4, 0.0, 0.4, 0.8, 1.14)]
             tube(mb, pts, 0.035, 5, 'wood', C_DARK)
     # catheads
     for sg in (-1, 1):
@@ -1041,11 +1042,11 @@ def build_props_deck(mb):
 
 def build_props_hold(mb):
     y = HOLD_Y
-    barrel(mb, (-0.85, y, -3.6), 0.33, 0.9); barrel(mb, (-0.1, y, -3.8), 0.33, 0.9, tone=C_DARK); barrel(mb, (0.75, y, -3.55), 0.3, 0.85)
-    barrel(mb, (-0.45, y + 0.9, -3.75), 0.27, 0.75, band=C_BRASS)
-    barrel(mb, (1.0, y + 0.31, -2.4), 0.3, 0.85, R('Y', 20) @ R('X', 90))          # one on its side
-    crate(mb, (-1.0, y, -2.4), (0.7, 0.6, 0.7), R('Y', 8)); crate(mb, (-0.95, y + 0.6, -2.42), (0.5, 0.4, 0.5), R('Y', -15), C_HULL)
-    crate(mb, (0.95, y, 4.3), (0.6, 0.5, 0.55), R('Y', -6)); barrel(mb, (-0.8, y, 4.5), 0.28, 0.8)
+    barrel(mb, (-0.52, y, -3.5), 0.33, 0.9); barrel(mb, (0.18, y, -3.85), 0.33, 0.9, tone=C_DARK); barrel(mb, (0.7, y, -3.25), 0.3, 0.85)
+    barrel(mb, (-0.17, y + 0.9, -3.7), 0.27, 0.75, band=C_BRASS)
+    barrel(mb, (0.8, y + 0.31, -2.75), 0.3, 0.85, R('Y', 20) @ R('X', 90))          # one on its side
+    crate(mb, (-0.85, y, -2.5), (0.7, 0.6, 0.7), R('Y', 8)); crate(mb, (-0.82, y + 0.6, -2.52), (0.5, 0.4, 0.5), R('Y', -15), C_HULL)
+    crate(mb, (0.3, y, 4.85), (0.55, 0.45, 0.5), R('Y', -6)); barrel(mb, (-0.3, y, 4.75), 0.26, 0.75)
     rope_coil(mb, (-1.0, y, 1.2), 0.25, 3)
     # hammock under the quarterdeck, a touch of life
     pts = [(-1.0, 0.95, 5.2 - 0.0), (-0.5, 0.62, 5.25), (0.0, 0.52, 5.3), (0.5, 0.62, 5.25), (1.0, 0.95, 5.2)]
@@ -1412,6 +1413,8 @@ def build_sail_furled(mb):
             k1 = (k + 1) % segs
             uv = lambda ii, kk: (0.03 + 0.94 * ii / n, 0.845 + 0.13 * kk / segs)
             mb.f([ids[i][k], ids[i][k1], ids[i + 1][k1], ids[i + 1][k]], 'canvas', [col(k), col(k + 1), col(k + 1), col(k)], [uv(i, k), uv(i, k + 1), uv(i + 1, k + 1), uv(i + 1, k)], True)
+    for ring, ii in ((ids[0], 0), (ids[-1], n)):
+        mb.f(ring if ii else ring[::-1], 'canvas', (0.85, 0.83, 0.8), [(0.5, 0.9)] * segs, False)
     for i in range(3, n, 6):                                                   # gaskets round sail and yard
         x = (-1 + 2 * i / n) * 3.05
         pts = [(x, YARD_Y - 0.14 + 0.29 * cos(a * pi / 6), z0 + 0.03 + 0.2 * sin(a * pi / 6)) for a in range(13)]
@@ -1607,7 +1610,7 @@ def build_collision():
     slab('col_quarterdeck', deck_outline(QDECK_Y - 0.12, QDECK_Y, QDECK_Z - 0.06, zq1, 10, 1.0), QDECK_Y - 0.12, QDECK_Y)
     slab('col_hold_floor', deck_outline(HOLD_Y - 0.06, HOLD_Y, -4.3, 5.75, 16, 1.0), HOLD_Y - 0.2, HOLD_Y)
     # stairs as ramps
-    col_piece('col_stairs_quarter', [(sx * 0.66, y, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, 1.9), (DECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z - 0.2))])
+    col_piece('col_stairs_quarter', [(sx * 0.66, y, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, 1.9), (DECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z - 0.03))])
     zt, zbm = hz1 - 0.02, hz0 + 0.05
     col_piece('col_stairs_hold', [(sx * 0.58, y + dy, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, zt), (HOLD_Y, zbm)) for dy in (0.0, -0.16)])
     # quarterdeck break: bulkhead (above the main deck) and front rail either side of the stairs
@@ -1777,6 +1780,14 @@ def main():
     pd = MB('Props_Deck'); build_props_deck(pd); build(pd)
     ph = MB('Props_Hold'); build_props_hold(ph); build(ph)
     build_collision()
+    # rope attachment helpers: clews ride on the Sail (they follow furl scaling and trim), sheets end at the winches
+    for name, p, par in (('Clew_Port', sail_point(-1, 1), 'Sail'), ('Clew_Starboard', sail_point(1, 1), 'Sail'),
+                         ('SheetPoint_Port', Vector((-1.83, DECK_Y + 0.62, 0.5)), None), ('SheetPoint_Starboard', Vector((1.83, DECK_Y + 0.62, 0.5)), None),
+                         ('AnchorCablePoint', Vector((1.62, ytop(-5.1) + 0.1, -5.1)), None)):
+        e = bpy.data.objects.new(name, None); e.empty_display_size = 0.2
+        if par: e.parent = OBJS[par][0]; e.location = conv(p - Vector((0, YARD_Y, MAST_Z)))
+        else: e.location = conv(p)
+        bpy.context.scene.collection.objects.link(e)
     for name, (p, yaw) in STATIONS.items():
         e = bpy.data.objects.new(name, None); e.empty_display_size = 0.3
         e.location = conv(p); e.rotation_euler = (0, 0, radians(yaw))

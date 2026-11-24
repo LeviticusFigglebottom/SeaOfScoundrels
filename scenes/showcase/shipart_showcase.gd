@@ -1,6 +1,6 @@
 extends Node3D
 ## Ship art showcase: loads the generated sloop, lights it, and runs a scripted camera.
-## User args (after `--`): shot=orbit|deck|helm|hold|bow|far|collision|stern|top|cannon|bowdeck|side  col=hide|solid|wire
+## User args (after `--`): shot=orbit|deck|helm|hold|bow|far|collision|stern|top|cannon|bowdeck|side|free (eye=x,y,z look=x,y,z)  col=hide|solid|wire
 ## lod=1 (show sloop_lod.glb instead)  furled=1 (Sail_Furled instead of Sail)  damage=1 (show Hole_* and HolePatch_01..05)
 ## r=<orbit radius> h=<orbit height> dist=<far distance> fov=<far fov> ssao=0|1
 ## dur=<seconds for one camera pass, default 2>  capsules=0|1 (1.8 m scale figures)  water=0|1
@@ -54,6 +54,8 @@ func _ready() -> void:
 			l.light_energy = 1.6 if String(n.name).contains("Hold") else 0.6
 			l.omni_range = 7.0
 			l.shadow_enabled = String(n.name) == "Lantern_Hold"
+			l.shadow_bias = 0.12
+			l.shadow_normal_bias = 2.0
 			n.add_child(l)
 	if opts.get("print", "0") == "1":
 		for n in ship.get_children():
@@ -193,6 +195,10 @@ func _update_camera() -> void:
 		"orbit", "collision":
 			var r := float(opts.get("r", "19"))
 			_look(Vector3(sin(a) * r, float(opts.get("h", "7.5")), cos(a) * r), Vector3(0, 5.6, -1.2), 55.0)
+		"free":  # eye=x,y,z look=x,y,z
+			var e: PackedStringArray = String(opts.get("eye", "0,3,10")).split(",")
+			var l: PackedStringArray = String(opts.get("look", "0,1,0")).split(",")
+			_look(Vector3(float(e[0]), float(e[1]), float(e[2])), Vector3(float(l[0]), float(l[1]), float(l[2])), float(opts.get("fov", "75")))
 		"side":
 			_look(Vector3(lerpf(10.0, -10.0, f), 2.2, lerpf(-4.0, 4.0, f)), Vector3(0, 0.6, 0), 60.0)
 		"cannon":
