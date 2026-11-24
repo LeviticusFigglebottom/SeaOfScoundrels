@@ -11,7 +11,7 @@ extends Node3D
 ##   clock=<seconds> start the scripted camera this far into its move
 ##   wire=1          wireframe ocean (mesh inspection)
 
-const ISLAND_POS := Vector3(70.0, 0.0, -60.0)
+const ISLAND_POS := Vector3(150.0, 0.0, -150.0)
 
 var _args: Dictionary = {}
 var _shot: String = "calm"
@@ -20,6 +20,7 @@ var _floaters: Array[Dictionary] = []
 var _clock: float = 0.0
 var _env: Environment
 var _sun: DirectionalLight3D
+var _lagoon: bool = false
 
 # Per-shot look: sun elevation/azimuth (degrees), colours, storminess.
 const LOOKS := {
@@ -64,10 +65,14 @@ func _ready() -> void:
 	var storm: float = LOOKS[look_name]["storm"]
 	if _shot == "swell":
 		storm = 0.35
-	if _shot == "shore" or _shot == "underwater" or _shot == "waterline":
-		storm = 0.08
 	Weather.storminess = storm
 	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, storm)
+	if _shot == "shore" or _shot == "underwater" or _shot == "waterline":
+		# a sheltered lagoon: less swell than the open sea's calm, so the rocks
+		# and the beach keep a steady waterline
+		Sea.amp_scale = 0.4
+		Sea.set_physics_process(false)
+		_lagoon = true
 	if _args.has("amp"):
 		Sea.amp_scale = float(_args["amp"])
 		Weather.storminess = inverse_lerp(Sea.AMP_CALM, Sea.AMP_STORM, Sea.amp_scale)
@@ -90,6 +95,8 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_clock += delta
+	if _lagoon:
+		Sea.time += delta  # Sea's own tick is off so it does not ease amp_scale back
 	_update_camera()
 	_update_floaters()
 
