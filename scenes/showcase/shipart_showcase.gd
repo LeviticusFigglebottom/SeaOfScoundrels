@@ -1,6 +1,8 @@
 extends Node3D
 ## Ship art showcase: loads the generated sloop, lights it, and runs a scripted camera.
-## User args (after `--`): shot=orbit|deck|helm|hold|bow|far|collision|stern|top  col=hide|solid|wire
+## User args (after `--`): shot=orbit|deck|helm|hold|bow|far|collision|stern|top|cannon|bowdeck|side  col=hide|solid|wire
+## lod=1 (show sloop_lod.glb instead)  furled=1 (Sail_Furled instead of Sail)  damage=1 (show Hole_* and HolePatch_01..05)
+## r=<orbit radius> h=<orbit height> dist=<far distance> fov=<far fov> ssao=0|1
 ## dur=<seconds for one camera pass, default 2>  capsules=0|1 (1.8 m scale figures)  water=0|1
 ## print=1 dumps node positions (to verify station markers and pivots).
 
@@ -21,14 +23,29 @@ func _ready() -> void:
 	shot = opts.get("shot", "orbit")
 	dur = float(opts.get("dur", "2"))
 	col_mode = opts.get("col", "solid" if shot == "collision" else "hide")
-	ship = (load(SLOOP) as PackedScene).instantiate()
+	var path := SLOOP if opts.get("lod", "0") == "0" else "res://assets/generated/ship/sloop_lod.glb"
+	ship = (load(path) as PackedScene).instantiate()
 	add_child(ship)
+	var furled: bool = opts.get("furled", "0") == "1"
+	var damage: bool = opts.get("damage", "0") == "1"
+	for n in ship.get_children():
+		var nm := String(n.name)
+		if nm.begins_with("mask_"):
+			n.visible = false
+		elif nm == "Sail_Furled":
+			n.visible = furled
+		elif nm == "Sail":
+			n.visible = not furled
+		elif nm.begins_with("HolePatch_"):
+			n.visible = damage and nm.right(2).to_int() <= 5
+		elif nm.begins_with("Hole_"):
+			n.visible = damage
 	_setup_collision_view()
 	_setup_env()
 	if opts.get("water", "0" if shot == "hold" else "1") == "1":
 		_add_water()
 	if opts.get("capsules", "1") == "1":
-		for p in [Vector3(0.9, 1.1, -2.6), Vector3(0.0, 2.0, 5.95), Vector3(0.75, -0.6, 3.5), Vector3(-1.0, -0.6, 0.4)]:
+		for p in [Vector3(0.9, 1.1, -2.6), Vector3(0.0, 2.0, 5.95), Vector3(0.75, -0.6, 3.5), Vector3(-1.05, -0.6, 0.3)]:
 			_add_capsule(p)
 	for n in ship.get_children():
 		if n.name.begins_with("Lantern_"):
@@ -45,7 +62,7 @@ func _ready() -> void:
 				print("%-26s pos %s  fwd %s  %s" % [n.name, (n as Node3D).global_position.snapped(Vector3.ONE * 0.001), fwd.snapped(Vector3.ONE * 0.01), n.get_class()])
 		var tris := 0
 		for n in ship.find_children("*", "MeshInstance3D", true, false):
-			if not n.name.begins_with("col_"):
+			if not (n.name.begins_with("col_") or n.name.begins_with("mask_")):
 				var m: Mesh = n.mesh
 				for s in m.get_surface_count():
 					tris += m.surface_get_array_index_len(s) / 3 if m.surface_get_array_index_len(s) > 0 else m.surface_get_array_len(s) / 3
@@ -142,10 +159,10 @@ func _add_water() -> void:
 	pm.size = Vector2(6000, 6000)
 	mi.mesh = pm
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.03, 0.45, 0.52, 0.8)
+	m.albedo_color = Color(0.05, 0.55, 0.6, 0.8)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.roughness = 0.12
-	m.metallic = 0.2
+	m.roughness = 0.55
+	m.metallic = 0.0
 	mi.material_override = m
 	add_child(mi)
 
@@ -176,6 +193,14 @@ func _update_camera() -> void:
 		"orbit", "collision":
 			var r := float(opts.get("r", "19"))
 			_look(Vector3(sin(a) * r, float(opts.get("h", "7.5")), cos(a) * r), Vector3(0, 5.6, -1.2), 55.0)
+		"side":
+			_look(Vector3(lerpf(10.0, -10.0, f), 2.2, lerpf(-4.0, 4.0, f)), Vector3(0, 0.6, 0), 60.0)
+		"cannon":
+			var eye5 := Vector3(lerpf(-0.3, 0.6, f), 1.1 + 1.62, lerpf(-0.2, -3.0, f))
+			_look(eye5, Vector3(1.5, 1.55, -1.6), 75.0)
+		"bowdeck":
+			var eye6 := Vector3(lerpf(-0.6, 0.6, f), 1.1 + 1.62, -2.6)
+			_look(eye6, Vector3(0, 1.9, -5.6), 80.0)
 		"top":
 			_look(Vector3(0.01, 30, 0.5), Vector3(0, 0, 0), 40.0)
 		"deck":
