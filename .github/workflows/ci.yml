@@ -10,12 +10,18 @@ jobs:
       - name: Install Godot
         run: |
           GVF=$(cat .godot-version); GV=${GVF%-*}; GF=${GVF#*-}
-          curl -fsSL -o godot.zip "https://downloads.godotengine.org/?version=$GV&flavor=$GF&slug=linux.x86_64.zip&platform=linux.64"
+          # GitHub release mirror first (the website download endpoint rejects CI runners), website as fallback.
+          fetch() {
+            curl -fsSL -o "$2" "https://github.com/godotengine/godot-builds/releases/download/$GVF/Godot_v${GVF}_$1" \
+              || curl -fsSL -A "Mozilla/5.0" -o "$2" "https://downloads.godotengine.org/?version=$GV&flavor=$GF&slug=$1&platform=$3"
+          }
+          fetch linux.x86_64.zip godot.zip linux.64
           unzip -q godot.zip
-          sudo mv Godot_v$GV-${GF}_linux.x86_64 /usr/local/bin/godot
-          curl -fsSL -o tpl.tpz "https://downloads.godotengine.org/?version=$GV&flavor=$GF&slug=export_templates.tpz&platform=templates"
+          sudo mv Godot_v${GVF}_linux.x86_64 /usr/local/bin/godot
+          fetch export_templates.tpz tpl.tpz templates
           mkdir -p ~/.local/share/godot/export_templates/$GV.$GF
           unzip -q -j tpl.tpz 'templates/linux_release.x86_64' 'templates/linux_debug.x86_64' -d ~/.local/share/godot/export_templates/$GV.$GF
+          godot --version
       - name: Import
         run: godot --headless --path . --import || true
       - name: Tests
