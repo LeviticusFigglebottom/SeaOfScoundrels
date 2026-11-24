@@ -60,6 +60,14 @@ Damage: `apply_hull_damage(world_pos: Vector3, radius: float)` creates a hole; `
 Pawns ride moving ships: while standing on a `Ship`, motion is solved in the ship's local frame so a rolling deck never throws or jitters the pawn.
 Controllers: `PlayerController` (local input, first-person camera), `CrewBrain` (AI crew), `EnemyBrain`.
 
+As built (see `src/characters/pawn.gd` header for the full list): signals `died()`, `damaged(amount, from)`, `landed`, `jumped`, `mode_changed`, `station_changed`, `carried_changed`; methods `board(ship_body, local_feet)`, `teleport`, `enter_station`, `leave_station`, `drive_station`, `pick_up`, `drop_carried`, `heal`, `revive`, `get_world_velocity`. `Ladder` (`src/characters/ladder.gd`) is a climb area: local +Y up, +Z out of the hull. `Carryable` (`src/core/carryable.gd`) is the haulable base; containers implement `accept_carryable(item) -> bool`.
+
+Integration rules for anything a pawn rides:
+- The body is in group `ship`, on layer 2, and its `collision_mask` must NOT include layer 3 (pawns), or a pawn can shove the hull.
+- Stations have an `Interactable` child (or one whose `target` is the station). `stand_point` is local to the station node.
+- Spawn with `pawn.board(ship, local_pos)`; AI brains set intent fields with `process_physics_priority < 0`.
+- Below deck the pawn auto-crouches (the sloop's hold has about 1.6 m of headroom; that is intended for a small ship).
+
 `Interactable extends Area3D` (`class_name Interactable`, `src/core/interactable.gd`): `prompt: String`, `signal interacted(pawn)`, `can_interact(pawn) -> bool`.
 
 ## Collision layers
