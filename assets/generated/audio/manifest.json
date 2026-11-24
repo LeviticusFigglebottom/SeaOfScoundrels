@@ -1,0 +1,513 @@
+{
+	"ambience": {
+		"below_deck": {
+			"about": "hold interior: timbers working, water on the hull",
+			"file": "ambience/below_deck.ogg",
+			"loop": true,
+			"lufs": -27.0
+		},
+		"hull_wash": {
+			"about": "water rushing past the hull; scales with ship speed",
+			"file": "ambience/hull_wash.ogg",
+			"loop": true,
+			"lufs": -27.0
+		},
+		"rain": {
+			"about": "steady rain with near drops",
+			"file": "ambience/rain.ogg",
+			"loop": true,
+			"lufs": -25.0
+		},
+		"sea_calm": {
+			"about": "gentle wash and laps; fades out as sea state rises",
+			"file": "ambience/sea_calm.ogg",
+			"loop": true,
+			"lufs": -27.0
+		},
+		"sea_rough": {
+			"about": "heavy rollers breaking; fades in with sea state",
+			"file": "ambience/sea_rough.ogg",
+			"loop": true,
+			"lufs": -21.0
+		},
+		"shore_surf": {
+			"about": "surf breaking on a beach, four waves per loop",
+			"file": "ambience/shore_surf.ogg",
+			"loop": true,
+			"lufs": -23.0
+		},
+		"underwater": {
+			"about": "muffled rumble, pressure tones, bubbles",
+			"file": "ambience/underwater.ogg",
+			"loop": true,
+			"lufs": -24.0
+		},
+		"wind_light": {
+			"about": "soft moving air; low wind",
+			"file": "ambience/wind_light.ogg",
+			"loop": true,
+			"lufs": -28.0
+		},
+		"wind_storm": {
+			"about": "howling gusts and singing rigging; high wind",
+			"file": "ambience/wind_storm.ogg",
+			"loop": true,
+			"lufs": -21.0
+		}
+	},
+	"sfx": {
+		"anchor_drop": {
+			"bus": "SFX",
+			"files": [
+				"sfx/anchor_drop_1.wav",
+				"sfx/anchor_drop_2.wav"
+			],
+			"lufs": -19,
+			"max_distance": 120,
+			"unit_size": 8
+		},
+		"anchor_splash": {
+			"bus": "SFX",
+			"files": [
+				"sfx/anchor_splash_1.wav",
+				"sfx/anchor_splash_2.wav"
+			],
+			"lufs": -16,
+			"max_distance": 120,
+			"unit_size": 8
+		},
+		"bucket_splash": {
+			"bus": "SFX",
+			"files": [
+				"sfx/bucket_splash_1.wav",
+				"sfx/bucket_splash_2.wav",
+				"sfx/bucket_splash_3.wav"
+			],
+			"lufs": -20,
+			"max_distance": 40,
+			"unit_size": 4
+		},
+		"burp": {
+			"bus": "Voice",
+			"files": [
+				"sfx/burp_1.wav",
+				"sfx/burp_2.wav",
+				"sfx/burp_3.wav"
+			],
+			"lufs": -19,
+			"max_distance": 25,
+			"unit_size": 3
+		},
+		"cannon_fire": {
+			"bus": "SFX",
+			"files": [
+				"sfx/cannon_fire_1.wav",
+				"sfx/cannon_fire_2.wav",
+				"sfx/cannon_fire_3.wav"
+			],
+			"lufs": -12,
+			"max_distance": 1500,
+			"unit_size": 40
+		},
+		"cannonball_whistle": {
+			"bus": "SFX",
+			"files": [
+				"sfx/cannonball_whistle_1.wav",
+				"sfx/cannonball_whistle_2.wav",
+				"sfx/cannonball_whistle_3.wav"
+			],
+			"lufs": -20,
+			"max_distance": 120,
+			"unit_size": 8
+		},
+		"capstan_clank": {
+			"bus": "SFX",
+			"files": [
+				"sfx/capstan_clank_1.wav",
+				"sfx/capstan_clank_2.wav",
+				"sfx/capstan_clank_3.wav",
+				"sfx/capstan_clank_4.wav"
+			],
+			"lufs": -24,
+			"max_distance": 50,
+			"unit_size": 5
+		},
+		"chest_thump": {
+			"bus": "SFX",
+			"files": [
+				"sfx/chest_thump_1.wav",
+				"sfx/chest_thump_2.wav",
+				"sfx/chest_thump_3.wav"
+			],
+			"lufs": -23,
+			"max_distance": 35,
+			"unit_size": 4
+		},
+		"coin_jingle": {
+			"bus": "SFX",
+			"files": [
+				"sfx/coin_jingle_1.wav",
+				"sfx/coin_jingle_2.wav",
+				"sfx/coin_jingle_3.wav",
+				"sfx/coin_jingle_4.wav"
+			],
+			"lufs": -23,
+			"max_distance": 25,
+			"unit_size": 3
+		},
+		"crew_shout": {
+			"bus": "Voice",
+			"files": [
+				"sfx/crew_shout_1.wav",
+				"sfx/crew_shout_2.wav",
+				"sfx/crew_shout_3.wav"
+			],
+			"lufs": -17,
+			"max_distance": 80,
+			"unit_size": 6
+		},
+		"dig_sand": {
+			"bus": "SFX",
+			"files": [
+				"sfx/dig_sand_1.wav",
+				"sfx/dig_sand_2.wav",
+				"sfx/dig_sand_3.wav",
+				"sfx/dig_sand_4.wav"
+			],
+			"lufs": -22,
+			"max_distance": 30,
+			"unit_size": 3
+		},
+		"footstep_sand": {
+			"bus": "SFX",
+			"files": [
+				"sfx/footstep_sand_1.wav",
+				"sfx/footstep_sand_2.wav",
+				"sfx/footstep_sand_3.wav",
+				"sfx/footstep_sand_4.wav",
+				"sfx/footstep_sand_5.wav",
+				"sfx/footstep_sand_6.wav"
+			],
+			"lufs": -29,
+			"max_distance": 18,
+			"unit_size": 2.5
+		},
+		"footstep_water": {
+			"bus": "SFX",
+			"files": [
+				"sfx/footstep_water_1.wav",
+				"sfx/footstep_water_2.wav",
+				"sfx/footstep_water_3.wav",
+				"sfx/footstep_water_4.wav",
+				"sfx/footstep_water_5.wav",
+				"sfx/footstep_water_6.wav"
+			],
+			"lufs": -27,
+			"max_distance": 20,
+			"unit_size": 2.5
+		},
+		"footstep_wood": {
+			"bus": "SFX",
+			"files": [
+				"sfx/footstep_wood_1.wav",
+				"sfx/footstep_wood_2.wav",
+				"sfx/footstep_wood_3.wav",
+				"sfx/footstep_wood_4.wav",
+				"sfx/footstep_wood_5.wav",
+				"sfx/footstep_wood_6.wav"
+			],
+			"lufs": -27,
+			"max_distance": 20,
+			"unit_size": 2.5
+		},
+		"grog_gulp": {
+			"bus": "Voice",
+			"files": [
+				"sfx/grog_gulp_1.wav",
+				"sfx/grog_gulp_2.wav",
+				"sfx/grog_gulp_3.wav"
+			],
+			"lufs": -23,
+			"max_distance": 18,
+			"unit_size": 2.5
+		},
+		"hammer_plank": {
+			"bus": "SFX",
+			"files": [
+				"sfx/hammer_plank_1.wav",
+				"sfx/hammer_plank_2.wav",
+				"sfx/hammer_plank_3.wav",
+				"sfx/hammer_plank_4.wav"
+			],
+			"lufs": -25,
+			"max_distance": 60,
+			"unit_size": 5
+		},
+		"hit_flesh": {
+			"bus": "SFX",
+			"files": [
+				"sfx/hit_flesh_1.wav",
+				"sfx/hit_flesh_2.wav",
+				"sfx/hit_flesh_3.wav",
+				"sfx/hit_flesh_4.wav"
+			],
+			"lufs": -24,
+			"max_distance": 35,
+			"unit_size": 4
+		},
+		"hold_slosh": {
+			"bus": "SFX",
+			"files": [
+				"sfx/hold_slosh_1.wav",
+				"sfx/hold_slosh_2.wav",
+				"sfx/hold_slosh_3.wav",
+				"sfx/hold_slosh_4.wav"
+			],
+			"lufs": -24,
+			"max_distance": 25,
+			"unit_size": 3
+		},
+		"hull_creak": {
+			"bus": "SFX",
+			"files": [
+				"sfx/hull_creak_1.wav",
+				"sfx/hull_creak_2.wav",
+				"sfx/hull_creak_3.wav",
+				"sfx/hull_creak_4.wav",
+				"sfx/hull_creak_5.wav"
+			],
+			"lufs": -24,
+			"max_distance": 40,
+			"unit_size": 4
+		},
+		"hull_impact": {
+			"bus": "SFX",
+			"files": [
+				"sfx/hull_impact_1.wav",
+				"sfx/hull_impact_2.wav",
+				"sfx/hull_impact_3.wav"
+			],
+			"lufs": -15,
+			"max_distance": 300,
+			"unit_size": 15
+		},
+		"lantern_click": {
+			"bus": "SFX",
+			"files": [
+				"sfx/lantern_click_1.wav",
+				"sfx/lantern_click_2.wav"
+			],
+			"lufs": -26,
+			"max_distance": 15,
+			"unit_size": 2
+		},
+		"parry_ring": {
+			"bus": "SFX",
+			"files": [
+				"sfx/parry_ring_1.wav",
+				"sfx/parry_ring_2.wav"
+			],
+			"lufs": -17,
+			"max_distance": 60,
+			"unit_size": 5
+		},
+		"pistol_shot": {
+			"bus": "SFX",
+			"files": [
+				"sfx/pistol_shot_1.wav",
+				"sfx/pistol_shot_2.wav",
+				"sfx/pistol_shot_3.wav"
+			],
+			"lufs": -13,
+			"max_distance": 400,
+			"unit_size": 20
+		},
+		"rope_creak": {
+			"bus": "SFX",
+			"files": [
+				"sfx/rope_creak_1.wav",
+				"sfx/rope_creak_2.wav",
+				"sfx/rope_creak_3.wav",
+				"sfx/rope_creak_4.wav"
+			],
+			"lufs": -26,
+			"max_distance": 25,
+			"unit_size": 3
+		},
+		"sail_fill": {
+			"bus": "SFX",
+			"files": [
+				"sfx/sail_fill_1.wav",
+				"sfx/sail_fill_2.wav",
+				"sfx/sail_fill_3.wav"
+			],
+			"lufs": -18,
+			"max_distance": 90,
+			"unit_size": 8
+		},
+		"sail_flap": {
+			"bus": "SFX",
+			"files": [
+				"sfx/sail_flap_1.wav",
+				"sfx/sail_flap_2.wav",
+				"sfx/sail_flap_3.wav",
+				"sfx/sail_flap_4.wav"
+			],
+			"lufs": -20,
+			"max_distance": 70,
+			"unit_size": 6
+		},
+		"seagull": {
+			"bus": "SFX",
+			"files": [
+				"sfx/seagull_1.wav",
+				"sfx/seagull_2.wav",
+				"sfx/seagull_3.wav",
+				"sfx/seagull_4.wav"
+			],
+			"lufs": -25,
+			"max_distance": 200,
+			"unit_size": 12
+		},
+		"skeleton_rattle": {
+			"bus": "SFX",
+			"files": [
+				"sfx/skeleton_rattle_1.wav",
+				"sfx/skeleton_rattle_2.wav",
+				"sfx/skeleton_rattle_3.wav",
+				"sfx/skeleton_rattle_4.wav"
+			],
+			"lufs": -21,
+			"max_distance": 35,
+			"unit_size": 4
+		},
+		"splash_large": {
+			"bus": "SFX",
+			"files": [
+				"sfx/splash_large_1.wav",
+				"sfx/splash_large_2.wav",
+				"sfx/splash_large_3.wav"
+			],
+			"lufs": -16,
+			"max_distance": 200,
+			"unit_size": 10
+		},
+		"splash_small": {
+			"bus": "SFX",
+			"files": [
+				"sfx/splash_small_1.wav",
+				"sfx/splash_small_2.wav",
+				"sfx/splash_small_3.wav",
+				"sfx/splash_small_4.wav"
+			],
+			"lufs": -24,
+			"max_distance": 30,
+			"unit_size": 3
+		},
+		"spyglass_slide": {
+			"bus": "SFX",
+			"files": [
+				"sfx/spyglass_slide_1.wav",
+				"sfx/spyglass_slide_2.wav"
+			],
+			"lufs": -26,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"sword_clash": {
+			"bus": "SFX",
+			"files": [
+				"sfx/sword_clash_1.wav",
+				"sfx/sword_clash_2.wav",
+				"sfx/sword_clash_3.wav",
+				"sfx/sword_clash_4.wav"
+			],
+			"lufs": -20,
+			"max_distance": 60,
+			"unit_size": 5
+		},
+		"sword_swing": {
+			"bus": "SFX",
+			"files": [
+				"sfx/sword_swing_1.wav",
+				"sfx/sword_swing_2.wav",
+				"sfx/sword_swing_3.wav",
+				"sfx/sword_swing_4.wav"
+			],
+			"lufs": -23,
+			"max_distance": 25,
+			"unit_size": 3
+		},
+		"thunder_far": {
+			"bus": "SFX",
+			"files": [
+				"sfx/thunder_far_1.wav",
+				"sfx/thunder_far_2.wav"
+			],
+			"lufs": -22,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"thunder_near": {
+			"bus": "SFX",
+			"files": [
+				"sfx/thunder_near_1.wav",
+				"sfx/thunder_near_2.wav"
+			],
+			"lufs": -13,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"ui_back": {
+			"bus": "SFX",
+			"files": [
+				"sfx/ui_back_1.wav"
+			],
+			"lufs": -24,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"ui_open": {
+			"bus": "SFX",
+			"files": [
+				"sfx/ui_open_1.wav",
+				"sfx/ui_open_2.wav"
+			],
+			"lufs": -27,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"ui_select": {
+			"bus": "SFX",
+			"files": [
+				"sfx/ui_select_1.wav"
+			],
+			"lufs": -24,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"ui_tick": {
+			"bus": "SFX",
+			"files": [
+				"sfx/ui_tick_1.wav",
+				"sfx/ui_tick_2.wav",
+				"sfx/ui_tick_3.wav"
+			],
+			"lufs": -28,
+			"max_distance": 0,
+			"unit_size": 0
+		},
+		"wheel_creak": {
+			"bus": "SFX",
+			"files": [
+				"sfx/wheel_creak_1.wav",
+				"sfx/wheel_creak_2.wav",
+				"sfx/wheel_creak_3.wav",
+				"sfx/wheel_creak_4.wav"
+			],
+			"lufs": -26,
+			"max_distance": 25,
+			"unit_size": 3
+		}
+	}
+}
