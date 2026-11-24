@@ -1,0 +1,30 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test-and-export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot
+        run: |
+          GV=$(cut -d- -f1 .godot-version)
+          curl -fsSL -o godot.zip "https://downloads.godotengine.org/?version=$GV&flavor=stable&slug=linux.x86_64.zip&platform=linux.64"
+          unzip -q godot.zip
+          sudo mv Godot_v$GV-stable_linux.x86_64 /usr/local/bin/godot
+          curl -fsSL -o tpl.tpz "https://downloads.godotengine.org/?version=$GV&flavor=stable&slug=export_templates.tpz&platform=templates"
+          mkdir -p ~/.local/share/godot/export_templates/$GV.stable
+          unzip -q -j tpl.tpz 'templates/linux_release.x86_64' 'templates/linux_debug.x86_64' -d ~/.local/share/godot/export_templates/$GV.stable
+      - name: Import
+        run: godot --headless --path . --import || true
+      - name: Tests
+        run: tools/test.sh
+      - name: Export Linux
+        run: |
+          mkdir -p build/linux
+          godot --headless --path . --export-release "Linux" build/linux/sea_of_scoundrels.x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sea-of-scoundrels-linux
+          path: build/linux

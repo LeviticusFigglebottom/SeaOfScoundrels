@@ -1,0 +1,64 @@
+; Engine configuration file. Edited by hand; keep sections sorted.
+config_version=5
+
+[application]
+
+config/name="Sea of Scoundrels"
+config/description="A stylized PvE pirate sandbox with AI crew."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[autoload]
+
+InputSetup="*res://src/core/input_setup.gd"
+Net="*res://src/net/net.gd"
+Weather="*res://src/sky/weather.gd"
+Sea="*res://src/ocean/sea.gd"
+Game="*res://src/core/game.gd"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+common/physics_ticks_per_second=60
+
+[rendering]
+
+anti_aliasing/quality/msaa_3d=1
+
+[shader_globals]
+
+sea_time={
+"type": "float",
+"value": 0.0
+}
+sea_amp_scale={
+"type": "float",
+"value": 1.0
+}
+sun_dir={
+"type": "vec3",
+"value": Vector3(0.3, 0.8, 0.3)
+}
+sun_color={
+"type": "vec3",
+"value": Vector3(1, 0.95, 0.85)
+}
+sky_horizon_color={
+"type": "vec3",
+"value": Vector3(0.7, 0.8, 0.9)
+}
+sky_zenith_color={
+"type": "vec3",
+"value": Vector3(0.2, 0.4, 0.8)
+}
+ambient_color={
+"type": "vec3",
+"value": Vector3(0.4, 0.5, 0.6)
+}
