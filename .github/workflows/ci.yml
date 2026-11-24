@@ -9,13 +9,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Godot
         run: |
-          GV=$(cut -d- -f1 .godot-version)
-          curl -fsSL -o godot.zip "https://downloads.godotengine.org/?version=$GV&flavor=stable&slug=linux.x86_64.zip&platform=linux.64"
+          GVF=$(cat .godot-version); GV=${GVF%-*}; GF=${GVF#*-}
+          curl -fsSL -o godot.zip "https://downloads.godotengine.org/?version=$GV&flavor=$GF&slug=linux.x86_64.zip&platform=linux.64"
           unzip -q godot.zip
-          sudo mv Godot_v$GV-stable_linux.x86_64 /usr/local/bin/godot
-          curl -fsSL -o tpl.tpz "https://downloads.godotengine.org/?version=$GV&flavor=stable&slug=export_templates.tpz&platform=templates"
-          mkdir -p ~/.local/share/godot/export_templates/$GV.stable
-          unzip -q -j tpl.tpz 'templates/linux_release.x86_64' 'templates/linux_debug.x86_64' -d ~/.local/share/godot/export_templates/$GV.stable
+          sudo mv Godot_v$GV-${GF}_linux.x86_64 /usr/local/bin/godot
+          curl -fsSL -o tpl.tpz "https://downloads.godotengine.org/?version=$GV&flavor=$GF&slug=export_templates.tpz&platform=templates"
+          mkdir -p ~/.local/share/godot/export_templates/$GV.$GF
+          unzip -q -j tpl.tpz 'templates/linux_release.x86_64' 'templates/linux_debug.x86_64' -d ~/.local/share/godot/export_templates/$GV.$GF
       - name: Import
         run: godot --headless --path . --import || true
       - name: Tests

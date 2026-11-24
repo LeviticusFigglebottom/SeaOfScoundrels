@@ -3,7 +3,7 @@
 Read this before touching code. These contracts let workstreams land independently.
 
 ## Conventions
-- Godot 4.7.2, GDScript, typed where practical. Forward+ renderer, Jolt physics, 60 Hz physics tick.
+- Godot 4.8 beta 5, GDScript, typed where practical. Forward+ renderer, Jolt physics, 60 Hz physics tick.
 - Units are metres, seconds, kilograms. **-Z is forward**, +Y up, +X starboard (right).
 - Sea level is world Y = 0 at rest.
 - Layout: `src/<system>/` code, scenes and shaders; `scenes/` top-level and showcase scenes; `assets/generated/` generator outputs (committed); `tools/` generators and scripts; `tests/` headless tests.
