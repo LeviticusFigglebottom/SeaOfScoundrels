@@ -33,7 +33,7 @@ const LOOKS := {
 		"ambient": Color(0.42, 0.55, 0.68),
 	},
 	"sunset": {
-		"elev": 5.5, "azim": 0.0, "storm": 0.3,
+		"elev": 5.5, "azim": 0.0, "storm": 0.5,
 		"sun": Color(1.0, 0.50, 0.18), "sun_energy": 1.3,
 		"horizon": Color(1.0, 0.56, 0.26), "zenith": Color(0.20, 0.22, 0.50),
 		"ambient": Color(0.40, 0.33, 0.44),
@@ -328,8 +328,8 @@ func _update_camera() -> void:
 			_look(p, ISLAND_POS + Vector3(-36.0, 0.0, 12.0))
 		"underwater":
 			# over the island's slope, looking up towards the sun and the surface
-			var p := ISLAND_POS + Vector3(-57.0 + t * 0.5, -2.4 + t * 0.1, 22.0)
-			_look(p, ISLAND_POS + Vector3(-45.0, 4.5 + t * 0.2, 12.0))
+			var p := ISLAND_POS + Vector3(-57.0 + t * 0.5, -2.6 + t * 0.1, 22.0)
+			_look(p, ISLAND_POS + Vector3(-45.0, 3.2 + t * 0.2, 12.0))
 		"waterline":
 			# lens bobbing through the surface
 			var p := ISLAND_POS + Vector3(-50.0, 0.0, 24.0)

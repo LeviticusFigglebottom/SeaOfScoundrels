@@ -395,7 +395,8 @@ void fragment() {
 		float cos_i = max(dot(V, Nd), 0.0);
 		vec3 Rd = reflect(I, Nd);
 		// the mirror outside Snell's window: reflects the deep, shaded by the waves
-		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * (0.55 + 1.6 * pow(1.0 - abs(Rd.y), 3.0));
+		// (brighter where the wave tilts the mirror towards the lit shallows)
+		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * (0.75 + 2.2 * pow(1.0 - abs(Rd.y), 2.0));
 		if (dot(T, T) < 1e-5) {
 			col = mirror; // total internal reflection outside Snell's window
 		} else {
