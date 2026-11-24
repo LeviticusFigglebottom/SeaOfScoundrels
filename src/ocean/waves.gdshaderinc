@@ -48,7 +48,7 @@ void sea_normal_jacobian(vec2 p, out vec3 n, out float j) {
 // Height of the surface above world xz (inverse of the horizontal shift).
 float sea_height(vec2 world_xz) {
 	vec2 p = world_xz;
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		p = world_xz - sea_displacement(p).xz;
 	}
 	return sea_displacement(p).y;

@@ -113,12 +113,14 @@ func displacement(x: float, z: float) -> Vector3:
 	return d * s
 
 ## Water surface height (world Y) above the world-space point (x, z).
-## Inverts the horizontal Gerstner displacement with a few fixed-point steps.
+## Inverts the horizontal Gerstner displacement with a few fixed-point steps
+## (4 steps: worst-case error about 0.1 m on the steepest storm crests,
+## millimetres otherwise). waves.gdshaderinc uses the same step count.
 func height(x: float, z: float) -> float:
 	var px := x
 	var pz := z
 	var d := Vector3.ZERO
-	for _i in 3:
+	for _i in 4:
 		d = displacement(px, pz)
 		px = x - d.x
 		pz = z - d.z
