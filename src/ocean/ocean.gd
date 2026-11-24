@@ -12,8 +12,25 @@ extends Node3D
 
 signal camera_submerged_changed(submerged: bool)
 
-## Cells across the innermost square. Must be a multiple of 8.
-@export var grid: int = 96
+## What each level buys (see docs/ARCHITECTURE.md for cost notes):
+##  LOW     44k triangles, no foam simulation (two analytic foam looks instead),
+##          one ripple layer, no refraction offset, caustics, rain rings or sun shafts.
+##  MEDIUM  90k triangles, 256 px foam simulation, all surface features,
+##          8-step sun shafts under water.
+##  HIGH    151k triangles, 512 px foam simulation, extra rain layer, 14-step shafts.
+enum Quality { LOW, MEDIUM, HIGH }
+
+const QUALITY_GRID := [56, 80, 104]       # cells across the innermost square
+const QUALITY_FOAM_RES := [0, 256, 512]   # foam field resolution, 0 = off
+const QUALITY_SHAFT_STEPS := [0, 8, 14]
+## Side of the foam field's wrapping tile, metres.
+const FOAM_TILE := 256.0
+
+@export var quality: Quality = Quality.HIGH:
+	set(v):
+		quality = v
+		if is_node_ready():
+			_apply_quality()
 ## Cell size of the innermost square, metres.
 @export var base_cell: float = 0.5
 ## Number of rings around the innermost square; each doubles the cell size.
@@ -24,18 +41,38 @@ signal camera_submerged_changed(submerged: bool)
 @export var camera: Camera3D
 ## Set false to hide the underwater pass (e.g. for a map render).
 @export var underwater_enabled: bool = true
+## Rain rings on the surface, 0..1. Negative = follow Weather.rain_intensity()
+## when the Weather autoload has it.
+@export var rain_intensity: float = -1.0
+## Crests foam where the wave Jacobian drops below `foam_crest_start` and are
+## solid white at `foam_crest_full`.
+@export var foam_crest_start: float = 0.87
+@export var foam_crest_full: float = 0.46
 
 const SHADER := preload("res://src/ocean/ocean.gdshader")
 const DETAIL_TEX := preload("res://assets/generated/ocean/water_detail.png")
 const FOAM_TEX := preload("res://assets/generated/ocean/foam.png")
 
+## The ocean most recently added to the tree (there is normally exactly one).
+static var current: Ocean
+
 var material: ShaderMaterial
 ## Metres the camera is below the water surface (negative when above).
 var camera_depth: float = -1000.0
 var camera_submerged: bool = false
+## Simulated foam, or null at LOW quality.
+var foam_field: FoamField
 
 var _surface: MeshInstance3D
 var _underwater: Node
+
+func _enter_tree() -> void:
+	current = self
+	add_to_group(&"ocean")
+
+func _exit_tree() -> void:
+	if current == self:
+		current = null
 
 func _ready() -> void:
 	process_priority = 100  # after cameras have moved this frame
@@ -44,14 +81,12 @@ func _ready() -> void:
 	material.set_shader_parameter(&"detail_tex", DETAIL_TEX)
 	material.set_shader_parameter(&"foam_tex", FOAM_TEX)
 	material.set_shader_parameter(&"mesh_base_cell", base_cell)
-	# Cell size as a function of distance: ring L (cell base*2^L) spans
-	# half-extents grid/4 .. grid/2 cells, so cell/distance is 2/grid..4/grid.
-	material.set_shader_parameter(&"mesh_cell_per_metre", 2.7 / float(grid))
+	material.set_shader_parameter(&"foam_crest_start", foam_crest_start)
+	material.set_shader_parameter(&"foam_crest_full", foam_crest_full)
 	Sea.bind_material(material)
 
 	_surface = MeshInstance3D.new()
 	_surface.name = "Surface"
-	_surface.mesh = build_mesh(grid, base_cell, rings)
 	_surface.material_override = material
 	_surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_surface.custom_aabb = AABB(Vector3(-1e6, -200, -1e6), Vector3(2e6, 400, 2e6))
@@ -61,10 +96,43 @@ func _ready() -> void:
 	_underwater = get_node_or_null(^"Underwater")
 	if _underwater != null:
 		_underwater.call(&"setup", self)
-	_follow()
+	_apply_quality()
+	_follow(0.0)
 
-func _process(_delta: float) -> void:
-	_follow()
+func _apply_quality() -> void:
+	var grid: int = QUALITY_GRID[quality]
+	_surface.mesh = build_mesh(grid, base_cell, rings)
+	# Cell size as a function of distance: ring L (cell base*2^L) spans
+	# half-extents grid/4 .. grid/2 cells, so cell/distance is 2/grid..4/grid.
+	material.set_shader_parameter(&"mesh_cell_per_metre", 2.7 / float(grid))
+	material.set_shader_parameter(&"quality", int(quality))
+	material.set_shader_parameter(&"uw_shaft_steps", QUALITY_SHAFT_STEPS[quality])
+	if _underwater != null:
+		_underwater.call(&"set_shaft_steps", QUALITY_SHAFT_STEPS[quality])
+	if foam_field != null:
+		foam_field.queue_free()
+		foam_field = null
+	var res: int = QUALITY_FOAM_RES[quality]
+	if res > 0:
+		foam_field = FoamField.new(res, FOAM_TILE)
+		foam_field.name = "FoamField"
+		add_child(foam_field)
+		material.set_shader_parameter(&"foam_field", foam_field.get_texture())
+		material.set_shader_parameter(&"foam_field_size", FOAM_TILE)
+	material.set_shader_parameter(&"foam_field_on", 1.0 if res > 0 else 0.0)
+
+func _process(delta: float) -> void:
+	_follow(delta)
+
+## Whiten the water: wakes, splashes, cannonball impacts, oar strokes. The foam
+## sticks to the water, rides the waves and fades over several seconds. Call it
+## every frame for a continuous trail (e.g. at a ship's bow and stern, strength
+## scaled by speed). `radius` in metres, `strength` 0..1 per call.
+## No effect at LOW quality or further than about 100 m from the camera.
+func add_foam(world_pos: Vector3, radius: float, strength: float = 1.0) -> void:
+	if foam_field == null:
+		return
+	foam_field.stamp(Sea.rest_point(world_pos.x, world_pos.z), radius, strength)
 
 func active_camera() -> Camera3D:
 	if camera != null and is_instance_valid(camera):
@@ -72,7 +140,7 @@ func active_camera() -> Camera3D:
 	var vp := get_viewport()
 	return vp.get_camera_3d() if vp != null else null
 
-func _follow() -> void:
+func _follow(delta: float) -> void:
 	var cam := active_camera()
 	if cam == null:
 		return
@@ -84,6 +152,19 @@ func _follow() -> void:
 	var far := cam.far
 	material.set_shader_parameter(&"horizon_fade_start", far * 0.45)
 	material.set_shader_parameter(&"horizon_fade_end", far * 0.98)
+
+	# weather
+	var wind := Weather.wind_vector()
+	var wd := Vector2(wind.x, wind.z)
+	if wd.length_squared() > 0.0001:
+		material.set_shader_parameter(&"wind_dir", wd.normalized())
+	var rain := rain_intensity
+	if rain < 0.0:
+		rain = float(Weather.call(&"rain_intensity")) if Weather.has_method(&"rain_intensity") else 0.0
+	material.set_shader_parameter(&"rain_intensity", clampf(rain, 0.0, 1.0))
+
+	if foam_field != null and delta > 0.0:
+		foam_field.step(delta, Sea.rest_point(cp.x, cp.z), foam_crest_start, foam_crest_full)
 
 	camera_depth = Sea.height(cp.x, cp.z) - cp.y
 	var sub := camera_depth > 0.0

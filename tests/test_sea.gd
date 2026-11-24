@@ -16,15 +16,18 @@ func test_waves_are_bounded_and_moving() -> void:
 	var h1 := Sea.height(3.0, 4.0)
 	check(absf(h0 - h1) > 0.001, "surface should move over time")
 	var max_amp := 0.0
-	for w in Sea.WAVE_TABLE:
-		max_amp += float(w[1])
-	check(absf(h0) <= max_amp * Sea.amp_scale + 0.001)
+	for i in Sea.WAVE_TABLE.size():
+		max_amp += Sea.wave_amplitude(i)
+	check(absf(h0) <= max_amp + 0.001)
 
 func test_no_self_intersection_at_storm() -> void:
-	var s := 0.0
-	for w in Sea.WAVE_TABLE:
-		s += TAU / float(w[0]) * float(w[1]) * float(w[3])
-	check(s * Sea.AMP_STORM < 1.0, "sum(k*A*steepness)*AMP_STORM = %f must be < 1" % (s * Sea.AMP_STORM))
+	# Pinch is linear in the calm/storm blend, so checking both ends covers
+	# every sea state in between.
+	for col: int in [1, 2]:
+		var s := 0.0
+		for w in Sea.WAVE_TABLE:
+			s += TAU / float(w[0]) * float(w[col]) * float(w[4])
+		check(s < 1.0, "sum(k*A*steepness) = %f must be < 1 (column %d)" % [s, col])
 
 func test_normal_points_up() -> void:
 	check(Sea.normal(10.0, 10.0).y > 0.5)
@@ -52,20 +55,50 @@ func test_height_inverts_displacement_in_storm() -> void:
 func test_sea_states_have_big_swell() -> void:
 	# The sea must read as large: most of the energy in long waves, calm is a
 	# gentle swell and a storm is several metres high.
-	var long_amp := 0.0
-	var all_amp := 0.0
-	for w in Sea.WAVE_TABLE:
-		all_amp += float(w[1])
-		if float(w[0]) >= 60.0:
-			long_amp += float(w[1])
 	check(Sea.WAVE_TABLE.size() <= Sea.MAX_WAVES)
-	check(long_amp / all_amp > 0.6, "long swell share %f" % (long_amp / all_amp))
-	check(long_amp * Sea.AMP_CALM < 2.0, "calm swell too high")
-	check(long_amp * Sea.AMP_STORM > 5.0, "storm swell too low")
+	var saved := Sea.amp_scale
+	for state: Array in [[Sea.AMP_CALM, 0.8, 2.2], [Sea.AMP_STORM, 6.0, 12.0]]:
+		Sea.amp_scale = state[0]
+		var hs := Sea.significant_height()
+		check(hs > float(state[1]) and hs < float(state[2]), "significant height %f m at amp_scale %f" % [hs, state[0]])
+		var long_e := 0.0
+		var all_e := 0.0
+		for i in Sea.WAVE_TABLE.size():
+			var e := Sea.wave_amplitude(i) ** 2
+			all_e += e
+			if float(Sea.WAVE_TABLE[i][0]) >= 100.0:
+				long_e += e
+		check(long_e / all_e > 0.75, "long swell energy share %f" % (long_e / all_e))
+	# storm wind sea must be much steeper than the calm one (it changes character)
+	var w: Array = Sea.WAVE_TABLE[8]
+	check(float(w[2]) / float(w[1]) > 5.0)
+	Sea.amp_scale = 0.0
+	Sea.time = 5.0
+	check_near(Sea.height(12.0, -7.0), 0.0, 1e-6, "amp_scale 0 must be a flat sea")
+	Sea.amp_scale = saved
+
+func test_rest_point_round_trip() -> void:
+	Sea.time = 9.0
+	var r := Sea.rest_point(31.0, -12.0)
+	var d := Sea.displacement(r.x, r.y)
+	check_near(r.x + d.x, 31.0, 0.02)
+	check_near(r.y + d.z, -12.0, 0.02)
+
+func test_height_query_is_fast_enough() -> void:
+	# Buoyancy samples dozens of points per tick; keep one query cheap.
+	Sea.time = 3.0
+	var t0 := Time.get_ticks_usec()
+	var acc := 0.0
+	for i in 2000:
+		acc += Sea.height(i * 0.37, i * -0.21)
+	var per := float(Time.get_ticks_usec() - t0) / 2000.0
+	print("    Sea.height: %.1f us per call" % per)
+	check(per < 150.0, "Sea.height takes %f us" % per)
+	check(acc == acc)
 
 func test_ocean_mesh_is_watertight_and_in_budget() -> void:
 	var ocean_script: GDScript = load("res://src/ocean/ocean.gd")
-	var mesh: ArrayMesh = ocean_script.build_mesh(96, 0.5, 8)
+	var mesh: ArrayMesh = ocean_script.build_mesh(104, 0.5, 8)
 	var arrays := mesh.surface_get_arrays(0)
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]

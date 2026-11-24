@@ -30,6 +30,9 @@ func setup(_ocean: Node3D) -> void:
 	_quad.visible = false
 	add_child(_quad)
 
+func set_shaft_steps(steps: int) -> void:
+	material.set_shader_parameter(&"uw_shaft_steps", steps)
+
 ## Called by Ocean every frame. depth > 0 means the camera is under water.
 func update(cam: Camera3D, depth: float) -> void:
 	var on := depth > -NEAR_SURFACE

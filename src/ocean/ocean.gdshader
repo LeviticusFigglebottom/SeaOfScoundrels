@@ -11,6 +11,14 @@ uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linea
 uniform sampler2D depth_tex : hint_depth_texture, repeat_disable, filter_nearest;
 // R = foam lace erosion map, G = blotch noise, B = second lace map.
 uniform sampler2D foam_tex : repeat_enable, filter_linear_mipmap_anisotropic;
+// Simulated foam (Ocean's foam field): R = amount, stored in rest-plane
+// coordinates, one tile of foam_field_size metres that wraps around the camera.
+uniform sampler2D foam_field : repeat_enable, filter_linear;
+uniform float foam_field_size = 256.0;
+uniform float foam_field_on = 0.0;
+
+// 0 low, 1 medium, 2 high. See Ocean.quality for what each level buys.
+uniform int quality = 2;
 
 group_uniforms water;
 uniform vec3 deep_color : source_color = vec3(0.0, 0.20, 0.34);
@@ -30,6 +38,9 @@ uniform float shore_foam_depth = 1.3;
 group_uniforms sun;
 uniform float glint_sharpness = 900.0;
 uniform float glint_strength = 6.0;
+group_uniforms weather;
+uniform vec2 wind_dir = vec2(0.56, -0.83); // unit xz, the way the wind blows
+uniform float rain_intensity = 0.0;        // 0..1, rings on the surface
 group_uniforms lod;
 uniform float mesh_base_cell = 0.5;
 uniform float mesh_cell_per_metre = 0.0278;
@@ -51,7 +62,9 @@ void vertex() {
 	}
 	float dist = distance(rest, cam.xz);
 	float cell = max(mesh_base_cell, dist * mesh_cell_per_metre);
-	vec3 d = sea_displacement_lod(rest, cell * 3.0);
+	// keep every wave the ring can carry with 4+ vertices per wavelength, so the
+	// big swell still shapes the horizon
+	vec3 d = sea_displacement_lod(rest, cell * 2.0);
 	VERTEX = vec3(rest.x, 0.0, rest.y) + d;
 	v_rest = rest;
 	v_world = VERTEX;
@@ -67,8 +80,19 @@ float linear_depth(vec2 uv, mat4 inv_proj, out vec3 view_pos) {
 	return -view_pos.z;
 }
 
+// Lingering foam from the simulated field, faded out where the tile would wrap.
+float field_foam(vec2 rest, float dist) {
+	if (foam_field_on < 0.5) {
+		return 0.0;
+	}
+	float edge = foam_field_size * 0.5;
+	return texture(foam_field, rest / foam_field_size).r * smoothstep(edge * 0.86, edge * 0.62, dist);
+}
+
 // Painterly foam: `amount` (0..1) erodes a lace pattern; edges stay crisp.
-float foam_mask(float amount, vec2 uv, float soft) {
+// `streak` (0..1) pulls the pattern out along the wind: spindrift.
+float foam_mask(float amount, vec2 rest, float soft, float streak) {
+	vec2 uv = rest * foam_scale;
 	float warp = texture(foam_tex, uv * 0.23 + vec2(0.11, 0.07)).g;
 	vec2 w = (vec2(warp, texture(foam_tex, uv.yx * 0.19).g) - 0.5) * 0.35;
 	float lace = texture(foam_tex, uv + w + vec2(0.006, -0.004) * sea_time).r;
@@ -76,10 +100,51 @@ float foam_mask(float amount, vec2 uv, float soft) {
 	float lace2 = texture(foam_tex, uv * 2.7 - w + vec2(-0.011, 0.007) * sea_time).b;
 	// big torn patches, medium bubbles inside them, a little fine break-up
 	float pattern = lace * 0.45 + lace_big * 0.40 + lace2 * 0.15;
+	if (streak > 0.01) {
+		// the same lace, squeezed across the wind and drawn out along it
+		vec2 along = wind_dir;
+		vec2 across = vec2(-wind_dir.y, wind_dir.x);
+		vec2 suv = vec2(dot(rest, along) * 0.10, dot(rest, across) * 1.05) * foam_scale;
+		float s1 = texture(foam_tex, suv + w * 0.3 + vec2(0.010, 0.0) * sea_time).r;
+		float s2 = texture(foam_tex, suv * vec2(0.6, 2.3) + 0.37 + vec2(0.017, 0.0) * sea_time).b;
+		pattern = mix(pattern, s1 * 0.6 + s2 * 0.4, streak);
+	}
 	pattern = smoothstep(0.12, 0.88, pattern);
 	// amount = 1 covers everything, small amounts leave only the thinnest lace.
 	float thr = 1.0 - amount;
 	return smoothstep(thr - soft, thr + soft, 1.0 - pattern) * smoothstep(0.0, 0.08, amount);
+}
+
+vec3 hash32(vec2 p) {
+	vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+	q += dot(q, q.yxz + 33.33);
+	return fract((q.xxy + q.yzz) * q.zyx);
+}
+
+// Rain rings: expanding ripples from random drops, as a normal offset (xz)
+// with the splash brightness in z.
+vec3 rain_rings(vec2 p, float amount, int layers) {
+	vec3 acc = vec3(0.0);
+	for (int l = 0; l < layers; l++) {
+		float fl = float(l);
+		vec2 g = p * (1.35 + 0.55 * fl) + vec2(17.3, 9.1) * fl;
+		vec2 id = floor(g);
+		vec2 f = fract(g) - 0.5;
+		vec3 rnd = hash32(id + fl * 31.7);
+		if (rnd.z > amount * 0.9) {
+			continue;
+		}
+		vec2 c = (rnd.xy - 0.5) * 0.45;
+		float life = fract(sea_time * (0.85 + 0.5 * rnd.x) + rnd.y * 9.0);
+		vec2 dvec = f - c;
+		float r = length(dvec);
+		float radius = life * 0.40;
+		float fade = (1.0 - life) * (1.0 - life);
+		float ring = sin((r - radius) * 46.0) * smoothstep(0.075, 0.0, abs(r - radius)) * fade;
+		acc.xy += dvec / max(r, 1e-4) * ring;
+		acc.z += smoothstep(0.05, 0.0, r) * smoothstep(0.18, 0.0, life);
+	}
+	return acc;
 }
 
 void fragment() {
@@ -88,7 +153,7 @@ void fragment() {
 	float dist = length(to_cam);
 	vec3 V = to_cam / dist;
 	float surf_z = -VERTEX.z;
-	float storm = clamp((sea_amp_scale - 0.5) / 2.0, 0.0, 1.0);
+	float storm = sea_state().x;
 
 	// --- surface normal and pinch, per pixel, filtered to the pixel footprint
 	// Footprint of a pixel on the water, metres. Analytic (distance and grazing
@@ -96,30 +161,46 @@ void fragment() {
 	// would print the mesh into the shading.
 	float px_angle = 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y);
 	float fp_across = dist * px_angle;
-	float fp = fp_across * mix(1.0, 1.0 / max(abs(V.y), 0.04), 0.35);
+	float fp = fp_across * mix(1.0, 1.0 / max(abs(V.y), 0.04), 0.3);
 	vec3 n_geo;
 	float jac;
 	float lost_var;
 	float wave_h; // analytic, so colour masks do not show the mesh
-	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var, wave_h);
+	float h_var;
+	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var, wave_h, h_var);
+	float amp_ref = max(2.0 * sqrt(h_var), 0.05);
+	float h_rel = wave_h / amp_ref;
 
-	// normal-only micro detail (three scrolling octaves of generated ripples)
+	// normal-only micro detail (scrolling octaves of generated ripples)
 	vec2 r1 = texture(detail_tex, v_rest * 0.110 + vec2(0.031, 0.017) * sea_time).rg;
 	vec2 r2 = texture(detail_tex, v_rest.yx * 0.041 + vec2(-0.012, 0.019) * sea_time).rg;
-	vec2 r3 = texture(detail_tex, v_rest * 0.0113 + vec2(0.004, -0.003) * sea_time).rg;
 	float fine = smoothstep(0.35, 0.03, fp);
 	vec2 rip_fine = (r1 - 0.5) * fine;
-	vec2 ripple = rip_fine * 0.8 + (r2 - 0.5) * 1.2 * smoothstep(1.2, 0.1, fp) + (r3 - 0.5) * 0.7 * smoothstep(5.0, 0.5, fp);
-	// wind patches: gusts roughen the water in slow-moving blotches
-	float gust = texture(foam_tex, v_rest * 0.0037 + vec2(0.0011, 0.0007) * sea_time).g;
-	gust = smoothstep(0.2, 0.8, gust);
+	vec2 ripple = rip_fine * 0.8 + (r2 - 0.5) * 1.2 * smoothstep(1.2, 0.1, fp);
+	float gust = 0.5;
+	if (quality > 0) {
+		vec2 r3 = texture(detail_tex, v_rest * 0.0113 + vec2(0.004, -0.003) * sea_time).rg;
+		// a second fine layer running with the wind: chop that leans downwind
+		vec2 r4 = texture(detail_tex, v_rest * 0.23 + wind_dir * 0.09 * sea_time).rg;
+		ripple += (r3 - 0.5) * 0.7 * smoothstep(5.0, 0.5, fp) + (r4 - 0.5) * 0.5 * fine * (0.3 + 0.7 * storm);
+		// wind patches: gusts roughen the water in slow-moving blotches
+		gust = smoothstep(0.2, 0.8, texture(foam_tex, v_rest * 0.0037 + wind_dir * 0.004 * sea_time).g);
+	}
 	float ripple_amt = mix(0.14, 0.27, storm) * mix(0.45, 1.5, gust);
 	// calm seas get their swell slopes exaggerated for shading only, so long
 	// low waves still read as forms (no height is added)
 	float exag = mix(1.8, 1.0, smoothstep(0.0, 0.6, storm));
 	vec3 n_shade = normalize(vec3(n_geo.x * exag, n_geo.y, n_geo.z * exag));
-	vec3 N = normalize(n_shade + vec3(ripple.x, 0.0, ripple.y) * ripple_amt);
-	float rough_var = lost_var + 0.0006 + 0.0025 * storm;
+	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
+	float splash = 0.0;
+	if (rain_intensity > 0.01 && quality > 0 && fp < 0.25) {
+		vec3 rr = rain_rings(v_rest, rain_intensity, quality > 1 ? 3 : 2) * smoothstep(0.25, 0.05, fp);
+		n_detail += vec3(rr.x, 0.0, rr.y) * 0.55;
+		splash = rr.z;
+	}
+	vec3 N = normalize(n_shade + n_detail);
+	// rain hammers the small ripples flat-ish but roughens the mirror
+	float rough_var = lost_var + 0.0006 + 0.0025 * storm + 0.004 * rain_intensity;
 
 	vec3 L = normalize(sun_dir);
 	vec3 sun_light = ocean_sun_light();
@@ -141,15 +222,19 @@ void fragment() {
 	if (!underside) {
 		// ---------------- seen from above ----------------
 		// Refraction: nudge the lookup along the normal, reject samples in front.
-		vec3 n_view = (VIEW_MATRIX * vec4(N, 0.0)).xyz;
-		vec2 offs = n_view.xy * refraction_strength * clamp(thick0 * 0.6, 0.0, 1.0) / max(surf_z, 1.0);
-		vec2 uv_r = clamp(SCREEN_UV - offs, vec2(0.001), vec2(0.999));
-		vec3 rv;
-		float rz = linear_depth(uv_r, INV_PROJECTION_MATRIX, rv);
-		if (rz < surf_z + 0.02) {
-			uv_r = SCREEN_UV;
-			rv = scene_view;
-			rz = scene_z;
+		vec2 uv_r = SCREEN_UV;
+		vec3 rv = scene_view;
+		float rz = scene_z;
+		if (quality > 0) {
+			vec3 n_view = (VIEW_MATRIX * vec4(N, 0.0)).xyz;
+			vec2 offs = n_view.xy * refraction_strength * clamp(thick0 * 0.6, 0.0, 1.0) / max(surf_z, 1.0);
+			uv_r = clamp(SCREEN_UV - offs, vec2(0.001), vec2(0.999));
+			rz = linear_depth(uv_r, INV_PROJECTION_MATRIX, rv);
+			if (rz < surf_z + 0.02) {
+				uv_r = SCREEN_UV;
+				rv = scene_view;
+				rz = scene_z;
+			}
 		}
 		float thick = max(rz - surf_z, 0.0) * dist / max(surf_z, 1e-4);
 		vec3 scene_world = (INV_VIEW_MATRIX * vec4(rv, 1.0)).xyz;
@@ -157,17 +242,17 @@ void fragment() {
 		vec3 behind = texture(screen_tex, uv_r).rgb;
 
 		// caustic light dancing on whatever is under shallow water
-		float sun_up = max(L.y, 0.15);
-		vec2 cq = scene_world.xz + L.xz * (vdepth / sun_up);
-		float caus = ocean_caustic(cq) * exp(-vdepth * 0.22) * smoothstep(0.0, 0.5, vdepth);
-		caus *= smoothstep(120.0, 30.0, dist);
-		behind *= 1.0 + caus * 1.6 * smoothstep(0.0, 0.3, L.y) * (sun_light.g + 0.1);
+		if (quality > 0 && vdepth < 14.0 && dist < 120.0) {
+			float sun_up = max(L.y, 0.15);
+			vec2 cq = scene_world.xz + L.xz * (vdepth / sun_up);
+			float caus = ocean_caustic(cq) * exp(-vdepth * 0.22) * smoothstep(0.0, 0.5, vdepth);
+			caus *= smoothstep(120.0, 30.0, dist);
+			behind *= 1.0 + caus * 1.6 * smoothstep(0.0, 0.3, L.y) * (sun_light.g + 0.1);
+		}
 		// anything seen through water reads a little darker and richer straight away
 		behind *= 0.68 + 0.32 * exp(-thick * 4.0);
 
 		// crest mask: pinched and high water is thin, so light gets through
-		float amp_ref = max(sea_amp_scale * 2.3, 0.3);
-		float h_rel = wave_h / amp_ref;
 		float crest = clamp((1.0 - jac) * 1.8, 0.0, 1.0) * 0.55 + smoothstep(0.15, 1.1, h_rel) * 0.65;
 		crest = clamp(crest, 0.0, 1.0);
 		float facing = 1.0 - max(dot(N, V), 0.0);
@@ -203,28 +288,46 @@ void fragment() {
 		refl += sun_light * (pow(rs, 10.0) * 0.30 + pow(rs, 80.0) * 0.6);
 		col = mix(col, refl, clamp(fres * reflectivity, 0.0, 1.0));
 
-		// --- stylized sun glint: a crisp core plus a soft sheen, widened by roughness
+		// --- stylized sun / moon glitter: a crisp core plus a soft sheen, widened by roughness
 		vec3 H = normalize(L + V);
 		// sparkle normal: extra fine ripples so the glint breaks into glitter
-		vec3 n_spark = normalize(N + vec3(rip_fine.x, 0.0, rip_fine.y) * 1.1 + vec3(r2.x - 0.5, 0.0, r2.y - 0.5) * 0.5);
+		vec3 n_spark = N;
+		if (quality > 0) {
+			n_spark = normalize(N + vec3(rip_fine.x, 0.0, rip_fine.y) * 1.1 + vec3(r2.x - 0.5, 0.0, r2.y - 0.5) * 0.5);
+		}
 		float ndh = max(dot(n_spark, H), 0.0);
 		float sharp = 1.0 / (1.0 / glint_sharpness + rough_var * 2.2);
 		float core = pow(ndh, sharp);
 		float glint = smoothstep(0.30, 0.60, core) * (glint_sharpness / (sharp + glint_sharpness)) * 2.0;
 		glint += pow(max(dot(N, H), 0.0), sharp * 0.2) * 0.05;
-		col += sun_light * glint * glint_strength * (0.2 + 0.8 * fres) * smoothstep(-0.02, 0.05, L.y);
+		// a dim key light (the moon) still gets a readable glitter path
+		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
+		vec3 glint_col = sun_light * (1.0 + 1.5 * smoothstep(0.5, 0.05, key));
+		col += glint_col * glint * glint_strength * (0.2 + 0.8 * fres) * smoothstep(-0.02, 0.05, L.y);
+		col += (ambient_color + sun_light * 0.5) * splash * 0.6;
 
-		// --- foam: breaking crests (Jacobian) with a lagged copy for trails
+		// --- foam: breaking crests (Jacobian), lingering in the simulated field
 		float lod_fade = smoothstep(0.9, 0.25, fp * 0.18);
 		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac);
-		float j1 = sea_jacobian_lod(v_rest, sea_time - 1.1, max(fp * 2.5, 5.0));
-		float j2 = sea_jacobian_lod(v_rest, sea_time - 2.6, max(fp * 2.5, 5.0));
-		float f_trail = max(smoothstep(foam_crest_start, foam_crest_full, j1 + 0.02) * 0.60,
-				smoothstep(foam_crest_start, foam_crest_full, j2 + 0.04) * 0.36);
-		float crest_foam = max(f_now, f_trail);
-		// wind streaks: a little standing foam in rough weather
-		float blot = texture(foam_tex, v_rest * 0.013 + vec2(0.002, 0.001) * sea_time).g;
-		crest_foam = max(crest_foam, storm * smoothstep(0.45, 0.95, blot) * 0.42 * smoothstep(-0.5, 0.5, wave_h / amp_ref));
+		float field = field_foam(v_rest, dist);
+		float crest_foam = max(f_now, field);
+		float linger = clamp(field - f_now, 0.0, 1.0);
+		if (foam_field_on < 0.5 || dist > foam_field_size * 0.31) {
+			// outside the field: two lagged looks at the same waves stand in for trails
+			float j1 = sea_jacobian_lod(v_rest, sea_time - 1.1, max(fp * 2.5, 5.0));
+			float f_trail = smoothstep(foam_crest_start, foam_crest_full, j1 + 0.02) * 0.60;
+			if (quality > 0) {
+				float j2 = sea_jacobian_lod(v_rest, sea_time - 2.6, max(fp * 2.5, 5.0));
+				f_trail = max(f_trail, smoothstep(foam_crest_start, foam_crest_full, j2 + 0.04) * 0.36);
+			}
+			crest_foam = max(crest_foam, f_trail);
+			linger = max(linger, clamp(f_trail - f_now, 0.0, 1.0));
+		}
+		// wind streaks: standing foam in rough weather, drawn out downwind
+		vec2 wuv = vec2(dot(v_rest, wind_dir) * 0.004, dot(v_rest, vec2(-wind_dir.y, wind_dir.x)) * 0.021);
+		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
+		float standing = storm * smoothstep(0.42, 0.95, blot) * 0.45 * smoothstep(-0.5, 0.5, h_rel);
+		crest_foam = max(crest_foam, standing);
 
 		// shoreline / intersection foam from the depth buffer
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
@@ -240,12 +343,13 @@ void fragment() {
 		float shore_foam = shore * (0.25 + 0.75 * band * band) * 0.9 + smoothstep(0.10, 0.0, vd0) * 0.7;
 		shore_foam *= step(scene_z, surf_z + 60.0);
 
-		vec2 fuv = v_rest * foam_scale;
 		float soft = clamp(0.05 + fp * 0.6, 0.05, 0.5);
-		foam = foam_mask(clamp(max(crest_foam, shore_foam), 0.0, 1.0), fuv, soft);
+		float amount = clamp(max(crest_foam, shore_foam), 0.0, 1.0);
+		// old foam and standing foam streak downwind in a blow: spindrift
+		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
+		foam = foam_mask(amount, v_rest, soft, quality > 0 ? streak : 0.0);
 		// beyond pattern resolution, fall back to plain coverage
-		float plain = clamp(max(crest_foam, shore_foam), 0.0, 1.0);
-		foam = mix(plain * plain * 0.6, foam, lod_fade);
+		foam = mix(amount * amount * 0.6, foam, lod_fade);
 		vec3 foam_lit = foam_color * (ambient_color * 0.85 + sun_light * (0.35 + 0.55 * clamp(dot(N, L), 0.0, 1.0)));
 		// thin foam lets the water colour through: reads as paint, not as noise
 		col = mix(col, foam_lit, foam * 0.92);
@@ -288,8 +392,8 @@ void fragment() {
 			col *= 1.0 + 0.25 * smoothstep(0.6, 1.0, cos_i);
 		}
 		// foam seen from below reads as a darker, soft patch
-		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac);
-		col *= 1.0 - 0.45 * f_now;
+		float f_under = max(smoothstep(foam_crest_start, foam_crest_full, jac), field_foam(v_rest, dist));
+		col *= 1.0 - 0.45 * f_under;
 		col = uw_apply(col, dist, I) + uw_shafts(cam, I, dist, FRAGCOORD.xy);
 	}
 	ALBEDO = col;

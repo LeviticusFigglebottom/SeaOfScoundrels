@@ -4,7 +4,9 @@ extends Node3D
 ##   tools/capture.sh res://scenes/showcase/ocean_showcase.tscn calm 3 8 -- shot=calm
 ##
 ## User args (after `--`), all optional:
-##   shot=calm|storm|sunset|underwater|shore|waterline|aerial|swell   (default calm)
+##   shot=calm|storm|sunset|night|underwater|shore|waterline|aerial|swell|wake   (default calm)
+##   quality=low|medium|high   Ocean.quality (default high)
+##   rain=<0..1>     rain rings (default: 0.8 in the storm shot, else 0)
 ##   amp=<float>     override Sea.amp_scale
 ##   t=<seconds>     starting wave time
 ##   scale=<0.25..1> 3D render scale (faster software captures)
@@ -36,6 +38,13 @@ const LOOKS := {
 		"horizon": Color(1.0, 0.56, 0.26), "zenith": Color(0.20, 0.22, 0.50),
 		"ambient": Color(0.40, 0.33, 0.44),
 	},
+	"night": {
+		# the moon is the key light at night; the sky rig feeds it through sun_dir/sun_color
+		"elev": 24.0, "azim": 8.0, "storm": 0.25,
+		"sun": Color(0.62, 0.74, 1.0), "sun_energy": 0.42,
+		"horizon": Color(0.07, 0.11, 0.21), "zenith": Color(0.012, 0.022, 0.07),
+		"ambient": Color(0.07, 0.10, 0.19),
+	},
 	"storm": {
 		"elev": 28.0, "azim": 60.0, "storm": 1.0,
 		"sun": Color(0.78, 0.84, 0.80), "sun_energy": 0.9,
@@ -54,8 +63,8 @@ func _ready() -> void:
 	Weather.day_length_seconds = 0.0
 
 	var look_name := "noon"
-	if _shot == "sunset":
-		look_name = "sunset"
+	if _shot == "sunset" or _shot == "night":
+		look_name = _shot
 	elif _shot == "storm":
 		look_name = "storm"
 	_build_sky(LOOKS[look_name])
@@ -63,8 +72,14 @@ func _ready() -> void:
 	_build_floaters()
 
 	var storm: float = LOOKS[look_name]["storm"]
-	if _shot == "swell":
-		storm = 0.35
+	if _shot == "swell" or _shot == "wake":
+		storm = 0.3
+	if _shot == "storm":
+		Weather.wind_speed = 22.0
+		Weather.wind_heading = 1.0
+	var ocean: Ocean = $Ocean
+	ocean.rain_intensity = float(_args.get("rain", "0.8" if _shot == "storm" else "0.0"))
+	ocean.quality = {"low": Ocean.Quality.LOW, "medium": Ocean.Quality.MEDIUM}.get(_args.get("quality", "high"), Ocean.Quality.HIGH)
 	Weather.storminess = storm
 	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, storm)
 	if _shot == "shore" or _shot == "underwater" or _shot == "waterline":
@@ -251,11 +266,22 @@ func _build_floaters() -> void:
 
 func _update_floaters() -> void:
 	for f in _floaters:
-		var x: float = f["x"]
-		var z: float = f["z"]
 		var span: float = f["span"]
 		var yaw: float = f["yaw"]
 		var fwd := Vector3(sin(yaw), 0.0, -cos(yaw))
+		if _shot == "wake" and span > 4.0:
+			# the hulk sails off and feeds the ocean's foam hook, like a ship would
+			var dt := get_process_delta_time()
+			f["x"] += fwd.x * 6.0 * dt
+			f["z"] += fwd.z * 6.0 * dt
+			var c := Vector3(f["x"], 0.0, f["z"])
+			var side := Vector3(-fwd.z, 0.0, fwd.x)
+			var oc: Ocean = $Ocean
+			oc.add_foam(c - fwd * 7.0, 2.6, 0.5)                 # churned wake astern
+			oc.add_foam(c + fwd * 6.0 + side * 2.0, 1.3, 0.35)   # bow wave, each side
+			oc.add_foam(c + fwd * 6.0 - side * 2.0, 1.3, 0.35)
+		var x: float = f["x"]
+		var z: float = f["z"]
 		var right := Vector3(fwd.z, 0.0, -fwd.x) * -1.0
 		var hc := Sea.height(x, z)
 		var hf := Sea.height(x + fwd.x * span, z + fwd.z * span)
@@ -309,6 +335,19 @@ func _update_camera() -> void:
 			var p := ISLAND_POS + Vector3(-50.0, 0.0, 24.0)
 			p.y = Sea.height(p.x, p.z) + 0.10 * sin(t * 1.3) - 0.02
 			_look(p, ISLAND_POS + Vector3(-38.0, p.y + 0.3, 8.0))
+		"night":
+			var p := Vector3(-1.0 + t * 0.5, 0.0, 6.0)
+			p.y = Sea.height(p.x, p.z) + 2.6
+			_look(p, Vector3(-4.0, 2.0, -60.0))
+		"wake":
+			# follow the hulk from astern and above
+			var hx: float = _floaters[2]["x"]
+			var hz: float = _floaters[2]["z"]
+			var yaw: float = _floaters[2]["yaw"]
+			var fwd := Vector3(sin(yaw), 0.0, -cos(yaw))
+			var p := Vector3(hx, 0.0, hz) - fwd * 34.0 + Vector3(9.0, 0.0, 0.0)
+			p.y = Sea.height(p.x, p.z) + 11.0
+			_look(p, Vector3(hx, 1.0, hz) - fwd * 6.0)
 		"aerial":
 			var p := Vector3(0.0, 90.0 + t * 30.0, 60.0)
 			_look(p, Vector3(0.0, 0.0, -260.0))
