@@ -57,8 +57,7 @@ func _physics_process(delta: float) -> void:
 		_sync_accum += delta
 		if _sync_accum >= 1.0 / WORLD_SYNC_HZ:
 			_sync_accum = 0.0
-			_world_snapshot.rpc(Sea.time, Sea.amp_scale, Weather.time_of_day,
-				Weather.wind_heading, Weather.wind_speed, Weather.storminess)
+			_world_snapshot.rpc(Sea.time, Sea.amp_scale, Weather.get_state())
 	else:
 		# Clients run the wave clock locally and bleed off error against the host,
 		# so the sea stays smooth between snapshots and identical across peers.
@@ -67,8 +66,7 @@ func _physics_process(delta: float) -> void:
 		Sea.time += step
 
 @rpc("authority", "call_remote", "unreliable_ordered")
-func _world_snapshot(sea_time: float, amp_scale: float, time_of_day: float,
-		wind_heading: float, wind_speed: float, storminess: float) -> void:
+func _world_snapshot(sea_time: float, amp_scale: float, weather: Dictionary) -> void:
 	var err := sea_time - Sea.time
 	if absf(err) > 2.0:
 		Sea.time = sea_time
@@ -76,7 +74,4 @@ func _world_snapshot(sea_time: float, amp_scale: float, time_of_day: float,
 	else:
 		_host_time_offset = err
 	Sea.amp_scale = amp_scale
-	Weather.time_of_day = time_of_day
-	Weather.wind_heading = wind_heading
-	Weather.wind_speed = wind_speed
-	Weather.storminess = storminess
+	Weather.apply_state(weather)
