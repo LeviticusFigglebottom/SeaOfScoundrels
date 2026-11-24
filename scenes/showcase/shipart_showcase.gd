@@ -99,6 +99,8 @@ func _setup_env() -> void:
 	sky_mat.ground_bottom_color = Color(0.05, 0.22, 0.3)
 	sky_mat.ground_horizon_color = Color(0.5, 0.75, 0.82)
 	sky_mat.sun_angle_max = 12.0
+	sky_mat.sky_curve = 0.06
+	sky_mat.ground_curve = 0.05
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
 	var env := Environment.new()
@@ -114,7 +116,7 @@ func _setup_env() -> void:
 	env.glow_enabled = true
 	env.glow_intensity = 0.35
 	env.glow_hdr_threshold = 1.3
-	env.fog_enabled = true
+	env.fog_enabled = false
 	env.fog_light_color = Color(0.7, 0.82, 0.9)
 	env.fog_density = 0.00025
 	var we := WorldEnvironment.new()
@@ -140,7 +142,7 @@ func _add_water() -> void:
 	pm.size = Vector2(6000, 6000)
 	mi.mesh = pm
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.06, 0.42, 0.5, 0.82)
+	m.albedo_color = Color(0.03, 0.45, 0.52, 0.8)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.roughness = 0.12
 	m.metallic = 0.2
@@ -160,8 +162,8 @@ func _add_capsule(p: Vector3) -> void:
 	add_child(mi)
 
 func _process(delta: float) -> void:
-	t += delta
 	_update_camera()
+	t += delta
 
 func _look(from: Vector3, to: Vector3, fov := 70.0) -> void:
 	cam.fov = fov
@@ -185,14 +187,16 @@ func _update_camera() -> void:
 			var eye2 := Vector3(0.0, 2.0 + 1.62, 6.0)
 			_look(eye2, eye2 + Vector3(sin(yaw2), -0.3, -cos(yaw2)), 80.0)
 		"hold":
-			var eye3 := Vector3(-0.35, -0.6 + 1.5, 4.3)
+			# first half: standing in the stern nook looking forward past the map table;
+			# second half: crouched by the mast looking aft at the table and stern windows
+			var eye3 := Vector3(-0.3, -0.6 + 1.6, 4.9)
 			if f < 0.5:
-				var y3 := lerpf(-0.5, 0.5, f * 2.0)
-				_look(eye3, eye3 + Vector3(sin(y3), -0.18, -cos(y3)), 85.0)
+				var y3 := lerpf(-0.45, 0.45, f * 2.0)
+				_look(eye3, eye3 + Vector3(sin(y3), -0.3, -cos(y3)), 85.0)
 			else:
-				var eye4 := Vector3(0.5, -0.6 + 1.3, -2.2)
-				var y4 := lerpf(-0.5, 0.5, f * 2.0 - 1.0)
-				_look(eye4, eye4 + Vector3(sin(y4), -0.1, cos(y4)), 85.0)
+				var eye4 := Vector3(0.9, -0.6 + 1.25, -0.2)
+				var y4 := lerpf(-0.6, 0.3, f * 2.0 - 1.0)
+				_look(eye4, eye4 + Vector3(sin(y4), -0.12, cos(y4)), 85.0)
 		"bow":
 			_look(Vector3(lerpf(5.5, -5.5, f), 3.2, -12.0), Vector3(0, 2.3, -7.0), 50.0)
 		"stern":

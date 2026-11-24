@@ -453,6 +453,14 @@ def s_of_z(z, v=1.0):
         else: hi = m
     return (lo + hi) / 2
 
+def inner_half(z, y):
+    """Half breadth of the inside face of the planking at (z, y)."""
+    v = 0.5; s = 0.0
+    for _ in range(3):
+        s = s_of_z(z, v); v = v_of_y(umap(s), y)
+    n = hull_n(umap(s), v)
+    return hull_b(z, y) - TH / max(n.x, 0.3)
+
 def hull_in(u, v, d=TH):
     p = hull_pt(u, v) - hull_n(u, v) * d
     p.x = max(p.x, 0.0); return p
@@ -508,7 +516,7 @@ def sun_mask(X, Y):
 def tex_sail(rs):
     W = 512; ss = 2; w = W * ss
     yy, xx = np.mgrid[0:w, 0:w] / float(w)
-    weave = 0.955 + 0.045 * np.sign(np.sin(xx * 2 * pi * 90) * np.sin(yy * 2 * pi * 90))
+    weave = 0.975 + 0.02 * np.sin(xx * 2 * pi * 128) * np.sin(yy * 2 * pi * 128) + 0.03 * (tile_noise(rs, w, w, 256, 256) - 0.5)
     blot = 0.90 + 0.10 * tile_noise(rs, w, w, 5, 5)
     base = np.array([0.95, 0.89, 0.74])
     img = base[None, None, :] * (weave * blot)[..., None]
@@ -749,12 +757,15 @@ def build_hull(mb):
             tube(mb, pts, 0.035, 5, 'wood', C_DARK)
     # catheads
     for sg in (-1, 1):
-        cbox(mb, (sg * 1.52, ytop(-5.1) + 0.2, -5.1), (1.1, 0.2, 0.24), 'wood', C_DARK, 0.03)
-        cbox(mb, (sg * 2.09, ytop(-5.1) + 0.2, -5.1), (0.06, 0.24, 0.28), 'wood', C_RED, 0.02)
+        cbox(mb, (sg * 1.3, ytop(-5.1) + 0.2, -5.1), (0.9, 0.2, 0.24), 'wood', C_DARK, 0.03)
+        cbox(mb, (sg * 1.77, ytop(-5.1) + 0.2, -5.1), (0.06, 0.24, 0.28), 'wood', C_RED, 0.02)
 
-def deck_outline(yb, yt, z0, z1, n=44, pw=1.7, margin=0.07):
+def deck_outline(yb, yt, z0, z1, n=44, pw=1.7, margin=0.07, inner=False):
     zs = [z0 + (z1 - z0) * (i / n) ** pw for i in range(n + 1)]
-    right = [(max(min(hull_b(z, yb), hull_b(z, yt)) - margin, 0.0), z) for z in zs]
+    if inner:   # sloping hull: reach just past the inside face of the planking, never through the outside
+        right = [(max(min(inner_half(z, yt) + 0.05, hull_b(z, yb) - 0.02), 0.0), z) for z in zs]
+    else:
+        right = [(max(min(hull_b(z, yb), hull_b(z, yt)) - margin, 0.0), z) for z in zs]
     return poly_clean(right + [(-x, z) for x, z in reversed(right)])
 
 def deck_planks(mb, poly, z0, z1, y1, th, pw, holes, colfn):
@@ -826,8 +837,8 @@ def build_decks(mb):
     # ---- hatch: coaming on three sides (open aft where the stairs start) and the stairs down
     hx0, hx1, hz0, hz1 = HATCH
     for sg in (-1, 1):
-        cbox(mb, (sg * (hx1 + 0.06), DECK_Y + 0.05, (hz0 + hz1) / 2 - 0.06), (0.13, 0.3, hz1 - hz0 + 0.12), 'wood', C_RED, 0.025)
-    cbox(mb, (0, DECK_Y + 0.05, hz0 - 0.06), (hx1 - hx0 + 0.25, 0.3, 0.13), 'wood', C_RED, 0.025)
+        cbox(mb, (sg * (hx1 + 0.05), DECK_Y + 0.04, (hz0 + hz1) / 2 - 0.05), (0.16, 0.34, hz1 - hz0 + 0.16), 'wood', C_RED, 0.025)
+    cbox(mb, (0, DECK_Y + 0.04, hz0 - 0.05), (hx1 - hx0 + 0.2, 0.34, 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y - 0.06, hz1 + 0.05), (hx1 - hx0 + 0.25, 0.12, 0.1), 'wood', C_DARK, 0.015)
     zt, zb = hz1 - 0.05, hz0 + 0.05; nst = 8; H = DECK_Y - HOLD_Y
     for sg in (-1, 1):
@@ -858,7 +869,7 @@ def rail_frame(s):
 
 def baluster(mb, base, h, col):
     with xf(mb, T(base)):
-        lathe(mb, [(0.055, 0), (0.055, 0.05), (0.035, 0.08), (0.06, h * 0.33), (0.03, h * 0.62), (0.045, h - 0.07), (0.05, h)], 6, 'wood', col, True)
+        lathe(mb, [(0.055, 0), (0.055, 0.05), (0.035, 0.08), (0.06, h * 0.33), (0.03, h * 0.62), (0.045, h - 0.07), (0.05, h)], 8, 'wood', col, True)
 
 def build_rails(mb):
     rng = mb.rng
@@ -932,7 +943,7 @@ def build_interior(mb):
     rng = mb.rng
     zf0, zf1 = -4.3, 5.75
     def dcol(): return jit(mul(C_INNER, 0.9), rng, 0.12)
-    floor_poly = deck_outline(HOLD_Y - 0.06, HOLD_Y, zf0, zf1, 30, 1.0)
+    floor_poly = deck_outline(HOLD_Y - 0.06, HOLD_Y, zf0, zf1, 30, 1.0, inner=True)
     deck_planks(mb, floor_poly, zf0, zf1, HOLD_Y, 0.06, 0.3, [], dcol)
     # ribs (frames) on the inside of the planking
     s = s_of_z(5.6, 0.5)
@@ -1158,7 +1169,6 @@ def build_rigging(mb):
     tip = Vector((0, 3.95, -10.4)); mid = Vector((0, 2.25, -5.45)).lerp(tip, 0.34)
     tube(mb, [(0, MAST_TOP - 0.35, MAST_Z - 0.08), tip + Vector((0, 0.1, 0.1))], 0.03, 5, 'rope', C_ROPE_D)       # forestay
     tube(mb, [(0, 10.35, MAST_Z - 0.25), mid + Vector((0, 0.19, 0))], 0.03, 5, 'rope', C_ROPE_D)                 # inner stay
-    tube(mb, [tip + Vector((0, -0.1, 0.12)), (0, 0.35, zstem(0.35) - 0.24)], 0.03, 5, 'rope', C_ROPE_D)          # bobstay
     for sg in (-1, 1):                                                                                            # backstays
         s = 2.0; p, nh = rail_frame(s)
         tube(mb, [(sg * 0.08, MAST_TOP - 0.5, MAST_Z + 0.08), (sg * (p.x - 0.05), p.y + 0.95, p.z)], 0.028, 5, 'rope', C_ROPE_D)
@@ -1296,8 +1306,8 @@ def build_cannon(mb, o, yaw):
                 pass
             with xf(mb, T(0, 0, sz * 0.25)):
                 # stepped cheek: profile in (x, y) extruded along z
-                with xf(mb, Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))):
-                    prism(mb, [(-0.56, -0.2), (0.5, -0.2), (0.5, -0.62), (0.14, -0.66), (-0.1, -0.52), (-0.34, -0.4), (-0.56, -0.32)], -0.055, 0.055, 'wood', C_RED, 0.0, (1, 0, 0))
+                with xf(mb, Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))):   # local (x, y, z) -> world (x, z, -y)
+                    prism(mb, [(-0.56, 0.2), (0.5, 0.2), (0.5, 0.6), (0.2, 0.68), (0.0, 0.68), (-0.56, 0.34)], -0.055, 0.055, 'wood', C_RED, 0.012, (1, 0, 0))
         cbox(mb, (-0.03, 0.2, 0), (1.0, 0.09, 0.42), 'wood', mul(C_RED, 0.85), 0.02)
         for sx in (-0.34, 0.32):
             cbox(mb, (sx, 0.15, 0), (0.13, 0.13, 0.84), 'wood', C_DARK, 0.02)
@@ -1450,7 +1460,7 @@ def main():
     o = (0, QDECK_Y + 0.95, hz); wheel = MB('Wheel', o); build_wheel(wheel, o); build(wheel)
     o = (0, 0, 6.41); rud = MB('Rudder', o); build_rudder(rud, o); build(rud)
     o = STATIONS['Station_Anchor'][0]; cap = MB('Capstan', o); build_capstan(cap, o); build(cap)
-    o = (2.02, ytop(-5.1) - 0.05, -5.1); anc = MB('Anchor', o); build_anchor(anc, o); build(anc)
+    o = (1.62, ytop(-5.1) - 0.05, -5.1); anc = MB('Anchor', o); build_anchor(anc, o); build(anc)
     for name, sg, yaw in (('Cannon_Starboard', 1, 0), ('Cannon_Port', -1, 180)):
         o = (sg * 1.38, DECK_Y, -1.5); c = MB(name, o, seed=1); build_cannon(c, o, yaw); build(c)
     for name, c, s, hang in (('Lantern_Stern', (0, ytop(6.5) + 1.55, zstern(ytop(6.5)) - 0.02), 1.5, False), ('Lantern_Mast', (0, 3.45, MAST_Z + 0.52), 1.0, True),
