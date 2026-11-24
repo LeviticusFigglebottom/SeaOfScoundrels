@@ -23,7 +23,7 @@ Read this before touching code. These contracts let workstreams land independent
 |---|---|---|
 | `InputSetup` | `src/core/input_setup.gd` | input actions |
 | `Net` | `src/net/net.gd` | session, `is_host()` |
-| `Weather` | `src/sky/weather.gd` | `time_of_day`, `wind_vector()`, `wind_speed`, `storminess`, `sun_direction()` |
+| `Weather` | `src/sky/weather.gd` | `time_of_day`, `wind_vector()`, `wind_speed`, `storminess`, `sun_direction()`, `set_weather()`, `lightning_struck` (see Sky) |
 | `Sea` | `src/ocean/sea.gd` | wave function: `height(x,z)`, `height_at(p)`, `depth(p)`, `normal(x,z)`, `displacement(x,z)`, `time`, `amp_scale`, `bind_material(mat)` |
 | `Game` | `src/core/game.gd` | session state, `post_notice()` |
 
@@ -64,4 +64,19 @@ Controllers: `PlayerController` (local input, first-person camera), `CrewBrain` 
 1 world static (terrain, docks) · 2 ships (hull and deck) · 3 pawns · 4 interactables (areas) · 5 projectiles · 6 carryables and debris · 7 water volumes and triggers.
 
 ## Sky (`src/sky/`)
-`sky_rig.tscn` is dropped into any scene: owns `WorldEnvironment`, sun and moon `DirectionalLight3D`, sky shader, clouds, stars, fog and precipitation, all driven by `Weather`. It sets these global shader uniforms for other shaders (declared in `project.godot` by the lead): `sun_dir: vec3`, `sun_color: vec3`, `sky_horizon_color: vec3`, `sky_zenith_color: vec3`, `ambient_color: vec3`.
+`sky_rig.tscn` is dropped into any scene: owns `WorldEnvironment`, sun and moon `DirectionalLight3D`, sky shader, clouds, stars, fog and precipitation, all driven by `Weather`. It holds no state, so it is safe on every peer. Do not add another `WorldEnvironment` or directional light to a scene that has the rig. It sets these global shader uniforms every frame (declared in `project.godot` by the lead), all in **linear RGB**:
+- `sun_dir: vec3` unit vector towards the dominant light (sun by day, moon by night), never lower than about 6 degrees above the horizon, identical to the shadow-casting `DirectionalLight3D`.
+- `sun_color: vec3` that light's colour times energy (includes lightning flashes).
+- `sky_horizon_color: vec3` horizon colour; the fog colour is the same value, so fade distant things to it.
+- `sky_zenith_color: vec3`, `ambient_color: vec3` (ambient colour times energy).
+
+Rig members other systems may read: `sun`, `moon`, `environment`, `palette` (this frame's colours). Colours come from `sky_palette.gd`, a pure function of sun height, cloud cover and storminess; tune the look there.
+
+`Weather` (host-authoritative; setters are no-ops on clients):
+- State: `time_of_day`, `day`, `day_length_seconds`, `wind_heading`, `wind_speed` (mean), `storminess`, `cloudiness`, `cloud_offset`, `clock`. `get_state()` / `apply_state(dict)` are the replication hooks.
+- Change it: `set_weather(storminess, wind_speed, wind_heading, seconds = 0, cloudiness = -1)` eases to the target; `set_preset(&"clear" | &"fair" | &"breezy" | &"overcast" | &"squall" | &"storm", seconds)`; `is_transitioning()`, `target_storminess()`.
+- Wind: `wind_vector()` **includes gusts** (speed and a small veer); `mean_wind_vector()` is the steady wind; `gust_factor()`, `gustiness()`.
+- Sky: `sun_direction()`, `moon_direction()`, `dominant_light_direction()`, `sun_height()`, `daylight()` (0..1), `is_night()`, `moon_phase()`, `cloud_cover()`, `rain_intensity()`.
+- Lightning: starts above storminess 0.55. `signal lightning_struck(direction: Vector3, distance: float, intensity: float)` (direction is horizontal, from the listener; delay thunder by distance / 340). `lightning_flash` is the 0..1 flash brightness; `strike_lightning(direction, distance, intensity)` forces one; `lightning_enabled` turns automatic strikes off.
+
+Showcase: `tools/capture.sh res://scenes/showcase/sky_showcase.tscn <name> 2 5 -- time=18.1 storm=0 cloud=0.4`; see the header of `scenes/showcase/sky_showcase.gd` for all arguments (`timelapse=1`, `to_storm=1`, `strike=`, `look=`).

@@ -199,7 +199,7 @@ func _update(first: bool) -> void:
 	if _flash_light.visible:
 		_aim(_flash_light, (Weather.lightning_direction + Vector3(0.0, 0.8, 0.0)).normalized())
 		_flash_light.light_color = p["flash_color"]
-		_flash_light.light_energy = flash * 2.2
+		_flash_light.light_energy = flash * 1.8
 
 	# Environment.
 	var horizon: Color = p["horizon"]
@@ -207,7 +207,7 @@ func _update(first: bool) -> void:
 	var flash_col: Color = p["flash_color"]
 	var ambient_energy: float = p["ambient_energy"]
 	environment.ambient_light_color = ambient.lerp(flash_col, minf(flash * 0.5, 1.0))
-	environment.ambient_light_energy = ambient_energy + flash * 0.8
+	environment.ambient_light_energy = ambient_energy + flash * 0.6
 	environment.fog_light_color = horizon
 	environment.fog_density = p["fog_density"]
 

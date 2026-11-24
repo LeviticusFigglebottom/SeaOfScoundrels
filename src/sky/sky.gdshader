@@ -179,6 +179,8 @@ void sky() {
 		float b = 1.0 - thick * mix(0.75, 0.5, low_light) + facing * mix(0.35, 1.0, low_light);
 		// Three flat tones with soft steps between them: the painterly part.
 		float tone = 0.55 * smoothstep(0.32, 0.46, b) + 0.45 * smoothstep(0.62, 0.74, b);
+		// A storm deck is mostly shade, with only thin pale seams.
+		tone *= mix(1.0, 0.6, storm);
 		vec3 c = mix(cloud_shade_color, cloud_lit_color, tone);
 		// Heavy storm bases: the thick parts sink towards near-black.
 		c *= mix(1.0, mix(1.0, 0.62, smoothstep(0.35, 1.0, thick)), storm);
@@ -188,7 +190,7 @@ void sky() {
 		c += cloud_rim_color * rim * 0.9;
 		// Lightning lights the cloud deck from inside, brightest towards the bolt.
 		float to_flash = max(dot(normalize(d.xz + vec2(0.00001)), flash_dir.xz), 0.0);
-		c += flash_color * flash * (0.25 + 1.6 * pow(to_flash, 3.0)) * (0.35 + 0.65 * n);
+		c += flash_color * flash * (0.16 + 1.2 * pow(to_flash, 3.0)) * (0.35 + 0.65 * n);
 
 		cloud_alpha = alpha * (1.0 - haze * 0.92);
 		cloud_col = c;

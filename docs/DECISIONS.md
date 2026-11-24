@@ -25,3 +25,10 @@ Newest last. Each entry: decision, why, and what would change it.
 **D11. Font: FLAG.** No font file is in the repo. Text uses Godot's built-in fallback font, which ships inside the engine binary (Open Sans, OFL). If that counts as third-party content, the fix is a generated stroke font from `tools/`; planned as a polish item.
 
 **D12. First-person player, third-person-quality crew.** Like the inspiration, the player is first person (immersion with diegetic tools), but player and AI share one `Pawn` with a full body model so co-op partners and crew look right.
+
+**D13. Clouds are flat noise layers in the sky shader, not meshes or raymarching.** Two layers (cumulus, cirrus) sample one generated 512 px noise texture (`tools/textures/gen_sky_noise.py`); the cumulus edge is a tight threshold and its shading is three flat tones from a second sample taken towards the light. Seven texture reads per sky pixel, no extra passes or draw calls, which fits the 1.5 ms sky budget with room to spare. The cost: clouds have no parallax or real volume and cannot be flown through or cast shadows on the sea. Revisit with Rare-style cloud meshes if landmark clouds (skull, ship) or towering storm cells are wanted.
+
+**D14. The sky's colours live in one script, `src/sky/sky_palette.gd`.** A pure function of sun height, cloud cover and storminess, keyed at six sun heights and authored in sRGB. The sky shader, lights, fog and the global uniforms all read the same values, so fog always matches the horizon. The sky's radiance map runs in realtime mode (256 px) because the sky changes every frame.
+
+**D15. `Weather.wind_vector()` includes gusts.** Sails, spray and flags get gusts without extra code; anything that needs the steady wind uses `mean_wind_vector()`. Gusts are a function of the replicated `clock`, so peers agree.
+
