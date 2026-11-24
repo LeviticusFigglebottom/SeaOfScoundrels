@@ -26,7 +26,7 @@ const PRESETS := {
 ## Storminess above which lightning starts.
 const LIGHTNING_THRESHOLD := 0.55
 ## Sun height (sine of elevation) below which the moon becomes the dominant light.
-const DOMINANT_SWITCH_HEIGHT := -0.05
+const DOMINANT_SWITCH_HEIGHT := -0.095
 ## Days per full cycle of the moon's phase.
 const MOON_CYCLE_DAYS := 8.0
 

@@ -103,14 +103,16 @@ static func compute(sun_h: float, moon_h: float, evening: float, moon_lit: float
 	# Overcast swallows the blue; storms add the green-grey cast and dim everything.
 	var grey := smoothstep(0.55, 1.0, cover) * 0.85
 	var gloom := smoothstep(0.0, 1.0, storm)
-	var storm_level := lerpf(0.22, 1.0, day) * lerpf(1.0, 0.78, gloom)
-	zenith = zenith.lerp(STORM_ZENITH * storm_level, grey)
-	mid = mid.lerp(STORM_ZENITH.lerp(STORM_HORIZON, 0.45) * storm_level, grey)
-	horizon = horizon.lerp(STORM_HORIZON * storm_level, grey * 0.92)
+	var storm_level := lerpf(0.42, 1.0, day) * lerpf(1.0, 0.78, gloom)
+	# Storm greys lean blue at night so a stormy night is still a blue night.
+	var storm_tint := Color(1.0, 1.0, 1.0).lerp(Color(0.62, 0.85, 1.35), 1.0 - day)
+	zenith = zenith.lerp(STORM_ZENITH * storm_tint * storm_level, grey)
+	mid = mid.lerp(STORM_ZENITH.lerp(STORM_HORIZON, 0.45) * storm_tint * storm_level, grey)
+	horizon = horizon.lerp(STORM_HORIZON * storm_tint * storm_level, grey * 0.92)
 	var glow_strength := _sample_f(GLOW_STRENGTH, sun_h) * (1.0 - grey * 0.85)
-	ambient = ambient.lerp(STORM_AMBIENT * storm_level, grey * 0.9)
-	cloud_lit = cloud_lit.lerp(STORM_CLOUD_LIT * storm_level, grey * lerpf(0.55, 1.0, gloom))
-	cloud_shade = cloud_shade.lerp(STORM_CLOUD_SHADE * lerpf(0.45, 1.0, day), gloom * 0.9 + grey * 0.1)
+	ambient = ambient.lerp(STORM_AMBIENT * storm_tint * storm_level, grey * 0.9)
+	cloud_lit = cloud_lit.lerp(STORM_CLOUD_LIT * storm_tint * storm_level, grey * lerpf(0.55, 1.0, gloom))
+	cloud_shade = cloud_shade.lerp(STORM_CLOUD_SHADE * storm_tint * lerpf(0.6, 1.0, day), gloom * 0.9 + grey * 0.1)
 	cloud_rim = cloud_rim * (1.0 - grey)
 	# Direct light: clouds soak it up, and what gets through a storm is greenish.
 	var direct := lerpf(1.0, 0.16, smoothstep(0.45, 1.0, cover)) * lerpf(1.0, 0.7, gloom)
