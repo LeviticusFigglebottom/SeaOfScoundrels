@@ -35,6 +35,15 @@ One finding shapes the whole design: Rare deliberately blocked the helm's view a
 6. **A perilous, living sea.** Storms, sea monsters, ghost and skeleton ships, forts. Sailing downtime is never empty.
 7. **Charm.** Shanties, instruments, grog, humour, expressive animation.
 
+## Quality bar (owner directive, 2026-11-24)
+
+No graphical or mechanical quality is to be compromised. The flagship features are, together: the water and seas (massive, dynamic, beautiful, at times turbulent), the sky and weather, the physics, the ships with all their mechanics fully fleshed out, and the islands. In practice:
+
+- A flagship system is not "done" at first merge. It is done when captures hold up against the vision in every condition (calm, storm, noon, sunset, night, close, far, in motion), a fresh reviewer has gone through it, and its listed weak spots are fixed, not just logged.
+- When quality and the frame budget conflict, build the high-quality version and add a scalable quality setting below it; do not ship the cheap version as the only one.
+- When quality and schedule conflict, quality wins: go deeper on the flagship systems before going wider on content.
+- Placeholders (flat water planes, primitive ships, capsule characters) never appear in the main game scene once the real system exists.
+
 ## 3. Core loop
 
 Port (stock up, pick voyages, refit) → set sail (crew the ship, navigate with diegetic tools) → the sea happens (weather, events, rivals) → objective (island, fort, wreck, hunt) → haul treasure home under threat → sell, earn gold and renown → sidegrade the ship and crew.

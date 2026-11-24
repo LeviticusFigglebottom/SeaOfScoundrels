@@ -36,3 +36,5 @@ Newest last. Each entry: decision, why, and what would change it.
 
 **D17. `Weather.wind_vector()` includes gusts.** Sails, spray and flags get gusts without extra code; anything that needs the steady wind uses `mean_wind_vector()`. Gusts are a function of the replicated `clock`, so peers agree.
 
+
+**D18. Quality bar for flagship systems (owner directive, 2026-11-24).** See "Quality bar" in DESIGN.md. Consequences: every flagship workstream (ocean, sky and weather, ship physics and mechanics, ship model, islands) gets an independent review and at least one dedicated polish pass after first merge; the frame budget in D10 is a target for the default quality preset, with higher presets allowed to exceed it; D15 (flat cloud layers) is reopened, since clouds without volume do not meet the bar.
