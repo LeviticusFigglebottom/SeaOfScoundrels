@@ -18,22 +18,33 @@ const GRAVITY := 9.81
 const MAX_WAVES := 12
 
 ## Wave table: wavelength (m), amplitude (m, at amp_scale 1), heading (rad,
-## direction of travel, 0 = towards -Z), steepness (0..1, horizontal pinch).
+## direction of travel, 0 = towards -Z), steepness (horizontal pinch relative
+## to the amplitude; 1 = classic Gerstner, more = choppier crests).
 ## Constraint: sum(k * amplitude * steepness) * max amp_scale must stay < 1 or
-## crests loop over themselves.
+## crests loop over themselves (tests/test_sea.gd checks this).
+##
+## Shape: a long primary swell train (three wavelengths within ~30 degrees, so
+## they beat into sets of big waves and lulls), a crossing secondary swell, and
+## wind sea filling in below. Amplitude is roughly proportional to wavelength,
+## so the energy sits in the long waves: the sea reads as large, not as ripples.
 const WAVE_TABLE: Array[Array] = [
-	[97.0, 0.62, 0.35, 0.80],
-	[61.0, 0.40, 0.72, 0.80],
-	[41.0, 0.26, -0.10, 0.75],
-	[27.0, 0.17, 0.95, 0.70],
-	[17.0, 0.10, -0.45, 0.65],
-	[11.0, 0.065, 0.20, 0.60],
-	[7.3, 0.040, 1.30, 0.55],
-	[4.9, 0.026, -0.80, 0.50],
+	[211.0, 1.10, 0.30, 1.15],
+	[149.0, 0.74, 0.58, 1.15],
+	[103.0, 0.50, 0.08, 1.20],
+	[71.0, 0.34, 0.80, 1.20],
+	[47.0, 0.22, -0.28, 1.20],
+	[31.0, 0.145, 1.05, 1.15],
+	[21.0, 0.095, -0.62, 1.10],
+	[14.0, 0.062, 0.42, 1.05],
+	[9.1, 0.039, 1.45, 0.95],
+	[6.1, 0.025, -1.02, 0.90],
+	[4.3, 0.016, 0.92, 0.80],
+	[3.1, 0.010, -0.20, 0.70],
 ]
 
 ## Calm-to-storm amplitude multipliers, blended by Weather.storminess.
-const AMP_CALM := 0.75
+## Calm: a gentle long swell about 1 m high. Storm: 6 to 12 m seas.
+const AMP_CALM := 0.5
 const AMP_STORM := 2.6
 
 ## Seconds of wave time. Host-owned.
