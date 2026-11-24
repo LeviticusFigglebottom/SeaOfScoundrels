@@ -17,7 +17,7 @@ frames=$(python3 -c "print(int(round($secs*$fps)))")
 [ -d .godot/imported ] || "$GODOT" --headless --path . --import >/dev/null 2>&1 || true
 runner=()
 [ -z "${DISPLAY:-}" ] && runner=(xvfb-run -a -s "-screen 0 1920x1080x24")
-"${runner[@]}" "$GODOT" --path . --rendering-method forward_plus --audio-driver Dummy \
+"${runner[@]}" "$GODOT" --path . --rendering-method forward_plus --audio-driver Dummy --debug-mute-audio \
 	--write-movie "$out/f.png" --fixed-fps "$fps" --quit-after "$frames" \
 	"$scene" -- "$@" 2>&1 | grep -E "ERROR|SHADER|WARNING|at: |res://|recorded in|render time" | grep -vE "ALSA|audio|f_wav|movie_writer|d.is_null" || true
 rm -f "$out"/*.wav

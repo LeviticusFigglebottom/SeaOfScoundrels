@@ -15,6 +15,8 @@ Read this before touching code. These contracts let workstreams land independent
 ## Verification
 - `tools/test.sh [test_name]` runs headless tests (`tests/test_*.gd`, extend `TestCase`).
 - `tools/capture.sh res://scene.tscn name [seconds] [fps] [-- args]` renders PNG frames (1600x900) and an mp4 into `captures/` (git-ignored) with software Vulkan. It is slow (0.2 to 2 s per frame): use 5 to 10 fps and short clips. Look at the frames with the Read tool and judge them against DESIGN.md.
+- `tools/lint.py [paths]` lints GDScript through the engine's language server (errors and warnings with codes). Run it before committing.
+- Engine notes for 4.8 (new APIs worth using, breaking changes): `docs/GODOT_4_8_NOTES.md`.
 - Showcase scenes live in `scenes/showcase/<system>_showcase.tscn`, are self-contained, and script their own camera so captures are repeatable.
 - The machine has 4 cores and other agents are rendering too. Do not run more than one capture at a time.
 

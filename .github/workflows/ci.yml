@@ -24,6 +24,8 @@ jobs:
           godot --version
       - name: Import
         run: godot --headless --path . --import || true
+      - name: Lint
+        run: tools/lint.py
       - name: Tests
         run: tools/test.sh
       - name: Network smoke test
