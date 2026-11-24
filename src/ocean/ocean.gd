@@ -46,8 +46,8 @@ const FOAM_TILE := 256.0
 @export var rain_intensity: float = -1.0
 ## Crests foam where the wave Jacobian drops below `foam_crest_start` and are
 ## solid white at `foam_crest_full`.
-@export var foam_crest_start: float = 0.87
-@export var foam_crest_full: float = 0.46
+@export var foam_crest_start: float = 0.88
+@export var foam_crest_full: float = 0.62
 
 const SHADER := preload("res://src/ocean/ocean.gdshader")
 const DETAIL_TEX := preload("res://assets/generated/ocean/water_detail.png")

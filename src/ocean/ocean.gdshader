@@ -31,8 +31,8 @@ uniform float sss_strength = 1.0;
 uniform float reflectivity = 0.75;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.95, 0.98, 0.96);
-uniform float foam_crest_start = 0.87; // Jacobian below this starts to foam
-uniform float foam_crest_full = 0.46;
+uniform float foam_crest_start = 0.88; // Jacobian below this starts to foam
+uniform float foam_crest_full = 0.62;
 uniform float foam_scale = 0.085;
 uniform float shore_foam_depth = 1.3;
 group_uniforms sun;
@@ -91,7 +91,8 @@ float field_foam(vec2 rest, float dist) {
 
 // Painterly foam: `amount` (0..1) erodes a lace pattern; edges stay crisp.
 // `streak` (0..1) pulls the pattern out along the wind: spindrift.
-float foam_mask(float amount, vec2 rest, float soft, float streak) {
+// Returns x = coverage, y = how thick the foam is there (0 at a patch's edge).
+vec2 foam_mask(float amount, vec2 rest, float soft, float streak) {
 	vec2 uv = rest * foam_scale;
 	float warp = texture(foam_tex, uv * 0.23 + vec2(0.11, 0.07)).g;
 	vec2 w = (vec2(warp, texture(foam_tex, uv.yx * 0.19).g) - 0.5) * 0.35;
@@ -104,15 +105,16 @@ float foam_mask(float amount, vec2 rest, float soft, float streak) {
 		// the same lace, squeezed across the wind and drawn out along it
 		vec2 along = wind_dir;
 		vec2 across = vec2(-wind_dir.y, wind_dir.x);
-		vec2 suv = vec2(dot(rest, along) * 0.10, dot(rest, across) * 1.05) * foam_scale;
+		vec2 suv = vec2(dot(rest, along) * 0.17, dot(rest, across) * 0.62) * foam_scale;
 		float s1 = texture(foam_tex, suv + w * 0.3 + vec2(0.010, 0.0) * sea_time).r;
-		float s2 = texture(foam_tex, suv * vec2(0.6, 2.3) + 0.37 + vec2(0.017, 0.0) * sea_time).b;
+		float s2 = texture(foam_tex, suv * vec2(0.6, 1.7) + 0.37 + vec2(0.017, 0.0) * sea_time).b;
 		pattern = mix(pattern, s1 * 0.6 + s2 * 0.4, streak);
 	}
 	pattern = smoothstep(0.12, 0.88, pattern);
 	// amount = 1 covers everything, small amounts leave only the thinnest lace.
 	float thr = 1.0 - amount;
-	return smoothstep(thr - soft, thr + soft, 1.0 - pattern) * smoothstep(0.0, 0.08, amount);
+	float cover = smoothstep(thr - soft, thr + soft, 1.0 - pattern) * smoothstep(0.0, 0.08, amount);
+	return vec2(cover, smoothstep(thr, thr + 0.45, 1.0 - pattern));
 }
 
 vec3 hash32(vec2 p) {
@@ -193,9 +195,9 @@ void fragment() {
 	vec3 n_shade = normalize(vec3(n_geo.x * exag, n_geo.y, n_geo.z * exag));
 	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
 	float splash = 0.0;
-	if (rain_intensity > 0.01 && quality > 0 && fp < 0.25) {
-		vec3 rr = rain_rings(v_rest, rain_intensity, quality > 1 ? 3 : 2) * smoothstep(0.25, 0.05, fp);
-		n_detail += vec3(rr.x, 0.0, rr.y) * 0.55;
+	if (rain_intensity > 0.01 && quality > 0 && fp < 0.09) {
+		vec3 rr = rain_rings(v_rest, rain_intensity, quality > 1 ? 3 : 2) * smoothstep(0.09, 0.02, fp);
+		n_detail += vec3(rr.x, 0.0, rr.y) * 0.22;
 		splash = rr.z;
 	}
 	vec3 N = normalize(n_shade + n_detail);
@@ -247,10 +249,15 @@ void fragment() {
 			vec2 cq = scene_world.xz + L.xz * (vdepth / sun_up);
 			float caus = ocean_caustic(cq) * exp(-vdepth * 0.22) * smoothstep(0.0, 0.5, vdepth);
 			caus *= smoothstep(120.0, 30.0, dist);
+			// light comes from above: floors catch it, walls and hull sides do not
+			vec3 floor_n = normalize(cross(dFdy(scene_world), dFdx(scene_world)));
+			caus = min(caus, 2.5) * smoothstep(0.25, 0.7, floor_n.y);
 			behind *= 1.0 + caus * 1.6 * smoothstep(0.0, 0.3, L.y) * (sun_light.g + 0.1);
 		}
 		// anything seen through water reads a little darker and richer straight away
 		behind *= 0.68 + 0.32 * exp(-thick * 4.0);
+		// ...and takes the water's hue at once, so sunken things never look chalky
+		behind *= mix(vec3(1.0), vec3(0.42, 0.92, 0.97), 1.0 - exp(-thick * 1.2));
 
 		// crest mask: pinched and high water is thin, so light gets through
 		float crest = clamp((1.0 - jac) * 1.8, 0.0, 1.0) * 0.55 + smoothstep(0.15, 1.1, h_rel) * 0.65;
@@ -270,7 +277,7 @@ void fragment() {
 		// mostly vertical depth, so shallows stay clear even at grazing view angles
 		float path = vdepth * 1.5 + min(thick, 10.0) * 0.12;
 		vec3 trans = exp(-(absorption + turbidity) * path);
-		float fill = 1.0 - exp(-turbidity * path);
+		float fill = 1.0 - exp(-turbidity * (path + min(thick, 4.0) * 0.8));
 		vec3 shallow_tint = scatter_color * light * 0.55;
 		col = behind * trans + mix(shallow_tint, body, smoothstep(0.0, 9.0, path)) * fill;
 
@@ -286,7 +293,10 @@ void fragment() {
 		// the glow around the sun also reflects: a warm path at low sun
 		float rs = max(dot(R, L), 0.0);
 		refl += sun_light * (pow(rs, 10.0) * 0.30 + pow(rs, 80.0) * 0.6);
-		col = mix(col, refl, clamp(fres * reflectivity, 0.0, 1.0));
+		// a thin film of water over something solid mirrors less (stylized: keeps
+		// sunken hulls and rocks from turning chalky under the sky's reflection)
+		float film = mix(0.3, 1.0, smoothstep(0.0, 2.5, thick));
+		col = mix(col, refl, clamp(fres * reflectivity * film, 0.0, 1.0));
 
 		// --- stylized sun / moon glitter: a crisp core plus a soft sheen, widened by roughness
 		vec3 H = normalize(L + V);
@@ -304,7 +314,7 @@ void fragment() {
 		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
 		vec3 glint_col = sun_light * (1.0 + 1.5 * smoothstep(0.5, 0.05, key));
 		col += glint_col * glint * glint_strength * (0.2 + 0.8 * fres) * smoothstep(-0.02, 0.05, L.y);
-		col += (ambient_color + sun_light * 0.5) * splash * 0.6;
+		col += (ambient_color + sun_light * 0.5) * splash * 0.35;
 
 		// --- foam: breaking crests (Jacobian), lingering in the simulated field
 		float lod_fade = smoothstep(0.9, 0.25, fp * 0.18);
@@ -332,6 +342,17 @@ void fragment() {
 		// shoreline / intersection foam from the depth buffer
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
 		float vd0 = max(v_world.y - sw0.y, 0.0);
+		float in_water = 1.0;
+		if (quality > 0 && thick0 < 8.0 && vd0 < shore_foam_depth) {
+			// Measure depth under the water directly above the hit point, not
+			// under the pixel: a ray that dives through a wave face would
+			// otherwise read as shallow and paint foam along hull sides.
+			vec2 rest_there = sw0.xz - (v_world.xz - v_rest);
+			float sd = sea_displacement_lod(rest_there, fp * 2.5).y - sw0.y;
+			vd0 = max(sd, 0.0);
+			// seen through a hump of water but actually in the air behind it: no foam
+			in_water = smoothstep(-0.30, -0.05, sd);
+		}
 		// Beaches get a wide wash; steep things (rocks, hulls, crates) only a
 		// thin lip. Steepness comes from the depth buffer's own slope.
 		vec3 scene_n = normalize(cross(dFdy(sw0), dFdx(sw0)));
@@ -341,18 +362,24 @@ void fragment() {
 		// wash lines sweeping in towards the beach, plus a solid lip at contact
 		float band = 0.5 + 0.5 * sin(vd0 * 11.0 / foam_depth + sea_time * 1.3 + blot * 6.0);
 		float shore_foam = shore * (0.25 + 0.75 * band * band) * 0.9 + smoothstep(0.10, 0.0, vd0) * 0.7;
-		shore_foam *= step(scene_z, surf_z + 60.0);
+		shore_foam *= step(scene_z, surf_z + 60.0) * in_water;
 
 		float soft = clamp(0.05 + fp * 0.6, 0.05, 0.5);
-		float amount = clamp(max(crest_foam, shore_foam), 0.0, 1.0);
+		// open-water foam always keeps some holes; only the shore lip goes solid
+		float amount = clamp(max(min(crest_foam, 0.68), shore_foam), 0.0, 1.0);
 		// old foam and standing foam streak downwind in a blow: spindrift
 		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
-		foam = foam_mask(amount, v_rest, soft, quality > 0 ? streak : 0.0);
+		vec2 fm = foam_mask(amount, v_rest, soft, quality > 0 ? streak : 0.0);
 		// beyond pattern resolution, fall back to plain coverage
-		foam = mix(amount * amount * 0.6, foam, lod_fade);
-		vec3 foam_lit = foam_color * (ambient_color * 0.85 + sun_light * (0.35 + 0.55 * clamp(dot(N, L), 0.0, 1.0)));
-		// thin foam lets the water colour through: reads as paint, not as noise
-		col = mix(col, foam_lit, foam * 0.92);
+		foam = mix(amount * amount * 0.6, fm.x, lod_fade);
+		float foam_body = mix(0.5, fm.y, lod_fade);
+		vec3 foam_light = ambient_color * 0.85 + sun_light * (0.35 + 0.55 * clamp(dot(N, L), 0.0, 1.0));
+		// two tones, like paint: thin edges carry the water's colour, thick
+		// centres are bright, and the wave's own shading still shows through
+		vec3 thin_tone = mix(scatter_color, foam_color, 0.62);
+		vec3 foam_lit = mix(thin_tone, foam_color, smoothstep(0.05, 0.75, foam_body)) * foam_light;
+		foam_lit *= mix(0.80, 1.06, smoothstep(0.80, 1.0, slope_light));
+		col = mix(col, foam_lit, foam * mix(0.78, 0.96, foam_body));
 
 		alpha_edge = smoothstep(0.0, 0.06, thick0);
 		col = mix(texture(screen_tex, SCREEN_UV).rgb, col, alpha_edge);

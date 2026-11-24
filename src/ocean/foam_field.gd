@@ -35,7 +35,8 @@ void fragment() {
 	float f = smoothstep(crest_start, crest_full, j);
 	// wipe the far band so stale foam never wraps back in
 	float wipe = smoothstep(0.445, 0.485, distance(rest, center) / tile);
-	COLOR = vec4(vec3(1.0 - wipe), max(f * rate, wipe));
+	// blend towards the crest's own strength (never past it), or to zero in the wipe band
+	COLOR = vec4(vec3(f * (1.0 - wipe)), max(f * rate, wipe));
 }
 "
 

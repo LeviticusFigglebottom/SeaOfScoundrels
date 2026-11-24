@@ -256,8 +256,8 @@ func _build_floaters() -> void:
 	_add_floater(barrel, Color(0.50, 0.30, 0.16), Vector3(3.5, 1.1, -14.0), -0.15, 0.5)
 	# a sloop-sized hulk for scale in the big-sea shots
 	var hulk := BoxMesh.new()
-	hulk.size = Vector3(4.4, 2.4, 13.0)
-	_add_floater(hulk, Color(0.45, 0.27, 0.15), Vector3(-16.0, 0.6, -46.0), -0.5, 5.0)
+	hulk.size = Vector3(4.4, 3.6, 13.0)
+	_add_floater(hulk, Color(0.45, 0.27, 0.15), Vector3(-16.0, 0.6, -46.0), 0.3, 5.0)
 	var mast := CylinderMesh.new()
 	mast.top_radius = 0.16
 	mast.bottom_radius = 0.22
