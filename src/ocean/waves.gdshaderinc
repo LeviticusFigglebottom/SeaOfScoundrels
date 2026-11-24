@@ -79,11 +79,13 @@ vec3 sea_displacement_lod(vec2 p, float cut) {
 }
 
 // Normal and Jacobian at wave time t, dropping waves shorter than `cut`.
-// lost_var is the slope variance of what was dropped (to widen highlights).
-void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var) {
+// lost_var is the slope variance of what was dropped (to widen highlights);
+// h is the vertical displacement of rest point p (for shading masks).
+void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h) {
 	float dxx = 1.0, dzz = 1.0, dxz = 0.0;
 	float dyx = 0.0, dyz = 0.0;
 	lost_var = 0.0;
+	h = 0.0;
 	for (int i = 0; i < sea_wave_count; i++) {
 		vec4 a = sea_wave_a[i];
 		vec4 b = sea_wave_b[i];
@@ -91,6 +93,7 @@ void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out fl
 		float ka = a.z * a.w * sea_amp_scale;
 		lost_var += (1.0 - w * w) * ka * ka * 0.5;
 		float th = a.z * dot(a.xy, p) - b.y * t + b.z;
+		h += cos(th) * a.w * sea_amp_scale;
 		float c = cos(th) * a.z * sea_amp_scale * w;
 		float s = sin(th) * a.z * sea_amp_scale * w;
 		dxx -= a.x * a.x * b.x * c;

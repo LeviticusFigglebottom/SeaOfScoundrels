@@ -23,7 +23,7 @@ uniform float sss_strength = 1.0;
 uniform float reflectivity = 0.75;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.95, 0.98, 0.96);
-uniform float foam_crest_start = 0.84; // Jacobian below this starts to foam
+uniform float foam_crest_start = 0.87; // Jacobian below this starts to foam
 uniform float foam_crest_full = 0.46;
 uniform float foam_scale = 0.085;
 uniform float shore_foam_depth = 1.3;
@@ -39,7 +39,6 @@ uniform float skirt_distance = 60000.0;
 
 varying vec2 v_rest;
 varying vec3 v_world;
-varying float v_height;
 
 void vertex() {
 	vec2 rest = VERTEX.xz;
@@ -52,11 +51,10 @@ void vertex() {
 	}
 	float dist = distance(rest, cam.xz);
 	float cell = max(mesh_base_cell, dist * mesh_cell_per_metre);
-	vec3 d = sea_displacement_lod(rest, cell * 2.5);
+	vec3 d = sea_displacement_lod(rest, cell * 3.0);
 	VERTEX = vec3(rest.x, 0.0, rest.y) + d;
 	v_rest = rest;
 	v_world = VERTEX;
-	v_height = d.y;
 	POSITION = PROJECTION_MATRIX * (VIEW_MATRIX * vec4(VERTEX, 1.0));
 	// Depth clamp: geometry past the far plane stays just inside it (reversed Z).
 	POSITION.z = max(POSITION.z, POSITION.w * 2e-7);
@@ -93,13 +91,17 @@ void fragment() {
 	float storm = clamp((sea_amp_scale - 0.5) / 2.0, 0.0, 1.0);
 
 	// --- surface normal and pinch, per pixel, filtered to the pixel footprint
-	float fp_a = length(dFdx(v_rest));
-	float fp_b = length(dFdy(v_rest));
-	float fp = mix(min(fp_a, fp_b), max(fp_a, fp_b), 0.35);
+	// Footprint of a pixel on the water, metres. Analytic (distance and grazing
+	// angle) rather than from derivatives, which are constant per triangle and
+	// would print the mesh into the shading.
+	float px_angle = 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y);
+	float fp_across = dist * px_angle;
+	float fp = fp_across * mix(1.0, 1.0 / max(abs(V.y), 0.04), 0.35);
 	vec3 n_geo;
 	float jac;
 	float lost_var;
-	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var);
+	float wave_h; // analytic, so colour masks do not show the mesh
+	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var, wave_h);
 
 	// normal-only micro detail (three scrolling octaves of generated ripples)
 	vec2 r1 = texture(detail_tex, v_rest * 0.110 + vec2(0.031, 0.017) * sea_time).rg;
@@ -165,7 +167,7 @@ void fragment() {
 
 		// crest mask: pinched and high water is thin, so light gets through
 		float amp_ref = max(sea_amp_scale * 2.3, 0.3);
-		float h_rel = v_height / amp_ref;
+		float h_rel = wave_h / amp_ref;
 		float crest = clamp((1.0 - jac) * 1.8, 0.0, 1.0) * 0.55 + smoothstep(0.15, 1.1, h_rel) * 0.65;
 		crest = clamp(crest, 0.0, 1.0);
 		float facing = 1.0 - max(dot(N, V), 0.0);
@@ -184,7 +186,7 @@ void fragment() {
 		float path = vdepth * 1.5 + min(thick, 10.0) * 0.12;
 		vec3 trans = exp(-(absorption + turbidity) * path);
 		float fill = 1.0 - exp(-turbidity * path);
-		vec3 shallow_tint = scatter_color * light * 0.9;
+		vec3 shallow_tint = scatter_color * light * 0.55;
 		col = behind * trans + mix(shallow_tint, body, smoothstep(0.0, 9.0, path)) * fill;
 
 		// --- reflection
@@ -222,7 +224,7 @@ void fragment() {
 		float crest_foam = max(f_now, f_trail);
 		// wind streaks: a little standing foam in rough weather
 		float blot = texture(foam_tex, v_rest * 0.013 + vec2(0.002, 0.001) * sea_time).g;
-		crest_foam = max(crest_foam, storm * smoothstep(0.45, 0.95, blot) * 0.42 * smoothstep(-0.5, 0.5, v_height / amp_ref));
+		crest_foam = max(crest_foam, storm * smoothstep(0.45, 0.95, blot) * 0.42 * smoothstep(-0.5, 0.5, wave_h / amp_ref));
 
 		// shoreline / intersection foam from the depth buffer
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
