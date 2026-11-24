@@ -20,6 +20,8 @@ jobs:
         run: godot --headless --path . --import || true
       - name: Tests
         run: tools/test.sh
+      - name: Network smoke test
+        run: tools/test_net.sh
       - name: Export Linux
         run: |
           mkdir -p build/linux
