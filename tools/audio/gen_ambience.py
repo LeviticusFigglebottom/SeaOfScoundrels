@@ -72,7 +72,7 @@ def sea_calm(rng) -> np.ndarray:
 
 	def gain(fc, t):
 		s = sw_fn(t)
-		wash = (0.45 + 0.55 * s) * bp_shape(fc, 700.0 + 900.0 * s, 4.0) * tilt(fc, -3.0) * hp_shape(fc, 160.0, 1.0)
+		wash = (0.2 + 0.8 * s * s) * bp_shape(fc, 700.0 + 900.0 * s, 4.0) * tilt(fc, -3.0) * hp_shape(fc, 160.0, 1.0)
 		deep = 0.1 * lp_shape(fc, 110.0, 2) * tilt(fc, -3.0)
 		air = 0.05 * hp_shape(fc, 3000.0) * lp_shape(fc, 9000.0)
 		return wash + deep + air
@@ -84,7 +84,7 @@ def sea_calm(rng) -> np.ndarray:
 		clip, t0 = wave_event(rng, strength=rng.uniform(0.25, 0.6), pre=rng.uniform(0.5, 1.0), crash=0.12,
 							  wash=rng.uniform(0.5, 0.9), bright=rng.uniform(0.55, 0.85), onset=0.06)
 		S.place(out, S.stereo_width(clip, 0.7) * np.array([rng.uniform(0.6, 1.0), rng.uniform(0.6, 1.0)]),
-				rng.uniform(0, LOOP_S), 1.1, wrap=True)
+				rng.uniform(0, LOOP_S), 3.2, wrap=True)
 	bub = S.bubbles(LOOP_S, 60, rng, 700, 3200, wrap=True)
 	out += S.to_stereo(bub) * 0.05 + S.pan(S.bubbles(LOOP_S, 40, rng, 900, 3600, wrap=True), 0.5) * 0.03
 	return out
@@ -179,12 +179,12 @@ def rain(rng) -> np.ndarray:
 	for _ in range(520):
 		f0 = rng.uniform(1400, 5200)
 		b = S.bubble(S.sec(0.03), f0, rng, rise=rng.uniform(-0.1, 0.5), t60=rng.uniform(0.006, 0.022))
-		S.place(drops, b, rng.uniform(0, LOOP_S), rng.uniform(0.05, 0.5) ** 1.5, wrap=True, p=rng.uniform(-1, 1))
+		S.place(drops, b, rng.uniform(0, LOOP_S), 2.0 * rng.uniform(0.2, 1.0) ** 1.5, wrap=True, p=rng.uniform(-1, 1))
 	for _ in range(90):
 		fr, t60, am = S.wood_modes(rng, rng.uniform(260, 700), 5, 4.0, 0.035)
 		S.place(drops, S.modal(fr, t60, am, 0.08, rng), rng.uniform(0, LOOP_S), rng.uniform(0.1, 0.4), wrap=True,
 				p=rng.uniform(-1, 1))
-	return out + drops * 0.9
+	return out + drops * 2.8
 
 
 def underwater(rng) -> np.ndarray:
@@ -208,7 +208,7 @@ def underwater(rng) -> np.ndarray:
 	dens = lambda u: sum(np.exp(-0.5 * ((((u - c + 0.5) % 1.0) - 0.5) / 0.035) ** 2) for c in centres) + 0.15
 	for p in (-0.6, 0.6):
 		b = S.bubbles(LOOP_S, 150, rng, 220, 1500, t60=(0.03, 0.14), density_env=dens, wrap=True)
-		out += S.pan(b, p) * 0.8
+		out += S.pan(b, p) * 2.6
 	out = S.spectral_filter(out, lambda f: lp_shape(f, 1500.0, 2.0))
 	return S.reverb(out, wet=0.5, t60=2.2, damp=0.85, seed=7, circular=True)
 
@@ -231,7 +231,7 @@ def below_deck(rng) -> np.ndarray:
 
 	def gain(fc, t):
 		return (0.7 + 0.3 * slow(t)) * (lp_shape(fc, 170.0, 1.5) * hp_shape(fc, 50.0) * tilt(fc, -3.0) * 0.6
-			+ 0.5 * bp_shape(fc, 450.0, 2.2))
+			+ 0.2 * bp_shape(fc, 450.0, 2.2))
 
 	bed = S.tf_noise(N, gain, rng, fmin=28.0, fmax=4000.0, channels=2, width=1.0)
 	out = bed / np.sqrt(np.mean(bed ** 2)) * 0.3
@@ -240,11 +240,11 @@ def below_deck(rng) -> np.ndarray:
 	for _ in range(9):
 		c = S.creak(rng.uniform(0.9, 2.4), rng, pitch=(rng.uniform(18, 30), rng.uniform(45, 85)),
 					body_lo=rng.uniform(140, 260), body_hi=rng.uniform(1100, 2200), groan=0.8)
-		S.place(dry, c / (np.abs(c).max() + 1e-9), rng.uniform(0, LOOP_S), rng.uniform(0.9, 2.0), wrap=True,
+		S.place(dry, c / (np.abs(c).max() + 1e-9), rng.uniform(0, LOOP_S), rng.uniform(3.5, 8.0), wrap=True,
 				p=rng.uniform(-0.8, 0.8))
 	for _ in range(7):
 		fr, t60, am = S.wood_modes(rng, rng.uniform(70, 130), 6, 6.0, 0.16)
-		S.place(dry, S.modal(fr, t60, am, 0.4, rng, attack=0.004), rng.uniform(0, LOOP_S), rng.uniform(0.4, 0.9),
+		S.place(dry, S.modal(fr, t60, am, 0.4, rng, attack=0.004), rng.uniform(0, LOOP_S), rng.uniform(1.0, 2.2),
 				wrap=True, p=rng.uniform(-0.8, 0.8))
 	# water slapping the outside of the hull
 	for _ in range(8):
@@ -265,13 +265,13 @@ def hull_wash(rng) -> np.ndarray:
 	def gain(fc, t):
 		s = 0.8 + 0.2 * slow(t)
 		rush = s * bp_shape(fc, 1100.0, 3.2) * tilt(fc, -2.5)
-		gur = np.clip(0.5 + 0.5 * gurgle(t), 0, 1) * bp_shape(fc, 320.0, 1.4) * 0.8
+		gur = np.clip(0.3 + 0.9 * gurgle(t), 0, 1.3) ** 2 * bp_shape(fc, 320.0, 1.4) * 1.3
 		return rush + gur
 
 	out = S.tf_noise(N, gain, rng, channels=2, width=1.0)
 	out /= np.sqrt(np.mean(out ** 2))
-	out += S.pan(S.bubbles(LOOP_S, 260, rng, 500, 2600, wrap=True), -0.4) * 0.08
-	out += S.pan(S.bubbles(LOOP_S, 260, rng, 500, 2600, wrap=True), 0.4) * 0.08
+	out += S.pan(S.bubbles(LOOP_S, 260, rng, 500, 2600, wrap=True), -0.4) * 0.22
+	out += S.pan(S.bubbles(LOOP_S, 260, rng, 500, 2600, wrap=True), 0.4) * 0.22
 	return out
 
 

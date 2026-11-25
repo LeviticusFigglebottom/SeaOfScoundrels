@@ -19,6 +19,7 @@ import zlib
 
 import numpy as np
 from scipy import signal
+from scipy.interpolate import CubicSpline
 from scipy.io import wavfile
 from scipy.ndimage import convolve1d, maximum_filter1d
 
@@ -143,21 +144,22 @@ def fade(x: np.ndarray, t_in: float = 0.002, t_out: float = 0.01) -> np.ndarray:
 
 def lfo_noise(n: int, rate_hz: float, rng, periodic: bool = True) -> np.ndarray:
 	"""Smooth random wander in about -1..1, roughly rate_hz wiggles per second.
-	Fourier-interpolated from random control points, so it is exactly periodic
-	over n samples (safe inside seamless loops)."""
+	A cubic spline through random control points; with periodic=True it joins
+	itself exactly over n samples (safe inside seamless loops)."""
 	k = max(4, int(round(n / SR * rate_hz * 2)))
 	pts = rng.uniform(-1, 1, k)
-	if not periodic:
-		pts = np.concatenate([pts, pts[::-1]])
-		return signal.resample(pts, 2 * n)[:n]
-	return signal.resample(pts, n)
+	if periodic:
+		spline = CubicSpline(np.arange(k + 1), np.append(pts, pts[0]), bc_type="periodic")
+		return spline(np.arange(n) * (k / n))
+	return CubicSpline(np.arange(k), pts)(np.linspace(0, k - 1, n))
 
 
 def smooth(x: np.ndarray, t: float) -> np.ndarray:
 	"""Zero-phase smoothing with a Hann window of t seconds."""
 	k = max(3, sec(t) | 1)
 	w = np.hanning(k)
-	return np.convolve(x, w / w.sum(), mode="same")
+	pad = np.concatenate([np.full(k // 2, x[0]), x, np.full(k // 2, x[-1])])  # hold the ends
+	return signal.oaconvolve(pad, w / w.sum(), mode="valid")[:len(x)]
 
 
 # ----------------------------------------------------------------------------
@@ -534,7 +536,7 @@ def concertina(f, n: int, rng, vel: float = 1.0, bright: float = 1.0, release: f
 
 	A beating reed chops the air stream into a pulse: every harmonic is
 	present, rolling off about 6 dB/octave, shaped here by the reed chamber
-	(broad bumps near 900 Hz and 2.3 kHz) and a 4 kHz roll-off. Upper
+	(broad bumps near 900 Hz and 2.3 kHz) and a 5 kHz roll-off. Upper
 	harmonics speak a little later than the fundamental, the bellows adds a
 	slow pressure wobble, and a second reed 5 cents off adds a gentle beat.
 	"""
@@ -545,7 +547,7 @@ def concertina(f, n: int, rng, vel: float = 1.0, bright: float = 1.0, release: f
 	def spec(k, fk, t):
 		src = 1.0 / k ** 0.95 * (1.0 if k % 2 else 0.8)
 		body = (0.55 + 0.6 * bp_shape(fk, 900.0, 1.6) + 0.45 * bp_shape(fk, 2300.0, 1.0)) \
-			* lp_shape(fk, 3800.0 * bright, 1.5)
+			* lp_shape(fk, 5000.0 * bright, 1.5)
 		speak = 1.0 - np.exp(-t / (0.008 + 0.004 * k))
 		return src * body * speak
 

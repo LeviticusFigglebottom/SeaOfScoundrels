@@ -131,6 +131,11 @@ def measure(path: str, loop: bool, kind: str) -> dict:
 			flags.append("CLICK_START")
 		if out["end_db"] > -45:
 			flags.append("CLICK_END")
+	elif kind == "music":
+		# music changes across the wrap by design (a cadence, then a downbeat), so only
+		# a raw sample step can be judged; the reverb tail is folded round by construction
+		if out["seam_jump"] > 3:
+			flags.append("SEAM_CLICK")
 	else:
 		if out["seam_jump"] > 3 or (out["seam_hf_excess_db"] > 6 and out["seam_hf_rel_db"] > -50):
 			flags.append("SEAM_CLICK")
@@ -236,7 +241,7 @@ def sheet(images: list, cols: int = 2) -> Image.Image:
 def track_f0(seg: np.ndarray, expect: float, wide: bool) -> tuple:
 	"""Fundamental of a segment. wide=True searches two octaves either side by
 	normalised autocorrelation (honest about octave errors, monophonic lines);
-	wide=False finds the strongest spectral peak within a semitone of the
+	wide=False finds the strongest spectral peak within 70 cents of the
 	expected pitch (melody inside chords). Returns (hz, confidence)."""
 	seg = seg - seg.mean()
 	if wide:
@@ -263,7 +268,7 @@ def track_f0(seg: np.ndarray, expect: float, wide: bool) -> tuple:
 	nfft = 1 << int(np.ceil(np.log2(n)) + 3)
 	sp = np.abs(np.fft.rfft(seg * np.hanning(n), nfft))
 	f = np.fft.rfftfreq(nfft, 1 / S.SR)
-	m = (f > expect * 2 ** (-1 / 12)) & (f < expect * 2 ** (1 / 12))
+	m = (f > expect * 2 ** (-0.7 / 12)) & (f < expect * 2 ** (0.7 / 12))
 	i = np.argmax(sp * m)
 	a, b, c = np.log(sp[i - 1] + 1e-12), np.log(sp[i] + 1e-12), np.log(sp[i + 1] + 1e-12)
 	off = 0.5 * (a - c) / (a - 2 * b + c + 1e-12)

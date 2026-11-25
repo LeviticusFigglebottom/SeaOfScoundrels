@@ -55,6 +55,47 @@
 			"lufs": -21.0
 		}
 	},
+	"music": {
+		"combat": {
+			"bars": 24,
+			"beats_per_bar": 4,
+			"bpm": 150.0,
+			"file": "music/combat.ogg",
+			"key": "D minor",
+			"length": 38.4,
+			"loop": true,
+			"stems": {},
+			"title": "Black Flag Rising"
+		},
+		"sailing": {
+			"bars": 32,
+			"beats_per_bar": 6,
+			"bpm": 166.667,
+			"file": "music/sailing.ogg",
+			"key": "G major",
+			"length": 69.12,
+			"loop": true,
+			"stems": {},
+			"title": "Fair Wind Home"
+		},
+		"shanty": {
+			"bars": 36,
+			"beats_per_bar": 4,
+			"bpm": 120.0,
+			"file": "music/shanty.ogg",
+			"key": "D major",
+			"length": 72.0,
+			"loop": true,
+			"stems": {
+				"concertina": "music/shanty_concertina.ogg",
+				"crew": "music/shanty_crew.ogg",
+				"drum": "music/shanty_drum.ogg",
+				"hurdy_gurdy": "music/shanty_hurdy_gurdy.ogg",
+				"whistle": "music/shanty_whistle.ogg"
+			},
+			"title": "The Scoundrel's Reel"
+		}
+	},
 	"sfx": {
 		"anchor_drop": {
 			"bus": "SFX",
@@ -508,6 +549,28 @@
 			"lufs": -26,
 			"max_distance": 25,
 			"unit_size": 3
+		}
+	},
+	"stingers": {
+		"danger": {
+			"file": "music/stinger_danger.ogg",
+			"key": "D minor"
+		},
+		"ship_sighted": {
+			"file": "music/stinger_ship_sighted.ogg",
+			"key": "D major"
+		},
+		"sunk": {
+			"file": "music/stinger_sunk.ogg",
+			"key": "D minor"
+		},
+		"treasure_found": {
+			"file": "music/stinger_treasure_found.ogg",
+			"key": "G major"
+		},
+		"victory": {
+			"file": "music/stinger_victory.ogg",
+			"key": "D major"
 		}
 	}
 }
