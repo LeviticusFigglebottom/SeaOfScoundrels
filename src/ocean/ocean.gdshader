@@ -169,7 +169,8 @@ void fragment() {
 	float lost_var;
 	float wave_h; // analytic, so colour masks do not show the mesh
 	float h_var;
-	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var, wave_h, h_var);
+	vec2 long_slope;
+	sea_surface_lod(v_rest, sea_time, fp * 2.5, n_geo, jac, lost_var, wave_h, h_var, long_slope);
 	float amp_ref = max(2.0 * sqrt(h_var), 0.05);
 	float h_rel = wave_h / amp_ref;
 
@@ -189,10 +190,11 @@ void fragment() {
 		gust = smoothstep(0.2, 0.8, texture(foam_tex, v_rest * 0.0037 + wind_dir * 0.004 * sea_time).g);
 	}
 	float ripple_amt = mix(0.14, 0.27, storm) * mix(0.45, 1.5, gust);
-	// calm seas get their swell slopes exaggerated for shading only, so long
-	// low waves still read as forms (no height is added)
+	// calm seas get the slopes of their long swell exaggerated for shading only,
+	// so low rolling waves still read as forms (no height is added; the short
+	// waves are left alone or they would print a regular lattice from above)
 	float exag = mix(2.6, 1.0, smoothstep(0.0, 0.7, storm));
-	vec3 n_shade = normalize(vec3(n_geo.x * exag, n_geo.y, n_geo.z * exag));
+	vec3 n_shade = normalize(n_geo - vec3(long_slope.x, 0.0, long_slope.y) * (exag - 1.0));
 	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
 	float splash = 0.0;
 	if (rain_intensity > 0.01 && quality > 0 && fp < 0.09) {
@@ -267,8 +269,8 @@ void fragment() {
 		// slopes turned to the light are brighter, troughs sink into the deep colour
 		float slope_light = dot(n_shade, normalize(L + vec3(0.0, 0.6, 0.0)));
 		// relative tilt towards the light: reads even on long, low swell
-		float tilt = dot(n_shade.xz, normalize(L.xz + vec2(1e-4)));
-		float swell_shade = clamp(1.0 + tilt * mix(4.5, 1.2, storm), 0.6, 1.3);
+		float tilt = dot(-long_slope, normalize(L.xz + vec2(1e-4)));
+		float swell_shade = clamp(1.0 + tilt * mix(11.0, 1.5, storm), 0.6, 1.3);
 		float k = 0.08 + 0.34 * smoothstep(-0.9, 1.1, h_rel) + 0.30 * crest + 0.25 * facing * facing;
 		k *= mix(1.0, 0.15, smoothstep(100.0, 1200.0, dist));
 		vec3 body = mix(deep_color, scatter_color, clamp(k, 0.0, 1.0)) * light * mix(0.55, 1.25, smoothstep(0.78, 1.0, slope_light)) * swell_shade;

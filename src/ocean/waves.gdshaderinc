@@ -98,13 +98,15 @@ vec3 sea_displacement_lod(vec2 p, float cut) {
 // Normal and Jacobian at wave time t, dropping waves shorter than `cut`.
 // lost_var: slope variance of what was dropped (to widen highlights);
 // h: full vertical displacement of rest point p; h_var: variance of the wave
-// heights in this sea state (h / sqrt(h_var) is a unitless crest mask).
-void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var) {
+// heights in this sea state (h / sqrt(h_var) is a unitless crest mask);
+// long_slope: surface slope (dy/dx, dy/dz) of the swell alone (waves over 35 m).
+void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var, out vec2 long_slope) {
 	float dxx = 1.0, dzz = 1.0, dxz = 0.0;
 	float dyx = 0.0, dyz = 0.0;
 	lost_var = 0.0;
 	h = 0.0;
 	h_var = 0.0;
+	long_slope = vec2(0.0);
 	vec2 st = sea_state();
 	for (int i = 0; i < sea_wave_count; i++) {
 		vec4 a = sea_wave_a[i];
@@ -124,6 +126,9 @@ void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out fl
 		dxz -= a.x * a.y * c;
 		dyx -= a.x * s;
 		dyz -= a.y * s;
+		if (a.z < 0.18) {
+			long_slope -= a.xy * s;
+		}
 	}
 	vec3 tx = vec3(dxx, dyx, dxz);
 	vec3 tz = vec3(dxz, dyz, dzz);
