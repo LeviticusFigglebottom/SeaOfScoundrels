@@ -1,17 +1,25 @@
 # Progress
 
-Re-read this, ROADMAP.md, DECISIONS.md and ARCHITECTURE.md when resuming.
+Re-read this, ROADMAP.md, DECISIONS.md, ARCHITECTURE.md and the "Quality bar" in DESIGN.md when resuming.
 
-## Current state (2026-11-24)
-- M0 foundations in place: skeleton, autoloads, shared wave function with tests, test runner, capture tool, CI workflow.
-- `scenes/main.tscn` is a placeholder ocean plane.
-- Tooling on the dev machine: Godot at `/usr/local/bin/godot`, Blender at `/usr/local/bin/blender`, export templates archive at `/opt/tools/tpl.tpz` (not yet installed). These live outside the repo and vanish with the container; `tools/setup_env.sh` reinstalls them.
+## Current state (2026-11-25)
+- Engine: Godot 4.8 beta 5 (owner request). Tooling: `tools/setup_env.sh`, `tools/test.sh`, `tools/test_net.sh`, `tools/test_gpu.sh`, `tools/lint.py`, `tools/capture.sh`, `tools/build_assets.sh`.
+- Merged on the main line: foundations, net clock/weather replication, profile saves, sky and weather (pass 1), pawn and player controller, sloop model (pass 1), audio, ocean (pass 1).
+- `scenes/main.tscn` shows the real ocean under the real sky (no ship yet).
+- CI (GitHub Actions) runs lint, tests, net test and Linux export.
 
-## In flight
-- Ocean rendering, sky and weather, ship physics, pawn and controller, sloop model (parallel agents on worktree branches).
+## In flight (worktree branches)
+- `ws/sky2`: sky pass 2 (volumetric-feeling clouds, storm cells as places, lightning, cloud shadows, moon).
+- `ws/ship`: ship physics pass 2 (retune for the 16-wave sea, real sloop model, pawn walkability, replication). Pass 1 is NOT merged: two tests fail against the new sea.
+- `ws/shipart`: sloop pass 2 (hold headroom, real hull breaches, glass, running rigging, sail weights).
+- `ws/ocean2`: ocean pass 2 (fair-weather drama, shoaling, hull mask, shadows on water).
+- `ws/island`: island generator, props, treasure island and outpost.
+- `ws/charart`: characters, rig, animation set, animation driver.
+- `ws/items`: held tools, HUD, command wheel.
 
 ## Next
-- Integrate the above into `scenes/main.tscn`; character model and animation; island generator; AI crewmate; Drowned enemy; audio.
+- Integrate ship + pawn + ocean + sky + island into the main scene; AI crewmate; combat and the Drowned; voyage loop; independent reviews of each flagship system.
 
 ## Known issues
-- No GPU here: frame times are unmeasured (DECISIONS D9).
+- No GPU here: frame times are unmeasured (DECISIONS D9). The ocean agent estimates 1.5-2.5 ms at 1080p on a GTX 1660 for high quality.
+- Nobody has listened to the audio except through analysis; the owner has a preview.
