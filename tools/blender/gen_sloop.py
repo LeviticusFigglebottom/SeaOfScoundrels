@@ -14,8 +14,8 @@ SEED = 1717
 DECK_Y = 1.1          # main deck
 QDECK_Y = 2.0         # quarterdeck (aft of QDECK_Z)
 QDECK_Z = 3.0
-HOLD_Y = float(os.environ.get('SLOOP_HOLD_Y', '-0.6'))   # hold floor per spec. Everything below deck follows this one value
-                      # (stairs, table and bilge markers, props, ribs, collision). -0.85 gives 1.85 m headroom under the main deck.
+HOLD_Y = float(os.environ.get('SLOOP_HOLD_Y', '-0.85'))  # hold floor: 1.85 m clear under the main deck. Everything below deck follows it
+                      # (stairs, table and bilge markers, props, ribs, collision).
 MAST_Z = -1.0
 YARD_Y = 9.0
 MAST_TOP = DECK_Y + 14.0
@@ -34,7 +34,10 @@ STATIONS = {
     "Station_Ladder_Starboard": ((2.3, 0, 2.0), 0),
 }
 GAPS = [(-1.95, -1.05), (1.55, 2.45)]   # z ranges cut out of the bulwark: gun ports, ladders
-HATCH = (-0.6, 0.6, -0.6, 1.4)           # x0, x1, z0, z1 hole in the main deck
+HOLD_STAIR = (2.2, -0.25)                # z at the top (main deck) and at the foot (hold floor) of the stairs down
+HATCH = (-0.5, 0.5, -0.6, 2.25)           # x0, x1, z0, z1 hole in the main deck (long, so the stairs down are as shallow as the mast and the quarterdeck allow)
+QSTAIR = (0.9, 1.95, 2.6, 3.9)           # x0, x1, z0, z1 of the starboard quarterdeck flight (port is mirrored); it is let into the quarterdeck
+BS_HEEL = (0, 2.5, -5.45); BS_TIP = (0, 4.15, -10.4)   # bowsprit
 
 # ---------------------------------------------------------------- colour
 def srgb(h):
@@ -381,8 +384,8 @@ def prism(mb, poly, y0, y1, mat, col, ch=0.0, grain=(0, 0, 1), bottom=True):
 
 # ---------------------------------------------------------------- hull form
 NS = 48                                     # samples along the hull
-YS = [-1.0, -0.74, -0.48, -0.22, 0.05, 0.30, 0.55, 0.80, 1.02, 1.24, 1.50, 1.75]   # strake edges at midship
-VS = [(y + 1.0) / 2.75 for y in YS]
+YS = [-1.0, -0.74, -0.48, -0.22, 0.05, 0.30, 0.55, 0.80, 1.02, 1.24, 1.50, 1.76, 2.0]   # strake edges at midship (bulwark top 0.9 m + cap rail = 1.0 m)
+VS = [(y + 1.0) / 3.0 for y in YS]
 YT = -0.15                                  # bottom of the transom
 _SB = []
 for _i in range(241):
@@ -411,7 +414,7 @@ def tumble(y):
 
 def bmid(y):
     h = max(0.0, min(1.0, (y + 1.0) / 1.9))
-    return 2.2 * (1 - (1 - h) ** 2.2) ** (1 / 2.6) * tumble(y)
+    return 2.2 * (1 - (1 - h) ** 3.0) ** (1 / 3.6) * tumble(y)   # full, flat-floored midsection: room to walk in the hold
 
 def wtrans(y):
     if y <= YT: return 0.0
@@ -422,13 +425,13 @@ def hull_b(z, y):
     """Half breadth of the outer hull surface at (z, y)."""
     bm = bmid(y)
     if z >= 0:
-        t = min(1.0, z / zstern(y)); return bm - (bm - wtrans(y)) * t ** 2.2
+        t = min(1.0, z / zstern(y)); return bm - (bm - wtrans(y)) * t ** 3.0
     t = min(1.0, z / zstem(y)); return bm * max(0.0, 1 - t ** 2.4) ** 0.7
 
 def ytop(z):
     """Sheer: top of the hull planking."""
-    if z < 0: return 1.75 + 0.6 * (-z / 6.5) ** 2
-    return 1.75 + 0.75 * smooth01((z - 1.0) / 3.5) + 0.1 * (z / 6.5) ** 2
+    if z < 0: return 2.0 + 0.5 * (-z / 6.5) ** 2
+    return 2.0 + 0.55 * smooth01((z - 1.0) / 3.5) + 0.1 * (z / 6.5) ** 2
 
 def umap(s):
     return 1.0 - (1.0 - min(max(s / NS, 0.0), 1.0)) ** 1.4
@@ -651,7 +654,7 @@ def strake_look(j):
     if YS[j + 1] <= 0.06: return C_TAR, 0.0
     if j == 4: return C_CREAM, 0.012
     if j == 7: return C_RED, 0.05
-    if j == 10: return C_TEAL, 0.012
+    if j == len(YS) - 2: return C_TEAL, 0.012
     return C_HULL, 0.0
 
 def gap_ranges():
@@ -704,7 +707,7 @@ def build_hull(mb):
     # keel + stem as one swept timber
     path = [(6.25, -1.0), (2.0, -1.0), (-2.0, -1.0), (-3.4, -1.0)]
     for i in range(8, 241, 8): path.append((_SB[i][1], _SB[i][0]))
-    for y in (1.4, 1.7, 2.0, 2.3, 2.52): path.append((zstem(y), y))
+    for y in (1.4, 1.7, 2.0, 2.3, 2.52, 2.68): path.append((zstem(y), y))
     secs = []; scols = []
     for i, (z, y) in enumerate(path):
         a = path[max(i - 1, 0)]; b = path[min(i + 1, len(path) - 1)]
@@ -814,12 +817,13 @@ def build_decks(mb):
         c = jit(C_DECK, rng, 0.12, 0.03)
         return mul(c, 0.8) if rng.random() < 0.12 else c
     main = deck_outline(DECK_Y - 0.1, DECK_Y, -6.52, QDECK_Z + 0.1)
-    deck_planks(mb, main, -6.6, QDECK_Z + 0.1, DECK_Y, 0.1, 0.24, [HATCH], deck_col)
+    deck_planks(mb, main, -6.6, QDECK_Z + 0.1, DECK_Y, 0.1, 0.2, [HATCH], deck_col)
     zq1 = zstern(QDECK_Y) - 0.1
     quarter = deck_outline(QDECK_Y - 0.1, QDECK_Y, QDECK_Z - 0.06, zq1, 12, 1.0)
-    deck_planks(mb, quarter, QDECK_Z - 0.06, zq1, QDECK_Y, 0.1, 0.24, [], deck_col)
+    qx0, qx1, qz0, qz1 = QSTAIR
+    deck_planks(mb, quarter, QDECK_Z - 0.06, zq1, QDECK_Y, 0.1, 0.2, [(qx0, 9, QDECK_Z - 0.1, qz1), (-9, -qx0, QDECK_Z - 0.1, qz1)], deck_col)
     # waterways (margin planks) hide the stepped plank ends against the bulwark
-    for (yd, z0, z1, n) in ((DECK_Y, -6.5, QDECK_Z, 40), (QDECK_Y, QDECK_Z, zq1, 10)):
+    for (yd, z0, z1, n) in ((DECK_Y, -6.5, QDECK_Z, 40), (QDECK_Y, qz1, zq1, 8)):
         for sg in (-1, 1):
             secs = []
             for i in range(n + 1):
@@ -831,29 +835,37 @@ def build_decks(mb):
     # breasthook: chunky knee filling the bow tip
     bh = [q for q in deck_outline(DECK_Y, 2.2, -6.62, -5.95, 8, 1.0, 0.1)]
     prism(mb, bh, DECK_Y, ytop(-6.3) - 0.02, 'wood', C_DARK, 0.03, (1, 0, 0))
-    # ---- quarterdeck break: bulkhead, beam, stairs
-    hb = min(hull_b(QDECK_Z + 0.05, DECK_Y), hull_b(QDECK_Z + 0.05, QDECK_Y)) - 0.08
-    nb = 12
+    # ---- quarterdeck break: bulkhead with a cabin door, beam, twin side flights let into the quarterdeck
+    hb = qx0
+    nb = 8
     for i in range(nb):
         x0 = -hb + 2 * hb * i / nb; x1 = -hb + 2 * hb * (i + 1) / nb
-        cbox(mb, ((x0 + x1) / 2, (DECK_Y + QDECK_Y - 0.1) / 2 - 0.05, QDECK_Z + 0.06), (x1 - x0, QDECK_Y - 0.1 - DECK_Y + 0.1, 0.1), 'wood', jit(C_TEAL, rng, 0.07), 0.014, (0, 1, 0))
-    cbox(mb, (0, QDECK_Y - 0.11, QDECK_Z - 0.01), (2 * hb, 0.16, 0.2), 'wood', C_RED, 0.03)
+        door = i in (3, 4)
+        cbox(mb, ((x0 + x1) / 2, (DECK_Y + QDECK_Y - 0.1) / 2 - 0.05, QDECK_Z + 0.06), (x1 - x0, QDECK_Y - 0.1 - DECK_Y + 0.1, 0.1), 'wood', jit(C_DARK if door else C_TEAL, rng, 0.07), 0.014, (0, 1, 0))
+    for (cx, cy, sx, sy) in ((-0.45, 1.48, 0.09, 0.78), (0.45, 1.48, 0.09, 0.78), (0, 1.86, 0.99, 0.09)):                  # door frame
+        cbox(mb, (cx, cy, QDECK_Z - 0.0), (sx, sy, 0.07), 'wood', C_GOLD, 0.02)
+    for cy in (1.3, 1.68): cbox(mb, (0, cy, QDECK_Z + 0.0), (0.8, 0.06, 0.04), 'iron', C_IRON, 0.01)                      # strap hinges
+    with xf(mb, T(0.28, 1.45, QDECK_Z - 0.01) @ M_Y2Z): torus(mb, 0.05, 0.014, 10, 5, 'brass', C_BRASS)                 # ring handle
+    cbox(mb, (0, QDECK_Y - 0.11, QDECK_Z - 0.01), (2 * hb + 0.04, 0.16, 0.2), 'wood', C_RED, 0.03)
     cbox(mb, (0, DECK_Y - 0.17, QDECK_Z + 0.04), (2 * hull_b(QDECK_Z, 0.9) - 0.3, 0.14, 0.16), 'wood', C_DARK, 0.02)   # beam under the deck edge
-    sw = 0.62; z0 = 1.95; run = (QDECK_Z - z0) / 3.0; rise = (QDECK_Y - DECK_Y) / 4.0
-    for i in range(3):
-        top = DECK_Y + rise * (i + 1)
-        box2(mb, (-sw + 0.04, DECK_Y - 0.02, z0 + run * i + 0.03), (sw - 0.04, top - 0.06, QDECK_Z + 0.02), 'wood', jit(C_DARK, rng, 0.06), 0.01, (1, 0, 0))
-        box2(mb, (-sw, top - 0.07, z0 + run * i - 0.03), (sw, top, z0 + run * (i + 1) + 0.02), 'wood', deck_col(), 0.02, (1, 0, 0))
+    nq = 5; run = (qz1 - qz0) / nq; rise = (QDECK_Y - DECK_Y) / nq
     for sg in (-1, 1):
-        with xf(mb, T(sg * (sw + 0.035), 0, 0) @ M_ZY):
-            prism(mb, [(z0 - 0.12, DECK_Y), (QDECK_Z, DECK_Y), (QDECK_Z, QDECK_Y + 0.06), (QDECK_Z - 0.16, QDECK_Y + 0.06), (z0 - 0.12, DECK_Y + 0.2)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
+        with xf(mb, T(sg * (qx0 + qx1) / 2, 0, 0) @ M_ZY):
+            prism(mb, [(qz0 + 0.02, DECK_Y - 0.05), (QDECK_Z + 0.05, DECK_Y - 0.1), (qz1, QDECK_Y - 0.4), (qz1, QDECK_Y - 0.04)], -(qx1 - qx0) / 2, (qx1 - qx0) / 2, 'wood', jit(C_DARK, rng, 0.06), 0.0, (1, 0, 0))
+        for i in range(nq):
+            top = DECK_Y + rise * (i + 1)
+            box2(mb, (sg * qx0, top - rise - 0.02, qz0 + run * i), (sg * qx1, top, qz0 + run * (i + 1) + 0.03), 'wood', deck_col(), 0.02, (1, 0, 0))
+        xi = sg * (qx0 - 0.035)                                                # inboard cheek: also the wall of the stairwell
+        with xf(mb, T(xi, 0, 0) @ M_ZY):
+            prism(mb, [(qz0 - 0.12, DECK_Y), (QDECK_Z, DECK_Y), (QDECK_Z, DECK_Y + 0.5), (qz0 - 0.12, DECK_Y + 0.2)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
+            prism(mb, [(QDECK_Z, DECK_Y - 0.1), (qz1 + 0.04, DECK_Y - 0.1), (qz1 + 0.04, QDECK_Y + 0.05), (QDECK_Z, QDECK_Y + 0.05)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
     # ---- hatch: coaming on three sides (open aft where the stairs start) and the stairs down
     hx0, hx1, hz0, hz1 = HATCH
     for sg in (-1, 1):
         cbox(mb, (sg * (hx1 + 0.05), DECK_Y + 0.04, (hz0 + hz1) / 2 - 0.05), (0.16, 0.34, hz1 - hz0 + 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y + 0.04, hz0 - 0.05), (hx1 - hx0 + 0.2, 0.34, 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y - 0.06, hz1 + 0.05), (hx1 - hx0 + 0.25, 0.12, 0.1), 'wood', C_DARK, 0.015)
-    zt, zb = hz1 - 0.05, hz0 + 0.05; nst = 8; H = DECK_Y - HOLD_Y
+    zt, zb = HOLD_STAIR; nst = 10; H = DECK_Y - HOLD_Y
     for sg in (-1, 1):
         x = sg * (hx1 - 0.07)
         d = Vector((0, -H, zb - zt)); nrm = Vector((0, d.z, H)).normalized() * 0.13
@@ -862,7 +874,7 @@ def build_decks(mb):
                   a + nrm + Vector((-0.035, 0, 0)), a + nrm + Vector((0.035, 0, 0)), b + nrm + Vector((0.035, 0, 0)), b + nrm + Vector((-0.035, 0, 0))], 'wood', jit(C_DARK, rng, 0.05), d)
     for i in range(1, nst):
         y = DECK_Y - H * i / nst; z = zt + (zb - zt) * i / nst
-        cbox(mb, (0, y - 0.03, z + 0.02), (hx1 - hx0 - 0.2, 0.06, 0.27), 'wood', deck_col(), 0.015, (1, 0, 0))
+        cbox(mb, (0, y - 0.03, z + 0.02), (hx1 - hx0 - 0.2, 0.06, 0.3), 'wood', deck_col(), 0.015, (1, 0, 0))
     # ---- helm pedestal + binnacle (static; the Wheel object spins in front of it)
     hz = STATIONS['Station_Helm'][0][2]
     cbox(mb, (0, QDECK_Y + 0.05, hz - 0.3), (0.56, 0.1, 0.5), 'wood', C_DARK, 0.025)
@@ -902,8 +914,8 @@ def build_rails(mb):
                 for s, dz in ((g0, 0.1), (g1, -0.1)):
                     p, nh = rail_frame(s); sill = hull_pt(umap(s), VS[9]).y
                     c = p - nh * (TH / 2)
-                    box2(mb, (c.x - 0.14, sill - 0.02, c.z + dz - 0.1), (c.x + 0.14, p.y + 0.3, c.z + dz + 0.1), 'wood', C_CREAM, 0.03, (0, 1, 0))
-                    cbox(mb, (c.x, p.y + 0.33, c.z + dz), (0.34, 0.07, 0.26), 'wood', C_RED, 0.02)
+                    box2(mb, (c.x - 0.14, sill - 0.02, c.z + dz - 0.1), (c.x + 0.14, p.y + 0.17, c.z + dz + 0.1), 'wood', C_CREAM, 0.03, (0, 1, 0))
+                    cbox(mb, (c.x, p.y + 0.2, c.z + dz), (0.34, 0.07, 0.26), 'wood', C_RED, 0.02)
             # timberheads along the main deck rail
             for s in range(int(sq) + 3, NS - 3, 3):
                 z = hull_pt(umap(s), 1.0).z
@@ -916,7 +928,7 @@ def build_rails(mb):
                 s = sq * (1 - i / n) if i < n else 0.0
                 s = sq - (sq - 0.0) * i / n
                 p, nh = rail_frame(s); c = p - nh * (TH / 2 - 0.01); base = Vector((c.x, p.y + 0.1, c.z))
-                hgt = 0.62
+                hgt = 0.45
                 if i in (0, n):
                     cbox(mb, (base.x, base.y + (hgt + 0.16) / 2, base.z), (0.17, hgt + 0.16, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
                     with xf(mb, T(base.x, base.y + hgt + 0.16, base.z)):
@@ -928,19 +940,27 @@ def build_rails(mb):
                 top = base + Vector((0, hgt, 0)); w = 0.1
                 secs.append([top - nh * w, top + nh * w, top + nh * w + Vector((0, 0.05, 0)), top + nh * (w - 0.03) + Vector((0, 0.08, 0)), top - nh * (w - 0.03) + Vector((0, 0.08, 0)), top - nh * w + Vector((0, 0.05, 0))])
             loft(mb, secs, 'wood', C_RED, True, (True, True), 'len')
-    # front rail of the quarterdeck, either side of the stairs
-    hq = min(hull_b(QDECK_Z, QDECK_Y), hull_b(QDECK_Z, QDECK_Y + 0.9)) - 0.3
+    # front rail of the quarterdeck between the two flights, and a guard rail along each stairwell
+    qx0, qx1, qz0, qz1 = QSTAIR
+    xs = [-qx0 + 0.04 + (2 * qx0 - 0.08) * i / 6 for i in range(7)]
+    for i, x in enumerate(xs):
+        if i in (0, 6):
+            cbox(mb, (x, QDECK_Y + 0.46, QDECK_Z + 0.02), (0.17, 0.92, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
+            with xf(mb, T(x, QDECK_Y + 0.92, QDECK_Z + 0.02)):
+                lathe(mb, [(0, 0), (0.07, 0.02), (0.09, 0.09), (0.06, 0.16), (0, 0.18)], 8, 'brass', C_BRASS, True, True)
+        else:
+            baluster(mb, (x, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
+        if i < 6: baluster(mb, (x + (xs[1] - xs[0]) / 2, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
+    cbox(mb, (0, QDECK_Y + 0.82, QDECK_Z + 0.02), (2 * qx0 - 0.2, 0.09, 0.2), 'wood', C_RED, 0.03)
     for sg in (-1, 1):
-        xs = [0.72 + (hq - 0.72) * i / 3 for i in range(4)]
-        for i, x in enumerate(xs):
-            if i == 0:
-                cbox(mb, (sg * x, QDECK_Y + 0.46, QDECK_Z + 0.02), (0.17, 0.92, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
-                with xf(mb, T(sg * x, QDECK_Y + 0.92, QDECK_Z + 0.02)):
-                    lathe(mb, [(0, 0), (0.07, 0.02), (0.09, 0.09), (0.06, 0.16), (0, 0.18)], 8, 'brass', C_BRASS, True, True)
+        x = sg * (qx0 - 0.04)
+        for i in range(1, 5):
+            z = QDECK_Z + 0.02 + (qz1 - QDECK_Z) * i / 4
+            if i == 4:
+                cbox(mb, (x, QDECK_Y + 0.44, z), (0.15, 0.88, 0.15), 'wood', C_CREAM, 0.03, (0, 1, 0))
             else:
-                baluster(mb, (sg * x, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
-            if i < 3: baluster(mb, (sg * (x + (xs[1] - xs[0]) / 2), QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
-        cbox(mb, (sg * (0.72 + hq + 0.12) / 2, QDECK_Y + 0.82, QDECK_Z + 0.02), (hq + 0.12 - 0.72, 0.09, 0.2), 'wood', C_RED, 0.03)
+                baluster(mb, (x, QDECK_Y + 0.05, z), 0.73, C_CREAM)
+        cbox(mb, (x, QDECK_Y + 0.82, (QDECK_Z + qz1) / 2 + 0.06), (0.16, 0.09, qz1 - QDECK_Z + 0.1), 'wood', C_RED, 0.03)
     # taffrail across the stern
     yt = ytop(6.5); zt = zstern(yt) - 0.07; wt = wtrans(yt) - 0.02
     cbox(mb, (0, yt + 0.05, zt), (2 * wt + 0.3, 0.1, 0.3), 'wood', C_DARK, 0.03)
@@ -948,8 +968,8 @@ def build_rails(mb):
     for i in range(1, nb):
         x = -wt + 2 * wt * i / nb
         if abs(x) < 0.01: continue
-        baluster(mb, (x, yt + 0.1, zt + 0.03), 0.62, C_CREAM)
-    yr = yt + 0.72; zr = zstern(yr) - 0.07
+        baluster(mb, (x, yt + 0.1, zt + 0.03), 0.45, C_CREAM)
+    yr = yt + 0.55; zr = zstern(yr) - 0.07
     cbox(mb, (0, yr + 0.04, zt + 0.05), (2 * wt + 0.22, 0.08, 0.2), 'wood', C_RED, 0.03)
 
 def build_interior(mb):
@@ -994,7 +1014,7 @@ def build_interior(mb):
         cbox(mb, (0, QDECK_Y - 0.17, zb), (2 * hbm, 0.14, 0.16), 'wood', jit(C_DARK, rng, 0.08), 0.02)
     build_bilge(mb, (0.0, HOLD_Y, -2.1))
     # mast step
-    cbox(mb, (0, HOLD_Y + 0.09, MAST_Z), (0.9, 0.18, 0.9), 'wood', C_DARK, 0.04)
+    cbox(mb, (0, HOLD_Y + 0.07, MAST_Z), (0.76, 0.14, 0.76), 'wood', C_DARK, 0.04)
 
 def barrel(mb, pos, r=0.3, h=0.85, M=None, band=C_IRON, tone=C_HULL):
     rng = mb.rng
@@ -1031,7 +1051,7 @@ def rope_coil(mb, c, r=0.22, turns=4, col=C_ROPE):
 def build_props_deck(mb):
     barrel(mb, (-1.05, DECK_Y, -3.3)); barrel(mb, (-0.55, DECK_Y, -3.75), 0.27, 0.78, tone=C_DARK, band=C_BRASS)
     crate(mb, (1.0, DECK_Y, -3.5), (0.7, 0.55, 0.6), R('Y', 14)); crate(mb, (0.95, DECK_Y + 0.55, -3.52), (0.45, 0.35, 0.42), R('Y', -12), C_HULL)
-    barrel(mb, (-1.5, DECK_Y, 2.72), 0.28, 0.8); crate(mb, (1.45, DECK_Y, 2.68), (0.6, 0.5, 0.5), R('Y', 4))
+    barrel(mb, (-0.35, DECK_Y, -3.05), 0.28, 0.8); crate(mb, (0.3, DECK_Y, -2.85), (0.6, 0.5, 0.5), R('Y', 4))
     rope_coil(mb, (1.25, DECK_Y, -2.55), 0.26, 3); rope_coil(mb, (-1.2, QDECK_Y, 3.6), 0.24, 3)
     barrel(mb, (1.25, QDECK_Y, 6.15), 0.25, 0.72, tone=C_DARK)
     # cannonball rack beside each gun
@@ -1047,7 +1067,7 @@ def build_props_hold(mb):
     barrel(mb, (0.8, y + 0.31, -2.75), 0.3, 0.85, R('Y', 20) @ R('X', 90))          # one on its side
     crate(mb, (-0.85, y, -2.5), (0.7, 0.6, 0.7), R('Y', 8)); crate(mb, (-0.82, y + 0.6, -2.52), (0.5, 0.4, 0.5), R('Y', -15), C_HULL)
     crate(mb, (0.3, y, 4.85), (0.55, 0.45, 0.5), R('Y', -6)); barrel(mb, (-0.3, y, 4.75), 0.26, 0.75)
-    rope_coil(mb, (-1.0, y, 1.2), 0.25, 3)
+    rope_coil(mb, (0.0, y, 0.25), 0.25, 3)
     # hammock under the quarterdeck, a touch of life
     pts = [(-1.0, 0.95, 5.2 - 0.0), (-0.5, 0.62, 5.25), (0.0, 0.52, 5.3), (0.5, 0.62, 5.25), (1.0, 0.95, 5.2)]
     secs = [[Vector(p) + Vector((0, 0.0 if i in (0, 4) else 0.1, -0.3 if i not in (0, 4) else -0.02)), Vector(p), Vector(p) + Vector((0, 0.0 if i in (0, 4) else 0.1, 0.3 if i not in (0, 4) else 0.02))] for i, p in enumerate(pts)]
@@ -1082,7 +1102,7 @@ def build_map_table(mb):
 def build_mast(mb):
     D = DECK_Y
     lathe(mb, [(0, HOLD_Y), (0.3, HOLD_Y), (0.3, D + 0.02), (0.29, D + 3.0), (0.27, D + 6.0), (0.24, 10.5), (0.21, 11.75), (0.17, 11.8), (0, 11.8)], 16, 'wood', mul(C_DECK, 0.95), True, True)
-    lathe(mb, [(0.3, D), (0.42, D), (0.42, D + 0.1), (0.34, D + 0.22), (0.3, D + 0.22)], 16, 'wood', C_RED)       # mast coat
+    lathe(mb, [(0.3, D), (0.38, D), (0.38, D + 0.1), (0.33, D + 0.22), (0.3, D + 0.22)], 16, 'wood', C_RED)       # mast coat
     for y in (2.9, 5.4, 7.6):
         r = 0.3 - (y - D) * 0.0065
         lathe(mb, [(r - 0.01, y - 0.07), (r + 0.02, y - 0.07), (r + 0.02, y + 0.07), (r - 0.01, y + 0.07)], 16, 'iron', C_IRON)
@@ -1107,7 +1127,7 @@ def build_mast(mb):
                 prism(mb, [(0.22, y0 - 0.75), (0.34, y0 - 0.75), (0.74, y0), (0.22, y0)], -0.05, 0.05, 'wood', C_DARK, 0.0, (1, 0, 1))
 
 def build_bowsprit(mb):
-    heel = Vector((0, 2.25, -5.45)); tip = Vector((0, 3.95, -10.4))
+    heel = Vector(BS_HEEL); tip = Vector(BS_TIP)
     n = 6; path = [heel.lerp(tip, i / n) for i in range(n + 1)]
     tube(mb, path, [0.17 - 0.07 * i / n for i in range(n + 1)], 12, 'wood', mul(C_DECK, 0.95))
     d = (tip - heel).normalized()
@@ -1116,8 +1136,8 @@ def build_bowsprit(mb):
         tube(mb, [p - d * 0.06, p + d * 0.06], r, 12, 'iron' if f < 0.9 else 'brass', C_IRON if f < 0.9 else C_BRASS, mode='len')
     # bitts holding the heel
     for sg in (-1, 1):
-        cbox(mb, (sg * 0.3, (DECK_Y + 2.6) / 2, -5.4), (0.2, 2.6 - DECK_Y, 0.2), 'wood', C_RED, 0.035, (0, 1, 0))
-    cbox(mb, (0, 2.5, -5.4), (0.9, 0.16, 0.16), 'wood', C_DARK, 0.03)
+        cbox(mb, (sg * 0.3, (DECK_Y + 2.9) / 2, -5.4), (0.2, 2.9 - DECK_Y, 0.2), 'wood', C_RED, 0.035, (0, 1, 0))
+    cbox(mb, (0, 2.76, -5.4), (0.9, 0.16, 0.16), 'wood', C_DARK, 0.03)
     # gammoning rope lashing the bowsprit to the stem head
     for i in range(4):
         p = heel.lerp(tip, 0.265 + i * 0.012)
@@ -1180,7 +1200,7 @@ def build_rigging(mb):
                 f = (y - b.y) / (t.y - b.y); pts.append(b.lerp(t, f))
             tube(mb, pts, 0.017, 3, 'rope', C_ROPE, (False, False), 'flat')
             y += 0.47
-    tip = Vector((0, 3.95, -10.4)); mid = Vector((0, 2.25, -5.45)).lerp(tip, 0.34)
+    tip = Vector(BS_TIP); mid = Vector(BS_HEEL).lerp(tip, 0.34)
     tube(mb, [(0, MAST_TOP - 0.35, MAST_Z - 0.08), tip + Vector((0, 0.1, 0.1))], 0.03, 5, 'rope', C_ROPE_D)       # forestay
     tube(mb, [(0, 10.35, MAST_Z - 0.25), mid + Vector((0, 0.19, 0))], 0.03, 5, 'rope', C_ROPE_D)                 # inner stay
     for sg in (-1, 1):                                                                                            # backstays
@@ -1538,7 +1558,7 @@ def extras():
     o = (-0.62, 2.9, MAST_Z); b = MB('Bell', o); build_bell(b, o); build(b)
     bc = (0.0, HOLD_Y, -2.1)
     o = (0.52, HOLD_Y, -1.75); bk = MB('Bucket', o); build_bucket(bk, o); build(bk)
-    o = (1.02, HOLD_Y, 0.35); ps = MB('PlankStack', o); build_plank_stack(ps, o); build(ps)
+    o = (0.0, HOLD_Y, 1.25); ps = MB('PlankStack', o); build_plank_stack(ps, o); build(ps)
     hx0, hx1, hz0, hz1 = HATCH
     for name, sg in (('HatchCover_Starboard', 1), ('HatchCover_Port', -1)):
         o = (sg * (hx1 + 0.13), DECK_Y + 0.21, (hz0 + hz1) / 2 - 0.05); h = MB(name, o); build_hatch_cover(h, o, sg); build(h)
@@ -1555,7 +1575,8 @@ def col_wall(name, s0, s1, y0, y1fn, thick=TH, extra_out=0.0, ns=3, ny=3):
             s = s0 + (s1 - s0) * i / (ns - 1); u = umap(s); yt = y1fn(hull_pt(u, 1.0).z, u)
             for j in range(ny):
                 y = y0 + (yt - y0) * j / (ny - 1); v = v_of_y(u, y)
-                p = hull_pt(u, v); n = hull_n(u, v)
+                p = hull_pt(u, min(v, 1.0)); n = hull_n(u, min(v, 1.0))
+                if v > 1.0: p.y = y; n = Vector((n.x, 0, n.z)).normalized()      # rails stand straight up from the hull top
                 a = p + n * extra_out; b = p - n * thick; b.x = max(b.x, 0.0)
                 pts += [(sg * a.x, a.y, a.z), (sg * b.x, b.y, b.z)]
         col_piece('col_%s_%s' % (name, tag), pts)
@@ -1566,64 +1587,66 @@ def build_collision():
     for i in range(len(zb) - 1):
         pts = []
         for z in (zb[i], (zb[i] + zb[i + 1]) / 2, zb[i + 1]):
-            for y in (-1.0, -0.9, -0.75, HOLD_Y):
+            for y in (-1.0, (HOLD_Y - 1.0) / 2, HOLD_Y - 0.005):
                 x = hull_b(z, y)
                 if z > zstem(y) + 0.01: pts += [(x, y, z), (-x, y, z)]
             if z > -3.6: pts += [(0.12, -1.2, z), (-0.12, -1.2, z)]
             elif z > zstem(-0.95): pts += [(0, -1.0, z)]
         if len(pts) >= 4: col_piece('col_hull_bottom_%d' % i, pts)
-    # hull sides from the hold floor to the deck, two bands so the hold stays hollow
+    # hull sides from the hold floor to the deck in three bands, so the convex pieces hug the curved planking and the hold stays hollow
     zs = [6.6, 5.4, 4.2, 2.8, 1.2, -0.4, -2.0, -3.6, -4.9, -5.8, -6.45]
+    bands = [('low', HOLD_Y - 0.03, -0.45), ('mid', -0.45, 0.2), ('high', 0.2, DECK_Y - 0.02)]
     for i in range(len(zs) - 1):
         s0, s1 = (0.0 if i == 0 else s_of_z(zs[i], 0.45)), s_of_z(zs[i + 1], 0.45)
-        col_wall('hull_side_low_%d' % i, s0, s1, HOLD_Y - 0.1, lambda z, u: 0.25)
-        col_wall('hull_side_mid_%d' % i, s0, s1, 0.25, lambda z, u: DECK_Y - 0.02)
+        for nm, ya, yb in bands:
+            col_wall('hull_side_%s_%d' % (nm, i), s0, s1, ya, lambda z, u, yb=yb: yb)
     # bulwarks and rails, leaving the gun ports and ladder gaps open
     sq = s_of_z(QDECK_Z)
-    def top(z, u): return ytop(z) + (0.8 if z > QDECK_Z - 0.01 else 0.12)
+    def top(z, u): return ytop(z) + (0.65 if z > QDECK_Z - 0.01 else 0.12)
     k = 0
     for (a, b) in top_intervals(NS - 0.5):
         cuts = [a] + [c for c in (sq, s_of_z(4.8), s_of_z(-3.3), s_of_z(-4.8), s_of_z(-5.8)) if a + 0.5 < c < b - 0.5] + [b]
         cuts.sort()
         for i in range(len(cuts) - 1):
-            mid_z = hull_pt(umap((cuts[i] + cuts[i + 1]) / 2), 1.0).z
             col_wall('rail_%d' % k, cuts[i], cuts[i + 1], DECK_Y - 0.02, top, 0.2); k += 1
     # stem
-    col_piece('col_stem', [(sx * 0.13, y, zstem(y) + dz) for y in (-0.6, 0.3, 1.2, 2.5) for sx in (-1, 1) for dz in (-0.25, 0.3)])
+    col_piece('col_stem', [(sx * 0.13, y, zstem(y) + dz) for y in (-0.6, 0.3, 1.2, 2.66) for sx in (-1, 1) for dz in (-0.25, 0.3)])
     # transom + taffrail
     pts = []
-    yt = ytop(6.5) + 0.8
+    yt = ytop(6.5) + 0.65
     for y in (YT, 0.2, 0.7, 1.4, 2.0, yt):
         for sg in (-1, 1):
             for dz in (0.03, -0.16): pts.append((sg * max(wtrans(y), 0.12), y, zstern(y) + dz))
     col_piece('col_transom', pts)
     # decks
-    main = deck_outline(DECK_Y - 0.12, DECK_Y, -6.52, QDECK_Z + 0.1)
-    hx0, hx1, hz0, hz1 = HATCH
+    main = deck_outline(DECK_Y - 0.1, DECK_Y, -6.52, QDECK_Z + 0.1)
+    hx0, hx1, hz0, hz1 = HATCH; qx0, qx1, qz0, qz1 = QSTAIR
     def slab(name, poly, y0, y1):
         if poly: col_piece(name, [(x, y, z) for x, z in poly for y in (y0, y1)])
-    slab('col_deck_main_fore', clip_rect(main, -9, 9, -7, hz0), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_port', clip_rect(main, -9, hx0, hz0, hz1), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_starboard', clip_rect(main, hx1, 9, hz0, hz1), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_aft', clip_rect(main, -9, 9, hz1, QDECK_Z + 0.1), DECK_Y - 0.12, DECK_Y)
+    slab('col_deck_main_fore', clip_rect(main, -9, 9, -7, hz0), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_port', clip_rect(main, -9, hx0, hz0, hz1), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_starboard', clip_rect(main, hx1, 9, hz0, hz1), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_aft', clip_rect(main, -9, 9, hz1, QDECK_Z + 0.1), DECK_Y - 0.1, DECK_Y)
     zq1 = zstern(QDECK_Y) - 0.1
-    slab('col_quarterdeck', deck_outline(QDECK_Y - 0.12, QDECK_Y, QDECK_Z - 0.06, zq1, 10, 1.0), QDECK_Y - 0.12, QDECK_Y)
-    slab('col_hold_floor', deck_outline(HOLD_Y - 0.06, HOLD_Y, -4.3, 5.75, 16, 1.0), HOLD_Y - 0.2, HOLD_Y)
-    # stairs as ramps
-    col_piece('col_stairs_quarter', [(sx * 0.66, y, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, 1.9), (DECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z - 0.03))])
-    zt, zbm = hz1 - 0.02, hz0 + 0.05
-    col_piece('col_stairs_hold', [(sx * 0.58, y + dy, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, zt), (HOLD_Y, zbm)) for dy in (0.0, -0.16)])
-    # quarterdeck break: bulkhead (above the main deck) and front rail either side of the stairs
-    hb = hull_b(QDECK_Z + 0.05, QDECK_Y) - 0.08
-    col_piece('col_bulkhead_quarter', [(sx * hb, y, z) for sx in (-1, 1) for y in (DECK_Y - 0.12, QDECK_Y) for z in (QDECK_Z, QDECK_Z + 0.12)])
+    quarter = deck_outline(QDECK_Y - 0.1, QDECK_Y, QDECK_Z - 0.06, zq1, 10, 1.0)
+    slab('col_quarterdeck_fore', clip_rect(quarter, -qx0, qx0, QDECK_Z - 0.06, qz1), QDECK_Y - 0.1, QDECK_Y)
+    slab('col_quarterdeck_aft', clip_rect(quarter, -9, 9, qz1, 9), QDECK_Y - 0.1, QDECK_Y)
+    slab('col_hold_floor', deck_outline(HOLD_Y - 0.06, HOLD_Y, -4.3, 5.75, 16, 1.0, inner=True), HOLD_Y - 0.1, HOLD_Y)
+    # stairs as ramps (quarterdeck flights 35 degrees, hold flight 38)
     for sg, tag in ((1, 'S'), (-1, 'P')):
-        col_piece('col_rail_quarter_front_%s' % tag, [(sg * x, y, z) for x in (0.64, hb) for y in (QDECK_Y, QDECK_Y + 0.9) for z in (QDECK_Z - 0.06, QDECK_Z + 0.12)])
+        col_piece('col_stairs_quarter_%s' % tag, [(sg * x, y, z) for x in (qx0, qx1) for (y, z) in ((DECK_Y, qz0), (DECK_Y - 0.1, qz0), (DECK_Y - 0.1, QDECK_Z + 0.05), (QDECK_Y - 0.4, qz1), (QDECK_Y, qz1))])
+        col_piece('col_stairwell_%s' % tag, [(sg * x, y, z) for x in (qx0 - 0.08, qx0) for y in (DECK_Y - 0.1, QDECK_Y + 0.9) for z in (QDECK_Z, qz1 + 0.06)])
+    zt, zbm = HOLD_STAIR[0] + 0.03, HOLD_STAIR[1]
+    col_piece('col_stairs_hold', [(sx * 0.45, y + dy, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, zt), (HOLD_Y, zbm)) for dy in (0.0, -0.16)])
+    # quarterdeck break: bulkhead (above the main deck) and the front rail between the flights
+    col_piece('col_bulkhead_quarter', [(sx * qx0, y, z) for sx in (-1, 1) for y in (DECK_Y - 0.1, QDECK_Y) for z in (QDECK_Z, QDECK_Z + 0.12)])
+    col_piece('col_rail_quarter_front', [(sx * qx0, y, z) for sx in (-1, 1) for y in (QDECK_Y, QDECK_Y + 0.9) for z in (QDECK_Z - 0.03, QDECK_Z + 0.1)])
     hbk = hull_b(-4.3, DECK_Y - 0.1) - 0.1
     col_piece('col_bulkhead_hold', [(sx * x, y, -4.3 + dz) for sx in (-1, 1) for (x, y) in ((hull_b(-4.3, HOLD_Y) - 0.1, HOLD_Y), (hbk, DECK_Y - 0.1)) for dz in (-0.06, 0.06)])
     # mast, bowsprit
     col_piece('col_mast', [(0.3 * cos(k * pi / 4), y, MAST_Z + 0.3 * sin(k * pi / 4)) for k in range(8) for y in (HOLD_Y, 10.5)])
     col_piece('col_mast_top', [(r * cos(k * pi / 4), y, MAST_Z + r * sin(k * pi / 4)) for k in range(8) for (y, r) in ((10.5, 0.9), (11.5, 0.95))])
-    col_piece('col_bowsprit', [(sx * 0.14, 2.25 + dy + 1.7 * f, -5.45 - 4.95 * f) for sx in (-1, 1) for dy in (-0.14, 0.14) for f in (0, 1)])
+    col_piece('col_bowsprit', [(sx * 0.14, BS_HEEL[1] + dy + (BS_TIP[1] - BS_HEEL[1]) * f, BS_HEEL[2] + (BS_TIP[2] - BS_HEEL[2]) * f) for sx in (-1, 1) for dy in (-0.14, 0.14) for f in (0, 1)])
 
 # ================================================================ distant LOD
 def build_lod(outdir):
@@ -1632,7 +1655,7 @@ def build_lod(outdir):
     for ob in list(bpy.data.objects): bpy.data.objects.remove(ob, do_unlink=True)
     OBJS.clear()
     mb = MB('Hull'); NL = 16
-    rows = [0, 2, 4, 5, 7, 8, 10, 11]
+    rows = [0, 2, 4, 5, 7, 8, 9, 11, 12]
     ss = [NS * (i / NL) for i in range(NL)] + [NS - 0.05]
     for sg in (-1, 1):
         with xf(mb, S(sg, 1, 1)):
@@ -1641,7 +1664,7 @@ def build_lod(outdir):
                 gaps_here = rows[r] >= 8
                 for i in range(len(ss) - 1):
                     zmid = hull_pt(umap((ss[i] + ss[i + 1]) / 2), 1.0).z
-                    if rows[r] >= 10 and any(z0 < zmid < z1 for z0, z1 in GAPS): continue
+                    if rows[r] >= 9 and any(z0 < zmid < z1 for z0, z1 in GAPS): continue
                     q = [hull_pt(umap(ss[i]), VS[rows[r]]), hull_pt(umap(ss[i + 1]), VS[rows[r]]), hull_pt(umap(ss[i + 1]), VS[rows[r + 1]]), hull_pt(umap(ss[i]), VS[rows[r + 1]])]
                     c = sum(q, Vector()) / 4
                     mb.fp(q, 'paint', mul(colr, 0.92 + 0.08 * ((i + r) % 2)), None, (0, c.y, c.z))
@@ -1654,11 +1677,11 @@ def build_lod(outdir):
                 if any(z0 < zmid < z1 for z0, z1 in GAPS): continue
                 mb.fp([a - na * 0.2 + Vector((0, 0.06, 0)), a + na * 0.06 + Vector((0, 0.06, 0)), b + nb * 0.06 + Vector((0, 0.06, 0)), b - nb * 0.2 + Vector((0, 0.06, 0))], 'paint', C_DARK, None, (0, -5, 0))
                 if zmid > QDECK_Z:                                              # quarterdeck balustrade as a slatted band
-                    up = Vector((0, 0.78, 0))
+                    up = Vector((0, 0.63, 0))
                     for inside in ((0, 0, zmid), (9, 0, zmid)):
                         mb.fp([a + up - Vector((0, 0.1, 0)), b + up - Vector((0, 0.1, 0)), b + up, a + up], 'paint', C_RED, None, inside)
                     for f in (0.0, 0.5):
-                        m = a.lerp(b, f); cbox(mb, (m.x - 0.05, m.y + 0.39, m.z), (0.07, 0.66, 0.07), 'paint', C_CREAM, 0.0)
+                        m = a.lerp(b, f); cbox(mb, (m.x - 0.05, m.y + 0.32, m.z), (0.07, 0.52, 0.07), 'paint', C_CREAM, 0.0)
     # decks, bulkhead, transom
     main = deck_outline(DECK_Y, DECK_Y, -6.5, QDECK_Z, 10, 1.6, 0.1); quarter = deck_outline(QDECK_Y, QDECK_Y, QDECK_Z, zstern(QDECK_Y) - 0.1, 3, 1.0, 0.1)
     mb.fp([(x, DECK_Y, z) for x, z in main], 'paint', C_DECK, None, (0, -5, 0)); mb.fp([(x, QDECK_Y, z) for x, z in quarter], 'paint', C_DECK, None, (0, -5, 0))
@@ -1671,9 +1694,9 @@ def build_lod(outdir):
         mb.fp([(wx - 0.3, 0.66, zstern(0.66) + 0.02), (wx + 0.3, 0.66, zstern(0.66) + 0.02), (wx + 0.3, 1.34, zstern(1.34) + 0.02), (wx - 0.3, 1.34, zstern(1.34) + 0.02)], 'glass', C_GLASS, None, (0, 1, 0))
     with xf(mb, T(0, 2.03, zstern(2.03) + 0.01) @ M_Y2Z):
         lathe(mb, [(0, 0), (0.42, 0), (0, 0.06)], 8, 'paint', C_GOLD, False)
-    yr = yts + 0.78
+    yr = yts + 0.6
     cbox(mb, (0, yr, zstern(yts) - 0.05), (2 * wtrans(yts), 0.1, 0.12), 'paint', C_RED, 0.0)
-    for i in range(5): cbox(mb, (-1.2 + 0.6 * i, yts + 0.4, zstern(yts) - 0.05), (0.08, 0.7, 0.08), 'paint', C_CREAM, 0.0)
+    for i in range(5): cbox(mb, (-1.2 + 0.6 * i, yts + 0.3, zstern(yts) - 0.05), (0.08, 0.55, 0.08), 'paint', C_CREAM, 0.0)
     # keel, stem, rudder
     path = [(6.25, -1.0), (-3.4, -1.0)] + [(_SB[i][1], _SB[i][0]) for i in range(40, 241, 40)] + [(zstem(1.8), 1.8), (zstem(2.5), 2.5)]
     secs = []; scols = []
@@ -1689,7 +1712,7 @@ def build_lod(outdir):
         lathe(mb, [(0.3, DECK_Y), (0.24, 10.5), (0.15, 11.8), (0.09, MAST_TOP), (0, MAST_TOP + 0.2)], 6, 'paint', mul(C_DECK, 0.95))
         lathe(mb, [(0.24, 10.5), (0.8, 10.5), (0.93, 11.4), (0.97, 11.4), (0.97, 11.5), (0, 11.5)], 8, 'paint', C_HULL, False, False, lambda i, k: C_RED if i >= 2 else C_HULL)
         lathe(mb, [(0.25, 9.6), (0.8, 10.5)], 4, 'paint', C_DARK, False)
-    tube(mb, [(0, 2.25, -5.45), (0, 3.95, -10.4)], [0.17, 0.1], 5, 'paint', mul(C_DECK, 0.95), mode='flat')
+    tube(mb, [BS_HEEL, BS_TIP], [0.17, 0.1], 5, 'paint', mul(C_DECK, 0.95), mode='flat')
     # figurehead: white body, teal wings, orange beak
     ellipsoid(mb, (0, 1.78, -7.08), (0.33, 0.5, 0.42), 'paint', srgb('#f4ead2'), 6, 4, R('X', -28))
     ellipsoid(mb, (0, 2.4, -7.55), (0.2, 0.26, 0.24), 'paint', srgb('#f4ead2'), 6, 4)
@@ -1701,13 +1724,13 @@ def build_lod(outdir):
     cbox(mb, (0, QDECK_Y + 0.6, 4.95), (0.34, 1.2, 0.34), 'paint', C_RED, 0.0)
     with xf(mb, T(0, QDECK_Y + 0.95, 5.2) @ M_Y2Z): lathe(mb, [(0, -0.04), (0.5, -0.04), (0.5, 0.04), (0, 0.04)], 8, 'paint', C_DARK, False)
     with xf(mb, T(0, DECK_Y, -4.6)): lathe(mb, [(0.4, 0), (0.24, 0.5), (0.42, 0.75), (0.42, 1.0), (0, 1.05)], 6, 'paint', C_DARK, False)
-    cbox(mb, (0, DECK_Y + 0.12, 0.4), (1.4, 0.3, 2.2), 'paint', C_RED, 0.0, skip=('-y',))
+    cbox(mb, (0, DECK_Y + 0.12, 1.0), (1.4, 0.3, 3.0), 'paint', C_RED, 0.0, skip=('-y',))
     yl = ytop(6.5) + 1.55
     cbox(mb, (0, yl, zstern(yts) - 0.02), (0.36, 0.5, 0.36), 'glass', C_GLASS, 0.0); cbox(mb, (0, yl - 0.75, zstern(yts) - 0.02), (0.1, 1.1, 0.1), 'paint', C_IRON, 0.0)
     cbox(mb, (1.62, 1.0, -5.1), (0.12, 1.5, 0.12), 'paint', C_IRON, 0.0); cbox(mb, (1.62, 0.4, -5.1), (0.12, 0.14, 1.0), 'paint', C_IRON, 0.0)
     # rigging: thin three-sided ropes
-    tip = Vector((0, 3.95, -10.4))
-    lines = [((0, MAST_TOP - 0.35, MAST_Z - 0.08), tip), ((0, 10.35, MAST_Z - 0.25), Vector((0, 2.25, -5.45)).lerp(tip, 0.34))]
+    tip = Vector(BS_TIP)
+    lines = [((0, MAST_TOP - 0.35, MAST_Z - 0.08), tip), ((0, 11.7, MAST_Z - 0.2), Vector(BS_HEEL).lerp(tip, 0.34))]
     for sg in (-1, 1):
         p, nh = rail_frame(2.0); lines.append(((sg * 0.08, MAST_TOP - 0.5, MAST_Z + 0.08), (sg * (p.x - 0.05), p.y + 0.95, p.z)))
     for sg, k, bot, top in shroud_pts(): lines.append((bot, top))

@@ -3,10 +3,11 @@ extends Node3D
 ## User args (after `--`): shot=orbit|deck|helm|hold|bow|far|collision|stern|top|cannon|bowdeck|side|free (eye=x,y,z look=x,y,z)  col=hide|solid|wire
 ## lod=1 (show sloop_lod.glb instead)  furled=1 (Sail_Furled instead of Sail)  damage=1 (show Hole_* and HolePatch_01..05)
 ## r=<orbit radius> h=<orbit height> dist=<far distance> fov=<far fov> ssao=0|1
-## dur=<seconds for one camera pass, default 2>  capsules=0|1 (1.8 m scale figures)  water=0|1
+## dur=<seconds for one camera pass, default 2>  capsules=0|1 (frozen 1.75 m Pawns as scale figures)  water=0|1
 ## print=1 dumps node positions (to verify station markers and pivots).
 
 const SLOOP := "res://assets/generated/ship/sloop.glb"
+const FLOOR := -0.85
 var shot := "orbit"
 var col_mode := ""
 var dur := 2.0
@@ -45,7 +46,7 @@ func _ready() -> void:
 	if opts.get("water", "0" if shot == "hold" else "1") == "1":
 		_add_water()
 	if opts.get("capsules", "1") == "1":
-		for p in [Vector3(0.9, 1.1, -2.6), Vector3(0.0, 2.0, 5.95), Vector3(0.75, -0.6, 3.5), Vector3(-1.05, -0.6, 0.3)]:
+		for p in [Vector3(0.9, 1.1, -2.6), Vector3(0.0, 2.0, 5.95), Vector3(0.4, FLOOR, 3.7), Vector3(-0.82, FLOOR, 0.5), Vector3(1.4, 1.55, 3.25), Vector3(-1.5, 1.1, 2.0)]:
 			_add_capsule(p)
 	for n in ship.get_children():
 		if n.name.begins_with("Lantern_"):
@@ -169,16 +170,12 @@ func _add_water() -> void:
 	add_child(mi)
 
 func _add_capsule(p: Vector3) -> void:
-	var mi := MeshInstance3D.new()
-	var c := CapsuleMesh.new()
-	c.height = 1.8
-	c.radius = 0.28
-	mi.mesh = c
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.25, 0.75, 1.0)
-	mi.material_override = m
-	mi.position = p + Vector3(0, 0.9, 0)
-	add_child(mi)
+	# a real Pawn (1.75 m), frozen: scale figure only
+	var pawn: Node3D = (load("res://src/characters/pawn.tscn") as PackedScene).instantiate()
+	add_child(pawn)
+	pawn.set_physics_process(false)
+	pawn.set_process(false)
+	pawn.position = p
 
 func _process(delta: float) -> void:
 	_update_camera()
@@ -220,12 +217,12 @@ func _update_camera() -> void:
 		"hold":
 			# first half: standing in the stern nook looking forward past the map table;
 			# second half: crouched by the mast looking aft at the table and stern windows
-			var eye3 := Vector3(-0.3, -0.6 + 1.6, 4.9)
+			var eye3 := Vector3(-0.3, FLOOR + 1.6, 4.9)
 			if f < 0.5:
 				var y3 := lerpf(-0.45, 0.45, f * 2.0)
 				_look(eye3, eye3 + Vector3(sin(y3), -0.3, -cos(y3)), 85.0)
 			else:
-				var eye4 := Vector3(0.9, -0.6 + 1.25, -0.2)
+				var eye4 := Vector3(0.85, FLOOR + 1.6, -1.6)
 				var y4 := lerpf(-0.6, 0.3, f * 2.0 - 1.0)
 				_look(eye4, eye4 + Vector3(sin(y4), -0.12, cos(y4)), 85.0)
 		"bow":
