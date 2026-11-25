@@ -324,7 +324,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	float dist = s_dist * inv;
 
 	// Toon shading: three flat tones with soft steps between them.
-	float tone = 0.5 * smoothstep(0.2, 0.34, direct) + 0.5 * smoothstep(0.58, 0.72, direct);
+	float tone = 0.5 * smoothstep(0.16, 0.4, direct) + 0.5 * smoothstep(0.52, 0.78, direct);
 	// Flat bases sit in their own shade, one clean tone; the sun models the sides and tops.
 	tone *= smoothstep(0.03, 0.3, height);
 	tone *= light_amount;
