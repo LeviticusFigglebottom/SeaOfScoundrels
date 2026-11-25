@@ -85,6 +85,14 @@ func _ready() -> void:
 	_build_players()
 
 
+func _exit_tree() -> void:
+	# stop everything so no playback outlives the players at shutdown
+	for child in get_children():
+		if child is AudioStreamPlayer or child is AudioStreamPlayer3D:
+			child.stop()
+	_clear_stems()
+
+
 # ----------------------------------------------------------------------------
 # Buses
 # ----------------------------------------------------------------------------
@@ -597,13 +605,11 @@ func _apply_ambience() -> void:
 		var g: float = levels.get(layer, 0.0) if ambience_enabled else 0.0
 		if g < 0.002:
 			if p.playing:
-				p.stream_paused = true
+				p.stop()  # silent layers cost nothing
 			continue
 		p.volume_db = _gain_db(g)
 		if not p.playing:
 			p.play(_rng.randf() * p.stream.get_length())  # layers never line up the same way twice
-		elif p.stream_paused:
-			p.stream_paused = false
 	var under: float = _value[&"under"]
 	for bus: StringName in [BUS_AMBIENCE, BUS_SFX, BUS_VOICE]:
 		_set_lowpass(bus, UNDERWATER_EFFECT, under, CUTOFF_UNDERWATER)

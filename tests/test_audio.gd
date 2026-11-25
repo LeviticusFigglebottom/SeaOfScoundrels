@@ -214,3 +214,18 @@ func test_ambience_mixer() -> void:
 	a.set_rain(0.0)
 	a.snap_ambience()
 	await physics_frames(2)
+
+
+func test_zz_shutdown_is_clean() -> void:
+	# Last on purpose: free the manager and give the audio thread a few mix
+	# cycles to let go of its playbacks, so the run exits without leak reports.
+	var a := _manager()
+	a.play_music(&"sailing", 0.0)
+	a.play_shanty()
+	await physics_frames(2)
+	a.queue_free()
+	audio = null
+	for i in 12:
+		await get_tree().process_frame
+		OS.delay_msec(10)
+	check(not is_instance_valid(a), "manager freed")
