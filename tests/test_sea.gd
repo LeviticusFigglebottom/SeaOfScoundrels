@@ -103,7 +103,7 @@ func test_ocean_mesh_is_watertight_and_in_budget() -> void:
 	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-	var tris := idx.size() / 3
+	var tris := int(idx.size() / 3.0)
 	check(tris > 100000 and tris <= 160000, "triangle count %d outside budget" % tris)
 	# Every edge is shared by exactly two triangles, except the open far edge
 	# of the horizon skirt. A T-junction or a crack would break this.

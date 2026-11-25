@@ -86,19 +86,47 @@ Integration rules for anything a pawn rides:
 1 world static (terrain, docks) · 2 ships (hull and deck) · 3 pawns · 4 interactables (areas) · 5 projectiles · 6 carryables and debris · 7 water volumes and triggers.
 
 ## Sky (`src/sky/`)
-`sky_rig.tscn` is dropped into any scene: owns `WorldEnvironment`, sun and moon `DirectionalLight3D`, sky shader, clouds, stars, fog and precipitation, all driven by `Weather`. It holds no state, so it is safe on every peer. Do not add another `WorldEnvironment` or directional light to a scene that has the rig. It sets these global shader uniforms every frame (declared in `project.godot` by the lead), all in **linear RGB**:
+`sky_rig.tscn` is dropped into any scene: owns `WorldEnvironment`, sun and moon `DirectionalLight3D`, the sky shader with volumetric clouds, cloud shadows, fog, rain, mist, the storm cell's rain curtain and lightning, all driven by `Weather`. It holds no replicated state, so it is safe on every peer. Do not add another `WorldEnvironment` or directional light to a scene that has the rig. It sets these global shader uniforms every frame (declared in `project.godot` `[shader_globals]`), colours in **linear RGB**:
 - `sun_dir: vec3` unit vector towards the dominant light (sun by day, moon by night), never lower than about 6 degrees above the horizon, identical to the shadow-casting `DirectionalLight3D`.
-- `sun_color: vec3` that light's colour times energy (includes lightning flashes).
+- `sun_color: vec3` that light's colour times energy (includes lightning flashes and the cloud shadow at the camera).
 - `sky_horizon_color: vec3` horizon colour; the fog colour is the same value, so fade distant things to it.
 - `sky_zenith_color: vec3`, `ambient_color: vec3` (ambient colour times energy).
+- `cloud_shadow_tex: sampler2D`, `cloud_shadow_params: vec4` the clouds' shadow on the ground; use them only through `cloud_shadow.gdshaderinc` (below).
 
-Rig members other systems may read: `sun`, `moon`, `environment`, `palette` (this frame's colours). Colours come from `sky_palette.gd`, a pure function of sun height, cloud cover and storminess; tune the look there.
+Rig members other systems may read: `sun`, `moon`, `environment`, `palette` (this frame's colours), `camera_sheltered`, `light_at_camera`, `cloud_light_at(world_pos)`, `cloud_field` (`column(xz)`: cloud base, height, storminess over a point). Exports: `cloud_quality` (`LOW` / `MEDIUM` default / `HIGH`), `track_camera_focus`, `splashes_follow_sea`, `rain_particles`, `show_bolts`, `shadow_distance`. Colours come from `sky_palette.gd`, a pure function of sun height, morning or evening, cloud cover and storminess; tune the look there.
 
-`Weather` (host-authoritative; setters are no-ops on clients):
-- State: `time_of_day`, `day`, `day_length_seconds`, `wind_heading`, `wind_speed` (mean), `storminess`, `cloudiness`, `cloud_offset`, `clock`. `get_state()` / `apply_state(dict)` are the replication hooks.
-- Change it: `set_weather(storminess, wind_speed, wind_heading, seconds = 0, cloudiness = -1)` eases to the target; `set_preset(&"clear" | &"fair" | &"breezy" | &"overcast" | &"squall" | &"storm", seconds)`; `is_transitioning()`, `target_storminess()`.
-- Wind: `wind_vector()` **includes gusts** (speed and a small veer); `mean_wind_vector()` is the steady wind; `gust_factor()`, `gustiness()`.
-- Sky: `sun_direction()`, `moon_direction()`, `dominant_light_direction()`, `sun_height()`, `daylight()` (0..1), `is_night()`, `moon_phase()`, `cloud_cover()`, `rain_intensity()`.
-- Lightning: starts above storminess 0.55. `signal lightning_struck(direction: Vector3, distance: float, intensity: float)` (direction is horizontal, from the listener; delay thunder by distance / 340). `lightning_flash` is the 0..1 flash brightness; `strike_lightning(direction, distance, intensity)` forces one; `lightning_enabled` turns automatic strikes off.
+### Clouds
+One function of world position, `cloud_field.gdshaderinc` (CPU copy: `cloud_field.gd`): a tiled weather map (`cloud_map.png`) gives cloud footprints; over a footprint the cloud is a flat-based dome; a 64^3 puff volume (`cloud_volume.png`) is subtracted so tops and sides are cauliflower lumps. It returns a rough signed distance, so the sky shader strides through empty air, lands on surfaces (bisecting after a forced long stride) and goes opaque within a few steps. Light is a short march towards the sun banded into three tones. The camera's world position feeds the march, so clouds have true parallax; a small-planet curve sinks them behind the horizon by 27 km. Storm cells add a tower and anvil in true metres. Textures come from `tools/textures/gen_cloud_volume.py`.
 
-Showcase: `tools/capture.sh res://scenes/showcase/sky_showcase.tscn <name> 2 5 -- time=18.1 storm=0 cloud=0.4`; see the header of `scenes/showcase/sky_showcase.gd` for all arguments (`timelapse=1`, `to_storm=1`, `strike=`, `look=`).
+Quality and cost (texture reads; a march step is 2 reads in clear air, 3 in or near cloud):
+
+| `cloud_quality` | Where the march runs | Steps / light samples | Worst case per marched pixel | Expected at 1080p, GTX 1660 class |
+|---|---|---|---|---|
+| `LOW` | quarter-res sky pass (130k px) | 16 / 2, no light shafts | about 75 reads | about 0.3 ms |
+| `MEDIUM` | half-res sky pass (518k px) | 32 / 3, 6 shaft samples | about 135 reads | 1 to 2 ms (most rays end in under 12 steps; pixels below the horizon exit at once) |
+| `HIGH` | full resolution (2.07M px) | 56 / 5, 12 shaft samples, second noise octave | about 280 reads | 6 to 10 ms: for strong GPUs |
+
+Also every frame: the full-res pass (gradient, 3 cirrus reads, at night 3 more for Milky Way and moon), the 512 px shadow bake (4 reads per texel) and the radiance cubemap (10-step march). These are reasoned, not measured: there is no GPU here (D9). Needs a real-hardware check.
+
+### Cloud shadows: how terrain, ocean and ship shaders use them
+The rig bakes the clouds' ground shadow for a 16 km square around the camera into `cloud_shadow_tex` every frame, and multiplies the sun (the light node and `sun_color`) by the shadow **at the camera**, so standard materials near the player darken when a cloud passes over. Custom shaders with a large footprint (ocean, islands) should shadow per pixel:
+```glsl
+#include "res://src/sky/cloud_shadow.gdshaderinc"
+// in light():   float sun = LIGHT_IS_DIRECTIONAL ? cloud_light(world_pos.xz) : 1.0;  then multiply the light by `sun`
+// with sun_color: vec3 key = sun_color * cloud_light(world_pos.xz);
+```
+`cloud_light(xz)` is relative to the dimming already in the light (do not use it twice); `cloud_shadow(xz)` is the absolute sunlit fraction (1 open sun, about 0.2 under thick cloud) for things that bypass the light. Example: `scenes/showcase/sky_showcase_ground.gdshader`. Standard materials cannot be shadowed per pixel (Godot has no directional-light projector), so ships get the camera value, which is right at ship scale.
+
+### Shelter from rain
+Put an `Area3D` in group `shelter` with a `BoxShape3D` child around any covered space (the hold, a cabin, a hut). Rain, splashes and mist are not drawn inside the four boxes nearest the camera (the boxes may move with a ship), and `rig.camera_sheltered` says whether the listener is under cover.
+
+### `Weather` (host-authoritative; setters are no-ops on clients)
+- State: `time_of_day`, `day`, `day_length_seconds`, `wind_heading`, `wind_speed` (mean, outside any cell), `base_storminess`, `cloudiness`, `cloud_offset`, `cloud_evolution`, `clock`, the storm cell (`storm_center`, `storm_radius`, `storm_intensity`, `storm_velocity`, `storm_wind_speed`), the front of a transition and the latest bolt. `get_state()` / `apply_state(dict)` replicate all of it (a snapshot with a new `lightning_serial` starts the flash on clients).
+- `storminess` is the weather **at `focus_position`** (this peer's camera; the rig sets it): `max(base_storminess, storm cell there)`. Assigning it sets the background. Anything with a position of its own should ask `local_storminess(world_pos)`; also `local_rain_intensity(pos)`, `wind_speed_at(pos)`, `storm_cell_strength(pos)`. Suggested: `Sea` should take its amplitude from the host's `local_storminess(ship position)`.
+- Change it: `set_weather(storminess, wind_speed, wind_heading, seconds = 0, cloudiness = -1)` eases the background to the target; `set_preset(&"clear" | &"fair" | &"breezy" | &"overcast" | &"squall" | &"storm", seconds)`; `is_transitioning()`, `target_storminess()`. `set_storm_cell(center, radius, intensity = 1, seconds = 0, velocity = ZERO)` and `clear_storm_cell(seconds)` place and remove a local storm.
+- Fronts: during a timed `set_weather`, the values at the focus ease smoothly, while the sky shows the new weather arriving from upwind as a band (`front_weight(pos)`, 0 ahead of it, 1 behind).
+- Wind: `wind_vector()` **includes gusts** (speed and a small veer) and the cell's wind when the focus is inside it; `mean_wind_vector()` is the steady wind; `gust_factor()`, `gustiness()`. Clouds drift and churn with the gusty wind.
+- Sky: `sun_direction()`, `moon_direction()` (own path: trails the sun by `moon_elongation()`, always gibbous), `moon_illumination()` (lit fraction from the real geometry; the disc is lit from the sun's direction), `moon_phase()`, `dominant_light_direction()`, `sun_height()`, `daylight()`, `is_night()`, `cloud_cover()`, `rain_intensity()`.
+- Lightning: automatic above storminess 0.55, inside the storm cell when there is one (so a distant cell flickers), about a third of it sheet lightning. `signal lightning_struck(direction, distance, intensity)` fires at the flash (direction horizontal from the focus); `signal thunder_heard(direction, distance, intensity)` fires `thunder_delay(distance)` = distance / 343 s later: play thunder on that. `lightning_flash` is the 0..1 flash envelope, `lightning_illumination(pos)` the flash with distance falloff, `lightning_position`, `lightning_is_sheet`; `strike_lightning(direction, distance, intensity)` and `strike_lightning_at(world_pos, intensity, sheet)` force one; `lightning_enabled` turns automatic strikes off.
+
+Showcase: `tools/capture.sh res://scenes/showcase/sky_showcase.tscn <name> 2 5 -- time=18.1 storm=0 cloud=0.4`; see the header of `scenes/showcase/sky_showcase.gd` for all arguments (`timelapse=1`, `from= to=`, `to_storm=1`, `front=`, `cell=x,z,radius,intensity`, `cam=`, `truck=`, `quality=`, `shelter=1`, `strike=`, `look=`). `tools/contact_sheet.py out.png captures/a captures/b:all` tiles frames for comparison.
