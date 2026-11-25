@@ -17,6 +17,11 @@ Re-read this, ROADMAP.md, DECISIONS.md, ARCHITECTURE.md and the "Quality bar" in
 - `ws/charart`: characters, rig, animation set, animation driver.
 - `ws/items`: held tools, HUD, command wheel.
 
+## Satellite sessions (separate cloud environments, started 2026-11-25)
+Each works on its own pushed branch, keeps `docs/status/<name>.md` there, and messages the lead session at milestones. Check with `git fetch origin <branch>` and the session tools (get_session, list_events, send_message).
+- `remote/combat` (session_01F3vrULcD8FF2W7zsj2iULm): melee and ranged combat, the Drowned enemy types, combat bot, showcase, tests.
+- `remote/voyage` (session_01F3vrUNnqQC1g54Kkocnd1X): world map, treasure and economy, voyage composer, world-event director, variety simulation, tests.
+
 ## Next
 - Integrate ship + pawn + ocean + sky + island into the main scene; AI crewmate; combat and the Drowned; voyage loop; independent reviews of each flagship system.
 
