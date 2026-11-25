@@ -27,7 +27,8 @@ Read this before touching code. These contracts let workstreams land independent
 | `Net` | `src/net/net.gd` | session, `is_host()` |
 | `Weather` | `src/sky/weather.gd` | `time_of_day`, `wind_vector()`, `wind_speed`, `storminess`, `sun_direction()`, `set_weather()`, `lightning_struck` (see Sky) |
 | `Sea` | `src/ocean/sea.gd` | wave function: `height(x,z)`, `height_at(p)`, `depth(p)`, `normal(x,z)`, `displacement(x,z)`, `time`, `amp_scale`, `bind_material(mat)` |
-| `Game` | `src/core/game.gd` | session state, `post_notice()` |
+| `Game` | `src/core/game.gd` | session state, `post_notice()`, `profile` |
+| `Audio` | `src/audio/audio_manager.gd` | buses, `play_sfx(name, pos)`, `play_music`, `play_stinger`, shanty stems, ambience mixer setters (`set_sea_state`, `set_wind`, `set_rain`, `set_underwater`, `set_below_deck`, `set_shore`, `set_ship_speed`); catalogue in `assets/generated/audio/manifest.json` |
 
 `Sea` is the only source of water height. Shaders that need waves include `res://src/ocean/waves.gdshaderinc` and register their material with `Sea.bind_material()`.
 

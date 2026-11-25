@@ -15,6 +15,7 @@ Net="*res://src/net/net.gd"
 Weather="*res://src/sky/weather.gd"
 Sea="*res://src/ocean/sea.gd"
 Game="*res://src/core/game.gd"
+Audio="*res://src/audio/audio_manager.gd"
 
 [display]
 
