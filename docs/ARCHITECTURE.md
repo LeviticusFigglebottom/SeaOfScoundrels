@@ -26,11 +26,22 @@ Read this before touching code. These contracts let workstreams land independent
 | `InputSetup` | `src/core/input_setup.gd` | input actions |
 | `Net` | `src/net/net.gd` | session, `is_host()` |
 | `Weather` | `src/sky/weather.gd` | `time_of_day`, `wind_vector()`, `wind_speed`, `storminess`, `sun_direction()`, `set_weather()`, `lightning_struck` (see Sky) |
-| `Sea` | `src/ocean/sea.gd` | wave function: `height(x,z)`, `height_at(p)`, `depth(p)`, `normal(x,z)`, `displacement(x,z)`, `time`, `amp_scale`, `bind_material(mat)` |
+| `Sea` | `src/ocean/sea.gd` | wave function: `height(x,z)`, `height_at(p)`, `depth(p)`, `normal(x,z)`, `displacement(x,z)`, `rest_point(x,z)`, `time`, `amp_scale`, `sea_state()`, `significant_height()`, `wave_amplitude(i)`, `bind_material(mat)` |
 | `Game` | `src/core/game.gd` | session state, `post_notice()`, `profile` |
 | `Audio` | `src/audio/audio_manager.gd` | buses, `play_sfx(name, pos)`, `play_music`, `play_stinger`, shanty stems, ambience mixer setters (`set_sea_state`, `set_wind`, `set_rain`, `set_underwater`, `set_below_deck`, `set_shore`, `set_ship_speed`); catalogue in `assets/generated/audio/manifest.json` |
 
 `Sea` is the only source of water height. Shaders that need waves include `res://src/ocean/waves.gdshaderinc` and register their material with `Sea.bind_material()`.
+
+## Ocean (`src/ocean/`)
+`ocean.tscn` (`class_name Ocean`) is dropped into any scene and follows the active camera; it needs the `Sea`, `Weather` and `Net` autoloads and reads the sky globals (`sun_dir`, `sun_color`, `sky_horizon_color`, `sky_zenith_color`, `ambient_color`; at night the sky rig puts the moon in `sun_dir`/`sun_color`, which is what lights the water).
+
+- **Wave model.** `Sea.WAVE_TABLE` rows are `[wavelength, calm amplitude, storm amplitude, heading, steepness]` (16 waves, `MAX_WAVES` 32). `amp_scale` runs `AMP_CALM..AMP_STORM` and blends each wave between its two amplitudes, so a storm adds a steep cross sea instead of scaling the calm one; values outside the range scale the nearest column (0 = flat). `Sea.height()` costs about 12 microseconds. Waves under about 7 m exist only as normal detail in the shader.
+- **Surface.** One mesh, one draw call: concentric square rings with doubling cell size, stitched rims, a skirt to the horizon, moved in 8 m steps (a multiple of every ring cell that still carries waves). `ocean.gdshader` is unshaded and composites everything itself: it reads the screen and depth textures (so it draws in the transparent pass, writes depth, and does **not** receive shadows or engine lights). Vertices beyond the far plane are depth-clamped.
+- **Public API.** `Ocean.current` (static) or group `ocean`; `quality` (`Ocean.Quality.LOW/MEDIUM/HIGH`); `add_foam(world_pos, radius, strength)` to whiten the water (wakes, splashes, impacts: call every frame for a trail; it rides the waves and fades in about 7 to 11 s; works within about 100 m of the camera, not at LOW); `rain_intensity` (negative follows `Weather.rain_intensity()` when present); `camera_depth`, `camera_submerged`, signal `camera_submerged_changed(bool)`; `material` for tuning colours.
+- **Foam field.** `foam_field.gd`: a 512 px float texture covering a wrapping 256 m tile in rest-plane coordinates (`Sea.rest_point`), never cleared: decay, crest injection from the wave Jacobian, stamps from `add_foam`.
+- **Underwater.** `underwater.gd` draws a full-screen pass before the surface while the camera is within 0.6 m of the water or below it (fog, absorption, caustics, sun shafts, per-pixel waterline from `sea_height`). The surface shader draws its own underside (Snell's window). Other transparent materials are not fogged by it.
+- **Tests.** `tools/test.sh` covers the CPU maths and the mesh; `tools/test_gpu.sh` renders `waves.gdshaderinc` and compares it with `Sea` (needs a renderer; software Vulkan under Xvfb works).
+- **Showcase.** `tools/capture.sh res://scenes/showcase/ocean_showcase.tscn <name> 3 5 -- shot=calm|storm|sunset|night|shore|underwater|waterline|wake|swell|aerial [quality=low|medium|high] [amp=] [t=] [rain=] [scale=] [wire=1]`.
 
 ## Ship (`src/ship/`)
 `Ship extends RigidBody3D` (`class_name Ship`). Origin at the waterline, midship, on the centreline.
