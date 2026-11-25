@@ -14,11 +14,12 @@ SEED = 1717
 DECK_Y = 1.1          # main deck
 QDECK_Y = 2.0         # quarterdeck (aft of QDECK_Z)
 QDECK_Z = 3.0
-HOLD_Y = float(os.environ.get('SLOOP_HOLD_Y', '-0.6'))   # hold floor per spec. Everything below deck follows this one value
-                      # (stairs, table and bilge markers, props, ribs, collision). -0.85 gives 1.85 m headroom under the main deck.
+HOLD_Y = float(os.environ.get('SLOOP_HOLD_Y', '-0.85'))  # hold floor: 1.85 m clear under the main deck. Everything below deck follows it
+                      # (stairs, table and bilge markers, props, ribs, collision).
 MAST_Z = -1.0
 YARD_Y = 9.0
 MAST_TOP = DECK_Y + 14.0
+YARD_FWD = 0.52       # the yard hangs this far forward of the mast axis (far enough to swing clear of the shrouds)
 TH = 0.16             # hull plank thickness
 STATIONS = {
     "Station_Bilge": ((0, HOLD_Y, -2.1), 0),            # extra (not in the spec): the bail/pump spot in the hold
@@ -34,7 +35,10 @@ STATIONS = {
     "Station_Ladder_Starboard": ((2.3, 0, 2.0), 0),
 }
 GAPS = [(-1.95, -1.05), (1.55, 2.45)]   # z ranges cut out of the bulwark: gun ports, ladders
-HATCH = (-0.6, 0.6, -0.6, 1.4)           # x0, x1, z0, z1 hole in the main deck
+HOLD_STAIR = (2.2, -0.25)                # z at the top (main deck) and at the foot (hold floor) of the stairs down
+HATCH = (-0.5, 0.5, -0.6, 2.25)           # x0, x1, z0, z1 hole in the main deck (long, so the stairs down are as shallow as the mast and the quarterdeck allow)
+QSTAIR = (0.9, 1.95, 2.6, 3.9)           # x0, x1, z0, z1 of the starboard quarterdeck flight (port is mirrored); it is let into the quarterdeck
+BS_HEEL = (0, 2.5, -5.45); BS_TIP = (0, 4.15, -10.4)   # bowsprit
 
 # ---------------------------------------------------------------- colour
 def srgb(h):
@@ -92,6 +96,8 @@ class MB:
         self.stack = [Matrix.Identity(4)]; self.flip = False
         self.rng = random.Random(SEED * 7919 + seed + sum(ord(c) for c in name))
         self.off = (0.0, 0.0)
+        self.wfn = None       # optional pos -> (weight, aux): written to UV2 for wind shaders (vertex colour stays the albedo tint)
+        self.gmatrix = None   # optional full object matrix in game coords (verts are then object-local)
 
     def push(self, M):
         self.stack.append(self.stack[-1] @ M)
@@ -187,7 +193,7 @@ def hexa(mb, p, mat, col, grain=None):
     for q in ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)):
         mb.fp([p[i] for i in q], mat, col, grain, c)
 
-def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', ecols=None, scols=None, flip=None, grain_caps=None):
+def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', ecols=None, scols=None, flip=None, grain_caps=None, uniform_w=False):
     """Connect consecutive sections (lists of points). mode: flat | len (smooth along, hard across) | smooth."""
     secs = [[Vector(p) for p in s] for s in secs]
     n = len(secs); k = len(secs[0])
@@ -200,16 +206,15 @@ def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', ecols=
         w = [0.0]
         for j in range(1, k + 1): w.append(w[-1] + (s[j % k] - s[j - 1]).length)
         W.append(w)
-    if flip is None:
-        flip = False; done = False
+    if uniform_w: W = [W[n // 2]] * n          # one across-the-grain mapping for every section: no skew where a section is pinched
+    if flip is None:                       # orient outward: area-weighted vote over every quad (ends may be pinched or twisted)
+        vote = 0.0
         for i in range(n - 1):
+            cc = (cents[i] + cents[i + 1]) / 2
             for j in range(ne):
                 q = [secs[i][j], secs[i][(j + 1) % k], secs[i + 1][(j + 1) % k], secs[i + 1][j]]
-                nn = newell(q)
-                qc = sum(q, Vector()) / 4; cc = (cents[i] + cents[i + 1]) / 2
-                if nn.length > 1e-9 and (qc - cc).length > 1e-6:
-                    flip = nn.dot(qc - cc) < 0; done = True; break
-            if done: break
+                vote += newell(q).dot(sum(q, Vector()) / 4 - cc)
+        flip = vote < 0
     o = mb.newoff()
     def uv(i, j): return (L[i] * SU + o[0], W[i][j] * SV + o[1])
     shared = mode in ('flat', 'smooth'); sm = mode != 'flat'
@@ -381,8 +386,14 @@ def prism(mb, poly, y0, y1, mat, col, ch=0.0, grain=(0, 0, 1), bottom=True):
 
 # ---------------------------------------------------------------- hull form
 NS = 48                                     # samples along the hull
-YS = [-1.0, -0.74, -0.48, -0.22, 0.05, 0.30, 0.55, 0.80, 1.02, 1.24, 1.50, 1.75]   # strake edges at midship
-VS = [(y + 1.0) / 2.75 for y in YS]
+# strake edges at midship. The first two are the wide flat bottom planks and the turn of the bilge; bulwark top 0.9 m + cap rail = 1.0 m
+YS = [-1.0, -0.975, -0.91, -0.74, -0.48, -0.22, 0.05, 0.30, 0.55, 0.80, 1.02, 1.24, 1.50, 1.76, 2.0]
+VS = [(y + 1.0) / 3.0 for y in YS]
+J_CREAM = YS.index(0.05); J_WALE = YS.index(0.80); J_SILL = YS.index(1.24)     # boot stripe, wale, lowest strake cut by the gun ports
+
+def hull_th(y):
+    """Planking thickness: thinner across the bottom so the hold floor can sit 1.85 m under the main deck."""
+    return 0.10 + (TH - 0.10) * smooth01((y + 0.95) / 0.4)
 YT = -0.15                                  # bottom of the transom
 _SB = []
 for _i in range(241):
@@ -411,7 +422,7 @@ def tumble(y):
 
 def bmid(y):
     h = max(0.0, min(1.0, (y + 1.0) / 1.9))
-    return 2.2 * (1 - (1 - h) ** 2.2) ** (1 / 2.6) * tumble(y)
+    return 2.2 * (1 - (1 - h) ** 3.0) ** (1 / 3.6) * tumble(y)   # full, flat-floored midsection: room to walk in the hold
 
 def wtrans(y):
     if y <= YT: return 0.0
@@ -422,13 +433,13 @@ def hull_b(z, y):
     """Half breadth of the outer hull surface at (z, y)."""
     bm = bmid(y)
     if z >= 0:
-        t = min(1.0, z / zstern(y)); return bm - (bm - wtrans(y)) * t ** 2.2
+        t = min(1.0, z / zstern(y)); return bm - (bm - wtrans(y)) * t ** 3.0
     t = min(1.0, z / zstem(y)); return bm * max(0.0, 1 - t ** 2.4) ** 0.7
 
 def ytop(z):
     """Sheer: top of the hull planking."""
-    if z < 0: return 1.75 + 0.6 * (-z / 6.5) ** 2
-    return 1.75 + 0.75 * smooth01((z - 1.0) / 3.5) + 0.1 * (z / 6.5) ** 2
+    if z < 0: return 2.0 + 0.5 * (-z / 6.5) ** 2
+    return 2.0 + 0.55 * smooth01((z - 1.0) / 3.5) + 0.1 * (z / 6.5) ** 2
 
 def umap(s):
     return 1.0 - (1.0 - min(max(s / NS, 0.0), 1.0)) ** 1.4
@@ -458,17 +469,19 @@ def s_of_z(z, v=1.0):
         else: hi = m
     return (lo + hi) / 2
 
-def inner_half(z, y):
-    """Half breadth of the inside face of the planking at (z, y)."""
-    v = 0.5; s = 0.0
-    for _ in range(3):
-        s = s_of_z(z, v); v = v_of_y(umap(s), y)
-    n = hull_n(umap(s), v)
-    return hull_b(z, y) - TH / max(n.x, 0.3)
-
-def hull_in(u, v, d=TH):
-    p = hull_pt(u, v) - hull_n(u, v) * d
+def hull_in(u, v):
+    p = hull_pt(u, v); p = p - hull_n(u, v) * hull_th(p.y)
     p.x = max(p.x, 0.0); return p
+
+def inner_half(z, y):
+    """Half breadth of the inside face of the planking at height y near station z (found on the offset surface itself)."""
+    lo, hi = 0.0, 1.0
+    for _ in range(26):
+        v = (lo + hi) / 2
+        if hull_in(umap(s_of_z(z, v)), v).y < y: lo = v
+        else: hi = v
+    v = (lo + hi) / 2
+    return hull_in(umap(s_of_z(z, v)), v).x
 
 # ---------------------------------------------------------------- textures and materials
 def tile_noise(rs, w, h, gx, gy):
@@ -561,11 +574,20 @@ def tex_flag(rs):
     return img.reshape(H, ss, W, ss, 3).mean(axis=(1, 3))
 
 MATS = {}
+# Stable material names for game shaders (wetness, wind, night glow): every surface in both glbs uses one of these.
+MAT_NAMES = {'wood': 'mat_wood', 'paint': 'mat_paint', 'rope': 'mat_rope', 'iron': 'mat_iron', 'brass': 'mat_brass', 'glass': 'mat_lantern_glass',
+             'window': 'mat_window_glass', 'canvas': 'mat_canvas', 'canvas_back': 'mat_canvas_back', 'cloth': 'mat_cloth', 'flag': 'mat_flag',
+             'canvas_lod': 'mat_canvas_lod', 'canvas_back_lod': 'mat_canvas_back_lod', 'col': 'mat_collision'}
+
 def make_materials():
     rs = np.random.RandomState(SEED)
-    wood = make_image('sloop_wood', tex_wood(rs)); sail = make_image('sloop_sail', tex_sail(rs)); flag = make_image('sloop_flag', tex_flag(rs))
-    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False):
-        m = bpy.data.materials.new(name); m.use_nodes = True
+    sail_px = tex_sail(rs)
+    wood = make_image('sloop_wood', tex_wood(rs)); sail = make_image('sloop_sail', sail_px); flag = make_image('sloop_flag', tex_flag(rs))
+    # the aft face of the sail: seams, patches and emblem ghosted through sunlit cloth
+    back = sail_px * 0.42 + np.array([1.0, 0.95, 0.80]) * 0.60
+    sail_back = make_image('sloop_sail_back', back)
+    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, alpha=1.0, emit_col=(1.0, 0.62, 0.22, 1)):
+        m = bpy.data.materials.new(MAT_NAMES[name]); m.use_nodes = True
         nt = m.node_tree; b = nt.nodes['Principled BSDF']
         b.inputs['Roughness'].default_value = rough; b.inputs['Metallic'].default_value = metal
         ca = nt.nodes.new('ShaderNodeVertexColor'); ca.layer_name = 'Color'
@@ -577,7 +599,9 @@ def make_materials():
         else:
             nt.links.new(ca.outputs['Color'], b.inputs['Base Color'])
         if emit > 0:
-            b.inputs['Emission Color'].default_value = (1.0, 0.62, 0.22, 1); b.inputs['Emission Strength'].default_value = emit
+            b.inputs['Emission Color'].default_value = emit_col; b.inputs['Emission Strength'].default_value = emit
+        if alpha < 1.0:
+            b.inputs['Alpha'].default_value = alpha; m.surface_render_method = 'BLENDED'
         m.use_backface_culling = not two
         MATS[name] = m
     mk('wood', wood, 0.82)
@@ -585,12 +609,16 @@ def make_materials():
     mk('rope', None, 0.95)
     mk('iron', None, 0.5, 0.55)
     mk('brass', None, 0.32, 0.85)
-    mk('glass', None, 0.25, 0.0, 2.2)
-    mk('canvas', sail, 0.95, two=True)
+    mk('glass', None, 0.25, 0.0, 2.2)                                   # lantern glass: emissive
+    mk('window', None, 0.08, 0.0, 0.35, two=True, alpha=0.3)            # stern glazing: see-through, faint warm glow to raise at night
+    mk('canvas', sail, 0.95)                                            # forward face of the sail
+    mk('canvas_back', sail_back, 0.95, emit=0.22, emit_col=(1.0, 0.86, 0.6, 1))   # aft face: ghosted print, a little back-lit glow
+    mk('cloth', None, 0.95, two=True)
     mk('flag', flag, 0.9, two=True)
     mk('col', None, 1.0)
-    small = tex_sail(np.random.RandomState(SEED + 2)).reshape(128, 4, 128, 4, 3).mean(axis=(1, 3))
-    mk('canvas_lod', make_image('sloop_sail_lod', small), 0.95, two=True)
+    small = sail_px.reshape(128, 4, 128, 4, 3).mean(axis=(1, 3))
+    mk('canvas_lod', make_image('sloop_sail_lod', small), 0.95)
+    mk('canvas_back_lod', make_image('sloop_sail_back_lod', small * 0.42 + np.array([1.0, 0.95, 0.80]) * 0.60), 0.95, emit=0.22, emit_col=(1.0, 0.86, 0.6, 1))
 
 # ---------------------------------------------------------------- object creation
 def conv(p):
@@ -600,25 +628,33 @@ OBJS = {}
 def build(mb):
     me = bpy.data.meshes.new(mb.name)
     rinv = Matrix.Rotation(radians(-mb.yaw), 3, 'Y')
-    me.from_pydata([conv(rinv @ (v - mb.origin)) for v in mb.verts], [], mb.faces)
+    if mb.gmatrix is not None: me.from_pydata([conv(v) for v in mb.verts], [], mb.faces)
+    else: me.from_pydata([conv(rinv @ (v - mb.origin)) for v in mb.verts], [], mb.faces)
     names = sorted(set(mb.fmat))
     for n in names: me.materials.append(MATS[n])
     mi = {n: i for i, n in enumerate(names)}
     uvl = me.uv_layers.new(name='UVMap')
     ca = me.color_attributes.new('Color', 'FLOAT_COLOR', 'CORNER')
-    uvs = []; cols = []
+    uvs = []; cols = []; uv2 = []
+    wv = [mb.wfn(v) for v in mb.verts] if mb.wfn else None
     for fi, f in enumerate(mb.faces):
         c = mb.fcol[fi]
         for k in range(len(f)):
             uvs.extend(mb.fuv[fi][k])
             cc = c[k] if isinstance(c, list) else c
             cols.extend((cc[0], cc[1], cc[2], 1.0))
+            if wv: uv2.extend(wv[f[k]])
     uvl.data.foreach_set('uv', uvs); ca.data.foreach_set('color', cols)
+    if wv:
+        u2 = me.uv_layers.new(name='Wind'); u2.data.foreach_set('uv', uv2)
     me.polygons.foreach_set('material_index', [mi[m] for m in mb.fmat])
     me.polygons.foreach_set('use_smooth', mb.fsm)
     me.update()
     ob = bpy.data.objects.new(mb.name, me)
-    if mb.parent is not None:
+    if mb.gmatrix is not None:
+        C = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
+        ob.matrix_world = C @ mb.gmatrix @ C.inverted()
+    elif mb.parent is not None:
         po = mb.parent; pr = Matrix.Rotation(radians(-po.yaw), 3, 'Y')
         ob.parent = OBJS[po.name][0]; ob.location = conv(pr @ (mb.origin - po.origin)); ob.rotation_euler = (0, 0, radians(mb.yaw - po.yaw))
     else:
@@ -649,9 +685,9 @@ def col_piece(name, pts):
 def strake_look(j):
     """(outer colour, extra outward offset) for strake j."""
     if YS[j + 1] <= 0.06: return C_TAR, 0.0
-    if j == 4: return C_CREAM, 0.012
-    if j == 7: return C_RED, 0.05
-    if j == 10: return C_TEAL, 0.012
+    if j == J_CREAM: return C_CREAM, 0.012
+    if j == J_WALE: return C_RED, 0.05
+    if j == len(YS) - 2: return C_TEAL, 0.012
     return C_HULL, 0.0
 
 def gap_ranges():
@@ -677,19 +713,44 @@ def hull_plank(mb, j, s0, s1, col, extra, inner_col):
         e = -b if end else extra
         A = p0 - n0 * b; D = p1 - n1 * b
         Bp = hull_pt(u, v0 + dv) + hull_n(u, v0 + dv) * e; Cp = hull_pt(u, v1 - dv) + hull_n(u, v1 - dv) * e
-        E = p1 - n1 * TH; F = p0 - n0 * TH
+        E = p1 - n1 * hull_th(p1.y); F = p0 - n0 * hull_th(p0.y)
         for q in (A, Bp, Cp, D, E, F): q.x = max(q.x, 0.0)
         secs.append([A, Bp, Cp, D, E, F])
     dk = mul(col, 0.55)
-    loft(mb, secs, 'wood', col, True, (True, True), 'len', ecols=[dk, col, dk, mul(col, 0.9), inner_col, inner_col])
+    loft(mb, secs, 'wood', col, True, (True, True), 'len', ecols=[dk, col, dk, mul(col, 0.9), inner_col, inner_col], uniform_w=True)
+
+# Hull damage. Each hole sits on the seam between two strakes; the two short plank lengths around it are built as a
+# separate removable HullPanel_NN (in place by default: the hull is seamless, it just has two more butt joints there).
+# (side, z, index of the strake edge the hole is centred on): J_LOW is below the waterline, J_HIGH above it.
+J_LOW = YS.index(-0.22); J_HIGH = YS.index(0.55)
+HOLES = [(1, -3.3, J_LOW), (1, -1.9, J_HIGH), (1, 0.3, J_LOW), (1, 1.15, J_HIGH), (1, 3.6, J_LOW),
+         (-1, -2.8, J_HIGH), (-1, -0.9, J_LOW), (-1, 0.9, J_HIGH), (-1, 2.9, J_LOW), (-1, 4.1, J_HIGH)]
+PANEL_HALF = 0.46          # half length of a panel along the hull, metres
+PANELS = []                # filled by plan_panels(): dicts with the parametric window of each panel
+
+def plan_panels():
+    PANELS.clear()
+    for idx, (sg, z, jb) in enumerate(HOLES):
+        v = VS[jb]; sc = s_of_z(z, v); e = 0.01
+        mps = (hull_pt(umap(sc + e), v) - hull_pt(umap(sc - e), v)).length / (2 * e)      # metres per unit s
+        u = umap(sc); p = hull_pt(u, v); n = hull_n(u, v)
+        mpv = (hull_pt(u, v + 1e-3) - hull_pt(u, v - 1e-3)).length / 2e-3                # metres per unit v
+        org = p - n * (TH / 2); org.x *= sg
+        PANELS.append(dict(idx=idx, side=sg, jb=jb, sc=sc, sa=sc - PANEL_HALF / mps, sb=sc + PANEL_HALF / mps, mps=mps, mpv=mpv, v=v,
+                           origin=org, yaw=math.degrees(atan2(-n.x * sg, -n.z)), cols={},
+                           mb=None))
+    for P in PANELS:
+        P['mb'] = MB('HullPanel_%02d' % (P['idx'] + 1), P['origin'], seed=P['idx'], yaw=P['yaw'])
 
 def build_hull(mb):
     rng = mb.rng
+    plan_panels()
     for side in (1, -1):
         with xf(mb, S(side, 1, 1)):
             for j in range(len(YS) - 1):
                 base, extra = strake_look(j)
-                ivs = top_intervals(NS - 0.05) if j >= 9 else [(0.0, NS - 0.05)]
+                ivs = top_intervals(NS - 0.05) if j >= J_SILL else [(0.0, NS - 0.05)]
+                here = [P for P in PANELS if P['side'] == side and j in (P['jb'] - 1, P['jb'])]
                 for (a, bnd) in ivs:
                     cuts = [a]; s = a - rng.uniform(0, 6)
                     while True:
@@ -697,14 +758,22 @@ def build_hull(mb):
                         if s > bnd - 3: break
                         if s > a + 3: cuts.append(float(round(s)))
                     cuts.append(bnd)
+                    for P in here:                                  # force butt joints at the panel ends
+                        cuts = [c for c in cuts if c in (a, bnd) or not (P['sa'] - 2.2 < c < P['sb'] + 2.2)] + [P['sa'], P['sb']]
+                    cuts.sort()
                     for k in range(len(cuts) - 1):
                         amt = 0.05 if base in (C_RED, C_TEAL, C_CREAM) else 0.13
-                        inner = jit(C_INNER if j < 8 else C_HULL, rng, 0.10)
-                        hull_plank(mb, j, cuts[k], cuts[k + 1], jit(base, rng, amt), extra, inner)
+                        inner = jit(C_INNER if j <= J_WALE else C_HULL, rng, 0.10); colr = jit(base, rng, amt)
+                        P = next((P for P in here if abs(cuts[k] - P['sa']) < 1e-9 and abs(cuts[k + 1] - P['sb']) < 1e-9), None)
+                        if P is None:
+                            hull_plank(mb, j, cuts[k], cuts[k + 1], colr, extra, inner)
+                        else:
+                            P['cols'][j] = (colr, inner, extra)
+                            with xf(P['mb'], S(side, 1, 1)): hull_plank(P['mb'], j, cuts[k], cuts[k + 1], colr, extra, inner)
     # keel + stem as one swept timber
     path = [(6.25, -1.0), (2.0, -1.0), (-2.0, -1.0), (-3.4, -1.0)]
     for i in range(8, 241, 8): path.append((_SB[i][1], _SB[i][0]))
-    for y in (1.4, 1.7, 2.0, 2.3, 2.52): path.append((zstem(y), y))
+    for y in (1.4, 1.7, 2.0, 2.3, 2.52, 2.68): path.append((zstem(y), y))
     secs = []; scols = []
     for i, (z, y) in enumerate(path):
         a = path[max(i - 1, 0)]; b = path[min(i + 1, len(path) - 1)]
@@ -726,16 +795,22 @@ def build_hull(mb):
         inner = jit(C_INNER, rng, 0.08)
         loft(mb, secs, 'wood', col, True, (True, True), 'flat', ecols=[mul(col, 0.55), col, mul(col, 0.55), col, inner, inner])
     yts = ytop(6.5)
-    for (y0, y1, c, ex) in ((YT, 0.12, C_TAR, 0), (0.12, 0.36, C_HULL, 0), (0.36, 0.54, C_CREAM, 0.03), (0.54, 1.46, C_TEAL, 0), (1.46, 1.6, C_CREAM, 0.03),
+    for (y0, y1, c, ex) in ((YT, 0.12, C_TAR, 0), (0.12, 0.36, C_HULL, 0), (0.36, 0.54, C_CREAM, 0.03), (0.54, 0.64, C_TEAL, 0), (1.36, 1.46, C_TEAL, 0), (1.46, 1.6, C_CREAM, 0.03),
                             (1.6, 1.9, C_HULL, 0), (1.9, 2.2, C_HULL, 0), (2.2, yts - 0.14, C_HULL, 0), (yts - 0.14, yts, C_RED, 0.03)):
         tplank(y0, y1, jit(c, rng, 0.06), ex)
+    def tpier(xa, xb):                                         # the wall between and beside the stern windows
+        X = lambda f, y: f(y) if callable(f) else f
+        pts = [(X(x, y), y, zstern(y) + dz) for y in (0.64, 1.36) for (x, dz) in ((xa, -0.14), (xb, -0.14), (xb, 0.0), (xa, 0.0))]
+        c = jit(C_TEAL, rng, 0.06); cen = sum((Vector(q) for q in pts), Vector()) / 8; mb.newoff()
+        for q, cc in (((0, 1, 2, 3), c), ((4, 5, 6, 7), c), ((0, 1, 5, 4), jit(C_INNER, rng, 0.08)), ((1, 2, 6, 5), c), ((2, 3, 7, 6), c), ((3, 0, 4, 7), c)):
+            mb.fp([pts[i] for i in q], 'wood', cc, (0, 1, 0), cen)
+    tpier(lambda y: -wtrans(y), -1.19); tpier(-0.53, -0.33); tpier(0.33, 0.53); tpier(1.19, lambda y: wtrans(y))
     with xf(mb, T(0, 1.1, 6.5) @ R('X', a)):
         ca = cos(radians(a))
         def ly(y): return (y - 1.1) / ca
-        for wx in (-0.86, 0.0, 0.86):                          # stern windows (opaque glowing panes, both faces)
+        for wx in (-0.86, 0.0, 0.86):                          # stern windows: real openings, glazed with mat_window_glass
             y0, y1 = ly(0.64), ly(1.36); hw = 0.33
-            for zf in (0.02, -0.16):
-                cbox(mb, (wx, (y0 + y1) / 2, zf), (hw * 2, y1 - y0, 0.03), 'glass', C_GLASS, 0.0)
+            mb.newoff(); mb.fp([(wx - hw, y0, -0.07), (wx + hw, y0, -0.07), (wx + hw, y1, -0.07), (wx - hw, y1, -0.07)], 'window', (0.80, 0.93, 0.88), None, (wx, 0, -5))
             for zf, dz in ((0.035, 0.07), (-0.175, 0.05)):
                 for (cx, cy, sx, sy) in ((wx, y0, hw * 2 + 0.12, 0.09), (wx, y1, hw * 2 + 0.12, 0.09), (wx - hw, (y0 + y1) / 2, 0.09, y1 - y0), (wx + hw, (y0 + y1) / 2, 0.09, y1 - y0),
                                          (wx, (y0 + y1) / 2, 0.05, y1 - y0), (wx, (y0 + y1) / 2, hw * 2, 0.05)):
@@ -768,6 +843,15 @@ def build_hull(mb):
         for dz in (-0.33, 0.33):
             pts = [(sg * (hull_b(2.0, y) + 0.03), y, 2.0 + dz) for y in (-0.4, 0.0, 0.4, 0.8, 1.14)]
             tube(mb, pts, 0.035, 5, 'wood', C_DARK)
+    # rope fenders hung over the side
+    for sg in (-1, 1):
+        for z in (-3.7, 0.1, 3.3):
+            yy = 0.88; x = hull_b(z, yy) + 0.2
+            with xf(mb, T(sg * x, yy, z)):
+                ellipsoid(mb, (0, 0, 0), (0.15, 0.28, 0.15), 'rope', C_ROPE, 10, 7)
+                for dy in (-0.1, 0.1):
+                    with xf(mb, T(0, dy, 0)): torus(mb, 0.145, 0.02, 10, 4, 'rope', C_ROPE_D)
+            tube(mb, [(sg * x, yy + 0.26, z), (sg * (hull_b(z, 1.6) + 0.06), 1.6, z), (sg * (hull_b(z, ytop(z)) + 0.03), ytop(z) + 0.08, z)], 0.016, 4, 'rope', C_ROPE)
     # catheads
     for sg in (-1, 1):
         cbox(mb, (sg * 1.3, ytop(-5.1) + 0.2, -5.1), (0.9, 0.2, 0.24), 'wood', C_DARK, 0.03)
@@ -776,7 +860,7 @@ def build_hull(mb):
 def deck_outline(yb, yt, z0, z1, n=44, pw=1.7, margin=0.07, inner=False):
     zs = [z0 + (z1 - z0) * (i / n) ** pw for i in range(n + 1)]
     if inner:   # sloping hull: reach just past the inside face of the planking, never through the outside
-        right = [(max(min(inner_half(z, yt) + 0.05, hull_b(z, yb) - 0.02), 0.0), z) for z in zs]
+        right = [(max(min(inner_half(z, yt) + 0.06, hull_b(z, yb) - 0.02), 0.0), z) for z in zs]
     else:
         right = [(max(min(hull_b(z, yb), hull_b(z, yt)) - margin, 0.0), z) for z in zs]
     return poly_clean(right + [(-x, z) for x, z in reversed(right)])
@@ -814,12 +898,13 @@ def build_decks(mb):
         c = jit(C_DECK, rng, 0.12, 0.03)
         return mul(c, 0.8) if rng.random() < 0.12 else c
     main = deck_outline(DECK_Y - 0.1, DECK_Y, -6.52, QDECK_Z + 0.1)
-    deck_planks(mb, main, -6.6, QDECK_Z + 0.1, DECK_Y, 0.1, 0.24, [HATCH], deck_col)
+    deck_planks(mb, main, -6.6, QDECK_Z + 0.1, DECK_Y, 0.1, 0.2, [HATCH], deck_col)
     zq1 = zstern(QDECK_Y) - 0.1
     quarter = deck_outline(QDECK_Y - 0.1, QDECK_Y, QDECK_Z - 0.06, zq1, 12, 1.0)
-    deck_planks(mb, quarter, QDECK_Z - 0.06, zq1, QDECK_Y, 0.1, 0.24, [], deck_col)
+    qx0, qx1, qz0, qz1 = QSTAIR
+    deck_planks(mb, quarter, QDECK_Z - 0.06, zq1, QDECK_Y, 0.1, 0.2, [(qx0, 9, QDECK_Z - 0.1, qz1), (-9, -qx0, QDECK_Z - 0.1, qz1)], deck_col)
     # waterways (margin planks) hide the stepped plank ends against the bulwark
-    for (yd, z0, z1, n) in ((DECK_Y, -6.5, QDECK_Z, 40), (QDECK_Y, QDECK_Z, zq1, 10)):
+    for (yd, z0, z1, n) in ((DECK_Y, -6.5, QDECK_Z, 40), (QDECK_Y, qz1, zq1, 8)):
         for sg in (-1, 1):
             secs = []
             for i in range(n + 1):
@@ -831,29 +916,37 @@ def build_decks(mb):
     # breasthook: chunky knee filling the bow tip
     bh = [q for q in deck_outline(DECK_Y, 2.2, -6.62, -5.95, 8, 1.0, 0.1)]
     prism(mb, bh, DECK_Y, ytop(-6.3) - 0.02, 'wood', C_DARK, 0.03, (1, 0, 0))
-    # ---- quarterdeck break: bulkhead, beam, stairs
-    hb = min(hull_b(QDECK_Z + 0.05, DECK_Y), hull_b(QDECK_Z + 0.05, QDECK_Y)) - 0.08
-    nb = 12
+    # ---- quarterdeck break: bulkhead with a cabin door, beam, twin side flights let into the quarterdeck
+    hb = qx0
+    nb = 8
     for i in range(nb):
         x0 = -hb + 2 * hb * i / nb; x1 = -hb + 2 * hb * (i + 1) / nb
-        cbox(mb, ((x0 + x1) / 2, (DECK_Y + QDECK_Y - 0.1) / 2 - 0.05, QDECK_Z + 0.06), (x1 - x0, QDECK_Y - 0.1 - DECK_Y + 0.1, 0.1), 'wood', jit(C_TEAL, rng, 0.07), 0.014, (0, 1, 0))
-    cbox(mb, (0, QDECK_Y - 0.11, QDECK_Z - 0.01), (2 * hb, 0.16, 0.2), 'wood', C_RED, 0.03)
+        door = i in (3, 4)
+        cbox(mb, ((x0 + x1) / 2, (DECK_Y + QDECK_Y - 0.1) / 2 - 0.05, QDECK_Z + 0.06), (x1 - x0, QDECK_Y - 0.1 - DECK_Y + 0.1, 0.1), 'wood', jit(C_DARK if door else C_TEAL, rng, 0.07), 0.014, (0, 1, 0))
+    for (cx, cy, sx, sy) in ((-0.45, 1.48, 0.09, 0.78), (0.45, 1.48, 0.09, 0.78), (0, 1.86, 0.99, 0.09)):                  # door frame
+        cbox(mb, (cx, cy, QDECK_Z - 0.0), (sx, sy, 0.07), 'wood', C_GOLD, 0.02)
+    for cy in (1.3, 1.68): cbox(mb, (0, cy, QDECK_Z + 0.0), (0.8, 0.06, 0.04), 'iron', C_IRON, 0.01)                      # strap hinges
+    with xf(mb, T(0.28, 1.45, QDECK_Z - 0.01) @ M_Y2Z): torus(mb, 0.05, 0.014, 10, 5, 'brass', C_BRASS)                 # ring handle
+    cbox(mb, (0, QDECK_Y - 0.11, QDECK_Z - 0.01), (2 * hb + 0.04, 0.16, 0.2), 'wood', C_RED, 0.03)
     cbox(mb, (0, DECK_Y - 0.17, QDECK_Z + 0.04), (2 * hull_b(QDECK_Z, 0.9) - 0.3, 0.14, 0.16), 'wood', C_DARK, 0.02)   # beam under the deck edge
-    sw = 0.62; z0 = 1.95; run = (QDECK_Z - z0) / 3.0; rise = (QDECK_Y - DECK_Y) / 4.0
-    for i in range(3):
-        top = DECK_Y + rise * (i + 1)
-        box2(mb, (-sw + 0.04, DECK_Y - 0.02, z0 + run * i + 0.03), (sw - 0.04, top - 0.06, QDECK_Z + 0.02), 'wood', jit(C_DARK, rng, 0.06), 0.01, (1, 0, 0))
-        box2(mb, (-sw, top - 0.07, z0 + run * i - 0.03), (sw, top, z0 + run * (i + 1) + 0.02), 'wood', deck_col(), 0.02, (1, 0, 0))
+    nq = 5; run = (qz1 - qz0) / nq; rise = (QDECK_Y - DECK_Y) / nq
     for sg in (-1, 1):
-        with xf(mb, T(sg * (sw + 0.035), 0, 0) @ M_ZY):
-            prism(mb, [(z0 - 0.12, DECK_Y), (QDECK_Z, DECK_Y), (QDECK_Z, QDECK_Y + 0.06), (QDECK_Z - 0.16, QDECK_Y + 0.06), (z0 - 0.12, DECK_Y + 0.2)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
+        with xf(mb, T(sg * (qx0 + qx1) / 2, 0, 0) @ M_ZY):
+            prism(mb, [(qz0 + 0.02, DECK_Y - 0.05), (QDECK_Z + 0.05, DECK_Y - 0.1), (qz1, QDECK_Y - 0.4), (qz1, QDECK_Y - 0.04)], -(qx1 - qx0) / 2, (qx1 - qx0) / 2, 'wood', jit(C_DARK, rng, 0.06), 0.0, (1, 0, 0))
+        for i in range(nq):
+            top = DECK_Y + rise * (i + 1)
+            box2(mb, (sg * qx0, top - rise - 0.02, qz0 + run * i), (sg * qx1, top, qz0 + run * (i + 1) + 0.03), 'wood', deck_col(), 0.02, (1, 0, 0))
+        xi = sg * (qx0 - 0.035)                                                # inboard cheek: also the wall of the stairwell
+        with xf(mb, T(xi, 0, 0) @ M_ZY):
+            prism(mb, [(qz0 - 0.12, DECK_Y), (QDECK_Z, DECK_Y), (QDECK_Z, DECK_Y + 0.5), (qz0 - 0.12, DECK_Y + 0.2)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
+            prism(mb, [(QDECK_Z, DECK_Y - 0.1), (qz1 + 0.04, DECK_Y - 0.1), (qz1 + 0.04, QDECK_Y + 0.05), (QDECK_Z, QDECK_Y + 0.05)], -0.035, 0.035, 'wood', C_RED, 0.0, (1, 0, 0.8))
     # ---- hatch: coaming on three sides (open aft where the stairs start) and the stairs down
     hx0, hx1, hz0, hz1 = HATCH
     for sg in (-1, 1):
         cbox(mb, (sg * (hx1 + 0.05), DECK_Y + 0.04, (hz0 + hz1) / 2 - 0.05), (0.16, 0.34, hz1 - hz0 + 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y + 0.04, hz0 - 0.05), (hx1 - hx0 + 0.2, 0.34, 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y - 0.06, hz1 + 0.05), (hx1 - hx0 + 0.25, 0.12, 0.1), 'wood', C_DARK, 0.015)
-    zt, zb = hz1 - 0.05, hz0 + 0.05; nst = 8; H = DECK_Y - HOLD_Y
+    zt, zb = HOLD_STAIR; nst = 10; H = DECK_Y - HOLD_Y
     for sg in (-1, 1):
         x = sg * (hx1 - 0.07)
         d = Vector((0, -H, zb - zt)); nrm = Vector((0, d.z, H)).normalized() * 0.13
@@ -862,7 +955,7 @@ def build_decks(mb):
                   a + nrm + Vector((-0.035, 0, 0)), a + nrm + Vector((0.035, 0, 0)), b + nrm + Vector((0.035, 0, 0)), b + nrm + Vector((-0.035, 0, 0))], 'wood', jit(C_DARK, rng, 0.05), d)
     for i in range(1, nst):
         y = DECK_Y - H * i / nst; z = zt + (zb - zt) * i / nst
-        cbox(mb, (0, y - 0.03, z + 0.02), (hx1 - hx0 - 0.2, 0.06, 0.27), 'wood', deck_col(), 0.015, (1, 0, 0))
+        cbox(mb, (0, y - 0.03, z + 0.02), (hx1 - hx0 - 0.2, 0.06, 0.3), 'wood', deck_col(), 0.015, (1, 0, 0))
     # ---- helm pedestal + binnacle (static; the Wheel object spins in front of it)
     hz = STATIONS['Station_Helm'][0][2]
     cbox(mb, (0, QDECK_Y + 0.05, hz - 0.3), (0.56, 0.1, 0.5), 'wood', C_DARK, 0.025)
@@ -900,10 +993,10 @@ def build_rails(mb):
             # stanchions at each gap edge
             for (g0, g1) in gap_ranges():
                 for s, dz in ((g0, 0.1), (g1, -0.1)):
-                    p, nh = rail_frame(s); sill = hull_pt(umap(s), VS[9]).y
+                    p, nh = rail_frame(s); sill = hull_pt(umap(s), VS[J_SILL]).y
                     c = p - nh * (TH / 2)
-                    box2(mb, (c.x - 0.14, sill - 0.02, c.z + dz - 0.1), (c.x + 0.14, p.y + 0.3, c.z + dz + 0.1), 'wood', C_CREAM, 0.03, (0, 1, 0))
-                    cbox(mb, (c.x, p.y + 0.33, c.z + dz), (0.34, 0.07, 0.26), 'wood', C_RED, 0.02)
+                    box2(mb, (c.x - 0.14, sill - 0.02, c.z + dz - 0.1), (c.x + 0.14, p.y + 0.17, c.z + dz + 0.1), 'wood', C_CREAM, 0.03, (0, 1, 0))
+                    cbox(mb, (c.x, p.y + 0.2, c.z + dz), (0.34, 0.07, 0.26), 'wood', C_RED, 0.02)
             # timberheads along the main deck rail
             for s in range(int(sq) + 3, NS - 3, 3):
                 z = hull_pt(umap(s), 1.0).z
@@ -916,7 +1009,7 @@ def build_rails(mb):
                 s = sq * (1 - i / n) if i < n else 0.0
                 s = sq - (sq - 0.0) * i / n
                 p, nh = rail_frame(s); c = p - nh * (TH / 2 - 0.01); base = Vector((c.x, p.y + 0.1, c.z))
-                hgt = 0.62
+                hgt = 0.45
                 if i in (0, n):
                     cbox(mb, (base.x, base.y + (hgt + 0.16) / 2, base.z), (0.17, hgt + 0.16, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
                     with xf(mb, T(base.x, base.y + hgt + 0.16, base.z)):
@@ -928,19 +1021,37 @@ def build_rails(mb):
                 top = base + Vector((0, hgt, 0)); w = 0.1
                 secs.append([top - nh * w, top + nh * w, top + nh * w + Vector((0, 0.05, 0)), top + nh * (w - 0.03) + Vector((0, 0.08, 0)), top - nh * (w - 0.03) + Vector((0, 0.08, 0)), top - nh * w + Vector((0, 0.05, 0))])
             loft(mb, secs, 'wood', C_RED, True, (True, True), 'len')
-    # front rail of the quarterdeck, either side of the stairs
-    hq = min(hull_b(QDECK_Z, QDECK_Y), hull_b(QDECK_Z, QDECK_Y + 0.9)) - 0.3
+    # pin rails inside the bulwark by the shrouds, with belaying pins and a coil of line
     for sg in (-1, 1):
-        xs = [0.72 + (hq - 0.72) * i / 3 for i in range(4)]
-        for i, x in enumerate(xs):
-            if i == 0:
-                cbox(mb, (sg * x, QDECK_Y + 0.46, QDECK_Z + 0.02), (0.17, 0.92, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
-                with xf(mb, T(sg * x, QDECK_Y + 0.92, QDECK_Z + 0.02)):
-                    lathe(mb, [(0, 0), (0.07, 0.02), (0.09, 0.09), (0.06, 0.16), (0, 0.18)], 8, 'brass', C_BRASS, True, True)
+        x = sg * (hull_b(1.2, 1.85) - TH - 0.07); yy = DECK_Y + 0.74
+        cbox(mb, (x, yy, 1.2), (0.13, 0.06, 0.56), 'wood', C_DARK, 0.015)
+        for zz in (0.98, 1.42): cbox(mb, (x + sg * 0.03, yy - 0.09, zz), (0.1, 0.14, 0.05), 'wood', C_DARK, 0.012)
+        for i in range(4):
+            with xf(mb, T(x, yy, 1.02 + 0.12 * i)):
+                lathe(mb, [(0.012, -0.14), (0.016, -0.03), (0.016, 0.03), (0.028, 0.05), (0.03, 0.13), (0.02, 0.16), (0, 0.165)], 6, 'wood', C_CREAM)
+        with xf(mb, T(x - sg * 0.05, yy - 0.24, 1.14) @ M_Y2X): torus(mb, 0.13, 0.025, 10, 4, 'rope', C_ROPE)
+        with xf(mb, T(x - sg * 0.065, yy - 0.26, 1.14) @ M_Y2X): torus(mb, 0.11, 0.025, 10, 4, 'rope', mul(C_ROPE, 0.9))
+    # front rail of the quarterdeck between the two flights, and a guard rail along each stairwell
+    qx0, qx1, qz0, qz1 = QSTAIR
+    xs = [-qx0 + 0.04 + (2 * qx0 - 0.08) * i / 6 for i in range(7)]
+    for i, x in enumerate(xs):
+        if i in (0, 6):
+            cbox(mb, (x, QDECK_Y + 0.46, QDECK_Z + 0.02), (0.17, 0.92, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
+            with xf(mb, T(x, QDECK_Y + 0.92, QDECK_Z + 0.02)):
+                lathe(mb, [(0, 0), (0.07, 0.02), (0.09, 0.09), (0.06, 0.16), (0, 0.18)], 8, 'brass', C_BRASS, True, True)
+        else:
+            baluster(mb, (x, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
+        if i < 6: baluster(mb, (x + (xs[1] - xs[0]) / 2, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
+    cbox(mb, (0, QDECK_Y + 0.82, QDECK_Z + 0.02), (2 * qx0 - 0.2, 0.09, 0.2), 'wood', C_RED, 0.03)
+    for sg in (-1, 1):
+        x = sg * (qx0 - 0.04)
+        for i in range(1, 5):
+            z = QDECK_Z + 0.02 + (qz1 - QDECK_Z) * i / 4
+            if i == 4:
+                cbox(mb, (x, QDECK_Y + 0.44, z), (0.15, 0.88, 0.15), 'wood', C_CREAM, 0.03, (0, 1, 0))
             else:
-                baluster(mb, (sg * x, QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
-            if i < 3: baluster(mb, (sg * (x + (xs[1] - xs[0]) / 2), QDECK_Y, QDECK_Z + 0.02), 0.78, C_CREAM)
-        cbox(mb, (sg * (0.72 + hq + 0.12) / 2, QDECK_Y + 0.82, QDECK_Z + 0.02), (hq + 0.12 - 0.72, 0.09, 0.2), 'wood', C_RED, 0.03)
+                baluster(mb, (x, QDECK_Y + 0.05, z), 0.73, C_CREAM)
+        cbox(mb, (x, QDECK_Y + 0.82, (QDECK_Z + qz1) / 2 + 0.06), (0.16, 0.09, qz1 - QDECK_Z + 0.1), 'wood', C_RED, 0.03)
     # taffrail across the stern
     yt = ytop(6.5); zt = zstern(yt) - 0.07; wt = wtrans(yt) - 0.02
     cbox(mb, (0, yt + 0.05, zt), (2 * wt + 0.3, 0.1, 0.3), 'wood', C_DARK, 0.03)
@@ -948,8 +1059,8 @@ def build_rails(mb):
     for i in range(1, nb):
         x = -wt + 2 * wt * i / nb
         if abs(x) < 0.01: continue
-        baluster(mb, (x, yt + 0.1, zt + 0.03), 0.62, C_CREAM)
-    yr = yt + 0.72; zr = zstern(yr) - 0.07
+        baluster(mb, (x, yt + 0.1, zt + 0.03), 0.45, C_CREAM)
+    yr = yt + 0.55; zr = zstern(yr) - 0.07
     cbox(mb, (0, yr + 0.04, zt + 0.05), (2 * wt + 0.22, 0.08, 0.2), 'wood', C_RED, 0.03)
 
 def build_interior(mb):
@@ -969,7 +1080,7 @@ def build_interior(mb):
         for sg in (-1, 1):
             secs = []
             for y in ys:
-                v = v_of_y(u, y); n = hull_n(u, v); p = hull_pt(u, v) - n * (TH - 0.01); q = p - n * 0.13
+                v = v_of_y(u, y); n = hull_n(u, v); p = hull_pt(u, v) - n * (hull_th(y) - 0.01); q = p - n * 0.13
                 secs.append([p - tu, p + tu, q + tu, q - tu])
             with xf(mb, S(sg, 1, 1)):
                 loft(mb, secs, 'wood', jit(C_DARK, rng, 0.1), True, (True, True), 'flat')
@@ -994,7 +1105,7 @@ def build_interior(mb):
         cbox(mb, (0, QDECK_Y - 0.17, zb), (2 * hbm, 0.14, 0.16), 'wood', jit(C_DARK, rng, 0.08), 0.02)
     build_bilge(mb, (0.0, HOLD_Y, -2.1))
     # mast step
-    cbox(mb, (0, HOLD_Y + 0.09, MAST_Z), (0.9, 0.18, 0.9), 'wood', C_DARK, 0.04)
+    cbox(mb, (0, HOLD_Y + 0.07, MAST_Z), (0.76, 0.14, 0.76), 'wood', C_DARK, 0.04)
 
 def barrel(mb, pos, r=0.3, h=0.85, M=None, band=C_IRON, tone=C_HULL):
     rng = mb.rng
@@ -1031,7 +1142,7 @@ def rope_coil(mb, c, r=0.22, turns=4, col=C_ROPE):
 def build_props_deck(mb):
     barrel(mb, (-1.05, DECK_Y, -3.3)); barrel(mb, (-0.55, DECK_Y, -3.75), 0.27, 0.78, tone=C_DARK, band=C_BRASS)
     crate(mb, (1.0, DECK_Y, -3.5), (0.7, 0.55, 0.6), R('Y', 14)); crate(mb, (0.95, DECK_Y + 0.55, -3.52), (0.45, 0.35, 0.42), R('Y', -12), C_HULL)
-    barrel(mb, (-1.5, DECK_Y, 2.72), 0.28, 0.8); crate(mb, (1.45, DECK_Y, 2.68), (0.6, 0.5, 0.5), R('Y', 4))
+    barrel(mb, (-0.35, DECK_Y, -3.05), 0.28, 0.8); crate(mb, (0.3, DECK_Y, -2.85), (0.6, 0.5, 0.5), R('Y', 4))
     rope_coil(mb, (1.25, DECK_Y, -2.55), 0.26, 3); rope_coil(mb, (-1.2, QDECK_Y, 3.6), 0.24, 3)
     barrel(mb, (1.25, QDECK_Y, 6.15), 0.25, 0.72, tone=C_DARK)
     # cannonball rack beside each gun
@@ -1046,13 +1157,43 @@ def build_props_hold(mb):
     barrel(mb, (-0.17, y + 0.9, -3.7), 0.27, 0.75, band=C_BRASS)
     barrel(mb, (0.8, y + 0.31, -2.75), 0.3, 0.85, R('Y', 20) @ R('X', 90))          # one on its side
     crate(mb, (-0.85, y, -2.5), (0.7, 0.6, 0.7), R('Y', 8)); crate(mb, (-0.82, y + 0.6, -2.52), (0.5, 0.4, 0.5), R('Y', -15), C_HULL)
-    crate(mb, (0.3, y, 4.85), (0.55, 0.45, 0.5), R('Y', -6)); barrel(mb, (-0.3, y, 4.75), 0.26, 0.75)
-    rope_coil(mb, (-1.0, y, 1.2), 0.25, 3)
-    # hammock under the quarterdeck, a touch of life
-    pts = [(-1.0, 0.95, 5.2 - 0.0), (-0.5, 0.62, 5.25), (0.0, 0.52, 5.3), (0.5, 0.62, 5.25), (1.0, 0.95, 5.2)]
-    secs = [[Vector(p) + Vector((0, 0.0 if i in (0, 4) else 0.1, -0.3 if i not in (0, 4) else -0.02)), Vector(p), Vector(p) + Vector((0, 0.0 if i in (0, 4) else 0.1, 0.3 if i not in (0, 4) else 0.02))] for i, p in enumerate(pts)]
-    loft(mb, secs, 'canvas', C_WHITE, False, (False, False), 'smooth', flip=False)
-    for f in mb.fuv[-12:]: pass
+    rope_coil(mb, (0.0, y, 0.25), 0.25, 3)
+    # hammock slung fore and aft along the port side of the cabin
+    pts = [(-1.2, 0.72, 3.25), (-1.12, 0.42, 3.7), (-1.1, 0.3, 4.2), (-1.05, 0.42, 4.7), (-0.95, 0.72, 5.1)]
+    secs = [[Vector(q) + Vector((-0.3 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.1, 0)), Vector(q), Vector(q) + Vector((0.3 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.1, 0))] for i, q in enumerate(pts)]
+    loft(mb, secs, 'cloth', srgb('#e9dcb8'), False, (False, False), 'smooth', flip=False)
+    build_cabin(mb)
+
+def build_cabin(mb):
+    """The stern cabin under the quarterdeck: window seat with cushions, sea chest, rug, stool, curtains."""
+    rng = mb.rng; y = HOLD_Y; seat = y + 0.5
+    poly = deck_outline(y + 0.2, seat, 5.3, 6.12, 6, 1.0, inner=True)
+    prism(mb, poly, y - 0.02, seat, 'wood', jit(C_HULL, rng, 0.06), 0.02, (1, 0, 0))
+    cush = [(x * 0.86, 5.36 + (z - 5.3) * 0.82) for x, z in poly]
+    prism(mb, cush, seat, seat + 0.09, 'cloth', C_RED, 0.03, (1, 0, 0))
+    for sx in (-0.25, 0.25):
+        ellipsoid(mb, (sx, seat + 0.2, 5.75), (0.2, 0.12, 0.16), 'cloth', C_TEAL if sx < 0 else C_GOLD, 8, 5, R('Y', sx * 60))
+    cbox(mb, (0, y + 0.004, 3.95), (1.25, 0.008, 1.15), 'cloth', C_CREAM, 0.0); cbox(mb, (0, y + 0.01, 3.95), (1.05, 0.008, 0.95), 'cloth', C_RED, 0.0)
+    cbox(mb, (0, y + 0.016, 3.95), (0.5, 0.008, 0.45), 'cloth', C_GOLD, 0.0, None, R('Y', 45))
+    with xf(mb, T(0.42, y, 4.75) @ R('Y', -12)):                                # sea chest
+        cbox(mb, (0, 0.17, 0), (0.62, 0.34, 0.4), 'wood', C_DARK, 0.02, (1, 0, 0))
+        with xf(mb, T(0, 0.34, 0) @ M_Y2X @ S(1, 1, 1)):
+            lathe(mb, [(0, -0.31), (0.2, -0.31), (0.2, 0.31), (0, 0.31)], 12, 'wood', C_HULL, True)
+        for sx in (-0.2, 0.2):
+            cbox(mb, (sx, 0.19, 0), (0.05, 0.4, 0.42), 'brass', C_BRASS, 0.008)
+        cbox(mb, (0, 0.3, -0.21), (0.08, 0.1, 0.03), 'brass', C_BRASS, 0.008)
+    with xf(mb, T(-0.42, y, 4.7)):                                              # stool
+        lathe(mb, [(0, 0.4), (0.17, 0.4), (0.17, 0.45), (0, 0.45)], 10, 'wood', C_HULL)
+        for k in range(3):
+            a = 2 * pi * k / 3
+            tube(mb, [(0.08 * cos(a), 0.4, 0.08 * sin(a)), (0.16 * cos(a), 0, 0.16 * sin(a))], 0.025, 5, 'wood', C_DARK)
+    ang = math.degrees(math.atan(0.2))                                          # curtains inside the stern windows
+    with xf(mb, T(0, 1.1, 6.5) @ R('X', ang)):
+        yy = lambda v: (v - 1.1) / cos(radians(ang))
+        tube(mb, [(-1.3, yy(1.42), -0.24), (1.3, yy(1.42), -0.24)], 0.018, 5, 'brass', C_BRASS)
+        for cx in (-1.26, -0.43, 0.43, 1.26):
+            for i in range(3):
+                cbox(mb, (cx + (i - 1) * 0.055, yy(1.02), -0.235 - 0.012 * (i % 2)), (0.06, yy(1.42) - yy(0.62), 0.02), 'cloth', jit(C_RED, rng, 0.08), 0.008)
 
 def build_map_table(mb):
     o = Vector(STATIONS['Station_MapTable'][0]); rng = mb.rng
@@ -1082,7 +1223,7 @@ def build_map_table(mb):
 def build_mast(mb):
     D = DECK_Y
     lathe(mb, [(0, HOLD_Y), (0.3, HOLD_Y), (0.3, D + 0.02), (0.29, D + 3.0), (0.27, D + 6.0), (0.24, 10.5), (0.21, 11.75), (0.17, 11.8), (0, 11.8)], 16, 'wood', mul(C_DECK, 0.95), True, True)
-    lathe(mb, [(0.3, D), (0.42, D), (0.42, D + 0.1), (0.34, D + 0.22), (0.3, D + 0.22)], 16, 'wood', C_RED)       # mast coat
+    lathe(mb, [(0.3, D), (0.38, D), (0.38, D + 0.1), (0.33, D + 0.22), (0.3, D + 0.22)], 16, 'wood', C_RED)       # mast coat
     for y in (2.9, 5.4, 7.6):
         r = 0.3 - (y - D) * 0.0065
         lathe(mb, [(r - 0.01, y - 0.07), (r + 0.02, y - 0.07), (r + 0.02, y + 0.07), (r - 0.01, y + 0.07)], 16, 'iron', C_IRON)
@@ -1107,7 +1248,7 @@ def build_mast(mb):
                 prism(mb, [(0.22, y0 - 0.75), (0.34, y0 - 0.75), (0.74, y0), (0.22, y0)], -0.05, 0.05, 'wood', C_DARK, 0.0, (1, 0, 1))
 
 def build_bowsprit(mb):
-    heel = Vector((0, 2.25, -5.45)); tip = Vector((0, 3.95, -10.4))
+    heel = Vector(BS_HEEL); tip = Vector(BS_TIP)
     n = 6; path = [heel.lerp(tip, i / n) for i in range(n + 1)]
     tube(mb, path, [0.17 - 0.07 * i / n for i in range(n + 1)], 12, 'wood', mul(C_DECK, 0.95))
     d = (tip - heel).normalized()
@@ -1116,8 +1257,8 @@ def build_bowsprit(mb):
         tube(mb, [p - d * 0.06, p + d * 0.06], r, 12, 'iron' if f < 0.9 else 'brass', C_IRON if f < 0.9 else C_BRASS, mode='len')
     # bitts holding the heel
     for sg in (-1, 1):
-        cbox(mb, (sg * 0.3, (DECK_Y + 2.6) / 2, -5.4), (0.2, 2.6 - DECK_Y, 0.2), 'wood', C_RED, 0.035, (0, 1, 0))
-    cbox(mb, (0, 2.5, -5.4), (0.9, 0.16, 0.16), 'wood', C_DARK, 0.03)
+        cbox(mb, (sg * 0.3, (DECK_Y + 2.9) / 2, -5.4), (0.2, 2.9 - DECK_Y, 0.2), 'wood', C_RED, 0.035, (0, 1, 0))
+    cbox(mb, (0, 2.76, -5.4), (0.9, 0.16, 0.16), 'wood', C_DARK, 0.03)
     # gammoning rope lashing the bowsprit to the stem head
     for i in range(4):
         p = heel.lerp(tip, 0.265 + i * 0.012)
@@ -1155,9 +1296,9 @@ def build_figurehead(mb):
 def shroud_pts():
     out = []
     for sg in (-1, 1):
-        for k, z in enumerate((-0.72, -0.27, 0.18)):
+        for k, z in enumerate((0.76, 1.03, 1.3)):          # chainplates well aft so the yard clears the shrouds at full trim
             s = s_of_z(z); p, nh = rail_frame(s)
-            bot = Vector((sg * (p.x + 0.04), p.y + 0.12, z)); top = Vector((sg * 0.2, 10.42, MAST_Z + 0.02 + 0.1 * k))
+            bot = Vector((sg * (p.x + 0.04), p.y + 0.12, z)); top = Vector((sg * 0.1, 10.42, MAST_Z + 0.28 + 0.02 * k))
             out.append((sg, k, bot, top))
     return out
 
@@ -1180,27 +1321,22 @@ def build_rigging(mb):
                 f = (y - b.y) / (t.y - b.y); pts.append(b.lerp(t, f))
             tube(mb, pts, 0.017, 3, 'rope', C_ROPE, (False, False), 'flat')
             y += 0.47
-    tip = Vector((0, 3.95, -10.4)); mid = Vector((0, 2.25, -5.45)).lerp(tip, 0.34)
+    tip = Vector(BS_TIP); mid = Vector(BS_HEEL).lerp(tip, 0.34)
     tube(mb, [(0, MAST_TOP - 0.35, MAST_Z - 0.08), tip + Vector((0, 0.1, 0.1))], 0.03, 5, 'rope', C_ROPE_D)       # forestay
-    tube(mb, [(0, 10.35, MAST_Z - 0.25), mid + Vector((0, 0.19, 0))], 0.03, 5, 'rope', C_ROPE_D)                 # inner stay
+    tube(mb, [(0, 11.7, MAST_Z - 0.2), mid + Vector((0, 0.19, 0))], 0.03, 5, 'rope', C_ROPE_D)                   # inner stay (set high: the yard swings under it)
     for sg in (-1, 1):                                                                                            # backstays
         s = 2.0; p, nh = rail_frame(s)
         tube(mb, [(sg * 0.08, MAST_TOP - 0.5, MAST_Z + 0.08), (sg * (p.x - 0.05), p.y + 0.95, p.z)], 0.028, 5, 'rope', C_ROPE_D)
-    # halyard / brace falls from the two sail stations up to the mast (static; makes the stations readable)
-    for sg, c in ((-1, C_ROPE), (1, C_ROPE)):
-        tube(mb, [(sg * 1.83, DECK_Y + 0.62, 0.5), (sg * 0.27, 8.3, MAST_Z + 0.12)], 0.022, 4, 'rope', c)
-    with xf(mb, T(0, 8.3, MAST_Z)):
-        lathe(mb, [(0.25, -0.08), (0.33, -0.08), (0.33, 0.08), (0.25, 0.08)], 12, 'iron', C_IRON)
 
 def build_yard(mb):
-    y = YARD_Y; z = MAST_Z - 0.42; n = 8
+    y = YARD_Y; z = MAST_Z - YARD_FWD; n = 8
     path = [(-3.25 + 6.5 * i / n, y, z) for i in range(n + 1)]
     rad = [0.075 + 0.06 * (1 - abs(2 * i / n - 1) ** 1.5) for i in range(n + 1)]
     tube(mb, path, rad, 10, 'wood', mul(C_DECK, 0.85))
     for sg in (-1, 1):
         tube(mb, [(sg * 3.19, y, z), (sg * 3.3, y, z)], 0.095, 10, 'wood', C_RED, mode='len')
         tube(mb, [(sg * 0.5, y, z), (sg * 0.62, y, z)], 0.15, 10, 'iron', C_IRON, mode='len')
-    cbox(mb, (0, y, MAST_Z - 0.3), (0.42, 0.26, 0.2), 'wood', C_DARK, 0.03)
+    cbox(mb, (0, y, MAST_Z - 0.34), (0.42, 0.26, 0.26), 'wood', C_DARK, 0.03)
     with xf(mb, T(0, y, MAST_Z)):
         lathe(mb, [(0.26, -0.1), (0.35, -0.1), (0.35, 0.1), (0.26, 0.1)], 14, 'rope', C_ROPE)                 # parrel
     for i in range(13):                                                                                      # robands lashing the sail head
@@ -1219,24 +1355,40 @@ def sail_point(xn, yn):
     belly = 1.05 * cos(xn * pi / 2) ** 0.85 * (0.10 + 0.90 * sin(pi * min(1.0, yn * 0.83)) ** 0.9)
     belly *= min(1.0, yn * 6 + 0.12)
     scallop = 0.035 * (1 - cos(xn * 6 * pi)) * min(1.0, yn * 3) * (1 if abs(xn) < 0.999 else 0)
-    z = MAST_Z - 0.44 - belly - scallop
+    z = MAST_Z - YARD_FWD - 0.02 - belly - scallop
     return Vector((x, y, z))
 
+def sail_weight_at(p):
+    """(billow weight, distance down the sail 0..1) for a point on or near the set sail. Weight is 0 at the yard and the
+    side bolt ropes, about 1 in the belly, and eases off towards the foot so the clews stay put."""
+    head_y = YARD_Y - 0.13; yn = 0.5; xn = 0.0
+    for _ in range(4):
+        xn = max(-1.0, min(1.0, p.x / (3.05 + 0.2 * yn)))
+        yn = max(0.0, min(1.0, (head_y - p.y) / (head_y - (3.35 + 0.4 * (1 - xn * xn)))))
+    w = (1 - abs(xn) ** 4) * smooth01(yn / 0.3) * (1 - 0.35 * smooth01((yn - 0.8) / 0.2))
+    return (w, yn)
+
 def build_sail(mb):
-    nx, ny = 24, 14
-    ids = [[mb.v(sail_point(-1 + 2 * i / nx, j / ny)) for i in range(nx + 1)] for j in range(ny + 1)]
+    nx, ny = 32, 20
+    mb.wfn = sail_weight_at
+    pts = [[sail_point(-1 + 2 * i / nx, j / ny) for i in range(nx + 1)] for j in range(ny + 1)]
+    front = [[mb.v(q) for q in row] for row in pts]
+    back = [[mb.v(q + Vector((0, 0, 0.014))) for q in row] for row in pts]
     for j in range(ny):
         for i in range(nx):
-            idx = [ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]]
             uvs = [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)]
             sh = [mix(C_WHITE, (0.80, 0.78, 0.74), 0.5 * abs(-1 + 2 * ii / nx) ** 3 + 0.25 * (jj / ny) ** 2) for ii, jj in ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))]
-            mb.f(idx, 'canvas', sh, uvs, True)
+            mb.f([front[j][i], front[j][i + 1], front[j + 1][i + 1], front[j + 1][i]], 'canvas', sh, uvs, True)
+            mb.f([back[j][i], back[j][i + 1], back[j + 1][i + 1], back[j + 1][i]][::-1], 'canvas_back', sh[::-1], uvs[::-1], True)
     # bolt rope round the edge
     edge = [sail_point(-1, j / ny) for j in range(ny + 1)] + [sail_point(-1 + 2 * i / nx, 1) for i in range(1, nx + 1)] + [sail_point(1, 1 - j / ny) for j in range(1, ny + 1)]
-    tube(mb, edge, 0.03, 4, 'rope', C_ROPE, (True, True), 'smooth')
+    tube(mb, [q + Vector((0, 0, 0.007)) for q in edge], 0.032, 5, 'rope', C_ROPE, (True, True), 'smooth')
+    for sg in (-1, 1):                                                      # clew cringles
+        with xf(mb, T(sail_point(sg, 1) + Vector((sg * 0.05, -0.05, 0.0))) @ M_Y2Z): torus(mb, 0.06, 0.02, 8, 4, 'iron', C_IRON)
 
 def build_flag(mb, nx=24, ny=8):
     top = MAST_TOP - 0.12; h = 1.15; L = 2.3
+    mb.wfn = lambda p: (max(0.0, min(1.0, (MAST_Z - 0.1 - p.z) / (L * 0.95))), max(0.0, min(1.0, (top - p.y) / h)))   # weight grows toward the fly
     def P(i, j):
         t = i / nx; f = j / ny
         x = 0.16 * sin(t * 7.5) * t ** 0.7 + 0.05 * sin(t * 15 + f * 2)
@@ -1248,6 +1400,18 @@ def build_flag(mb, nx=24, ny=8):
             idx = [ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]]
             uvs = [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)]
             mb.f(idx, 'flag', C_WHITE, uvs, True)
+
+def rope_object(name, a, b):
+    """Running rigging for runtime animation: a unit-length rope along local +Z with its origin at one end. Posed from a to b
+    here; game code re-aims and re-scales it (Z scale = length) between the two documented empties every frame."""
+    a = Vector(a); b = Vector(b); d = b - a; L = d.length; z = d / L
+    x = Vector((0, 1, 0)).cross(z)
+    if x.length < 1e-4: x = Vector((1, 0, 0))
+    x.normalize(); y = z.cross(x)
+    mb = MB(name)
+    tube(mb, [(0, 0, 0), (0, 0, 0.5), (0, 0, 1)], 0.022, 6, 'rope', C_ROPE)
+    mb.gmatrix = Matrix(((x.x, y.x, d.x, a.x), (x.y, y.y, d.y, a.y), (x.z, y.z, d.z, a.z), (0, 0, 0, 1)))
+    build(mb)
 
 def build_wheel(mb, o):
     with xf(mb, T(o) @ M_Y2Z):
@@ -1394,7 +1558,7 @@ def build_powder_keg(mb, o):
 
 def build_sail_furled(mb):
     """The mainsail gathered up under the yard and tied with gaskets. Same origin as Sail: show one, hide the other."""
-    n = 36; segs = 10; z0 = MAST_Z - 0.46; ids = []
+    n = 36; segs = 10; z0 = MAST_Z - YARD_FWD - 0.04; ids = []
     for i in range(n + 1):
         xn = -1 + 2 * i / n; x = xn * 3.05
         r = 0.2 + 0.035 * sin(i * 1.7) + 0.025 * cos(i * 0.9)
@@ -1476,51 +1640,55 @@ def build_bilge(mb, c):
     for i in range(2):
         cbox(mb, (x, y + 0.02, z - 0.15 + 0.3 * i), (0.6, 0.03, 0.05), 'wood', C_DARK, 0.006)
 
-HOLES = [(1, -3.3, -0.30), (1, -1.9, 0.50), (1, 0.3, -0.35), (1, 1.2, 0.45), (1, 3.6, -0.10),
-         (-1, -2.8, 0.45), (-1, -0.9, -0.35), (-1, 0.9, 0.50), (-1, 2.9, -0.30), (-1, 4.1, 0.40)]
-
-def hole_frame(z, y):
-    v = 0.5; s = 0.0
-    for _ in range(4):
-        s = s_of_z(z, v); v = v_of_y(umap(s), y)
-    u = umap(s); e = 0.004
-    du = e / (hull_pt(u + e, v) - hull_pt(u, v)).length; dv = e / (hull_pt(u, v + e) - hull_pt(u, v)).length
-    return u, v, du, dv
-
 def build_holes():
-    """Damage set: Hole_NN (dark breach + splinters on both faces of the planking) and HolePatch_NN (planks nailed inside)."""
-    for idx, (sg, z, y) in enumerate(HOLES):
-        u, v, du, dv = hole_frame(z, y)
-        p = hull_pt(u, v); n = hull_n(u, v)
-        org = p - n * (TH / 2); org.x *= sg
-        yaw = math.degrees(atan2(-n.x * sg, -n.z))
-        tu = (hull_pt(u + 0.004, v) - hull_pt(u - 0.004, v)).normalized(); tv = n.cross(tu)
-        if tv.y < 0: tv = -tv
-        hb = MB('Hole_%02d' % (idx + 1), org, seed=idx, yaw=yaw); rng = hb.rng
-        nr = 13; ph = rng.random() * 6.28; rim = [0.2 + 0.05 * sin(2 * pi * k / nr * 2 + ph) + 0.07 * rng.random() for k in range(nr)]
-        def sp(a, b, off):
-            q = hull_pt(u + a * du, v + b * dv) + hull_n(u + a * du, v + b * dv) * off
-            return q
-        dark = (0.012, 0.014, 0.02)
+    """Damage set per hole position: HullPanel_NN (the intact planking, shown by default), Hole_NN (the same planking with a
+    real splintered breach through it; swap it in for the panel) and HolePatch_NN (planks nailed over from inside)."""
+    for P in PANELS:
+        idx = P['idx']; sg = P['side']; jb = P['jb']
+        build(P['mb'])
+        hb = MB('Hole_%02d' % (idx + 1), P['origin'], seed=idx, yaw=P['yaw']); rng = hb.rng
+        lo = (VS[jb] - VS[jb - 1]) * P['mpv']; hi = (VS[jb + 1] - VS[jb]) * P['mpv']        # strake heights in metres
+        def pt(a, b, depth):
+            u = umap(P['sc'] + a / P['mps']); v = P['v'] + b / P['mpv']
+            q = hull_pt(u, v) - hull_n(u, v) * depth; q.x = max(q.x, 0.0); return q
+        K = 24; ra = 0.27; rb = min(0.2, 0.74 * min(lo, hi))
+        ang = [2 * pi * k / K for k in range(K)]
+        rad = []
+        for k, t in enumerate(ang):
+            r = 1.0 / sqrt((cos(t) / ra) ** 2 + (sin(t) / rb) ** 2)
+            rad.append(r * (0.62 + 0.5 * rng.random()) * (1.12 if k % 3 == 0 else 0.92))
+        H = [(rad[k] * cos(t), rad[k] * sin(t)) for k, t in enumerate(ang)]
+        def edge(t):
+            c, sn = cos(t), sin(t)
+            f = min(PANEL_HALF / abs(c) if abs(c) > 1e-9 else 1e9, (hi if sn > 0 else lo) / abs(sn) if abs(sn) > 1e-9 else 1e9)
+            return (f * c, f * sn)
+        Rr = [edge(t) for t in ang]
+        corners = [(PANEL_HALF, hi), (-PANEL_HALF, hi), (-PANEL_HALF, -lo), (PANEL_HALF, -lo)]
+        cang = [atan2(c[1], c[0]) % (2 * pi) for c in corners]
+        tu = (pt(0.05, 0, 0) - pt(-0.05, 0, 0)).normalized()
+        c0 = pt(0, 0, TH / 2)
+        splinter = jit(mix(C_HULL, C_DECK, 0.7), rng, 0.1)
         with xf(hb, S(sg, 1, 1)):
-            for face, off in ((1, 0.024), (-1, -(TH + 0.012))):
-                c = sp(0, 0, off); pts = [sp(rim[k] * cos(2 * pi * k / nr), rim[k] * sin(2 * pi * k / nr) * 0.85, off) for k in range(nr)]
+            for k in range(K):
+                k1 = (k + 1) % K; t0 = ang[k]; t1 = ang[k1] if k1 else 2 * pi
+                j = jb if sin((t0 + t1) / 2) > 0 else jb - 1
+                colr, inner, extra = P['cols'].get(j, (C_HULL, C_INNER, 0.0))
+                ring = [Rr[k]] + [corners[i] for i in range(4) if t0 < cang[i] < t1] + [Rr[k1]]
                 hb.newoff()
-                for k in range(nr):
-                    hb.fp([c, pts[k], pts[(k + 1) % nr]], 'paint', dark, None, c - n * face)
-                for k in range(nr):                                             # splinters
-                    a = pts[k]; b = pts[(k + 1) % nr]; m = (a + b) / 2; out = (m - c).normalized()
-                    if rng.random() < 0.25: continue
-                    a = a.lerp(b, rng.uniform(0.0, 0.3)); b = b.lerp(a, rng.uniform(0.0, 0.3)); m = a.lerp(b, rng.uniform(0.3, 0.7))
-                    if face > 0: apex = m - out * rng.uniform(0.05, 0.15) - n * 0.03
-                    else: apex = m + out * rng.uniform(-0.03, 0.06) - n * rng.uniform(0.06, 0.2)
-                    a2 = a + (a - c) * 0.05 + n * face * 0.006; b2 = b + (b - c) * 0.05 + n * face * 0.006
-                    colr = jit(mix(C_HULL, C_DECK, 0.55), rng, 0.15)
-                    hb.newoff()
-                    hb.fp([a2, b2, apex + n * face * 0.004], 'wood', colr, tu, c - n * face * 3)
-                    hb.fp([a2, b2, apex + n * face * 0.004], 'wood', mul(colr, 0.7), tu, c + n * face * 3)
+                for depth, cc, face in ((-extra, colr, 1), (TH, inner, -1)):
+                    poly = [pt(H[k][0], H[k][1], depth)] + [pt(a, b, depth) for a, b in ring] + [pt(H[k1][0], H[k1][1], depth)]
+                    hb.fp(poly, 'wood', cc, tu, c0)
+                wall = [pt(H[k][0], H[k][1], -extra), pt(H[k1][0], H[k1][1], -extra), pt(H[k1][0], H[k1][1], TH), pt(H[k][0], H[k][1], TH)]
+                mid = pt((H[k][0] + H[k1][0]) * 0.8, (H[k][1] + H[k1][1]) * 0.8, TH / 2)      # a point outside the hole wall
+                hb.fp(wall, 'wood', jit(splinter, rng, 0.12), tu, mid)
+                if rng.random() < 0.45:                                                       # a splinter bent into the hold
+                    a = pt(H[k][0], H[k][1], TH); b = pt(H[k1][0], H[k1][1], TH)
+                    tip = pt(H[k][0] * 0.55, H[k][1] * 0.55, TH + rng.uniform(0.05, 0.16))
+                    hb.fp([a, b, tip], 'wood', splinter, tu, c0); hb.fp([b, a, tip], 'wood', mul(splinter, 0.75), tu, tip + (tip - c0))
         build(hb)
-        pb = MB('HolePatch_%02d' % (idx + 1), org, seed=idx, yaw=yaw); rng = pb.rng
+        pb = MB('HolePatch_%02d' % (idx + 1), P['origin'], seed=idx, yaw=P['yaw']); rng = pb.rng
+        p = pt(0, 0, 0); n = (pt(0, 0, 0) - pt(0, 0, 0.1)).normalized(); tv = n.cross(tu)
+        if tv.y < 0: tv = -tv
         c = p - n * (TH + 0.155)
         M = Matrix(((tu.x, tv.x, -n.x, c.x), (tu.y, tv.y, -n.y, c.y), (tu.z, tv.z, -n.z, c.z), (0, 0, 0, 1)))
         with xf(pb, S(sg, 1, 1) @ M):
@@ -1538,7 +1706,7 @@ def extras():
     o = (-0.62, 2.9, MAST_Z); b = MB('Bell', o); build_bell(b, o); build(b)
     bc = (0.0, HOLD_Y, -2.1)
     o = (0.52, HOLD_Y, -1.75); bk = MB('Bucket', o); build_bucket(bk, o); build(bk)
-    o = (1.02, HOLD_Y, 0.35); ps = MB('PlankStack', o); build_plank_stack(ps, o); build(ps)
+    o = (0.0, HOLD_Y, 1.25); ps = MB('PlankStack', o); build_plank_stack(ps, o); build(ps)
     hx0, hx1, hz0, hz1 = HATCH
     for name, sg in (('HatchCover_Starboard', 1), ('HatchCover_Port', -1)):
         o = (sg * (hx1 + 0.13), DECK_Y + 0.21, (hz0 + hz1) / 2 - 0.05); h = MB(name, o); build_hatch_cover(h, o, sg); build(h)
@@ -1546,6 +1714,24 @@ def extras():
     # where the sea surface must be cut away inside the hull (hide like col_*; for the ocean shader/stencil)
     wm = MB('mask_water'); poly = deck_outline(0.0, 0.0, -6.3, zstern(0.0) - 0.02, 20, 1.3, 0.02)
     wm.newoff(); wm.fp([(x, 0.0, z) for x, z in poly], 'col', C_WHITE, None, (0, -5, 0)); build(wm)
+
+def rig_clearance():
+    """Smallest gap (surface to surface) between the yard and the standing rigging over the whole +-1.2 rad trim range."""
+    segs = [(b, t, 0.032) for _, _, b, t in shroud_pts()]
+    tip = Vector(BS_TIP); mid = Vector(BS_HEEL).lerp(tip, 0.34)
+    segs += [(Vector((0, MAST_TOP - 0.35, MAST_Z - 0.08)), tip, 0.03), (Vector((0, 11.7, MAST_Z - 0.2)), mid, 0.03)]
+    for sg in (-1, 1):
+        p, _ = rail_frame(2.0); segs.append((Vector((sg * 0.08, MAST_TOP - 0.5, MAST_Z + 0.08)), Vector((sg * (p.x - 0.05), p.y + 0.95, p.z)), 0.028))
+    best = 9.0
+    for i in range(97):
+        th = -1.2 + 2.4 * i / 96
+        for k in range(81):
+            x = -3.3 + 6.6 * k / 80; r = 0.075 + 0.06 * (1 - abs(x / 3.25) ** 1.5) if abs(x) < 3.25 else 0.095
+            q = Vector((x * cos(th) - YARD_FWD * sin(th), YARD_Y, MAST_Z - x * sin(th) - YARD_FWD * cos(th)))
+            for a, b, rr in segs:
+                d = b - a; f = max(0.0, min(1.0, (q - a).dot(d) / d.dot(d)))
+                best = min(best, (q - (a + d * f)).length - r - rr)
+    return best
 
 # ---------------------------------------------------------------- collision
 def col_wall(name, s0, s1, y0, y1fn, thick=TH, extra_out=0.0, ns=3, ny=3):
@@ -1555,8 +1741,9 @@ def col_wall(name, s0, s1, y0, y1fn, thick=TH, extra_out=0.0, ns=3, ny=3):
             s = s0 + (s1 - s0) * i / (ns - 1); u = umap(s); yt = y1fn(hull_pt(u, 1.0).z, u)
             for j in range(ny):
                 y = y0 + (yt - y0) * j / (ny - 1); v = v_of_y(u, y)
-                p = hull_pt(u, v); n = hull_n(u, v)
-                a = p + n * extra_out; b = p - n * thick; b.x = max(b.x, 0.0)
+                p = hull_pt(u, min(v, 1.0)); n = hull_n(u, min(v, 1.0))
+                if v > 1.0: p.y = y; n = Vector((n.x, 0, n.z)).normalized()      # rails stand straight up from the hull top
+                a = p + n * extra_out; b = p - n * (hull_th(p.y) if thick == TH else thick); b.x = max(b.x, 0.0)
                 pts += [(sg * a.x, a.y, a.z), (sg * b.x, b.y, b.z)]
         col_piece('col_%s_%s' % (name, tag), pts)
 
@@ -1566,64 +1753,66 @@ def build_collision():
     for i in range(len(zb) - 1):
         pts = []
         for z in (zb[i], (zb[i] + zb[i + 1]) / 2, zb[i + 1]):
-            for y in (-1.0, -0.9, -0.75, HOLD_Y):
+            for y in (-1.0, (HOLD_Y - 1.0) / 2, HOLD_Y - 0.005):
                 x = hull_b(z, y)
                 if z > zstem(y) + 0.01: pts += [(x, y, z), (-x, y, z)]
             if z > -3.6: pts += [(0.12, -1.2, z), (-0.12, -1.2, z)]
             elif z > zstem(-0.95): pts += [(0, -1.0, z)]
         if len(pts) >= 4: col_piece('col_hull_bottom_%d' % i, pts)
-    # hull sides from the hold floor to the deck, two bands so the hold stays hollow
+    # hull sides from the hold floor to the deck in three bands, so the convex pieces hug the curved planking and the hold stays hollow
     zs = [6.6, 5.4, 4.2, 2.8, 1.2, -0.4, -2.0, -3.6, -4.9, -5.8, -6.45]
+    bands = [('low', HOLD_Y - 0.03, -0.45), ('mid', -0.45, 0.2), ('high', 0.2, DECK_Y - 0.02)]
     for i in range(len(zs) - 1):
         s0, s1 = (0.0 if i == 0 else s_of_z(zs[i], 0.45)), s_of_z(zs[i + 1], 0.45)
-        col_wall('hull_side_low_%d' % i, s0, s1, HOLD_Y - 0.1, lambda z, u: 0.25)
-        col_wall('hull_side_mid_%d' % i, s0, s1, 0.25, lambda z, u: DECK_Y - 0.02)
+        for nm, ya, yb in bands:
+            col_wall('hull_side_%s_%d' % (nm, i), s0, s1, ya, lambda z, u, yb=yb: yb)
     # bulwarks and rails, leaving the gun ports and ladder gaps open
     sq = s_of_z(QDECK_Z)
-    def top(z, u): return ytop(z) + (0.8 if z > QDECK_Z - 0.01 else 0.12)
+    def top(z, u): return ytop(z) + (0.65 if z > QDECK_Z - 0.01 else 0.12)
     k = 0
     for (a, b) in top_intervals(NS - 0.5):
         cuts = [a] + [c for c in (sq, s_of_z(4.8), s_of_z(-3.3), s_of_z(-4.8), s_of_z(-5.8)) if a + 0.5 < c < b - 0.5] + [b]
         cuts.sort()
         for i in range(len(cuts) - 1):
-            mid_z = hull_pt(umap((cuts[i] + cuts[i + 1]) / 2), 1.0).z
             col_wall('rail_%d' % k, cuts[i], cuts[i + 1], DECK_Y - 0.02, top, 0.2); k += 1
     # stem
-    col_piece('col_stem', [(sx * 0.13, y, zstem(y) + dz) for y in (-0.6, 0.3, 1.2, 2.5) for sx in (-1, 1) for dz in (-0.25, 0.3)])
+    col_piece('col_stem', [(sx * 0.13, y, zstem(y) + dz) for y in (-0.6, 0.3, 1.2, 2.66) for sx in (-1, 1) for dz in (-0.25, 0.3)])
     # transom + taffrail
     pts = []
-    yt = ytop(6.5) + 0.8
+    yt = ytop(6.5) + 0.65
     for y in (YT, 0.2, 0.7, 1.4, 2.0, yt):
         for sg in (-1, 1):
             for dz in (0.03, -0.16): pts.append((sg * max(wtrans(y), 0.12), y, zstern(y) + dz))
     col_piece('col_transom', pts)
     # decks
-    main = deck_outline(DECK_Y - 0.12, DECK_Y, -6.52, QDECK_Z + 0.1)
-    hx0, hx1, hz0, hz1 = HATCH
+    main = deck_outline(DECK_Y - 0.1, DECK_Y, -6.52, QDECK_Z + 0.1)
+    hx0, hx1, hz0, hz1 = HATCH; qx0, qx1, qz0, qz1 = QSTAIR
     def slab(name, poly, y0, y1):
         if poly: col_piece(name, [(x, y, z) for x, z in poly for y in (y0, y1)])
-    slab('col_deck_main_fore', clip_rect(main, -9, 9, -7, hz0), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_port', clip_rect(main, -9, hx0, hz0, hz1), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_starboard', clip_rect(main, hx1, 9, hz0, hz1), DECK_Y - 0.12, DECK_Y)
-    slab('col_deck_main_aft', clip_rect(main, -9, 9, hz1, QDECK_Z + 0.1), DECK_Y - 0.12, DECK_Y)
+    slab('col_deck_main_fore', clip_rect(main, -9, 9, -7, hz0), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_port', clip_rect(main, -9, hx0, hz0, hz1), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_starboard', clip_rect(main, hx1, 9, hz0, hz1), DECK_Y - 0.1, DECK_Y)
+    slab('col_deck_main_aft', clip_rect(main, -9, 9, hz1, QDECK_Z + 0.1), DECK_Y - 0.1, DECK_Y)
     zq1 = zstern(QDECK_Y) - 0.1
-    slab('col_quarterdeck', deck_outline(QDECK_Y - 0.12, QDECK_Y, QDECK_Z - 0.06, zq1, 10, 1.0), QDECK_Y - 0.12, QDECK_Y)
-    slab('col_hold_floor', deck_outline(HOLD_Y - 0.06, HOLD_Y, -4.3, 5.75, 16, 1.0), HOLD_Y - 0.2, HOLD_Y)
-    # stairs as ramps
-    col_piece('col_stairs_quarter', [(sx * 0.66, y, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, 1.9), (DECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z), (QDECK_Y, QDECK_Z - 0.03))])
-    zt, zbm = hz1 - 0.02, hz0 + 0.05
-    col_piece('col_stairs_hold', [(sx * 0.58, y + dy, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, zt), (HOLD_Y, zbm)) for dy in (0.0, -0.16)])
-    # quarterdeck break: bulkhead (above the main deck) and front rail either side of the stairs
-    hb = hull_b(QDECK_Z + 0.05, QDECK_Y) - 0.08
-    col_piece('col_bulkhead_quarter', [(sx * hb, y, z) for sx in (-1, 1) for y in (DECK_Y - 0.12, QDECK_Y) for z in (QDECK_Z, QDECK_Z + 0.12)])
+    quarter = deck_outline(QDECK_Y - 0.1, QDECK_Y, QDECK_Z - 0.06, zq1, 10, 1.0)
+    slab('col_quarterdeck_fore', clip_rect(quarter, -qx0, qx0, QDECK_Z - 0.06, qz1), QDECK_Y - 0.1, QDECK_Y)
+    slab('col_quarterdeck_aft', clip_rect(quarter, -9, 9, qz1, 9), QDECK_Y - 0.1, QDECK_Y)
+    slab('col_hold_floor', deck_outline(HOLD_Y - 0.06, HOLD_Y, -4.3, 5.75, 16, 1.0, inner=True), HOLD_Y - 0.1, HOLD_Y)
+    # stairs as ramps (quarterdeck flights 35 degrees, hold flight 38)
     for sg, tag in ((1, 'S'), (-1, 'P')):
-        col_piece('col_rail_quarter_front_%s' % tag, [(sg * x, y, z) for x in (0.64, hb) for y in (QDECK_Y, QDECK_Y + 0.9) for z in (QDECK_Z - 0.06, QDECK_Z + 0.12)])
+        col_piece('col_stairs_quarter_%s' % tag, [(sg * x, y, z) for x in (qx0, qx1) for (y, z) in ((DECK_Y, qz0), (DECK_Y - 0.1, qz0), (DECK_Y - 0.1, QDECK_Z + 0.05), (QDECK_Y - 0.4, qz1), (QDECK_Y, qz1))])
+        col_piece('col_stairwell_%s' % tag, [(sg * x, y, z) for x in (qx0 - 0.08, qx0) for y in (DECK_Y - 0.1, QDECK_Y + 0.9) for z in (QDECK_Z, qz1 + 0.06)])
+    zt, zbm = HOLD_STAIR[0] + 0.03, HOLD_STAIR[1]
+    col_piece('col_stairs_hold', [(sx * 0.45, y + dy, z) for sx in (-1, 1) for (y, z) in ((DECK_Y, zt), (HOLD_Y, zbm)) for dy in (0.0, -0.16)])
+    # quarterdeck break: bulkhead (above the main deck) and the front rail between the flights
+    col_piece('col_bulkhead_quarter', [(sx * qx0, y, z) for sx in (-1, 1) for y in (DECK_Y - 0.1, QDECK_Y) for z in (QDECK_Z, QDECK_Z + 0.12)])
+    col_piece('col_rail_quarter_front', [(sx * qx0, y, z) for sx in (-1, 1) for y in (QDECK_Y, QDECK_Y + 0.9) for z in (QDECK_Z - 0.03, QDECK_Z + 0.1)])
     hbk = hull_b(-4.3, DECK_Y - 0.1) - 0.1
     col_piece('col_bulkhead_hold', [(sx * x, y, -4.3 + dz) for sx in (-1, 1) for (x, y) in ((hull_b(-4.3, HOLD_Y) - 0.1, HOLD_Y), (hbk, DECK_Y - 0.1)) for dz in (-0.06, 0.06)])
     # mast, bowsprit
     col_piece('col_mast', [(0.3 * cos(k * pi / 4), y, MAST_Z + 0.3 * sin(k * pi / 4)) for k in range(8) for y in (HOLD_Y, 10.5)])
     col_piece('col_mast_top', [(r * cos(k * pi / 4), y, MAST_Z + r * sin(k * pi / 4)) for k in range(8) for (y, r) in ((10.5, 0.9), (11.5, 0.95))])
-    col_piece('col_bowsprit', [(sx * 0.14, 2.25 + dy + 1.7 * f, -5.45 - 4.95 * f) for sx in (-1, 1) for dy in (-0.14, 0.14) for f in (0, 1)])
+    col_piece('col_bowsprit', [(sx * 0.14, BS_HEEL[1] + dy + (BS_TIP[1] - BS_HEEL[1]) * f, BS_HEEL[2] + (BS_TIP[2] - BS_HEEL[2]) * f) for sx in (-1, 1) for dy in (-0.14, 0.14) for f in (0, 1)])
 
 # ================================================================ distant LOD
 def build_lod(outdir):
@@ -1632,20 +1821,19 @@ def build_lod(outdir):
     for ob in list(bpy.data.objects): bpy.data.objects.remove(ob, do_unlink=True)
     OBJS.clear()
     mb = MB('Hull'); NL = 16
-    rows = [0, 2, 4, 5, 7, 8, 10, 11]
+    rows = [0, 3, J_CREAM, J_CREAM + 1, J_WALE, J_WALE + 1, J_SILL, len(YS) - 2, len(YS) - 1]
     ss = [NS * (i / NL) for i in range(NL)] + [NS - 0.05]
     for sg in (-1, 1):
         with xf(mb, S(sg, 1, 1)):
             for r in range(len(rows) - 1):
                 colr, _ = strake_look(rows[r]) if rows[r + 1] - rows[r] == 1 or rows[r] == 0 else (C_HULL, 0)
-                gaps_here = rows[r] >= 8
                 for i in range(len(ss) - 1):
                     zmid = hull_pt(umap((ss[i] + ss[i + 1]) / 2), 1.0).z
-                    if rows[r] >= 10 and any(z0 < zmid < z1 for z0, z1 in GAPS): continue
+                    if rows[r] >= J_SILL and any(z0 < zmid < z1 for z0, z1 in GAPS): continue
                     q = [hull_pt(umap(ss[i]), VS[rows[r]]), hull_pt(umap(ss[i + 1]), VS[rows[r]]), hull_pt(umap(ss[i + 1]), VS[rows[r + 1]]), hull_pt(umap(ss[i]), VS[rows[r + 1]])]
                     c = sum(q, Vector()) / 4
                     mb.fp(q, 'paint', mul(colr, 0.92 + 0.08 * ((i + r) % 2)), None, (0, c.y, c.z))
-                    if rows[r] >= 8:                                            # inside of the bulwark
+                    if rows[r] > J_WALE:                                        # inside of the bulwark
                         mb.fp([Vector((p.x - 0.12, p.y, p.z)) for p in q], 'paint', mul(C_HULL, 0.8), None, (9, c.y, c.z))
             ss2 = ss[:-1] + [NS - 1.0]
             for i in range(len(ss2) - 1):                                       # cap rail
@@ -1654,11 +1842,11 @@ def build_lod(outdir):
                 if any(z0 < zmid < z1 for z0, z1 in GAPS): continue
                 mb.fp([a - na * 0.2 + Vector((0, 0.06, 0)), a + na * 0.06 + Vector((0, 0.06, 0)), b + nb * 0.06 + Vector((0, 0.06, 0)), b - nb * 0.2 + Vector((0, 0.06, 0))], 'paint', C_DARK, None, (0, -5, 0))
                 if zmid > QDECK_Z:                                              # quarterdeck balustrade as a slatted band
-                    up = Vector((0, 0.78, 0))
+                    up = Vector((0, 0.63, 0))
                     for inside in ((0, 0, zmid), (9, 0, zmid)):
                         mb.fp([a + up - Vector((0, 0.1, 0)), b + up - Vector((0, 0.1, 0)), b + up, a + up], 'paint', C_RED, None, inside)
                     for f in (0.0, 0.5):
-                        m = a.lerp(b, f); cbox(mb, (m.x - 0.05, m.y + 0.39, m.z), (0.07, 0.66, 0.07), 'paint', C_CREAM, 0.0)
+                        m = a.lerp(b, f); cbox(mb, (m.x - 0.05, m.y + 0.32, m.z), (0.07, 0.52, 0.07), 'paint', C_CREAM, 0.0)
     # decks, bulkhead, transom
     main = deck_outline(DECK_Y, DECK_Y, -6.5, QDECK_Z, 10, 1.6, 0.1); quarter = deck_outline(QDECK_Y, QDECK_Y, QDECK_Z, zstern(QDECK_Y) - 0.1, 3, 1.0, 0.1)
     mb.fp([(x, DECK_Y, z) for x, z in main], 'paint', C_DECK, None, (0, -5, 0)); mb.fp([(x, QDECK_Y, z) for x, z in quarter], 'paint', C_DECK, None, (0, -5, 0))
@@ -1671,9 +1859,9 @@ def build_lod(outdir):
         mb.fp([(wx - 0.3, 0.66, zstern(0.66) + 0.02), (wx + 0.3, 0.66, zstern(0.66) + 0.02), (wx + 0.3, 1.34, zstern(1.34) + 0.02), (wx - 0.3, 1.34, zstern(1.34) + 0.02)], 'glass', C_GLASS, None, (0, 1, 0))
     with xf(mb, T(0, 2.03, zstern(2.03) + 0.01) @ M_Y2Z):
         lathe(mb, [(0, 0), (0.42, 0), (0, 0.06)], 8, 'paint', C_GOLD, False)
-    yr = yts + 0.78
+    yr = yts + 0.6
     cbox(mb, (0, yr, zstern(yts) - 0.05), (2 * wtrans(yts), 0.1, 0.12), 'paint', C_RED, 0.0)
-    for i in range(5): cbox(mb, (-1.2 + 0.6 * i, yts + 0.4, zstern(yts) - 0.05), (0.08, 0.7, 0.08), 'paint', C_CREAM, 0.0)
+    for i in range(5): cbox(mb, (-1.2 + 0.6 * i, yts + 0.3, zstern(yts) - 0.05), (0.08, 0.55, 0.08), 'paint', C_CREAM, 0.0)
     # keel, stem, rudder
     path = [(6.25, -1.0), (-3.4, -1.0)] + [(_SB[i][1], _SB[i][0]) for i in range(40, 241, 40)] + [(zstem(1.8), 1.8), (zstem(2.5), 2.5)]
     secs = []; scols = []
@@ -1689,7 +1877,7 @@ def build_lod(outdir):
         lathe(mb, [(0.3, DECK_Y), (0.24, 10.5), (0.15, 11.8), (0.09, MAST_TOP), (0, MAST_TOP + 0.2)], 6, 'paint', mul(C_DECK, 0.95))
         lathe(mb, [(0.24, 10.5), (0.8, 10.5), (0.93, 11.4), (0.97, 11.4), (0.97, 11.5), (0, 11.5)], 8, 'paint', C_HULL, False, False, lambda i, k: C_RED if i >= 2 else C_HULL)
         lathe(mb, [(0.25, 9.6), (0.8, 10.5)], 4, 'paint', C_DARK, False)
-    tube(mb, [(0, 2.25, -5.45), (0, 3.95, -10.4)], [0.17, 0.1], 5, 'paint', mul(C_DECK, 0.95), mode='flat')
+    tube(mb, [BS_HEEL, BS_TIP], [0.17, 0.1], 5, 'paint', mul(C_DECK, 0.95), mode='flat')
     # figurehead: white body, teal wings, orange beak
     ellipsoid(mb, (0, 1.78, -7.08), (0.33, 0.5, 0.42), 'paint', srgb('#f4ead2'), 6, 4, R('X', -28))
     ellipsoid(mb, (0, 2.4, -7.55), (0.2, 0.26, 0.24), 'paint', srgb('#f4ead2'), 6, 4)
@@ -1701,25 +1889,26 @@ def build_lod(outdir):
     cbox(mb, (0, QDECK_Y + 0.6, 4.95), (0.34, 1.2, 0.34), 'paint', C_RED, 0.0)
     with xf(mb, T(0, QDECK_Y + 0.95, 5.2) @ M_Y2Z): lathe(mb, [(0, -0.04), (0.5, -0.04), (0.5, 0.04), (0, 0.04)], 8, 'paint', C_DARK, False)
     with xf(mb, T(0, DECK_Y, -4.6)): lathe(mb, [(0.4, 0), (0.24, 0.5), (0.42, 0.75), (0.42, 1.0), (0, 1.05)], 6, 'paint', C_DARK, False)
-    cbox(mb, (0, DECK_Y + 0.12, 0.4), (1.4, 0.3, 2.2), 'paint', C_RED, 0.0, skip=('-y',))
+    cbox(mb, (0, DECK_Y + 0.12, 1.0), (1.4, 0.3, 3.0), 'paint', C_RED, 0.0, skip=('-y',))
     yl = ytop(6.5) + 1.55
     cbox(mb, (0, yl, zstern(yts) - 0.02), (0.36, 0.5, 0.36), 'glass', C_GLASS, 0.0); cbox(mb, (0, yl - 0.75, zstern(yts) - 0.02), (0.1, 1.1, 0.1), 'paint', C_IRON, 0.0)
     cbox(mb, (1.62, 1.0, -5.1), (0.12, 1.5, 0.12), 'paint', C_IRON, 0.0); cbox(mb, (1.62, 0.4, -5.1), (0.12, 0.14, 1.0), 'paint', C_IRON, 0.0)
     # rigging: thin three-sided ropes
-    tip = Vector((0, 3.95, -10.4))
-    lines = [((0, MAST_TOP - 0.35, MAST_Z - 0.08), tip), ((0, 10.35, MAST_Z - 0.25), Vector((0, 2.25, -5.45)).lerp(tip, 0.34))]
+    tip = Vector(BS_TIP)
+    lines = [((0, MAST_TOP - 0.35, MAST_Z - 0.08), tip), ((0, 11.7, MAST_Z - 0.2), Vector(BS_HEEL).lerp(tip, 0.34))]
     for sg in (-1, 1):
         p, nh = rail_frame(2.0); lines.append(((sg * 0.08, MAST_TOP - 0.5, MAST_Z + 0.08), (sg * (p.x - 0.05), p.y + 0.95, p.z)))
     for sg, k, bot, top in shroud_pts(): lines.append((bot, top))
     for a, b in lines: tube(mb, [a, b], 0.04, 3, 'paint', C_ROPE_D, (False, False), 'flat')
     build(mb)
-    y = YARD_Y; z = MAST_Z - 0.42
+    y = YARD_Y; z = MAST_Z - YARD_FWD
     yd = MB('Yard', (0, YARD_Y, MAST_Z)); tube(yd, [(-3.25, y, z), (0, y, z), (3.25, y, z)], [0.08, 0.14, 0.08], 5, 'paint', mul(C_DECK, 0.85), mode='flat'); build(yd)
     sl = MB('Sail', (0, YARD_Y, MAST_Z)); nx, ny = 8, 5
     ids = [[sl.v(sail_point(-1 + 2 * i / nx, j / ny)) for i in range(nx + 1)] for j in range(ny + 1)]
     for j in range(ny):
         for i in range(nx):
-            sl.f([ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]], 'canvas_lod', C_WHITE, [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)], True)
+            q = [ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]]; uq = [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)]
+            sl.f(q, 'canvas_lod', C_WHITE, uq, True); sl.f(q[::-1], 'canvas_back_lod', C_WHITE, uq[::-1], True)
     build(sl)
     sf = MB('Sail_Furled', (0, YARD_Y, MAST_Z)); tube(sf, [(-3.0, y - 0.32, z), (0, y - 0.36, z), (3.0, y - 0.32, z)], [0.14, 0.22, 0.14], 5, 'paint', srgb('#e6dbbd'), mode='flat'); build(sf)
     fl = MB('Flag', (0, MAST_TOP - 0.12, MAST_Z)); build_flag(fl, 6, 2); build(fl)
@@ -1776,18 +1965,36 @@ def main():
         build(l)
     for name, key, band in (('Winch_SailLength', 'Station_SailLength', C_RED), ('Winch_SailAngle', 'Station_SailAngle', C_TEAL)):
         o = STATIONS[key][0]; o = (o[0] * 0.955, o[1], o[2]); w = MB(name, o); build_winch(w, o, band); build(w)
+    c = (-0.36, QDECK_Y + 1.36, hz - 0.28); l = MB('Lantern_Helm', c); build_lantern(l, c, 0.6, False)      # swivel lamp on the binnacle for night steering
+    tube(l, [(-0.15, QDECK_Y + 1.0, hz - 0.28), (-0.36, QDECK_Y + 1.05, hz - 0.28), (-0.36, QDECK_Y + 1.24, hz - 0.28)], 0.018, 5, 'iron', C_IRON)
+    with xf(l, T(-0.36, QDECK_Y + 1.06, hz - 0.28)): lathe(l, [(0, -0.03), (0.035, -0.03), (0.035, 0.03), (0, 0.03)], 8, 'brass', C_BRASS)
+    build(l)
+    o = (-1.6, DECK_Y, -2.85); bd = MB('Bucket_Deck', o); build_bucket(bd, o); rope_coil(bd, (-1.62, DECK_Y, -3.3), 0.17, 3)
+    rp, _ = rail_frame(s_of_z(-2.85))
+    tube(bd, [(-1.6, DECK_Y + 0.44, -2.83), (-1.75, DECK_Y + 0.6, -2.9), (-(rp.x - 0.1), rp.y + 0.12, -2.95), (-(rp.x - 0.2), DECK_Y + 0.4, -3.2), (-1.66, DECK_Y + 0.14, -3.3)], 0.014, 4, 'rope', C_ROPE)
+    build(bd)
     mt = MB('MapTable', STATIONS['Station_MapTable'][0]); build_map_table(mt); build(mt)
     pd = MB('Props_Deck'); build_props_deck(pd); build(pd)
     ph = MB('Props_Hold'); build_props_hold(ph); build(ph)
     build_collision()
-    # rope attachment helpers: clews ride on the Sail (they follow furl scaling and trim), sheets end at the winches
-    for name, p, par in (('Clew_Port', sail_point(-1, 1), 'Sail'), ('Clew_Starboard', sail_point(1, 1), 'Sail'),
-                         ('SheetPoint_Port', Vector((-1.83, DECK_Y + 0.62, 0.5)), None), ('SheetPoint_Starboard', Vector((1.83, DECK_Y + 0.62, 0.5)), None),
-                         ('AnchorCablePoint', Vector((1.62, ytop(-5.1) + 0.1, -5.1)), None)):
+    gap = rig_clearance(); print('yard to standing rigging, smallest gap over +-1.2 rad trim: %.3f m' % gap)
+    assert gap > 0.05, 'the yard fouls the standing rigging'
+    # rope attachment helpers: clews ride on the Sail (they follow furl scaling and trim), yardarms on the Yard;
+    # sheets end at the winches and braces on the quarterdeck rail. Rope_* objects are posed between them.
+    bp, _ = rail_frame(s_of_z(5.7)); ya_z = MAST_Z - YARD_FWD
+    marks = {'Clew_Port': (sail_point(-1, 1), 'Sail'), 'Clew_Starboard': (sail_point(1, 1), 'Sail'),
+             'Yardarm_Port': (Vector((-3.25, YARD_Y, ya_z)), 'Yard'), 'Yardarm_Starboard': (Vector((3.25, YARD_Y, ya_z)), 'Yard'),
+             'SheetPoint_Port': (Vector((-1.83, DECK_Y + 0.62, 0.5)), None), 'SheetPoint_Starboard': (Vector((1.83, DECK_Y + 0.62, 0.5)), None),
+             'BracePoint_Port': (Vector((-(bp.x - 0.07), bp.y + 0.66, bp.z)), None), 'BracePoint_Starboard': (Vector((bp.x - 0.07, bp.y + 0.66, bp.z)), None),
+             'AnchorCablePoint': (Vector((1.62, ytop(-5.1) + 0.1, -5.1)), None)}
+    for name, (p, par) in marks.items():
         e = bpy.data.objects.new(name, None); e.empty_display_size = 0.2
         if par: e.parent = OBJS[par][0]; e.location = conv(p - Vector((0, YARD_Y, MAST_Z)))
         else: e.location = conv(p)
         bpy.context.scene.collection.objects.link(e)
+    for side in ('Port', 'Starboard'):
+        rope_object('Rope_Sheet_' + side, marks['SheetPoint_' + side][0], marks['Clew_' + side][0])
+        rope_object('Rope_Brace_' + side, marks['BracePoint_' + side][0], marks['Yardarm_' + side][0])
     for name, (p, yaw) in STATIONS.items():
         e = bpy.data.objects.new(name, None); e.empty_display_size = 0.3
         e.location = conv(p); e.rotation_euler = (0, 0, radians(yaw))

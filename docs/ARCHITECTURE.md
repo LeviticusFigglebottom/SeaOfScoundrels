@@ -55,10 +55,11 @@ Read-only: `speed_knots()`, `forward_speed()`, `water_level` (0..1 hold flooding
 Damage: `apply_hull_damage(world_pos: Vector3, radius: float)` creates a hole; `patch_hole(index)`; `bail(amount)`.
 
 ### Sloop dimensions (shared by physics and art)
-- Length on deck 13 m (bow at z = -6.5, stern at z = +6.5), beam 4.4 m, draught 1.2 m, main deck at y = +1.1, quarterdeck (aft of z = +3) at y = +2.0, hold floor at y = -0.6.
+- Length on deck 13 m (bow at z = -6.5, stern at z = +6.5), beam 4.4 m, draught 1.2 m, main deck at y = +1.1, quarterdeck (aft of z = +3) at y = +2.0, hold floor at y = -0.85 (1.85 m headroom).
 - One mast at z = -1.0, 14 m tall above deck, one square mainsail (yard 6.5 m wide at y = +9), bowsprit.
 - Mass about 9000 kg.
-- Station markers (Node3D or glTF empties, names exact): `Station_Helm` (0, 2.0, 5.2), `Station_SailLength` (-1.9, 1.1, 0.5), `Station_SailAngle` (1.9, 1.1, 0.5), `Station_Anchor` (0, 1.1, -4.6), `Station_CannonPort` (-2.0, 1.1, -1.5) facing -X, `Station_CannonStarboard` (2.0, 1.1, -1.5) facing +X, `Station_MapTable` (0, -0.6, 2.5), `Station_Ladder_Port` (-2.3, 0, 2.0), `Station_Ladder_Starboard` (2.3, 0, 2.0).
+- Station markers (Node3D or glTF empties, names exact): `Station_Helm` (0, 2.0, 5.2), `Station_SailLength` (-1.9, 1.1, 0.5), `Station_SailAngle` (1.9, 1.1, 0.5), `Station_Anchor` (0, 1.1, -4.6), `Station_CannonPort` (-2.0, 1.1, -1.5) facing -X, `Station_CannonStarboard` (2.0, 1.1, -1.5) facing +X, `Station_MapTable` (0, -0.85, 2.5), `Station_Bilge` (0, -0.85, -2.1), `Station_Ladder_Port` (-2.3, 0, 2.0), `Station_Ladder_Starboard` (2.3, 0, 2.0).
+- Code must read station positions, pivots and collision from the model's markers and `col_*` meshes, never from these numbers. Full node, material, damage (`HullPanel_NN`/`Hole_NN`/`HolePatch_NN`) and rope conventions: `docs/SHIP_ART.md`.
 - Model file: `assets/generated/ship/sloop.glb`. Meshes named `col_*` are collision-only convex pieces (hidden at runtime). The sail, yard, wheel, rudder, capstan and anchor are separate objects named `Sail`, `Yard`, `Wheel`, `Rudder`, `Capstan`, `Anchor` with origins at their pivots.
 
 ## Stations (`src/ship/station.gd`)
@@ -78,7 +79,7 @@ Integration rules for anything a pawn rides:
 - The body is in group `ship`, on layer 2, and its `collision_mask` must NOT include layer 3 (pawns), or a pawn can shove the hull.
 - Stations have an `Interactable` child (or one whose `target` is the station). `stand_point` is local to the station node.
 - Spawn with `pawn.board(ship, local_pos)`; AI brains set intent fields with `process_physics_priority < 0`.
-- Below deck the pawn auto-crouches (the sloop's hold has about 1.6 m of headroom; that is intended for a small ship).
+- The sloop's hold has 1.85 m of headroom; the pawn's auto-crouch remains as a fallback for low spaces.
 
 `Interactable extends Area3D` (`class_name Interactable`, `src/core/interactable.gd`): `prompt: String`, `signal interacted(pawn)`, `can_interact(pawn) -> bool`.
 
