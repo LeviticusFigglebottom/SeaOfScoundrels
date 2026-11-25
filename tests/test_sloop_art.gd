@@ -24,8 +24,10 @@ func test_names_and_stations() -> void:
 	check((-(s.get_node("Station_CannonStarboard") as Node3D).global_transform.basis.z).distance_to(Vector3.RIGHT) < 0.01, "starboard cannon station faces +X")
 	for n in ["Hull", "Sail", "Sail_Furled", "Yard", "Flag", "Wheel", "Rudder", "Capstan", "Anchor", "Cannon_Port", "Cannon_Starboard",
 			"Cannon_Port/Cannon_Port_Barrel", "Cannon_Starboard/Cannon_Starboard_Barrel", "Bell", "Bucket", "PlankStack", "HatchCover_Port",
-			"HatchCover_Starboard", "Lantern_Stern", "Lantern_Mast", "Lantern_Hold", "Hole_01", "Hole_10", "HolePatch_01", "HolePatch_10",
-			"Sail/Clew_Port", "Sail/Clew_Starboard", "MapTable", "Figurehead"]:
+			"HatchCover_Starboard", "Lantern_Stern", "Lantern_Mast", "Lantern_Hold", "Hole_01", "Hole_10", "HolePatch_01", "HolePatch_10", "HullPanel_01", "HullPanel_10",
+			"Sail/Clew_Port", "Sail/Clew_Starboard", "MapTable", "Figurehead", "Yard/Yardarm_Port", "Yard/Yardarm_Starboard", "SheetPoint_Port",
+			"SheetPoint_Starboard", "BracePoint_Port", "BracePoint_Starboard", "Rope_Sheet_Port", "Rope_Sheet_Starboard", "Rope_Brace_Port",
+			"Rope_Brace_Starboard", "Lantern_Helm", "Bucket_Deck", "Station_Bilge"]:
 		check(s.get_node_or_null(n) != null, "missing " + n)
 	check((s.get_node("Sail") as Node3D).position.distance_to(Vector3(0, 9, -1)) < 0.002, "Sail origin on the mast at the yard")
 	check((s.get_node("Yard") as Node3D).position.distance_to(Vector3(0, 9, -1)) < 0.002, "Yard origin on the mast")
@@ -34,6 +36,36 @@ func test_names_and_stations() -> void:
 	s.queue_free()
 
 const FLOOR := -0.85
+
+func test_materials_and_wind_weights() -> void:
+	var s := _load()
+	var names := {}
+	for n in s.find_children("*", "MeshInstance3D", true, false):
+		var m: Mesh = (n as MeshInstance3D).mesh
+		for i in m.get_surface_count():
+			names[m.surface_get_material(i).resource_name] = m.surface_get_material(i)
+	for want in ["mat_wood", "mat_paint", "mat_rope", "mat_iron", "mat_brass", "mat_lantern_glass", "mat_window_glass", "mat_canvas", "mat_canvas_back", "mat_cloth", "mat_flag"]:
+		check(names.has(want), "material " + want)
+	if names.has("mat_window_glass"):
+		check((names["mat_window_glass"] as BaseMaterial3D).transparency != BaseMaterial3D.TRANSPARENCY_DISABLED, "stern glazing is see-through")
+	for nm in ["Sail", "Flag"]:
+		var arr := (s.get_node(nm) as MeshInstance3D).mesh.surface_get_arrays(0)
+		check(arr[Mesh.ARRAY_TEX_UV2] != null, nm + " has wind weights in UV2")
+		if arr[Mesh.ARRAY_TEX_UV2] != null:
+			var lo := 1.0
+			var hi := 0.0
+			for v: Vector2 in arr[Mesh.ARRAY_TEX_UV2]:
+				lo = minf(lo, v.x)
+				hi = maxf(hi, v.x)
+			check(lo < 0.02 and hi > 0.9, "%s weights span 0..1 (%f..%f)" % [nm, lo, hi])
+	# a unit rope: local z from 0 to 1
+	var rope := s.get_node("Rope_Sheet_Port") as MeshInstance3D
+	var bb := rope.mesh.get_aabb()
+	check(absf(bb.position.z) < 0.01 and absf(bb.size.z - 1.0) < 0.01 and bb.size.x < 0.06, "rope is a unit cylinder along +Z: %s" % bb)
+	check(rope.global_position.distance_to((s.get_node("SheetPoint_Port") as Node3D).global_position) < 0.01, "sheet starts at its sheet point")
+	var tip := rope.global_transform * Vector3(0, 0, 1)
+	check(tip.distance_to((s.get_node("Sail/Clew_Port") as Node3D).global_position) < 0.02, "sheet ends at the clew")
+	s.queue_free()
 
 func _static_ship(s: Node3D, lift: float) -> StaticBody3D:
 	var body := StaticBody3D.new()
