@@ -20,6 +20,10 @@ Re-read this, ROADMAP.md, DECISIONS.md, ARCHITECTURE.md and the "Quality bar" in
 ## Next
 - Integrate ship + pawn + ocean + sky + island into the main scene; AI crewmate; combat and the Drowned; voyage loop; independent reviews of each flagship system.
 
+## Operational notes
+- The container restarted once (2026-11-25) and stopped every agent. Worktrees under `/home/user/ws-*` and `/opt/tools` survived that time, but only this branch is on the remote: agents must commit often, and anything not merged here is at risk if the container is reclaimed.
+- Stopped agents can be resumed by messaging their ids; their briefs live in the session, so if the session itself is lost, re-brief from ROADMAP.md, the Quality bar and the "In flight" list above.
+
 ## Known issues
 - No GPU here: frame times are unmeasured (DECISIONS D9). The ocean agent estimates 1.5-2.5 ms at 1080p on a GTX 1660 for high quality.
 - Nobody has listened to the audio except through analysis; the owner has a preview.
