@@ -107,7 +107,7 @@ CloudColumn cloud_column(vec2 xz) {
 	h = mix(h, 900.0 + 900.0 * big, heavy);
 	c.height = h;
 	c.k = mix(0.22, 0.07, deck);
-	c.relief = mix(25.0, 150.0, heavy) * (0.4 + 0.6 * deck);
+	c.relief = mix(25.0, 150.0, max(heavy, deck * 0.75));
 	return c;
 }
 
@@ -159,7 +159,7 @@ float cloud_sd(vec3 p, CloudColumn c, bool fine) {
 		// The tower is built of turrets: one more read at a much larger scale.
 		float turret = texture(cloud_volume, uvw * 0.31 + 0.17).r;
 		float lump = min(storm_cell.z * 0.24, 520.0);
-		cell = max(parts.x - (1.0 - turret) * lump - eat * 110.0,
+		cell = max(parts.x - (1.0 - turret) * lump - eat * 60.0,
 				parts.y - (1.0 - turret) * 130.0 - eat * 90.0);
 	}
 	return max(d, cell);

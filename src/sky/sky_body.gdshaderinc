@@ -71,7 +71,7 @@ uniform float ray_strength = 0.0;
 
 const float CURVE = 2.0e-6;     // 1 / (2 * 250 km): a small planet, so clouds sink behind the horizon
 const float FAR = 27000.0;
-const float SIGMA = 1.0 / 110.0; // extinction per metre at full density: clouds are near solid
+const float SIGMA = 1.0 / 80.0;  // extinction per metre at full density: clouds are near solid
 
 #if CLOUD_QUALITY == 0
 const int STEPS = 16;
@@ -157,20 +157,20 @@ vec2 milky_way(vec3 sd) {
 	return vec2(glow, band);
 }
 
-// Cirrus: thin streaks on a high, strongly curved shell, so they stay streaks
-// near the horizon instead of fanning out from a vanishing point.
+// Cirrus: thin streaks high above. They are laid out on an equal-angle map of
+// the sky dome (distance from the zenith = angle), not on a flat plane: on a
+// plane, parallel streaks race to a vanishing point and fan out like rays at a
+// wide field of view; on this map they stay evenly spaced arcs to the horizon.
 float cirrus_layer(vec3 d) {
-	const float R = 30.0; // shell: observer 30 units from the centre, layer 6 above
-	const float H = 6.0;
-	float t = -R * d.y + sqrt(R * R * d.y * d.y + 2.0 * R * H + H * H);
-	vec2 p = d.xz * t / H * 2.4;
-	// Bend the streaks with a slow warp so none of them is a straight ray.
-	vec2 warp = texture(noise_tex, p * 0.045 + cirrus_scroll * 0.3).ag - 0.5;
-	vec2 cp = vec2(p.x * 0.8 + p.y * 0.6, p.y * 0.8 - p.x * 0.6) + warp * 0.9;
-	float wisp = texture(noise_tex, cp * vec2(0.09, 0.34) - cirrus_scroll).b;
-	float patches = texture(noise_tex, cp * 0.06 + 0.21 - cirrus_scroll * 0.5).a;
-	float c = smoothstep(0.6, 0.98, wisp) * smoothstep(0.45, 0.75, patches);
-	return c * smoothstep(0.06, 0.3, d.y);
+	float zen = acos(clamp(d.y, -1.0, 1.0));
+	vec2 p = d.xz / max(length(d.xz), 0.0001) * zen * 4.2;
+	// A slow warp bends them into hooks.
+	vec2 warp = texture(noise_tex, p * 0.05 + cirrus_scroll * 0.3).ag - 0.5;
+	vec2 cp = vec2(p.x * 0.8 + p.y * 0.6, p.y * 0.8 - p.x * 0.6) + warp * 1.1;
+	float wisp = texture(noise_tex, cp * vec2(0.085, 0.3) - cirrus_scroll).b;
+	float patches = texture(noise_tex, cp * 0.055 + 0.21 - cirrus_scroll * 0.5).a;
+	float c = smoothstep(0.6, 0.98, wisp) * smoothstep(0.45, 0.72, patches);
+	return c * smoothstep(0.05, 0.3, d.y);
 }
 
 // --- Weather layer ----------------------------------------------------------
@@ -238,6 +238,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	float s_dist = 0.0;
 	float s_thick = 0.0;
 	float s_belly = 0.0;
+	float s_deck = 0.0;
 	CloudColumn c;
 	vec3 p;
 	for (int i = 0; i < steps; i++) {
@@ -285,7 +286,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 			float rc = length(p.xz - storm_cell.xy) / (storm_cell.z * 1.4);
 			in_cell = storm_cell.w * (1.0 - smoothstep(0.75, 1.0, rc));
 		}
-		float dt = clamp(t * 0.016, 45.0, 420.0);
+		float dt = clamp(t * 0.03, 80.0, 520.0);
 		if (lit_left > 0) {
 			lit_left -= 1;
 			direct = light_steps > 0 ? light_march(p, light_steps) : 1.0;
@@ -304,6 +305,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 		vec3 to_flash = p - flash_pos;
 		s_flash += w * exp(-dot(to_flash, to_flash) / 5.0e5) * (0.35 + 0.65 * dens);
 		s_dist += w * t;
+		s_deck += w * clamp((0.22 - c.k) / 0.15, 0.0, 1.0);
 		s_thick += w * clamp(c.height * sqrt(clamp(c.m / c.k, 0.0, 1.0)) / 1500.0, 0.0, 1.0);
 		trans *= 1.0 - alpha;
 		t += dt;
@@ -327,7 +329,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	tone *= smoothstep(0.03, 0.3, height);
 	tone *= light_amount;
 	// A thunderhead is darkest at its base and catches more light up in the anvil.
-	vec3 lit = mix(cloud_lit_color, storm_lit_color * (0.8 + 0.5 * smoothstep(0.35, 1.0, height) * (1.0 - storm)), st);
+	vec3 lit = mix(cloud_lit_color, storm_lit_color * (0.36 + 0.6 * smoothstep(0.45, 1.0, height) * (1.0 - storm) + 0.64 * storm), st);
 	vec3 shade = mix(cloud_shade_color, storm_shade_color, st);
 	vec3 col = mix(shade, lit, tone);
 	col *= mix(0.86, 1.04, smoothstep(0.0, 0.9, height));
@@ -338,7 +340,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	// recesses down to the near-black bellies of the rolls.
 	float belly = s_belly * inv;
 	float hang = 0.5 * smoothstep(0.3, 0.4, belly) + 0.5 * smoothstep(0.55, 0.66, belly);
-	col *= mix(1.0, mix(1.45, 0.62, hang), st * (1.0 - tone));
+	col *= mix(1.0, mix(1.4, 0.64, hang), max(st, s_deck * inv * 0.8) * (1.0 - tone));
 	// Silver lining: thin edges between the eye and the light glow.
 	float vl = max(dot(rd, light_dir), 0.0);
 	float thin = trans + (1.0 - trans) * direct * 0.35;
@@ -347,7 +349,9 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	col += flash_color * flash * s_flash * inv * 1.8;
 
 	// Aerial perspective: far clouds take the horizon's colour, then dissolve.
-	float fog = 1.0 - exp(-dist * cloud_fog);
+	// A storm seen from fair weather keeps its darkness: it is the subject.
+	float fog = (1.0 - exp(-dist * cloud_fog)) * (1.0 - 0.6 * st * (1.0 - storm));
+	col *= 1.0 - 0.3 * st * (1.0 - storm);
 	col = mix(col, haze, fog);
 	cover *= 1.0 - smoothstep(FAR * 0.72, FAR * 0.98, dist);
 	return vec4(col * cover, cover);
@@ -453,7 +457,7 @@ void sky() {
 				vec3 stars = star_field(sd, TIME, 0.2 + 0.25 * mw.y);
 				stars += star_field(sd * 1.9 + 4.0, TIME, 0.1 + 0.5 * mw.y) * (0.25 + 0.5 * mw.y);
 				col += stars * star_intensity * horizon_fade;
-				col += mix(vec3(0.16, 0.22, 0.42), vec3(0.42, 0.36, 0.38), mw.x) * mw.x * 0.55
+				col += mix(vec3(0.16, 0.22, 0.42), vec3(0.42, 0.36, 0.38), mw.x) * mw.x * 0.16
 						* star_intensity * horizon_fade;
 				if (meteor_head.w > 0.0) {
 					// Distance to the streak's segment on the unit sphere.

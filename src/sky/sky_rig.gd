@@ -323,7 +323,7 @@ func _update_curtain(flash_here: float) -> void:
 			Vector3(Weather.storm_center.x, height * 0.5 - 4.0, Weather.storm_center.z))
 	var m := _curtain_material
 	var wind: float = Weather.wind_vector().length()
-	m.set_shader_parameter(&"tint", _lin(palette["storm_cloud_shade"]).lerp(_lin(palette["horizon"]), 0.22))
+	m.set_shader_parameter(&"tint", _lin(palette["storm_cloud_shade"]).lerp(_lin(palette["horizon"]), 0.1))
 	m.set_shader_parameter(&"opacity", 0.9 * cell_rain)
 	m.set_shader_parameter(&"around", maxf(roundf(radius * TAU / 420.0), 6.0))
 	m.set_shader_parameter(&"slant", clampf(wind * 0.02, 0.0, 0.6))
@@ -462,7 +462,7 @@ func _update_sky(p: Dictionary, sun_dir: Vector3, moon_dir: Vector3,
 	m.set_shader_parameter(&"flash_pos", Vector3(bolt_at.x,
 			base_alt + (900.0 if Weather.lightning_is_sheet else 420.0), bolt_at.z))
 	m.set_shader_parameter(&"flash_color", _lin(p["flash_color"]))
-	m.set_shader_parameter(&"cirrus_amount", 0.34 * (1.0 - smoothstep(0.5, 0.95, cover)))
+	m.set_shader_parameter(&"cirrus_amount", 0.26 * (1.0 - smoothstep(0.5, 0.95, cover)))
 	var drift: Vector2 = Weather.cloud_offset
 	m.set_shader_parameter(&"cirrus_scroll", _wrap(
 			Vector2(drift.x * 0.8 + drift.y * 0.6, drift.y * 0.8 - drift.x * 0.6) / 90000.0))

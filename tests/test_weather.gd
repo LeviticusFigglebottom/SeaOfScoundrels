@@ -140,8 +140,8 @@ func test_clouds_drift_downwind() -> void:
 	Weather.advance(2.0)
 	var moved := Weather.cloud_offset - before
 	# The offset wraps; take the short way round.
-	var wrap: float = Weather.CLOUD_WRAP
-	moved = Vector2(fposmod(moved.x + wrap * 0.5, wrap) - wrap * 0.5, fposmod(moved.y + wrap * 0.5, wrap) - wrap * 0.5)
+	var period: float = Weather.CLOUD_WRAP
+	moved = Vector2(fposmod(moved.x + period * 0.5, period) - period * 0.5, fposmod(moved.y + period * 0.5, period) - period * 0.5)
 	# Clouds ride the gusty wind, so allow for the gust of the moment.
 	check_near(moved.x, 20.0, 20.0 * Weather.gustiness() * 1.5, "clouds move with the wind along +X")
 	check(absf(moved.y) < 2.0, "and barely across it")

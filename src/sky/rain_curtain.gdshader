@@ -24,5 +24,5 @@ void fragment() {
 	float top = smoothstep(0.0, 0.16, UV.y);
 	float foot = mix(0.75, 1.0, smoothstep(1.0, 0.8, UV.y));
 	ALBEDO = tint + vec3(0.7, 0.8, 1.0) * flash * 0.25;
-	ALPHA = opacity * top * foot * (0.5 + 0.5 * streaks) * smoothstep(0.0, 0.45, facing);
+	ALPHA = opacity * top * foot * (0.72 + 0.28 * streaks) * smoothstep(0.0, 0.35, facing);
 }
