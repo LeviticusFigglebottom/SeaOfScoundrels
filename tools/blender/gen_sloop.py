@@ -577,7 +577,7 @@ MATS = {}
 # Stable material names for game shaders (wetness, wind, night glow): every surface in both glbs uses one of these.
 MAT_NAMES = {'wood': 'mat_wood', 'paint': 'mat_paint', 'rope': 'mat_rope', 'iron': 'mat_iron', 'brass': 'mat_brass', 'glass': 'mat_lantern_glass',
              'window': 'mat_window_glass', 'canvas': 'mat_canvas', 'canvas_back': 'mat_canvas_back', 'cloth': 'mat_cloth', 'flag': 'mat_flag',
-             'canvas_lod': 'mat_canvas_lod', 'col': 'mat_collision'}
+             'canvas_lod': 'mat_canvas_lod', 'canvas_back_lod': 'mat_canvas_back_lod', 'col': 'mat_collision'}
 
 def make_materials():
     rs = np.random.RandomState(SEED)
@@ -617,7 +617,8 @@ def make_materials():
     mk('flag', flag, 0.9, two=True)
     mk('col', None, 1.0)
     small = sail_px.reshape(128, 4, 128, 4, 3).mean(axis=(1, 3))
-    mk('canvas_lod', make_image('sloop_sail_lod', small), 0.95, two=True)
+    mk('canvas_lod', make_image('sloop_sail_lod', small), 0.95)
+    mk('canvas_back_lod', make_image('sloop_sail_back_lod', small * 0.42 + np.array([1.0, 0.95, 0.80]) * 0.60), 0.95, emit=0.22, emit_col=(1.0, 0.86, 0.6, 1))
 
 # ---------------------------------------------------------------- object creation
 def conv(p):
@@ -1906,7 +1907,8 @@ def build_lod(outdir):
     ids = [[sl.v(sail_point(-1 + 2 * i / nx, j / ny)) for i in range(nx + 1)] for j in range(ny + 1)]
     for j in range(ny):
         for i in range(nx):
-            sl.f([ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]], 'canvas_lod', C_WHITE, [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)], True)
+            q = [ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]]; uq = [(i / nx, 1 - j / ny), ((i + 1) / nx, 1 - j / ny), ((i + 1) / nx, 1 - (j + 1) / ny), (i / nx, 1 - (j + 1) / ny)]
+            sl.f(q, 'canvas_lod', C_WHITE, uq, True); sl.f(q[::-1], 'canvas_back_lod', C_WHITE, uq[::-1], True)
     build(sl)
     sf = MB('Sail_Furled', (0, YARD_Y, MAST_Z)); tube(sf, [(-3.0, y - 0.32, z), (0, y - 0.36, z), (3.0, y - 0.32, z)], [0.14, 0.22, 0.14], 5, 'paint', srgb('#e6dbbd'), mode='flat'); build(sf)
     fl = MB('Flag', (0, MAST_TOP - 0.12, MAST_Z)); build_flag(fl, 6, 2); build(fl)
