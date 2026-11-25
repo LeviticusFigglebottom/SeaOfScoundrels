@@ -26,8 +26,8 @@ render_mode blend_mix, unshaded;
 uniform vec2 center;
 uniform float tile = 256.0;
 uniform float rate = 0.2;
-uniform float crest_start = 0.87;
-uniform float crest_full = 0.46;
+uniform float crest_start = 0.91;
+uniform float crest_full = 0.66;
 void fragment() {
 	// the copy of this texel nearest the camera
 	vec2 rest = center + (fract(UV - center / tile + 0.5) - 0.5) * tile;

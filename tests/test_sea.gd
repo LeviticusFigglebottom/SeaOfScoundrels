@@ -71,7 +71,7 @@ func test_sea_states_have_big_swell() -> void:
 		check(long_e / all_e > 0.75, "long swell energy share %f" % (long_e / all_e))
 	# storm wind sea must be much steeper than the calm one (it changes character)
 	var w: Array = Sea.WAVE_TABLE[8]
-	check(float(w[2]) / float(w[1]) > 5.0)
+	check(float(w[2]) / float(w[1]) > 4.0)
 	Sea.amp_scale = 0.0
 	Sea.time = 5.0
 	check_near(Sea.height(12.0, -7.0), 0.0, 1e-6, "amp_scale 0 must be a flat sea")

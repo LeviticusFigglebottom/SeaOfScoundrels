@@ -31,8 +31,8 @@ uniform float sss_strength = 1.0;
 uniform float reflectivity = 0.75;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.95, 0.98, 0.96);
-uniform float foam_crest_start = 0.88; // Jacobian below this starts to foam
-uniform float foam_crest_full = 0.62;
+uniform float foam_crest_start = 0.91; // Jacobian below this starts to foam
+uniform float foam_crest_full = 0.66;
 uniform float foam_scale = 0.085;
 uniform float shore_foam_depth = 1.3;
 group_uniforms sun;
@@ -191,7 +191,7 @@ void fragment() {
 	float ripple_amt = mix(0.14, 0.27, storm) * mix(0.45, 1.5, gust);
 	// calm seas get their swell slopes exaggerated for shading only, so long
 	// low waves still read as forms (no height is added)
-	float exag = mix(1.8, 1.0, smoothstep(0.0, 0.6, storm));
+	float exag = mix(2.6, 1.0, smoothstep(0.0, 0.7, storm));
 	vec3 n_shade = normalize(vec3(n_geo.x * exag, n_geo.y, n_geo.z * exag));
 	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
 	float splash = 0.0;
@@ -266,9 +266,12 @@ void fragment() {
 		float back_lit = pow(max(dot(V, -normalize(L + N * 0.35)), 0.0), 3.0);
 		// slopes turned to the light are brighter, troughs sink into the deep colour
 		float slope_light = dot(n_shade, normalize(L + vec3(0.0, 0.6, 0.0)));
+		// relative tilt towards the light: reads even on long, low swell
+		float tilt = dot(n_shade.xz, normalize(L.xz + vec2(1e-4)));
+		float swell_shade = clamp(1.0 + tilt * mix(4.5, 1.2, storm), 0.6, 1.3);
 		float k = 0.08 + 0.34 * smoothstep(-0.9, 1.1, h_rel) + 0.30 * crest + 0.25 * facing * facing;
 		k *= mix(1.0, 0.15, smoothstep(100.0, 1200.0, dist));
-		vec3 body = mix(deep_color, scatter_color, clamp(k, 0.0, 1.0)) * light * mix(0.55, 1.25, smoothstep(0.78, 1.0, slope_light));
+		vec3 body = mix(deep_color, scatter_color, clamp(k, 0.0, 1.0)) * light * mix(0.55, 1.25, smoothstep(0.78, 1.0, slope_light)) * swell_shade;
 		// translucent crests: a steady glow, much stronger when the sun is behind the wave
 		float thin = clamp(crest + 0.6 * smoothstep(-0.3, 0.7, h_rel) * back_lit, 0.0, 1.0);
 		body += sss_color * sss_strength * (crest * light * 0.40 + thin * sun_light * 1.9 * back_lit) * (0.35 + 0.65 * facing);
@@ -336,7 +339,7 @@ void fragment() {
 		// wind streaks: standing foam in rough weather, drawn out downwind
 		vec2 wuv = vec2(dot(v_rest, wind_dir) * 0.004, dot(v_rest, vec2(-wind_dir.y, wind_dir.x)) * 0.021);
 		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
-		float standing = storm * smoothstep(0.42, 0.95, blot) * 0.45 * smoothstep(-0.5, 0.5, h_rel);
+		float standing = storm * storm * smoothstep(0.40, 0.92, blot) * 0.58 * smoothstep(-0.5, 0.5, h_rel);
 		crest_foam = max(crest_foam, standing);
 
 		// shoreline / intersection foam from the depth buffer
