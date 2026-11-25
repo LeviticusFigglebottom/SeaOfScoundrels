@@ -594,7 +594,7 @@ def hurdy_gurdy(f, n: int, rng, vel: float = 1.0, wheel: np.ndarray | None = Non
 		def bspec(k, fk, t):
 			return bp_shape(fk, 1700.0, 2.2) * lp_shape(fk, 4200.0, 2.0) / k ** 0.2
 
-		x += 0.5 * bz * additive(f, n, bspec, kmax=40)
+		x += 1.1 * bz * additive(f, n, bspec, kmax=40)
 	return x * 0.4 * vel
 
 

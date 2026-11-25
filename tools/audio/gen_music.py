@@ -474,7 +474,7 @@ def play_hurdy_drone(song, track, n_total, beat_s, rng):
 						buzz[j0:j1] += (1.0 if ch == "B" else 0.5) * np.exp(-u / 0.35) * np.clip(u / 0.06, 0, 1)
 	wheel = S.smooth(wheel, 0.25)
 	wheel[:S.sec(0.02)] *= np.linspace(0, 1, S.sec(0.02))
-	wheel = wheel * (1.0 + 0.25 * np.minimum(buzz, 1.0))  # the crank jerk that makes the buzz
+	wheel = wheel * (1.0 + 0.4 * np.minimum(buzz, 1.0))  # the crank jerk that makes the buzz
 	droop = track.get("droop", 0.0)
 	bend = 2.0 ** (-droop / 12.0 * np.clip(t / (n_total / S.SR), 0, 1) ** 2) if droop else 1.0
 	out = np.zeros(n)
