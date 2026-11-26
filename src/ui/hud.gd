@@ -24,7 +24,7 @@ const ITEM_SLICE_HINTS := {
 	&"boarding_axe": "Heavy cleave | Guard crush | RMB parry",
 	&"pistol": "Flintlock shot | RMB aim",
 	&"blunderbuss": "6-pellet spread | Short range | RMB aim",
-	&"compass": "True North | Hold RMB count paces",
+	&"compass": "True North / Chart Pin | LMB track | RMB paces",
 	&"spyglass": "RMB zoom & sight horizon",
 	&"lantern": "LMB toggle flame | RMB raise",
 	&"map": "Treasure chart | RMB read",
@@ -228,6 +228,8 @@ func _connect_signals() -> void:
 			inventory.shanty_instrument_changed.connect(_on_tool_state_changed)
 		if not inventory.compass_pace_counted.is_connected(_on_compass_pace_counted):
 			inventory.compass_pace_counted.connect(_on_compass_pace_counted)
+		if not inventory.compass_mode_changed.is_connected(_on_tool_state_changed):
+			inventory.compass_mode_changed.connect(_on_tool_state_changed)
 		if not inventory.grog_toast_raised.is_connected(_on_grog_toast_raised):
 			inventory.grog_toast_raised.connect(_on_grog_toast_raised)
 	if combat != null:
@@ -270,6 +272,8 @@ func _disconnect_signals() -> void:
 			inventory.shanty_instrument_changed.disconnect(_on_tool_state_changed)
 		if inventory.compass_pace_counted.is_connected(_on_compass_pace_counted):
 			inventory.compass_pace_counted.disconnect(_on_compass_pace_counted)
+		if inventory.compass_mode_changed.is_connected(_on_tool_state_changed):
+			inventory.compass_mode_changed.disconnect(_on_tool_state_changed)
 		if inventory.grog_toast_raised.is_connected(_on_grog_toast_raised):
 			inventory.grog_toast_raised.disconnect(_on_grog_toast_raised)
 	if combat != null and is_instance_valid(combat):
@@ -1484,6 +1488,9 @@ func _refresh_tool_chip() -> void:
 			&"harpoon":
 				title = "Bow Harpoon"
 				meta = "[Mouse/WASD] Aim | [LMB] Fire | [Hold RMB] Reel | [R] Release | [F] Leave"
+			&"rowboat_oars":
+				title = "Rowboat Oars"
+				meta = "[A/D] Stroke Port/Stbd | [W] Surge | [S] Brake | [F] Stand"
 			&"map_table":
 				title = "Map Table"
 				meta = "[WASD] Pan | [Space] Pin | [F] Leave"
@@ -1513,7 +1520,18 @@ func _refresh_tool_chip() -> void:
 			&"shovel":
 				meta = "[LMB] Dig Treasure"
 			&"compass":
-				if inventory.is_compass_pacing():
+				var pin_summary := inventory.get_compass_pin_summary()
+				if pin_summary != "":
+					var mode_tag := "Compass [Pin]" if inventory.compass_pin_mode else "Compass"
+					var lmb_hint := "[LMB] True North" if inventory.compass_pin_mode else "[LMB] Track Pin"
+					if inventory.is_compass_pacing():
+						meta = "%s | %s | Pace %d %s | %s" % [
+							mode_tag, pin_summary, inventory.get_compass_paces(),
+							inventory.get_compass_heading_label(), lmb_hint,
+						]
+					else:
+						meta = "%s | %s | %s | [RMB] Pace" % [mode_tag, pin_summary, lmb_hint]
+				elif inventory.is_compass_pacing():
 					meta = "Compass | %d paces (%s)" % [inventory.get_compass_paces(), inventory.get_compass_heading_label()]
 				else:
 					meta = "[Hold RMB] Raise & Count Paces"

@@ -182,6 +182,7 @@ var _stations_by_kind: Dictionary = {}  # StringName -> Array[Station]
 var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard" / &"port_aft" / &"starboard_aft") -> Dictionary state
 var _harpoons: Dictionary = {}  # StringName (&"port" / &"starboard") -> ShipHarpoon
 var _harpoon_primary_was: Dictionary = {}  # StringName -> bool
+var _supply_barrels: ShipSupplyBarrels = null
 
 var _sink_timer: float = 0.0
 var _sink_list_dir: float = 1.0
@@ -408,6 +409,7 @@ func _exit_tree() -> void:
 	cabin_furnishings = null
 	_harpoons.clear()
 	_harpoon_primary_was.clear()
+	_supply_barrels = null
 	_lantern_glass_mats.clear()
 	_window_mats.clear()
 	_lantern_lights.clear()
@@ -610,7 +612,7 @@ func _build_harpoons() -> void:
 			"Harpoon_Port",
 			"Station_HarpoonPort_Node",
 			"Man port harpoon",
-			Vector3(-1.93, 1.96, -5.70) if is_brig else Vector3(-1.46, 1.68, -4.34),
+			Vector3(-1.93, 1.96, -5.70) if is_brig else Vector3(-1.43, 1.70, -4.46),
 			0.26,
 		],
 		[
@@ -618,7 +620,7 @@ func _build_harpoons() -> void:
 			"Harpoon_Starboard",
 			"Station_HarpoonStarboard_Node",
 			"Man starboard harpoon",
-			Vector3(1.93, 1.96, -5.70) if is_brig else Vector3(1.46, 1.68, -4.34),
+			Vector3(1.93, 1.96, -5.70) if is_brig else Vector3(1.43, 1.70, -4.46),
 			-0.26,
 		],
 	]
@@ -1215,6 +1217,31 @@ func _build_deck_extras() -> void:
 		supplies_taken.emit(pawn)
 	)
 	add_child(supply_it)
+
+	_build_supply_barrels()
+
+
+func _build_supply_barrels() -> void:
+	var sb := ShipSupplyBarrels.new()
+	sb.name = "ShipSupplyBarrels"
+	sb.ship = self
+	sb.visual_scale = hull_scale
+	sb.max_cannonballs = MAX_CANNONBALLS
+	sb.max_planks = MAX_PLANKS
+	add_child(sb)
+	_supply_barrels = sb
+
+
+## Return the lower-deck sculpted ShipSupplyBarrels cluster (or null).
+func get_supply_barrels() -> ShipSupplyBarrels:
+	if _supply_barrels != null and is_instance_valid(_supply_barrels):
+		return _supply_barrels
+	return null
+
+
+func _sync_supply_barrels() -> void:
+	if _supply_barrels != null and is_instance_valid(_supply_barrels):
+		_supply_barrels.sync_fill_visuals()
 
 
 func _setup_sail_shaders() -> void:
@@ -2115,6 +2142,7 @@ func restock_supplies() -> void:
 		return
 	cannonballs_remaining = MAX_CANNONBALLS
 	planks_remaining = MAX_PLANKS
+	_sync_supply_barrels()
 
 
 ## Apply sidegrade multipliers from Economy.get_ship_modifiers(profile).
@@ -2561,6 +2589,7 @@ func patch_hole(index: int) -> bool:
 		return false
 	if planks_remaining > 0:
 		planks_remaining -= 1
+		_sync_supply_barrels()
 	slot["patched"] = true
 	slot["severity"] = 0.0
 	_sync_hole_visuals(slot)
@@ -2665,6 +2694,7 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	if carriage == null:
 		return null
 	cannonballs_remaining -= 1
+	_sync_supply_barrels()
 	c["reload"] = CANNON_RELOAD_TIME * reload_modifier
 	c["recoil"] = 0.34
 
@@ -4223,8 +4253,12 @@ func apply_net_state(state: Dictionary) -> void:
 	anchor_progress = float(state.get("anchor_progress", anchor_progress))
 	water_level = float(state.get("water_level", water_level))
 	is_sinking = bool(state.get("is_sinking", is_sinking))
+	var prev_balls := cannonballs_remaining
+	var prev_planks := planks_remaining
 	cannonballs_remaining = int(state.get("cannonballs", cannonballs_remaining))
 	planks_remaining = int(state.get("planks", planks_remaining))
+	if cannonballs_remaining != prev_balls or planks_remaining != prev_planks:
+		_sync_supply_barrels()
 	sail_damage_timer = float(state.get("sail_damage_timer", sail_damage_timer))
 	if state.has("cannon_ordnance"):
 		var ord_sn := StringName(String(state["cannon_ordnance"]))

@@ -75,6 +75,7 @@ var active_sharks: Array[Shark] = []
 var active_leviathans: Array[Leviathan] = []
 var current_music_mood: StringName = &""
 var sea_soundscape: SeaSoundscape = null
+var player_rowboat: Rowboat = null
 var active_shot_mode: String = ""
 
 var _entities_root: Node3D = null
@@ -205,6 +206,8 @@ static func _drain_static_visual_caches() -> void:
 	CaptainCabinFurnishings.clear_shared_cache()
 	WindRibbons.clear_shared_cache()
 	ShipHarpoon.clear_shared_cache()
+	ShipSupplyBarrels.clear_shared_cache()
+	Rowboat.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
 	Leviathan.clear_shared_cache()
@@ -562,7 +565,43 @@ func _build_player_ship() -> void:
 		add_child(sea_soundscape)
 	sea_soundscape.bind_ship(player_ship)
 
+	_mount_player_rowboat(player_ship)
+
 	Net.register_replicated_ship(&"player_sloop", player_ship)
+
+
+func _mount_player_rowboat(target_ship: Ship) -> void:
+	if target_ship == null or not is_instance_valid(target_ship):
+		return
+	if player_rowboat == null or not is_instance_valid(player_rowboat):
+		player_rowboat = Rowboat.new()
+		player_rowboat.name = "PlayerRowboat"
+		add_child(player_rowboat)
+		player_rowboat.launched.connect(_on_player_rowboat_launched)
+		player_rowboat.docked.connect(_on_player_rowboat_docked)
+		player_rowboat.attach_to_ship(target_ship)
+	elif player_rowboat.is_docked():
+		player_rowboat.attach_to_ship(target_ship)
+	else:
+		player_rowboat.mother_ship = target_ship
+
+
+func _on_player_rowboat_launched(_by_pawn: Node) -> void:
+	if not Net.is_host():
+		return
+	for br in crew_brains:
+		if br != null and is_instance_valid(br):
+			if br.notify_rowboat_launched():
+				return
+
+
+func _on_player_rowboat_docked(_by_pawn: Node) -> void:
+	if not Net.is_host():
+		return
+	for br in crew_brains:
+		if br != null and is_instance_valid(br):
+			if br.notify_rowboat_docked():
+				return
 
 
 func _resolve_ship_scene(cls: StringName) -> PackedScene:
@@ -971,6 +1010,7 @@ func _build_player_and_crew() -> void:
 	inventory = Inventory.new()
 	inventory.name = "Inventory"
 	inventory.input_enabled = (active_shot_mode == "")
+	inventory.map_table = map_table
 	player_pawn.add_child(inventory)
 	inventory.bind(player_pawn, player_controller, player_combat, p_cv)
 
@@ -2682,6 +2722,9 @@ func _swap_player_ship_class(cls: StringName) -> void:
 		hud.ship = player_ship
 	if sea_soundscape != null and is_instance_valid(sea_soundscape):
 		sea_soundscape.bind_ship(player_ship)
+	_mount_player_rowboat(player_ship)
+	if inventory != null and is_instance_valid(inventory):
+		inventory.map_table = map_table
 	if shipwright_menu != null:
 		shipwright_menu.ship = player_ship
 		shipwright_menu.map_table = map_table

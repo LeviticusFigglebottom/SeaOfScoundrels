@@ -80,6 +80,7 @@ var _jump_was_down: bool = false
 
 
 func _enter_tree() -> void:
+	add_to_group(&"map_tables")
 	if _surface_mat != null and _viewport != null and is_instance_valid(_viewport):
 		var vp_tex := _viewport.get_texture()
 		_surface_mat.albedo_texture = vp_tex
@@ -198,6 +199,18 @@ func toggle_marker_at(world_pos: Vector3, toggle_radius_m: float = PIN_TOGGLE_RA
 func clear_markers() -> void:
 	markers.clear()
 	_dirty = true
+
+
+## True when at least one player-placed chart pin marker is active.
+func has_active_pin() -> bool:
+	return not markers.is_empty()
+
+
+## Return the newest player-placed chart pin world position, or Vector3.ZERO when unset.
+func get_active_pin() -> Vector3:
+	if markers.is_empty():
+		return Vector3.ZERO
+	return markers[markers.size() - 1]
 
 
 ## Format the 16-point compass bearing and horizontal distance between two world positions.

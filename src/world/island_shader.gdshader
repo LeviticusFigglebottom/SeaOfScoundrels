@@ -308,7 +308,7 @@ void fragment() {
 	// --- Elevation bands (deep seabed -> shallow -> wet sand -> dry sand -> lush grass) ---
 	float t_shallow = smoothstep(-5.4, -1.5, h + (macro_n - 0.5) * 1.15);
 	float t_wet_in = smoothstep(-0.48, 0.08, h + (brush_n - 0.5) * 0.18);
-	float t_dry_in = smoothstep(0.62, 1.02, h + (brush_n - 0.5) * 0.22);
+	float t_dry_in = smoothstep(0.68, 1.24, h + (brush_n - 0.5) * 0.24);
 	float t_grass_in = smoothstep(2.25, 3.35, h_org + (tussock_n - 0.5) * 0.55);
 
 	vec3 col_deep = deep_seabed_color * mix(0.84, 1.16, brush_n);
@@ -413,8 +413,8 @@ void fragment() {
 	// Summit rock respects flat highland jungle plateaus on Wave 24 massive islands (only exposing
 	// rock on sloped ridges or high alpine crests, while volcanic calderas bare out lower).
 	float cliff_ny = smooth_n.y;
-	float slope_jit = (macro_n - 0.5) * 0.14 + (brush_n - 0.5) * 0.17 + (tussock_n - 0.5) * 0.09;
-	float slope_cliff = smoothstep(0.80, 0.48, cliff_ny + slope_jit);
+	float slope_jit = (macro_n - 0.5) * 0.13 + (brush_n - 0.5) * 0.16 + (tussock_n - 0.5) * 0.11 + (grain_n - 0.5) * 0.05;
+	float slope_cliff = smoothstep(0.77, 0.50, cliff_ny + slope_jit);
 	float summit_lo = mix(17.0, 34.0, lush_jungle_amount) - volc * 6.0;
 	float summit_hi = mix(29.0, 56.0, lush_jungle_amount) - volc * 8.0;
 	// Check both smooth_n.y and face_n.y so flat highland plateaus stay lush green while
@@ -475,9 +475,9 @@ void fragment() {
 	// past 430 m (560 m on volcanic calderas) for < +0.10 ms GPU cost!
 	float max_tex_dist = mix(440.0, 580.0, volc);
 	if (use_terrain_textures && v_cam_dist < max_tex_dist) {
-		float pbr_nrm_fade = smoothstep(mix(130.0, 260.0, volc), 26.0, v_cam_dist);
+		float pbr_nrm_fade = smoothstep(mix(165.0, 260.0, volc), 26.0, v_cam_dist);
 		float tex_nrm_str = terrain_tex_normal_strength * pbr_nrm_fade;
-		bool far_cliff = v_cam_dist > 145.0;
+		bool far_cliff = v_cam_dist > 165.0;
 		float path_edge_w = dirt_path_mask > 0.005
 			? smoothstep(0.08, 0.58, dirt_path_mask + (tussock_n - 0.5) * 0.24)
 			: 0.0;
@@ -497,15 +497,20 @@ void fragment() {
 		if (w_sand > 0.08) {
 			vec3 sa; vec3 sn_o;
 			// Directional trade-wind sand ripples: gentle 12-deg meander avoids cross-patch seams!
-			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.65, macro_n, brush_n, tex_nrm_str * 0.36, 0.21, sa, sn_o);
-			tex_alb_acc += mix(col_dry, sa, 0.62) * w_sand;
+			// Preserve water-darkened glistening wet shoreline sand (t_dry_in < 1) instead of overwriting with dry sand.
+			float sand_nrm_k = mix(0.12, 0.38, t_dry_in);
+			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.65, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.21, sa, sn_o);
+			vec3 wet_pbr = mix(col_wet, sa * vec3(0.64, 0.55, 0.40), 0.42);
+			vec3 dry_pbr = mix(col_dry, sa, 0.64);
+			tex_alb_acc += mix(wet_pbr, dry_pbr, t_dry_in) * w_sand;
 			tex_nrm_acc += sn_o * w_sand;
 			tex_w_acc += w_sand;
 		}
 		if (w_grass > 0.08) {
 			vec3 ga; vec3 gn_o;
-			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 0.82, 0.645, ga, gn_o);
-			tex_alb_acc += (ga * grass_tint) * w_grass;
+			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 0.88, 0.645, ga, gn_o);
+			vec3 ga_rich = pow(max(ga, vec3(0.001)), vec3(1.07)) * vec3(1.04, 1.06, 1.01);
+			tex_alb_acc += (ga_rich * grass_tint) * w_grass;
 			tex_nrm_acc += gn_o * w_grass;
 			tex_w_acc += w_grass;
 		}

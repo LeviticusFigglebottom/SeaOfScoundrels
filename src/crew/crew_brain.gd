@@ -102,6 +102,7 @@ const SPLASHED_COOLDOWN := 4.5
 const HARPOON_HAUL_COOLDOWN := 6.0
 const CHAINSHOT_HIT_COOLDOWN := 8.0
 const RUNNING_DARK_COOLDOWN := 6.0
+const ROWBOAT_COOLDOWN := 6.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -1729,6 +1730,26 @@ func comment_running_dark(lit: bool) -> bool:
 	if _callout_cooldowns.has(cd_key):
 		return false
 	_speak(category, {}, cd_key, RUNNING_DARK_COOLDOWN)
+	return true
+
+
+## Persona callout when the stern rowboat is launched onto the sea.
+func notify_rowboat_launched() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("rowboat_launched"):
+		return false
+	_speak(&"rowboat_launched", {}, "rowboat_launched", ROWBOAT_COOLDOWN)
+	return true
+
+
+## Persona callout when the stern rowboat is hoisted back onto the davits.
+func notify_rowboat_docked() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("rowboat_docked"):
+		return false
+	_speak(&"rowboat_docked", {}, "rowboat_docked", ROWBOAT_COOLDOWN)
 	return true
 
 

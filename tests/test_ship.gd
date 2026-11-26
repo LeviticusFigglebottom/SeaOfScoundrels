@@ -1878,3 +1878,210 @@ func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
 		"ShipHarpoon releases all static sculpted meshes, PBR materials, and WeakRef cache cleanly (0 leaks)")
 	check_eq(Cannonball._active_cannonballs, 0, "Cannonball _active_cannonballs returns to 0 on teardown")
 	check(Cannonball._ball_meshes.is_empty(), "Cannonball releases all ordnance mesh caches including chainshot & flare")
+
+
+func test_wave29_ship_supply_barrels_geometry_fill_tiers_and_one_press_restock() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(32.0, 0.0, 0.0)
+	await physics_frames(4)
+
+	# 1. Mount verification & backward-compatible deck SupplyBarrelsInteractable preserved.
+	var sb_sloop := sloop.get_supply_barrels()
+	var sb_brig := brig.get_supply_barrels()
+	check(sb_sloop != null, "Sloop mounts ShipSupplyBarrels via get_supply_barrels()")
+	check(sb_brig != null, "Brigantine mounts ShipSupplyBarrels via get_supply_barrels()")
+	check(sloop.get_node_or_null(^"SupplyBarrelsInteractable") != null,
+		"Sloop keeps existing deck SupplyBarrelsInteractable intact")
+	check(brig.get_node_or_null(^"SupplyBarrelsInteractable") != null,
+		"Brigantine keeps existing deck SupplyBarrelsInteractable intact")
+
+	# Exact port hold bulkhead placement scaled by ship_point + hull_scale!
+	var sloop_expect := {
+		"CannonballBarrel": Vector3(-1.22, -0.85, -0.15),
+		"PlankBarrel": Vector3(-1.26, -0.85, 0.72),
+		"RationsBarrel": Vector3(-1.22, -0.85, 1.58),
+	}
+	for bname: String in sloop_expect:
+		var bn := sb_sloop.get_node_or_null(bname) as Node3D
+		check(bn != null, "Sloop ShipSupplyBarrels builds %s" % bname)
+		if bn != null:
+			check(bn.position.is_equal_approx(sloop.ship_point(sloop_expect[bname] as Vector3)),
+				"Sloop %s positioned at exact port hold bulkhead coord" % bname)
+			check(bn.scale.is_equal_approx(Vector3.ONE * sloop.hull_scale),
+				"Sloop %s scales cleanly with hull_scale" % bname)
+
+	var brig_expect := {
+		"CannonballBarrel": Vector3(-1.58, -0.95, 0.72),
+		"PlankBarrel": Vector3(-1.60, -0.95, 1.62),
+		"RationsBarrel": Vector3(-1.56, -0.95, 2.52),
+	}
+	for bname: String in brig_expect:
+		var bn := sb_brig.get_node_or_null(bname) as Node3D
+		check(bn != null, "Brigantine ShipSupplyBarrels builds %s" % bname)
+		if bn != null:
+			check(bn.position.is_equal_approx(brig.ship_point(brig_expect[bname] as Vector3)),
+				"Brigantine %s positioned at exact port hold bulkhead coord" % bname)
+			check(bn.scale.is_equal_approx(Vector3.ONE * brig.hull_scale),
+				"Brigantine %s scales cleanly with hull_scale" % bname)
+
+	# 2. Zero PrimitiveMesh, finite unit normals, sRGB vertex-color + object-space triplanar PBR, >= 1,100 tris!
+	var raw_prims := 0
+	var bad_norms := 0
+	var bad_mats := 0
+	for n in sb_sloop.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_norms += 1
+		var mat := mi.material_override as StandardMaterial3D
+		if mat == null or not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
+				or not mat.uv1_triplanar or mat.uv1_world_triplanar \
+				or not mat.normal_enabled or mat.normal_texture == null or mat.roughness_texture == null:
+			bad_mats += 1
+	var barrel_tris := sb_sloop.get_triangle_count()
+	print("    Wave 29A ShipSupplyBarrels sculpted tris: %d" % barrel_tris)
+	check_eq(raw_prims, 0, "ShipSupplyBarrels contains ZERO PrimitiveMeshes")
+	check_eq(bad_norms, 0, "ShipSupplyBarrels normals are all finite unit vectors")
+	check_eq(bad_mats, 0, "ShipSupplyBarrels binds sRGB vertex colors + object-space triplanar BC7 PBR maps")
+	check(barrel_tris >= 1100, "ShipSupplyBarrels has rich sculpted geometry (%d >= 1100 tris)" % barrel_tris)
+
+	# 3. Tiered fill visuals (full -> mid -> low -> empty) & dynamic strict-ASCII prompts!
+	var ammo_it := sb_sloop.get_barrel_interactable(&"cannonball")
+	var plank_it := sb_sloop.get_barrel_interactable(&"planks")
+	var rations_it := sb_sloop.get_barrel_interactable(&"rations")
+	check(ammo_it != null and plank_it != null and rations_it != null,
+		"all three barrel Interactables are exposed via get_barrel_interactable()")
+	check_eq(rations_it.prompt, "Grab rations & grog (+25 HP)", "rations barrel prompt matches")
+
+	check_near(sb_sloop.get_fill_ratio(&"cannonball"), 1.0, 0.001, "full cannonball fill ratio == 1.0")
+	check_near(sb_sloop.get_fill_ratio(&"planks"), 1.0, 0.001, "full planks fill ratio == 1.0")
+	check(sb_sloop._ammo_fill_mi.visible and sb_sloop._plank_fill_mi.visible, "both fill meshes visible when full")
+	var ammo_y_full := sb_sloop._ammo_fill_mi.position.y
+	var plank_y_full := sb_sloop._plank_fill_mi.position.y
+	check_eq(ammo_it.prompt, "Take cannonballs (%d/%d)" % [Ship.MAX_CANNONBALLS, Ship.MAX_CANNONBALLS],
+		"full cannonball prompt reflects full stock")
+
+	# Mid tier (~50%)
+	sloop.cannonballs_remaining = floori(float(Ship.MAX_CANNONBALLS) * 0.5)
+	sloop.planks_remaining = floori(float(Ship.MAX_PLANKS) * 0.5)
+	sb_sloop.sync_fill_visuals()
+	var ammo_y_mid := sb_sloop._ammo_fill_mi.position.y
+	var plank_y_mid := sb_sloop._plank_fill_mi.position.y
+	check(sb_sloop._ammo_fill_mi.visible and ammo_y_mid < ammo_y_full, "mid ammo tier drops roundshot stack height")
+	check(sb_sloop._plank_fill_mi.visible and plank_y_mid < plank_y_full, "mid plank tier drops plank bundle height")
+	check_eq(ammo_it.prompt, "Restock cannonballs (%d/%d)" % [sloop.cannonballs_remaining, Ship.MAX_CANNONBALLS],
+		"partial cannonball prompt switches to Restock")
+
+	# Low tier (~12%)
+	sloop.cannonballs_remaining = 5
+	sloop.planks_remaining = 3
+	sb_sloop.sync_fill_visuals()
+	check(sb_sloop._ammo_fill_mi.visible and sb_sloop._ammo_fill_mi.position.y < ammo_y_mid,
+		"low ammo tier lowers roundshot stack further")
+	check(sb_sloop._plank_fill_mi.visible and sb_sloop._plank_fill_mi.position.y < plank_y_mid,
+		"low plank tier lowers plank bundle further")
+
+	# Empty tier (0)
+	sloop.cannonballs_remaining = 0
+	sloop.planks_remaining = 0
+	sb_sloop.sync_fill_visuals()
+	check(not sb_sloop._ammo_fill_mi.visible, "ammo fill mesh hides at 0 cannonballs")
+	check(not sb_sloop._plank_fill_mi.visible, "plank fill mesh hides at 0 planks")
+	check_near(sb_sloop.get_fill_ratio(&"cannonball"), 0.0, 0.001, "empty cannonball fill ratio == 0.0")
+	check_near(sb_sloop.get_fill_ratio(&"planks"), 0.0, 0.001, "empty planks fill ratio == 0.0")
+
+	# 4. One-press restock & rations heal (+25 HP clamped to max_health) + signals & ASCII notices!
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(-0.35, -0.85, 0.72)))
+	await physics_frames(4)
+
+	var used_events: Array[StringName] = []
+	var ship_taken_count := [0]
+	var notices: Array[String] = []
+	sb_sloop.barrel_used.connect(func(k: StringName, _p: Node) -> void: used_events.append(k))
+	sloop.supplies_taken.connect(func(_p: Node) -> void: ship_taken_count[0] += 1)
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	# One-press cannonball restock via Interactable.interact(captain)
+	ammo_it.interact(captain)
+	check_eq(sloop.cannonballs_remaining, Ship.MAX_CANNONBALLS, "CannonballBarrel refills cannonballs to MAX")
+	check(sb_sloop._ammo_fill_mi.visible and is_equal_approx(sb_sloop._ammo_fill_mi.position.y, ammo_y_full),
+		"CannonballBarrel restores full roundshot stack visual")
+	check_eq(used_events.size(), 1, "barrel_used emitted once for cannonball")
+	check_eq(used_events[0], &"cannonball", "barrel_used emits &'cannonball'")
+	check_eq(ship_taken_count[0], 1, "ship.supplies_taken emitted on cannonball restock")
+
+	# One-press oak plank restock via Interactable.interact(captain)
+	plank_it.interact(captain)
+	check_eq(sloop.planks_remaining, Ship.MAX_PLANKS, "PlankBarrel refills planks to MAX")
+	check(sb_sloop._plank_fill_mi.visible and is_equal_approx(sb_sloop._plank_fill_mi.position.y, plank_y_full),
+		"PlankBarrel restores full plank bundle visual")
+	check_eq(used_events.size(), 2, "barrel_used emitted for planks")
+	check_eq(used_events[1], &"planks", "barrel_used emits &'planks'")
+	check_eq(ship_taken_count[0], 2, "ship.supplies_taken emitted on plank restock")
+
+	# One-press rations & grog barrel heals +25 HP and clamps cleanly to max_health!
+	captain.apply_damage(40.0)  # 60 / 100 HP
+	rations_it.interact(captain)
+	check_near(captain.health, 85.0, 0.01, "RationsBarrel heals damaged pawn by +25 HP (60 -> 85)")
+	check_eq(used_events.size(), 3, "barrel_used emitted for rations")
+	check_eq(used_events[2], &"rations", "barrel_used emits &'rations'")
+	rations_it.interact(captain)
+	check_near(captain.health, captain.max_health, 0.01, "RationsBarrel clamps heal cleanly to max_health (85 -> 100)")
+
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "ShipSupplyBarrels notice is strictly ASCII ('%s')" % n_txt)
+	for it_chk: Interactable in [ammo_it, plank_it, rations_it]:
+		for ci in it_chk.prompt.length():
+			check(it_chk.prompt.unicode_at(ci) < 128, "barrel prompt is strictly ASCII ('%s')" % it_chk.prompt)
+
+	# 5. Live Ship events (fire_cannon, patch_hole, apply_net_state) auto-sync barrel prompts & fill visuals!
+	var ball := sloop.fire_cannon(&"port")
+	check(ball != null, "sloop fires port cannon")
+	check(ammo_it.prompt.contains("(%d/%d)" % [Ship.MAX_CANNONBALLS - 1, Ship.MAX_CANNONBALLS]),
+		"fire_cannon automatically updates CannonballBarrel prompt (got '%s')" % ammo_it.prompt)
+
+	var h_idx := sloop.apply_hull_damage(sloop.global_transform * sloop.ship_point(Vector3(1.9, -0.35, 0.4)), 0.5)
+	check(h_idx >= 0 and sloop.patch_hole(h_idx), "sloop patches hull breach consuming 1 plank")
+	check(plank_it.prompt.contains("(%d/%d)" % [Ship.MAX_PLANKS - 1, Ship.MAX_PLANKS]),
+		"patch_hole automatically updates PlankBarrel prompt (got '%s')" % plank_it.prompt)
+
+	# apply_net_state syncs client ship barrel fill visuals cleanly!
+	sloop.cannonballs_remaining = 0
+	sloop.planks_remaining = 0
+	var snap_empty := sloop.get_net_state()
+	brig.apply_net_state(snap_empty)
+	check(not sb_brig._ammo_fill_mi.visible and not sb_brig._plank_fill_mi.visible,
+		"apply_net_state automatically syncs ShipSupplyBarrels fill visuals to empty")
+
+	Game.notice.disconnect(notice_cb)
+
+	# 6. Clean 0-leak ref-counted teardown releases all ShipSupplyBarrels static caches!
+	await _end()
+	check_eq(ShipSupplyBarrels._active_instances, 0, "ShipSupplyBarrels._active_instances returns to 0 on teardown")
+	check(ShipSupplyBarrels._cannon_oak_mesh == null and ShipSupplyBarrels._ammo_fill_mesh == null \
+		and ShipSupplyBarrels._plank_fill_mesh == null and ShipSupplyBarrels._rations_brass_mesh == null \
+		and ShipSupplyBarrels._oak_mat == null and ShipSupplyBarrels._iron_mat == null \
+		and ShipSupplyBarrels._brass_mat == null and ShipSupplyBarrels._pbr_tex_cache.is_empty(),
+		"ShipSupplyBarrels releases all static meshes, PBR materials, and WeakRef cache cleanly (0 leaks)")
+

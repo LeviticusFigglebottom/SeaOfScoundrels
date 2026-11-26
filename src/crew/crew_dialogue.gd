@@ -109,6 +109,14 @@ const LINES := {
 			"Warm deck glow back up - let 'em see our colors!",
 			"Lamps lit bright across the rails - good to see the compass again!",
 		],
+		&"rowboat_launched": [
+			"Rowboat's in the drink, Cap'n! Keep a weather eye on the tide!",
+			"Dinghy's away astern! Pull steady and mind the shoals!",
+		],
+		&"rowboat_docked": [
+			"Dinghy's hoisted snug on the davits - ready to make sail, Cap'n!",
+			"Rowboat's fast at the stern! Good to have her back on the blocks!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -183,6 +191,14 @@ const LINES := {
 			"Deck lanterns blazing again - shines like a beacon on the swells!",
 			"Lights back on! Every deckhand can see the rigging clear as day.",
 		],
+		&"rowboat_launched": [
+			"Rowboat's launched! I'll keep watch on the horizon while you row ashore!",
+			"Dinghy away! Wave if you spot buried loot on the beach, Cap'n!",
+		],
+		&"rowboat_docked": [
+			"Rowboat's lashed tight astern! Hope you packed the bow bench with gold!",
+			"Dinghy's hooked and hoisted - clear stern and ready to run, Cap'n!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -256,6 +272,14 @@ const LINES := {
 		&"lanterns_lit": [
 			"Lanterns glowing warm again - much easier to swing a hammer with light!",
 			"Back in golden light! Now she looks like a proper ship, Cap'n!",
+		],
+		&"rowboat_launched": [
+			"Fresh pitch on those dinghy planks - she'll float like a cork, Cap'n!",
+			"Rowboat away! Don't scratch my nice mahogany gunwale on the rocks!",
+		],
+		&"rowboat_docked": [
+			"Slings secured and cleats tied off - dinghy's safe on the stern davits!",
+			"Hoisted clean with zero splinters! That's proper seamanship, Cap'n!",
 		],
 	},
 }

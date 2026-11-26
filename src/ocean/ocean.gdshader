@@ -515,10 +515,12 @@ void fragment() {
 		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light * face_contrast * swell_shade;
 
 		// Luminous emerald-aquamarine translucent glow strictly in near-to-mid steep thin crests
-		// viewed through the wave wall during daylight (zero aerial pancakes, zero midnight horizon glow).
-		float sss_elev = smoothstep(0.03, 0.22, L.y);
-		float sss_key = smoothstep(0.14, 0.60, sun_light.r + sun_light.g * 0.8);
+		// viewed through the wave wall during daylight & golden hour (zero aerial pancakes, zero midnight horizon glow).
+		float golden_hour = (1.0 - night_bio) * (1.0 - storm * 0.82) * smoothstep(-0.01, 0.04, L.y) * smoothstep(0.32, 0.08, L.y);
+		float sss_elev = smoothstep(0.005, 0.16, L.y);
+		float sss_key = smoothstep(0.10, 0.56, sun_light.r + sun_light.g * 0.8);
 		float sss_mod = sss_elev * sss_key * (1.0 - night_bio) * mix(1.0, 0.42, storm);
+		vec3 sss_tint = mix(sss_color, vec3(0.24, 0.82, 0.56), golden_hour * 0.42);
 		float sss_break = clamp(0.62 + (N.x * 0.9 + N.z * 0.7) * 0.52 + (1.0 - N.y) * 0.85, 0.32, 1.32);
 		float chop_ridge = smoothstep(0.56, 0.92, chop_h) * (0.42 + 0.58 * chop_fold) * open_sea;
 		float ridge_thin = clamp(
@@ -531,7 +533,7 @@ void fragment() {
 			+ 0.52 * smoothstep(0.24, 0.94, eff_h) * wave_steep * max(back_lit, side_lit * 0.58) * sss_break,
 			0.0, 1.0
 		);
-		body += sss_color * sss_strength * sss_mod * (
+		body += sss_tint * sss_strength * sss_mod * (
 				ridge_thin * light * 0.62
 				+ thin * sun_light * (2.15 * back_lit + 0.78 * side_lit)
 		) * (0.04 + 0.96 * grazing_sss) * sss_dist;
@@ -570,10 +572,17 @@ void fragment() {
 			crest_foam = max(crest_foam, f_trail);
 			linger = max(linger, clamp(f_trail - f_now, 0.0, 1.0));
 		}
-		// Wind streaks: standing foam in rough weather, drawn out downwind.
+		// Wind streaks: standing foam in rough weather, drawn out downwind into torn spindrift ribbons.
+		// Gate the extra spindrift tap strictly on active storms (0.00 ms overhead in fair weather!).
 		vec2 wuv = vec2(dot(v_rest, wind_dir) * 0.004, dot(v_rest, vec2(-wind_dir.y, wind_dir.x)) * 0.021);
 		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
-		float standing = storm * storm * smoothstep(0.32, 0.86, blot) * 0.72 * smoothstep(-0.35, 0.48, eff_h) * deep_water;
+		float spindrift = blot;
+		float standing = 0.0;
+		if (storm > 0.02) {
+			spindrift = texture(foam_tex, wuv * vec2(0.62, 2.75) + vec2(0.0045, 0.13) * sea_time).r;
+			float wind_ribbon = smoothstep(0.30, 0.84, blot) * smoothstep(0.24, 0.78, spindrift * 0.72 + blot * 0.28);
+			standing = storm * storm * wind_ribbon * 0.68 * smoothstep(-0.30, 0.52, eff_h) * deep_water;
+		}
 		crest_foam = max(crest_foam, standing);
 
 		// Shoreline / ship-hull intersection foam from the depth buffer.
@@ -594,7 +603,8 @@ void fragment() {
 		float band1 = 0.5 + 0.5 * sin(vd0 * 10.5 / foam_depth + sea_time * 1.65 + blot * 5.5);
 		float band2 = 0.5 + 0.5 * sin(vd0 * 18.0 / foam_depth + sea_time * 2.35 - blot * 3.8);
 		float surf_bands = max(band1 * band1, band2 * band2 * 0.70);
-		float beach_wash = shore * (0.24 + 0.76 * surf_bands) * 0.92 + smoothstep(0.12, 0.0, vd0) * 0.78;
+		float lip_lace = 0.52 + 0.52 * smoothstep(0.20, 0.82, blot * 0.62 + band1 * 0.38);
+		float beach_wash = shore * (0.24 + 0.76 * surf_bands) * 0.92 + smoothstep(0.11, 0.0, vd0) * 0.74 * lip_lace;
 		// Crisp white collar right around steep rocks and ship hulls.
 		float collar_wave = 0.85 + 0.15 * sin(sea_time * 2.2 + dot(v_rest, vec2(0.7, 0.5)));
 		float hull_collar = (smoothstep(0.26, 0.0, vd0) * 0.88 + smoothstep(0.55, 0.08, vd0) * 0.35 * band1) * collar_wave;
@@ -617,9 +627,9 @@ void fragment() {
 		float amount = clamp(max(min(crest_foam, 0.82), shore_foam), 0.0, 1.0);
 		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
 		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, flow_dir, flow_stretch, soft, quality > 0 ? streak : 0.0);
-		// Break distant whitecaps into fine wind-torn flecks instead of solid aerial blobs.
-		float far_fleck = smoothstep(0.22, 0.78, blot * 0.65 + chop_fold * 0.55);
-		float heavy_foam = mix(amount * amount * 0.42 * far_fleck, fm.x, lod_fade);
+		// Break distant whitecaps into wind-torn spindrift flecks & streaks instead of solid snow-drifts.
+		float far_fleck = smoothstep(0.24, 0.80, mix(blot * 0.65 + chop_fold * 0.55, spindrift * 0.70 + chop_fold * 0.45, storm * 0.82));
+		float heavy_foam = mix(amount * amount * 0.40 * far_fleck, fm.x, lod_fade);
 		float foam_body = mix(0.5, fm.y, lod_fade);
 		float web_foam = fm.z * lod_fade;
 
@@ -642,12 +652,14 @@ void fragment() {
 		// Keep daytime troughs rich jewel marine blue rather than muddy warm-grey reflection.
 		float day_cool = (1.0 - night_bio) * (1.0 - storm) * smoothstep(0.12, 0.42, L.y);
 		refl *= mix(vec3(1.0), vec3(0.84, 0.96, 1.12), day_cool * 0.42);
-		// Tight sunlit mirror accent only (zero broad warm wash so foreground troughs stay deep sapphire).
+		// Tight sunlit mirror accent + molten golden-hour sunset sun-path ribbon (zero broad midday wash).
 		float rs = max(dot(R, L), 0.0);
-		refl += sun_light * (pow(rs, 90.0) * 0.60 * mix(1.0, 0.14, storm));
+		float sunset_ribbon = golden_hour * clamp(cloud_l, 0.22, 1.35) * (pow(rs, 20.0) * 0.72 + pow(rs, 110.0) * 1.95);
+		refl += sun_light * (pow(rs, 90.0) * 0.60 * mix(1.0, 0.14, storm) + sunset_ribbon);
 		float film = mix(0.28, 1.0, smoothstep(0.0, 2.5, thick));
 		float foam_damp = 1.0 - clamp(heavy_foam * 0.68 + aerate * 0.26, 0.0, 0.84);
-		col = mix(col, refl, clamp(fres * reflectivity * film * foam_damp, 0.0, 1.0));
+		float refl_boost = mix(reflectivity, min(reflectivity + 0.24, 0.82), golden_hour * smoothstep(0.25, 0.85, fres));
+		col = mix(col, refl, clamp(fres * refl_boost * film * foam_damp, 0.0, 1.0));
 
 		// --- crisp refined sun sparkles along the solar path (zero overcast storm / midnight confetti)
 		vec3 H = normalize(L + V);
@@ -666,14 +678,14 @@ void fragment() {
 			float c1 = pow(max(dot(N, H), 0.0), sharp);
 			glint = smoothstep(0.45, 0.78, c1) * glint_norm * 1.35;
 		}
-		// Subtle sunlit silk sheen along the specular azimuth without broad muddy glare.
-		glint += pow(max(dot(N, H), 0.0), sharp * 0.28) * 0.024;
+		// Subtle sunlit silk sheen along the specular azimuth, richer liquid gold at golden hour.
+		glint += pow(max(dot(N, H), 0.0), sharp * 0.28) * mix(0.024, 0.11, golden_hour);
 		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
 		vec3 glint_col = sun_light * (1.0 + 1.25 * smoothstep(0.45, 0.06, key));
-		// Strongly suppress harsh pixel sparkles in heavy overcast storms and moonlit night.
-		float glint_sky = smoothstep(0.02, 0.16, L.y) * (1.0 - night_bio) * mix(1.0, 0.06, storm * storm) * clamp(cloud_l, 0.15, 1.25);
+		// Keep golden-hour low sun sparkling across waves while suppressing overcast storms & midnight.
+		float glint_sky = smoothstep(0.005, 0.09, L.y) * (1.0 - night_bio) * mix(1.0, 0.06, storm * storm) * clamp(cloud_l, 0.18, 1.25);
 		float glint_mask = (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85)) * glint_sky;
-		col += glint_col * glint * glint_strength * (0.34 + 0.66 * fres) * glint_mask;
+		col += glint_col * glint * glint_strength * (0.34 + 0.66 * fres) * mix(1.0, 1.45, golden_hour) * glint_mask;
 		// Soft silvery moonlit silk shimmer on open night swells (zero pinhole pixel noise).
 		if (night_bio > 0.01) {
 			float moon_shimmer = pow(max(dot(N, H), 0.0), 46.0) * (0.24 + 0.76 * fres) * (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85));
@@ -691,17 +703,19 @@ void fragment() {
 		col = mix(col, foam_lit, heavy_foam * mix(0.80, 0.97, foam_body));
 
 		// --- nocturnal bioluminescent plankton shimmer in ship wakes, breaking crests & surf (0 extra taps)
-		// Uses `night_bio` computed above so daytime, sunset, and daytime storms stay 100% untouched.
+		// Modulated strictly by organic lacy foam filaments & fine ripple glitter so ship wakes
+		// swirl like starry plankton ribbons with zero smooth circular blobs floating in open sea!
 		if (night_bio > 0.001) {
-			float wake_bio = clamp(field * 1.15 + field * (0.45 + 0.55 * web_foam), 0.0, 1.0);
-			float crest_bio = clamp(max(heavy_foam * 0.52, web_foam * 0.45) + shore_foam * 0.48, 0.0, 1.0);
 			float rip_energy = clamp(length(rip_fine + rip_micro * 0.85) * 2.4, 0.0, 1.0);
 			float micro_twinkle = 0.5 + 0.5 * sin(dot(v_rest, vec2(3.7, -2.9)) + sea_time * 2.6 + blot * 9.0);
-			float fine_glitter = smoothstep(0.42, 0.92, rip_energy * 0.65 + micro_twinkle * 0.45);
-			float bio_shimmer = (0.46 + 0.54 * blot) * (0.68 + 0.62 * fine_glitter);
-			float bio_dist = smoothstep(140.0, 18.0, dist);
-			vec3 bio_col = mix(vec3(0.06, 0.72, 0.88), vec3(0.18, 0.94, 0.96), fine_glitter * 0.55);
-			float bio_intensity = (wake_bio * 0.68 + crest_bio * 0.14) * bio_shimmer * bio_dist * night_bio;
+			float fine_glitter = smoothstep(0.44, 0.92, rip_energy * 0.62 + micro_twinkle * 0.48);
+			float lace_bio = clamp(heavy_foam * 1.15 + web_foam * 1.35 + shore_foam * 0.85, 0.0, 1.0);
+			float wake_bio = field * smoothstep(0.10, 0.78, lace_bio * 0.82 + fine_glitter * 0.45) * (0.45 + 0.85 * lace_bio);
+			float crest_bio = clamp(heavy_foam * 0.58 + web_foam * 0.52 + shore_foam * 0.52, 0.0, 1.0) * smoothstep(0.20, 0.82, blot * 0.55 + fine_glitter * 0.55);
+			float bio_shimmer = (0.48 + 0.52 * blot) * (0.62 + 0.72 * fine_glitter);
+			float bio_dist = smoothstep(135.0, 16.0, dist);
+			vec3 bio_col = mix(vec3(0.05, 0.70, 0.90), vec3(0.22, 0.96, 0.98), fine_glitter * 0.62);
+			float bio_intensity = (wake_bio * 0.74 + crest_bio * 0.16) * bio_shimmer * bio_dist * night_bio;
 			col += bio_col * bio_intensity;
 		}
 

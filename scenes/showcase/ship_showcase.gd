@@ -20,6 +20,7 @@ var _args: Dictionary = {}
 var _shot: String = "sailing"
 var _is_brig: bool = false
 var _ship: Ship
+var _rowboat: Rowboat = null
 var _target_ship: Ship = null
 var _pawn: Pawn = null
 var _cam: Camera3D
@@ -54,7 +55,7 @@ func _ready() -> void:
 			storm = 0.22
 			wind_spd = 9.5
 			wind_hdg = 0.4
-		"damage", "hold":
+		"damage", "hold", "barrels":
 			time_h = 13.0
 			storm = 0.28
 			wind_spd = 9.0
@@ -98,6 +99,14 @@ func _ready() -> void:
 		_ship.apply_livery(Color(0.45, 0.92, 0.88), Color(0.35, 0.95, 0.9), Color(0.25, 0.98, 0.85))
 	elif liv == "corsair":
 		_ship.apply_livery(Color(0.22, 0.16, 0.16), Color(0.84, 0.18, 0.14), Color(0.0, 0.0, 0.0))
+
+	if _shot == "rowboat" or liv == "player":
+		_rowboat = Rowboat.new()
+		_rowboat.name = "ShipRowboat"
+		add_child(_rowboat)
+		_rowboat.attach_to_ship(_ship)
+		if String(_args.get("rowboat", "docked")).to_lower() == "launched":
+			_rowboat.launch()
 
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
@@ -175,9 +184,20 @@ func _update_camera() -> void:
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2 * sc, -1.0), Vector3.UP)
 		"harpoon":
-			# Foredeck 3/4 view clear of the foremast framing both sculpted bow-mounted ShipHarpoons, capstan & 2D-FFT ocean.
-			var eye := xf * _ship.ship_point(Vector3(1.48, 3.28, -3.40) if _is_brig else Vector3(1.18, 2.95, -2.15))
-			var look := xf * _ship.ship_point(Vector3(-0.48, 2.60, -6.30) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			# Foredeck 3/4 view cleanly forward of the foremast framing both bow ShipHarpoons unobstructed.
+			var eye := xf * _ship.ship_point(Vector3(1.15, 3.22, -4.65) if _is_brig else Vector3(1.18, 2.95, -2.15))
+			var look := xf * _ship.ship_point(Vector3(-0.30, 2.65, -7.80) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"rowboat":
+			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
+			var eye := xf * _ship.ship_point(Vector3(5.6, 2.65, 14.4) if _is_brig else Vector3(4.8, 2.35, 11.8))
+			var look := xf * _ship.ship_point(Vector3(0.0, 1.35, 9.1) if _is_brig else Vector3(0.0, 1.25, 7.2))
+			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 1.4)
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"barrels":
+			# Lower-deck hold framing the 3 sculpted coopered-oak ShipSupplyBarrels along the port bulkhead.
+			var eye := xf * _ship.ship_point(Vector3(0.85, 0.25, 3.35) if _is_brig else Vector3(0.75, 0.28, 2.25))
+			var look := xf * _ship.ship_point(Vector3(-1.45, -0.45, 1.55) if _is_brig else Vector3(-1.15, -0.40, 0.65))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		_:
 			# Quarter-bow hero view showing figurehead, bow wave, billowing sail, and pennant.
@@ -188,6 +208,8 @@ func _update_camera() -> void:
 
 
 func _exit_tree() -> void:
+	Rowboat.clear_shared_cache()
+	ShipSupplyBarrels.clear_shared_cache()
 	ShipHarpoon.clear_shared_cache()
 	WindRibbons.clear_shared_cache()
 	ShipNameplate.clear_shared_cache()

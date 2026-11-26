@@ -18,6 +18,7 @@ signal shanty_playing_changed(playing: bool)
 signal shanty_instrument_changed(instrument: StringName)
 signal weapon_loadout_changed(melee_id: StringName, ranged_id: StringName)
 signal compass_pace_counted(paces: int, heading_str: String)
+signal compass_mode_changed(pin_mode: bool)
 signal grog_toast_raised()
 
 const DEFAULT_SLOTS: Array[StringName] = [
@@ -99,6 +100,7 @@ var player_controller: PlayerController = null
 var combat: CombatComponent = null
 var visual: CharacterVisual = null
 var anim_driver: AnimationDriver = null
+var map_table: MapTableView = null
 
 var viewmodel_root: Node3D = null
 var fp_tool_node: Node3D = null
@@ -109,6 +111,7 @@ var tp_tool_node: Node3D = null
 var lantern_lit: bool = true
 var bucket_full: bool = false
 var compass_paces: int = 0
+var compass_pin_mode: bool = false
 var spyglass_zoom: float = 0.0
 var spyglass_zoomed: bool:
 	get:
@@ -235,6 +238,7 @@ func _exit_tree() -> void:
 	if playing_shanty:
 		set_playing_shanty(false)
 	treasure_map_texture = null
+	map_table = null
 	_active_inventories = maxi(0, _active_inventories - 1)
 	if _active_inventories == 0:
 		_clod_mesh = null
@@ -541,6 +545,63 @@ func is_compass_pacing() -> bool:
 	return active_item == &"compass" and _secondary_held
 
 
+## Resolve the active MapTableView gracefully without allocating.
+func _resolve_map_table() -> MapTableView:
+	if map_table != null and is_instance_valid(map_table):
+		return map_table
+	if pawn != null and is_instance_valid(pawn) and pawn.platform != null and is_instance_valid(pawn.platform):
+		var named := pawn.platform.find_child("MapTableView", true, false) as MapTableView
+		if named != null and is_instance_valid(named):
+			return named
+	if is_inside_tree():
+		var tree := get_tree()
+		if tree != null:
+			var fallback: MapTableView = null
+			var plat: Node = pawn.platform if (pawn != null and is_instance_valid(pawn) and is_instance_valid(pawn.platform)) else null
+			for n in tree.get_nodes_in_group(&"map_tables"):
+				var mtv := n as MapTableView
+				if mtv == null or not is_instance_valid(mtv):
+					continue
+				if plat != null and mtv.tracked_ship == plat:
+					return mtv
+				if fallback == null:
+					fallback = mtv
+			if fallback != null:
+				return fallback
+	return null
+
+
+## Return a strict-ASCII bearing & distance readout to the active chart pin (e.g. "Pin: NNE 310 m"), or "".
+func get_compass_pin_summary() -> String:
+	if pawn == null or not is_instance_valid(pawn):
+		return ""
+	var mtv := _resolve_map_table()
+	if mtv == null or not mtv.has_active_pin():
+		return ""
+	var raw := MapTableView.format_course_bearing(pawn.global_position, mtv.get_active_pin())
+	var norm := raw.replace("  ", " ").strip_edges()
+	return "Pin: " + norm
+
+
+## Toggle compass tracking between True North and the active MapTableView chart pin.
+func toggle_compass_pin_mode() -> bool:
+	var mtv := _resolve_map_table()
+	if mtv == null or not mtv.has_active_pin():
+		var was_pin := compass_pin_mode
+		compass_pin_mode = false
+		if was_pin:
+			compass_mode_changed.emit(false)
+		_start_swing(&"inspect", 0.26)
+		return false
+	compass_pin_mode = not compass_pin_mode
+	Audio.play_sfx(&"ui_tick", Vector3.INF, -4.5, 0.05)
+	_start_swing(&"inspect", 0.26)
+	compass_mode_changed.emit(compass_pin_mode)
+	if Game != null:
+		Game.post_notice("Compass locked onto chart pin!" if compass_pin_mode else "Compass returned to True North.")
+	return compass_pin_mode
+
+
 ## Render & bind a dynamic parchment-and-ink treasure map for the active voyage.
 ## `dig_local_pos` accepts either `Vector2(x, z)` or `Vector3(x, y, z)`.
 func set_treasure_map(
@@ -625,7 +686,9 @@ func use_primary() -> Variant:
 			return use_tankard()
 		&"instrument":
 			return toggle_shanty()
-		&"compass", &"map":
+		&"compass":
+			return toggle_compass_pin_mode()
+		&"map":
 			# Quick glance lift when clicking primary on navigation tools.
 			_start_swing(&"inspect", 0.32)
 			return true
@@ -1556,13 +1619,27 @@ func _tick_compass(delta: float) -> void:
 	elif _compass_pace_active or compass_paces != 0:
 		_reset_compass_pacing(false)
 
-	# True North is world -Z. Rotate into the compass node's local XZ frame!
+	# Resolve target world direction: True North (-Z) or flattened XZ vector to active chart pin.
+	var target_dir_world := Vector3(0.0, 0.0, -1.0)
+	if compass_pin_mode:
+		var mtv := _resolve_map_table()
+		if mtv == null or not mtv.has_active_pin():
+			compass_pin_mode = false
+			compass_mode_changed.emit(false)
+		else:
+			var to_pin := mtv.get_active_pin() - pawn.global_position
+			to_pin.y = 0.0
+			if to_pin.length_squared() > 0.0004:
+				target_dir_world = to_pin.normalized()
+
+	# Rotate target world direction into the compass node's local XZ frame!
 	var ref_node := get_active_tool_node()
-	var target_angle := -pawn.look_yaw
+	var bearing_cw := atan2(target_dir_world.x, -target_dir_world.z)
+	var target_angle := wrapf(-pawn.look_yaw - bearing_cw, -PI, PI)
 	if ref_node != null and ref_node.is_inside_tree():
-		var north_local := ref_node.global_transform.basis.orthonormalized().inverse() * Vector3(0.0, 0.0, -1.0)
-		if Vector2(north_local.x, north_local.z).length_squared() > 0.0004:
-			target_angle = atan2(-north_local.x, -north_local.z)
+		var dir_local := ref_node.global_transform.basis.orthonormalized().inverse() * target_dir_world
+		if Vector2(dir_local.x, dir_local.z).length_squared() > 0.0004:
+			target_angle = atan2(-dir_local.x, -dir_local.z)
 	# Damped magnetic spring physics for realistic fluid needle settling!
 	var err := wrapf(target_angle - _needle_angle, -PI, PI)
 	var dt := minf(delta, 0.05)

@@ -1892,6 +1892,165 @@ func test_wave27_tool_pbr_compass_paces_toast_and_bucket_splash() -> void:
 	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes.clear_shared_cache() clears PBR texture cache cleanly")
 
 
+# ---------------------------------------------------------------------------
+# 16. Wave 29A: Tactical Map-Pin Compass Bearing, Toggle & Rowboat Oars HUD Hint
+# ---------------------------------------------------------------------------
+
+class MockRowboatOarsStation:
+	extends Node3D
+	var kind: StringName = &"rowboat_oars"
+
+
+func test_wave29_compass_map_pin_bearing_toggle_and_hud_hint() -> void:
+	_begin()
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+	ship.global_position = Vector3.ZERO
+
+	var mtv := MapTableView.new()
+	check(mtv.mount_to_ship(ship), "MapTableView mounts cleanly onto sloop")
+	await get_tree().process_frame
+
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	captain.board(ship, ship.ship_point(Vector3(0.0, 1.12, 0.2)))
+	captain.look_yaw = 0.0  # Facing due North (-Z)
+	await physics_frames(4)
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, ship, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var mode_events: Array[bool] = []
+	inv.compass_mode_changed.connect(func(pin_mode: bool) -> void: mode_events.append(pin_mode))
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	# 1. No active pin: has_active_pin() == false, get_active_pin() == ZERO, toggle returns false.
+	check(not mtv.has_active_pin(), "MapTableView starts without active chart pin")
+	check(mtv.get_active_pin().is_equal_approx(Vector3.ZERO), "get_active_pin() returns Vector3.ZERO when empty")
+	inv.equip(&"compass", true)
+	check_eq(inv.get_compass_pin_summary(), "", "get_compass_pin_summary() is empty when no pin exists")
+	check(not bool(inv.use_primary()), "compass LMB without active pin returns false")
+	check(not inv.compass_pin_mode, "compass_pin_mode stays false without pin")
+	hud._process(0.05)
+	check(hud.get_tool_meta_text().contains("[Hold RMB] Raise & Count Paces"),
+		"compass HUD without pin preserves classic pace hint (got '%s')" % hud.get_tool_meta_text())
+
+	# 2. Place NNE chart pin (~310 m from captain) -> automatic MapTableView resolution + strict-ASCII summary!
+	var pin_nne := captain.global_position + Vector3(119.0, 0.0, -286.0)
+	mtv.place_marker(pin_nne)
+	check(mtv.has_active_pin(), "has_active_pin() returns true after place_marker")
+	check(mtv.get_active_pin().is_equal_approx(pin_nne), "get_active_pin() returns active marker world pos")
+	var pin_sum := inv.get_compass_pin_summary()
+	check_eq(pin_sum, "Pin: NNE 310 m", "get_compass_pin_summary() normalizes spacing cleanly (got '%s')" % pin_sum)
+
+	hud._process(0.05)
+	var meta_north := hud.get_tool_meta_text()
+	check_eq(meta_north, "Compass | Pin: NNE 310 m | [LMB] Track Pin | [RMB] Pace",
+		"HUD shows True North compass hint with live NNE pin bearing (got '%s')" % meta_north)
+
+	# 3. Place newer due-East pin -> newest pin wins, and LMB locks compass needle toward East!
+	var pin_east := captain.global_position + Vector3(280.0, 0.0, 0.0)
+	mtv.place_marker(pin_east)
+	check(mtv.get_active_pin().is_equal_approx(pin_east), "get_active_pin() returns newest placed pin")
+	check_eq(inv.get_compass_pin_summary(), "Pin: E 280 m", "pin summary updates to newest East pin")
+
+	# Settle compass needle on True North first while facing North (-Z).
+	for _i in 60:
+		inv._tick_compass(1.0 / 60.0)
+	var compass_node := inv.get_active_tool_node()
+	var needle := compass_node.get_node_or_null(^"Needle") as Node3D if compass_node != null else null
+	check(needle != null, "equipped compass has live Needle node")
+	var needle_north := needle.rotation.y
+
+	# Press primary (LMB) on compass -> locks onto East chart pin!
+	check(bool(inv.use_primary()), "compass use_primary() toggles pin lock on when pin exists")
+	check(inv.compass_pin_mode, "compass_pin_mode becomes true")
+	check_eq(mode_events.size(), 1, "compass_mode_changed emitted once")
+	check_eq(mode_events[0], true, "compass_mode_changed emitted true")
+	check(notices.has("Compass locked onto chart pin!"), "locking pin posts strict-ASCII notice")
+
+	# Verify HUD updates immediately via compass_mode_changed signal!
+	var meta_pin := hud.get_tool_meta_text()
+	check_eq(meta_pin, "Compass [Pin] | Pin: E 280 m | [LMB] True North | [RMB] Pace",
+		"HUD immediately updates to Compass [Pin] tracking mode (got '%s')" % meta_pin)
+
+	# Advance damped magnetic needle physics -> swings smoothly ~90 deg right toward East!
+	for _i in 90:
+		inv._tick_compass(1.0 / 60.0)
+	var needle_east := needle.rotation.y
+	var swing_rad := absf(wrapf(needle_east - needle_north, -PI, PI))
+	check(swing_rad > 1.15 and swing_rad < 1.95,
+		"magnetic needle swings ~90 deg toward East pin (delta=%.2f rad)" % swing_rad)
+
+	# Verify pacing HUD format while pin is active ("Pace %d %s").
+	inv.set_secondary_held(true)
+	hud._process(0.05)
+	var meta_pace := hud.get_tool_meta_text()
+	check(meta_pace.contains("Compass [Pin]") and meta_pace.contains("Pin: E 280 m") \
+		and meta_pace.contains("Pace 0 ") and meta_pace.contains("[LMB] True North"),
+		"pacing with active pin includes Pace readout and Pin mode (got '%s')" % meta_pace)
+	inv.set_secondary_held(false)
+
+	# 4. Second LMB toggles back to True North and swings needle back!
+	check(not bool(inv.use_primary()), "second compass LMB returns false (True North mode)")
+	check(not inv.compass_pin_mode, "compass_pin_mode returns to false")
+	check_eq(mode_events.size(), 2, "compass_mode_changed emitted second time")
+	check_eq(mode_events[1], false, "compass_mode_changed emitted false")
+	check(notices.has("Compass returned to True North."), "returning to True North posts notice")
+	for _i in 90:
+		inv._tick_compass(1.0 / 60.0)
+	var back_err := absf(wrapf(needle.rotation.y - needle_north, -PI, PI))
+	check(back_err < 0.25, "needle settles back to True North (err=%.2f rad)" % back_err)
+
+	# 5. Clearing chart markers while in Pin Lock auto-resets compass_pin_mode cleanly!
+	check(inv.toggle_compass_pin_mode(), "re-engage pin lock before clear_markers")
+	check(inv.compass_pin_mode, "compass_pin_mode is true before clearing markers")
+	mtv.clear_markers()
+	inv._tick_compass(1.0 / 60.0)
+	check(not inv.compass_pin_mode, "clearing markers auto-resets compass_pin_mode to false")
+	check_eq(mode_events[mode_events.size() - 1], false, "auto-reset emits compass_mode_changed(false)")
+	check_eq(inv.get_compass_pin_summary(), "", "pin summary clears to empty after clear_markers")
+	hud._process(0.05)
+	check(hud.get_tool_meta_text().contains("[Hold RMB] Raise & Count Paces"),
+		"HUD reverts cleanly to no-pin pace hint after markers cleared")
+
+	# 6. Verify Rowboat Oars station hint (`&"rowboat_oars"`) in GameHUD!
+	var mock_oars := MockRowboatOarsStation.new()
+	_root.add_child(mock_oars)
+	captain.station = mock_oars
+	hud._process(0.05)
+	var oars_title := hud.get_tool_title_text()
+	var oars_meta := hud.get_tool_meta_text()
+	check_eq(oars_title, "Rowboat Oars", "rowboat_oars station title matches")
+	check_eq(oars_meta, "[A/D] Stroke Port/Stbd | [W] Surge | [S] Brake | [F] Stand",
+		"rowboat_oars station meta hint matches")
+	captain.station = null
+
+	for txt_chk: String in [pin_sum, meta_north, meta_pin, meta_pace, oars_title, oars_meta]:
+		for ci in txt_chk.length():
+			check(txt_chk.unicode_at(ci) < 128, "HUD/compass text is strictly ASCII ('%s')" % txt_chk)
+
+	Game.notice.disconnect(notice_cb)
+	hud.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(hud), "GameHUD frees cleanly on teardown")
+	check_eq(inv.compass_mode_changed.get_connections().size(), 1,
+		"GameHUD disconnects compass_mode_changed cleanly on teardown (only test listener remains)")
+	await _end()
+
+
+
 
 
 
