@@ -81,7 +81,8 @@ func _process(delta: float) -> void:
 	var cam_pos := cam.global_position if has_cam else Vector3.ZERO
 	var dist_sq := global_position.distance_squared_to(cam_pos) if has_cam else 0.0
 
-	if not _foliage_materials.is_empty() and _wind_accum >= 0.16 and dist_sq <= 380.0 * 380.0:
+	var foliage_cull := maxf(380.0, island_radius + 260.0)
+	if not _foliage_materials.is_empty() and _wind_accum >= 0.16 and dist_sq <= foliage_cull * foliage_cull:
 		_wind_accum = 0.0
 		var wind := Weather.wind_vector()
 		var spd := wind.length()
@@ -95,7 +96,8 @@ func _process(delta: float) -> void:
 				mat.set_shader_parameter(&"wind_dir", dir2)
 				mat.set_shader_parameter(&"wind_speed", spd)
 
-	if not _flicker_lights.is_empty() and dist_sq <= 160.0 * 160.0:
+	var flicker_cull := maxf(160.0, island_radius + 95.0)
+	if not _flicker_lights.is_empty() and dist_sq <= flicker_cull * flicker_cull:
 		for entry in _flicker_lights:
 			var light: OmniLight3D = entry.get("light")
 			if light == null or not is_instance_valid(light):
@@ -172,12 +174,13 @@ static func _on_fireflies_exiting_tree(node: GPUParticles3D) -> void:
 		_firefly_glow_tex = null
 
 
-## Gate IslandFireflies smoothly by Weather.daylight() and 95 m camera distance (0.00 ms GPU cost in daylight/open sea).
+## Gate IslandFireflies smoothly by Weather.daylight() and radius-scaled camera distance (0.00 ms GPU cost in daylight/open sea).
 func update_night_ambience(cam_pos: Vector3, has_cam: bool) -> void:
 	if _fireflies == null or not is_instance_valid(_fireflies):
 		return
 	var night_strength := clampf((0.45 - Weather.daylight()) / 0.35, 0.0, 1.0)
-	var within_range := (not has_cam) or global_position.distance_squared_to(cam_pos) <= FIREFLY_CULL_DIST * FIREFLY_CULL_DIST
+	var firefly_cull := maxf(FIREFLY_CULL_DIST, island_radius + 45.0)
+	var within_range := (not has_cam) or global_position.distance_squared_to(cam_pos) <= firefly_cull * firefly_cull
 	if night_strength <= 0.01 or not within_range:
 		_fireflies.emitting = false
 		_fireflies.visible = false

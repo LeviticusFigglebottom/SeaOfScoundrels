@@ -3153,9 +3153,10 @@ func _tick_hydrodynamics(delta: float) -> void:
 		# Flooded hold drags the hull deeper cleanly (without capsizing early).
 		sink_buoy = lerpf(1.0, 0.76, water_level)
 
-	# 1. Multi-point buoyancy & per-probe damping (using Godot 4.8 get_velocity_at_position).
+	# 1. Multi-point buoyancy & per-probe damping (cross-version Godot 4.7+/4.8+ rigid-body point velocity).
 	const PROBE_SPAN := 1.15
 	const BUOY_GAIN := 1.98
+	var com_world := xf * center_of_mass
 	for entry in BUOYANCY_PROBES:
 		var local_p: Vector3 = (entry[0] as Vector3) * _probe_scale
 		var w: float = entry[1]
@@ -3169,7 +3170,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		sub_accum += w * damp_frac
 
 		var buoy_f := _hull_mass * GRAVITY * BUOY_GAIN * w * frac * sink_buoy
-		var v_p := get_velocity_at_position(world_p)
+		var v_p := linear_velocity + angular_velocity.cross(world_p - com_world)
 		var v_damp := -v_p.y * (20500.0 * mass_ratio * w * damp_frac)
 		var rel := world_p - origin
 		# Keep vertical application arm modest so steep waves pitch/roll smoothly without flipping.

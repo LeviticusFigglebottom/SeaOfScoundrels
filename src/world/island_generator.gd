@@ -22,6 +22,7 @@ const BARREL_SCENE: PackedScene = preload("res://assets/generated/props/barrel_p
 const CRATE_SCENE: PackedScene = preload("res://assets/generated/props/crate_supply.glb")
 const CAMPFIRE_SCENE: PackedScene = preload("res://assets/generated/props/campfire.glb")
 const SUPPLY_BARREL_SCRIPT: GDScript = preload("res://src/world/supply_barrel.gd")
+const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 
 const ARCHETYPES: Array[StringName] = [
 	&"outpost",
@@ -35,6 +36,9 @@ const ARCHETYPES: Array[StringName] = [
 	&"palm_atoll",
 	&"skull_bluff",
 	&"smuggler_cove",
+	&"sea_stack",
+	&"grand_citadel",
+	&"grand_outpost",
 ]
 
 ## Non-outpost tropical beach archetypes that wash up a glinting `MessageBottle`.
@@ -45,6 +49,7 @@ const BOTTLE_ARCHETYPES: Array[StringName] = [
 	&"wreck_shoal",
 	&"sea_arch",
 	&"palm_atoll",
+	&"grand_citadel",
 ]
 
 ## Deterministic washed-up bottle clues pointing to other archipelago islands & high-value loot.
@@ -85,6 +90,12 @@ const BOTTLE_CLUE_TARGETS: Array[Dictionary] = [
 		"treasure_id": &"archive_chalice",
 		"clue_text": "Sun-faded map scrap: a Gilded Tide-Chalice waits by the Split Palm of Cutlass Cay!",
 	},
+	{
+		"target_id": "sovereigns_bastion",
+		"target_name": "Sovereign's Bastion",
+		"treasure_id": &"sovereign_chest",
+		"clue_text": "Gilded seal fragment: a Sovereign's Strongbox lies hidden beneath the temple terraces of Sovereign's Bastion!",
+	},
 ]
 
 const LAYER_WORLD_STATIC := 1
@@ -123,9 +134,20 @@ const COL_CALDERA_OBSIDIAN_EDGE := Color(0.20, 0.19, 0.22)
 const COL_CALDERA_OBSIDIAN_SCORCH := Color(0.46, 0.14, 0.05)
 
 static var _beacon_puff_tex: ImageTexture = null
+static var _active_puff_users: int = 0
 
 
-## Crowning Fort Bastion controller node mounted on `fort_rock` islands.
+static func _retain_puff_tex() -> void:
+	_active_puff_users += 1
+
+
+static func _release_puff_tex() -> void:
+	_active_puff_users = maxi(0, _active_puff_users - 1)
+	if _active_puff_users == 0:
+		_beacon_puff_tex = null
+
+
+## Crowning Fort Bastion controller node mounted on `fort_rock` / `grand_citadel` islands.
 ## Owns the Signal Brazier flare state (`set_siege_beacon`), live flame/ember
 ## beacon column animation, and the 4 mounted seaward `FortBattery` emplacements.
 class FortBastion:
@@ -142,6 +164,9 @@ class FortBastion:
 	var _beacon_embers: GPUParticles3D = null
 	var _clock: float = 0.0
 
+	func _enter_tree() -> void:
+		IslandGenerator._retain_puff_tex()
+
 	func _exit_tree() -> void:
 		for p: GPUParticles3D in [_beacon_smoke, _beacon_embers]:
 			if p != null and is_instance_valid(p):
@@ -151,6 +176,7 @@ class FortBastion:
 				p.process_material = null
 		_beacon_smoke = null
 		_beacon_embers = null
+		IslandGenerator._release_puff_tex()
 
 	func _process(delta: float) -> void:
 		_clock += delta
@@ -235,6 +261,9 @@ class VolcanoCaldera:
 	var _fissure_mat: StandardMaterial3D = null
 	var _clock: float = 0.0
 
+	func _enter_tree() -> void:
+		IslandGenerator._retain_puff_tex()
+
 	func _exit_tree() -> void:
 		for p: GPUParticles3D in [ash_plume, ember_plume]:
 			if p != null and is_instance_valid(p):
@@ -250,6 +279,7 @@ class VolcanoCaldera:
 		obsidian_mesh = null
 		lava_fissure_mesh = null
 		caldera_light = null
+		IslandGenerator._release_puff_tex()
 
 	func _process(delta: float) -> void:
 		_clock += delta
@@ -266,7 +296,7 @@ class VolcanoCaldera:
 
 
 
-## Build a complete procedural `Island` (or `Outpost` when `archetype == &"outpost"`).
+## Build a complete procedural `Island` (or `Outpost` for `&"outpost"` / `&"grand_outpost"`).
 ## `spec` keys (all optional except defaults):
 ##   id (String), name (String), archetype (StringName), kind (StringName),
 ##   seed (int), radius (float), peak_height (float), dock_yaw (float),
@@ -276,7 +306,7 @@ static func build_island(spec: Dictionary) -> Island:
 	var arch := StringName(String(spec.get("archetype", &"treasure_peak")))
 	if not ARCHETYPES.has(arch):
 		arch = &"treasure_peak"
-	var is_outpost := arch == &"outpost" or bool(spec.get("is_outpost", false))
+	var is_outpost := arch == &"outpost" or arch == &"grand_outpost" or bool(spec.get("is_outpost", false))
 	var island: Island = Outpost.new() if is_outpost else Island.new()
 
 	var id_str := String(spec.get("id", spec.get("island_id", "island_" + String(arch))))
@@ -294,7 +324,7 @@ static func build_island(spec: Dictionary) -> Island:
 	island.kind = StringName(String(spec.get("kind", _default_kind(arch))))
 	island.is_outpost = is_outpost
 	island.island_radius = radius
-	island.seabed_radius = radius + 62.0
+	island.seabed_radius = radius + clampf(radius * 0.55, 58.0, 82.0)
 	island.peak_height = target_peak
 
 	var lm_raw: Variant = spec.get("landmarks", _default_landmarks(arch))
@@ -307,8 +337,14 @@ static func build_island(spec: Dictionary) -> Island:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_val
 
-	# Build sculpted terrain height grid, visual mesh, and walkable StaticBody3D collider.
-	var grid_res := 80 if is_outpost else 72
+	# Adaptive high-resolution terrain height grid scaled by island tier (72..120).
+	var grid_res := 72
+	if radius > 145.0:
+		grid_res = 120
+	elif radius > 105.0:
+		grid_res = 104
+	elif radius > 60.0:
+		grid_res = 88
 	var grid_half := island.seabed_radius + 8.0
 	var grid := _generate_height_grid(arch, radius, island.seabed_radius, target_peak,
 		landing_yaw, seed_val, grid_res, grid_half)
@@ -322,7 +358,7 @@ static func build_island(spec: Dictionary) -> Island:
 	island.peak_height = max_h
 
 	var terrain_mat := _create_terrain_material(arch)
-	_build_terrain_mesh_and_collider(island, grid, grid_res, grid_half, terrain_mat)
+	_build_terrain_mesh_and_collider(island, grid, grid_res, grid_half, terrain_mat, arch, landing_yaw)
 
 	# Extract coastline polygon in local XZ for Map Table & held Treasure Maps.
 	island.contour_points = _extract_contour_points(island)
@@ -354,38 +390,47 @@ static func build_island(spec: Dictionary) -> Island:
 			[-6.6, -19.5, 4.5],
 			[24.0, -6.5, 9.0],
 		]
+		if arch == &"grand_outpost":
+			keepouts.append([0.0, -64.0, 22.0])
+			keepouts.append([0.0, -104.0, 26.0])
 		for k in keepouts:
 			var wp := db * Vector3(float(k[0]), 0.0, float(k[1]))
 			exclusions.append(Vector3(wp.x, wp.z, float(k[2])))
 	else:
 		island.mooring_transform = _compute_non_outpost_mooring(island, landing_yaw)
 
-	# Build sculpted Stone Bastion, Watchtower Gantry, Signal Brazier & 4 FortBatteries on forts.
+	# Build sculpted Stone Bastion, Watchtower Gantry, Signal Brazier & 4 FortBatteries on forts & grand citadels.
 	var fort_courtyard_spawns: Array[Vector3] = []
-	if arch == &"fort_rock":
+	if arch == &"fort_rock" or arch == &"grand_citadel":
 		var scale_r := radius / 60.0
 		var lb := Basis(Vector3.UP, landing_yaw)
-		var bastion_xz := lb * Vector3(0.0, 0.0, 2.0 * scale_r)
+		var bastion_v := 18.0 if arch == &"grand_citadel" else 2.0 * scale_r
+		var bastion_xz := lb * Vector3(0.0, 0.0, bastion_v)
 		var bastion_pos := Vector3(bastion_xz.x, island.surface_height(bastion_xz.x, bastion_xz.z), bastion_xz.z)
-		_build_fort_bastion(island, landing_yaw, bastion_pos, prop_body, props_root, rng)
+		var bastion := _build_fort_bastion(island, landing_yaw, bastion_pos, prop_body, props_root, rng)
+		if arch == &"grand_citadel" and bastion != null:
+			_mount_citadel_fort_vault(bastion)
 		# Keep trees, ferns, boulders, and beach dig spots clear of the bastion & approach ramp.
-		exclusions.append(Vector3(bastion_pos.x, bastion_pos.z, 17.5))
-		for ramp_v: float in [-13.5, -22.5, -31.0]:
-			var rp := lb * Vector3(0.0, 0.0, ramp_v * scale_r)
-			exclusions.append(Vector3(rp.x, rp.z, 7.2))
+		exclusions.append(Vector3(bastion_pos.x, bastion_pos.z, 20.0 if arch == &"grand_citadel" else 17.5))
+		var ramp_stops: Array[float] = [-10.0, -28.0, -48.0, -68.0]
+		if arch != &"grand_citadel":
+			ramp_stops = [-13.5 * scale_r, -22.5 * scale_r, -31.0 * scale_r]
+		for ramp_v: float in ramp_stops:
+			var rp := lb * Vector3(0.0, 0.0, ramp_v)
+			exclusions.append(Vector3(rp.x, rp.z, 8.5 if arch == &"grand_citadel" else 7.2))
 		for local_sp: Vector3 in [Vector3(0.0, 0.0, -2.0), Vector3(-5.0, 0.0, 2.8), Vector3(5.0, 0.0, 2.8)]:
 			var wp := bastion_pos + lb * local_sp
 			wp.y = island.surface_height(wp.x, wp.z)
 			fort_courtyard_spawns.append(wp)
 	elif arch == &"smuggler_cove":
-		# Reserve clean cave vault & cove mouth approach before placing dig sites/campfires/enemies.
+		# Reserve clean cave vault & cove mouth approach in cave-relative metres before placing dig sites/campfires.
 		var sc_r := radius / 60.0
 		var sc_b := Basis(Vector3.UP, landing_yaw)
-		var sc_mid := sc_b * Vector3(0.0, 0.0, 11.5 * sc_r)
-		var sc_mouth := sc_b * Vector3(0.0, 0.0, 3.2 * sc_r)
-		exclusions.append(Vector3(sc_mid.x, sc_mid.z, 10.6))
-		exclusions.append(Vector3(sc_mouth.x, sc_mouth.z, 7.2))
-
+		var v_grotto := 6.0 * sc_r
+		var sc_mid := sc_b * Vector3(0.0, 0.0, v_grotto + 5.5)
+		var sc_mouth := sc_b * Vector3(0.0, 0.0, v_grotto - 2.0)
+		exclusions.append(Vector3(sc_mid.x, sc_mid.z, 10.8))
+		exclusions.append(Vector3(sc_mouth.x, sc_mouth.z, 7.6))
 
 	# Gather verified walkable beach/clearing spots for buried treasure & enemy spawns.
 	_populate_gameplay_points(island, landing_yaw, exclusions, rng)
@@ -399,7 +444,8 @@ static func build_island(spec: Dictionary) -> Island:
 		var tid := StringName(String(spec.get("default_treasure_id", &"wayfarer_chest")))
 		island.spawn_dig_site(island.dig_points[0], tid)
 
-	# Place ground-snapped stylized props (palms, ferns, boulders, spires, arches, wrecks, campfires).
+	# Place ground-snapped stylized props (palms, ferns, boulders, spires, arches, wrecks, campfires,
+	# plus duck-typed Wave 24A architecture/jungle props & Wave 24B waterfalls/fumaroles).
 	var foliage_mat_cache: Dictionary = {}
 	_populate_archetype_props(island, arch, landing_yaw, exclusions, rng, prop_body, props_root, foliage_mat_cache)
 
@@ -437,33 +483,53 @@ static func _generate_height_grid(arch: StringName, radius: float, seabed_r: flo
 static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 		seabed_r: float, target_peak: float, seed_val: int) -> float:
 	var r := sqrt(u * u + v * v)
+	if r >= seabed_r + 2.0:
+		return SEA_FLOOR_Y
 	var ang := atan2(v, u)
 	var s := float(seed_val % 4096) * 0.137
 
-	# Organic coastal perimeter wobble (low-frequency bays & headlands).
-	var coast_n := _fbm2(u * 0.022 + s, v * 0.022 - s * 0.7) - 0.5
-	var detail_n := _fbm2(u * 0.068 - s * 0.4, v * 0.068 + s * 0.9) - 0.5
-	var ridge_n := 1.0 - absf(_fbm2(u * 0.052 + s * 1.3, v * 0.052 + s * 0.5) * 2.0 - 1.0)
+	# Organic surface detail & ridged cliff noise fields (skip deep underwater outer abyss).
+	var in_land_zone := r < radius * 1.42
+	var detail_n := (_fbm2(u * 0.068 - s * 0.4, v * 0.068 + s * 0.9) - 0.5) if in_land_zone else 0.0
+	var ridge_n := (1.0 - absf(_fbm2(u * 0.052 + s * 1.3, v * 0.052 + s * 0.5) * 2.0 - 1.0)) if in_land_zone else 0.0
 
-	# Base coastline silhouette per archetype.
-	var r_coast := radius * (1.0 + 0.16 * coast_n + 0.07 * cos(ang * 2.0 + s) + 0.05 * sin(ang * 3.0 - s))
+	# Base coastline silhouette per archetype (organic coves, peninsulas & harbour bays).
+	var coast_freq := 0.022 if radius <= 85.0 else 0.015
+	var coast_m := _fbm2(u * coast_freq + s, v * coast_freq - s * 0.7) - 0.5
+	var r_coast := radius * (1.0 + 0.16 * coast_m + 0.07 * cos(ang * 2.0 + s) + 0.05 * sin(ang * 3.0 - s))
 	if arch == &"crescent_lagoon" or arch == &"palm_atoll":
-		r_coast = radius * (1.02 + 0.10 * coast_n)
+		r_coast = radius * (1.02 + 0.10 * coast_m)
 	elif arch == &"wreck_shoal":
-		r_coast = radius * (1.06 + 0.18 * cos(ang * 2.0 - 0.4) + 0.14 * coast_n)
+		r_coast = radius * (1.06 + 0.18 * cos(ang * 2.0 - 0.4) + 0.14 * coast_m)
+	elif arch == &"sea_stack":
+		r_coast = radius * (0.94 + 0.18 * cos(ang * 2.0 + 0.55) + 0.14 * coast_m)
 	elif arch == &"outpost":
-		# Slight horseshoe harbour indentation on the -v (seaward) flank.
-		var bay_ang := exp(-pow(u / 26.0, 2.0)) * _smoothstep(-4.0, -28.0, v)
-		r_coast = radius * (1.0 + 0.11 * coast_n) - 18.0 * bay_ang
+		# Sheltered horseshoe harbour bay indenting smoothly to the unscaled dock shoreline (v ~ -26 m).
+		var bay_ang := exp(-pow(u / 30.0, 2.0)) * _smoothstep(-4.0, -24.0, v)
+		var bay_cut := maxf(18.0, radius - 40.0)
+		r_coast = radius * (1.0 + 0.12 * coast_m + 0.05 * cos(ang * 3.0 - 0.4)) - bay_cut * bay_ang
+	elif arch == &"grand_outpost":
+		# Sweeping natural horseshoe harbour fjord opening wide & deep seaward along -v!
+		var fjord_ang := exp(-pow(u / 48.0, 2.0)) * _smoothstep(4.0, -24.0, v)
+		var fjord_cut := maxf(44.0, radius - 34.0)
+		r_coast = radius * (1.0 + 0.13 * coast_m + 0.08 * cos(ang * 2.0 + 0.3)) - fjord_cut * fjord_ang
+	elif arch == &"fort_rock":
+		# Welcoming coastal landing bay on the -v flank so ships anchor clearly in front of the bastion.
+		var fort_bay := exp(-pow(u / (28.0 * maxf(1.0, radius / 60.0)), 2.0)) * _smoothstep(-8.0, -34.0, v)
+		r_coast = radius * (1.0 + 0.12 * coast_m) - maxf(0.0, (radius - 60.0) * 0.42) * fort_bay
+	elif arch == &"grand_citadel":
+		# Broad grand fortress headland with sheltered seaward bay & twin protruding coastal promontories.
+		var cit_bay := exp(-pow(u / 54.0, 2.0)) * _smoothstep(-10.0, -48.0, v)
+		r_coast = radius * (1.02 + 0.14 * coast_m + 0.07 * sin(ang * 3.0 + 0.4)) - 34.0 * cit_bay
 
 	var d_shore := r - r_coast
 
 	# Base coastal elevation curve:
-	#   seaward: gentle glowing turquoise shallows (0..-3.8 m over ~18 m), then smooth drop to -20 m
-	#   landward: walkable golden beach (0..+3.0 m over ~16 m, slope < 12 deg), then lush rolling ground
+	#   seaward: gentle glowing turquoise shallows (0..-3.8 m over ~18-28 m), then smooth drop to -20 m
+	#   landward: walkable golden beach (0..+3.0 m over ~17-22 m, gentle slope), then lush rolling highlands
 	var base_h := 0.0
 	if d_shore >= 0.0:
-		var shallow_span := 20.0 if arch != &"wreck_shoal" else 30.0
+		var shallow_span := 30.0 if arch == &"wreck_shoal" else clampf(radius * 0.24, 18.0, 32.0)
 		var deep_span := maxf(24.0, seabed_r - r_coast - shallow_span)
 		if d_shore <= shallow_span:
 			var t := d_shore / shallow_span
@@ -473,63 +539,76 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			base_h = lerpf(-3.8, SEA_FLOOR_Y, t2 * t2 * (3.0 - 2.0 * t2))
 	else:
 		var inland := -d_shore
-		var beach_t := clampf(inland / 17.0, 0.0, 1.0)
-		var hill_t := clampf((inland - 12.0) / maxf(18.0, radius * 0.65), 0.0, 1.0)
-		base_h = 3.0 * (beach_t * (2.0 - beach_t)) + 5.2 * (hill_t * hill_t * (3.0 - 2.0 * hill_t))
-		base_h += detail_n * 1.4 * hill_t
+		var beach_span := clampf(radius * 0.20, 14.0, 24.0)
+		var beach_t := clampf(inland / beach_span, 0.0, 1.0)
+		var hill_t := clampf((inland - beach_span * 0.65) / maxf(20.0, radius * 0.58), 0.0, 1.0)
+		base_h = 3.0 * (beach_t * (2.0 - beach_t)) + clampf(5.0 + radius * 0.035, 5.2, 11.5) * (hill_t * hill_t * (3.0 - 2.0 * hill_t))
+		base_h += detail_n * 1.8 * hill_t
 
-	# Archetype-specific dramatic faceted cliffs, spires, lagoons, coves, and harbour grading.
+	# Archetype-specific ridged mountain massifs, stepped geological terraces, canyons, lagoons & harbours.
 	var h := base_h
 	var scale_r := radius / 60.0
 
 	match arch:
 		&"outpost":
-			# Dramatic twin-shouldered limestone backdrop behind the village (+v) + western cliff arm.
-			var p1 := _faceted_spire(u, v, -5.0 * scale_r, 23.0 * scale_r, 26.0 * scale_r, 23.0 * scale_r, target_peak, 0.35, 5.0, 1.38)
-			var p2 := _faceted_spire(u, v, 15.0 * scale_r, 20.0 * scale_r, 18.0 * scale_r, 17.0 * scale_r, target_peak * 0.64, -0.45, 5.0, 1.45)
-			var arm_w := _faceted_spire(u, v, -31.0 * scale_r, -8.0 * scale_r, 18.0 * scale_r, 20.0 * scale_r, target_peak * 0.44, 0.7, 4.0, 1.5)
-			h = maxf(h, maxf(p1, maxf(p2, arm_w)))
-			h += ridge_n * 2.2 * _smoothstep(6.0, 22.0, h)
+			# Sweeping curved limestone mountain massif & lush upper terrace behind the harbour village!
+			var main_ridge := _ridged_massif(u, v, Vector2(-34.0 * scale_r, 16.0 * scale_r),
+				Vector2(28.0 * scale_r, 26.0 * scale_r), 26.0 * scale_r, 20.0 * scale_r,
+				target_peak, target_peak * 0.70, 9.0 * scale_r, 9.5, s + 1.1)
+			var west_arm := _ridged_massif(u, v, Vector2(-34.0 * scale_r, 16.0 * scale_r),
+				Vector2(-40.0 * scale_r, -16.0 * scale_r), 20.0 * scale_r, 14.0 * scale_r,
+				target_peak * 0.62, target_peak * 0.34, -5.0 * scale_r, 8.0, s + 2.4)
+			var upper_bench := _terraced_cliff(u, v, 8.0 * scale_r, 12.0 * scale_r,
+				26.0 * scale_r, 18.0 * scale_r, 14.5, -0.25, 2, 0.58, s + 3.7)
+			h = maxf(h, maxf(main_ridge, maxf(west_arm, upper_bench)))
+			h += ridge_n * 2.4 * _smoothstep(8.0, 26.0, h)
+			h = _grade_outpost_harbour(h, u, v, radius, false)
 
-			# Crisp beacon tower headland shelf at (u = +24, v = -6.5), flat top at y = 11.8 m.
-			var bcn_mesa := _stepped_mesa(u, v, 24.0, -6.5, 13.5, 13.5, 11.8, 0.25, 6.0, 0.52)
-			h = maxf(h, bcn_mesa)
-			# Flatten beacon crown cleanly so beacon_tower.glb sits perfectly level.
-			var bcn_d := Vector2(u - 24.0, v + 6.5).length()
-			var bcn_flat := _smoothstep(9.0, 5.2, bcn_d)
-			h = lerpf(h, 11.8, bcn_flat)
+		&"grand_outpost":
+			# Massive Capital Port (Galleon's Reach): deep natural harbour fjord framed by sweeping curved
+			# headland massifs, lush terraced upper town highlands, and twin guardian cliff peaks!
+			var back_arc_w := _ridged_massif(u, v, Vector2(-88.0, 38.0), Vector2(-12.0, 94.0),
+				46.0, 44.0, target_peak * 0.72, target_peak, 18.0, 11.0, s + 1.3)
+			var back_arc_e := _ridged_massif(u, v, Vector2(-12.0, 94.0), Vector2(88.0, 42.0),
+				44.0, 42.0, target_peak, target_peak * 0.68, 16.0, 11.0, s + 2.7)
+			var arm_port := _ridged_massif(u, v, Vector2(-86.0, 32.0), Vector2(-78.0, -96.0),
+				38.0, 26.0, target_peak * 0.60, target_peak * 0.36, -14.0, 9.0, s + 4.1)
+			var arm_stbd := _ridged_massif(u, v, Vector2(86.0, 36.0), Vector2(76.0, -88.0),
+				36.0, 26.0, target_peak * 0.54, target_peak * 0.34, 14.0, 9.0, s + 5.5)
+			var town_terrace := _terraced_cliff(u, v, 0.0, 32.0, 66.0, 42.0, 16.5, 0.05, 3, 0.56, s + 6.9)
+			var east_overlook := _terraced_cliff(u, v, 56.0, -24.0, 28.0, 26.0, 24.0, -0.35, 3, 0.48, s + 8.2)
+			h = maxf(h, maxf(maxf(back_arc_w, back_arc_e), maxf(arm_port, arm_stbd)))
+			h = maxf(h, maxf(town_terrace, east_overlook))
+			h += ridge_n * 3.0 * _smoothstep(10.0, 32.0, h)
+			h = _grade_outpost_harbour(h, u, v, radius, true)
 
-			# Smoothly graded walkable harbour village terrace (u in [-18..16], v in [-26..-1]).
-			var plaza_u := _smoothstep(22.0, 13.0, absf(u + 1.5))
-			var plaza_v := _smoothstep(-28.5, -23.5, v) * _smoothstep(6.0, -3.5, v)
-			var plaza_mask := plaza_u * plaza_v
-			var plaza_target := lerpf(0.35, 3.35, clampf((v + 25.8) / 18.5, 0.0, 1.0))
-			h = lerpf(h, plaza_target, plaza_mask * 0.94)
-
-			# Carve clean deep-water harbour pier channel & mooring basin (v <= -25.8).
-			var chan_u := _smoothstep(20.0, 10.5, absf(u - 1.5))
-			var chan_v := _smoothstep(-24.2, -29.5, v)
-			var chan_mask := chan_u * chan_v
-			var chan_depth := lerpf(0.38, -7.8, clampf((-25.5 - v) / 15.5, 0.0, 1.0))
-			chan_depth = minf(chan_depth, lerpf(-7.8, SEA_FLOOR_Y, clampf((-41.0 - v) / 28.0, 0.0, 1.0)))
-			h = lerpf(h, minf(h, chan_depth), chan_mask)
-
-			# Guarantee exact gentle walkable sand ramp landing right at dock ramp foot (u=0, v=-25.75).
-			var ramp_d := Vector2(u * 0.65, v + 25.75).length()
-			var ramp_blend := _smoothstep(6.5, 2.2, ramp_d)
-			h = lerpf(h, 0.34, ramp_blend)
+		&"sea_stack":
+			# Dramatic razor-ridged coastal sea-stack monolith & twin crooked rock fangs rising from turquoise shallows!
+			var fang_main := _ridged_massif(u, v, Vector2(-9.0 * scale_r, 8.0 * scale_r),
+				Vector2(10.0 * scale_r, -3.0 * scale_r), 16.0 * scale_r, 13.0 * scale_r,
+				target_peak, target_peak * 0.72, 4.5 * scale_r, 7.5, s + 1.7)
+			var fang_sub := _terraced_cliff(u, v, -15.0 * scale_r, -10.0 * scale_r,
+				12.0 * scale_r, 11.0 * scale_r, target_peak * 0.58, 0.65, 3, 0.24, s + 3.2)
+			h = maxf(h, maxf(fang_main, fang_sub))
+			h += ridge_n * 3.2 * _smoothstep(6.0, 22.0, h)
+			# Carve a tiny walkable golden sandbar landing pocket on the -v seaward shelf.
+			var pocket := _smoothstep(18.0 * scale_r, 6.0 * scale_r, absf(u - 3.0 * scale_r)) * _smoothstep(-2.0 * scale_r, -20.0 * scale_r, v)
+			if d_shore < 0.0 and pocket > 0.001:
+				var p_h := 1.45 + 0.95 * clampf((-d_shore - 3.0) / (14.0 * scale_r), 0.0, 1.0)
+				h = lerpf(h, minf(h, p_h), pocket * 0.85)
 
 		&"treasure_peak":
-			# Iconic Cutlass Cay silhouette (matching image_2.png):
-			# Sweeping golden sandy landing cove on the -v flank + towering twin pale-limestone spires!
-			var sp1 := _faceted_spire(u, v, -3.0 * scale_r, 12.0 * scale_r, 25.0 * scale_r, 22.0 * scale_r, target_peak, 0.25, 5.0, 1.32)
-			var sp2 := _faceted_spire(u, v, 17.0 * scale_r, 4.0 * scale_r, 17.0 * scale_r, 16.0 * scale_r, target_peak * 0.68, -0.55, 5.0, 1.42)
-			var sp3 := _faceted_spire(u, v, -22.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, 14.0 * scale_r, target_peak * 0.45, 0.85, 4.0, 1.50)
-			h = maxf(h, maxf(sp1, maxf(sp2, sp3)))
+			# Iconic Cutlass Cay: sweeping golden landing cove + curved terraced twin limestone ridge peaks!
+			var ridge_main := _ridged_massif(u, v, Vector2(-14.0 * scale_r, 16.0 * scale_r),
+				Vector2(10.0 * scale_r, 8.0 * scale_r), 22.0 * scale_r, 17.0 * scale_r,
+				target_peak, target_peak * 0.74, 6.0 * scale_r, 9.0, s + 0.9)
+			var spire_east := _terraced_cliff(u, v, 19.0 * scale_r, 2.0 * scale_r,
+				16.0 * scale_r, 15.0 * scale_r, target_peak * 0.68, -0.55, 3, 0.26, s + 2.3)
+			var shoulder_w := _terraced_cliff(u, v, -22.0 * scale_r, 14.0 * scale_r,
+				15.0 * scale_r, 14.0 * scale_r, target_peak * 0.44, 0.85, 2, 0.42, s + 4.1)
+			h = maxf(h, maxf(ridge_main, maxf(spire_east, shoulder_w)))
 			h += ridge_n * 3.2 * _smoothstep(8.0, 26.0, h)
 			# Grade a wide, welcoming golden sand cove on the -v landing beach.
-			# Strictly monotonic inland from the shoreline contour (>= 1.45 m once
-			# inland of the wet shore ramp) so ocean swells never poke through mid-beach.
 			var cove_u := _smoothstep(30.0 * scale_r, 12.0 * scale_r, absf(u - 2.0 * scale_r))
 			var cove_v := _smoothstep(6.0 * scale_r, -16.0 * scale_r, v)
 			var cove_mask := cove_u * cove_v
@@ -539,29 +618,50 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 				h = lerpf(h, minf(h, cove_h), cove_mask * 0.82)
 
 		&"twin_spires":
-			# Soaring cathedral-like twin pale-limestone needles separated by a walkable green saddle!
-			var n1 := _faceted_spire(u, v, -16.0 * scale_r, 4.0 * scale_r, 21.0 * scale_r, 20.0 * scale_r, target_peak, 0.42, 5.0, 1.25)
-			var n2 := _faceted_spire(u, v, 18.0 * scale_r, -2.0 * scale_r, 19.0 * scale_r, 18.0 * scale_r, target_peak * 0.76, -0.38, 5.0, 1.30)
-			var crag := _faceted_spire(u, v, 2.0 * scale_r, 22.0 * scale_r, 15.0 * scale_r, 14.0 * scale_r, target_peak * 0.42, 1.1, 4.0, 1.48)
-			h = maxf(h, maxf(n1, maxf(n2, crag)))
-			h += ridge_n * 3.4 * _smoothstep(10.0, 30.0, h)
+			# Soaring twin terraced cathedral massifs framing a lush emerald highland canyon & waterfall cliff!
+			var m_west := _ridged_massif(u, v, Vector2(-24.0 * scale_r, -12.0 * scale_r),
+				Vector2(-18.0 * scale_r, 24.0 * scale_r), 24.0 * scale_r, 22.0 * scale_r,
+				target_peak * 0.82, target_peak, -8.0 * scale_r, 11.5, s + 1.2)
+			var m_east := _ridged_massif(u, v, Vector2(22.0 * scale_r, -14.0 * scale_r),
+				Vector2(20.0 * scale_r, 20.0 * scale_r), 21.0 * scale_r, 22.0 * scale_r,
+				target_peak * 0.70, target_peak * 0.84, 7.0 * scale_r, 11.0, s + 2.8)
+			var head_cliff := _terraced_cliff(u, v, 0.0, 28.0 * scale_r,
+				24.0 * scale_r, 18.0 * scale_r, target_peak * 0.44, 0.15, 3, 0.48, s + 4.4)
+			var saddle_shelf := _terraced_cliff(u, v, 0.0, 2.0 * scale_r,
+				18.0 * scale_r, 24.0 * scale_r, 14.5, 0.0, 2, 0.62, s + 5.6)
+			h = maxf(h, maxf(maxf(m_west, m_east), maxf(head_cliff, saddle_shelf)))
+			# Carve a scenic walkable emerald canyon floor descending from the waterfall headwall to the -v cove!
+			var canyon_u := _smoothstep(15.0 * scale_r, 5.5 * scale_r, absf(u))
+			var canyon_v := _smoothstep(18.0 * scale_r, 8.0 * scale_r, v) * _smoothstep(-46.0 * scale_r, -28.0 * scale_r, v)
+			var canyon_t := clampf((v + 38.0 * scale_r) / (50.0 * scale_r), 0.0, 1.0)
+			var canyon_h := lerpf(1.8, 12.5, canyon_t * canyon_t * (3.0 - 2.0 * canyon_t))
+			h = lerpf(h, minf(h, canyon_h), canyon_u * canyon_v * 0.82)
+			h += ridge_n * 3.4 * _smoothstep(14.0, 36.0, h)
 
 		&"crescent_lagoon":
-			# C-shaped coral-sand ring embracing a glowing turquoise shallow lagoon + back crag!
+			# Broad coral-sand ring embracing a vast turquoise shallow lagoon + sculpted terraced back headland!
 			var lag_d := Vector2(u, v + 8.0 * scale_r).length()
 			var lag_mouth := _smoothstep(20.0 * scale_r, 6.0 * scale_r, absf(u)) * _smoothstep(-6.0 * scale_r, -26.0 * scale_r, v)
-			var lag_pool := _smoothstep(28.0 * scale_r, 14.0 * scale_r, lag_d)
+			var lag_pool := _smoothstep(29.0 * scale_r, 14.0 * scale_r, lag_d)
 			var lagoon_mask := clampf(maxf(lag_pool, lag_mouth), 0.0, 1.0)
-			var back_crag := _faceted_spire(u, v, 4.0 * scale_r, 29.0 * scale_r, 21.0 * scale_r, 16.0 * scale_r, target_peak, 0.18, 5.0, 1.40)
-			var horn_w := _faceted_spire(u, v, -31.0 * scale_r, 8.0 * scale_r, 14.0 * scale_r, 18.0 * scale_r, target_peak * 0.42, 0.65, 4.0, 1.55)
-			h = maxf(h, maxf(back_crag, horn_w))
+			var back_ridge := _ridged_massif(u, v, Vector2(-18.0 * scale_r, 32.0 * scale_r),
+				Vector2(24.0 * scale_r, 28.0 * scale_r), 18.0 * scale_r, 16.0 * scale_r,
+				target_peak * 0.86, target_peak, 6.0 * scale_r, 8.5, s + 1.5)
+			var horn_w := _terraced_cliff(u, v, -33.0 * scale_r, 6.0 * scale_r,
+				15.0 * scale_r, 18.0 * scale_r, target_peak * 0.44, 0.65, 2, 0.46, s + 3.0)
+			h = maxf(h, maxf(back_ridge, horn_w))
 			h = lerpf(h, -2.2 + 0.5 * detail_n, lagoon_mask * 0.92)
 
 		&"sea_arch":
-			# Twin coastal headlands cradling a bright sandy tide bay (crowned with rock_arch.glb).
-			var b_l := _faceted_spire(u, v, -24.0 * scale_r, 6.0 * scale_r, 21.0 * scale_r, 22.0 * scale_r, target_peak, 0.30, 5.0, 1.38)
-			var b_r := _faceted_spire(u, v, 24.0 * scale_r, 10.0 * scale_r, 19.0 * scale_r, 20.0 * scale_r, target_peak * 0.78, -0.45, 5.0, 1.42)
-			var b_back := _faceted_spire(u, v, 0.0, 26.0 * scale_r, 18.0 * scale_r, 15.0 * scale_r, target_peak * 0.52, 0.12, 4.0, 1.50)
+			# Twin terraced coastal headlands cradling a bright sandy tide bay (crowned with rock_arch.glb).
+			var b_l := _ridged_massif(u, v, Vector2(-28.0 * scale_r, -6.0 * scale_r),
+				Vector2(-18.0 * scale_r, 22.0 * scale_r), 20.0 * scale_r, 18.0 * scale_r,
+				target_peak * 0.78, target_peak, -5.0 * scale_r, 9.0, s + 1.1)
+			var b_r := _ridged_massif(u, v, Vector2(26.0 * scale_r, -2.0 * scale_r),
+				Vector2(18.0 * scale_r, 24.0 * scale_r), 18.0 * scale_r, 18.0 * scale_r,
+				target_peak * 0.66, target_peak * 0.80, 5.0 * scale_r, 9.0, s + 2.5)
+			var b_back := _terraced_cliff(u, v, 0.0, 28.0 * scale_r,
+				20.0 * scale_r, 16.0 * scale_r, target_peak * 0.54, 0.12, 3, 0.45, s + 3.9)
 			h = maxf(h, maxf(b_l, maxf(b_r, b_back)))
 			# Soft sandy cove trough between the twin bluffs.
 			var bay := _smoothstep(18.0 * scale_r, 6.0 * scale_r, absf(u)) * _smoothstep(12.0 * scale_r, -16.0 * scale_r, v)
@@ -569,21 +669,28 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 
 		&"fort_rock":
 			# Tiered coral-limestone Watch Mesa crowned by a level bastion plateau,
-			# a walkable sloped landing ramp from the -v cove, and twin rear citadel crags!
+			# a walkable sloped landing ramp from the -v cove, and twin sculpted rear citadel ridges!
 			var bastion_v := 2.0 * scale_r
-			var bastion_y := clampf(target_peak * 0.42, 14.5, 19.5)
-			var mesa := _stepped_mesa(u, v, 0.0, bastion_v, 34.0 * scale_r, 31.0 * scale_r, bastion_y, 0.20, 8.0, 0.54)
-			var crag_l := _faceted_spire(u, v, -17.0 * scale_r, 27.0 * scale_r, 18.0 * scale_r, 17.0 * scale_r, target_peak, 0.32, 5.0, 1.32)
-			var crag_r := _faceted_spire(u, v, 18.0 * scale_r, 24.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, target_peak * 0.78, -0.38, 5.0, 1.38)
-			h = maxf(h, maxf(mesa, maxf(crag_l, crag_r)))
+			var bastion_y := clampf(target_peak * 0.38, 15.2, 19.5)
+			var mesa := _terraced_cliff(u, v, 0.0, bastion_v, 34.0 * scale_r, 31.0 * scale_r,
+				bastion_y, 0.20, 3, 0.56, s + 1.4)
+			var rear_ridge_l := _ridged_massif(u, v, Vector2(-32.0 * scale_r, 18.0 * scale_r),
+				Vector2(-6.0 * scale_r, 32.0 * scale_r), 18.0 * scale_r, 16.0 * scale_r,
+				target_peak * 0.84, target_peak, 6.0 * scale_r, 9.0, s + 2.6)
+			var rear_ridge_r := _ridged_massif(u, v, Vector2(6.0 * scale_r, 30.0 * scale_r),
+				Vector2(30.0 * scale_r, 16.0 * scale_r), 16.0 * scale_r, 15.0 * scale_r,
+				target_peak * 0.82, target_peak * 0.64, -5.0 * scale_r, 9.0, s + 4.0)
+			h = maxf(h, maxf(mesa, maxf(rear_ridge_l, rear_ridge_r)))
 			h += ridge_n * 2.2 * _smoothstep(18.0, 34.0, h)
 			# Level the bastion courtyard & gun terrace plateau cleanly so walls & cannons sit flush.
 			var mesa_d := Vector2(u, v - bastion_v).length()
-			var mesa_flat := _smoothstep(16.2 * scale_r, 13.4 * scale_r, mesa_d)
+			var flat_in := maxf(15.2, 13.4 * scale_r)
+			var flat_out := maxf(18.5, 16.2 * scale_r)
+			var mesa_flat := _smoothstep(flat_out, flat_in, mesa_d)
 			h = lerpf(h, bastion_y, mesa_flat)
 			# Walkable sloped landing ramp from the -v sandy cove straight up into the bastion gateway.
 			var ramp_u := _smoothstep(14.0 * scale_r, 5.6 * scale_r, absf(u))
-			var ramp_v := _smoothstep(-44.0 * scale_r, -37.0 * scale_r, v) * _smoothstep(-7.5 * scale_r, -12.5 * scale_r, v)
+			var ramp_v := _smoothstep(-46.0 * scale_r, -36.0 * scale_r, v) * _smoothstep(-7.0 * scale_r, -12.5 * scale_r, v)
 			var ramp_t := clampf((v + 38.0 * scale_r) / (27.5 * scale_r), 0.0, 1.0)
 			var ramp_h := lerpf(1.75, bastion_y, ramp_t)
 			h = lerpf(h, ramp_h, ramp_u * ramp_v * 0.95)
@@ -594,23 +701,65 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 				var cove_h := 1.45 + 1.15 * clampf((-d_shore - 4.0) / (20.0 * scale_r), 0.0, 1.0)
 				h = lerpf(h, minf(h, cove_h), cove_u * cove_v * 0.78)
 
+		&"grand_citadel":
+			# Massive Multi-Biome Flagship Citadel (Sovereign's Bastion, 364 m across!):
+			# Crowned by an elevated FortBastion + FortVault plateau, flanked by outer bastion headlands,
+			# sweeping lush emerald jungle temple terraces, a waterfall cliff drop, and a 96 m rear massif!
+			var bastion_v := 18.0
+			var bastion_y := clampf(target_peak * 0.24, 21.0, 25.0)
+			var cit_mesa := _terraced_cliff(u, v, 0.0, bastion_v, 48.0, 44.0, bastion_y, 0.12, 3, 0.56, s + 0.8)
+			var rear_w := _ridged_massif(u, v, Vector2(-106.0, 54.0), Vector2(-12.0, 108.0),
+				48.0, 46.0, target_peak * 0.78, target_peak, 22.0, 11.5, s + 2.1)
+			var rear_e := _ridged_massif(u, v, Vector2(-12.0, 108.0), Vector2(96.0, 56.0),
+				46.0, 44.0, target_peak, target_peak * 0.80, 18.0, 11.5, s + 3.4)
+			var temple_terrace_w := _terraced_cliff(u, v, -76.0, 14.0, 46.0, 44.0, 26.0, 0.28, 3, 0.58, s + 4.8)
+			var temple_terrace_e := _terraced_cliff(u, v, 74.0, 8.0, 46.0, 42.0, 30.0, -0.32, 3, 0.56, s + 6.1)
+			var prom_w := _terraced_cliff(u, v, -68.0, -68.0, 34.0, 32.0, 15.5, 0.45, 2, 0.54, s + 7.5)
+			var prom_e := _terraced_cliff(u, v, 68.0, -64.0, 34.0, 32.0, 16.0, -0.40, 2, 0.54, s + 8.9)
+			h = maxf(h, maxf(cit_mesa, maxf(rear_w, rear_e)))
+			h = maxf(h, maxf(maxf(temple_terrace_w, temple_terrace_e), maxf(prom_w, prom_e)))
+			h += ridge_n * 3.2 * _smoothstep(16.0, 42.0, h)
+			# Carve a dramatic eastern waterfall plunge cove right below temple_terrace_e (u ~ 56, v ~ -26).
+			var wf_cove := _smoothstep(24.0, 8.0, Vector2(u - 54.0, v + 30.0).length())
+			h = lerpf(h, minf(h, 2.2), wf_cove * 0.84)
+			# Level the central FortBastion & FortVault courtyard plateau cleanly.
+			var cit_d := Vector2(u, v - bastion_v).length()
+			h = lerpf(h, bastion_y, _smoothstep(28.0, 22.0, cit_d))
+			# Grand walkable graded coastal approach road from the -v landing beach up to Bay 0 gateway!
+			var g_ramp_u := _smoothstep(18.0, 8.0, absf(u))
+			var g_ramp_v := _smoothstep(-105.0, -82.0, v) * _smoothstep(4.0, -6.0, v)
+			var g_ramp_t := clampf((v + 86.0) / 82.0, 0.0, 1.0)
+			var g_ramp_h := lerpf(1.75, bastion_y, g_ramp_t)
+			h = lerpf(h, g_ramp_h, g_ramp_u * g_ramp_v * 0.94)
+			# Welcoming sweeping golden sand landing cove along -v shoreline.
+			var g_cove_u := _smoothstep(54.0, 22.0, absf(u))
+			var g_cove_v := _smoothstep(-68.0, -104.0, v)
+			if d_shore < 0.0 and g_cove_u * g_cove_v > 0.001:
+				var gc_h := 1.45 + 1.35 * clampf((-d_shore - 4.0) / 36.0, 0.0, 1.0)
+				h = lerpf(h, minf(h, gc_h), g_cove_u * g_cove_v * 0.80)
+
 		&"wreck_shoal":
 			# Broad shallow sandbars & jagged knife-edge limestone ribs for dramatic shipwrecks.
-			var rib1 := _faceted_spire(u, v, -14.0 * scale_r, 14.0 * scale_r, 22.0 * scale_r, 11.0 * scale_r, target_peak, 0.52, 4.0, 1.35)
-			var rib2 := _faceted_spire(u, v, 18.0 * scale_r, 8.0 * scale_r, 16.0 * scale_r, 10.0 * scale_r, target_peak * 0.72, -0.62, 4.0, 1.45)
-			var rib3 := _faceted_spire(u, v, 2.0 * scale_r, -10.0 * scale_r, 11.0 * scale_r, 14.0 * scale_r, target_peak * 0.36, 0.15, 4.0, 1.55)
+			var rib1 := _ridged_massif(u, v, Vector2(-24.0 * scale_r, 12.0 * scale_r),
+				Vector2(-2.0 * scale_r, 18.0 * scale_r), 14.0 * scale_r, 11.0 * scale_r,
+				target_peak * 0.82, target_peak, 4.0 * scale_r, 7.5, s + 1.2)
+			var rib2 := _ridged_massif(u, v, Vector2(12.0 * scale_r, 14.0 * scale_r),
+				Vector2(26.0 * scale_r, 2.0 * scale_r), 12.0 * scale_r, 10.0 * scale_r,
+				target_peak * 0.74, target_peak * 0.45, -3.5 * scale_r, 7.0, s + 2.5)
+			var rib3 := _terraced_cliff(u, v, 2.0 * scale_r, -10.0 * scale_r,
+				11.0 * scale_r, 13.0 * scale_r, target_peak * 0.36, 0.15, 2, 0.36, s + 3.8)
 			h = maxf(h, maxf(rib1, maxf(rib2, rib3)))
 			# Broad sandy shoal apron extending seaward on -v.
 			var shoal := _smoothstep(42.0 * scale_r, 14.0 * scale_r, Vector2(u, v + 22.0 * scale_r).length())
 			h = maxf(h, lerpf(-3.2, 1.8, shoal) + detail_n * 0.6)
 
 		&"volcano_crag":
-			# Towering jagged basalt volcanic cone with a true recessed summit caldera bowl
-			# ringed by jagged basalt fangs (and a subtle seaward breach toward -v)!
+			# Colossal multi-ribbed basalt stratovolcano with recessed summit caldera bowl,
+			# jagged rim fangs (peaking at 14.5 * scale_r), radiating lava-flow buttress ridges & fumarole benches!
 			var cv := v - 4.0 * scale_r
 			var v_dist := Vector2(u, cv).length()
 			var v_ang := atan2(cv, u)
-			var cone := _faceted_spire(u, v, 0.0, 4.0 * scale_r, 50.0 * scale_r, 48.0 * scale_r, target_peak * 1.14, 0.18, 7.0, 1.08)
+			var cone := _faceted_spire(u, v, 0.0, 4.0 * scale_r, 50.0 * scale_r, 48.0 * scale_r, target_peak * 1.12, 0.18, 7.0, 1.08)
 			var rim_band := exp(-pow((v_dist - 14.5 * scale_r) / (6.8 * scale_r), 2.0))
 			var rim_jags := 1.0 + 0.16 * cos(v_ang * 5.0 + 0.4) + 0.10 * sin(v_ang * 3.0 - 0.7)
 			var breach := _smoothstep(0.35, 0.95, -sin(v_ang)) * 0.24
@@ -619,12 +768,29 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			var bowl_t := clampf((v_dist - 6.5 * scale_r) / (5.5 * scale_r), 0.0, 1.0)
 			var bowl_floor := target_peak * (0.68 + 0.09 * bowl_t * bowl_t)
 			cone = lerpf(cone, minf(cone, bowl_floor), bowl_mask)
-			var spur := _faceted_spire(u, v, 26.0 * scale_r, 16.0 * scale_r, 18.0 * scale_r, 16.0 * scale_r, target_peak * 0.48, -0.6, 5.0, 1.42)
-			h = maxf(h, maxf(cone, spur))
-			h += ridge_n * 4.2 * _smoothstep(12.0, 40.0, h) * (1.0 - bowl_mask * 0.80)
-			# Narrow walkable pocket beach on the -v landing flank.
-			var pock := _smoothstep(20.0 * scale_r, 8.0 * scale_r, absf(u)) * _smoothstep(-14.0 * scale_r, -36.0 * scale_r, v)
-			h = lerpf(h, minf(h, 2.2), pock * 0.72)
+			# Radiating sculpted basalt lava-flow ribs & fumarole cliff benches outside the caldera bowl.
+			var rib_e := _ridged_massif(u, v, Vector2(18.0 * scale_r, 10.0 * scale_r),
+				Vector2(44.0 * scale_r, 22.0 * scale_r), 18.0 * scale_r, 14.0 * scale_r,
+				target_peak * 0.60, target_peak * 0.26, 6.0 * scale_r, 11.0, s + 1.6)
+			var rib_w := _ridged_massif(u, v, Vector2(-18.0 * scale_r, 12.0 * scale_r),
+				Vector2(-46.0 * scale_r, -6.0 * scale_r), 18.0 * scale_r, 14.0 * scale_r,
+				target_peak * 0.56, target_peak * 0.22, -7.0 * scale_r, 11.0, s + 3.1)
+			var rib_n := _ridged_massif(u, v, Vector2(-4.0 * scale_r, 20.0 * scale_r),
+				Vector2(10.0 * scale_r, 48.0 * scale_r), 20.0 * scale_r, 15.0 * scale_r,
+				target_peak * 0.62, target_peak * 0.28, 8.0 * scale_r, 11.0, s + 4.7)
+			var bench_sw := _terraced_cliff(u, v, -28.0 * scale_r, -26.0 * scale_r,
+				18.0 * scale_r, 16.0 * scale_r, target_peak * 0.24, 0.5, 2, 0.55, s + 6.2)
+			var bench_se := _terraced_cliff(u, v, 28.0 * scale_r, -24.0 * scale_r,
+				18.0 * scale_r, 16.0 * scale_r, target_peak * 0.26, -0.45, 2, 0.55, s + 7.4)
+			var outer_ribs := maxf(maxf(rib_e, rib_w), maxf(rib_n, maxf(bench_sw, bench_se)))
+			h = maxf(h, maxf(cone, lerpf(outer_ribs, cone, bowl_mask)))
+			# Subtle geological basalt strata outside the caldera bowl.
+			if h > 8.0 and bowl_mask < 0.35:
+				h = lerpf(h, _apply_geological_terraces(h, 12.5, 0.42), 1.0 - bowl_mask * 2.5)
+			h += ridge_n * 4.2 * _smoothstep(12.0, 44.0, h) * (1.0 - bowl_mask * 0.85)
+			# Walkable dark-ash pocket beach on the -v landing flank.
+			var pock := _smoothstep(22.0 * scale_r, 8.0 * scale_r, absf(u)) * _smoothstep(-18.0 * scale_r, -40.0 * scale_r, v)
+			h = lerpf(h, minf(h, 2.2), pock * 0.74)
 
 		&"palm_atoll":
 			# Lush coral ring atoll with turquoise center lagoon, sandy dunes, and a single windward crag.
@@ -635,46 +801,174 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			var inner_lagoon := _smoothstep(radius * 0.56, radius * 0.28, c_dist)
 			atoll_h = lerpf(atoll_h, -2.0 + detail_n * 0.4, inner_lagoon)
 			atoll_h = lerpf(atoll_h, -2.8, channel * 0.85)
-			var rock_head := _faceted_spire(u, v, 22.0 * scale_r, 24.0 * scale_r, 18.0 * scale_r, 16.0 * scale_r, target_peak, 0.4, 5.0, 1.42)
+			var rock_head := _terraced_cliff(u, v, 22.0 * scale_r, 24.0 * scale_r,
+				18.0 * scale_r, 16.0 * scale_r, target_peak, 0.4, 3, 0.35, s + 2.1)
 			h = maxf(maxf(base_h * 0.35, atoll_h), rock_head)
 
 		&"skull_bluff":
-			# Ominous stepped limestone headland mesa with twin recessed cliff brow hollows & crown crags!
-			var head := _stepped_mesa(u, v, 0.0, 10.0 * scale_r, 34.0 * scale_r, 28.0 * scale_r, target_peak * 0.86, 0.08, 6.0, 0.42)
-			var crown_l := _faceted_spire(u, v, -14.0 * scale_r, 14.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, target_peak, 0.25, 5.0, 1.35)
-			var crown_r := _faceted_spire(u, v, 14.0 * scale_r, 14.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, target_peak * 0.92, -0.25, 5.0, 1.35)
-			h = maxf(h, maxf(head, maxf(crown_l, crown_r)))
+			# Monumental stepped limestone skull headland with sculpted jaw ridges, twin dark brow hollows & lush terraces!
+			var head := _terraced_cliff(u, v, 0.0, 10.0 * scale_r, 36.0 * scale_r, 30.0 * scale_r,
+				target_peak * 0.84, 0.08, 4, 0.44, s + 1.0)
+			var brow_ridge := _ridged_massif(u, v, Vector2(-22.0 * scale_r, 14.0 * scale_r),
+				Vector2(22.0 * scale_r, 14.0 * scale_r), 18.0 * scale_r, 18.0 * scale_r,
+				target_peak, target_peak * 0.94, 8.0 * scale_r, 10.0, s + 2.4)
+			var lower_terrace_w := _terraced_cliff(u, v, -34.0 * scale_r, -12.0 * scale_r,
+				18.0 * scale_r, 18.0 * scale_r, 16.5, 0.35, 2, 0.58, s + 3.7)
+			var lower_terrace_e := _terraced_cliff(u, v, 34.0 * scale_r, -10.0 * scale_r,
+				18.0 * scale_r, 18.0 * scale_r, 15.0, -0.35, 2, 0.58, s + 4.9)
+			h = maxf(h, maxf(maxf(head, brow_ridge), maxf(lower_terrace_w, lower_terrace_e)))
 			# Twin dark cliff brow hollows on the -v sea-facing wall.
-			var h_l := _smoothstep(10.0 * scale_r, 3.0 * scale_r, Vector2(u + 11.0 * scale_r, v + 8.0 * scale_r).length())
-			var h_r := _smoothstep(10.0 * scale_r, 3.0 * scale_r, Vector2(u - 11.0 * scale_r, v + 8.0 * scale_r).length())
-			h -= (h_l + h_r) * (target_peak * 0.22)
+			var h_l := _smoothstep(10.5 * scale_r, 3.0 * scale_r, Vector2(u + 11.5 * scale_r, v + 8.0 * scale_r).length())
+			var h_r := _smoothstep(10.5 * scale_r, 3.0 * scale_r, Vector2(u - 11.5 * scale_r, v + 8.0 * scale_r).length())
+			h -= (h_l + h_r) * (target_peak * 0.24)
 			h += ridge_n * 2.8 * _smoothstep(10.0, 32.0, h)
 
 		&"smuggler_cove":
-			# Steep horseshoe cliff amphitheatre with framing coastal cheeks enclosing a hidden pocket beach!
-			var back_wall := _faceted_spire(u, v, 0.0, 26.5 * scale_r, 38.0 * scale_r, 23.0 * scale_r, target_peak, 0.05, 6.0, 1.24)
-			var wing_l := _faceted_spire(u, v, -28.0 * scale_r, 2.0 * scale_r, 18.0 * scale_r, 24.0 * scale_r, target_peak * 0.74, 0.35, 5.0, 1.38)
-			var wing_r := _faceted_spire(u, v, 28.0 * scale_r, 4.0 * scale_r, 18.0 * scale_r, 22.0 * scale_r, target_peak * 0.68, -0.35, 5.0, 1.40)
-			var cheek_l := _faceted_spire(u, v, -15.5 * scale_r, 13.0 * scale_r, 14.5 * scale_r, 15.5 * scale_r, target_peak * 0.48, 0.25, 5.0, 1.32)
-			var cheek_r := _faceted_spire(u, v, 15.5 * scale_r, 13.0 * scale_r, 14.5 * scale_r, 15.5 * scale_r, target_peak * 0.45, -0.28, 5.0, 1.32)
-			h = maxf(h, maxf(maxf(back_wall, maxf(wing_l, wing_r)), maxf(cheek_l, cheek_r)))
+			# Steep terraced horseshoe cliff amphitheatre enclosing a hidden pocket beach & cliff-embedded sea cave!
+			var back_ridge := _ridged_massif(u, v, Vector2(-28.0 * scale_r, 22.0 * scale_r),
+				Vector2(28.0 * scale_r, 22.0 * scale_r), 24.0 * scale_r, 24.0 * scale_r,
+				target_peak * 0.82, target_peak, 12.0 * scale_r, 9.5, s + 1.3)
+			var wing_l := _ridged_massif(u, v, Vector2(-28.0 * scale_r, 22.0 * scale_r),
+				Vector2(-32.0 * scale_r, -12.0 * scale_r), 20.0 * scale_r, 16.0 * scale_r,
+				target_peak * 0.78, target_peak * 0.42, -5.0 * scale_r, 9.0, s + 2.7)
+			var wing_r := _ridged_massif(u, v, Vector2(28.0 * scale_r, 22.0 * scale_r),
+				Vector2(32.0 * scale_r, -10.0 * scale_r), 20.0 * scale_r, 16.0 * scale_r,
+				target_peak * 0.76, target_peak * 0.38, 5.0 * scale_r, 9.0, s + 3.9)
+			var v_grotto := 6.0 * scale_r
+			var cheek_l := _faceted_spire(u, v, -15.5, v_grotto + 7.5, 14.5, 15.5, target_peak * 0.48, 0.25, 5.0, 1.32)
+			var cheek_r := _faceted_spire(u, v, 15.5, v_grotto + 7.5, 14.5, 15.5, target_peak * 0.45, -0.28, 5.0, 1.32)
+			h = maxf(h, maxf(maxf(back_ridge, maxf(wing_l, wing_r)), maxf(cheek_l, cheek_r)))
 			# Sheltered sandy pocket cove carved right into the amphitheatre heart.
-			var cov := _smoothstep(22.0 * scale_r, 10.0 * scale_r, Vector2(u, v + 6.0 * scale_r).length())
-			var mouth := _smoothstep(13.0 * scale_r, 5.0 * scale_r, absf(u)) * _smoothstep(-2.0 * scale_r, -28.0 * scale_r, v)
-			var target_cov := lerpf(-2.4, 2.6, clampf((v + 24.0 * scale_r) / (26.0 * scale_r), 0.0, 1.0))
+			var cov := _smoothstep(24.0 * scale_r, 10.0 * scale_r, Vector2(u, v + 6.0 * scale_r).length())
+			var mouth := _smoothstep(14.0 * scale_r, 5.0 * scale_r, absf(u)) * _smoothstep(-2.0 * scale_r, -30.0 * scale_r, v)
+			var target_cov := lerpf(-2.4, 2.5, clampf((v + 24.0 * scale_r) / (26.0 * scale_r), 0.0, 1.0))
 			h = lerpf(h, minf(h, target_cov), clampf(maxf(cov, mouth), 0.0, 1.0) * 0.88)
-			# Carve a smooth walkable sea-cave grotto recess ~4.5 m deeper inland into the cliff foot
-			# with generous flat rear buffer (v <= 20.8) so rotated terrain triangles never poke inside the alcove.
-			var grotto_u := _smoothstep(10.6 * scale_r, 5.8 * scale_r, absf(u))
-			var grotto_v := _smoothstep(-1.5 * scale_r, 4.0 * scale_r, v) * _smoothstep(26.8 * scale_r, 20.8 * scale_r, v)
+			# Carve exact cave-relative walkable sea-cave grotto recess around v_grotto
+			# so the mountain tightly hugs the unscaled GrottoVaultMesh at any island scale!
+			var grotto_u := _smoothstep(11.0, 5.8, absf(u))
+			var grotto_v := _smoothstep(v_grotto - 7.5, v_grotto - 2.0, v) * _smoothstep(v_grotto + 20.5, v_grotto + 14.8, v)
 			var grotto_mask := grotto_u * grotto_v
 			if grotto_mask > 0.001:
-				var grotto_floor := lerpf(1.94, 2.38, clampf((v - 4.0 * scale_r) / (14.5 * scale_r), 0.0, 1.0))
+				var grotto_floor := lerpf(1.94, 2.38, clampf((v - (v_grotto - 2.0)) / 14.5, 0.0, 1.0))
 				h = lerpf(h, minf(h, grotto_floor), grotto_mask)
 
 	# Keep outer skirt pinned cleanly to SEA_FLOOR_Y so islands blend seamlessly into deep ocean.
 	var outer_t := _smoothstep(seabed_r - 12.0, seabed_r + 2.0, r)
 	return lerpf(h, SEA_FLOOR_Y, outer_t)
+
+
+static func _grade_outpost_harbour(h: float, u: float, v: float, radius: float, is_grand: bool) -> float:
+	# Exact unscaled harbour village, Beacon Tower headland shelf, and deep-water pier channel
+	# so Outpost.build_outpost_structures() sits flush & navigable at any outpost scale (62..166 m)!
+	var bcn_mesa := _stepped_mesa(u, v, 24.0, -6.5, 13.5, 13.5, 11.8, 0.25, 6.0, 0.52)
+	h = maxf(h, bcn_mesa)
+	var bcn_d := Vector2(u - 24.0, v + 6.5).length()
+	h = lerpf(h, 11.8, _smoothstep(9.0, 5.2, bcn_d))
+
+	# Smoothly graded walkable harbour village terrace (u in [-18..16], v in [-26..-1]).
+	var plaza_u := _smoothstep(23.0, 13.5, absf(u + 1.5))
+	var plaza_v := _smoothstep(-28.5, -23.5, v) * _smoothstep(7.0, -3.0, v)
+	var plaza_target := lerpf(0.35, 3.35, clampf((v + 25.8) / 18.5, 0.0, 1.0))
+	h = lerpf(h, plaza_target, plaza_u * plaza_v * 0.98)
+
+	# Deep-water harbour pier channel & mooring basin opening straight seaward from v = -25.8 to open sea!
+	var chan_outer := 36.0 if is_grand else 23.0
+	var chan_inner := 16.0 if is_grand else 11.5
+	# Widen the grand fjord channel naturally as it opens seaward past the dock pier.
+	var seaward_flare := clampf((-v - 42.0) * 0.28, 0.0, 24.0) if is_grand else 0.0
+	var chan_u := _smoothstep(chan_outer + seaward_flare, chan_inner + seaward_flare * 0.6, absf(u - 1.5))
+	var chan_v := _smoothstep(-24.2, -28.8, v)
+	var chan_depth := lerpf(0.35, -8.4, clampf((-25.8 - v) / 10.5, 0.0, 1.0))
+	chan_depth = minf(chan_depth, lerpf(-8.4, SEA_FLOOR_Y, clampf((-48.0 - v) / maxf(28.0, radius * 0.65), 0.0, 1.0)))
+	h = lerpf(h, minf(h, chan_depth), chan_u * chan_v)
+
+	# Guarantee exact gentle walkable sand ramp landing right at dock ramp foot (u=0, v=-25.75).
+	var ramp_d := Vector2(u * 0.65, v + 25.75).length()
+	h = lerpf(h, 0.34, _smoothstep(6.5, 2.2, ramp_d))
+	return h
+
+
+static func _apply_geological_terraces(raw_h: float, step_height: float, terrace_strength: float) -> float:
+	if raw_h <= 3.5 or step_height <= 0.5:
+		return raw_h
+	var q := raw_h / step_height
+	var base_q := floorf(q)
+	var frac := q - base_q
+	# Steep limestone/basalt cliff riser across 0.06..0.52 followed by a natural sloping strata bench.
+	var stepped := base_q + _smoothstep(0.06, 0.52, frac) * 0.86 + frac * 0.14
+	return lerpf(raw_h, stepped * step_height, clampf(terrace_strength, 0.0, 1.0))
+
+
+static func _ridged_massif(u: float, v: float, p_a: Vector2, p_b: Vector2,
+		width_a: float, width_b: float, height_a: float, height_b: float,
+		ridge_warp: float, strata_step: float, seed_f: float) -> float:
+	var ab := p_b - p_a
+	var len_sq := ab.length_squared()
+	if len_sq < 0.01:
+		return SEA_FLOOR_Y
+	var seg_len := sqrt(len_sq)
+	var dir := ab / seg_len
+	var perp := Vector2(-dir.y, dir.x)
+	var rel := Vector2(u, v) - p_a
+	var t_raw := rel.dot(dir) / seg_len
+	var t := clampf(t_raw, 0.0, 1.0)
+	var w := maxf(lerpf(width_a, width_b, t), 2.0)
+
+	# Exact bounding early-out before expensive noise evaluation (zero visual change, ~4x faster!).
+	var lateral_curve := ridge_warp * sin(t * PI)
+	var base_spine := p_a + ab * t + perp * lateral_curve
+	var max_reach := w * 1.50 + maxf(width_a, width_b) * 0.17
+	if Vector2(u, v).distance_squared_to(base_spine) >= max_reach * max_reach:
+		return SEA_FLOOR_Y
+
+	# Smooth curved headland spine + low-frequency geological ridge warp.
+	var warp_n := (_fbm2(u * 0.026 + seed_f, v * 0.026 - seed_f * 0.8) - 0.5) * 0.32
+	var spine_pt := base_spine + perp * (warp_n * maxf(width_a, width_b))
+	var dist := Vector2(u, v).distance_to(spine_pt)
+
+	# Eroded radial cliff gullies & angular rock buttresses along the flanks.
+	var gully_n := _fbm2(u * 0.055 - seed_f * 1.1, v * 0.055 + seed_f * 0.6)
+	var rib_mod := 0.84 + 0.34 * (1.0 - absf(gully_n * 2.0 - 1.0))
+	var d_norm := dist / (w * rib_mod)
+	if d_norm >= 1.25:
+		return SEA_FLOOR_Y
+
+	var crest_h := lerpf(height_a, height_b, t) * (0.92 + 0.16 * sin(t * PI) + 0.08 * (gully_n - 0.5))
+	# Convex shoulder profile so ridges feel monumental and craggy instead of narrow triangular pyramids.
+	var slope_u := clampf(1.0 - d_norm, 0.0, 1.0)
+	var prof := pow(slope_u, 1.12) * (0.82 + 0.18 * _smoothstep(0.0, 0.45, slope_u))
+	var h := prof * crest_h
+	if strata_step > 0.5 and h > 4.0:
+		h = _apply_geological_terraces(h, strata_step, 0.46)
+	return h
+
+
+static func _terraced_cliff(u: float, v: float, cx: float, cz: float, rx: float, rz: float,
+		height: float, yaw: float, terrace_levels: int, flat_crown: float, seed_f: float) -> float:
+	var dx := u - cx
+	var dz := v - cz
+	var c := cos(-yaw)
+	var s := sin(-yaw)
+	var lx := (dx * c - dz * s) / maxf(rx, 1.0)
+	var lz := (dx * s + dz * c) / maxf(rz, 1.0)
+	var r := sqrt(lx * lx + lz * lz)
+	if r >= 1.38:
+		return SEA_FLOOR_Y
+
+	# Domain-warped organic fracture silhouette instead of uniform radial petals.
+	var ang := atan2(lz, lx)
+	var rock_n := _fbm2(u * 0.042 + seed_f, v * 0.042 - seed_f * 0.65) - 0.5
+	var r_fac := r * (1.0 + 0.18 * rock_n + 0.09 * cos(ang * 5.0 + yaw * 1.4) + 0.05 * sin(ang * 7.0 - seed_f))
+	var t := clampf((1.0 - r_fac) / maxf(1.0 - flat_crown, 0.14), 0.0, 1.0)
+	var prof := t * t * (3.0 - 2.0 * t)
+	var h := prof * height
+	if terrace_levels >= 2 and t > 0.04 and t < 0.94:
+		var step_h := maxf(4.2, height / float(terrace_levels))
+		h = _apply_geological_terraces(h, step_h, 0.58)
+	# Subtle rolling highland grass undulation across the walkable crown plateau.
+	if t >= 0.85:
+		h += rock_n * minf(2.2, height * 0.06) * _smoothstep(0.85, 0.98, t)
+	return h
 
 
 static func _faceted_spire(u: float, v: float, cx: float, cz: float, rx: float, rz: float,
@@ -728,14 +1022,46 @@ static func _create_terrain_material(arch: StringName) -> ShaderMaterial:
 		&"volcano_crag":
 			mat.set_shader_parameter(&"cliff_tint", Color(0.45, 0.43, 0.48))
 			mat.set_shader_parameter(&"grass_tint", Color(0.76, 0.80, 0.56))
+			mat.set_shader_parameter(&"volcanic_amount", 1.0)
+			mat.set_shader_parameter(&"cliff_strata_scale", 0.72)
 		&"twin_spires":
-			mat.set_shader_parameter(&"cliff_tint", Color(1.02, 1.00, 0.96))
-			mat.set_shader_parameter(&"grass_tint", Color(0.92, 1.12, 0.90))
+			mat.set_shader_parameter(&"cliff_tint", Color(1.02, 1.00, 0.95))
+			mat.set_shader_parameter(&"grass_tint", Color(0.92, 1.12, 0.88))
+			mat.set_shader_parameter(&"lush_jungle_amount", 0.92)
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.48)
+			mat.set_shader_parameter(&"cliff_strata_scale", 0.84)
+		&"grand_citadel":
+			mat.set_shader_parameter(&"cliff_tint", Color(0.98, 0.96, 0.92))
+			mat.set_shader_parameter(&"grass_tint", Color(0.94, 1.10, 0.88))
+			mat.set_shader_parameter(&"lush_jungle_amount", 0.76)
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.58)
+			mat.set_shader_parameter(&"cliff_strata_scale", 0.74)
+			mat.set_shader_parameter(&"path_warmth", 0.52)
+		&"grand_outpost":
+			mat.set_shader_parameter(&"cliff_tint", Color(1.03, 0.99, 0.92))
+			mat.set_shader_parameter(&"grass_tint", Color(0.98, 1.06, 0.92))
+			mat.set_shader_parameter(&"lush_jungle_amount", 0.68)
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.24)
+			mat.set_shader_parameter(&"cliff_strata_scale", 0.78)
+			mat.set_shader_parameter(&"path_warmth", 0.68)
 		&"crescent_lagoon", &"palm_atoll":
 			mat.set_shader_parameter(&"cliff_tint", Color(1.04, 0.98, 0.88))
 			mat.set_shader_parameter(&"grass_tint", Color(1.06, 1.08, 0.92))
+			mat.set_shader_parameter(&"lush_jungle_amount", 0.52)
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.25)
+		&"smuggler_cove":
+			mat.set_shader_parameter(&"cliff_tint", Color(0.96, 0.94, 0.90))
+			mat.set_shader_parameter(&"grass_tint", Color(0.96, 1.05, 0.92))
+			mat.set_shader_parameter(&"lush_jungle_amount", 0.45)
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.36)
 		&"fort_rock", &"skull_bluff":
 			mat.set_shader_parameter(&"cliff_tint", Color(0.92, 0.90, 0.87))
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.42)
+			mat.set_shader_parameter(&"cliff_strata_scale", 0.90)
+		&"sea_stack":
+			mat.set_shader_parameter(&"cliff_tint", Color(0.92, 0.90, 0.88))
+			mat.set_shader_parameter(&"ruin_moss_amount", 0.22)
+			mat.set_shader_parameter(&"cliff_strata_scale", 1.32)
 		_:
 			mat.set_shader_parameter(&"cliff_tint", Color(1.0, 1.0, 1.0))
 			mat.set_shader_parameter(&"grass_tint", Color(1.0, 1.0, 1.0))
@@ -743,11 +1069,15 @@ static func _create_terrain_material(arch: StringName) -> ShaderMaterial:
 
 
 static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32Array,
-		grid_res: int, grid_half: float, mat: ShaderMaterial) -> void:
+		grid_res: int, grid_half: float, mat: ShaderMaterial,
+		arch: StringName = &"treasure_peak", landing_yaw: float = 0.0) -> void:
 	var stride := grid_res + 1
 	var span := grid_half * 2.0
 	var step := span / float(grid_res)
 	var vert_count := stride * stride
+	var cos_y := cos(landing_yaw)
+	var sin_y := sin(landing_yaw)
+	var peak_ref := maxf(island.peak_height, 24.0)
 
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -778,11 +1108,42 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 			var n := Vector3((hx0 - hx1) / dx_step, 1.0, (hz0 - hz1) / dz_step).normalized()
 			normals[idx] = n
 
-			# Subtle vertex crevice AO tint (brighter on ridges, slightly deeper in hollows).
-			var avg_n := 0.25 * (hx0 + hx1 + hz0 + hz1)
-			var curv := clampf((y - avg_n) * 0.16, -0.14, 0.10)
-			var shade := clampf(1.0 + curv, 0.84, 1.08)
-			colors[idx] = Color(shade, shade, shade, 1.0)
+			# 2-ring crevice AO darkening in ravines & inner terrace corners + ridge highlight pop.
+			var ix0b := maxi(ix - 2, 0)
+			var ix1b := mini(ix + 2, grid_res)
+			var iz0b := maxi(iz - 2, 0)
+			var iz1b := mini(iz + 2, grid_res)
+			var avg1 := 0.25 * (hx0 + hx1 + hz0 + hz1)
+			var avg2 := 0.25 * (grid[iz * stride + ix0b] + grid[iz * stride + ix1b] + grid[iz0b * stride + ix] + grid[iz1b * stride + ix])
+			var curv := clampf((y - avg1) * 0.14 + (y - avg2) * 0.08, -0.22, 0.11)
+			var shade := clampf(1.0 + curv, 0.78, 1.09)
+			var c_vert := Color(shade, shade, shade, 1.0)
+
+			# Subtle biome rock richness & warm sun-bleached coastal approach path tinting.
+			var u := x * cos_y - z * sin_y
+			var v := x * sin_y + z * cos_y
+			if arch == &"volcano_crag":
+				var rim_w := _smoothstep(peak_ref * 0.56, peak_ref * 0.82, y)
+				c_vert = c_vert.lerp(Color(0.84, 0.80, 0.78), _smoothstep(4.0, 26.0, y) * 0.35)
+				c_vert = c_vert.lerp(Color(1.06, 0.86, 0.72), rim_w * 0.35)
+			elif arch == &"twin_spires" or arch == &"grand_citadel":
+				if y > 8.0 and y < 32.0 and n.y > 0.78:
+					c_vert *= Color(0.92, 1.04, 0.90)
+			elif arch == &"sea_stack" or arch == &"skull_bluff":
+				if y > -1.5 and y < 4.0 and n.y < 0.72:
+					c_vert *= Color(0.84, 0.87, 0.86)
+
+			# Warm sunlit coastal trail tint along walkable harbour/bastion/grotto approach lanes.
+			var on_trail := false
+			if (arch == &"outpost" or arch == &"grand_outpost") and absf(u + 1.5) < 15.0 and v > -26.0 and v < -2.0:
+				on_trail = true
+			elif (arch == &"fort_rock" or arch == &"grand_citadel") and absf(u) < 9.5 and v < 8.0 and v > -78.0 and n.y > 0.84 and y > 1.3:
+				on_trail = true
+			elif arch == &"smuggler_cove" and absf(u) < 7.5 and v < 12.0 and v > -18.0 and n.y > 0.88 and y > 1.2:
+				on_trail = true
+			if on_trail:
+				c_vert = c_vert.lerp(Color(1.06, 1.02, 0.92), 0.38)
+			colors[idx] = c_vert
 
 	# Triangulate active cells (skip flat outer abyss beyond seabed_radius).
 	var max_r_sq := (island.seabed_radius + step * 2.0) * (island.seabed_radius + step * 2.0)
@@ -902,20 +1263,22 @@ static func _populate_gameplay_points(island: Island, landing_yaw: float,
 	var dig_pts: Array[Vector3] = []
 	var enemy_pts: Array[Vector3] = []
 	var basis := Basis(Vector3.UP, landing_yaw)
+	var max_dig := 7 if island.island_radius > 110.0 else 5
+	var max_enemies := 10 if island.island_radius > 110.0 else 6
 
 	# First look along the welcoming landing cove beach so starter dig sites are easy to reach on foot!
 	var beach_candidates: Array[Vector3] = []
-	for ring: float in [0.42, 0.58, 0.72, 0.84]:
-		for k in 24:
-			var ang := -PI * 0.5 + (float(k) - 12.0) * (TAU / 24.0)
+	for ring: float in [0.42, 0.58, 0.72, 0.84, 0.91, 0.96]:
+		for k in 28:
+			var ang := -PI * 0.5 + (float(k) - 14.0) * (TAU / 28.0)
 			var u: float = cos(ang) * island.island_radius * ring
 			var v: float = sin(ang) * island.island_radius * ring
 			var lp := basis * Vector3(u, 0.0, v)
 			var h := island.surface_height(lp.x, lp.z)
-			if h < 1.15 or h > 5.2:
+			if h < 1.15 or h > 5.5:
 				continue
 			var n := island.surface_normal(lp.x, lp.z)
-			if n.y < 0.90:
+			if n.y < 0.89:
 				continue
 			if _in_exclusion(lp.x, lp.z, exclusions):
 				continue
@@ -929,30 +1292,32 @@ static func _populate_gameplay_points(island: Island, landing_yaw: float,
 		return va < vb
 	)
 
+	var dig_spacing := 14.0 if island.island_radius > 110.0 else 11.0
 	for p in beach_candidates:
-		if dig_pts.size() >= 5:
+		if dig_pts.size() >= max_dig:
 			break
-		if _far_from_all(p, dig_pts, 11.0):
+		if _far_from_all(p, dig_pts, dig_spacing):
 			dig_pts.append(p)
 
-	# Enemy spawns across dry sandy beaches & lower grassy clearings.
-	for attempt in 90:
-		if enemy_pts.size() >= 6:
+	# Enemy spawns across dry sandy beaches & walkable grassy terraces.
+	var max_enemy_h := 24.0 if island.island_radius > 110.0 else 9.5
+	for _attempt in max_enemies * 18:
+		if enemy_pts.size() >= max_enemies:
 			break
 		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.25, island.island_radius * 0.88)
+		var rad := rng.randf_range(island.island_radius * 0.22, island.island_radius * 0.94)
 		var lx := cos(ang) * rad
 		var lz := sin(ang) * rad
 		var h := island.surface_height(lx, lz)
-		if h < 1.3 or h > 9.5:
+		if h < 1.3 or h > max_enemy_h:
 			continue
 		var n := island.surface_normal(lx, lz)
-		if n.y < 0.87:
+		if n.y < 0.86:
 			continue
 		if _in_exclusion(lx, lz, exclusions):
 			continue
 		var cand := Vector3(lx, h, lz)
-		if _far_from_all(cand, enemy_pts, 9.0):
+		if _far_from_all(cand, enemy_pts, 10.0):
 			enemy_pts.append(cand)
 
 	island.dig_points = dig_pts
@@ -1011,7 +1376,7 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			placed.append(Vector3(w2.x, w2.z, 8.0))
 			keepout_zones.append(Vector3(w2.x, w2.z, 8.0))
 
-		&"treasure_peak", &"smuggler_cove", &"fort_rock":
+		&"treasure_peak", &"smuggler_cove", &"fort_rock", &"grand_citadel":
 			# Stranded explorer campfire + supply barrels/crates near the landing cove.
 			if island.dig_points.size() >= 2:
 				var camp := island.dig_points[1]
@@ -1052,34 +1417,45 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		placed.append(Vector3(cal_xz.x, cal_xz.z, 16.0 * scale_r))
 		keepout_zones.append(Vector3(cal_xz.x, cal_xz.z, 16.0 * scale_r))
 
+	# 1d. Duck-typed Wave 24A architecture/jungle props & Wave 24B waterfalls/fumaroles.
+	var area_scale := clampf(pow(island.island_radius / 60.0, 1.35), 0.75, 3.6)
+	var opt_prop_cache: Dictionary = {}
+	_populate_wave24_landmarks_and_architecture(
+		island, arch, landing_yaw, area_scale, placed, keepout_zones,
+		rng, prop_body, props_root, foliage_cache, opt_prop_cache)
 
-	# 2. Dramatic offshore sea stacks (`rock_spire.glb`) for iconic horizon silhouettes (like image.png!).
-	var spire_count := 3 if arch in [&"treasure_peak", &"twin_spires", &"volcano_crag", &"skull_bluff"] else 2
+	# 2. Dramatic offshore sea stacks (`rock_spire.glb`) for iconic horizon silhouettes.
+	var base_spires := 4 if arch == &"sea_stack" else (3 if arch in [&"treasure_peak", &"twin_spires", &"volcano_crag", &"skull_bluff", &"grand_citadel"] else 2)
+	var spire_count := clampi(int(round(float(base_spires) * clampf(sqrt(area_scale), 0.9, 2.0))), 2, 7)
 	for si in spire_count:
 		# Place sea stacks off the side flanks so they never block the landing cove or outpost pier!
 		var side_sgn := -1.0 if si % 2 == 0 else 1.0
-		var s_ang := side_sgn * rng.randf_range(0.65, 2.25)
-		var s_dist := island.island_radius * rng.randf_range(0.95, 1.28)
+		var s_ang := side_sgn * rng.randf_range(0.65, 2.35)
+		var s_dist := island.island_radius * rng.randf_range(0.95, 1.24)
 		var sp := basis * Vector3(sin(s_ang) * s_dist, 0.0, cos(s_ang) * s_dist)
 		if _in_exclusion(sp.x, sp.z, placed):
 			continue
 		var sy := island.surface_height(sp.x, sp.z)
-		var sc_val := rng.randf_range(0.85, 1.55)
+		var sc_val := rng.randf_range(0.90, 1.75) * clampf(island.island_radius / 72.0, 0.85, 1.45)
 		_spawn_prop(island, ROCK_SPIRE_SCENE, "SeaStack_%d" % si,
 			Transform3D(Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(sc_val, sc_val * rng.randf_range(0.95, 1.35), sc_val)),
 				Vector3(sp.x, maxf(sy - 1.2, -3.5), sp.z)),
 			prop_body, props_root, foliage_cache)
-		placed.append(Vector3(sp.x, sp.z, 6.5))
-		keepout_zones.append(Vector3(sp.x, sp.z, 5.5))
+		placed.append(Vector3(sp.x, sp.z, 7.0))
+		keepout_zones.append(Vector3(sp.x, sp.z, 5.8))
 
-	# 3. Lush tropical palm groves (2-3 palm clusters leaning over golden beaches & green rims).
-	var palm_target := 22
-	if arch in [&"crescent_lagoon", &"palm_atoll", &"treasure_peak"]:
-		palm_target = 28
+	# 3. Area-scaled lush tropical palm groves leaning over beaches & highland green terraces.
+	var base_palms := 22.0
+	if arch in [&"crescent_lagoon", &"palm_atoll", &"treasure_peak", &"grand_citadel"]:
+		base_palms = 26.0
 	elif arch == &"volcano_crag":
-		palm_target = 12
-	elif arch == &"outpost":
-		palm_target = 20
+		base_palms = 10.0
+	elif arch == &"sea_stack":
+		base_palms = 10.0
+	elif arch == &"outpost" or arch == &"grand_outpost":
+		base_palms = 20.0
+	var palm_target := clampi(int(round(base_palms * area_scale)), 8, 84)
+	var max_palm_h := 28.0 if island.island_radius > 105.0 else 16.5
 
 	var palms_placed := 0
 	var palm_positions: Array[Vector3] = []
@@ -1087,24 +1463,24 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		if palms_placed >= palm_target:
 			break
 		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.22, island.island_radius * 0.94)
+		var rad := rng.randf_range(island.island_radius * 0.20, island.island_radius * 0.96)
 		var px := cos(ang) * rad
 		var pz := sin(ang) * rad
 		if _in_exclusion(px, pz, placed):
 			continue
 		var h := island.surface_height(px, pz)
-		if h < 1.35 or h > 15.0:
+		if h < 1.35 or h > max_palm_h:
 			continue
 		var n := island.surface_normal(px, pz)
-		if n.y < 0.80:
+		if n.y < 0.79:
 			continue
 		# Curved palms favour beach verges and lean picturesquely toward the sea!
 		var use_curved := (h < 3.8 and rng.randf() < 0.74) or rng.randf() < 0.44
 		var scene := PALM_CURVED_SCENE if use_curved else PALM_TALL_SCENE
 		var outward_yaw := atan2(px, pz) - PI * 0.5 + rng.randf_range(-0.55, 0.55)
-		var sc_p := rng.randf_range(0.86, 1.22)
+		var sc_p := rng.randf_range(0.86, 1.24)
 		var xform := Transform3D(
-			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.92, 1.12), sc_p)),
+			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.92, 1.14), sc_p)),
 			Vector3(px, h - 0.16, pz))
 		_spawn_prop(island, scene, "Palm_%d" % palms_placed, xform, prop_body, props_root, foliage_cache)
 		placed.append(Vector3(px, pz, 4.6))
@@ -1112,12 +1488,12 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		palms_placed += 1
 
 		# Cluster 1-2 companion palms around beach & grass-verge trunks for lush groves.
-		if palms_placed < palm_target and h < 8.5 and rng.randf() < 0.68:
+		if palms_placed < palm_target and h < 14.0 and rng.randf() < 0.68:
 			var companions := mini(rng.randi_range(1, 2), palm_target - palms_placed)
 			for ci in companions:
 				for _c_try in 5:
 					var c_ang := ang + rng.randf_range(-1.9, 1.9) + float(ci) * 2.1
-					var c_dist := rng.randf_range(2.2, 3.5)
+					var c_dist := rng.randf_range(2.2, 3.6)
 					var cx := px + cos(c_ang) * c_dist
 					var cz := pz + sin(c_ang) * c_dist
 					if _in_exclusion(cx, cz, keepout_zones):
@@ -1125,10 +1501,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.95):
 						continue
 					var ch := island.surface_height(cx, cz)
-					if ch < 1.35 or ch > 14.0:
+					if ch < 1.35 or ch > max_palm_h:
 						continue
 					var cn := island.surface_normal(cx, cz)
-					if cn.y < 0.80:
+					if cn.y < 0.79:
 						continue
 					var c_curved := (ch < 4.0 and rng.randf() < 0.78) or rng.randf() < 0.50
 					var c_scene := PALM_CURVED_SCENE if c_curved else PALM_TALL_SCENE
@@ -1143,10 +1519,14 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					palms_placed += 1
 					break
 
-	# 4. Lush tropical bush ferns tucked around beach/grass-rim palms & grassy verges.
-	var fern_target := 32 if arch != &"volcano_crag" else 10
-	if arch == &"outpost":
-		fern_target = 26
+	# 4. Area-scaled lush tropical bush ferns tucked around palms & highland grassy shelves.
+	var base_ferns := 28.0 if arch != &"volcano_crag" else 8.0
+	if arch == &"outpost" or arch == &"grand_outpost":
+		base_ferns = 24.0
+	elif arch == &"sea_stack":
+		base_ferns = 12.0
+	var fern_target := clampi(int(round(base_ferns * area_scale)), 8, 92)
+	var max_fern_h := 30.0 if island.island_radius > 105.0 else 17.5
 	var ferns_placed := 0
 	var fern_positions: Array[Vector3] = []
 	var palm_fern_cap := int(fern_target * 0.55)
@@ -1155,14 +1535,14 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 	for palm_p in palm_positions:
 		if ferns_placed >= palm_fern_cap:
 			break
-		if palm_p.y < 1.65 or palm_p.y > 8.5:
+		if palm_p.y < 1.65 or palm_p.y > max_fern_h:
 			continue
 		var tuft_n := rng.randi_range(1, 2)
 		for _ti in tuft_n:
 			if ferns_placed >= palm_fern_cap:
 				break
 			var f_ang := rng.randf() * TAU
-			var f_dist := rng.randf_range(1.15, 2.45)
+			var f_dist := rng.randf_range(1.15, 2.55)
 			var fx := palm_p.x + cos(f_ang) * f_dist
 			var fz := palm_p.z + sin(f_ang) * f_dist
 			if _in_exclusion(fx, fz, keepout_zones):
@@ -1170,11 +1550,11 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.35):
 				continue
 			var fh := island.surface_height(fx, fz)
-			if fh < 1.75 or fh > 14.0:
+			if fh < 1.75 or fh > max_fern_h:
 				continue
-			if island.surface_normal(fx, fz).y < 0.78:
+			if island.surface_normal(fx, fz).y < 0.77:
 				continue
-			var sc_f := rng.randf_range(0.78, 1.32)
+			var sc_f := rng.randf_range(0.78, 1.35)
 			var xform := Transform3D(
 				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
 				Vector3(fx, fh - 0.10, fz))
@@ -1182,12 +1562,12 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			fern_positions.append(Vector3(fx, fh, fz))
 			ferns_placed += 1
 
-	# Fill remaining ferns along beach/grass rims and grassy benches.
+	# Fill remaining ferns along beach/grass rims and highland benches.
 	for _attempt in fern_target * 8:
 		if ferns_placed >= fern_target:
 			break
 		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.88)
+		var rad := rng.randf_range(island.island_radius * 0.16, island.island_radius * 0.92)
 		var fx := cos(ang) * rad
 		var fz := sin(ang) * rad
 		if _in_exclusion(fx, fz, keepout_zones):
@@ -1195,10 +1575,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.8):
 			continue
 		var h := island.surface_height(fx, fz)
-		if h < 1.85 or h > 16.0:
+		if h < 1.85 or h > max_fern_h:
 			continue
 		var n := island.surface_normal(fx, fz)
-		if n.y < 0.78:
+		if n.y < 0.77:
 			continue
 		var sc_f := rng.randf_range(0.80, 1.38)
 		var xform := Transform3D(
@@ -1208,26 +1588,27 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		fern_positions.append(Vector3(fx, h, fz))
 		ferns_placed += 1
 
-	# 5. Faceted coastal boulders anchoring gentle beaches, headlands, and shallows.
-	var rock_target := 14
+	# 5. Area-scaled faceted coastal boulders anchoring beaches, headlands, terraces, and shallows.
+	var rock_target := clampi(int(round(13.0 * area_scale)), 10, 40)
+	var max_rock_h := 24.0 if island.island_radius > 105.0 else 11.5
 	var rocks_placed := 0
 	for _attempt in rock_target * 14:
 		if rocks_placed >= rock_target:
 			break
 		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.35, island.island_radius * 1.05)
+		var rad := rng.randf_range(island.island_radius * 0.30, island.island_radius * 1.05)
 		var rx := cos(ang) * rad
 		var rz := sin(ang) * rad
 		if _in_exclusion(rx, rz, placed):
 			continue
 		var h := island.surface_height(rx, rz)
-		if h < -1.0 or h > 10.5:
+		if h < -1.0 or h > max_rock_h:
 			continue
 		if island.surface_normal(rx, rz).y < 0.72:
 			continue
 		if island.surface_normal(rx, rz, 2.5).y < 0.72:
 			continue
-		var sc_r := rng.randf_range(0.75, 1.55)
+		var sc_r := rng.randf_range(0.75, 1.65)
 		var min_foot_h := h
 		for off: Vector2 in [Vector2(1.3, 0.0), Vector2(-1.3, 0.0), Vector2(0.0, 1.3), Vector2(0.0, -1.3)]:
 			var fh := island.surface_height(rx + off.x * sc_r, rz + off.y * sc_r)
@@ -1252,6 +1633,308 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		_spawn_island_supply_barrels(island, arch, landing_yaw, placed, keepout_zones, props_root, rng)
 
 
+static func _load_optional_prop(filename: String, cache: Dictionary) -> PackedScene:
+	if cache.has(filename):
+		return cache[filename] as PackedScene
+	var path := "res://assets/generated/props/" + filename
+	if not ResourceLoader.exists(path):
+		cache[filename] = null
+		return null
+	var scene := load(path) as PackedScene
+	cache[filename] = scene
+	return scene
+
+
+static func _spawn_optional_at(island: Island, filename: String, node_name: String,
+		local_xz: Vector3, yaw: float, scale_vec: Vector3, embed_y: float,
+		keepout_r: float, placed: Array[Vector3], keepout_zones: Array[Vector3],
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		prop_cache: Dictionary, min_h: float = 0.5, max_h: float = 48.0, min_ny: float = 0.72) -> Node3D:
+	var scene := _load_optional_prop(filename, prop_cache)
+	if scene == null:
+		return null
+	if _in_exclusion(local_xz.x, local_xz.z, keepout_zones):
+		return null
+	var h := island.surface_height(local_xz.x, local_xz.z)
+	if h < min_h or h > max_h:
+		return null
+	if island.surface_normal(local_xz.x, local_xz.z).y < min_ny:
+		return null
+	var xform := Transform3D(Basis(Vector3.UP, yaw) * Basis.from_scale(scale_vec),
+		Vector3(local_xz.x, h - embed_y, local_xz.z))
+	var node := _spawn_prop(island, scene, node_name, xform, prop_body, props_root, foliage_cache)
+	if keepout_r > 0.0:
+		placed.append(Vector3(local_xz.x, local_xz.z, keepout_r))
+		keepout_zones.append(Vector3(local_xz.x, local_xz.z, keepout_r))
+	return node
+
+
+static func _populate_wave24_landmarks_and_architecture(island: Island, arch: StringName,
+		landing_yaw: float, area_scale: float, placed: Array[Vector3],
+		keepout_zones: Array[Vector3], rng: RandomNumberGenerator, prop_body: StaticBody3D,
+		props_root: Node3D, foliage_cache: Dictionary, prop_cache: Dictionary) -> void:
+	var basis := Basis(Vector3.UP, landing_yaw)
+
+	# A. Outposts & Massive Capital Port (harbour warehouses, seawall bastions, watchtowers, banyans & overlooks).
+	if arch == &"outpost" or arch == &"grand_outpost":
+		var is_grand := arch == &"grand_outpost"
+		# Waterfront harbour warehouses flanking the village wharf (clear of tavern/stall/bunting!).
+		var wh_specs: Array[Array] = [
+			[Vector3(-23.5, 0.0, -16.5), 0.32, Vector3(1.0, 1.0, 1.0)],
+		]
+		if is_grand:
+			wh_specs.append([Vector3(22.0, 0.0, -21.0), -0.42, Vector3(1.12, 1.08, 1.12)])
+			wh_specs.append([Vector3(-28.0, 0.0, -34.0), 0.58, Vector3(1.05, 1.05, 1.05)])
+		for wi in wh_specs.size():
+			var lp := basis * (wh_specs[wi][0] as Vector3)
+			_spawn_optional_at(island, "harbour_warehouse.glb", "HarbourWarehouse_%d" % wi,
+				lp, landing_yaw + float(wh_specs[wi][1]), wh_specs[wi][2] as Vector3, 0.28, 7.5,
+				placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 0.6, 14.0, 0.76)
+
+		# Coastal seawall bastions framing the harbour entrance headlands.
+		var sw_specs: Array[Array] = [
+			[Vector3(-28.0, 0.0, -32.0), 0.45, Vector3(1.05, 1.0, 1.05)],
+			[Vector3(31.0, 0.0, -28.0), -0.45, Vector3(1.05, 1.0, 1.05)],
+		]
+		if is_grand:
+			sw_specs.append([Vector3(-48.0, 0.0, -78.0), 0.35, Vector3(1.25, 1.18, 1.25)])
+			sw_specs.append([Vector3(48.0, 0.0, -72.0), -0.35, Vector3(1.25, 1.18, 1.25)])
+		for si in sw_specs.size():
+			var lp := basis * (sw_specs[si][0] as Vector3)
+			_spawn_optional_at(island, "seawall_bastion.glb", "SeawallBastion_%d" % si,
+				lp, landing_yaw + float(sw_specs[si][1]), sw_specs[si][2] as Vector3, 0.45, 7.2,
+				placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 0.4, 24.0, 0.66)
+
+		# Timber headland watchtowers guarding the harbour approach.
+		var wt_specs: Array[Array] = [
+			[Vector3(-34.0, 0.0, -10.0), 0.35, Vector3(1.0, 1.0, 1.0)],
+		]
+		if is_grand:
+			wt_specs.append([Vector3(56.0, 0.0, -24.0), -0.38, Vector3(1.12, 1.15, 1.12)])
+			wt_specs.append([Vector3(-64.0, 0.0, -54.0), 0.25, Vector3(1.10, 1.12, 1.10)])
+		for ti in wt_specs.size():
+			var lp := basis * (wt_specs[ti][0] as Vector3)
+			_spawn_optional_at(island, "watchtower_wood.glb", "HeadlandWatchtower_%d" % ti,
+				lp, landing_yaw + float(wt_specs[ti][1]), wt_specs[ti][2] as Vector3, 0.30, 6.2,
+				placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 4.0, 34.0, 0.70)
+
+		# Scenic ancient hilltop ruin pillars crowning Galleon's Reach upper overlooks.
+		if is_grand:
+			for pi in 3:
+				var p_off: Vector3 = [Vector3(-18.0, 0.0, 36.0), Vector3(24.0, 0.0, 38.0), Vector3(54.0, 0.0, 8.0)][pi]
+				var lp := basis * p_off
+				_spawn_optional_at(island, "ruin_pillar.glb", "OverlookRuinPillar_%d" % pi,
+					lp, landing_yaw + rng.randf() * TAU, Vector3.ONE * rng.randf_range(0.95, 1.25), 0.32, 4.2,
+					placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 6.0, 34.0, 0.72)
+
+	# B. Sea Fort & Sovereign's Grand Citadel (outer seawall bastions, watchtowers, jungle temples, bridge & waterfall).
+	if arch == &"fort_rock" or arch == &"grand_citadel":
+		var is_citadel := arch == &"grand_citadel"
+		var sw_list: Array[Array] = [
+			[Vector3(-34.0, 0.0, -24.0), 0.48, Vector3(1.05, 1.0, 1.05)],
+			[Vector3(34.0, 0.0, -24.0), -0.48, Vector3(1.05, 1.0, 1.05)],
+		]
+		if is_citadel:
+			sw_list = [
+				[Vector3(-64.0, 0.0, -64.0), 0.42, Vector3(1.28, 1.20, 1.28)],
+				[Vector3(64.0, 0.0, -60.0), -0.42, Vector3(1.28, 1.20, 1.28)],
+				[Vector3(-36.0, 0.0, -26.0), 0.30, Vector3(1.15, 1.10, 1.15)],
+				[Vector3(36.0, 0.0, -24.0), -0.30, Vector3(1.15, 1.10, 1.15)],
+			]
+		for si in sw_list.size():
+			var lp := basis * (sw_list[si][0] as Vector3)
+			_spawn_optional_at(island, "seawall_bastion.glb", "CitadelSeawall_%d" % si,
+				lp, landing_yaw + float(sw_list[si][1]), sw_list[si][2] as Vector3, 0.45, 7.5,
+				placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 32.0, 0.66)
+
+		var wt_list: Array[Array] = [
+			[Vector3(-28.0, 0.0, -6.0), 0.35, Vector3(1.0, 1.0, 1.0)],
+			[Vector3(28.0, 0.0, -6.0), -0.35, Vector3(1.0, 1.0, 1.0)],
+		]
+		if is_citadel:
+			wt_list = [
+				[Vector3(-68.0, 0.0, -56.0), 0.35, Vector3(1.15, 1.18, 1.15)],
+				[Vector3(68.0, 0.0, -54.0), -0.35, Vector3(1.15, 1.18, 1.15)],
+				[Vector3(-38.0, 0.0, 26.0), 0.25, Vector3(1.10, 1.12, 1.10)],
+			]
+		for ti in wt_list.size():
+			var lp := basis * (wt_list[ti][0] as Vector3)
+			_spawn_optional_at(island, "watchtower_wood.glb", "FortWatchtower_%d" % ti,
+				lp, landing_yaw + float(wt_list[ti][1]), wt_list[ti][2] as Vector3, 0.30, 6.2,
+				placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 4.0, 36.0, 0.70)
+
+		if is_citadel:
+			# Ancient jungle temple arches, pillars & timber bridge across the highland terraces!
+			for ai in 2:
+				var a_off: Vector3 = [Vector3(-72.0, 0.0, 12.0), Vector3(72.0, 0.0, 12.0)][ai]
+				_spawn_optional_at(island, "ruin_arch.glb", "CitadelRuinArch_%d" % ai,
+					basis * a_off, landing_yaw + (0.35 if ai == 0 else -0.35), Vector3(1.22, 1.22, 1.22),
+					0.35, 7.5, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 10.0, 38.0, 0.72)
+			for pi in 4:
+				var p_off: Vector3 = [
+					Vector3(-82.0, 0.0, 24.0), Vector3(-62.0, 0.0, 26.0),
+					Vector3(64.0, 0.0, 24.0), Vector3(84.0, 0.0, 4.0),
+				][pi]
+				_spawn_optional_at(island, "ruin_pillar.glb", "CitadelRuinPillar_%d" % pi,
+					basis * p_off, landing_yaw + rng.randf() * TAU, Vector3.ONE * rng.randf_range(1.0, 1.32),
+					0.32, 4.2, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 8.0, 38.0, 0.70)
+			_spawn_optional_at(island, "timber_bridge.glb", "CitadelTimberBridge",
+				basis * Vector3(-42.0, 0.0, -14.0), landing_yaw + 0.65, Vector3(1.15, 1.05, 1.15),
+				0.24, 6.8, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 4.0, 28.0, 0.72)
+			# Cascading highland waterfall plunging off Sovereign's Bastion eastern temple cliff!
+			var wf_top := basis * Vector3(62.0, 0.0, -10.0)
+			var wf_bot := basis * Vector3(54.0, 0.0, -28.0)
+			var top_y := island.surface_height(wf_top.x, wf_top.z)
+			var bot_y := maxf(0.2, island.surface_height(wf_bot.x, wf_bot.z))
+			var drop_h := clampf(top_y - bot_y, 12.0, 34.0)
+			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_y - 0.6, wf_top.z),
+				landing_yaw - 0.42, drop_h, 5.2)
+
+	# C. Lush Canyon (`twin_spires`), Highland Ruins (`skull_bluff`, `smuggler_cove`).
+	if arch == &"twin_spires":
+		var s_r := island.island_radius / 60.0
+		_spawn_optional_at(island, "timber_bridge.glb", "CanyonTimberBridge",
+			basis * Vector3(0.0, 0.0, -6.0 * s_r), landing_yaw, Vector3(1.18, 1.08, 1.18),
+			0.24, 6.5, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 24.0, 0.72)
+		for ai in 2:
+			var a_off: Vector3 = [Vector3(-6.0 * s_r, 0.0, 6.0 * s_r), Vector3(7.0 * s_r, 0.0, -16.0 * s_r)][ai]
+			_spawn_optional_at(island, "ruin_arch.glb", "CanyonRuinArch_%d" % ai,
+				basis * a_off, landing_yaw + (0.25 if ai == 0 else -0.35), Vector3(1.15, 1.15, 1.15),
+				0.32, 6.5, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 26.0, 0.72)
+		for pi in 3:
+			var p_off: Vector3 = [
+				Vector3(-12.0 * s_r, 0.0, -12.0 * s_r),
+				Vector3(12.0 * s_r, 0.0, 2.0 * s_r),
+				Vector3(-4.0 * s_r, 0.0, 14.0 * s_r),
+			][pi]
+			_spawn_optional_at(island, "ruin_pillar.glb", "CanyonRuinPillar_%d" % pi,
+				basis * p_off, landing_yaw + rng.randf() * TAU, Vector3.ONE * rng.randf_range(0.95, 1.25),
+				0.30, 4.0, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 28.0, 0.70)
+		# Thundering Emerald Spire waterfall plunging down the canyon headwall cliff!
+		var wf_top := basis * Vector3(0.0, 0.0, 20.0 * s_r)
+		var wf_bot := basis * Vector3(0.0, 0.0, 8.0 * s_r)
+		var top_y := island.surface_height(wf_top.x, wf_top.z)
+		var bot_y := maxf(1.5, island.surface_height(wf_bot.x, wf_bot.z))
+		var drop_h := clampf(top_y - bot_y, 12.0, 36.0)
+		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_y - 0.6, wf_top.z),
+			landing_yaw, drop_h, 4.8)
+	elif arch == &"skull_bluff" or arch == &"smuggler_cove":
+		var s_r := island.island_radius / 60.0
+		_spawn_optional_at(island, "ruin_arch.glb", "HighlandRuinArch",
+			basis * Vector3(-24.0 * s_r, 0.0, -10.0 * s_r), landing_yaw + 0.52, Vector3(1.12, 1.12, 1.12),
+			0.32, 6.5, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 3.0, 28.0, 0.72)
+		for pi in 2:
+			var p_off: Vector3 = [Vector3(24.0 * s_r, 0.0, -12.0 * s_r), Vector3(-18.0 * s_r, 0.0, -22.0 * s_r)][pi]
+			_spawn_optional_at(island, "ruin_pillar.glb", "HighlandRuinPillar_%d" % pi,
+				basis * p_off, landing_yaw + rng.randf() * TAU, Vector3.ONE * rng.randf_range(0.95, 1.22),
+				0.30, 4.0, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.5, 28.0, 0.70)
+		if arch == &"skull_bluff":
+			_spawn_optional_at(island, "timber_bridge.glb", "BluffTimberBridge",
+				basis * Vector3(0.0, 0.0, -26.0 * s_r), landing_yaw + 0.18, Vector3(1.08, 1.0, 1.08),
+				0.24, 6.2, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 22.0, 0.74)
+
+	# D. Lush `jungle_banyan.glb` groves crowning upper green terraces & jungles!
+	var banyan_scene := _load_optional_prop("jungle_banyan.glb", prop_cache)
+	if banyan_scene != null and arch != &"volcano_crag" and arch != &"sea_stack" and arch != &"wreck_shoal":
+		var banyan_base := 5.0 if arch in [&"grand_citadel", &"twin_spires", &"skull_bluff", &"grand_outpost"] else 3.0
+		var banyan_target := clampi(int(round(banyan_base * clampf(area_scale, 0.8, 3.2))), 2, 16)
+		var banyans_placed := 0
+		for _bi in banyan_target * 14:
+			if banyans_placed >= banyan_target:
+				break
+			var ang := rng.randf() * TAU
+			var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.82)
+			var bx := cos(ang) * rad
+			var bz := sin(ang) * rad
+			if _in_exclusion(bx, bz, placed):
+				continue
+			var bh := island.surface_height(bx, bz)
+			if bh < 4.5 or bh > 32.0:
+				continue
+			if island.surface_normal(bx, bz).y < 0.80:
+				continue
+			var b_sc := rng.randf_range(0.90, 1.35)
+			var b_xf := Transform3D(
+				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(b_sc, b_sc * rng.randf_range(0.92, 1.12), b_sc)),
+				Vector3(bx, bh - 0.28, bz))
+			_spawn_prop(island, banyan_scene, "JungleBanyan_%d" % banyans_placed, b_xf, prop_body, props_root, foliage_cache)
+			placed.append(Vector3(bx, bz, 8.2))
+			keepout_zones.append(Vector3(bx, bz, 6.4))
+			banyans_placed += 1
+
+	# E. Massive Volcano active `VolcanicFumarole` steam vents around basalt terraces & ash cove!
+	if arch == &"volcano_crag":
+		_try_spawn_fumaroles(island, landing_yaw, rng, placed, keepout_zones)
+
+
+static func _try_spawn_waterfall(island: Island, node_name: String, top_pos: Vector3,
+		yaw: float, drop_height: float, width: float) -> Node3D:
+	const WF_PATH := "res://src/world/island_waterfall.gd"
+	if not ResourceLoader.exists(WF_PATH):
+		return null
+	var wf_script := load(WF_PATH) as GDScript
+	if wf_script == null:
+		return null
+	var wf := wf_script.new() as Node3D
+	if wf == null:
+		return null
+	wf.name = node_name
+	wf.position = top_pos
+	wf.rotation = Vector3(0.0, yaw, 0.0)
+	for h_key: String in ["drop_height", "fall_height", "waterfall_height", "cliff_height", "height"]:
+		if h_key in wf:
+			wf.set(StringName(h_key), drop_height)
+	for w_key: String in ["width", "fall_width", "waterfall_width", "stream_width"]:
+		if w_key in wf:
+			wf.set(StringName(w_key), width)
+	island.add_child(wf)
+	return wf
+
+
+static func _try_spawn_fumaroles(island: Island, landing_yaw: float, rng: RandomNumberGenerator,
+		placed: Array[Vector3], keepout_zones: Array[Vector3]) -> void:
+	const FUM_PATH := "res://src/world/island_fumarole.gd"
+	if not ResourceLoader.exists(FUM_PATH):
+		return
+	var fum_script := load(FUM_PATH) as GDScript
+	if fum_script == null:
+		return
+	var basis := Basis(Vector3.UP, landing_yaw)
+	var scale_r := island.island_radius / 60.0
+	var candidate_uvs: Array[Vector2] = [
+		Vector2(-26.0 * scale_r, -24.0 * scale_r),
+		Vector2(26.0 * scale_r, -22.0 * scale_r),
+		Vector2(-14.0 * scale_r, -34.0 * scale_r),
+		Vector2(16.0 * scale_r, -32.0 * scale_r),
+		Vector2(-34.0 * scale_r, 8.0 * scale_r),
+		Vector2(34.0 * scale_r, 10.0 * scale_r),
+	]
+	var spawned := 0
+	for uv in candidate_uvs:
+		if spawned >= 4:
+			break
+		var lp := basis * Vector3(uv.x, 0.0, uv.y)
+		if _in_exclusion(lp.x, lp.z, keepout_zones):
+			continue
+		var h := island.surface_height(lp.x, lp.z)
+		if h < 2.0 or h > 56.0:
+			continue
+		if island.surface_normal(lp.x, lp.z).y < 0.70:
+			continue
+		var fum := fum_script.new() as Node3D
+		if fum == null:
+			continue
+		fum.name = "VolcanicFumarole_%d" % spawned
+		fum.position = Vector3(lp.x, h, lp.z)
+		fum.rotation = Vector3(0.0, rng.randf() * TAU, 0.0)
+		if "seed_val" in fum:
+			fum.set(&"seed_val", rng.randi())
+		island.add_child(fum)
+		placed.append(Vector3(lp.x, lp.z, 5.5))
+		keepout_zones.append(Vector3(lp.x, lp.z, 5.5))
+		spawned += 1
+
+
 static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
 		placed: Array[Vector3], keepout_zones: Array[Vector3]) -> MessageBottle:
 	var basis := Basis(Vector3.UP, landing_yaw)
@@ -1260,8 +1943,8 @@ static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
 
 	# Pass 1: Prefer dry upper golden shoreline flanking the welcoming landing cove.
 	var passes: Array[Array] = [
-		[0.65, 2.35, 0.88, 1.35, 19],
-		[0.45, 3.00, 0.84, PI, 32],
+		[0.65, 2.35, 0.88, 1.35, 21],
+		[0.45, 3.00, 0.84, PI, 36],
 	]
 	for pass_cfg: Array in passes:
 		if found:
@@ -1271,7 +1954,7 @@ static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
 		var n_min: float = float(pass_cfg[2])
 		var half_arc: float = float(pass_cfg[3])
 		var steps_a: int = int(pass_cfg[4])
-		for ring_frac: float in [0.76, 0.84, 0.68, 0.90, 0.60, 0.95]:
+		for ring_frac: float in [0.92, 0.88, 0.96, 0.82, 0.76, 0.68, 0.60]:
 			if found:
 				break
 			var r_cand := island.island_radius * ring_frac
@@ -1366,7 +2049,7 @@ static func _spawn_island_supply_barrels(
 		var n_min: float = float(sweep_cfg[2])
 		var half_arc: float = float(sweep_cfg[3])
 		var steps_a: int = int(sweep_cfg[4])
-		for ring_frac: float in [0.72, 0.80, 0.64, 0.86, 0.56]:
+		for ring_frac: float in [0.92, 0.86, 0.96, 0.78, 0.70, 0.60]:
 			if spawned.size() >= want_count:
 				break
 			var r_cand := island.island_radius * ring_frac
@@ -1577,40 +2260,62 @@ static func _stable_hash(text: String) -> int:
 
 static func _default_radius(arch: StringName) -> float:
 	match arch:
-		&"outpost":
-			return 62.0
+		&"grand_citadel":
+			return 182.0
 		&"volcano_crag":
-			return 68.0
-		&"crescent_lagoon", &"palm_atoll":
+			return 176.0
+		&"grand_outpost":
+			return 166.0
+		&"twin_spires":
+			return 138.0
+		&"crescent_lagoon":
+			return 134.0
+		&"skull_bluff":
+			return 124.0
+		&"smuggler_cove":
+			return 96.0
+		&"fort_rock":
+			return 92.0
+		&"outpost", &"sea_arch":
+			return 82.0
+		&"palm_atoll":
 			return 64.0
 		&"treasure_peak":
-			return 52.0
+			return 54.0
+		&"wreck_shoal":
+			return 46.0
+		&"sea_stack":
+			return 38.0
 		_:
-			return 58.0
+			return 68.0
 
 
 static func _default_peak(arch: StringName) -> float:
 	match arch:
 		&"volcano_crag":
-			return 90.0
+			return 132.0
 		&"twin_spires":
-			return 80.0
-		&"treasure_peak":
-			return 68.0
+			return 98.0
+		&"grand_citadel":
+			return 96.0
 		&"skull_bluff":
-			return 64.0
+			return 78.0
+		&"grand_outpost":
+			return 76.0
+		&"treasure_peak":
+			return 66.0
 		&"smuggler_cove":
-			return 56.0
+			return 64.0
 		&"sea_arch":
-			return 50.0
-		&"outpost":
-			return 48.0
+			return 58.0
+		&"outpost", &"sea_stack":
+			return 54.0
 		&"fort_rock":
-			return 42.0
-		&"wreck_shoal":
-			return 40.0
+			return 52.0
 		&"crescent_lagoon":
-			return 35.0
+			return 44.0
+		&"wreck_shoal":
+			return 36.0
 		&"palm_atoll":
 			return 32.0
 		_:
@@ -1619,13 +2324,13 @@ static func _default_peak(arch: StringName) -> float:
 
 static func _default_kind(arch: StringName) -> StringName:
 	match arch:
-		&"outpost":
+		&"outpost", &"grand_outpost":
 			return &"outpost"
-		&"fort_rock":
+		&"fort_rock", &"grand_citadel":
 			return &"fort"
 		&"wreck_shoal":
 			return &"shipwreck"
-		&"volcano_crag", &"twin_spires":
+		&"volcano_crag", &"twin_spires", &"sea_stack":
 			return &"landmark"
 		_:
 			return &"treasure_island"
@@ -1635,28 +2340,59 @@ static func _default_landmarks(arch: StringName) -> Array[String]:
 	match arch:
 		&"outpost":
 			return ["Harbour Pier", "Beacon Tower", "Tavern Porch"]
+		&"grand_outpost":
+			return ["Grand Wharf", "Headland Bastions", "Sovereign Beacon"]
 		&"treasure_peak":
 			return ["Twin Peaks", "Golden Cove", "Split Palm"]
 		&"twin_spires":
-			return ["North Needle", "Mossy Saddle", "Emerald Bluff"]
+			return ["North Needle", "Waterfall Saddle", "Emerald Bluff"]
 		&"crescent_lagoon":
 			return ["Turquoise Lagoon", "Coral Horn", "Sunlit Spit"]
 		&"sea_arch":
 			return ["White Sea Arch", "Tide Bay", "Gull Cliff"]
 		&"fort_rock":
 			return ["Stone Bastion", "Watch Mesa", "Landing Ramp"]
+		&"grand_citadel":
+			return ["Sovereign Citadel", "Temple Terraces", "Cascade Falls"]
 		&"wreck_shoal":
 			return ["Broken Bow", "Barnacle Mast", "Shoal Bar"]
 		&"volcano_crag":
-			return ["Basalt Rim", "Caldera Spire", "Ash Cove"]
+			return ["Basalt Rim", "Caldera Spire", "Fumarole Terraces"]
 		&"palm_atoll":
 			return ["Palm Ring", "Shallow Pool", "Coral Monolith"]
 		&"skull_bluff":
 			return ["Skull Brow", "High Crag", "South Beach"]
 		&"smuggler_cove":
 			return ["Hidden Pocket", "Cliff Gate", "Smuggler's Fire"]
+		&"sea_stack":
+			return ["Siren's Fang", "Tide Chasm", "Coral Shelf"]
 		_:
 			return ["Coastal Rock", "Sandy Cove", "Lone Palm"]
+
+
+static func _mount_citadel_fort_vault(bastion: FortBastion) -> Node3D:
+	var existing := bastion.get_node_or_null(^"FortVault") as Node3D
+	if existing != null:
+		return existing
+	var vault := FORT_VAULT_SCRIPT.new() as Node3D
+	if vault == null:
+		return null
+	vault.name = "FortVault"
+	vault.position = Vector3(0.0, 0.06, -11.4)
+	bastion.add_child(vault)
+	for bat in bastion.get_batteries():
+		if not bat.has_meta(&"fort_vault_wired"):
+			bat.set_meta(&"fort_vault_wired", true)
+			bat.battery_destroyed.connect(func(_b: FortBattery) -> void:
+				if not is_instance_valid(bastion) or not is_instance_valid(vault):
+					return
+				for other in bastion.get_batteries():
+					if not other.destroyed:
+						return
+				if vault.has_method(&"set_siege_cleared"):
+					vault.call(&"set_siege_cleared", true)
+			)
+	return vault
 
 
 # ============================================================ fort stone bastion & signal brazier
@@ -3101,20 +3837,21 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	caldera.obsidian_mesh = crust_mi
 
 	# 3. High-mounted fiery magma rim bounce light illuminating the jagged basalt caldera fangs!
+	var plume_sc := clampf(scale_r * 0.62, 1.0, 1.85)
 	var cal_light := OmniLight3D.new()
 	cal_light.name = "CalderaMagmaLight"
 	cal_light.light_color = Color(1.0, 0.36, 0.08)
 	cal_light.light_energy = 10.5
-	cal_light.omni_range = 76.0
+	cal_light.omni_range = maxf(76.0, 44.0 * scale_r)
 	cal_light.omni_attenuation = 0.72
 	cal_light.shadow_enabled = false
-	cal_light.position = Vector3(0.0, 7.5, 0.0)
+	cal_light.position = Vector3(0.0, 7.5 * plume_sc, 0.0)
 	caldera.add_child(cal_light)
 	caldera.caldera_light = cal_light
 	island.register_flicker_light(cal_light, 10.5, 0.18, rng.randf() * TAU)
 
 	# 4. Two sculpted glowing molten lava-fissure runnels spilling through the breached -v notch
-	#    and snaking ~22-30 m down the steep dark basalt cliff face!
+	#    and snaking boldly down the steep dark basalt cliff face!
 	var fissure_mat := StandardMaterial3D.new()
 	fissure_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fissure_mat.vertex_color_use_as_albedo = true
@@ -3132,7 +3869,7 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	caldera.lava_fissure_mesh = fissure_mi
 	caldera._fissure_mat = fissure_mat
 
-	# 5. Towering rising volcanic ash plume (lean <= 28 puffs, bold scale visible from 1.5 km away!).
+	# 5. Towering rising volcanic ash plume (lean <= 28 puffs, bold scale visible from 2+ km away!).
 	var ash_p := GPUParticles3D.new()
 	ash_p.name = "VolcanoAshPlume"
 	ash_p.amount = 28
@@ -3140,7 +3877,8 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	ash_p.preprocess = 7.0
 	ash_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	ash_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	ash_p.visibility_aabb = AABB(Vector3(-56.0, -4.0, -56.0), Vector3(112.0, 142.0, 112.0))
+	var ash_span := 56.0 * plume_sc
+	ash_p.visibility_aabb = AABB(Vector3(-ash_span, -4.0, -ash_span), Vector3(ash_span * 2.0, 142.0 * plume_sc, ash_span * 2.0))
 	ash_p.position = Vector3(0.0, 3.6, 0.0)
 	var ash_proc := ParticleProcessMaterial.new()
 	ash_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
@@ -3150,11 +3888,11 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	ash_proc.emission_ring_axis = Vector3.UP
 	ash_proc.direction = Vector3(0.14, 1.0, 0.08).normalized()
 	ash_proc.spread = 12.0
-	ash_proc.initial_velocity_min = 5.0
-	ash_proc.initial_velocity_max = 7.8
+	ash_proc.initial_velocity_min = 5.0 * plume_sc
+	ash_proc.initial_velocity_max = 7.8 * plume_sc
 	ash_proc.gravity = Vector3(0.35, 0.16, 0.16)
-	ash_proc.scale_min = 3.8
-	ash_proc.scale_max = 6.2
+	ash_proc.scale_min = 3.8 * plume_sc
+	ash_proc.scale_max = 6.2 * plume_sc
 	var ash_curve := Curve.new()
 	ash_curve.add_point(Vector2(0.0, 0.62))
 	ash_curve.add_point(Vector2(0.32, 1.55))
@@ -3188,7 +3926,8 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	ember_p.preprocess = 2.8
 	ember_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	ember_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	ember_p.visibility_aabb = AABB(Vector3(-36.0, -2.0, -36.0), Vector3(72.0, 88.0, 72.0))
+	var emb_span := 36.0 * plume_sc
+	ember_p.visibility_aabb = AABB(Vector3(-emb_span, -2.0, -emb_span), Vector3(emb_span * 2.0, 88.0 * plume_sc, emb_span * 2.0))
 	ember_p.position = Vector3(0.0, 4.0, 0.0)
 	var emb_proc := ParticleProcessMaterial.new()
 	emb_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
@@ -3198,11 +3937,11 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	emb_proc.emission_ring_axis = Vector3.UP
 	emb_proc.direction = Vector3(0.10, 1.0, 0.06).normalized()
 	emb_proc.spread = 24.0
-	emb_proc.initial_velocity_min = 7.5
-	emb_proc.initial_velocity_max = 14.8
+	emb_proc.initial_velocity_min = 7.5 * plume_sc
+	emb_proc.initial_velocity_max = 14.8 * plume_sc
 	emb_proc.gravity = Vector3(0.30, -0.32, 0.15)
-	emb_proc.scale_min = 0.85
-	emb_proc.scale_max = 1.95
+	emb_proc.scale_min = 0.85 * plume_sc
+	emb_proc.scale_max = 1.95 * plume_sc
 	emb_proc.color_ramp = _make_volcano_ember_ramp()
 	ember_p.process_material = emb_proc
 	var emb_quad := QuadMesh.new()
@@ -3233,6 +3972,7 @@ static func _build_lava_fissure_mesh(island: Island, cal_xform: Transform3D,
 	var inv_basis := cal_xform.basis.inverse()
 	var col_scorch := Color(0.20, 0.03, 0.01)
 	var col_rim_hot := Color(1.0, 0.30, 0.03)
+	var w_scale := minf(scale_r, 1.85)
 
 	# Probe both breached seaward -v caldera rim saddles (r = 14.5 * scale_r) so the two molten lava
 	# fissures spill independently through genuine V-notches rather than overlapping or climbing fangs!
@@ -3258,14 +3998,14 @@ static func _build_lava_fissure_mesh(island: Island, cal_xform: Transform3D,
 			notch_b = cand_ang
 
 	# 2 distinct glowing molten lava-fissure runnels spilling through the twin seaward V-notches
-	# and snaking ~22-30 m down the steep dark basalt cliff face:
+	# and snaking down the steep dark basalt cliff face:
 	# [r_start, r_end, base_notch_ang, fork_drift, wave_amp, wave_freq, wave_phase, width_top, width_bot]
 	var runnels: Array[Array] = [
-		[7.8 * scale_r, 38.5 * scale_r, notch_a, 0.16, 0.085, 8.6, 0.45, 1.32 * scale_r, 0.34 * scale_r],
-		[8.0 * scale_r, 35.6 * scale_r, notch_b, -0.10, 0.095, 9.2, 2.05, 1.24 * scale_r, 0.30 * scale_r],
+		[7.8 * scale_r, 38.5 * scale_r, notch_a, 0.16, 0.085, 8.6, 0.45, 1.32 * w_scale, 0.34 * w_scale],
+		[8.0 * scale_r, 35.6 * scale_r, notch_b, -0.10, 0.095, 9.2, 2.05, 1.24 * w_scale, 0.30 * w_scale],
 	]
 
-	const STEPS := 22
+	const STEPS := 26
 	const OFFSETS: Array[float] = [-1.0, -0.34, 0.0, 0.34, 1.0]
 
 	for run in runnels:

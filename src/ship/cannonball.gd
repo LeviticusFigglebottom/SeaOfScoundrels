@@ -36,8 +36,8 @@ var velocity: Vector3 = Vector3.ZERO
 var shooter_ship: Node3D = null
 var shooter_pawn: Node = null
 
-## Godot 4.8 Trail3D smoke/tracer ribbon attached to the ball.
-var trail: Trail3D = null
+## Optional Godot 4.8 Trail3D smoke/tracer ribbon attached to the ball (gracefully skipped on Godot 4.7.x).
+var trail: Node3D = null
 
 var _ball_mesh: MeshInstance3D = null
 var _ball_mat: StandardMaterial3D = null
@@ -49,7 +49,7 @@ var _impacted: bool = false
 var _cleanup_timer: float = 0.0
 var _spawned_vfx: Array[Node] = []
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
-var _ray_result: PhysicsIntersectRayResult3D = PhysicsIntersectRayResult3D.new()
+var _ray_result: Variant = ClassDB.instantiate(&"PhysicsIntersectRayResult3D") if ClassDB.class_exists(&"PhysicsIntersectRayResult3D") else null
 var _exclude_rids: Array[RID] = []
 
 static var _active_cannonballs: int = 0
@@ -103,9 +103,9 @@ func _exit_tree() -> void:
 	_ball_mat = null
 	_core_glow_mat = null
 	if trail != null and is_instance_valid(trail):
-		trail.emitting = false
-		trail.color_gradient = null
-		trail.width_curve = null
+		trail.set(&"emitting", false)
+		trail.set(&"color_gradient", null)
+		trail.set(&"width_curve", null)
 	trail = null
 	_active_cannonballs = maxi(0, _active_cannonballs - 1)
 	if _active_cannonballs == 0:
@@ -200,27 +200,31 @@ func _build_visuals() -> void:
 
 	add_child(_ball_mesh)
 
-	trail = Trail3D.new()
-	trail.name = "SmokeTrail"
-	trail.limit_mode = Trail3D.LIMIT_MODE_LIFETIME
-	trail.lifetime = trail_life
-	trail.min_section_length = 0.14
-	trail.width = trail_width
-	trail.mesh_alignment = Trail3D.MESH_ALIGNMENT_BILLBOARD
-	trail.material_mode = Trail3D.MATERIAL_MODE_MIX
-	trail.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var width_curve := Curve.new()
-	width_curve.add_point(Vector2(0.0, 1.0))
-	width_curve.add_point(Vector2(0.55, 0.65))
-	width_curve.add_point(Vector2(1.0, 0.12))
-	trail.width_curve = width_curve
-	var grad := Gradient.new()
-	grad.set_color(0, trail_c0)
-	grad.add_point(0.35, trail_c1)
-	grad.set_color(grad.get_point_count() - 1, trail_c2)
-	trail.color_gradient = grad
-	trail.emitting = true
-	add_child(trail)
+	if ClassDB.class_exists(&"Trail3D"):
+		var t_obj: Variant = ClassDB.instantiate(&"Trail3D")
+		if t_obj is Node3D:
+			trail = t_obj as Node3D
+			trail.name = "SmokeTrail"
+			trail.set(&"limit_mode", ClassDB.class_get_integer_constant(&"Trail3D", &"LIMIT_MODE_LIFETIME"))
+			trail.set(&"lifetime", trail_life)
+			trail.set(&"min_section_length", 0.14)
+			trail.set(&"width", trail_width)
+			trail.set(&"mesh_alignment", ClassDB.class_get_integer_constant(&"Trail3D", &"MESH_ALIGNMENT_BILLBOARD"))
+			trail.set(&"material_mode", ClassDB.class_get_integer_constant(&"Trail3D", &"MATERIAL_MODE_MIX"))
+			if trail is GeometryInstance3D:
+				(trail as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var width_curve := Curve.new()
+			width_curve.add_point(Vector2(0.0, 1.0))
+			width_curve.add_point(Vector2(0.55, 0.65))
+			width_curve.add_point(Vector2(1.0, 0.12))
+			trail.set(&"width_curve", width_curve)
+			var grad := Gradient.new()
+			grad.set_color(0, trail_c0)
+			grad.add_point(0.35, trail_c1)
+			grad.set_color(grad.get_point_count() - 1, trail_c2)
+			trail.set(&"color_gradient", grad)
+			trail.set(&"emitting", true)
+			add_child(trail)
 
 
 func _refresh_exclusions() -> void:
@@ -263,9 +267,24 @@ func _physics_process(delta: float) -> void:
 		_refresh_exclusions()
 		_ray_params.from = from
 		_ray_params.to = to
-		if world.direct_space_state.intersect_ray_into(_ray_params, _ray_result):
-			_on_solid_hit(_ray_result.position, _ray_result.normal, _ray_result.collider)
-			return
+		var space := world.direct_space_state
+		if _ray_result != null and space.has_method(&"intersect_ray_into"):
+			if bool(space.call(&"intersect_ray_into", _ray_params, _ray_result)):
+				_on_solid_hit(
+					_ray_result.get(&"position") as Vector3,
+					_ray_result.get(&"normal") as Vector3,
+					_ray_result.get(&"collider") as Object
+				)
+				return
+		else:
+			var hit := space.intersect_ray(_ray_params)
+			if not hit.is_empty():
+				_on_solid_hit(
+					hit["position"] as Vector3,
+					hit["normal"] as Vector3,
+					hit["collider"] as Object
+				)
+				return
 
 	var sea_y := Sea.height(to.x, to.z)
 	if to.y <= sea_y:
@@ -338,7 +357,7 @@ func _mark_impacted(hit_pos: Vector3, target: Node, cleanup_delay: float = 0.5) 
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
 	if trail != null:
-		trail.emitting = false
+		trail.set(&"emitting", false)
 	impacted.emit(hit_pos, target)
 
 
@@ -348,7 +367,7 @@ func _finish_without_impact() -> void:
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
 	if trail != null:
-		trail.emitting = false
+		trail.set(&"emitting", false)
 
 
 static func _find_ship(node: Node) -> Node3D:

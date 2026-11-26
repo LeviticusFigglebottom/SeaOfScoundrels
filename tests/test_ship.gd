@@ -1073,8 +1073,10 @@ func test_sculpted_cannonball_ordnance_variants_and_fort_battery_zero_primitives
 	check(float(widths["swivel"]) < float(widths["iron"]) and float(widths["iron"]) < float(widths["heavy"]),
 		"Ordnance silhouette sizes scale distinctly: swivel (%.3f) < iron (%.3f) < heavy (%.3f)" % [
 			float(widths["swivel"]), float(widths["iron"]), float(widths["heavy"])])
-	check(b_swivel.trail.width < b_iron.trail.width and b_iron.trail.width < b_heavy.trail.width,
-		"Trail3D widths scale distinctly: swivel < iron < heavy")
+	if b_swivel.trail != null and b_iron.trail != null and b_heavy.trail != null:
+		check(float(b_swivel.trail.get(&"width")) < float(b_iron.trail.get(&"width"))
+				and float(b_iron.trail.get(&"width")) < float(b_heavy.trail.get(&"width")),
+			"Trail3D widths scale distinctly: swivel < iron < heavy")
 	var heavy_mi := b_heavy.get_node(^"IronBall") as MeshInstance3D
 	var heavy_glow_mat := heavy_mi.get_surface_override_material(1) as StandardMaterial3D
 	check(heavy_glow_mat != null and heavy_glow_mat.emission_enabled and heavy_glow_mat.emission_energy_multiplier >= 2.0,

@@ -73,7 +73,7 @@ func _reset_shape_counts() -> void:
 		_shape_counts[s] = 0
 
 
-## Default 11-island canonical archipelago descriptor used as fallback when no
+## Default 14-island canonical archipelago descriptor used as fallback when no
 ## live Archipelago map array is supplied.
 static func default_archipelago_roster() -> Array[Dictionary]:
 	return [
@@ -154,6 +154,30 @@ static func default_archipelago_roster() -> Array[Dictionary]:
 			"position": Vector3(880.0, 0.0, 620.0),
 			"landmarks": ["Salt Pillars", "Dry Cistern", "Weathered Gallows"],
 		},
+		{
+			"id": &"sirens_tooth",
+			"name": "Siren's Tooth",
+			"archetype": &"sea_stack",
+			"kind": &"landmark",
+			"position": Vector3(1480.0, 0.0, -960.0),
+			"landmarks": ["Twin Basalt Fangs", "Siren Tidepool", "Reef Shelf"],
+		},
+		{
+			"id": &"sovereigns_bastion",
+			"name": "Sovereign's Bastion",
+			"archetype": &"grand_citadel",
+			"kind": &"fort",
+			"position": Vector3(-1640.0, 0.0, -1580.0),
+			"landmarks": ["Outer Seawall", "Ruined Temple Arch", "Waterfall Terrace", "Citadel Vault"],
+		},
+		{
+			"id": &"galleons_reach",
+			"name": "Galleon's Reach",
+			"archetype": &"grand_outpost",
+			"kind": &"outpost",
+			"position": Vector3(1560.0, 0.0, 980.0),
+			"landmarks": ["Grand Trade Pier", "Harbour Warehouse", "Seawall Promenade", "Cliffside Watchtower"],
+		},
 	]
 
 
@@ -185,6 +209,7 @@ static func extract_archipelago_data(source: Variant) -> Array[Dictionary]:
 			out.append({
 				"id": id,
 				"name": String(d.get("name", String(id).capitalize())),
+				"archetype": StringName(String(d.get("archetype", &""))),
 				"kind": StringName(String(d.get("kind", &"treasure_island"))),
 				"position": pos,
 				"landmarks": landmarks.duplicate(),
@@ -196,6 +221,7 @@ static func extract_archipelago_data(source: Variant) -> Array[Dictionary]:
 				id_val = n.get("id")
 			var id := StringName(String(id_val if id_val != null else n.name))
 			var name_val: Variant = n.get("island_name")
+			var arch_val: Variant = n.get("archetype")
 			var kind_val: Variant = n.get("kind")
 			var pos := Vector3.ZERO
 			if n is Node3D:
@@ -205,6 +231,7 @@ static func extract_archipelago_data(source: Variant) -> Array[Dictionary]:
 			out.append({
 				"id": id,
 				"name": String(name_val if name_val != null else n.name),
+				"archetype": StringName(String(arch_val if arch_val != null else &"")),
 				"kind": StringName(String(kind_val if kind_val != null else &"treasure_island")),
 				"position": pos,
 				"landmarks": landmarks.duplicate(),
@@ -1028,21 +1055,24 @@ func _pick_target_island(islands: Array[Dictionary], shape: StringName,
 		var kind: StringName = isl["kind"]
 		if id == origin_id and islands.size() > 1:
 			continue
+		var is_outpost := _is_outpost_entry(isl)
+		var is_citadel := _is_citadel_entry(isl)
+		var is_fort := _is_fort_entry(isl)
 		var matches_shape := false
 		match shape:
 			&"cargo_run":
-				matches_shape = (kind == &"outpost")
+				matches_shape = is_outpost
 			&"fort_siege":
-				matches_shape = (kind == &"fort")
+				matches_shape = is_fort
 			&"wreck_salvage":
 				matches_shape = (kind == &"shipwreck" or kind == &"reef" or kind == &"landmark")
 			&"open_sea_hunt":
-				matches_shape = (kind != &"outpost")
+				matches_shape = not is_outpost
 			_:
-				matches_shape = (kind == &"treasure_island" or kind == &"landmark")
+				matches_shape = (kind == &"treasure_island" or kind == &"landmark" or is_citadel)
 		if matches_shape:
 			preferred.append(isl)
-		if kind != &"outpost" or shape == &"cargo_run":
+		if not is_outpost or shape == &"cargo_run":
 			fallback.append(isl)
 
 	if fallback.is_empty():
@@ -1114,10 +1144,32 @@ func _find_island(islands: Array[Dictionary], target_id: StringName) -> Dictiona
 	return {}
 
 
+static func _is_outpost_entry(isl: Dictionary) -> bool:
+	var kind: StringName = isl.get("kind", &"")
+	var arch: StringName = isl.get("archetype", &"")
+	return kind == &"outpost" or kind == &"grand_outpost" or arch == &"outpost" or arch == &"grand_outpost"
+
+
+static func _is_citadel_entry(isl: Dictionary) -> bool:
+	var kind: StringName = isl.get("kind", &"")
+	var arch: StringName = isl.get("archetype", &"")
+	return kind == &"grand_citadel" or arch == &"grand_citadel"
+
+
+static func _is_fort_entry(isl: Dictionary) -> bool:
+	var kind: StringName = isl.get("kind", &"")
+	var arch: StringName = isl.get("archetype", &"")
+	return kind == &"fort" or arch == &"fort_rock" or _is_citadel_entry(isl)
+
+
 func _find_first_of_kind(islands: Array[Dictionary], kind: StringName,
 		default_isl: Dictionary) -> Dictionary:
 	for isl in islands:
 		if isl["kind"] == kind:
+			return isl
+		if kind == &"outpost" and _is_outpost_entry(isl):
+			return isl
+		if kind == &"fort" and _is_fort_entry(isl):
 			return isl
 	return default_isl
 

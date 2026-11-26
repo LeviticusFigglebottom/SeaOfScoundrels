@@ -98,8 +98,11 @@ func test_main_scene_boots_zero_placeholders() -> void:
 	var arch: Archipelago = m.get(&"archipelago") as Archipelago
 	check(sky_rig != null and sky_rig.get(&"sky_material") != null, "real SkyRig booted")
 	check(ocean != null and Ocean.current == ocean, "real Ocean booted")
-	check(arch != null and arch.get_islands().size() == 11, "Archipelago has all 11 islands")
+	var expected_islands := Archipelago.ISLAND_SPECS.size()
+	check(arch != null and arch.get_islands().size() == expected_islands,
+		"Archipelago has all %d islands" % expected_islands)
 	check(arch.get_island_by_id("port_scoundrel") is Outpost, "Port Scoundrel outpost present")
+	check(arch.get_island_by_id("galleons_reach") is Outpost, "Galleon's Reach grand outpost present")
 	check(arch.get_island_by_id("cutlass_cay") != null, "Cutlass Cay starter island present")
 
 	# Moored Ship + diegetic stations + downtime props
@@ -112,7 +115,8 @@ func test_main_scene_boots_zero_placeholders() -> void:
 	var moor_pos := port.get_world_mooring_transform().origin
 	var moor_dist := Vector2(ship.global_position.x - moor_pos.x, ship.global_position.z - moor_pos.z).length()
 	check(moor_dist < 4.0, "player Ship moored at Port Scoundrel pier (dist=%.2f m)" % moor_dist)
-	check(map_table != null and map_table.get_island_count() == 11, "MapTableView mounted with 11 islands")
+	check(map_table != null and map_table.get_island_count() == expected_islands,
+		"MapTableView mounted with %d islands" % expected_islands)
 	check(stove != null and stove.get_parent() == ship, "CookingStove mounted in ship hold")
 	check(fish != null and fish.get_parent() == ship, "FishingLine mounted on aft rail")
 

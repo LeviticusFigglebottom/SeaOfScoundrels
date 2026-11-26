@@ -339,8 +339,9 @@ func test_coral_reef_multimesh_budget_and_depth_placement() -> void:
 			continue
 		check_eq(mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
 			"%s disables shadow casting for zero shadow-pass cost" % mm_name)
-		check_near(mmi.visibility_range_end, 155.0, 0.01,
-			"%s culls cleanly at 155 m visibility range" % mm_name)
+		var expected_vis := maxf(CoralReef.VISIBILITY_RANGE_END, lagoon.seabed_radius + 110.0)
+		check_near(mmi.visibility_range_end, expected_vis, 0.05,
+			"%s scales cull range with island seabed radius (%.1f m)" % [mm_name, expected_vis])
 		check_eq(mmi.visibility_range_fade_mode, GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED,
 			"%s uses hard visibility range cutoff" % mm_name)
 		check(mmi.multimesh != null and mmi.multimesh.mesh != null,

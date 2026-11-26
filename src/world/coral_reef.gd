@@ -257,13 +257,14 @@ static func populate_for_island(island: Island, rng_seed: int = 0,
 	# 5. Build strictly 3 batched MultiMeshInstance3D children sharing cached static meshes.
 	var coral_mat := _get_coral_material()
 	var kelp_mat := _get_kelp_material()
+	var vis_end := maxf(VISIBILITY_RANGE_END, island.seabed_radius + 110.0)
 
 	reef._staghorn_mmi = _create_multimesh_node(
-		"StaghornCorals", _get_staghorn_mesh(), coral_mat, staghorn_xf, staghorn_col, 0.0)
+		"StaghornCorals", _get_staghorn_mesh(), coral_mat, staghorn_xf, staghorn_col, 0.0, vis_end)
 	reef._brain_mmi = _create_multimesh_node(
-		"BrainTableCorals", _get_brain_table_mesh(), coral_mat, brain_xf, brain_col, 0.0)
+		"BrainTableCorals", _get_brain_table_mesh(), coral_mat, brain_xf, brain_col, 0.0, vis_end)
 	reef._kelp_mmi = _create_multimesh_node(
-		"KelpFronds", _get_kelp_mesh(), kelp_mat, kelp_xf, kelp_col, 1.0)
+		"KelpFronds", _get_kelp_mesh(), kelp_mat, kelp_xf, kelp_col, 1.0, vis_end)
 
 	reef.add_child(reef._staghorn_mmi)
 	reef.add_child(reef._brain_mmi)
@@ -335,7 +336,7 @@ func get_placed_transforms() -> Array[Transform3D]:
 
 static func _create_multimesh_node(node_name: String, mesh: ArrayMesh, mat: Material,
 		transforms: Array[Transform3D], colors: Array[Color],
-		cull_margin: float) -> MultiMeshInstance3D:
+		cull_margin: float, vis_end: float = VISIBILITY_RANGE_END) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -351,7 +352,7 @@ static func _create_multimesh_node(node_name: String, mesh: ArrayMesh, mat: Mate
 	mmi.multimesh = mm
 	mmi.material_override = mat
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mmi.visibility_range_end = VISIBILITY_RANGE_END
+	mmi.visibility_range_end = vis_end
 	mmi.visibility_range_end_margin = VISIBILITY_RANGE_MARGIN
 	mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 	if cull_margin > 0.0:

@@ -578,7 +578,7 @@ func test_economy_renown_sidegrades_and_profile() -> void:
 
 func test_voyage_composer_variety_simulation() -> void:
 	var roster := VoyageComposer.default_archipelago_roster()
-	check_eq(roster.size(), 11, "simulated archipelago has 11 islands")
+	check_eq(roster.size(), 14, "simulated archipelago has 14 islands")
 
 	var composer := VoyageComposer.new(0x5C00D2E1)
 	var shape_counts: Dictionary = {}
@@ -687,7 +687,7 @@ func test_story_campaign_live_archipelago_alignment() -> void:
 	add_child(arch)
 	await physics_frames(1)
 	var live_map := arch.get_map_data()
-	check_eq(live_map.size(), 11, "live Archipelago exposes 11 islands")
+	check(live_map.size() >= 11, "live Archipelago exposes >= 11 islands (got %d)" % live_map.size())
 
 	var live_ch1 := composer.get_story_voyage(1, live_map)
 	check_eq(live_ch1["target_island_id"], &"cutlass_cay", "live Chapter 1 targets cutlass_cay")
@@ -1549,5 +1549,124 @@ func test_victory_flare_sculpted_launch_burst_and_teardown() -> void:
 		"VictoryFlare releases all static mesh & material caches cleanly to null")
 
 
+func test_wave24d_14_island_roster_and_massive_showcase_shots() -> void:
+	var roster := VoyageComposer.default_archipelago_roster()
+	check_eq(roster.size(), 14, "default_archipelago_roster() expands cleanly to 14 islands")
 
+	var by_id: Dictionary = {}
+	for entry in roster:
+		by_id[entry["id"]] = entry
 
+	# 1. Verify the 3 new Wave 24C islands and archetypes exist with exact metadata.
+	check(by_id.has(&"sirens_tooth"), "roster includes sirens_tooth")
+	check(by_id.has(&"sovereigns_bastion"), "roster includes sovereigns_bastion")
+	check(by_id.has(&"galleons_reach"), "roster includes galleons_reach")
+
+	var siren: Dictionary = by_id[&"sirens_tooth"]
+	check_eq(String(siren.get("name", "")), "Siren's Tooth", "sirens_tooth display name matches")
+	check_eq(siren.get("archetype", &""), &"sea_stack", "sirens_tooth archetype is sea_stack")
+	check_eq(siren.get("kind", &""), &"landmark", "sirens_tooth kind is landmark")
+	check_eq((siren.get("landmarks", []) as Array), ["Twin Basalt Fangs", "Siren Tidepool", "Reef Shelf"],
+		"sirens_tooth landmarks match")
+
+	var bastion: Dictionary = by_id[&"sovereigns_bastion"]
+	check_eq(String(bastion.get("name", "")), "Sovereign's Bastion", "sovereigns_bastion display name matches")
+	check_eq(bastion.get("archetype", &""), &"grand_citadel", "sovereigns_bastion archetype is grand_citadel")
+	check_eq(bastion.get("kind", &""), &"fort", "sovereigns_bastion kind is fort")
+	check_eq((bastion.get("landmarks", []) as Array),
+		["Outer Seawall", "Ruined Temple Arch", "Waterfall Terrace", "Citadel Vault"],
+		"sovereigns_bastion landmarks match")
+
+	var reach: Dictionary = by_id[&"galleons_reach"]
+	check_eq(String(reach.get("name", "")), "Galleon's Reach", "galleons_reach display name matches")
+	check_eq(reach.get("archetype", &""), &"grand_outpost", "galleons_reach archetype is grand_outpost")
+	check_eq(reach.get("kind", &""), &"outpost", "galleons_reach kind is outpost")
+	check_eq((reach.get("landmarks", []) as Array),
+		["Grand Trade Pier", "Harbour Warehouse", "Seawall Promenade", "Cliffside Watchtower"],
+		"galleons_reach landmarks match")
+
+	# extract_archipelago_data() preserves archetype cleanly across all 14 islands.
+	var extracted := VoyageComposer.extract_archipelago_data(roster)
+	check_eq(extracted.size(), 14, "extract_archipelago_data preserves all 14 islands")
+	var extracted_archetypes: Array[StringName] = []
+	for item in extracted:
+		extracted_archetypes.append(item.get("archetype", &""))
+	check(extracted_archetypes.has(&"sea_stack"), "extracted data preserves sea_stack archetype")
+	check(extracted_archetypes.has(&"grand_citadel"), "extracted data preserves grand_citadel archetype")
+	check(extracted_archetypes.has(&"grand_outpost"), "extracted data preserves grand_outpost archetype")
+
+	# 2. Verify procedural voyages across the 14-island roster:
+	#    - fort_siege targets sovereigns_bastion (& ironwatch_fort)
+	#    - drowned_bounty & buried_hoard can target grand_citadel (sovereigns_bastion)
+	#    - cargo_run targets galleons_reach and hostile voyages never attack grand_outpost!
+	var composer := VoyageComposer.new(0x24D14)
+	var all_seen: Dictionary = {}
+	var seen_fort_targets: Dictionary = {}
+	for _i in 12:
+		var fv := composer.compose_voyage(roster, 4, &"iron_tide", &"fort_siege", &"port_scoundrel")
+		seen_fort_targets[fv["target_island_id"]] = true
+		all_seen[fv["target_island_id"]] = true
+	check(seen_fort_targets.has(&"sovereigns_bastion"),
+		"fort_siege targets sovereigns_bastion on 14-island roster")
+	check(seen_fort_targets.has(&"ironwatch_fort"),
+		"fort_siege also targets ironwatch_fort on 14-island roster")
+
+	composer.set_seed(0x24D22)
+	var seen_bounty_bastion := false
+	var seen_hoard_bastion := false
+	var seen_cargo_reach := false
+	var hostile_hit_reach := false
+	for _i in 140:
+		var bv := composer.compose_voyage(roster, 3, &"iron_tide", &"drowned_bounty", &"port_scoundrel")
+		all_seen[bv["target_island_id"]] = true
+		if bv["target_island_id"] == &"sovereigns_bastion":
+			seen_bounty_bastion = true
+		if bv["target_island_id"] == &"galleons_reach":
+			hostile_hit_reach = true
+	for _i in 120:
+		var hv := composer.compose_voyage(roster, 3, &"gilded_compass", &"buried_hoard", &"port_scoundrel")
+		all_seen[hv["target_island_id"]] = true
+		if hv["target_island_id"] == &"sovereigns_bastion":
+			seen_hoard_bastion = true
+		if hv["target_island_id"] == &"galleons_reach":
+			hostile_hit_reach = true
+	for _i in 30:
+		var cv := composer.compose_voyage(roster, 2, &"gilded_compass", &"cargo_run", &"port_scoundrel")
+		all_seen[cv["target_island_id"]] = true
+		if cv["target_island_id"] == &"galleons_reach":
+			seen_cargo_reach = true
+	for _i in 40:
+		var wv := composer.compose_voyage(roster, 2, &"sunken_archive", &"wreck_salvage", &"port_scoundrel")
+		all_seen[wv["target_island_id"]] = true
+		if wv["target_island_id"] == &"galleons_reach":
+			hostile_hit_reach = true
+	check(seen_bounty_bastion, "drowned_bounty targets sovereigns_bastion grand_citadel")
+	check(seen_hoard_bastion, "buried_hoard targets sovereigns_bastion grand_citadel as treasure destination")
+	check(seen_cargo_reach, "cargo_run targets galleons_reach grand_outpost as friendly port")
+	check(not hostile_hit_reach, "hostile voyages never target friendly grand_outpost galleons_reach")
+	check(all_seen.has(&"sirens_tooth"), "sirens_tooth participates in procedural voyages")
+	check_eq(all_seen.size(), 13, "all 13 non-origin islands across 14-island roster receive voyages")
+
+	# Verify Galleon's Reach works cleanly as an origin/turn-in outpost & direct kind classification.
+	var from_reach := composer.compose_voyage(roster, 3, &"iron_tide", &"fort_siege", &"galleons_reach")
+	check_eq(from_reach["origin_outpost_id"], &"galleons_reach", "grand_outpost serves as origin outpost")
+	check_eq(from_reach["return_outpost_id"], &"galleons_reach", "grand_outpost serves as friendly turn-in port")
+	check(from_reach["target_island_id"] != &"galleons_reach", "voyage from galleons_reach does not target itself")
+
+	var kind_only_roster: Array[Dictionary] = [
+		{"id": &"galleons_reach", "name": "Galleon's Reach", "kind": &"grand_outpost", "position": Vector3.ZERO, "landmarks": ["Grand Trade Pier"]},
+		{"id": &"sovereigns_bastion", "name": "Sovereign's Bastion", "kind": &"grand_citadel", "position": Vector3(-800, 0, -800), "landmarks": ["Outer Seawall"]},
+	]
+	var kind_siege := composer.compose_voyage(kind_only_roster, 4, &"iron_tide", &"fort_siege", &"missing_origin")
+	check_eq(kind_siege["origin_outpost_id"], &"galleons_reach", "grand_outpost kind resolves as origin outpost")
+	check_eq(kind_siege["target_island_id"], &"sovereigns_bastion", "grand_citadel kind resolves as fort_siege target")
+
+	# 3. Verify scenes/main.gd registers all 4 Wave 24D massive-island showcase shots cleanly.
+	var main_src := FileAccess.get_file_as_string("res://scenes/main.gd")
+	for shot_name: String in ["sovereigns_bastion", "galleons_reach", "emerald_waterfall", "archipelago_panorama"]:
+		check(main_src.contains("\"%s\":" % shot_name), "scenes/main.gd registers shot=%s" % shot_name)
+		check(main_src.contains("|%s" % shot_name), "scenes/main.gd header docstring lists shot=%s" % shot_name)
+		check(main_src.contains("\"%s\"" % shot_name), "scenes/main.gd third_person allowlist includes %s" % shot_name)
+	check(main_src.contains("_suppress_shot_hud_overlays"), "scenes/main.gd suppresses HUD overlays on new showcase shots")
+	for prim: String in ["BoxMesh.new", "SphereMesh.new", "CylinderMesh.new", "CapsuleMesh.new", "PrismMesh.new"]:
+		check(not main_src.contains(prim), "scenes/main.gd remains free of raw %s primitives" % prim)

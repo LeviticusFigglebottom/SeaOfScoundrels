@@ -1,9 +1,11 @@
 extends TestCase
 ## Headless integration tests for Workstream `island`:
-## 17 stylized props, 11 procedural archetypes, 11-island archipelago, Outpost
-## dock depth / mooring clearance / shelter / restock, harbour bunting / grog keg /
-## campfire bard, Pawn beach landing walk, 3-dig DigSite unearthing, Outpost
-## MerchantStall selling, shore factor & discovery.
+## 17 base stylized props (+ optional Wave 24A architecture/jungle props), 14
+## procedural archetypes, 14-island multi-tier archipelago (38-182 m radius, 91
+## pairwise channels > 320 m), Outpost dock depth / mooring clearance / shelter /
+## restock (all 3 Outposts), harbour bunting / grog keg / campfire bard, Pawn
+## beach landing walk, 3-dig DigSite unearthing, Outpost MerchantStall selling,
+## shore factor & discovery, FortBastion/FortVault, SmugglersGrotto & VolcanoCaldera.
 
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
@@ -28,6 +30,16 @@ const ALL_PROPS: Array[String] = [
 	"notice_board.glb",
 ]
 
+const OPTIONAL_WAVE24_PROPS: Array[String] = [
+	"jungle_banyan.glb",
+	"ruin_arch.glb",
+	"ruin_pillar.glb",
+	"timber_bridge.glb",
+	"harbour_warehouse.glb",
+	"seawall_bastion.glb",
+	"watchtower_wood.glb",
+]
+
 
 func _init_host() -> void:
 	Net.start_single_player()
@@ -36,7 +48,7 @@ func _init_host() -> void:
 
 
 func test_all_17_props_load() -> void:
-	check_eq(ALL_PROPS.size(), 17, "expected 17 stylized props")
+	check_eq(ALL_PROPS.size(), 17, "expected 17 stylized base props")
 	var expected_empties := {
 		"dock_pier.glb": "Lantern_Dock",
 		"outpost_tavern.glb": "Lantern_Tavern",
@@ -71,10 +83,25 @@ func test_all_17_props_load() -> void:
 				"too few col_* meshes in %s (%d)" % [filename, col_meshes.size()])
 		inst.free()
 
+	# Also validate any Wave 24A optional architecture/jungle props present in assets/generated/props/.
+	for opt_name in OPTIONAL_WAVE24_PROPS:
+		var opt_path := "res://assets/generated/props/" + opt_name
+		if not ResourceLoader.exists(opt_path):
+			continue
+		var opt_packed := load(opt_path) as PackedScene
+		check(opt_packed != null, "failed to load optional Wave 24A PackedScene " + opt_path)
+		if opt_packed == null:
+			continue
+		var opt_inst := opt_packed.instantiate()
+		check(opt_inst is Node3D, "optional prop root must be Node3D: " + opt_name)
+		var opt_meshes := opt_inst.find_children("*", "MeshInstance3D", true, false)
+		check(opt_meshes.size() >= 1, "optional prop has no meshes: " + opt_name)
+		opt_inst.free()
 
-func test_all_11_archetypes_generate() -> void:
+
+func test_all_14_archetypes_generate() -> void:
 	_init_host()
-	check_eq(IslandGenerator.ARCHETYPES.size(), 11, "expected 11 island archetypes")
+	check_eq(IslandGenerator.ARCHETYPES.size(), 14, "expected 14 island archetypes")
 	for arch in IslandGenerator.ARCHETYPES:
 		var isl := IslandGenerator.build_island({
 			"id": "test_" + String(arch),
@@ -91,43 +118,82 @@ func test_all_11_archetypes_generate() -> void:
 		var terrain_body := isl.get_node_or_null(^"TerrainBody") as StaticBody3D
 		check(terrain_body != null and terrain_body.collision_layer == 1,
 			"archetype %s TerrainBody must be on layer 1" % arch)
+		# Verify adaptive terrain grid resolution scales cleanly with island size tier.
+		var expected_res := 72
+		if isl.island_radius > 145.0:
+			expected_res = 120
+		elif isl.island_radius > 105.0:
+			expected_res = 104
+		elif isl.island_radius > 60.0:
+			expected_res = 88
+		check_eq(isl._grid_res, expected_res,
+			"archetype %s (r=%.1f m) should use adaptive grid_res=%d" % [arch, isl.island_radius, expected_res])
 		# Verify all col_* helper meshes are hidden visually.
 		for c_node in isl.find_children("col_*", "MeshInstance3D", true, false):
 			var c_mi := c_node as MeshInstance3D
 			check(not c_mi.visible, "col_* mesh still visible on %s: %s" % [arch, c_mi.name])
 		isl.queue_free()
-	await physics_frames(2)
+	await physics_frames(3)
 
 
-func test_archipelago_11_islands_no_overlap() -> void:
+func test_archipelago_14_islands_no_overlap() -> void:
 	_init_host()
 	var arch := Archipelago.new()
 	add_child(arch)
 
 	var all_islands := arch.get_islands()
-	check_eq(all_islands.size(), 11, "archipelago must contain 11 islands")
+	check_eq(all_islands.size(), 14, "archipelago must contain 14 islands")
 
 	var seen_ids := {}
 	var seen_names := {}
+	var min_radius := INF
+	var max_radius := 0.0
 	for isl in all_islands:
 		check(not seen_ids.has(isl.island_id), "duplicate island_id: " + isl.island_id)
 		check(not seen_names.has(isl.display_name), "duplicate display_name: " + isl.display_name)
 		seen_ids[isl.island_id] = true
 		seen_names[isl.display_name] = true
+		min_radius = minf(min_radius, isl.island_radius)
+		max_radius = maxf(max_radius, isl.island_radius)
 
+	check(min_radius <= 42.0, "archipelago must include tiny sea-stack tier (min_radius=%.1f <= 42 m)" % min_radius)
+	check(max_radius >= 175.0, "archipelago must include massive flagship tier (max_radius=%.1f >= 175 m)" % max_radius)
+
+	var outposts := arch.get_outposts()
+	check(outposts.size() >= 3, "archipelago must provide >= 3 Outposts including Galleon's Reach (got %d)" % outposts.size())
 	var op0 := arch.get_outpost(0)
 	var op1 := arch.get_outpost(1)
+	var op2 := arch.get_outpost(2)
 	var starter := arch.get_starter_treasure_island()
 	check(op0 != null and op0.island_id == "port_scoundrel", "outpost 0 must be port_scoundrel")
 	check(op1 != null and op1.island_id == "barnacle_haven", "outpost 1 must be barnacle_haven")
+	check(op2 != null and op2.island_id == "galleons_reach" and op2 is Outpost, "outpost 2 must be galleons_reach Outpost")
 	check(starter != null and starter.island_id == "cutlass_cay", "starter treasure island must be cutlass_cay")
 	check(starter.get_dig_sites().size() >= 1, "Cutlass Cay should have an active DigSite")
 
+	# Verify new Siren's Tooth sea-stack & Sovereign's Bastion Grand Citadel (with FortBastion + FortVault).
+	var sirens := arch.get_island_by_id("sirens_tooth")
+	check(sirens != null and sirens.archetype == &"sea_stack" and sirens.island_radius <= 42.0,
+		"Siren's Tooth must spawn as Tier 1 sea_stack")
+	var citadel := arch.get_island_by_id("sovereigns_bastion")
+	check(citadel != null and citadel.archetype == &"grand_citadel" and citadel.island_radius >= 175.0,
+		"Sovereign's Bastion must spawn as Tier 4 grand_citadel")
+	if citadel != null:
+		var cit_bastion := citadel.get_node_or_null(^"FortBastion")
+		check(cit_bastion != null, "Sovereign's Bastion must crown its mesa with FortBastion")
+		if cit_bastion != null:
+			var cit_vault := cit_bastion.get_node_or_null(^"FortVault")
+			check(cit_vault != null, "Sovereign's Bastion FortBastion must mount FortVault")
+			var cit_bats := citadel.find_children("*", "FortBattery", true, false)
+			check_eq(cit_bats.size(), 4, "Sovereign's Bastion must mount 4 FortBattery sea-batteries")
+
 	var dist_starter := op0.global_position.distance_to(starter.global_position)
 	check(dist_starter >= 380.0 and dist_starter <= 520.0,
-		"Cutlass Cay distance %.1f m should be ~430 m NNE of Port Scoundrel" % dist_starter)
+		"Cutlass Cay distance %.1f m should be ~430-490 m NNE of Port Scoundrel" % dist_starter)
 
-	# Verify zero overlaps and >320 m open sailing channels between every island pair.
+	# Verify zero overlaps and >320 m open sailing channels across ALL 91 island pairs.
+	var pair_count := 0
+	var min_channel := INF
 	for i in all_islands.size():
 		for j in range(i + 1, all_islands.size()):
 			var a := all_islands[i]
@@ -136,17 +202,22 @@ func test_archipelago_11_islands_no_overlap() -> void:
 				a.global_position.x - b.global_position.x,
 				a.global_position.z - b.global_position.z).length()
 			var channel := center_dist - a.island_radius - b.island_radius
+			min_channel = minf(min_channel, channel)
+			pair_count += 1
 			check(channel > 320.0,
 				"channel between %s and %s too narrow: %.1f m" % [a.island_id, b.island_id, channel])
+	check_eq(pair_count, 91, "must verify all 91 pairwise channels across 14 islands")
+	print("    archipelago 14 islands: radius %.1f..%.1f m, %d pairs, min_channel=%.1f m" % [
+		min_radius, max_radius, pair_count, min_channel])
 
 	# Verify get_map_data() works cleanly with VoyageComposer.
 	var map_data := arch.get_map_data()
-	check_eq(map_data.size(), 11, "get_map_data should return 11 entries")
+	check_eq(map_data.size(), 14, "get_map_data should return 14 entries")
 	var extracted := VoyageComposer.extract_archipelago_data(arch)
-	check_eq(extracted.size(), 11, "VoyageComposer must extract all 11 islands cleanly")
+	check_eq(extracted.size(), 14, "VoyageComposer must extract all 14 islands cleanly")
 
 	arch.queue_free()
-	await physics_frames(2)
+	await physics_frames(3)
 
 
 func test_outpost_dock_depth_mooring_and_restock() -> void:
@@ -155,7 +226,7 @@ func test_outpost_dock_depth_mooring_and_restock() -> void:
 	add_child(arch)
 	await physics_frames(2)
 
-	for idx in [0, 1]:
+	for idx in [0, 1, 2]:
 		var op := arch.get_outpost(idx)
 		check(op != null, "missing outpost %d" % idx)
 		if op == null:

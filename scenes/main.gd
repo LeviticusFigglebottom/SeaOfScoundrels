@@ -1,7 +1,7 @@
 extends Node3D
 ## Sea of Scoundrels — Full Playable Vertical Slice Main Scene.
 ##
-## Assembles SkyRig, Ocean, 11-island Archipelago, Sloop/Brigantine Ship with
+## Assembles SkyRig, Ocean, 14-island Archipelago, Sloop/Brigantine Ship with
 ## live MapTableView, CookingStove & FishingLine, first-person Captain Pawn +
 ## Inventory + CombatComponent + 3 AI Crewmates (or Co-op peers), GameHUD,
 ## ShipwrightMenu, VoyageManager (Story Chapters + Procedural Contracts),
@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|whale_breach|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|whale_breach|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins|sovereigns_bastion|galleons_reach|emerald_waterfall|archipelago_panorama
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -119,6 +119,7 @@ var _cli_storm: float = NAN
 var _cli_cloud: float = NAN
 var _cli_quality: String = ""
 var _cli_ship_class: StringName = &"sloop"
+var _cli_ship_explicit: bool = false
 
 
 func _ready() -> void:
@@ -127,7 +128,9 @@ func _ready() -> void:
 
 	user_settings = UserSettings.new()
 	user_settings.load_from()
-	if _cli_ship_class == &"sloop" and Game != null and Game.profile != null:
+	if not _cli_ship_explicit and active_shot_mode in ["sovereigns_bastion", "galleons_reach"]:
+		_cli_ship_class = &"brigantine"
+	elif _cli_ship_class == &"sloop" and not _cli_ship_explicit and Game != null and Game.profile != null:
 		var saved_cls := String(Game.profile.data.get("ship_class", "sloop"))
 		if saved_cls == "brigantine":
 			_cli_ship_class = &"brigantine"
@@ -211,6 +214,7 @@ func _parse_cli_args() -> void:
 		elif a.begins_with("quality="):
 			_cli_quality = a.trim_prefix("quality=").to_lower()
 		elif a.begins_with("ship="):
+			_cli_ship_explicit = true
 			var s_arg := a.trim_prefix("ship=").to_lower()
 			if s_arg == "brigantine":
 				_cli_ship_class = &"brigantine"
@@ -2898,6 +2902,9 @@ func _apply_hero_shot(mode: String) -> void:
 	if hud != null:
 		hud.input_enabled = false
 		hud.clear_banners()
+		var ch_hero := hud.find_child("Crosshair", true, false) as CanvasItem
+		if ch_hero != null:
+			ch_hero.visible = false
 	if player_pawn != null:
 		player_pawn.focus = null
 	if player_controller != null:
@@ -2909,7 +2916,8 @@ func _apply_hero_shot(mode: String) -> void:
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "night_sail", "night_lighthouse", "rainbow", "whale_breach", "leviathan", "fleet",
 			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam", "deck_duel",
-			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
+			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing",
+			"sovereigns_bastion", "galleons_reach", "emerald_waterfall", "archipelago_panorama"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -3078,7 +3086,7 @@ func _apply_hero_shot(mode: String) -> void:
 			player_ship.water_level = 0.18
 			if map_table != null:
 				map_table.refresh_now()
-			var cam_local_hold := Vector3(1.35, 0.42, -0.45) if is_brig else Vector3(1.02, 0.34, -0.82)
+			var cam_local_hold := Vector3(1.15, 0.48, 0.45) if is_brig else Vector3(1.02, 0.34, -0.82)
 			var look_local_hold := Vector3(-0.10, -0.25, 4.20) if is_brig else Vector3(-0.08, -0.22, 2.55)
 			_enable_ship_track_shot(cam_local_hold, look_local_hold, 66.0)
 
@@ -3570,6 +3578,10 @@ func _apply_hero_shot(mode: String) -> void:
 					player_pawn.board(player_ship, fishing_line.position + Vector3(0.18, 0.0, 0.10))
 					player_pawn.look_yaw = atan2(-cast_world_dir.x, -cast_world_dir.z)
 					_fishing_pawn = player_pawn
+				if inventory != null and inventory.has_method(&"equip"):
+					inventory.equip(&"", true)
+				if player_combat != null:
+					player_combat.equipped_weapon = &""
 				fishing_line.cancel_cast()
 				fishing_line.cast_line(fishing_line.global_position, cast_world_dir, 7.6)
 				fishing_line.state = FishingLine.State.HOOKED
@@ -3659,6 +3671,164 @@ func _apply_hero_shot(mode: String) -> void:
 
 				var look_p := cutlass.global_position + sea_dir * (shore_r + 4.0) + Vector3(0.0, 0.52, 0.0)
 				_mount_shot_camera(cam_p, look_p, 54.0)
+
+		"sovereigns_bastion":
+			# Crisp golden-morning hero maritime vista: Brigantine cruising off Sovereign's Bastion
+			# framing the massive 364 m multi-elevation citadel, outer seawall bastions, ruin arches,
+			# cascading waterfall, jungle banyans & towering ridged cliffs!
+			Weather.time_of_day = 9.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 10.5, -0.35, 0.0, 0.32)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_suppress_shot_hud_overlays()
+			var citadel := archipelago.get_island_by_id("sovereigns_bastion")
+			if citadel == null:
+				citadel = archipelago.get_island_by_id("ironwatch_fort")
+			if citadel != null:
+				var cpos := citadel.global_position
+				var r := citadel.island_radius
+				var pk := citadel.peak_height
+				var m_orig := citadel.mooring_transform.origin
+				var sea_dir := Vector3(m_orig.x, 0.0, m_orig.z)
+				sea_dir = sea_dir.normalized() if sea_dir.length_squared() > 0.01 else Vector3(-0.707, 0.0, 0.707)
+				var view_right := (-sea_dir).cross(Vector3.UP).normalized()
+				var moor_dist := Vector2(m_orig.x, m_orig.z).length()
+				var offshore_base := maxf(r + 36.0, moor_dist + 18.0)
+
+				# Position Brigantine cruising cleanly across the sunlit landing cove approach.
+				var ship_pos := cpos + sea_dir * (offshore_base + 22.0) - view_right * maxf(18.0, r * 0.16)
+				var ship_fwd := (cpos + view_right * (r * 0.22)) - ship_pos
+				ship_fwd.y = 0.0
+				ship_fwd = ship_fwd.normalized() if ship_fwd.length_squared() > 0.01 else -sea_dir
+				var ship_yaw := atan2(-ship_fwd.x, -ship_fwd.z)
+				_place_sailing_ship(ship_pos, ship_yaw, 0.92, 5.2)
+
+				var cam_p := cpos + sea_dir * (offshore_base + maxf(54.0, r * 0.42)) \
+					- view_right * maxf(30.0, r * 0.24) \
+					+ Vector3(0.0, clampf(pk * 0.24, 14.0, 26.0), 0.0)
+				var look_p := cpos + sea_dir * (r * 0.12) + view_right * (r * 0.04) \
+					+ Vector3(0.0, pk * 0.38, 0.0)
+				_mount_shot_camera(cam_p, look_p, 58.0)
+
+		"galleons_reach":
+			# Warm sunlit afternoon panoramic view of Galleon's Reach grand capital trade port:
+			# harbour warehouse, stone seawalls, wooden lookout watchtower, bunting, tavern plaza,
+			# beacon tower, and towering sculpted amphitheatre cliffs behind our moored Brigantine!
+			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.02, 8.5, -0.35, 0.0, 0.28)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
+			_suppress_shot_hud_overlays()
+			var capital_isl := archipelago.get_island_by_id("galleons_reach")
+			if capital_isl == null:
+				capital_isl = port
+			if capital_isl != null:
+				var capital_op := capital_isl as Outpost
+				var moor_xf := capital_isl.get_world_mooring_transform()
+				moor_xf.origin.y = Sea.height(moor_xf.origin.x, moor_xf.origin.z)
+				player_ship.global_transform = moor_xf
+				player_ship.set_anchor(true)
+				player_ship.anchor_progress = 1.0
+				player_ship.set_sail_target(0.0)
+				player_ship.sail_set = 0.0
+				player_ship.linear_velocity = Vector3.ZERO
+				player_ship.angular_velocity = Vector3.ZERO
+				if player_pawn != null:
+					player_pawn.board(player_ship, _captain_deck_pos(player_ship))
+					player_pawn.look_yaw = player_ship.rotation.y
+				var cap_specs := _crew_specs_for(player_ship)
+				for i in crew_pawns.size():
+					if crew_pawns[i] != null:
+						crew_pawns[i].board(player_ship, cap_specs[i % cap_specs.size()]["local_pos"] as Vector3)
+
+				var scale_k := clampf(capital_isl.island_radius / 62.0, 1.0, 2.6)
+				if capital_op != null:
+					var dock_xf := capital_op.global_transform * capital_op.dock_local_transform
+					var z_cam := -lerpf(48.0, 92.0, clampf((scale_k - 1.0) / 1.5, 0.0, 1.0))
+					var cam_w := dock_xf * Vector3(18.0 * scale_k, clampf(14.5 * scale_k, 14.5, 28.0), z_cam)
+					var look_w := dock_xf * Vector3(-2.0 * scale_k, clampf(capital_isl.peak_height * 0.28, 12.0, 28.0), 22.0 * scale_k)
+					_mount_shot_camera(cam_w, look_w, 58.0)
+				else:
+					var m_orig := capital_isl.mooring_transform.origin
+					var sea_dir := Vector3(m_orig.x, 0.0, m_orig.z)
+					sea_dir = sea_dir.normalized() if sea_dir.length_squared() > 0.01 else Vector3(0.0, 0.0, -1.0)
+					var view_right := (-sea_dir).cross(Vector3.UP).normalized()
+					var cam_w := capital_isl.global_position + sea_dir * (capital_isl.island_radius + 54.0) \
+						+ view_right * (18.0 * scale_k) + Vector3(0.0, clampf(14.5 * scale_k, 14.5, 28.0), 0.0)
+					var look_w := capital_isl.global_position + Vector3(0.0, capital_isl.peak_height * 0.30, 0.0)
+					_mount_shot_camera(cam_w, look_w, 58.0)
+
+		"emerald_waterfall":
+			# Lush sunlit tropical vista off Emerald Spire looking straight toward its dramatic
+			# cascading IslandWaterfall, turquoise plunge pool, dense jungle banyan canopy, ancient
+			# stone ruins, and towering sculpted twin massifs!
+			Weather.time_of_day = 10.6 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.02, 8.0, -0.35, 0.0, 0.26)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
+			_suppress_shot_hud_overlays()
+			var emerald := archipelago.get_island_by_id("emerald_spire")
+			if emerald != null:
+				var epos := emerald.global_position
+				var er := emerald.island_radius
+				var epk := emerald.peak_height
+				var m_orig := emerald.mooring_transform.origin
+				var sea_dir := Vector3(m_orig.x, 0.0, m_orig.z)
+				sea_dir = sea_dir.normalized() if sea_dir.length_squared() > 0.01 else Vector3(0.988, 0.0, -0.150)
+
+				var wf_node := emerald.get_node_or_null(^"IslandWaterfall") as Node3D
+				if wf_node == null:
+					var found_wf := emerald.find_children("*Waterfall*", "Node3D", true, false)
+					if not found_wf.is_empty():
+						wf_node = found_wf[0] as Node3D
+
+				if wf_node != null:
+					var wf_pos := wf_node.global_position
+					var wf_out := Vector3(wf_pos.x - epos.x, 0.0, wf_pos.z - epos.z)
+					var out_dir := wf_out.normalized() if wf_out.length_squared() > 16.0 else sea_dir
+					var side_dir := (-out_dir).cross(Vector3.UP).normalized()
+					var stand_off := maxf(46.0, er * 0.62)
+					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off + side_dir * 12.0 \
+						+ Vector3(0.0, clampf(epk * 0.16, 9.5, 18.0), 0.0)
+					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 4.5)
+					var wf_mid_y := clampf(maxf(wf_pos.y * 0.55, epk * 0.26), 10.0, 34.0)
+					var look_p := Vector3(wf_pos.x, wf_mid_y, wf_pos.z).lerp(
+						epos + Vector3(0.0, epk * 0.34, 0.0), 0.35
+					)
+					_mount_shot_camera(cam_p, look_p, 56.0)
+				else:
+					var side_dir := (-sea_dir).cross(Vector3.UP).normalized()
+					var cam_p := epos + sea_dir * (er + 42.0) + side_dir * 14.0 \
+						+ Vector3(0.0, clampf(epk * 0.18, 11.0, 20.0), 0.0)
+					var look_p := epos + Vector3(0.0, epk * 0.36, 0.0)
+					_mount_shot_camera(cam_p, look_p, 56.0)
+
+		"archipelago_panorama":
+			# Elevated scenic aerial vista (y = 72 m above Port Scoundrel's seaward headland)
+			# looking NNE across Port Scoundrel harbour, Cutlass Cay, Smuggler's Cove, and the
+			# vast multi-scale archipelago horizon!
+			Weather.time_of_day = 10.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 8.5, -0.37, 0.0, 0.30)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
+			_suppress_shot_hud_overlays()
+			var port_pos := port.global_position if port != null else Vector3.ZERO
+			var cam_p := port_pos + Vector3(-58.0, 72.0, 96.0)
+			if port != null:
+				cam_p.y = maxf(cam_p.y, port.world_surface_height(cam_p) + 18.0)
+			var look_p := port_pos + Vector3(240.0, 10.0, -340.0)
+			_mount_shot_camera(cam_p, look_p, 62.0)
+
+
+func _suppress_shot_hud_overlays() -> void:
+	if hud != null:
+		hud.set_boss_encounter("", 0.0, false)
+		var ch_node := hud.find_child("Crosshair", true, false) as CanvasItem
+		if ch_node != null:
+			ch_node.visible = false
+		var prompt_node := hud.find_child("PromptHolder", true, false) as CanvasItem
+		if prompt_node != null:
+			prompt_node.visible = false
+	if player_pawn != null:
+		player_pawn.focus = null
+	if player_controller != null:
+		player_controller.focus_prompt = ""
 
 
 func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:

@@ -1,6 +1,6 @@
 # Sea of Scoundrels: procedural island & outpost prop generator.
 # Usage: blender --background --factory-startup --python tools/blender/gen_props.py -- <outdir>
-# Writes 17 stylized .glb files into <outdir>/props/. Deterministic (seeded).
+# Writes 24 stylized .glb files into <outdir>/props/. Deterministic (seeded).
 # Everything is authored in Godot game coordinates (-Z forward, +Y up, +X starboard, metres)
 # and converted to Blender's Z-up frame only on mesh creation, matching gen_sloop.py.
 import bpy, bmesh, sys, os, math, random
@@ -1853,6 +1853,843 @@ def gen_notice_board(outdir):
     col_box('col_notice_board', (-1.18, -0.4, -0.35), (1.18, 2.50, 0.35))
     export_glb(outdir, 'notice_board.glb')
 
+
+# ================================================================ WAVE 24A LANDMARK, JUNGLE, RUIN & HARBOUR PROPS
+
+def _add_faceted_canopy_dome(mb, center, radii, rng, phase, base_w=0.18, tip_w=0.88, tint=0.5):
+    """Chunky painterly multi-faceted jungle leaf-cluster dome with baked UV2 wind sway weights."""
+    bm = bmesh.new()
+    bmesh.ops.create_icosphere(bm, subdivisions=1, radius=1.0)
+    ph = [rng.uniform(0.0, 6.28) for _ in range(4)]
+    cx, cy, cz = center
+    rx, ry, rz = radii
+    for v in bm.verts:
+        p = v.co.copy()
+        wob = 1.0 + 0.16 * sin(p.x * 3.1 + ph[0]) * cos(p.z * 2.8 + ph[1]) + 0.10 * sin(p.y * 4.0 + ph[2])
+        # Slightly flatten underside so canopy domes stack into lush umbrella tiers
+        py = p.y * (0.58 if p.y < 0.0 else 1.06)
+        v.co = Vector((cx + p.x * rx * wob, cy + py * ry * wob, cz + p.z * rz * wob))
+    bm.faces.ensure_lookup_table()
+    mb.newoff()
+    for f in bm.faces:
+        pts = [v.co.copy() for v in f.verts]
+        fn = newell(pts)
+        if fn.length < 1e-8:
+            continue
+        fn.normalize()
+        fc = sum(pts, Vector()) / len(pts)
+        # Ensure outward face orientation from cluster center
+        if fn.dot(fc - Vector(center)) < 0.0:
+            pts.reverse()
+            fn = -fn
+        h_frac = smooth01((fc.y - (cy - ry * 0.6)) / max(0.2, ry * 1.6))
+        sun_k = smooth01(0.55 * max(0.0, fn.y) + 0.45 * h_frac + (tint - 0.5) * 0.35)
+        if fn.y < -0.15:
+            col = jit(mul(C_LEAF_DEEP, 0.80), rng, 0.06, 0.02)
+        else:
+            col = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, smooth01(sun_k * 1.35)), C_LEAF_SUN, pow(sun_k, 1.45) * 0.72), rng, 0.06, 0.03)
+        uv2s = []
+        for p in pts:
+            r_out = sqrt((p.x - cx) ** 2 + (p.z - cz) ** 2) / max(0.1, max(rx, rz))
+            w = max(0.0, min(1.0, base_w + (tip_w - base_w) * min(1.0, r_out * 0.85 + max(0.0, (p.y - cy) / max(0.2, ry)) * 0.25)))
+            uv2s.append((w, phase))
+        mb.fp(pts, 'foliage', col, (1, 0, 0), Vector(center), smooth=False, uv2=uv2s)
+    bm.free()
+
+def _add_ivy_drape(mb, anchor, length, width, out_dir, rng, phase):
+    """Hanging jungle ivy ribbon pinned at top (UV2.x = 0) and swaying softly toward the tip (UV2.x = 0.9)."""
+    od = Vector(out_dir).normalized()
+    side = Vector((-od.z, 0.0, od.x)).normalized()
+    segs = 5
+    pts_l = []
+    pts_r = []
+    for i in range(segs + 1):
+        t = i / float(segs)
+        sway = sin(t * pi * 1.6 + phase * 6.28) * 0.09
+        w = width * (0.55 + 0.45 * sin(t * pi * 0.85)) * (1.0 - 0.58 * t)
+        c = Vector(anchor) + od * (0.08 + 0.10 * sin(t * pi)) + side * sway + Vector((0.0, -length * t, 0.0))
+        pts_l.append(c - side * w)
+        pts_r.append(c + side * w)
+    for i in range(segs):
+        t0 = i / float(segs)
+        t1 = (i + 1) / float(segs)
+        c0 = jit(mix(C_LEAF_DEEP, C_LEAF_MID, 0.35 + 0.45 * t0), rng, 0.07, 0.03)
+        c1 = jit(mix(C_LEAF_MID, C_LEAF_SUN, 0.30 * t1), rng, 0.07, 0.03)
+        u0 = (pow(t0, 1.25) * 0.90, phase)
+        u1 = (pow(t1, 1.25) * 0.90, phase)
+        mb.fp([pts_l[i], pts_r[i], pts_r[i + 1], pts_l[i + 1]], 'foliage', [c0, c0, c1, c1], (0, 1, 0), None, smooth=False, uv2=[u0, u0, u1, u1])
+
+def gen_jungle_banyan(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 431)
+    mb_wood = MB('BanyanWood', seed=431)
+    mb_leaf = MB('BanyanCanopy', seed=531)
+
+    # 1. Twisted furrowed dark-bark main trunk (y = -0.85..+4.65 m) with subtle root fluting!
+    trunk_pts = [
+        (0.00, -0.85, 0.00, 0.92),
+        (0.04,  0.10, -0.02, 0.78),
+        (0.10,  1.25, -0.06, 0.64),
+        (0.06,  2.45,  0.02, 0.56),
+        (-0.04, 3.55,  0.08, 0.58),
+        (-0.02, 4.65,  0.04, 0.68),
+    ]
+    sides = 8
+    secs = []
+    scols = []
+    col_pts = []
+    for i, (tx, ty, tz, tr) in enumerate(trunk_pts):
+        t = i / float(len(trunk_pts) - 1)
+        ring = []
+        for k in range(sides):
+            ang = 2.0 * pi * k / sides + t * 0.55
+            flute = 1.0 + (0.16 * sin(ang * 5.0) * (1.0 - 0.6 * t))
+            v = Vector((tx + cos(ang) * tr * flute, ty, tz + sin(ang) * tr * flute))
+            ring.append(v)
+            col_pts.append(v)
+        secs.append(ring)
+        scols.append(jit(mix(C_TRUNK_DARK, C_DARK, 0.35 + 0.30 * t), rng, 0.06, 0.02))
+    loft(mb_wood, secs, 'wood', C_TRUNK_DARK, closed=True, caps=(True, True), mode='flat', scols=scols)
+
+    # 2. Five dramatic splayed buttress roots plunging cleanly down to y = -0.85 m for sloped terrain!
+    for ri in range(5):
+        ang = ri * (2.0 * pi / 5.0) + rng.uniform(-0.16, 0.16)
+        ca, sa = cos(ang), sin(ang)
+        reach = rng.uniform(1.95, 2.45)
+        r_path = [
+            Vector((ca * 0.42, 2.35 + rng.uniform(-0.2, 0.25), sa * 0.42)),
+            Vector((ca * (reach * 0.46), 1.05, sa * (reach * 0.46))),
+            Vector((ca * (reach * 0.82), 0.12, sa * (reach * 0.82))),
+            Vector((ca * reach, -0.85, sa * reach)),
+        ]
+        tube(mb_wood, r_path, [0.34, 0.28, 0.23, 0.16], 6, 'wood', jit(C_TRUNK_DARK, rng, 0.07), mode='flat')
+        for p in r_path[:3]:
+            col_pts.append(p)
+
+    # 3. Four heavy gnarled spreading boughs + central crown limb!
+    bough_specs = [
+        (0.25,  3.55, 6.85, 0.42, 0.18),
+        (1.75,  3.25, 7.25, 0.40, 0.17),
+        (3.35,  3.45, 6.55, 0.40, 0.18),
+        (4.90,  3.15, 7.45, 0.38, 0.16),
+    ]
+    bough_tips = []
+    for bi, (az, reach, top_y, r0, r1) in enumerate(bough_specs):
+        ca, sa = cos(az), sin(az)
+        sx, sz = -sa, ca
+        sw = rng.uniform(-0.35, 0.35)
+        b_path = [
+            Vector((ca * 0.22, 4.15 + 0.12 * (bi % 2), sa * 0.22)),
+            Vector((ca * (reach * 0.42) + sx * sw * 0.5, 5.25, sa * (reach * 0.42) + sz * sw * 0.5)),
+            Vector((ca * (reach * 0.78) + sx * sw, top_y - 0.55, sa * (reach * 0.78) + sz * sw)),
+            Vector((ca * reach, top_y, sa * reach)),
+        ]
+        tube(mb_wood, b_path, [r0, r0 * 0.78, r0 * 0.56, r1], 6, 'wood', jit(C_DARK, rng, 0.07), mode='flat')
+        bough_tips.append(b_path[-1])
+        # Forked secondary sub-branch for rich broad-canopy structure
+        for sgn in (-1.0, 1.0):
+            fork_az = az + sgn * 0.58
+            fca, fsa = cos(fork_az), sin(fork_az)
+            f_start = b_path[2]
+            f_end = f_start + Vector((fca * 1.45, 0.85 + rng.uniform(-0.15, 0.25), fsa * 1.45))
+            tube(mb_wood, [f_start, f_end], [r0 * 0.42, r1 * 0.65], 5, 'wood', jit(C_TRUNK_LIGHT, rng, 0.07), mode='flat')
+            bough_tips.append(f_end)
+
+        # Hanging banyan aerial root tendrils draping down from the heavy bough!
+        a_anchor = b_path[1].lerp(b_path[2], 0.55)
+        a_end_y = -0.65 if bi % 2 == 0 else rng.uniform(1.4, 2.6)
+        a_mid = Vector((a_anchor.x * 1.06, 0.5 * (a_anchor.y + a_end_y), a_anchor.z * 1.06))
+        a_bot = Vector((a_anchor.x * 1.04, a_end_y, a_anchor.z * 1.04))
+        tube(mb_wood, [a_anchor, a_mid, a_bot], [0.065, 0.050, 0.042], 5, 'wood', jit(C_WEATH, rng, 0.08), mode='flat')
+
+    # Towering central crown bough reaching up into the sunlit canopy apex (~10.5 m!)
+    crown_limb = [Vector((-0.02, 4.50, 0.04)), Vector((0.18, 6.45, -0.12)), Vector((0.08, 8.25, -0.06))]
+    tube(mb_wood, crown_limb, [0.42, 0.28, 0.16], 6, 'wood', C_TRUNK_DARK, mode='flat')
+
+    # 4. Lush multi-tiered emerald-to-sunlit-gold layered leaf-frond dome canopy ('foliage' -> wind shader!)
+    # Outer broad bough leaf domes + forked mid-canopy tiers
+    for idx, tip in enumerate(bough_tips):
+        is_primary = (idx % 3 == 0)
+        rx = rng.uniform(2.05, 2.55) if is_primary else rng.uniform(1.55, 1.95)
+        ry = rng.uniform(1.30, 1.65) if is_primary else rng.uniform(1.05, 1.35)
+        rz = rng.uniform(1.95, 2.45) if is_primary else rng.uniform(1.48, 1.88)
+        _add_faceted_canopy_dome(
+            mb_leaf,
+            (tip.x, tip.y + 0.55, tip.z),
+            (rx, ry, rz),
+            rng, phase=rng.random(), base_w=0.16, tip_w=0.86, tint=0.45 if is_primary else 0.62
+        )
+    # Upper crowning sunlit umbrella dome pushing tree silhouette cleanly to ~10.5 m!
+    _add_faceted_canopy_dome(mb_leaf, (0.05, 8.95, -0.05), (2.75, 1.60, 2.65), rng, phase=rng.random(), base_w=0.22, tip_w=0.92, tint=0.92)
+    _add_faceted_canopy_dome(mb_leaf, (-1.15, 8.35, 0.85), (1.95, 1.25, 1.85), rng, phase=rng.random(), base_w=0.20, tip_w=0.88, tint=0.78)
+    _add_faceted_canopy_dome(mb_leaf, (1.10, 8.25, -0.90), (1.90, 1.22, 1.80), rng, phase=rng.random(), base_w=0.20, tip_w=0.88, tint=0.82)
+
+    # Hanging lush jungle vine ribbons trailing from outer boughs
+    for vi in range(5):
+        vaz = vi * (2.0 * pi / 5.0) + 0.45
+        vr = rng.uniform(2.6, 3.4)
+        v_anc = (cos(vaz) * vr, rng.uniform(5.7, 6.5), sin(vaz) * vr)
+        _add_ivy_drape(mb_leaf, v_anc, rng.uniform(1.8, 2.8), 0.24, (cos(vaz), 0.0, sin(vaz)), rng, phase=rng.random())
+
+    build(mb_wood)
+    build(mb_leaf)
+    col_piece('col_banyan_trunk', col_pts)
+    export_glb(outdir, 'jungle_banyan.glb')
+
+def gen_ruin_arch(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 461)
+    mb = MB('RuinArch', seed=461)
+
+    # Monumental ~6.8 m tall x ~6.4 m wide ancient maritime temple archway (~3.8 m clear walkable opening!)
+    # 1. Twin stepped limestone foundation plinths extending solidly down to y = -1.2 m
+    for sx in (-1.0, 1.0):
+        px = sx * 2.52
+        box2(mb, (px - 0.74, -1.20, -0.84), (px + 0.74, 0.44, 0.84), 'stone', jit(C_STONE_MID, rng, 0.06), 0.05)
+        box2(mb, (px - 0.62, 0.44, -0.72), (px + 0.62, 0.84, 0.72), 'stone', jit(C_STONE_LIGHT, rng, 0.06), 0.04)
+
+        # 5 stacked beveled coral-limestone ashlar pillar courses (y = 0.84..4.28, inner face at |x| = 1.92 -> 3.84 m open!)
+        course_y = [0.84, 1.54, 2.24, 2.94, 3.60, 4.24]
+        for ci in range(5):
+            y0, y1 = course_y[ci], course_y[ci + 1]
+            ym = 0.5 * (y0 + y1)
+            h_c = y1 - y0 - 0.015
+            ox = rng.uniform(-0.03, 0.03)
+            oz = rng.uniform(-0.03, 0.03)
+            col_c = mix(C_STONE_WARM, C_STONE_PALE, 0.25 + 0.14 * ci)
+            if ci == 0:
+                col_c = mix(col_c, C_SEA_MOSS, 0.28)
+            cbox(mb, (px + ox, ym, oz), (1.14, h_c, 1.24), 'stone', jit(col_c, rng, 0.06), 0.045, M=R('Y', rng.uniform(-2.0, 2.0)))
+            # Subtle protruding inner pilaster quoin strip
+            cbox(mb, (px - sx * 0.56, ym, 0.0), (0.12, h_c * 0.82, 0.72), 'stone', jit(C_STONE_PALE, rng, 0.05), 0.02)
+
+        # Stepped flaring temple capital abacus (y = 4.24..4.68)
+        cbox(mb, (px, 4.38, 0.0), (1.32, 0.28, 1.42), 'stone', C_STONE_WARM, 0.04)
+        cbox(mb, (px, 4.60, 0.0), (1.46, 0.18, 1.54), 'stone', C_STONE_PALE, 0.035)
+
+    # 2. Seven-voussoir radial coral-limestone arch span (clear opening ~3.8 m wide x ~4.6..5.45 m tall!)
+    arch_r = 2.38
+    arch_cy = 3.22
+    n_vous = 7
+    for vi in range(n_vous):
+        ang_deg = -62.0 + (124.0 * vi / float(n_vous - 1))
+        ang = radians(ang_deg)
+        is_key = (vi == n_vous // 2)
+        vx = sin(ang) * arch_r
+        vy = arch_cy + cos(ang) * arch_r
+        vw = 0.82 if is_key else 0.72
+        vh = 0.96 if is_key else 0.76
+        vd = 1.46 if is_key else 1.28
+        vcol = C_STONE_PALE if is_key else jit(mix(C_STONE_WARM, C_STONE_PALE, 0.55), rng, 0.06)
+        cbox(mb, (vx, vy, 0.0), (vw, vh, vd), 'stone', vcol, 0.045, M=R('Z', -ang_deg))
+
+    # Carved antique-brass maritime compass-crest medallion inlaid on BOTH faces of the central keystone!
+    key_y = arch_cy + arch_r
+    for sz in (-1.0, 1.0):
+        with xf(mb, T(0.0, key_y, sz * 0.74) @ R('X', 90 if sz > 0 else -90)):
+            cyl(mb, 0.28, 0.0, 0.06, 8, 'brass', C_BRASS, False, 0.012, 0.24)
+            cyl(mb, 0.16, 0.05, 0.09, 8, 'brass', C_GOLD, False, 0.008, 0.12)
+        for k in range(4):
+            a_deg = k * 45.0
+            cbox(mb, (0.0, key_y, sz * 0.78), (0.48 if k % 2 == 0 else 0.36, 0.06, 0.05), 'brass', C_GOLD, 0.008, M=R('Z', a_deg))
+
+    # 3. Weathered fractured temple entablature & stepped cornice blocks crowning arch to ~6.8 m!
+    lintel_blocks = [
+        (-2.35, 5.42, 0.0, (1.55, 0.68, 1.46), 1.5, C_STONE_WARM),
+        (-0.88, 6.08, 0.02, (1.72, 0.72, 1.42), -1.2, C_STONE_PALE),
+        ( 0.85, 6.06, -0.02, (1.68, 0.68, 1.40), 2.5, C_STONE_WARM),
+        ( 2.38, 5.38, 0.0, (1.42, 0.64, 1.44), -3.5, C_STONE_LIGHT),
+        # Broken stepped pediment crest peak (~6.80 m on port side, weathered fracture slope to starboard!)
+        (-1.25, 6.62, 0.0, (1.85, 0.46, 1.24), 4.0, C_STONE_PALE),
+        ( 0.22, 6.56, 0.02, (1.35, 0.38, 1.16), -8.0, C_STONE_OCHRE),
+    ]
+    for lx, ly, lz, lsz, lrot, lcol in lintel_blocks:
+        cbox(mb, (lx, ly, lz), lsz, 'stone', jit(lcol, rng, 0.05), 0.05, M=R('Z', lrot))
+
+    # 4. Cushioned emerald moss patches & hanging wind-swaying jungle ivy drapes ('foliage')!
+    moss_spots = [
+        (-2.45, 5.82, -0.25, (0.62, 0.22, 0.56)),
+        (-0.95, 6.84,  0.10, (0.78, 0.22, 0.58)),
+        ( 1.95, 5.76,  0.18, (0.58, 0.20, 0.52)),
+        (-2.55, 0.88, -0.45, (0.48, 0.16, 0.42)),
+        ( 2.55, 0.88,  0.42, (0.46, 0.15, 0.40)),
+    ]
+    for mx, my, mz, mrad in moss_spots:
+        _add_faceted_canopy_dome(mb, (mx, my, mz), mrad, rng, phase=rng.random(), base_w=0.04, tip_w=0.22, tint=0.42)
+
+    ivy_spots = [
+        ((-1.95, 5.65, -0.74), 2.05, 0.26, (0.0, 0.0, -1.0)),
+        ((-1.35, 6.28, -0.72), 1.65, 0.22, (0.0, 0.0, -1.0)),
+        (( 1.78, 5.52, -0.74), 1.85, 0.24, (0.0, 0.0, -1.0)),
+        ((-1.82, 5.72,  0.74), 1.90, 0.24, (0.0, 0.0,  1.0)),
+        (( 1.55, 5.95,  0.72), 1.55, 0.22, (0.0, 0.0,  1.0)),
+        (( 2.95, 4.65, -0.58), 2.15, 0.26, (0.5, 0.0, -0.8)),
+    ]
+    for anc, ilen, iw, idir in ivy_spots:
+        _add_ivy_drape(mb, anc, ilen, iw, idir, rng, phase=rng.random())
+
+    build(mb)
+    # Two separate side-pillar colliders ONLY — leaving the entire ~3.8 m central archway 100% walkable!
+    col_box('col_arch_l', (-3.26, -1.20, -0.85), (-1.90, 5.50, 0.85))
+    col_box('col_arch_r', ( 1.90, -1.20, -0.85), ( 3.26, 5.50, 0.85))
+    export_glb(outdir, 'ruin_arch.glb')
+
+def gen_ruin_pillar(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 491)
+    mb = MB('RuinPillar', seed=491)
+
+    # Chunky ~5.4 m tall broken fluted octagonal limestone monolith column on a stepped plinth (y = -1.0..+5.4 m)
+    # 1. Stepped ancient foundation plinth plunging to y = -1.0 m
+    box2(mb, (-1.02, -1.00, -1.02), (1.02, 0.36, 1.02), 'stone', C_STONE_MID, 0.055)
+    cyl(mb, 0.90, 0.36, 0.72, 8, 'stone', C_STONE_LIGHT, False, 0.045, 0.82)
+    cyl(mb, 0.76, 0.72, 0.94, 8, 'stone', C_STONE_WARM, False, 0.035, 0.66)
+
+    # 2. Fluted 16-vertex (8 rib + 8 concave flute) weathered limestone column drums rising to diagonal snap (~5.4 m)!
+    def fluted_ring(y_base, r_rib, r_flute, tilt_slope=0.0):
+        pts = []
+        for k in range(16):
+            ang = 2.0 * pi * k / 16.0
+            r = r_rib if k % 2 == 0 else r_flute
+            px = cos(ang) * r
+            pz = sin(ang) * r
+            py = y_base + tilt_slope * (px * 0.72 - pz * 0.45)
+            pts.append((px, py, pz))
+        return pts
+
+    # Lower shaft drum (y = 0.92..2.64)
+    loft(mb, [
+        fluted_ring(0.92, 0.64, 0.55),
+        fluted_ring(1.80, 0.61, 0.52),
+        fluted_ring(2.64, 0.59, 0.50),
+    ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
+        scols=[mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM, C_STONE_PALE])
+
+    # 3. Inlaid oxidized antique-bronze ring collar (y = 2.64..3.08) with raised gold border bands & studs!
+    cyl(mb, 0.635, 2.64, 3.08, 8, 'brass', C_COPPER, False, 0.015, 0.635)
+    cyl(mb, 0.665, 2.65, 2.74, 8, 'brass', C_GOLD, False, 0.012, 0.665)
+    cyl(mb, 0.665, 2.98, 3.07, 8, 'brass', C_GOLD, False, 0.012, 0.665)
+    for k in range(8):
+        ang = 2.0 * pi * k / 8.0 + pi / 8.0
+        with xf(mb, T(cos(ang) * 0.61, 2.86, sin(ang) * 0.61) @ R('Y', -degrees_of(ang))):
+            cbox(mb, (0.0, 0.0, 0.0), (0.06, 0.14, 0.14), 'brass', C_GOLD, 0.012)
+
+    # 4. Upper fluted column shaft with authentic weathered diagonal fracture top (peaking at y = 5.42 m!)
+    loft(mb, [
+        fluted_ring(3.08, 0.58, 0.49),
+        fluted_ring(4.12, 0.55, 0.46),
+        fluted_ring(5.05, 0.53, 0.44, tilt_slope=-0.82),
+    ], 'stone', C_STONE_PALE, closed=True, caps=(True, True), mode='flat',
+        scols=[C_STONE_WARM, C_STONE_PALE, jit(C_STONE_PALE, rng, 0.04)])
+
+    # Jagged chipped limestone fracture shards crowning the diagonal break & 2 fallen stones at foot
+    faceted_rock(mb, (-0.18, 5.18, 0.10), (0.34, 0.24, 0.30), 'stone', C_STONE_PALE, C_STONE_WARM, C_STONE_SHADE, rng, subdiv=1, warp=0.18, strata=0.06)
+    faceted_rock(mb, (0.86, 0.16, -0.78), (0.34, 0.24, 0.28), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(12, 35, -8))
+    faceted_rock(mb, (-0.95, 0.12, 0.62), (0.28, 0.19, 0.25), 'stone', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.20, strata=0.06, rot_deg=(-8, -42, 10))
+
+    # 5. Emerald moss patches clinging to plinth ledge & fractured top + trailing ivy sprig
+    _add_faceted_canopy_dome(mb, (0.22, 4.92, -0.18), (0.36, 0.16, 0.32), rng, phase=rng.random(), base_w=0.04, tip_w=0.18, tint=0.45)
+    _add_faceted_canopy_dome(mb, (-0.65, 0.42, -0.58), (0.42, 0.16, 0.38), rng, phase=rng.random(), base_w=0.03, tip_w=0.14, tint=0.35)
+    _add_ivy_drape(mb, (0.38, 4.65, -0.46), 1.45, 0.20, (0.7, 0.0, -0.7), rng, phase=rng.random())
+
+    build(mb)
+    col_box('col_pillar', (-1.00, -1.00, -1.00), (1.00, 5.38, 1.00))
+    export_glb(outdir, 'ruin_pillar.glb')
+
+def degrees_of(rad):
+    return rad * 180.0 / pi
+
+def gen_timber_bridge(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 521)
+    mb = MB('TimberBridge', seed=521)
+
+    # Chunky ~11.0 m long (Z = -5.5..+5.5) x 2.6 m wide arched oak-plank & hemp-rope suspension footbridge!
+    HALF_L = 5.50
+    HALF_W = 1.30
+    ARCH_H = 0.55
+
+    def arch_y(z):
+        u = z / HALF_L
+        return ARCH_H * max(0.0, 1.0 - u * u)
+
+    def arch_pitch_deg(z):
+        # Slope dy/dz = -2 * ARCH_H * z / HALF_L^2; rotation around X lifts -Z when positive
+        dydz = -2.0 * ARCH_H * z / (HALF_L * HALF_L)
+        return degrees_of(atan2(dydz, 1.0))
+
+    # 1. Twin heavy weathered oak end-posts at both canyon lips (y = -1.80..+2.10 m!) + end sill anchor timbers
+    for sz in (-1.0, 1.0):
+        pz = sz * 5.42
+        # Heavy transverse end-sill lip beam anchoring bridge deck cleanly into canyon rim
+        box2(mb, (-1.52, -0.45, pz - 0.22), (1.52, 0.02, pz + 0.22), 'wood', C_DARK, 0.025, (1, 0, 0))
+        for sx in (-1.0, 1.0):
+            px = sx * HALF_W
+            # Sturdy timber suspension post plunging deep to y = -1.8 m!
+            box2(mb, (px - 0.14, -1.80, pz - 0.14), (px + 0.14, 2.08, pz + 0.14), 'wood', jit(C_DARK, rng, 0.06), 0.024, (0, 1, 0))
+            # Beveled oak cap finial & forged iron collar band
+            cbox(mb, (px, 2.12, pz), (0.34, 0.08, 0.34), 'wood', C_HULL, 0.018)
+            cbox(mb, (px, 1.84, pz), (0.31, 0.10, 0.31), 'iron', C_IRON, 0.01)
+            # Wrapped hemp rope lashing around post top where handrail cables anchor
+            with xf(mb, T(px, 1.66, pz)):
+                for ri in range(3):
+                    with xf(mb, T(0, ri * 0.044, 0)):
+                        torus(mb, 0.16, 0.024, 10, 5, 'rope', C_ROPE, True)
+            # Angled canyon-lip anchor strut bracing each end post outward
+            tube(mb, [(px, 0.95, pz), (px + sx * 0.55, -1.45, pz + sz * 0.55)], [0.095, 0.115], 5, 'wood', C_WEATH, mode='flat')
+
+    # 2. Two curved under-deck timber carrier stringers spanning full 11 m arch
+    for sx in (-0.96, 0.96):
+        str_path = []
+        for i in range(13):
+            z = -HALF_L + (2.0 * HALF_L * i / 12.0)
+            str_path.append((sx, arch_y(z) - 0.14, z))
+        tube(mb, str_path, 0.11, 4, 'wood', C_DARK, mode='flat')
+
+    # 3. 26 chunky weathered oak walkway planks gently arching up to y = +0.55 m mid-span!
+    n_planks = 26
+    plank_palette = (C_DECK, C_HULL, C_WEATH, C_DRIFT)
+    for pi in range(n_planks):
+        z = -5.22 + (10.44 * pi / float(n_planks - 1))
+        py = arch_y(z)
+        pitch = -arch_pitch_deg(z)
+        pw = 2.48 + rng.uniform(-0.06, 0.06)
+        pcol = jit(plank_palette[pi % len(plank_palette)], rng, 0.08, 0.02)
+        rot_m = R('X', pitch) @ R('Y', rng.uniform(-1.3, 1.3))
+        cbox(mb, (0.0, py - 0.045, z), (pw, 0.09, 0.35), 'wood', pcol, 0.015, (1, 0, 0), M=rot_m)
+
+    # Low side timber curb rails along outer deck edges
+    for sx in (-1.18, 1.18):
+        curb_path = []
+        for i in range(13):
+            z = -5.30 + (10.60 * i / 12.0)
+            curb_path.append((sx, arch_y(z) + 0.05, z))
+        tube(mb, curb_path, 0.055, 4, 'wood', C_WEATH, mode='flat')
+
+    # 4. Taut catenary side hemp-rope handrails & vertical rope hangers on port & starboard!
+    def handrail_y(z):
+        u = z / HALF_L
+        return 1.48 + 0.36 * (u * u)
+
+    def midrail_y(z):
+        u = z / HALF_L
+        return 0.96 + 0.22 * (u * u)
+
+    for sx in (-HALF_W, HALF_W):
+        top_rope = [(sx, handrail_y(-5.42 + 10.84 * i / 16.0), -5.42 + 10.84 * i / 16.0) for i in range(17)]
+        mid_rope = [(sx, midrail_y(-5.42 + 10.84 * i / 16.0), -5.42 + 10.84 * i / 16.0) for i in range(17)]
+        tube(mb, top_rope, 0.044, 6, 'rope', C_ROPE, mode='smooth')
+        tube(mb, mid_rope, 0.030, 5, 'rope', mul(C_ROPE, 0.92), mode='smooth')
+        # 9 vertical rope hangers per side tying handrail to deck planks
+        for hi in range(9):
+            hz = -4.20 + (8.40 * hi / 8.0)
+            hy_bot = arch_y(hz) - 0.04
+            hy_top = handrail_y(hz)
+            tube(mb, [(sx, hy_bot, hz), (sx, hy_top, hz)], 0.022, 5, 'rope', mul(C_ROPE, 0.88), mode='flat')
+            # Knotted tie-off collar on top rail
+            with xf(mb, T(sx, hy_top, hz)):
+                cyl(mb, 0.048, -0.03, 0.03, 6, 'rope', C_ROPE, False)
+
+    build(mb)
+
+    # Smooth walkable 3-segment ramp-matched convex deck collider matching exact arch_y(z)!
+    deck_segs = [
+        ('col_bridge_deck_0', -5.50, -1.80),
+        ('col_bridge_deck_1', -1.92,  1.92),
+        ('col_bridge_deck_2',  1.80,  5.50),
+    ]
+    for cname, z0, z1 in deck_segs:
+        y0 = arch_y(z0)
+        y1 = arch_y(z1)
+        ym = arch_y(0.5 * (z0 + z1))
+        pts = []
+        for x in (-1.26, 1.26):
+            pts.append((x, y0, z0))
+            pts.append((x, y0 - 0.24, z0))
+            pts.append((x, ym, 0.5 * (z0 + z1)))
+            pts.append((x, ym - 0.24, 0.5 * (z0 + z1)))
+            pts.append((x, y1, z1))
+            pts.append((x, y1 - 0.24, z1))
+        col_piece(cname, pts)
+    export_glb(outdir, 'timber_bridge.glb')
+
+def gen_harbour_warehouse(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 557)
+    mb = MB('HarbourWarehouse', seed=557)
+
+    # Chunky ~8.4 x 5.8 x 6.2 m coastal stone-and-timber port trading warehouse (facing -Z dockside!)
+    FLOOR_Y = 0.60
+    EAVE_Y = 3.65
+    RIDGE_Y = 6.20
+
+    # 1. Battered stone foundation plinth (y = -1.8..+0.60 m) + corner stone quoins + loading apron!
+    loft(mb, [
+        [(-4.52, -1.80, -3.22), (4.52, -1.80, -3.22), (4.52, -1.80, 3.22), (-4.52, -1.80, 3.22)],
+        [(-4.26, FLOOR_Y, -2.96), (4.26, FLOOR_Y, -2.96), (4.26, FLOOR_Y, 2.96), (-4.26, FLOOR_Y, 2.96)],
+    ], 'stone', C_STONE_MID, closed=True, caps=(True, True), mode='flat', scols=[C_STONE_DARK, C_STONE_MID])
+    for sx in (-4.24, 4.24):
+        for sz in (-2.94, 2.94):
+            for yi in range(3):
+                cbox(mb, (sx, -0.35 + yi * 0.36, sz), (0.56, 0.32, 0.56), 'stone', jit(C_STONE_LIGHT, rng, 0.06), 0.03)
+    # Stone cargo-loading porch apron in front of warehouse doors (-Z)
+    box2(mb, (-4.10, -1.40, -3.95), (4.10, 0.14, -2.90), 'stone', C_STONE_LIGHT, 0.035)
+    cbox(mb, (0.0, 0.36, -3.35), (2.75, 0.24, 0.65), 'stone', C_STONE_MID, 0.025)
+
+    # 2. Timber-framed whitewashed plaster upper walls (y = 0.60..3.65 m) + front/rear gable triangles!
+    loft(mb, [
+        [(-4.15, FLOOR_Y, -2.86), (4.15, FLOOR_Y, -2.86), (4.15, FLOOR_Y, 2.86), (-4.15, FLOOR_Y, 2.86)],
+        [(-4.30, EAVE_Y, -2.96), (4.30, EAVE_Y, -2.96), (4.30, EAVE_Y, 2.96), (-4.30, EAVE_Y, 2.96)],
+    ], 'paint', C_PLASTER, closed=True, caps=(True, True), mode='flat', scols=[C_PLASTER])
+    for sz in (-1.0, 1.0):
+        gz = sz * 2.94
+        g_pts = [(-4.28, EAVE_Y - 0.04, gz), (4.28, EAVE_Y - 0.04, gz), (0.0, RIDGE_Y - 0.12, gz)]
+        mb.fp(g_pts, 'paint', C_PLASTER_SH, (1, 0, 0), (0.0, EAVE_Y, 0.0))
+
+    # Heavy dark-oak half-timber framing (corner posts, horizontals, diagonal X-braces)
+    for sx in (-1.0, 1.0):
+        for sz in (-1.0, 1.0):
+            tube(mb, [(sx * 4.20, FLOOR_Y, sz * 2.90), (sx * 4.35, EAVE_Y + 0.04, sz * 3.00)], 0.16, 4, 'wood', C_DARK, mode='flat')
+    for y_beam in (FLOOR_Y + 0.08, 2.15, EAVE_Y - 0.05):
+        t = (y_beam - FLOOR_Y) / (EAVE_Y - FLOOR_Y)
+        bx = 4.18 + 0.16 * t
+        bz = 2.88 + 0.10 * t
+        cbox(mb, (0.0, y_beam, -bz), (bx * 2.0 + 0.24, 0.20, 0.20), 'wood', C_DARK, 0.02)
+        cbox(mb, (0.0, y_beam,  bz), (bx * 2.0 + 0.24, 0.20, 0.20), 'wood', C_DARK, 0.02)
+        cbox(mb, (-bx, y_beam, 0.0), (0.20, 0.20, bz * 2.0 + 0.24), 'wood', C_DARK, 0.02)
+        cbox(mb, ( bx, y_beam, 0.0), (0.20, 0.20, bz * 2.0 + 0.24), 'wood', C_DARK, 0.02)
+    for sx in (-1.65, 1.65):
+        cbox(mb, (sx, 2.12, -2.96), (0.20, 3.05, 0.20), 'wood', C_DARK, 0.02)
+    for sz in (-1.0, 1.0):
+        for sx in (-4.28, 4.28):
+            tube(mb, [(sx, FLOOR_Y + 0.15, sz * 2.85), (sx, EAVE_Y - 0.15, sz * 1.10)], 0.08, 4, 'wood', C_DARK, mode='flat')
+
+    # 3. Pitched weathered cedar-shingle gable roof (eaves along +/-X, ridge running front-to-back along Z!)
+    courses = 5
+    for side_x in (-1.0, 1.0):
+        for ci in range(courses):
+            f0 = ci / float(courses)
+            f1 = min(1.02, (ci + 1) / float(courses) + 0.03)
+            y0 = RIDGE_Y - (RIDGE_Y - EAVE_Y + 0.35) * f0
+            y1 = RIDGE_Y - (RIDGE_Y - EAVE_Y + 0.35) * f1
+            x0 = side_x * (4.78 * f0)
+            x1 = side_x * (4.78 * f1)
+            zs = [-3.48, -2.35, -1.20, 0.05, 1.25, 2.38, 3.48]
+            for zi in range(len(zs) - 1):
+                z0, z1 = zs[zi], zs[zi + 1]
+                th = 0.15 + rng.uniform(-0.015, 0.02)
+                c_sh = jit(mix(C_CEDAR_PALETTE[(ci + zi) % len(C_CEDAR_PALETTE)], C_DARK, 0.12 * f0), rng, 0.07, 0.02)
+                p_top = [(x0, y0 + th, z0), (x0, y0 + th, z1), (x1, y1 + th, z1), (x1, y1 + th, z0)]
+                p_bot = [(x0, y0, z0), (x0, y0, z1), (x1, y1, z1), (x1, y1, z0)]
+                mb.fp(p_top, 'wood', c_sh, (0, 0, 1), (0.0, y0 - 2.0, 0.5 * (z0 + z1)))
+                mb.fp(p_bot, 'wood', mul(c_sh, 0.68), (0, 0, 1), (0.0, y0 + 2.0, 0.5 * (z0 + z1)))
+                mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'wood', mul(c_sh, 0.78), (0, 0, 1), (0.0, y0, 0.5 * (z0 + z1)))
+    # Heavy ridge cap timber + bold maritime teal bargeboards distinguishing the Trading Warehouse!
+    cbox(mb, (0.0, RIDGE_Y + 0.12, 0.0), (0.34, 0.30, 7.15), 'wood', C_DARK, 0.03)
+    for sz in (-3.44, 3.44):
+        for side_x in (-1.0, 1.0):
+            tube(mb, [(0.0, RIDGE_Y + 0.05, sz), (side_x * 4.78, EAVE_Y - 0.30, sz)], 0.14, 4, 'wood', C_TEAL, mode='flat')
+
+    # 4. Projecting timber cargo hoist gantry beam with iron pulley block, cargo hook & coiled hemp rope!
+    cbox(mb, (0.0, 5.52, -3.72), (0.24, 0.24, 2.25), 'wood', C_DARK, 0.025)
+    tube(mb, [(0.0, 4.35, -2.94), (0.0, 5.48, -4.18)], 0.09, 4, 'wood', C_HULL, mode='flat')
+    cbox(mb, (0.0, 5.52, -4.62), (0.28, 0.28, 0.14), 'iron', C_IRON, 0.01)
+    # Hanging iron pulley sheave block & vertical hoist rope + hook
+    cbox(mb, (0.0, 5.18, -4.62), (0.14, 0.28, 0.24), 'iron', C_IRON, 0.015)
+    with xf(mb, T(0.0, 5.16, -4.62) @ M_Y2X):
+        cyl(mb, 0.11, -0.04, 0.04, 10, 'wood', C_DECK, False)
+    tube(mb, [(0.0, 5.05, -4.62), (0.0, 3.35, -4.62)], 0.024, 5, 'rope', C_ROPE, mode='flat')
+    with xf(mb, T(0.0, 3.22, -4.62) @ M_Y2Z):
+        torus(mb, 0.085, 0.022, 8, 5, 'iron', C_IRON, False)
+    # Coiled hemp cargo line resting beside front porch apron
+    rope_coil(mb, (-1.95, 0.14, -3.55), radius=0.26, turns=3, r=0.028)
+
+    # Upper cargo loft hatch doors (swung open beneath hoist beam!)
+    cbox(mb, (0.0, 4.35, -2.96), (1.42, 1.38, 0.16), 'wood', C_DARK, 0.02)
+    cbox(mb, (0.0, 4.35, -2.90), (1.16, 1.14, 0.10), 'wood', C_TAR, 0.01)
+    for sx in (-1.0, 1.0):
+        cbox(mb, (sx * 0.94, 4.35, -3.14), (0.58, 1.18, 0.08), 'wood', C_TEAL, 0.014, M=R('Y', sx * 28))
+
+    # 5. Double heavy timber warehouse cargo doors (-Z) with iron strap hinges & brass ring pulls!
+    cbox(mb, (0.0, FLOOR_Y + 1.24, -2.96), (2.48, 2.48, 0.22), 'wood', C_DARK, 0.025)
+    for sx in (-1.0, 1.0):
+        dx = sx * 0.56
+        cbox(mb, (dx, FLOOR_Y + 1.18, -3.02), (1.06, 2.28, 0.12), 'wood', jit(C_HULL, rng, 0.06), 0.018)
+        cbox(mb, (dx, FLOOR_Y + 1.18, -3.08), (0.92, 0.12, 0.05), 'wood', C_DARK, 0.01, M=R('Z', sx * 42))
+        for hy in (FLOOR_Y + 0.56, FLOOR_Y + 1.78):
+            cbox(mb, (dx + sx * 0.20, hy, -3.10), (0.58, 0.09, 0.04), 'iron', C_IRON, 0.008)
+        with xf(mb, T(sx * 0.16, FLOOR_Y + 1.08, -3.12) @ M_Y2Z):
+            torus(mb, 0.072, 0.018, 8, 5, 'brass', C_BRASS, True)
+
+    # 6. Warm glowing mullioned warehouse windows ('window'!)
+    def add_wh_window(pos, rot_y, w=1.18, h=1.08):
+        with xf(mb, T(pos) @ R('Y', rot_y)):
+            cbox(mb, (0, -h * 0.5 - 0.06, -0.05), (w + 0.30, 0.13, 0.22), 'wood', C_DARK, 0.02)
+            cbox(mb, (0, h * 0.5 + 0.05, -0.04), (w + 0.24, 0.13, 0.20), 'wood', C_DARK, 0.02)
+            for sx in (-w * 0.5 - 0.06, w * 0.5 + 0.06):
+                cbox(mb, (sx, 0, -0.04), (0.12, h + 0.10, 0.18), 'wood', C_DARK, 0.02)
+            for sx in (-1, 1):
+                cbox(mb, (sx * (w * 0.5 + 0.30), 0, -0.04), (0.34, h, 0.06), 'wood', C_TEAL, 0.012)
+            cbox(mb, (0, 0, 0.0), (w, h, 0.06), 'window', C_GLASS, 0.0)
+            cbox(mb, (0, 0, -0.04), (w, 0.065, 0.05), 'wood', C_DARK, 0.006)
+            cbox(mb, (0, 0, -0.04), (0.065, h, 0.05), 'wood', C_DARK, 0.006)
+
+    add_wh_window((-2.88, FLOOR_Y + 1.52, -2.94), 0.0)
+    add_wh_window(( 2.88, FLOOR_Y + 1.52, -2.94), 0.0)
+    add_wh_window((-4.26, FLOOR_Y + 1.52, -0.85), 90.0, 1.25, 1.08)
+    add_wh_window((-4.26, FLOOR_Y + 1.52,  1.05), 90.0, 1.25, 1.08)
+    add_wh_window(( 4.26, FLOOR_Y + 1.52, -0.85), -90.0, 1.25, 1.08)
+    add_wh_window(( 4.26, FLOOR_Y + 1.52,  1.05), -90.0, 1.25, 1.08)
+    add_wh_window(( 0.00, FLOOR_Y + 1.52,  2.94), 180.0, 1.45, 1.08)
+
+    # 7. Stacked cargo barrels & crates beside the loading porch!
+    for bx, bz in ((-3.38, -3.45), (-2.72, -3.56)):
+        with xf(mb, T(bx, 0.14, bz)):
+            lathe(mb, [(0, 0), (0.25, 0), (0.30, 0.26), (0.30, 0.56), (0.25, 0.84), (0, 0.84)], 10, 'wood', jit(C_HULL, rng, 0.08), False)
+            for hy in (0.18, 0.66):
+                cyl(mb, 0.305, hy, hy + 0.05, 10, 'iron', C_IRON, False)
+    for cx, cy, cz, csz, cry in ((3.12, 0.48, -3.46, 0.68, -8), (3.16, 1.08, -3.44, 0.52, 16), (2.36, 0.44, -3.52, 0.60, 5)):
+        with xf(mb, T(cx, cy, cz) @ R('Y', cry)):
+            cbox(mb, (0, 0, 0), (csz, csz, csz), 'wood', jit(C_DECK, rng, 0.07), 0.018)
+            cbox(mb, (0, 0, -csz * 0.48), (csz * 0.92, 0.08, 0.04), 'wood', C_HULL, 0.008, M=R('Z', 38))
+            cbox(mb, (0, csz * 0.49, 0), (csz * 0.72, 0.025, 0.12), 'paint', C_TEAL, 0.004)
+
+    # 8. Porch hoist bracket lantern + Lantern_Warehouse empty anchor!
+    lantern_pos = (-1.65, 2.95, -3.48)
+    cbox(mb, (-1.65, 3.24, -3.22), (0.08, 0.08, 0.62), 'iron', C_IRON, 0.01)
+    tube(mb, [(-1.65, 2.92, -2.96), (-1.65, 3.24, -3.38)], 0.025, 4, 'iron', C_IRON, mode='flat')
+    build_lantern_geom(mb, lantern_pos, scale=1.10, hanging=True)
+
+    build(mb)
+    add_empty('Lantern_Warehouse', lantern_pos)
+    col_box('col_warehouse_main', (-4.40, -1.80, -3.15), (4.40, EAVE_Y + 0.05, 3.15))
+    col_piece('col_warehouse_roof', [
+        (x, y, z)
+        for z in (-3.45, 3.45)
+        for (x, y) in ((-4.75, EAVE_Y - 0.25), (4.75, EAVE_Y - 0.25), (0.0, RIDGE_Y + 0.15))
+    ])
+    export_glb(outdir, 'harbour_warehouse.glb')
+
+def gen_seawall_bastion(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 587)
+    mb = MB('SeawallBastion', seed=587)
+
+    # Heavy battered coral-limestone harbour sea-wall & crenellated parapet segment:
+    # 9.0 m wide (X = -4.5..+4.5), 3.6 m deep (Z = -1.8..+1.8), 4.2 m high above y=0, plunging to y = -2.4 m!
+    DECK_Y = 3.00
+
+    # 1. Battered main masonry curtain wall (wider battered seawall foot on -Z seaward side!)
+    loft(mb, [
+        [(-4.50, -2.40, -2.18), (4.50, -2.40, -2.18), (4.50, -2.40, 1.85), (-4.50, -2.40, 1.85)],
+        [(-4.50,  0.40, -1.96), (4.50,  0.40, -1.96), (4.50,  0.40, 1.78), (-4.50,  0.40, 1.78)],
+        [(-4.50, DECK_Y, -1.68), (4.50, DECK_Y, -1.68), (4.50, DECK_Y, 1.72), (-4.50, DECK_Y, 1.72)],
+    ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
+        scols=[mix(C_STONE_DARK, C_SEA_MOSS, 0.45), mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM])
+
+    # Projecting beveled stone cornice stringcourse along top of seaward wall (y = 2.74..3.04)
+    cbox(mb, (0.0, 2.89, -1.74), (9.16, 0.30, 0.36), 'stone', C_STONE_PALE, 0.045)
+
+    # Paved coral-limestone flagstone slabs crowning the walkable deck (y = 3.00..3.08)
+    for fi in range(6):
+        fx = -3.75 + fi * 1.50
+        for fz in (-0.20, 1.02):
+            cbox(mb, (fx, DECK_Y + 0.03, fz), (1.42, 0.08, 1.14), 'stone', jit(C_STONE_LIGHT, rng, 0.05), 0.015)
+
+    # 2. Two heavy battered corner buttress piers (x = +/-4.05, y = -2.4..+4.20 m)
+    for sx in (-1.0, 1.0):
+        bx = sx * 4.02
+        loft(mb, [
+            [(bx - 0.68, -2.40, -2.45), (bx + 0.68, -2.40, -2.45), (bx + 0.68, -2.40, -0.75), (bx - 0.68, -2.40, -0.75)],
+            [(bx - 0.58,  0.50, -2.22), (bx + 0.58,  0.50, -2.22), (bx + 0.58,  0.50, -0.78), (bx - 0.58,  0.50, -0.78)],
+            [(bx - 0.54,  3.04, -1.96), (bx + 0.54,  3.04, -1.96), (bx + 0.54,  3.04, -0.82), (bx - 0.54,  3.04, -0.82)],
+        ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
+            scols=[mix(C_STONE_MID, C_SEA_MOSS, 0.35), C_STONE_WARM, C_STONE_PALE])
+        # Stepped buttress cap & heavy corner merlon rising to y = 4.20 m
+        cbox(mb, (bx, 3.16, -1.42), (1.22, 0.24, 1.24), 'stone', C_STONE_PALE, 0.04)
+        cbox(mb, (bx, 3.74, -1.36), (1.06, 0.94, 1.02), 'stone', jit(C_STONE_WARM, rng, 0.05), 0.045)
+        cbox(mb, (bx, 4.18, -1.36), (1.14, 0.14, 1.10), 'stone', C_STONE_PALE, 0.03)
+
+    # 3. Recessed stone parapet breastwork, flanking merlons & central seaward cannon embrasure!
+    # Low beveled embrasure sill across the central bay (x = -1.25..+1.25, top y = 3.44)
+    cbox(mb, (0.0, 3.22, -1.32), (2.75, 0.44, 0.84), 'stone', C_STONE_LIGHT, 0.035)
+    # Two stout beveled crenellation merlons flanking the central embrasure (y = 3.02..4.18)
+    for sx in (-1.0, 1.0):
+        mx = sx * 2.18
+        cbox(mb, (mx, 3.58, -1.32), (1.68, 1.10, 0.88), 'stone', jit(C_STONE_WARM, rng, 0.05), 0.045)
+        cbox(mb, (mx, 4.14, -1.32), (1.76, 0.14, 0.96), 'stone', C_STONE_PALE, 0.03)
+
+    # Weathered inset ashlar stone relief blocks along the seaward face for painterly masonry readability
+    for rx, ry in ((-2.4, 1.8), (0.0, 2.0), (2.3, 1.6), (-1.2, 0.9), (1.4, 1.0)):
+        cbox(mb, (rx, ry, -1.84), (1.15, 0.48, 0.14), 'stone', jit(C_STONE_PALE, rng, 0.06), 0.03)
+
+    # 4. Twin heavy forged-iron harbour mooring bollards on the seawall deck + coiled mooring ropes!
+    for sx in (-1.0, 1.0):
+        px = sx * 3.05
+        pz = 0.98
+        with xf(mb, T(px, DECK_Y + 0.06, pz)):
+            cyl(mb, 0.28, 0.0, 0.08, 8, 'iron', C_IRON, False, 0.015, 0.24)
+            cyl(mb, 0.17, 0.08, 0.62, 8, 'iron', C_IRON, False, 0.012, 0.19)
+            cyl(mb, 0.24, 0.58, 0.70, 8, 'iron', C_IRON, False, 0.02, 0.21)
+            # Horizontal cast-iron horn cross-bar
+            with xf(mb, T(0, 0.48, 0) @ M_Y2X):
+                cyl(mb, 0.065, -0.34, 0.34, 6, 'iron', C_IRON, False, 0.01)
+            rope_coil(mb, (0.0, 0.08, 0.0), radius=0.22, turns=2, r=0.026)
+
+    # 5. Hanging forged-iron wall lantern bracket + Lantern_Seawall empty anchor!
+    lantern_pos = (-3.95, 2.42, -2.42)
+    cbox(mb, (-3.95, 2.74, -2.14), (0.10, 0.10, 0.68), 'iron', C_IRON, 0.012)
+    tube(mb, [(-3.95, 2.38, -1.86), (-3.95, 2.74, -2.30)], 0.028, 4, 'iron', C_IRON, mode='flat')
+    build_lantern_geom(mb, lantern_pos, scale=1.15, hanging=True)
+
+    build(mb)
+    add_empty('Lantern_Seawall', lantern_pos)
+    col_box('col_seawall_base', (-4.62, -2.40, -2.18), (4.62, DECK_Y + 0.06, 1.80))
+    col_box('col_seawall_parapet', (-4.62, DECK_Y, -1.82), (4.62, 4.22, -0.82))
+    export_glb(outdir, 'seawall_bastion.glb')
+
+def gen_watchtower_wood(outdir):
+    clear_scene()
+    rng = random.Random(SEED + 617)
+    mb = MB('WatchtowerWood', seed=617)
+
+    # Tall ~8.8 m lashed-timber pirate cliffside lookout tower!
+    DECK_Y = 5.20
+    EAVE_Y = 7.40
+    PEAK_Y = 8.80
+
+    # 1. Four splayed heavy timber stilts plunging to y = -1.80 m, rising cleanly to roof eaves (y = 7.42 m)!
+    def stilt_xy(sx, sz, y):
+        # Splayed wide at base (-1.8 m -> +/-1.72 m), tapering inward to deck (5.2 m -> +/-1.24 m), vertical above deck
+        t = max(0.0, min(1.0, (y + 1.80) / (DECK_Y + 1.80)))
+        spread = 1.72 - 0.48 * t
+        return (sx * spread, sz * spread)
+
+    for sx in (-1.0, 1.0):
+        for sz in (-1.0, 1.0):
+            bx, bz = stilt_xy(sx, sz, -1.80)
+            dx, dz = stilt_xy(sx, sz, DECK_Y)
+            tube(mb, [(bx, -1.80, bz), (dx, DECK_Y, dz), (dx, EAVE_Y + 0.05, dz)], [0.18, 0.15, 0.13], 6, 'wood', jit(C_DARK, rng, 0.06), mode='flat')
+            # Wrapped hemp rope lashings at major joint heights
+            for ly in (1.50, 3.35, DECK_Y - 0.12, EAVE_Y - 0.10):
+                lx, lz = stilt_xy(sx, sz, ly)
+                with xf(mb, T(lx, ly, lz)):
+                    for ri in range(2):
+                        with xf(mb, T(0, ri * 0.052, 0)):
+                            torus(mb, 0.17, 0.025, 8, 5, 'rope', C_ROPE, True)
+
+    # 2. Horizontal ledger beams & diagonal X-bracing timbers across 2 stilt tiers!
+    corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+    tier_ys = [(0.15, 1.50), (1.50, 3.35), (3.35, DECK_Y - 0.12)]
+    for ti, (y0, y1) in enumerate(tier_ys):
+        for side in range(4):
+            c0 = corners[side]
+            c1 = corners[(side + 1) % 4]
+            a0 = stilt_xy(c0[0], c0[1], y0)
+            b0 = stilt_xy(c1[0], c1[1], y0)
+            a1 = stilt_xy(c0[0], c0[1], y1)
+            b1 = stilt_xy(c1[0], c1[1], y1)
+            # Horizontal ledger beam at y1
+            tube(mb, [(a1[0], y1, a1[1]), (b1[0], y1, b1[1])], 0.095, 5, 'wood', jit(C_HULL, rng, 0.06), mode='flat')
+            # Diagonal X-bracing (leave front -Z face side=0 open for climbing ladder!)
+            if side != 0 or ti == 2:
+                if side != 0:
+                    tube(mb, [(a0[0], y0, a0[1]), (b1[0], y1, b1[1])], 0.072, 4, 'wood', C_WEATH, mode='flat')
+                    tube(mb, [(b0[0], y0, b0[1]), (a1[0], y1, a1[1])], 0.072, 4, 'wood', C_WEATH, mode='flat')
+
+    # Sloped wooden climbing ladder rising up front -Z face to the y = 5.20 m lookout deck!
+    lad_bot_z = -2.28
+    lad_top_z = -1.46
+    for sx in (-0.34, 0.34):
+        tube(mb, [(sx, -0.80, lad_bot_z), (sx, DECK_Y + 0.25, lad_top_z)], 0.052, 5, 'wood', C_HULL, mode='flat')
+    for ri in range(14):
+        rt = (ri + 0.5) / 14.0
+        ry = -0.35 + (DECK_Y + 0.35) * rt
+        rz = lad_bot_z + (lad_top_z - lad_bot_z) * rt
+        tube(mb, [(-0.34, ry, rz), (0.34, ry, rz)], 0.032, 5, 'wood', C_DECK, mode='flat')
+
+    # 3. Elevated planked lookout deck (y = 5.20 m) + cantilevered joists + chunky perimeter railings!
+    for jz in (-1.22, 0.0, 1.22):
+        cbox(mb, (0.0, DECK_Y - 0.14, jz), (3.32, 0.16, 0.16), 'wood', C_DARK, 0.018)
+    for pi in range(9):
+        px = -1.40 + pi * 0.35
+        cbox(mb, (px, DECK_Y, 0.0), (0.31, 0.11, 3.16), 'wood', jit(C_DECK if pi % 2 == 0 else C_HULL, rng, 0.07), 0.014, (0, 0, 1))
+
+    # Waist-high perimeter timber railings (leaving front -Z ladder entrance open!)
+    for side in range(4):
+        c0 = corners[side]
+        c1 = corners[(side + 1) % 4]
+        p0 = Vector((c0[0] * 1.48, DECK_Y, c0[1] * 1.48))
+        p1 = Vector((c1[0] * 1.48, DECK_Y, c1[1] * 1.48))
+        if side == 0:
+            # Left & right short safety rails framing front ladder gap
+            for end_p, dir_v in ((p0, (p1 - p0).normalized()), (p1, (p0 - p1).normalized())):
+                seg_e = end_p + dir_v * 0.95
+                tube(mb, [end_p + Vector((0, 0.96, 0)), seg_e + Vector((0, 0.96, 0))], 0.068, 5, 'wood', C_HULL, mode='flat')
+                tube(mb, [end_p + Vector((0, 0.50, 0)), seg_e + Vector((0, 0.50, 0))], 0.048, 4, 'wood', C_WEATH, mode='flat')
+                tube(mb, [seg_e + Vector((0, 0.04, 0)), seg_e + Vector((0, 1.02, 0))], 0.065, 5, 'wood', C_DARK, mode='flat')
+        else:
+            tube(mb, [p0 + Vector((0, 0.96, 0)), p1 + Vector((0, 0.96, 0))], 0.068, 5, 'wood', C_HULL, mode='flat')
+            tube(mb, [p0 + Vector((0, 0.50, 0)), p1 + Vector((0, 0.50, 0))], 0.048, 4, 'wood', C_WEATH, mode='flat')
+            for bi in (1, 2):
+                bp = p0.lerp(p1, bi / 3.0)
+                tube(mb, [bp + Vector((0, 0.04, 0)), bp + Vector((0, 0.96, 0))], 0.052, 4, 'wood', C_WEATH, mode='flat')
+
+    # Lookout deck storytelling cargo (tucked rum barrel & ammo crate in rear corner)
+    with xf(mb, T(-0.92, DECK_Y + 0.06, 0.88)):
+        lathe(mb, [(0, 0), (0.22, 0), (0.26, 0.24), (0.26, 0.50), (0.22, 0.74), (0, 0.74)], 8, 'wood', C_HULL, False)
+        cyl(mb, 0.265, 0.16, 0.21, 8, 'iron', C_IRON, False)
+        cyl(mb, 0.265, 0.54, 0.59, 8, 'iron', C_IRON, False)
+    cbox(mb, (0.88, DECK_Y + 0.30, 0.92), (0.52, 0.48, 0.52), 'wood', C_DECK, 0.015, M=R('Y', 14))
+
+    # 4. Pitched overhanging palm-thatch roof canopy (y = 7.30..8.80 m!)
+    for side in range(4):
+        c0 = corners[side]
+        c1 = corners[(side + 1) % 4]
+        tube(mb, [(c0[0] * 1.24, EAVE_Y, c0[1] * 1.24), (c1[0] * 1.24, EAVE_Y, c1[1] * 1.24)], 0.095, 5, 'wood', C_DARK, mode='flat')
+    # 3 overlapping stepped hipped thatch tiers for rich painterly tropical-island roof texture
+    tiers = [
+        (7.28, 7.82, 1.98, 1.46, C_THATCH),
+        (7.76, 8.32, 1.54, 0.86, mul(C_THATCH, 0.93)),
+        (8.26, PEAK_Y, 0.94, 0.14, jit(C_DECK, rng, 0.05)),
+    ]
+    for y0, y1, r0, r1, tcol in tiers:
+        loft(mb, [
+            [(-r0, y0, -r0), (r0, y0, -r0), (r0, y0, r0), (-r0, y0, r0)],
+            [(-r1, y1, -r1), (r1, y1, -r1), (r1, y1, r1), (-r1, y1, r1)],
+        ], 'wood', tcol, closed=True, caps=(True, True), mode='flat', scols=[mul(tcol, 0.88), tcol])
+    # Thatch crown finial bundle & bamboo corner rafter tails
+    cyl(mb, 0.18, PEAK_Y - 0.06, PEAK_Y + 0.16, 6, 'wood', C_DARK, False, 0.02, 0.08)
+    for sx in (-1.0, 1.0):
+        for sz in (-1.0, 1.0):
+            tube(mb, [(0.0, PEAK_Y - 0.08, 0.0), (sx * 2.08, EAVE_Y - 0.16, sz * 2.08)], [0.06, 0.05], 4, 'wood', C_WEATH, mode='flat')
+
+    # 5. Fluttering crimson forked swallowtail pirate banner pennant on starboard roof corner!
+    pole_b = Vector((1.24, EAVE_Y - 0.20, -1.24))
+    pole_t = Vector((1.58, PEAK_Y + 0.35, -1.48))
+    tube(mb, [pole_b, pole_t], [0.052, 0.036], 6, 'wood', C_DARK, mode='flat')
+    # Rippling swallowtail crimson banner with gold accent bar
+    b_t0 = pole_t + Vector((0.0, -0.08, 0.0))
+    b_b0 = pole_t + Vector((0.0, -0.78, 0.0))
+    b_m1 = pole_t + Vector((0.88, -0.44, -0.22))
+    b_tu = pole_t + Vector((1.65, -0.18, -0.42))
+    b_tl = pole_t + Vector((1.58, -0.76, -0.40))
+    b_notch = pole_t + Vector((1.18, -0.46, -0.32))
+    mb.fp([b_t0, b_tu, b_notch, b_m1], 'awning', C_RED, (1, 0, 0), None, smooth=False)
+    mb.fp([b_b0, b_m1, b_notch, b_tl], 'awning', mul(C_RED, 0.88), (1, 0, 0), None, smooth=False)
+    mb.fp([b_t0, b_m1, b_b0], 'awning', C_GOLD, (1, 0, 0), None, smooth=False)
+
+    # 6. Warm hanging lookout lantern under the front -Z eave + Lantern_Watch empty!
+    lantern_pos = (0.0, 6.92, -1.58)
+    tube(mb, [(0.0, EAVE_Y - 0.02, -1.58), (0.0, 7.18, -1.58)], 0.015, 4, 'iron', C_IRON, mode='flat')
+    build_lantern_geom(mb, lantern_pos, scale=1.12, hanging=True)
+
+    build(mb)
+    add_empty('Lantern_Watch', lantern_pos)
+    col_box('col_watch_base', (-1.62, -1.80, -1.62), (1.62, DECK_Y - 0.05, 1.62))
+    col_box('col_watch_deck', (-1.58, DECK_Y - 0.05, -1.58), (1.58, PEAK_Y, 1.58))
+    export_glb(outdir, 'watchtower_wood.glb')
+
 # ================================================================ main
 def main():
     argv = sys.argv
@@ -1881,6 +2718,14 @@ def main():
         gen_crate_supply,
         gen_campfire,
         gen_notice_board,
+        # Wave 24A: 7 brand-new island landmark, jungle, ruin, fort & harbour props
+        gen_jungle_banyan,
+        gen_ruin_arch,
+        gen_ruin_pillar,
+        gen_timber_bridge,
+        gen_harbour_warehouse,
+        gen_seawall_bastion,
+        gen_watchtower_wood,
     ]
     for fn in generators:
         fn(outdir)

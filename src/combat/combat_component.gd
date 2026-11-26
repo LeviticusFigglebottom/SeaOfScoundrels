@@ -91,7 +91,7 @@ var _hitstop_timer: float = 0.0
 var _player_controller: PlayerController = null
 var _inventory: Node = null
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
-var _ray_result: PhysicsIntersectRayResult3D = PhysicsIntersectRayResult3D.new()
+var _ray_result: Variant = ClassDB.instantiate(&"PhysicsIntersectRayResult3D") if ClassDB.class_exists(&"PhysicsIntersectRayResult3D") else null
 var _shape_params: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 var _melee_sphere: SphereShape3D = SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
@@ -664,9 +664,21 @@ func _fire_ranged(spec: Dictionary) -> bool:
 		if world != null:
 			_ray_params.from = origin
 			_ray_params.to = end
-			if world.direct_space_state.intersect_ray_into(_ray_params, _ray_result):
-				hit_pos = _ray_result.position
-				var col := _ray_result.collider
+			var space := world.direct_space_state
+			var did_hit := false
+			var col: Object = null
+			if _ray_result != null and space.has_method(&"intersect_ray_into"):
+				if bool(space.call(&"intersect_ray_into", _ray_params, _ray_result)):
+					did_hit = true
+					hit_pos = _ray_result.get(&"position") as Vector3
+					col = _ray_result.get(&"collider") as Object
+			else:
+				var hit := space.intersect_ray(_ray_params)
+				if not hit.is_empty():
+					did_hit = true
+					hit_pos = hit["position"] as Vector3
+					col = hit["collider"] as Object
+			if did_hit:
 				if col is Pawn:
 					struck_entity = true
 					var target_p := col as Pawn
