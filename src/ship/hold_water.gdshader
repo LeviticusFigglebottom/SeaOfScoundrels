@@ -3,9 +3,9 @@ shader_type spatial;
 // Sloshes subtly with ship roll/pitch and stays clipped to the curved hull interior.
 render_mode blend_mix, depth_draw_opaque, cull_disabled, specular_schlick_ggx;
 
-uniform vec3 deep_color : source_color = vec3(0.025, 0.14, 0.16);
-uniform vec3 shallow_color : source_color = vec3(0.06, 0.30, 0.29);
-uniform vec3 foam_color : source_color = vec3(0.76, 0.88, 0.86);
+uniform vec3 deep_color : source_color = vec3(0.015, 0.075, 0.09);
+uniform vec3 shallow_color : source_color = vec3(0.038, 0.17, 0.17);
+uniform vec3 foam_color : source_color = vec3(0.68, 0.80, 0.78);
 
 uniform float water_level : hint_range(0.0, 1.0) = 0.0;
 uniform float slosh_time = 0.0;
@@ -82,8 +82,8 @@ void fragment() {
 	col = mix(col, foam_color, clamp(rim + chop_foam, 0.0, 0.72));
 
 	ALBEDO = col;
-	ROUGHNESS = mix(0.14, 0.45, clamp(rim + chop_foam, 0.0, 1.0));
-	METALLIC = 0.04;
-	SPECULAR = 0.65;
-	ALPHA = clamp(mix(0.68, 0.90, depth_mix) + fresnel * 0.15 + rim * 0.15, 0.62, 0.95);
+	ROUGHNESS = mix(0.28, 0.56, clamp(rim + chop_foam, 0.0, 1.0));
+	METALLIC = 0.02;
+	SPECULAR = 0.22;
+	ALPHA = clamp(mix(0.76, 0.93, depth_mix) + fresnel * 0.10 + rim * 0.14, 0.70, 0.96);
 }

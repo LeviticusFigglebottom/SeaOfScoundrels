@@ -172,6 +172,9 @@ var _livery_flag_tint: Color = Color.WHITE
 var _livery_glow_accent: Color = Color.BLACK
 
 
+var _bow_spray: GPUParticles3D = null
+
+
 func _init() -> void:
 	mass = BASE_MASS
 	gravity_scale = 1.0
@@ -205,10 +208,13 @@ func _ready() -> void:
 	_build_damage_slots()
 	_build_hold_water()
 	_build_deck_extras()
+	if enable_effects:
+		_build_bow_spray()
 	_setup_sail_shaders()
 	_setup_lights_and_glass()
 	_cache_ropes()
 	_register_ocean_mask()
+	_last_wind_catch = wind_catch()
 	_update_visuals(0.0)
 
 
@@ -437,36 +443,70 @@ func _make_leak_jet(local_pos: Vector3, hole_basis: Basis) -> GPUParticles3D:
 	p.name = "LeakJet"
 	p.emitting = false
 	p.visible = false
-	p.amount = 24
-	p.lifetime = 0.55
+	p.amount = 48
+	p.lifetime = 0.48
 	p.local_coords = true
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.position = local_pos + hole_basis.z * 0.08
 
 	var proc := ParticleProcessMaterial.new()
 	# Hole -Z points outboard, so +Z sprays inward into the hold.
-	var inward := (hole_basis.z + Vector3(0.0, 0.25, 0.0)).normalized()
+	var inward := (hole_basis.z + Vector3(0.0, 0.28, 0.0)).normalized()
 	proc.direction = inward
-	proc.spread = 18.0
-	proc.initial_velocity_min = 2.6
-	proc.initial_velocity_max = 4.6
-	proc.gravity = Vector3(0.0, -11.0, 0.0)
-	proc.scale_min = 0.35
-	proc.scale_max = 0.8
+	proc.spread = 14.0
+	proc.initial_velocity_min = 3.0
+	proc.initial_velocity_max = 5.2
+	proc.gravity = Vector3(0.0, -12.0, 0.0)
+	proc.scale_min = 0.5
+	proc.scale_max = 1.15
+	proc.particle_flag_align_y = true
 	p.process_material = proc
 
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.06
-	sphere.height = 0.12
-	sphere.radial_segments = 6
-	sphere.rings = 3
+	var streak := BoxMesh.new()
+	streak.size = Vector3(0.032, 0.22, 0.032)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.76, 0.94, 0.96, 0.78)
+	mat.albedo_color = Color(0.78, 0.96, 0.98, 0.72)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sphere.material = mat
-	p.draw_pass_1 = sphere
+	streak.material = mat
+	p.draw_pass_1 = streak
 	return p
+
+
+func _build_bow_spray() -> void:
+	var p := GPUParticles3D.new()
+	p.name = "BowSpray"
+	p.emitting = false
+	p.amount = 64
+	p.lifetime = 0.62
+	p.local_coords = false
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.position = Vector3(0.0, 0.25, -6.1)
+	p.visibility_aabb = AABB(Vector3(-6.0, -3.0, -8.0), Vector3(12.0, 8.0, 16.0))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	proc.emission_box_extents = Vector3(0.85, 0.25, 0.9)
+	proc.direction = Vector3(0.0, 0.72, 0.68)
+	proc.spread = 48.0
+	proc.initial_velocity_min = 2.6
+	proc.initial_velocity_max = 5.4
+	proc.gravity = Vector3(0.0, -9.8, 0.0)
+	proc.scale_min = 0.5
+	proc.scale_max = 1.35
+	proc.particle_flag_align_y = true
+	p.process_material = proc
+
+	var drop := BoxMesh.new()
+	drop.size = Vector3(0.055, 0.24, 0.055)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.92, 0.98, 0.99, 0.65)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	drop.material = mat
+	p.draw_pass_1 = drop
+	add_child(p)
+	_bow_spray = p
 
 
 func _build_hold_water() -> void:
@@ -1457,9 +1497,12 @@ func _aim_ropes() -> void:
 
 
 func _update_wake() -> void:
+	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
+	if _bow_spray != null:
+		_bow_spray.emitting = (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
+		_bow_spray.amount_ratio = clampf((spd - 2.0) / 5.5, 0.15, 1.0)
 	if Ocean.current == null or is_sinking:
 		return
-	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
 	if spd < 0.35:
 		# Subtle waterline collar foam even while gently bobbing at anchor.
 		Ocean.current.add_foam(global_transform * Vector3(0.0, 0.0, -5.6), 1.4, 0.14)

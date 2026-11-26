@@ -92,7 +92,7 @@ func _ready() -> void:
 		_ship.apply_hull_damage(_ship.global_transform * Vector3(-2.0, -0.35, -1.2), 0.55)
 		_ship.apply_hull_damage(_ship.global_transform * Vector3(1.9, -0.3, -2.5), 0.5)
 		_ship.patch_hole(0)
-		_ship.water_level = 0.38
+		_ship.water_level = 0.26
 
 	if _shot == "broadside":
 		_target_ship = SLOOP_SCENE.instantiate() as Ship
@@ -131,11 +131,13 @@ func _process(delta: float) -> void:
 func _update_camera() -> void:
 	var xf := _ship.global_transform
 	var pos := xf.origin
-	var yaw := Basis(Vector3.UP, atan2(-xf.basis.z.x, -xf.basis.z.z))
+	# Ship bow faces local -Z (xf.basis.z points aft), so atan2(z.x, z.z) aligns with ship yaw.
+	var yaw := Basis(Vector3.UP, atan2(xf.basis.z.x, xf.basis.z.z))
 	match _shot:
 		"helm":
-			var eye := xf * Vector3(0.0, 3.65, 6.2)
-			var look := xf * Vector3(0.0, 2.6, -12.0)
+			# Over-the-shoulder helm framing showing Captain gripping wheel, deck, sail, and horizon.
+			var eye := xf * Vector3(0.85, 3.65, 7.1)
+			var look := xf * Vector3(-0.15, 2.85, -10.0)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"hold":
 			var eye := xf * Vector3(-0.35, 0.68, 4.3)
@@ -148,13 +150,13 @@ func _update_camera() -> void:
 			var eye := pos + yaw * Vector3(-11.0, 6.5, 16.0)
 			_cam.look_at_from_position(eye, pos + Vector3(18.0, 1.5, -4.0), Vector3.UP)
 		"storm":
-			var ang := 0.55 + _clock * 0.14
-			var eye := pos + yaw * Vector3(sin(ang) * 20.0, 5.4, -cos(ang) * 20.0)
-			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.2)
-			_cam.look_at_from_position(eye, pos + Vector3(0.0, 2.8, 0.0), Vector3.UP)
+			var ang := 0.58 + _clock * 0.12
+			var eye := pos + yaw * Vector3(sin(ang) * 23.5, 5.8, -cos(ang) * 23.5)
+			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
+			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2, -1.0), Vector3.UP)
 		_:
-			# Quarter-bow hero view showing bow wave, billowing sail, and wake.
-			var ang := 0.68 + _clock * 0.12
-			var eye := pos + yaw * Vector3(sin(ang) * 19.0, 4.4, -cos(ang) * 19.0)
-			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.0)
-			_cam.look_at_from_position(eye, pos + Vector3(0.0, 3.2, 0.0), Vector3.UP)
+			# Quarter-bow hero view showing figurehead, bow wave, billowing sail, and pennant.
+			var ang := 0.66 + _clock * 0.10
+			var eye := pos + yaw * Vector3(sin(ang) * 22.5, 4.8, -cos(ang) * 22.5)
+			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.2)
+			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.8, -1.0), Vector3.UP)

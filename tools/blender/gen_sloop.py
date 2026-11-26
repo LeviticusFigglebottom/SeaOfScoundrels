@@ -945,7 +945,7 @@ def build_decks(mb):
     for sg in (-1, 1):
         cbox(mb, (sg * (hx1 + 0.05), DECK_Y + 0.04, (hz0 + hz1) / 2 - 0.05), (0.16, 0.34, hz1 - hz0 + 0.16), 'wood', C_RED, 0.025)
     cbox(mb, (0, DECK_Y + 0.04, hz0 - 0.05), (hx1 - hx0 + 0.2, 0.34, 0.16), 'wood', C_RED, 0.025)
-    cbox(mb, (0, DECK_Y - 0.06, hz1 + 0.05), (hx1 - hx0 + 0.25, 0.12, 0.1), 'wood', C_DARK, 0.015)
+    cbox(mb, (0, DECK_Y - 0.068, hz1 + 0.05), (hx1 - hx0 + 0.25, 0.12, 0.1), 'wood', C_DARK, 0.015)
     zt, zb = HOLD_STAIR; nst = 10; H = DECK_Y - HOLD_Y
     for sg in (-1, 1):
         x = sg * (hx1 - 0.07)

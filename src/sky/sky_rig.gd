@@ -109,6 +109,15 @@ func _ready() -> void:
 	Weather.lightning_struck.connect(_on_lightning_struck)
 	_update(true)
 
+func _exit_tree() -> void:
+	if Weather != null and Weather.lightning_struck.is_connected(_on_lightning_struck):
+		Weather.lightning_struck.disconnect(_on_lightning_struck)
+	RenderingServer.global_shader_parameter_set(&"cloud_shadow_tex", RID())
+	if sky_material != null:
+		sky_material.set_shader_parameter(&"shadow_map", null)
+	if _shadow_viewport != null and is_instance_valid(_shadow_viewport):
+		_shadow_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+
 func _process(_delta: float) -> void:
 	_update(false)
 
