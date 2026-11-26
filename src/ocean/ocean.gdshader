@@ -569,8 +569,10 @@ void fragment() {
 		float chop_cap = smoothstep(0.56, 0.88, chop_fold) * smoothstep(0.26, 0.92, eff_h) * mix(0.40, 0.88, storm) * mix(0.60, 1.18, macro_patch) * open_foam;
 		float fair_cap = max(smoothstep(0.44, 1.00, eff_h) * smoothstep(0.93, 0.72, jac) * mix(0.50, 0.42, storm) * open_foam, chop_cap);
 		float field_raw = field_foam(v_rest, dist);
-		// Break up Gaussian wake stamps with organic froth modulation so hull wakes stay lacy, never solid pads!
-		float field = clamp(field_raw * 0.86, 0.0, 0.76);
+		float web_patch = smoothstep(0.24, 0.86, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
+		// Carve swirling eddy breakup into Gaussian wake stamps so hull/stern wakes stay lacy, never smooth oval discs!
+		float eddy_mod = mix(0.58, 1.06, web_patch);
+		float field = clamp(field_raw * 0.86 * eddy_mod, 0.0, 0.74);
 		float crest_foam = max(max(f_now, fair_cap), field);
 		float linger = clamp(field - max(f_now, fair_cap), 0.0, 1.0);
 		if (foam_field_on < 0.5 || dist > foam_field_size * 0.31) {
@@ -630,7 +632,6 @@ void fragment() {
 		float wave_energy = smoothstep(0.46, 0.78, sea_amp_scale) * deep_water;
 		float slope_len = length(n_geo.xz);
 		float near_web_fade = smoothstep(115.0, 10.0, dist);
-		float web_patch = smoothstep(0.24, 0.86, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
 		float ridge_act = smoothstep(0.42, 0.92, crest) * 0.42 + smoothstep(0.12, 0.34, slope_len) * 0.34 + smoothstep(0.60, 0.92, chop_fold) * 0.36;
 		float web_src = max(ridge_act * wave_energy, max(field * 1.0, shore_foam * 0.86));
 		web_src = max(web_src, crest_foam * 0.85 + storm * 0.36 * smoothstep(0.06, 0.24, slope_len) * deep_water);
@@ -651,7 +652,7 @@ void fragment() {
 		// Tight milky turquoise-green aeration strictly beneath active foam patches & ship wakes
 		// (fades cleanly at distance so aerial views never show glowing cyan halos).
 		float aerate_src = clamp(max(heavy_foam * 1.15, web_foam * 0.78) + field * 0.92 + shore_foam * 0.72, 0.0, 1.0);
-		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist);
+		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist) * mix(1.0, 0.28, night_bio);
 		vec3 milky_light = ambient_color * 0.68 + sun_light * (0.34 + 0.66 * clamp(dot(N, L), 0.0, 1.0));
 		vec3 milky_col = foam_under_color * milky_light * mix(0.72, 1.10, smoothstep(0.55, 1.0, macro_light));
 		col = mix(col, milky_col, clamp(aerate * 0.46 + heavy_foam * 0.24, 0.0, 0.56));
@@ -711,7 +712,7 @@ void fragment() {
 		// --- composite organic wave-action webbing and creamy breaking caps on top
 		vec3 foam_light = ambient_color * 0.86 + sun_light * (0.36 + 0.58 * clamp(dot(N, L), 0.0, 1.0));
 		// Keep night-time ship wake foam subtle moonlit silver-blue so bioluminescent plankton stars pop cleanly!
-		foam_light *= mix(1.0, 0.66, night_bio);
+		foam_light *= mix(1.0, 0.48, night_bio);
 		float foam_shade = mix(0.80, 1.08, smoothstep(0.75, 1.0, macro_light));
 		vec3 web_tone = mix(foam_under_color, foam_color, 0.76) * foam_light * foam_shade;
 		col = mix(col, web_tone, clamp(web_foam * 0.72, 0.0, 0.72));
@@ -720,19 +721,21 @@ void fragment() {
 		col = mix(col, foam_lit, heavy_foam * mix(0.76, 0.95, foam_body));
 
 		// --- nocturnal bioluminescent plankton shimmer in ship wakes, breaking crests & surf (0 extra taps)
-		// Carves lacy starry plankton ribbons out of swirling wake filaments & fine ripple glitter so
-		// night wakes sparkle like living bioluminescence rather than glowing solid oval pads!
+		// Carves isotropic starry plankton eddies out of swirling wake filaments & fine ripple glitter so
+		// night wakes sparkle organically alongside Q7B bow ribbons (zero diagonal stripes or milky ovals!).
 		if (night_bio > 0.001) {
 			float rip_energy = clamp(length(rip_fine + rip_micro * 0.85) * 2.4, 0.0, 1.0);
-			float micro_twinkle = 0.5 + 0.5 * sin(dot(v_rest, vec2(3.7, -2.9)) + sea_time * 2.6 + blot * 9.0);
-			float fine_glitter = smoothstep(0.48, 0.94, rip_energy * 0.58 + micro_twinkle * 0.52);
-			float lace_fil = clamp((heavy_foam - foam_body * 0.58) * 1.35 + web_foam * 1.48 + shore_foam * 0.72, 0.0, 1.0);
-			float wake_bio = max(field, shore_foam * (1.0 - step(0.5, foam_field_on)) * 0.58) * smoothstep(0.18, 0.82, lace_fil * 0.76 + fine_glitter * 0.58) * (0.28 + 0.96 * lace_fil);
-			float crest_bio = clamp(heavy_foam * 0.52 + web_foam * 0.58 + shore_foam * 0.48, 0.0, 1.0) * smoothstep(0.24, 0.84, blot * 0.52 + fine_glitter * 0.58);
-			float bio_shimmer = (0.40 + 0.60 * blot) * (0.50 + 0.92 * fine_glitter);
+			float tw_a = 0.5 + 0.5 * sin(dot(v_rest, vec2(2.3, 1.7)) + sea_time * 2.1 + blot * 7.5);
+			float tw_b = 0.5 + 0.5 * sin(dot(v_rest, vec2(-1.9, 2.7)) - sea_time * 1.7 + web_patch * 8.2);
+			float micro_twinkle = tw_a * tw_b;
+			float fine_glitter = smoothstep(0.32, 0.88, rip_energy * 0.52 + micro_twinkle * 0.72);
+			float lace_fil = clamp((heavy_foam - foam_body * 0.64) * 1.45 + web_foam * 1.55 + shore_foam * 0.68, 0.0, 1.0);
+			float wake_bio = max(field, shore_foam * (1.0 - step(0.5, foam_field_on)) * 0.58) * smoothstep(0.22, 0.84, lace_fil * 0.72 + fine_glitter * 0.62) * (0.22 + 1.05 * lace_fil);
+			float crest_bio = clamp(heavy_foam * 0.48 + web_foam * 0.56 + shore_foam * 0.44, 0.0, 1.0) * smoothstep(0.26, 0.84, blot * 0.48 + fine_glitter * 0.62);
+			float bio_shimmer = (0.36 + 0.64 * web_patch) * (0.48 + 1.05 * fine_glitter);
 			float bio_dist = smoothstep(135.0, 16.0, dist);
-			vec3 bio_col = mix(vec3(0.03, 0.58, 0.84), vec3(0.26, 0.98, 1.00), fine_glitter * 0.74);
-			float bio_intensity = (wake_bio * 0.62 + crest_bio * 0.16) * bio_shimmer * bio_dist * night_bio;
+			vec3 bio_col = mix(vec3(0.02, 0.56, 0.86), vec3(0.24, 0.98, 1.00), fine_glitter * 0.78);
+			float bio_intensity = (wake_bio * 0.68 + crest_bio * 0.16) * bio_shimmer * bio_dist * night_bio;
 			col += bio_col * bio_intensity;
 		}
 
