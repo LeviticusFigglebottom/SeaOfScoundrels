@@ -20,6 +20,8 @@ const FLARE_BURN_DURATION := 9.0
 const FLARE_MAX_LIFETIME := 11.5
 const CHAINSHOT_BREACH_RADIUS := 0.18
 const CHAINSHOT_SAIL_DAMAGE := 14.0
+const FIREBOMB_SPLASH_DAMAGE := 12.0
+const FIREBOMB_SPLASH_RADIUS := 4.2
 
 ## World-space velocity (m/s).
 var velocity: Vector3 = Vector3.ZERO
@@ -27,7 +29,7 @@ var velocity: Vector3 = Vector3.ZERO
 @export var drag: float = 0.012
 ## Breach radius passed to `Ship.apply_hull_damage()`.
 @export var hull_damage_radius: float = 0.45
-## Sculpted ordnance variant: &"iron", &"heavy", &"swivel", &"chainshot", or &"flare".
+## Sculpted ordnance variant: &"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", or &"flare".
 @export var ordnance_style: StringName = &"iron"
 ## Damage dealt on a direct hit to a `Pawn`.
 @export var pawn_damage: float = 55.0
@@ -44,6 +46,8 @@ var shooter_pawn: Node = null
 var trail: Node3D = null
 ## Signal flare illumination OmniLight3D (only active when ordnance_style resolves to &"flare").
 var flare_light: OmniLight3D = null
+## Warm flickering travel OmniLight3D (only active when ordnance_style resolves to &"firebomb").
+var firebomb_light: OmniLight3D = null
 
 var _ball_mesh: MeshInstance3D = null
 var _ball_mat: StandardMaterial3D = null
@@ -62,6 +66,7 @@ var _exclude_rids: Array[RID] = []
 
 static var _active_cannonballs: int = 0
 static var _ball_meshes: Dictionary = {}
+static var _firebomb_mesh: ArrayMesh = null
 static var _splinter_mesh: ArrayMesh = null
 static var _splinter_mat: StandardMaterial3D = null
 static var _foam_puff_tex: ImageTexture = null
@@ -74,6 +79,7 @@ static func clear_shared_cache() -> void:
 	if _splinter_mesh != null and _splinter_mesh.get_surface_count() > 0:
 		_splinter_mesh.surface_set_material(0, null)
 	_ball_meshes.clear()
+	_firebomb_mesh = null
 	_splinter_mesh = null
 	_splinter_mat = null
 	_foam_puff_tex = null
@@ -81,7 +87,7 @@ static func clear_shared_cache() -> void:
 	_flash_tex = null
 
 
-## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", or &"flare").
+## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", or &"flare").
 func get_resolved_ordnance_style() -> StringName:
 	return _resolved_style
 
@@ -113,6 +119,9 @@ func _exit_tree() -> void:
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.visible = false
 	flare_light = null
+	if firebomb_light != null and is_instance_valid(firebomb_light):
+		firebomb_light.visible = false
+	firebomb_light = null
 	if trail != null and is_instance_valid(trail):
 		trail.set(&"emitting", false)
 		trail.set(&"color_gradient", null)
@@ -139,7 +148,8 @@ func _ready() -> void:
 
 func _resolve_ordnance_style() -> StringName:
 	if ordnance_style == &"heavy" or ordnance_style == &"swivel" \
-			or ordnance_style == &"chainshot" or ordnance_style == &"flare":
+			or ordnance_style == &"chainshot" or ordnance_style == &"firebomb" \
+			or ordnance_style == &"flare":
 		return ordnance_style
 	if ordnance_style == &"iron":
 		if hull_damage_radius >= 0.52:
@@ -220,6 +230,41 @@ func _build_visuals() -> void:
 			trail_c0 = Color(0.92, 0.94, 0.98, 0.82)
 			trail_c1 = Color(0.68, 0.72, 0.78, 0.48)
 			trail_c2 = Color(0.42, 0.46, 0.52, 0.0)
+		&"firebomb":
+			# Bulbous molten-amber incendiary glass flask with braided fuse neck, glowing core & travel light.
+			_ball_mat.metallic = 0.24
+			_ball_mat.roughness = 0.18
+			_ball_mat.emission = Color(1.0, 0.44, 0.08)
+			_base_muzzle_emission = 0.85
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission
+			_ball_mesh.set_surface_override_material(0, _ball_mat)
+
+			_core_glow_mat = StandardMaterial3D.new()
+			_core_glow_mat.vertex_color_use_as_albedo = true
+			_core_glow_mat.vertex_color_is_srgb = true
+			_core_glow_mat.albedo_color = Color(1.0, 0.76, 0.26)
+			_core_glow_mat.metallic = 0.08
+			_core_glow_mat.roughness = 0.22
+			_core_glow_mat.emission_enabled = true
+			_core_glow_mat.emission = Color(1.0, 0.50, 0.10)
+			_core_glow_mat.emission_energy_multiplier = 3.8
+			if _ball_mesh.mesh.get_surface_count() > 1:
+				_ball_mesh.set_surface_override_material(1, _core_glow_mat)
+
+			firebomb_light = OmniLight3D.new()
+			firebomb_light.name = "FirebombLight"
+			firebomb_light.light_color = Color(1.0, 0.52, 0.14)
+			firebomb_light.light_energy = 2.6
+			firebomb_light.omni_range = 14.0
+			firebomb_light.omni_attenuation = 1.4
+			firebomb_light.shadow_enabled = false
+			add_child(firebomb_light)
+
+			trail_width = 0.30
+			trail_life = 0.62
+			trail_c0 = Color(1.0, 0.68, 0.18, 0.90)
+			trail_c1 = Color(0.96, 0.32, 0.06, 0.56)
+			trail_c2 = Color(0.28, 0.22, 0.20, 0.0)
 		&"flare":
 			# Glowing brass & crimson-gold marine illumination signal shell with wide-range OmniLight3D.
 			_ball_mat.metallic = 0.84
@@ -317,11 +362,14 @@ func _physics_process(delta: float) -> void:
 		_finish_without_impact()
 		return
 
-	# Spin faceted ordnance mid-flight & update muzzle / flare illumination glow.
+	# Spin faceted ordnance mid-flight & update muzzle / flare / firebomb illumination glow.
 	if _ball_mesh != null:
 		if _resolved_style == &"chainshot":
 			_ball_mesh.rotate_y(delta * 26.0)
 			_ball_mesh.rotate_x(delta * 8.5)
+		elif _resolved_style == &"firebomb":
+			_ball_mesh.rotate_x(delta * 10.5)
+			_ball_mesh.rotate_z(delta * 7.8)
 		elif _resolved_style == &"flare":
 			_ball_mesh.rotate_z(delta * 6.5)
 		else:
@@ -353,6 +401,14 @@ func _physics_process(delta: float) -> void:
 			_ball_mat.emission_energy_multiplier = _base_muzzle_emission * burn_env
 		if _core_glow_mat != null:
 			_core_glow_mat.emission_energy_multiplier = 4.2 * burn_env * pulse
+	elif _resolved_style == &"firebomb":
+		var flick := 0.86 + 0.14 * sin(_age * 24.0) * cos(_age * 13.0)
+		if firebomb_light != null and is_instance_valid(firebomb_light):
+			firebomb_light.light_energy = 2.6 * flick
+		if _core_glow_mat != null:
+			_core_glow_mat.emission_energy_multiplier = 3.8 * flick
+		velocity.y -= GRAVITY * delta
+		velocity *= maxf(0.0, 1.0 - drag * delta)
 	else:
 		if _age < 0.35 and _ball_mat != null:
 			_ball_mat.emission_energy_multiplier = maxf(0.0, _base_muzzle_emission * (1.0 - _age / 0.35))
@@ -415,6 +471,35 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 		_mark_impacted(hit_pos, target, cleanup_delay)
 		return
 
+	if _resolved_style == &"firebomb":
+		# Firebombs shatter on impact: ignite deck fire + adjacent zone and deal light 12.0 splash scorch
+		# instead of punching a deep iron cannon hole!
+		var burn_ship: Node3D = ship_target
+		if burn_ship == null and target is Pawn and (target as Pawn).platform is Node3D:
+			burn_ship = _find_ship((target as Pawn).platform)
+		if burn_ship != null:
+			target = burn_ship
+		if Net.is_host():
+			if burn_ship != null and burn_ship.has_method(&"ignite_deck_fire"):
+				burn_ship.call(&"ignite_deck_fire", hit_pos, true)
+			if burn_ship is RigidBody3D:
+				var rb_fb := burn_ship as RigidBody3D
+				var fb_dir := velocity.normalized() if velocity.length_squared() > 0.01 else -hit_normal
+				var fb_rel := hit_pos - rb_fb.global_position
+				fb_rel.y = clampf(fb_rel.y, -1.5, 1.5)
+				rb_fb.apply_impulse(fb_dir * hull_impact_impulse * 0.22, fb_rel)
+			if target != null and target.has_meta("leviathan"):
+				var lev_fb: Variant = target.get_meta("leviathan")
+				if lev_fb != null and is_instance_valid(lev_fb) and (lev_fb as Object).has_method(&"damage_tentacle"):
+					var t_idx_fb := int(target.get_meta("tentacle_index", -1))
+					(lev_fb as Object).call(&"damage_tentacle", t_idx_fb, FIREBOMB_SPLASH_DAMAGE)
+			_apply_firebomb_splash_scorch(hit_pos, collider as Node)
+		if _spawn_dust_burst(hit_pos, hit_normal, Color(1.0, 0.46, 0.10)):
+			cleanup_delay = 0.9
+		Audio.play_sfx(&"hull_impact", hit_pos, -1.5)
+		_mark_impacted(hit_pos, target, cleanup_delay)
+		return
+
 	if ship_target != null:
 		target = ship_target
 		var is_chain := _resolved_style == &"chainshot"
@@ -460,12 +545,59 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 	_mark_impacted(hit_pos, target, cleanup_delay)
 
 
+func _apply_firebomb_splash_scorch(hit_pos: Vector3, direct_node: Node = null) -> void:
+	if not Net.is_host() or not is_inside_tree():
+		return
+	var r_sq := FIREBOMB_SPLASH_RADIUS * FIREBOMB_SPLASH_RADIUS
+	var seen: Dictionary = {}
+	var candidates: Array[Node3D] = []
+	if direct_node is Node3D and is_instance_valid(direct_node):
+		candidates.append(direct_node as Node3D)
+	var tree := get_tree()
+	if tree != null:
+		for grp: StringName in [&"pawn", &"pawns"]:
+			for n in tree.get_nodes_in_group(grp):
+				if n is Node3D and is_instance_valid(n):
+					candidates.append(n as Node3D)
+		for cb in tree.get_nodes_in_group(&"crew_brains"):
+			var p := cb.get_parent() as Node3D
+			if p != null and is_instance_valid(p):
+				candidates.append(p)
+		for cc in tree.get_nodes_in_group(&"combatants"):
+			var p2 := cc.get_parent() as Node3D
+			if p2 != null and is_instance_valid(p2):
+				candidates.append(p2)
+	var parent_node := get_parent()
+	if parent_node != null:
+		for ch in parent_node.get_children():
+			if ch is Pawn and is_instance_valid(ch):
+				candidates.append(ch as Node3D)
+	for cand: Node3D in candidates:
+		if cand == null or not is_instance_valid(cand):
+			continue
+		var iid := cand.get_instance_id()
+		if seen.has(iid):
+			continue
+		seen[iid] = true
+		if cand == shooter_pawn and _age < SELF_IGNORE_TIME:
+			continue
+		var is_dead: Variant = cand.get(&"dead")
+		if is_dead is bool and bool(is_dead):
+			continue
+		if cand != direct_node and cand.global_position.distance_squared_to(hit_pos) > r_sq:
+			continue
+		if cand.has_method(&"take_damage"):
+			cand.call(&"take_damage", FIREBOMB_SPLASH_DAMAGE)
+		elif cand.has_method(&"apply_damage"):
+			cand.call(&"apply_damage", FIREBOMB_SPLASH_DAMAGE, shooter_pawn)
+
+
 func _on_water_hit(hit_pos: Vector3) -> void:
 	global_position = hit_pos
 	if Ocean.current != null:
 		Ocean.current.add_foam(hit_pos, 3.2, 0.95)
 	var spawned := _spawn_splash_burst(hit_pos)
-	Audio.play_sfx(&"splash_small" if _resolved_style == &"flare" else &"splash_large", hit_pos)
+	Audio.play_sfx(&"splash_small" if (_resolved_style == &"flare" or _resolved_style == &"firebomb") else &"splash_large", hit_pos)
 	_mark_impacted(hit_pos, null, 1.65 if spawned else 0.5)
 
 
@@ -477,6 +609,9 @@ func _mark_impacted(hit_pos: Vector3, target: Node, cleanup_delay: float = 0.5) 
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.light_energy = 0.0
 		flare_light.visible = false
+	if firebomb_light != null and is_instance_valid(firebomb_light):
+		firebomb_light.light_energy = 0.0
+		firebomb_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 	impacted.emit(hit_pos, target)
@@ -490,6 +625,9 @@ func _finish_without_impact() -> void:
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.light_energy = 0.0
 		flare_light.visible = false
+	if firebomb_light != null and is_instance_valid(firebomb_light):
+		firebomb_light.light_energy = 0.0
+		firebomb_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 
@@ -984,10 +1122,12 @@ func _spawn_dust_burst(pos: Vector3, normal: Vector3, tint: Color) -> bool:
 # Sculpted Flat-Faceted Ordnance & Jagged Oak Splinter Builders (0 Primitives)
 # ==============================================================================
 
-## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, `&"swivel"`, `&"chainshot"`, or `&"flare"`.
+## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, `&"swivel"`, `&"chainshot"`, `&"firebomb"`, or `&"flare"`.
 static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
 	var key := style if (style == &"heavy" or style == &"swivel" \
-			or style == &"chainshot" or style == &"flare") else &"iron"
+			or style == &"chainshot" or style == &"firebomb" or style == &"flare") else &"iron"
+	if key == &"firebomb" and _firebomb_mesh != null:
+		return _firebomb_mesh
 	if _ball_meshes.has(key):
 		var cached := _ball_meshes[key] as ArrayMesh
 		if cached != null:
@@ -1000,6 +1140,9 @@ static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
 			built = _build_swivel_ball_mesh()
 		&"chainshot":
 			built = _build_chainshot_mesh()
+		&"firebomb":
+			built = _build_firebomb_mesh()
+			_firebomb_mesh = built
 		&"flare":
 			built = _build_flare_mesh()
 		_:
@@ -1197,6 +1340,114 @@ static func _build_flare_mesh() -> ArrayMesh:
 	glow_st.generate_normals()
 	glow_st.commit(mesh)
 	return mesh
+
+
+static func _build_firebomb_mesh() -> ArrayMesh:
+	# Bulbous faceted molten-amber incendiary glass flask with diagonal hemp-rope harness,
+	# brass neck collar & curved braided fuse (Surface 0) + blazing molten core seams & fuse spark (Surface 1).
+	var body_st := SurfaceTool.new()
+	body_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_glass_hi := Color(0.96, 0.56, 0.14)
+	var col_glass_mid := Color(0.76, 0.28, 0.06)
+	var col_glass_lo := Color(0.38, 0.12, 0.04)
+	var col_rope_hi := Color(0.56, 0.41, 0.22)
+	var col_rope_mid := Color(0.36, 0.24, 0.12)
+	var col_rope_lo := Color(0.18, 0.12, 0.06)
+	var col_brass_hi := Color(0.88, 0.68, 0.24)
+	var col_brass_lo := Color(0.42, 0.28, 0.10)
+
+	# 1. Turned bulbous faceted amber glass flask aligned along Y (-0.128 base -> +0.168 flared lip).
+	var flask_profile: Array[Vector2] = [
+		Vector2(0.0, -0.128),
+		Vector2(0.068, -0.118),
+		Vector2(0.118, -0.072),
+		Vector2(0.138, -0.008),
+		Vector2(0.126, 0.056),
+		Vector2(0.078, 0.102),
+		Vector2(0.044, 0.128),
+		Vector2(0.052, 0.150),
+		Vector2(0.042, 0.164),
+		Vector2(0.0, 0.164),
+	]
+	_add_y_lathe(body_st, flask_profile, 14, col_glass_hi, col_glass_mid, col_glass_lo)
+
+	# 2. Forged brass neck collar rim + twin diagonal braided-hemp harness bands hugging the flask belly.
+	var neck_collar: Array[Vector2] = [
+		Vector2(0.045, 0.124),
+		Vector2(0.060, 0.130),
+		Vector2(0.062, 0.144),
+		Vector2(0.052, 0.152),
+	]
+	_add_y_lathe(body_st, neck_collar, 12, col_brass_hi, col_brass_lo, col_rope_lo)
+	var harness_bases: Array[Basis] = [
+		Basis(Vector3.RIGHT, 0.58) * Basis(Vector3.FORWARD, 0.32),
+		Basis(Vector3.RIGHT, -0.58) * Basis(Vector3.FORWARD, -0.32),
+	]
+	for hb: Basis in harness_bases:
+		_add_forged_band(body_st, hb, 0.126, 0.143, 0.015, 12, col_rope_hi, col_rope_mid, col_rope_lo)
+
+	# 3. Curving braided rope fuse neck rising from the flask cork (+0.155 -> +0.255).
+	var fuse_pts: Array[Vector3] = [
+		Vector3(0.0, 0.152, 0.0),
+		Vector3(0.012, 0.184, 0.006),
+		Vector3(0.036, 0.212, 0.014),
+		Vector3(0.068, 0.228, 0.008),
+		Vector3(0.096, 0.222, -0.006),
+		Vector3(0.114, 0.204, -0.016),
+	]
+	for fi in range(fuse_pts.size() - 1):
+		var c0 := col_rope_hi if (fi % 2 == 0) else col_rope_mid
+		_add_ordnance_tube(body_st, fuse_pts[fi], fuse_pts[fi + 1], 0.017, 0.015, 6, c0, col_rope_lo)
+
+	# Surface 1: incandescent molten-amber interior fire ribs & blazing faceted fuse-tip ember spark!
+	var glow_st := SurfaceTool.new()
+	glow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_g_hi := Color(1.0, 0.96, 0.68)
+	var col_g_mid := Color(1.0, 0.56, 0.12)
+	var col_g_lo := Color(0.94, 0.22, 0.05)
+
+	for gy: float in [-0.038, 0.024]:
+		_add_offset_seam_ring(glow_st, Basis.IDENTITY, 0.130, 0.144, gy, 0.014, 12,
+			col_g_hi, col_g_mid, col_g_lo)
+	_add_hammered_sphere_at(glow_st, fuse_pts[fuse_pts.size() - 1], 0.038, 8, 4, 0.18, 1.3,
+		col_g_hi, col_g_mid, col_g_lo)
+
+	body_st.generate_normals()
+	var mesh := body_st.commit()
+	glow_st.generate_normals()
+	glow_st.commit(mesh)
+	return mesh
+
+
+static func _add_y_lathe(st: SurfaceTool, profile: Array[Vector2], segs: int,
+		col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	if profile.size() < 2:
+		return
+	var y_mid := (profile[0].y + profile[profile.size() - 1].y) * 0.5
+	var ref_c := Vector3(0.0, y_mid, 0.0)
+	for pi in range(profile.size() - 1):
+		var r0 := profile[pi].x
+		var y0 := profile[pi].y
+		var r1 := profile[pi + 1].x
+		var y1 := profile[pi + 1].y
+		var t0 := float(pi) / maxf(float(profile.size() - 1), 1.0)
+		var t1 := float(pi + 1) / maxf(float(profile.size() - 1), 1.0)
+		var c0 := col_lo.lerp(col_mid, t0 * 2.0) if t0 < 0.5 else col_mid.lerp(col_hi, (t0 - 0.5) * 2.0)
+		var c1 := col_lo.lerp(col_mid, t1 * 2.0) if t1 < 0.5 else col_mid.lerp(col_hi, (t1 - 0.5) * 2.0)
+		for s in segs:
+			var a0 := TAU * float(s) / float(segs)
+			var a1 := TAU * float(s + 1) / float(segs)
+			var p00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var p10 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var p01 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var p11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			if r0 <= 0.0004 and r1 > 0.0004:
+				_emit_outward_tri(st, p00, p01, p11, ref_c, c0, c1, c1)
+			elif r1 <= 0.0004 and r0 > 0.0004:
+				_emit_outward_tri(st, p00, p10, p01, ref_c, c0, c0, c1)
+			elif r0 > 0.0004 and r1 > 0.0004:
+				_emit_outward_quad(st, p00, p10, p11, p01, ref_c, c0, c0, c1, c1)
 
 
 static func _add_hammered_sphere_at(st: SurfaceTool, center: Vector3, radius: float, segs: int, rings: int,

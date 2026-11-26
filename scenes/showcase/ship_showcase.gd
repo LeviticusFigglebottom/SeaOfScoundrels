@@ -63,6 +63,15 @@ func _ready() -> void:
 			time_h = 14.5
 			storm = 0.18
 			wind_spd = 9.5
+		"fire":
+			time_h = 18.25
+			storm = 0.24
+			wind_spd = 11.0
+		"emissary":
+			time_h = 16.9
+			storm = 0.14
+			wind_spd = 11.5
+			wind_hdg = 0.55
 
 	if _args.has("time"):
 		time_h = float(_args["time"])
@@ -108,6 +117,20 @@ func _ready() -> void:
 		if String(_args.get("rowboat", "docked")).to_lower() == "launched":
 			_rowboat.launch()
 
+	if _shot == "emissary":
+		var eflag := ShipEmissaryFlag.mount_to_ship(_ship)
+		if eflag != null:
+			var comp := StringName(String(_args.get("company", "gilded_compass")))
+			var grade := clampi(int(_args.get("grade", "5")), 1, 5)
+			eflag.set_emissary(comp, grade)
+
+	if _shot == "fire":
+		var sfire: ShipFire = _ship.get_node_or_null(^"ShipFire") as ShipFire
+		if sfire != null:
+			sfire.ignite_zone(0, 1.0)
+			sfire.ignite_zone(1, 0.95)
+			sfire.ignite_zone(2, 0.92)
+
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
 		_ship.apply_hull_damage(_ship.global_transform * _ship.ship_point(Vector3(bx, -0.35, 0.4)), 0.55)
@@ -137,7 +160,7 @@ func _ready() -> void:
 		_pawn.enter_station(helm_st)
 
 	_cam = Camera3D.new()
-	_cam.fov = 66.0
+	_cam.fov = 78.0 if (_shot == "harpoon" and _is_brig) else 66.0
 	_cam.near = 0.08
 	_cam.far = 6000.0
 	add_child(_cam)
@@ -184,9 +207,21 @@ func _update_camera() -> void:
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2 * sc, -1.0), Vector3.UP)
 		"harpoon":
-			# Foredeck 3/4 view cleanly ahead of the foremast framing BOTH bow ShipHarpoons unobstructed.
-			var eye := xf * _ship.ship_point(Vector3(0.65, 3.32, -4.15) if _is_brig else Vector3(1.18, 2.95, -2.15))
-			var look := xf * _ship.ship_point(Vector3(-0.18, 2.68, -7.20) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			# Foredeck 3/4 view cleanly ahead of the foremast (MAST_FORE_Z = -4.60 on Brig) framing BOTH bow ShipHarpoons unobstructed.
+			var eye := xf * _ship.ship_point(Vector3(0.32, 3.22, -4.95) if _is_brig else Vector3(1.18, 2.95, -2.15))
+			var look := xf * _ship.ship_point(Vector3(-0.08, 2.48, -7.85) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"emissary":
+			# Dramatic 3/4 starboard-stern view framing the sculpted ShipEmissaryFlag & all 5 Grade V pennants above the taffrail.
+			var eye := xf * _ship.ship_point(Vector3(6.2, 5.45, 11.4) if _is_brig else Vector3(5.2, 4.95, 9.2))
+			var look := xf * _ship.ship_point(Vector3(1.75, 4.95, 7.15) if _is_brig else Vector3(1.45, 4.45, 5.65))
+			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.0)
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"fire":
+			# Dramatic dusk quarter-bow view framing blazing multi-tongue sculpted ShipFire deck flames.
+			var eye := xf * _ship.ship_point(Vector3(7.4, 5.2, -9.8) if _is_brig else Vector3(6.2, 4.6, -7.8))
+			var look := xf * _ship.ship_point(Vector3(0.0, 2.0, -2.2) if _is_brig else Vector3(0.0, 1.8, -1.2))
+			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.0)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"rowboat":
 			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
@@ -208,6 +243,8 @@ func _update_camera() -> void:
 
 
 func _exit_tree() -> void:
+	ShipFire.clear_shared_cache()
+	ShipEmissaryFlag.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()
 	Rowboat.clear_shared_cache()
 	ShipSupplyBarrels.clear_shared_cache()

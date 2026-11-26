@@ -121,6 +121,14 @@ const LINES := {
 			"Eyes to the {bearing}! {cloud} rising over the horizon - glory or doom awaits!",
 			"Steady on the helm - {cloud} gathering off the {bearing}, Cap'n!",
 		],
+		&"fire_aboard": [
+			"Fire on deck! Grab the buckets before the rigging catches!",
+			"Deck planks are ablaze, Cap'n! Dousing the flames now!",
+		],
+		&"fire_doused": [
+			"Flames snuffed out! Smells like scorched oak, but she'll sail!",
+			"Deck fire's out, Cap'n! Not a spark left burning!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -207,6 +215,14 @@ const LINES := {
 			"Look up to the {bearing}, Cap'n! {cloud} looming high over the swells!",
 			"Spyglass confirms it - {cloud} off the {bearing}! Ready the guns and sails!",
 		],
+		&"fire_aboard": [
+			"Fire aboard! Flames licking the deck - fetching water!",
+			"Firebomb got us, Cap'n! Running with a bucket right now!",
+		],
+		&"fire_doused": [
+			"Fire's out! Smoke clearing off the gunwales!",
+			"Doused those flames clean! Deck's safe again, Cap'n!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -292,6 +308,14 @@ const LINES := {
 		&"event_cloud_sighted": [
 			"Blimey! {cloud} brewing to the {bearing} - I'll stack extra planks by the hold!",
 			"Big trouble off the {bearing}, Cap'n - {cloud} hanging right over the waves!",
+		],
+		&"fire_aboard": [
+			"Whoa - fire on my clean oak deck! Grabbing a water bucket!",
+			"Flames aboard, Cap'n! Nobody chars my timbers - on it!",
+		],
+		&"fire_doused": [
+			"Sizzle and steam - fire's out! Good as new, Cap'n!",
+			"All doused! Just a touch of soot on the planks!",
 		],
 	},
 }

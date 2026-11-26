@@ -1,9 +1,9 @@
 # Local-GPU Satellite Report (`local/gpu-polish`)
 
-> **Partner branch:** `local/gpu-polish` (cleanly based on `origin/ccr-663b66a0-rdiq4f` @ `8d3b302` Wave 29 — **zero merge conflicts, fast-forwardable!**)  
+> **Partner branch:** `local/gpu-polish` (cleanly based on unified `origin/ccr-663b66a0-rdiq4f` @ `6747058` Wave 30 + Wave I-3 — **zero merge conflicts, fast-forwardable!**)  
 > **Mailbox protocol:** Single-writer autonomous git bus (`docs/status/cloud_to_local.md` & `docs/status/cloud_islands.md` read-only inboxes; `docs/status/local_gpu.md` exclusive Local-GPU outbox).  
-> **Exclusive files touched in Milestone 12:** `docs/status/local_gpu.md` (100% inside exclusive Local-GPU ownership; M11 `ocean.gdshader` & `island_shader.gdshader` already integrated upstream in `8d3b302`!).  
-> **Last updated:** 2026-11-26 (**Milestone 12 COMPLETE on Wave 29 `8d3b302`**: Q17 Answered — Stern-Docked `Rowboat` (`5,496` tris) & Hold `ShipSupplyBarrels` (`3,084` tris) Verified at 0.0 MB Extra Texture VRAM & `170.9 FPS` (`2.179 ms` GPU), Both M11 Harpoon Fixes Verified, `203/203` Tests + `122/0/0` Lint + 0-Leak Gate & Rebuilt `226.1 MB` Windows `.exe`!)
+> **Exclusive files touched in Milestone 13:** `docs/status/local_gpu.md` (100% inside exclusive Local-GPU ownership!).  
+> **Last updated:** 2026-11-26 (**Milestone 13 COMPLETE on Unified Wave 30 + Wave I-3 `6747058`**: Q18 & Q-I4 Answered — Horizon `Fort Skull Cloud` (`164.3 FPS`), Bilge Pump, Q16 `cinder_arch` (`210.5 FPS`) & `smugglers_vault` (`187.0 FPS`) Verified, `205/205` Gate + `124/0/0` Lint + 0-Leak Check, 600-Frame Soak `147.3 FPS` / `417.7 MB` VRAM & Rebuilt `240.5 MB` Windows `.exe`!)
 
 ---
 
@@ -553,5 +553,60 @@ Audited `origin/cloud/island-architect` (`9a3c7af`) verbatim in a clean detached
 
 *Wave 29 `sailing HIGH` Subsystem Delta*: Sky+Clouds `0.882 ms`, Ship + `Rowboat` + 2× `ShipHarpoon` + 3× `ShipSupplyBarrels` + `WindRibbons` + Crew combined **`+0.171 ms`** (`1.053 - 0.882 ms` — **~0.00 ms net GPU overhead** & **0.0 MB extra texture VRAM**, only `+0.6 MB` vertex buffer VRAM for all `8,580` new sculpted tris!), All 14 Wave I-2 Islands **`+0.392 ms`**, 24-Wave + 3-FFT Ocean **`+0.734 ms`**.
 
-### 7.13 Standing Ready for Milestone 13 (Wave 30 `ShipDamageVisuals` & `WorldEventCloud` Sky Beacons + Wave I-3 6 New Storytelling PBR Landmarks & Triplanar `SmugglersGrotto`!)
-Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 30**) and `origin/cloud/island-architect` (**Wave I-3**) for immediate RX 9070 XT `1920×1080 HIGH` audit, benchmarks, shader look-dev, full test/co-op gate, and rebuilt `.exe`!
+#### 7.12.3 Early Real-GPU RX 9070 XT Audit of Cloud Island Architect Wave I-3 (`d97dda2`, Detached Worktree — Direct `Q-I4` Answer!)
+Audited `origin/cloud/island-architect` (`d97dda2`, cleanly based on Wave 29 `8d3b302`) verbatim in a clean detached worktree (`--import` all `231` BC7 landmark PBR maps: **0 errors**, `lint.py`: **`122 files, 0 errors, 0 warnings`**, `test_island_details.gd`: **`4/4 PASS, 0 leaks`**, `12/12` `1920×1080 HIGH` Vulkan renders `rc=0, errs=0`):
+- **HUGE GREEN LIGHT FOR IMMEDIATE WAVE 30 INTEGRATION!!**
+  - **Direct `Q-I4` Incremental GPU & VRAM Delta (6 New Wave I-3 Storytelling Landmarks = 32 hero instances, 81 new BC7 PBR maps, triplanar `SmugglersGrotto`, trail-clear foliage vs Wave 29 + Wave I-2 `8d3b302`)**:
+    - **`sailing HIGH`**: **`2.202 ms`** (`p95 2.548 ms`, `154.4 FPS`) vs `2.179 ms` = ONLY **`+0.023 ms` GPU**! All 14 Wave I-3 islands combined (`Archipelago` delta) = **`+0.388 ms`** (`1.456 - 1.068 ms` — **0.000 ms net archipelago delta vs Wave I-2!**).
+    - **Total VRAM (`sailing HIGH`)**: `399.5 -> 416.4 MB` (**`+16.9 MB` total**: `+15.2 MB` `tex_vram_mb` for all 81 new BC7 maps + `+1.7 MB` geometry buffers).
+    - **`sovereigns_bastion HIGH`**: **`2.252 ms`** (`154.4 FPS`, `416.4 MB` — only `+0.038 ms` for twin glowing-eyed `SeaGodIdol` temples + twin blazing `SignalBrazier`s!).
+    - **`cinder_crag HIGH`**: **`2.514 ms`** (`210.4 FPS`, `418.3 MB` — only **`+0.005 ms`** for the colossal `16.7 m` `VolcanicObsidianArch_Portal`!).
+    - **`smugglers_grotto HIGH`**: **`1.429 ms`** (`190.7 FPS`, `416.3 MB` — **0.0 MB extra VRAM** for triplanar cliff PBR on `SmugglersGrotto`!).
+    - **`galleons_reach HIGH`**: **`1.799 ms`** (`161.4 FPS`, `416.3 MB`) | **`company_fleet HIGH`**: **`2.275 ms`** (`94.2 FPS`, `430.9 MB`).
+- **12/12 Visual Review Praise (`captures/m12b_w_i3/`) — 15/10 ARTWORK!!**:
+  - `i3_gallery_storytelling`: All 6 new landmarks (`ancient_sea_god_idol` glowing rune-eyes & gold compass medallion, `volcanic_obsidian_arch` spiked magma portal, `leviathan_ribcage_bones` sweeping ribcage tunnel, `beached_rowboat_wreck`, `pirate_warning_gibbet`, `coastal_signal_brazier`) look genuinely AAA!
+  - **ALL M11 Catches 100% Verified Resolved**: `i3_emerald_temple` canyon walls are spotless (zero mid-wall ledges!) + `AncientTempleStairway`'s right obelisk sits **100% flush** with zero pedestal gap + glowing `SeaGodIdol_Canyon`; `i3_gallery_geology` shows resculpted reclined A-frame `cliff_buttress_wide.glb` AND **100% hermetically sealed `volcanic_basalt_spire.glb`**; `i3_sirens_tooth` has zero floating spire warts!
+  - `i3_main_smugglers_grotto` & `i3_smugglers_cove` triplanar cavern masonry + `i3_cinder_basalt` molten lava river pouring straight through `VolcanicObsidianArch_Portal` + `i3_crescent_atoll` + `i3_ironwatch_fort` + `i3_barnacle_haven` + `i3_sovereigns_bastion` look breathtaking!
+- **2 Actionable High-Value Tips for Cloud Island Architect Wave I-4**:
+  1. **`[HIGH — VRAM/Size Win]` Shared Landmark PBR Texture Deduplication (`231 -> ~33` BC7 files)**: Each of the 18 landmark GLBs currently exports its own identical copy of `lm_{brass,iron,timber,paint,rope,limestone,limestone_moss,foliage,basalt,skull_stone,temple_stone}_{albedo,normal,rough}.png` (`+44 MB` total across Wave I-2 + I-3). Pointing landmark materials to one shared `assets/generated/landmarks/shared/lm_*.png` folder (matching `assets/generated/ship/`!) would reclaim **`~37–40 MB` GPU VRAM** AND shrink `.exe` size by **`~25–30 MB`** before Wave I-4 adds 4 more skyline GLBs!
+  2. **`[LOW — Dawn Lighting]` `Cutlass Cay` `CliffOverhangLedge_Cove` (`i3_main_cutlass_dawn.png`)**: At low dawn sun (`time=6.15`), `cliff_overhang_ledge.glb`'s flat front underside still catches direct horizontal sunlight slightly like a thin shelf — swapping `Cutlass Cay`'s cove ledge to the new bottom-heavy `CliffButtressWide` (or tapering `cliff_overhang_ledge`'s front underside skirt down into the slope) will make `Cutlass Cay` seamless at every sun angle!
+  3. **HUGE +1 on Wave I-4 Upper-Mountain Skyline Sculpting**: Confirmed directly on `i3_sovereigns_bastion`, `i3_barnacle_haven`, and `i3_smugglers_cove` that the rounded `25..95 m` rear mountain domes are literally the ONLY remaining visual frontier — Wave I-4's summit crag spires, cliff aqueducts, watchposts & heightfield erosion gullies are going to make every island iconic!
+
+### 7.13 Milestone 13 — Unified Wave 30 (`ShipDamageVisuals` & `WorldEventCloud`) + Wave I-3 (`6747058`) Audit & Direct `Q18` Answer
+
+#### 7.13.1 End-to-End Unified Wave 30 + Wave I-3 (`6747058`) Verification Gate (RX 9070 XT, Godot `4.8-beta5`)
+- **`py tools/lint.py`**: **PASS — `124 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `205 tests, 0 failures`** (`HEADLESS_EXIT=0`, incl. Wave 30A mast tilt/repair/bilge pump/recoil, Wave 30B `WorldEventCloud` sky beacons + Spyglass ID + crew callouts, AND Wave I-3 18-landmark archipelago!).
+- **Real-GPU 24-Wave Ocean Shader Parity (`--only=test_sea_shader`, Vulkan `1.4.359` Forward+)**: **PASS — `3 tests, 0 failures`** (`max |dvx/z| = 0.0156`, `|dj| = 0.0010`, `GPU_SEA_EXIT=0`).
+- **Zero-Leak `--quit-after 30` Live `scenes/main.tscn` (`shot=skull_cloud`, W30 + W-I3 + M11)**: **100% CLEAN — `QUIT_AFTER_EXIT=0`, `0` errors, `0` warnings, `0` leaks!**
+- **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`NET_CLIENT_EXIT=0`).
+- **Unified Wave 30 + Wave I-3 600-Frame Live Multi-TOD/Storm Soak (`1920×1080 HIGH`, Brigantine, ALL 18 BC7 Landmarks + `606` BC7 PBR Maps)**:
+  - GPU: **`p50 = 2.449 ms`**, `p95 = 2.945 ms`, `p99 = 3.008 ms` | Frame: **`p50 = 6.79 ms` (`147.3 FPS`!)**, `p95 = 9.67 ms`, `p99 = 12.00 ms` | VRAM: **`416.5 -> 417.7 MB`** (`+1.3 MB` steady-state storm buffers — **zero VRAM leak, `0` errors**!).
+- **Rebuilt Unified Wave 30 + Wave I-3 Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`)**: **`240.5 MB`** (`252,224,568` bytes, `EXPORT_EXIT=0`, `+14.4 MB` from the 81 new Wave I-3 BC7 landmark maps — confirming shared landmark texture dedup will save `~25–30 MB` `.exe` + `~37–40 MB` VRAM!); live RX 9070 XT `1920×1080 HIGH` 90-frame smoke runs on `skull_cloud`, `cinder_arch`, & `smugglers_vault` all **`rc=0`, `0` errors**!
+
+#### 7.13.2 Direct Answer to Cloud Lead `Q18` (Wave 30 `skull_cloud`, Bilge Pump, Q16 Shots & Full-World Benchmarks)
+- **Visual Audit (`10/10` `1920×1080 HIGH` Captures, `rc=0, errs=0`)**:
+  - **Horizon `Fort Skull Cloud` (`w30_skull_cloud`, `w30_skull_cloud_night`) — 15/10 ICONIC SEA OF THIEVES!!**: Towering slate thunderhead with twin blazing emerald-green glowing eyes hovering at `y = 175 m` above Sovereign's Bastion, paired with Barnaby's crisp top banner `"Barnaby: Eyes to the E! Fort Skull Cloud rising over the horizon - glory or doom awaits!"` — and `w30_skull_cloud_night` with a shooting star, full moon, glowing emerald skull eyes, and Sovereign's glowing `SeaGodIdol` temples below is pure cinema!
+  - **Sculpted Hold Bilge Pump (`w30_hold_brig`)**: Crisp oak-stave, forged-iron-banded, brass-spouted Bilge Pump with articulated pumping lever sitting cleanly beside the bilge grate & bucket at **0.0 MB extra texture VRAM**!
+  - **BOTH Q16 Wave I-3 Showcase Shots VERIFIED (`w30_cinder_arch`, `w30_smugglers_vault`) — 15/10!!**: `w30_cinder_arch` frames the molten lava river slicing straight through `VolcanicObsidianArch_Portal` with M10 lifted obsidian-basalt cliffs (`210.5 FPS`!); `w30_smugglers_vault` frames the glistening M11 wet-sand cove leading straight into triplanar PBR `SmugglersGrotto` flanked by `PirateGibbet_Gate` & `CliffCatwalkPier_Cove` (`187.0 FPS`!).
+  - **M12 Camera Refinements**: `w30_barrels_sloop_v2` is much cleaner (Rations & Plank barrels completely unobstructed in foreground!); **2 small optional polish notes for Wave 31**:
+    1. `world_event_cloud.gd`: On golden-hour sunset (`w30_skull_cloud`), slightly warming/softening the Skull Cloud's outer billowing thunderhead puffs toward `sky_horizon_color` will help it sit even more naturally inside pastel sunset skies while keeping the emerald eyes blazing!
+    2. `ship_showcase.gd` (`shot=harpoon`, `ship=brigantine`, `w30_harpoon_brig_v3`): Nudging the eye aft brought the Brigantine foremast onto the left third (`x=0..35%`) blocking the port harpoon — reverting to `z = -4.65` with slightly wider FOV (`78°`) or framing from the bowsprit looking slightly aft will show BOTH Brigantine harpoons unobstructed!
+
+| Unified Wave 30 + Wave I-3 Scenario (`1920×1080`, Brigantine) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB (`tex_vram`) | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sailing` (`LOW`) | **1.546** (1.897) | 1.497 | **164.6** | 1,243 | 1,655k | 413.2 (`321.1`) | ~7.7 ms (**PASS**) |
+| `sailing` (`MEDIUM`) | **1.866** (2.208) | 1.516 | **151.6** | 1,247 | 1,700k | 417.9 (`324.8`) | ~9.3 ms (**PASS**) |
+| `sailing` (`HIGH` — W30 + W-I3 + M11) | **2.203** (2.543) | 1.568 | **144.7** | 1,247 | 1,762k | **416.5** (`321.8`) | ~11.0 ms (**PASS**) |
+| `skull_cloud` (`HIGH` — `Fort Skull Cloud` `y=175m` + sunset) | **2.275** (2.618) | 1.158 | **164.3** | 944 | 1,465k | **416.6** (`321.8`) | ~11.4 ms (**PASS**) |
+| `cinder_arch` (`HIGH` — Q16 `VolcanicObsidianArch` + lava) | **1.466** (1.484) | 0.568 | **210.5** | 347 | 668k | 418.5 (`321.8`) | ~7.3 ms (**PASS**) |
+| `smugglers_vault` (`HIGH` — Q16 triplanar `SmugglersGrotto`) | **1.809** (2.108) | 0.929 | **187.0** | 653 | 1,494k | 416.5 (`321.8`) | ~9.0 ms (**PASS**) |
+| `sovereigns_bastion` (`HIGH` — twin `SeaGodIdol` + braziers) | **2.251** (2.603) | 1.252 | **161.6** | 1,183 | 1,726k | 416.5 (`321.8`) | ~11.3 ms (**PASS**) |
+| `hold` (`HIGH` — live Bilge Pump + `ShipSupplyBarrels`) | **1.654** (2.015) | 1.711 | **115.0** | 1,303 | 1,910k | 416.5 (`321.8`) | ~8.3 ms (**PASS**) |
+| `storm` (`HIGH`) | **2.790** (3.153) | 1.523 | **147.9** | 1,121 | 1,679k | 418.3 (`321.8`) | ~14.0 ms (**PASS**) |
+| `company_fleet` (`HIGH` — 4 ships + 18-landmark W-I3 world) | **2.281** (2.639) | 2.196 | **89.4** | 2,098 | 3,004k | 431.0 (`322.7`) | ~11.4 ms (**PASS**) |
+
+*Wave 30 + Wave I-3 `sailing HIGH` Subsystem Delta*: Sky+Clouds `0.897 ms`, Ship + `Rowboat` + `ShipHarpoon`s + `ShipSupplyBarrels` + `ShipDamageVisuals` Bilge Pump + Crew **`+0.176 ms`** (**`0.00 ms` GPU & `0.0 MB` extra texture VRAM** for Wave 30!), **ALL 14 Wave I-3 Islands (`18` BC7 landmarks = `231` maps)** **`+0.383 ms`** (under Q5's `0.45 ms` cap!), 24-Wave + 3-FFT Ocean **`+0.747 ms`**.
+
+### 7.14 Standing Ready for Milestone 14 (Wave 31 Emissary Grades `I–V` / `ShipEmissaryFlag` & `Firebomb`/`ShipFire` Flames + Wave I-4 Upper-Mountain Skyline Sculpting!)
+Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 31**) and `origin/cloud/island-architect` (**Wave I-4**) for immediate RX 9070 XT `1920×1080 HIGH` audit, benchmarks, shader look-dev, full test/co-op gate, and rebuilt `.exe`!

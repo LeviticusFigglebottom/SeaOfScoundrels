@@ -118,8 +118,10 @@ var _tool_flash_timer: float = 0.0
 var _hull_alert_active: bool = false
 
 # Gold & Voyage whisper (top-right)
+var emissary_badge_text: String = ""
 var _whisper_panel: PanelContainer = null
 var _gold_label: Label = null
+var _emissary_label: Label = null
 var _voyage_title_label: Label = null
 var _voyage_obj_label: Label = null
 var _whisper_timer: float = 0.0
@@ -203,6 +205,14 @@ func bind(
 	_damage_flash = 0.0
 	_low_hp_clock = 0.0
 	_connect_signals()
+	if voyage_manager != null and voyage_manager.emissary != null and voyage_manager.emissary.is_active():
+		set_emissary_status(
+			voyage_manager.emissary.active_company,
+			voyage_manager.emissary.grade,
+			voyage_manager.emissary.get_multiplier()
+		)
+	else:
+		set_emissary_status(&"", 0, 1.0)
 	_sync_damage_vignette(0.0)
 	_refresh_item_radial_entries()
 	_refresh_tool_chip()
@@ -249,6 +259,13 @@ func _connect_signals() -> void:
 			voyage_manager.voyage_started.connect(_on_voyage_started)
 		if not voyage_manager.voyage_stage_changed.is_connected(_on_voyage_stage_changed):
 			voyage_manager.voyage_stage_changed.connect(_on_voyage_stage_changed)
+		if voyage_manager.emissary != null:
+			if not voyage_manager.emissary.grade_changed.is_connected(_on_emissary_grade_changed):
+				voyage_manager.emissary.grade_changed.connect(_on_emissary_grade_changed)
+			if not voyage_manager.emissary.flag_lowered.is_connected(_on_emissary_flag_lowered):
+				voyage_manager.emissary.flag_lowered.connect(_on_emissary_flag_lowered)
+			if not voyage_manager.emissary.flag_broken.is_connected(_on_emissary_flag_broken):
+				voyage_manager.emissary.flag_broken.connect(_on_emissary_flag_broken)
 	if ship != null:
 		if not ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
 			ship.cannon_ordnance_changed.connect(_on_tool_state_changed)
@@ -293,6 +310,13 @@ func _disconnect_signals() -> void:
 			voyage_manager.voyage_started.disconnect(_on_voyage_started)
 		if voyage_manager.voyage_stage_changed.is_connected(_on_voyage_stage_changed):
 			voyage_manager.voyage_stage_changed.disconnect(_on_voyage_stage_changed)
+		if voyage_manager.emissary != null:
+			if voyage_manager.emissary.grade_changed.is_connected(_on_emissary_grade_changed):
+				voyage_manager.emissary.grade_changed.disconnect(_on_emissary_grade_changed)
+			if voyage_manager.emissary.flag_lowered.is_connected(_on_emissary_flag_lowered):
+				voyage_manager.emissary.flag_lowered.disconnect(_on_emissary_flag_lowered)
+			if voyage_manager.emissary.flag_broken.is_connected(_on_emissary_flag_broken):
+				voyage_manager.emissary.flag_broken.disconnect(_on_emissary_flag_broken)
 	if ship != null and is_instance_valid(ship):
 		if ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
 			ship.cannon_ordnance_changed.disconnect(_on_tool_state_changed)
@@ -476,6 +500,21 @@ func set_voyage_whisper(title: String, objective: String, hold_seconds: float = 
 	_custom_voyage_obj = objective
 	_whisper_timer = maxf(_whisper_timer, hold_seconds)
 	_refresh_whisper_labels()
+
+
+## Update the strict-ASCII gilded Emissary Grade badge inside the top-right objective card.
+func set_emissary_status(company_id: StringName, grade: int, multiplier: float) -> void:
+	if grade <= 0 or company_id == &"":
+		emissary_badge_text = ""
+	else:
+		emissary_badge_text = _to_ascii(EmissaryLedger.format_badge_text(company_id, grade, multiplier))
+		_whisper_timer = maxf(_whisper_timer, 6.0)
+	_sync_emissary_label()
+
+
+## True while the top-right Emissary badge label is actively visible.
+func is_emissary_badge_visible() -> bool:
+	return _emissary_label != null and _emissary_label.visible
 
 
 ## Display a non-blocking diegetic parchment Voyage Title Card in the upper-middle sky.
@@ -882,6 +921,16 @@ func _build_whisper_card() -> void:
 	_gold_label.add_theme_font_size_override("font_size", 17)
 	_gold_label.add_theme_color_override("font_color", Color(0.56, 0.36, 0.06))
 	vbox.add_child(_gold_label)
+
+	_emissary_label = Label.new()
+	_emissary_label.name = "EmissaryBadgeLabel"
+	_emissary_label.text = ""
+	_emissary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_emissary_label.add_theme_font_size_override("font_size", 13)
+	_emissary_label.add_theme_color_override("font_color", Color(0.66, 0.44, 0.05))
+	_emissary_label.visible = false
+	vbox.add_child(_emissary_label)
+	_sync_emissary_label()
 
 	_voyage_title_label = Label.new()
 	_voyage_title_label.text = ""
@@ -1613,6 +1662,14 @@ func _refresh_whisper_labels() -> void:
 	_voyage_title_label.visible = v_title != ""
 	_voyage_obj_label.text = _to_ascii(v_obj)
 	_voyage_obj_label.visible = v_obj != ""
+	_sync_emissary_label()
+
+
+func _sync_emissary_label() -> void:
+	if _emissary_label == null:
+		return
+	_emissary_label.text = emissary_badge_text
+	_emissary_label.visible = emissary_badge_text != ""
 
 
 func _tick_crosshair(delta: float) -> void:
@@ -1733,6 +1790,18 @@ func _on_voyage_started(_voyage: Dictionary) -> void:
 
 func _on_voyage_stage_changed(_stage: int, _obj: String) -> void:
 	_whisper_timer = 6.0
+
+
+func _on_emissary_grade_changed(company_id: StringName, new_grade: int, multiplier: float) -> void:
+	set_emissary_status(company_id, new_grade, multiplier)
+
+
+func _on_emissary_flag_lowered(_company_id: StringName, _final_grade: int, _bonus_gold: int, _bonus_renown: int) -> void:
+	set_emissary_status(&"", 0, 1.0)
+
+
+func _on_emissary_flag_broken(_company_id: StringName, _lost_grade: int) -> void:
+	set_emissary_status(&"", 0, 1.0)
 
 
 func _on_game_notice(text: String) -> void:

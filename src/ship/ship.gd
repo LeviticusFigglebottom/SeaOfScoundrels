@@ -53,10 +53,11 @@ const CANNON_MUZZLE_SPEED := 58.0
 const CANNON_RELOAD_TIME := 2.6
 const MAX_CANNONBALLS := 40
 const MAX_PLANKS := 24
-const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"flare"]
+const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"firebomb", &"flare"]
 const CANNON_ORDNANCE_LABELS := {
 	&"iron": "Iron",
 	&"chainshot": "Chainshot",
+	&"firebomb": "Firebomb",
 	&"flare": "Flare",
 }
 
@@ -102,7 +103,7 @@ var anchor_down: bool = false
 var anchor_progress: float = 0.0
 ## Whether ship deck and cabin lanterns are currently lit (false = running dark under moonlight).
 var lanterns_lit: bool = true
-## Active cannon ordnance type (&"iron", &"chainshot", or &"flare").
+## Active cannon ordnance type (&"iron", &"chainshot", &"firebomb", or &"flare").
 var cannon_ordnance: StringName = &"iron"
 ## Remaining seconds of sail rigging damage from chainshot (reduces sail thrust to 0.35x).
 var sail_damage_timer: float = 0.0
@@ -185,6 +186,7 @@ var _harpoons: Dictionary = {}  # StringName (&"port" / &"starboard") -> ShipHar
 var _harpoon_primary_was: Dictionary = {}  # StringName -> bool
 var _supply_barrels: ShipSupplyBarrels = null
 var _damage_visuals: ShipDamageVisuals = null
+var _ship_fire: ShipFire = null
 var _yard_damage_tilt: float = 0.0
 var _yard_damage_pitch: float = 0.0
 var _repair_sfx_accum: float = 0.0
@@ -416,6 +418,7 @@ func _exit_tree() -> void:
 	_harpoon_primary_was.clear()
 	_supply_barrels = null
 	_damage_visuals = null
+	_ship_fire = null
 	_lantern_glass_mats.clear()
 	_window_mats.clear()
 	_lantern_lights.clear()
@@ -1228,6 +1231,7 @@ func _build_deck_extras() -> void:
 
 	_build_supply_barrels()
 	_build_damage_visuals()
+	_build_ship_fire()
 
 
 func _build_supply_barrels() -> void:
@@ -1248,6 +1252,57 @@ func _build_damage_visuals() -> void:
 	dv.visual_scale = hull_scale
 	add_child(dv)
 	_damage_visuals = dv
+
+
+func _build_ship_fire() -> void:
+	var sf := ShipFire.new()
+	sf.name = "ShipFire"
+	sf.ship = self
+	sf.visual_scale = hull_scale
+	add_child(sf)
+	_ship_fire = sf
+
+
+## Return the sculpted ShipFire deck-fire component, or null.
+func get_ship_fire() -> ShipFire:
+	if _ship_fire != null and is_instance_valid(_ship_fire):
+		return _ship_fire
+	return null
+
+
+## Host only. Ignite deck fire at the zone nearest `world_pos` (optionally spreading to 1 neighbor).
+func ignite_deck_fire(world_pos: Vector3, spread_extra: bool = false) -> int:
+	if not Net.is_host() or is_sinking:
+		return -1
+	var sf := get_ship_fire()
+	if sf == null:
+		return -1
+	var zone_idx := sf.ignite_at_world(world_pos, 1.0)
+	if zone_idx >= 0 and spread_extra:
+		sf.ignite_adjacent_to(zone_idx, 0.85)
+	return zone_idx
+
+
+## Host only. Extinguish deck fire zones within `radius` of `world_pos`. Returns zones extinguished.
+func douse_deck_fire(world_pos: Vector3, radius: float = 4.5) -> int:
+	if not Net.is_host():
+		return 0
+	var sf := get_ship_fire()
+	if sf == null:
+		return 0
+	return sf.douse_at_world(world_pos, radius)
+
+
+## True while one or more deck fire zones are actively burning on this ship.
+func has_deck_fire() -> bool:
+	var sf := get_ship_fire()
+	return sf != null and sf.has_active_fire()
+
+
+## Number of actively burning deck fire zones on this ship (0..6).
+func get_active_fire_count() -> int:
+	var sf := get_ship_fire()
+	return sf.get_active_fire_count() if sf != null else 0
 
 
 ## Return the sculpted ShipDamageVisuals component (bilge pump, spar splinters, fuse spark), or null.
@@ -2777,7 +2832,7 @@ func get_cannon_recoil(side: StringName) -> float:
 	return float((_cannons[side] as Dictionary).get("recoil", 0.0))
 
 
-## Host only. Select active cannon ordnance (&"iron", &"chainshot", or &"flare").
+## Host only. Select active cannon ordnance (&"iron", &"chainshot", &"firebomb", or &"flare").
 func set_cannon_ordnance(kind: StringName) -> void:
 	if not Net.is_host():
 		return
@@ -2788,7 +2843,7 @@ func set_cannon_ordnance(kind: StringName) -> void:
 	cannon_ordnance_changed.emit(cannon_ordnance)
 
 
-## Host only. Cycle active cannon ordnance: iron -> chainshot -> flare -> iron.
+## Host only. Cycle active cannon ordnance: iron -> chainshot -> firebomb -> flare -> iron.
 func cycle_cannon_ordnance() -> StringName:
 	if not Net.is_host():
 		return cannon_ordnance
@@ -4380,6 +4435,7 @@ func get_net_state() -> Dictionary:
 		"lanterns_lit": lanterns_lit,
 		"cannon_ordnance": String(cannon_ordnance),
 		"sail_damage_timer": sail_damage_timer,
+		"fire_mask": _ship_fire.get_fire_bitmask() if (_ship_fire != null and is_instance_valid(_ship_fire)) else 0,
 	}
 
 
@@ -4418,6 +4474,8 @@ func apply_net_state(state: Dictionary) -> void:
 		if CANNON_ORDNANCE_CYCLE.has(ord_sn) and ord_sn != cannon_ordnance:
 			cannon_ordnance = ord_sn
 			cannon_ordnance_changed.emit(cannon_ordnance)
+	if state.has("fire_mask") and _ship_fire != null and is_instance_valid(_ship_fire):
+		_ship_fire.apply_fire_bitmask(int(state["fire_mask"]))
 
 	var hole_bits: Array = state.get("holes", [])
 	for i in mini(hole_bits.size(), holes.size()):

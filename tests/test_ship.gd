@@ -1727,7 +1727,7 @@ func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
 			"relit mat_lantern_glass restores night emission")
 
 	# ------------------------------------------------------------------
-	# 3. Tactile Cannon Ordnance Cycling ([R]: Iron -> Chainshot -> Flare -> Iron)
+	# 3. Tactile Cannon Ordnance Cycling ([R]: Iron -> Chainshot -> Firebomb -> Flare -> Iron)
 	# ------------------------------------------------------------------
 	var ord_events: Array[StringName] = []
 	sloop.cannon_ordnance_changed.connect(func(k: StringName) -> void: ord_events.append(k))
@@ -1735,10 +1735,12 @@ func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
 	check_eq(sloop.get_cannon_ordnance_label(), "Iron", "Iron label matches")
 	check_eq(sloop.cycle_cannon_ordnance(), &"chainshot", "1st cycle -> &'chainshot'")
 	check_eq(sloop.get_cannon_ordnance_label(), "Chainshot", "Chainshot label matches")
-	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "2nd cycle -> &'flare'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"firebomb", "2nd cycle -> &'firebomb'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Firebomb", "Firebomb label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "3rd cycle -> &'flare'")
 	check_eq(sloop.get_cannon_ordnance_label(), "Flare", "Flare label matches")
-	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "3rd cycle wraps cleanly -> &'iron'")
-	check_eq(ord_events.size(), 3, "cannon_ordnance_changed emitted on each swap")
+	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "4th cycle wraps cleanly -> &'iron'")
+	check_eq(ord_events.size(), 4, "cannon_ordnance_changed emitted on each swap")
 
 	# Verify PlayerController mouse-aim on harpoon + [R] station special action + HUD hints!
 	var pc := PlayerController.new()
@@ -2324,5 +2326,238 @@ func test_wave30_physical_mast_tilt_active_repair_bilge_pump_and_cannon_recoil()
 		and ShipDamageVisuals._canvas_mat == null and ShipDamageVisuals._water_mat == null \
 		and ShipDamageVisuals._fuse_mat == null and ShipDamageVisuals._pbr_tex_cache.is_empty(),
 		"ShipDamageVisuals.clear_shared_cache() leaves 0 cached meshes/materials/WeakRefs (0 leaks)")
+
+
+func test_wave31_firebomb_ordnance_spreading_ship_fire_bucket_douse_and_crew_firefighting() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	sloop.set_anchor(true)
+	sloop.anchor_progress = 1.0
+	var target_sloop := _spawn_sloop(Vector3(24.0, 0.0, -1.5))
+	target_sloop.faction = &"drowned"
+	target_sloop.set_anchor(true)
+	target_sloop.anchor_progress = 1.0
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	brig.start_anchored = true
+	_root.add_child(brig)
+	brig.global_position = Vector3(-42.0, 0.0, 0.0)
+	await physics_frames(8)
+
+	# 1. Sculpted zero-primitive &"firebomb" Cannonball (>= 320 tris) & ShipFire (>= 420 tris)!
+	var fb_probe := Cannonball.new()
+	fb_probe.enable_effects = false
+	fb_probe.ordnance_style = &"firebomb"
+	_root.add_child(fb_probe)
+	fb_probe.global_position = Vector3(0.0, 45.0, 0.0)
+	await physics_frames(1)
+	check_eq(fb_probe.get_resolved_ordnance_style(), &"firebomb", "Cannonball resolves &'firebomb'")
+	var fb_mi := fb_probe.get_node_or_null(^"IronBall") as MeshInstance3D
+	check(fb_mi != null and fb_mi.mesh is ArrayMesh and not (fb_mi.mesh is PrimitiveMesh),
+		"Firebomb uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	var fb_tris := 0
+	var fb_bad_norms := 0
+	if fb_mi != null and fb_mi.mesh is ArrayMesh:
+		var fb_am := fb_mi.mesh as ArrayMesh
+		check_eq(fb_am.get_surface_count(), 2, "Firebomb sculpted mesh has 2 surfaces (flask + glowing core)")
+		for si in fb_am.get_surface_count():
+			var arr := fb_am.surface_get_arrays(si)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			fb_tris += floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					fb_bad_norms += 1
+			var ov_mat := fb_mi.get_surface_override_material(si) as StandardMaterial3D
+			check(ov_mat != null and ov_mat.vertex_color_use_as_albedo and ov_mat.vertex_color_is_srgb,
+				"Firebomb surface %d enables sRGB vertex color albedo" % si)
+	check_eq(fb_bad_norms, 0, "Firebomb normals are all finite unit vectors")
+	check(fb_tris >= 320, "Firebomb sculpted triangle count >= 320 (got %d)" % fb_tris)
+	check(fb_probe.firebomb_light != null and not fb_probe.firebomb_light.shadow_enabled
+		and fb_probe.firebomb_light.omni_range >= 10.0,
+		"Firebomb equips unshadowed warm flickering travel OmniLight3D")
+	fb_probe.queue_free()
+	await physics_frames(2)
+
+	var sf_sloop := sloop.get_ship_fire()
+	var sf_brig := brig.get_ship_fire()
+	check(sf_sloop != null, "Sloop mounts ShipFire via get_ship_fire()")
+	check(sf_brig != null, "Brigantine mounts ShipFire via get_ship_fire()")
+	var sf_tris := sf_sloop.get_triangle_count()
+	check(sf_tris >= 420, "ShipFire sculpted flame cluster triangle count >= 420 (got %d)" % sf_tris)
+	var sf_prims := 0
+	var sf_bad_norms := 0
+	var sf_bad_mats := 0
+	for n in sf_sloop.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			sf_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						sf_bad_norms += 1
+		var smat := mi.material_override as StandardMaterial3D
+		if smat == null or not smat.vertex_color_use_as_albedo or not smat.vertex_color_is_srgb or not smat.emission_enabled:
+			sf_bad_mats += 1
+		check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ShipFire flame clusters disable shadow casting")
+	check_eq(sf_prims, 0, "ShipFire contains ZERO PrimitiveMeshes")
+	check_eq(sf_bad_norms, 0, "ShipFire normals are all finite unit vectors")
+	check_eq(sf_bad_mats, 0, "ShipFire uses sRGB vertex-color emissive StandardMaterial3D")
+	var sf_light := sf_sloop.get_fire_light()
+	check(sf_light != null and not sf_light.shadow_enabled and not sf_light.visible,
+		"ShipFire OmniLight3D is unshadowed and hidden when active_count == 0")
+	print("    Wave 31B sculpted tris: firebomb=%d, ship_fire_cluster=%d" % [fb_tris, sf_tris])
+
+	# 2. 4-item Ordnance Cycle: iron -> chainshot -> firebomb -> flare -> iron!
+	check_eq(sloop.cannon_ordnance, &"iron", "starts on &'iron'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"chainshot", "cycle 1 -> &'chainshot'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"firebomb", "cycle 2 -> &'firebomb'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Firebomb", "Firebomb label matches strict ASCII")
+	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "cycle 3 -> &'flare'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "cycle 4 wraps -> &'iron'")
+
+	# 3. Firing a &"firebomb" cannonball into target_sloop ignites deck fires (without punching a deep iron hull breach)
+	#    and fire_mask round-trips cleanly via get_net_state() / apply_net_state()!
+	sloop.set_cannon_ordnance(&"firebomb")
+	sloop.aim_cannon(&"starboard", 0.0, -0.02)
+	var fb_shot := sloop.fire_cannon(&"starboard")
+	check(fb_shot != null and fb_shot.get_resolved_ordnance_style() == &"firebomb",
+		"Sloop fires sculpted &'firebomb' cannonball")
+	for _i in 90:
+		await physics_frames(1)
+		if target_sloop.has_deck_fire():
+			break
+	check(target_sloop.has_deck_fire() and target_sloop.get_active_fire_count() >= 1,
+		"Firebomb impact ignites target ship deck fire (active=%d)" % target_sloop.get_active_fire_count())
+	check_eq(target_sloop.open_hole_count(), 0,
+		"Firebomb impact ignites fire instead of punching an immediate deep iron cannon hole")
+
+	var target_sf := target_sloop.get_ship_fire()
+	var mask_before := target_sf.get_fire_bitmask()
+	check(mask_before > 0, "Ignited target ship produces non-zero fire_mask (%d)" % mask_before)
+	var net_snap := target_sloop.get_net_state()
+	check_eq(int(net_snap.get("fire_mask", 0)), mask_before, "Ship.get_net_state() includes fire_mask")
+	brig.apply_net_state(net_snap)
+	check_eq(sf_brig.get_fire_bitmask(), mask_before,
+		"Ship.apply_net_state() restores fire_mask cleanly onto client ship")
+	check(brig.has_deck_fire() and sf_brig.get_fire_light().visible,
+		"Replicated fire_mask activates sculpted flames and shared OmniLight3D")
+	sf_brig.douse_all()
+	check(not brig.has_deck_fire() and not sf_brig.get_fire_light().visible,
+		"douse_all() clears fires and hides shared OmniLight3D")
+
+	# 4. Full Water Bucket (use_bucket() AND splash_bucket_forward()) extinguishes deck flames cleanly!
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(0.0, 1.12, -2.2)))
+	var inv := Inventory.new()
+	inv.name = "Inventory"
+	inv.input_enabled = false
+	captain.add_child(inv)
+	await physics_frames(4)
+	inv.equip(&"bucket", true)
+
+	var notices: Array[String] = []
+	var all_out_count := [0]
+	sf_sloop.all_fires_out.connect(func() -> void: all_out_count[0] += 1)
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	# 4a. Test Inventory.use_bucket() on deck fire at zone 0 (foredeck).
+	sloop.ignite_deck_fire(sf_sloop.get_zone_world_pos(0), false)
+	check(sloop.has_deck_fire() and sf_sloop.get_fire_light().visible, "Sloop foredeck fire lit")
+	inv.bucket_full = true
+	var use_res := inv.use_bucket()
+	check(int(use_res.get("fires_doused", 0)) >= 1,
+		"Inventory.use_bucket() extinguishes deck fire and reports fires_doused >= 1 (got %s)" % str(use_res))
+	check(not sloop.has_deck_fire(), "Sloop deck fire is fully extinguished after use_bucket()")
+	check_eq(all_out_count[0], 1, "all_fires_out emitted once when last zone is doused")
+	check(notices.has("Deck fires extinguished!"), "Player ship posts strict-ASCII 'Deck fires extinguished!'")
+
+	# 4b. Test Inventory.splash_bucket_forward() on deck fire at zone 0.
+	sloop.ignite_deck_fire(sf_sloop.get_zone_world_pos(0), false)
+	check(sloop.has_deck_fire(), "Sloop foredeck fire re-lit for splash_bucket_forward()")
+	inv.bucket_full = true
+	var fwd_res := inv.splash_bucket_forward()
+	check(int(fwd_res.get("fires_doused", 0)) >= 1,
+		"Inventory.splash_bucket_forward() extinguishes deck fire (got %s)" % str(fwd_res))
+	check(not sloop.has_deck_fire(), "Sloop deck fire is fully extinguished after splash_bucket_forward()")
+
+	# 5. AI CrewBrain fire-fighting: Carpenter Pip detects deck fire, calls out strict-ASCII &"fire_aboard",
+	#    sprints to flame, extinguishes it, and calls out strict-ASCII &"fire_doused"!
+	for persona: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		for cat: StringName in [&"fire_aboard", &"fire_doused"]:
+			var line := CrewDialogue.format_line(persona, cat)
+			check(line.length() > 8, "CrewDialogue has %s line for %s" % [String(cat), String(persona)])
+			for ci in line.length():
+				check(line.unicode_at(ci) < 128, "CrewDialogue %s/%s is strictly ASCII ('%s')" % [
+					String(persona), String(cat), line])
+
+	var pip := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pip)
+	var brain := CrewBrain.new()
+	brain.name = "CrewBrain"
+	pip.add_child(brain)
+	brain.setup(sloop, captain, &"carpenter")
+	pip.board(sloop, sloop.ship_point(Vector3(1.1, 1.12, 1.0)))
+	await physics_frames(4)
+
+	var crew_events: Array[Dictionary] = []
+	brain.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+		crew_events.append({"speaker": sp, "text": txt, "cat": cat})
+	)
+
+	sloop.ignite_deck_fire(sf_sloop.get_zone_world_pos(0), false)
+	check(sloop.has_deck_fire(), "Deck fire ignited for Carpenter Pip AI test")
+	var saw_douse_task := false
+	for _i in 320:
+		await physics_frames(1)
+		if brain.current_task == &"douse_fire":
+			saw_douse_task = true
+		if not sloop.has_deck_fire():
+			break
+
+	var saw_fire_aboard := false
+	var saw_fire_doused := false
+	for ev: Dictionary in crew_events:
+		var ev_txt := String(ev["text"])
+		for ci in ev_txt.length():
+			check(ev_txt.unicode_at(ci) < 128, "Crew fire callout is strictly ASCII ('%s')" % ev_txt)
+		if ev["cat"] == &"fire_aboard":
+			saw_fire_aboard = true
+		elif ev["cat"] == &"fire_doused":
+			saw_fire_doused = true
+
+	check(saw_douse_task, "CrewBrain Carpenter Pip switches to &'douse_fire' task")
+	check(saw_fire_aboard, "CrewBrain calls out &'fire_aboard' upon detecting deck fire")
+	check(not sloop.has_deck_fire(), "CrewBrain sprints to flame and extinguishes deck fire cleanly")
+	check(saw_fire_doused, "CrewBrain calls out &'fire_doused' after extinguishing deck fire")
+
+	Game.notice.disconnect(notice_cb)
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "Deck fire notice is strictly ASCII ('%s')" % n_txt)
+
+	# 6. Clean 0-leak ref-counted teardown & clear_shared_cache()!
+	await _end()
+	ShipFire.clear_shared_cache()
+	Cannonball.clear_shared_cache()
+	check_eq(ShipFire._active_instances, 0, "ShipFire._active_instances returns to 0 on teardown")
+	check(ShipFire._flame_mesh == null and ShipFire._flame_mat == null,
+		"ShipFire.clear_shared_cache() leaves 0 cached meshes/materials (0 leaks)")
+	check(Cannonball._firebomb_mesh == null and Cannonball._ball_meshes.is_empty(),
+		"Cannonball.clear_shared_cache() clears _firebomb_mesh and _ball_meshes cleanly (0 leaks)")
+
 
 

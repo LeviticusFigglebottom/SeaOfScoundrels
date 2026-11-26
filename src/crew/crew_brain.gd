@@ -104,6 +104,7 @@ const CHAINSHOT_HIT_COOLDOWN := 8.0
 const RUNNING_DARK_COOLDOWN := 6.0
 const ROWBOAT_COOLDOWN := 6.0
 const EVENT_CLOUD_COOLDOWN := 10.0
+const FIRE_CALLOUT_COOLDOWN := 7.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -140,6 +141,7 @@ var _reported_islands: Dictionary = {}   # String -> true
 var _reported_ships: Dictionary = {}     # int instance_id -> true
 var _last_wind_heading: float = NAN
 var _was_breached: bool = false
+var _was_on_fire: bool = false
 var _bound_ship: Ship = null
 
 
@@ -355,6 +357,8 @@ func _physics_process(delta: float) -> void:
 			_tick_patch_hole(delta)
 		&"bail":
 			_tick_bail(delta)
+		&"douse_fire":
+			_tick_douse_fire(delta)
 		&"mend_rigging":
 			_tick_mend_rigging(delta)
 		&"anchor_drop":
@@ -394,13 +398,29 @@ func _needs_mast_repair() -> bool:
 	return raw_timer != null and float(raw_timer) > 0.0
 
 
+func _has_active_carpenter_aboard() -> bool:
+	if ship == null or not is_instance_valid(ship):
+		return false
+	for cb in _sibling_crew_brains():
+		if cb.ship == ship and cb.persona_id == &"carpenter" \
+				and cb.pawn != null and is_instance_valid(cb.pawn) \
+				and not cb.pawn.dead and cb.pawn.platform == ship:
+			return true
+	return false
+
+
 func _choose_task() -> StringName:
 	var has_ship := ship != null and is_instance_valid(ship) and not ship.is_sinking
 
 	# 1. Survival beats everything (except explicit follow off-ship when captain is on land).
 	if has_ship and (pawn.platform == ship or current_order != &"follow"):
+		if ship.water_level >= 0.65:
+			return &"bail"
 		if ship.open_hole_count() > 0:
 			return &"patch_hole"
+		if ship.has_deck_fire() and ship.water_level < 0.65:
+			if persona_id == &"carpenter" or current_order == &"repair" or not _has_active_carpenter_aboard():
+				return &"douse_fire"
 		var bail_thresh := 0.015 if current_task == &"bail" else 0.14
 		if ship.water_level > bail_thresh or (current_order == &"repair" and ship.water_level > 0.02):
 			return &"bail"
@@ -440,6 +460,8 @@ func _choose_task() -> StringName:
 				return &"patch_hole"
 			if has_ship and ship.water_level > 0.02:
 				return &"bail"
+			if has_ship and ship.has_deck_fire() and ship.water_level < 0.65:
+				return &"douse_fire"
 			if has_ship and persona_id == &"carpenter" and _needs_mast_repair():
 				var repair_sail_st := ship.get_station(&"sail_length")
 				if repair_sail_st != null and (repair_sail_st.occupant == null or repair_sail_st.occupant == pawn):
@@ -489,6 +511,10 @@ func _choose_task() -> StringName:
 	# 7. Autonomous treasure haul if already carrying or a loose chest is near.
 	if has_ship and (pawn.carried != null or _find_fetchable_treasure(18.0) != null):
 		return &"fetch_treasure"
+
+	# 7b. Any otherwise idle crewmate pitches in to douse deck fires!
+	if has_ship and pawn.platform == ship and ship.has_deck_fire() and ship.water_level < 0.65:
+		return &"douse_fire"
 
 	# 8. Join active shanty session during calm downtime!
 	if Audio.is_shanty_playing() and has_ship and pawn.platform == ship:
@@ -583,6 +609,42 @@ func _tick_bail(delta: float) -> void:
 			# Fallback direct bail if another crewmate occupies the bilge station.
 			_play_anim(&"bail", 0.55)
 			ship.bail(0.22 * delta * bail_speed_scale)
+
+
+func _tick_douse_fire(delta: float) -> void:
+	if ship == null or not is_instance_valid(ship) or not ship.has_deck_fire():
+		return
+	_speak(&"fire_aboard", {}, "fire_aboard", FIRE_CALLOUT_COOLDOWN)
+	var sf := ship.get_ship_fire()
+	if sf == null:
+		return
+	var fire_world := sf.get_nearest_fire_world_pos(pawn.global_position)
+	if not fire_world.is_finite():
+		return
+	var hs := _ship_scale()
+	var fire_local := ship.global_transform.affine_inverse() * fire_world
+	var arrived := false
+	if pawn.platform == ship:
+		arrived = _navigate_ship_local(fire_local, 2.2 * hs)
+		if not arrived:
+			var cur_local := pawn.platform_local_position()
+			if absf(cur_local.y - fire_local.y) < 0.85 * hs \
+					and pawn.global_position.distance_to(fire_world) <= 2.5 * hs:
+				arrived = true
+	else:
+		arrived = _move_world_towards(fire_world, 2.2, true)
+	if arrived:
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+		_face_ship_local(fire_local)
+		_play_anim(&"bail", 0.55)
+		_work_timer += delta * bail_speed_scale
+		if _work_timer >= 0.45:
+			_work_timer = 0.0
+			var doused := ship.douse_deck_fire(fire_world, 4.8)
+			Audio.play_sfx(&"bucket_splash", fire_world, -1.5)
+			if doused > 0:
+				_speak(&"fire_doused", {}, "fire_doused", FIRE_CALLOUT_COOLDOWN)
 
 
 func _tick_mend_rigging(delta: float) -> void:
@@ -1494,7 +1556,8 @@ func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> boo
 			if world_dir.length_squared() > 0.0001:
 				var wd := world_dir.normalized()
 				pawn.wish_dir = wd
-				pawn.wish_sprint = current_task == &"patch_hole" or current_task == &"bail" or flat > 3.0 * hs
+				pawn.wish_sprint = current_task == &"patch_hole" or current_task == &"bail" \
+					or current_task == &"douse_fire" or flat > 3.0 * hs
 				pawn.look_yaw = atan2(-wd.x, -wd.z)
 			else:
 				pawn.wish_dir = Vector3.ZERO
@@ -1619,7 +1682,7 @@ func _tick_lookout(delta: float) -> void:
 	_scan_timer -= delta
 	_banter_timer -= delta
 
-	# Immediate breach & flooding callouts.
+	# Immediate breach, flooding, and deck fire callouts.
 	if ship != null and is_instance_valid(ship):
 		var breached := ship.open_hole_count() > 0
 		if breached and not _was_breached:
@@ -1627,6 +1690,10 @@ func _tick_lookout(delta: float) -> void:
 		_was_breached = breached
 		if ship.water_level > 0.35:
 			_speak(&"water_high", {}, "water_high", 22.0)
+		var on_fire := ship.has_deck_fire()
+		if on_fire and not _was_on_fire:
+			_speak(&"fire_aboard", {}, "fire_aboard", FIRE_CALLOUT_COOLDOWN)
+		_was_on_fire = on_fire
 
 	if _scan_timer > 0.0:
 		return

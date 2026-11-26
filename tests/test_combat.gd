@@ -924,6 +924,93 @@ func test_wave28_night_running_dark_reduces_ai_ship_aggro_range() -> void:
 	await _end()
 
 
+func test_wave31_ship_fire_scorches_pawns_spreads_and_storm_rain_extinguishes() -> void:
+	_begin()
+	Weather.set_weather(0.0, 6.0, 0.0)
+	Sea.amp_scale = 0.0
+
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	ship.faction = &"player"
+	ship.start_anchored = true
+	_root.add_child(ship)
+	ship.global_position = Vector3(0.0, 0.0, 0.0)
+	await physics_frames(6)
+
+	var sf := ship.get_ship_fire()
+	check(sf != null, "Ship mounts ShipFire component")
+	var zone0_local := sf.get_zone_local_pos(0)
+
+	# Place one Pawn standing inside the 1.85 m scorch zone and a bystander Pawn far aft (> 4 m away).
+	var near_pawn := PAWN_SCENE.instantiate() as Pawn
+	var far_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(near_pawn)
+	_root.add_child(far_pawn)
+	near_pawn.board(ship, zone0_local + Vector3(0.45, 0.02, 0.25))
+	far_pawn.board(ship, ship.ship_point(Vector3(0.0, 2.02, 4.4)))
+	await physics_frames(4)
+
+	var ignited_zones: Array[int] = []
+	var all_out_events := [0]
+	sf.fire_ignited.connect(func(zi: int) -> void: ignited_zones.append(zi))
+	sf.all_fires_out.connect(func() -> void: all_out_events[0] += 1)
+
+	# 1. Ignite zone 0 in clear weather -> scorches standing Pawn within 1.85 m (3.0 HP / 0.5 s), spares distant Pawn!
+	var hp_near0 := near_pawn.health
+	var hp_far0 := far_pawn.health
+	check(sf.ignite_zone(0, 1.0), "ShipFire ignites zone 0 at intensity 1.0")
+	check_eq(sf.get_active_fire_count(), 1, "active fire count starts at 1")
+	check(sf.get_fire_light() != null and sf.get_fire_light().visible,
+		"shared unshadowed OmniLight3D lights up when fire burns")
+
+	# Step 1.6 s in clear weather (3 scorch ticks -> ~9.0 fire damage to near_pawn).
+	for _i in 16:
+		sf.step_fire(0.1)
+	var scorch_dmg := hp_near0 - near_pawn.health
+	print("    Wave 31B ShipFire scorch: near_pawn took %.1f dmg (far_pawn=%.1f)" % [
+		scorch_dmg, hp_far0 - far_pawn.health])
+	check(scorch_dmg >= 6.0, "standing Pawn within 1.85 m is scorched by active flame (dmg=%.1f)" % scorch_dmg)
+	check_near(far_pawn.health, hp_far0, 0.01, "bystander Pawn beyond 1.85 m takes zero scorch damage")
+
+	# 2. Unchecked clear-weather fire spreads to a neighboring zone (~11.0 s) & chars a hull hole (~18.0 s)!
+	# Move near_pawn safely away so it does not die while stepping spread/char timers.
+	near_pawn.board(ship, ship.ship_point(Vector3(0.0, 2.02, 4.4)))
+	for _i in 105:
+		sf.step_fire(0.1)
+	check(sf.get_active_fire_count() >= 2,
+		"unchecked clear-weather fire spreads to adjacent zone after 11.0 s (active=%d)" % sf.get_active_fire_count())
+	check(ignited_zones.size() >= 2, "fire_ignited signal fired for spread zone")
+
+	for _i in 75:
+		sf.step_fire(0.1)
+	check(ship.open_hole_count() >= 1,
+		"unchecked fire for 18.0 s chars a hull hole via apply_hull_damage() (open=%d)" % ship.open_hole_count())
+
+	# 3. Heavy storm rain (Weather.storminess = 0.85) decays flames at -0.26/s and extinguishes cleanly!
+	Weather.storminess = 0.85
+	check(Weather.storminess > 0.55, "Weather.storminess set to heavy storm rain (%.2f)" % Weather.storminess)
+	var inten_before := sf.get_zone_intensity(0)
+	sf.step_fire(1.0)
+	var inten_after_1s := sf.get_zone_intensity(0)
+	check(inten_after_1s < inten_before - 0.20,
+		"heavy storm rain decays active flame intensity at ~-0.26/s (%.2f -> %.2f)" % [inten_before, inten_after_1s])
+
+	for _i in 40:
+		sf.step_fire(0.15)
+		if not sf.has_active_fire():
+			break
+	check(not sf.has_active_fire() and sf.get_active_fire_count() == 0,
+		"heavy storm rain fully extinguishes all active deck fires")
+	check(all_out_events[0] >= 1, "all_fires_out emitted once storm rain snuffs the last flame")
+	check(not sf.get_fire_light().visible, "shared OmniLight3D hides cleanly once storm rain snuffs fires")
+
+	await _end()
+	ShipFire.clear_shared_cache()
+	check_eq(ShipFire._active_instances, 0, "ShipFire._active_instances == 0 after combat teardown")
+	check(ShipFire._flame_mesh == null and ShipFire._flame_mat == null,
+		"ShipFire static cache released cleanly (0 leaks)")
+
+
 
 
 

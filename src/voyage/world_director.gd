@@ -72,6 +72,8 @@ var deep_swim_seconds: float = 0.0
 var lookout_scale: float = 1.0
 ## Voyages completed (unlocks rarer spectral threats on later runs).
 var voyage_count: int = 0
+## Active Trading Company Emissary Grade (0 = inactive, 1..5 = Grade I..V).
+var emissary_grade: int = 0
 ## Optional live ship tracked automatically in `_physics_process`.
 var player_ship: Node3D = null
 ## Master toggle for automatic stepping.
@@ -204,11 +206,11 @@ func step(delta: float, context: Dictionary = {}) -> Array[Dictionary]:
 	return spawned
 
 
-## Normalized 0..1 risk curve based on gold value aboard the ship.
+## Normalized 0..1 risk curve based on gold value aboard plus active Emissary hunter risk.
 func get_cargo_risk() -> float:
-	if cargo_value_aboard <= 0:
-		return 0.0
-	return clampf(float(cargo_value_aboard) / 1200.0, 0.0, 1.0)
+	var cargo_base := clampf(float(maxi(0, cargo_value_aboard)) / 1200.0, 0.0, 1.0)
+	var emissary_bonus: float = EmissaryLedger.HUNTER_RISK_BONUS[clampi(emissary_grade, 0, 5)]
+	return clampf(cargo_base + emissary_bonus, 0.0, 1.0)
 
 
 ## Compute compass bearing string ("N", "NE", ...) in world space (-Z North, +X East).
@@ -392,6 +394,7 @@ func get_state() -> Dictionary:
 		"last_outpost_id": last_outpost_id,
 		"last_outpost_pos": last_outpost_pos,
 		"voyage_count": voyage_count,
+		"emissary_grade": emissary_grade,
 		"active_events": active_events.duplicate(true),
 		"salvage_wrecks": salvage_wrecks.duplicate(true),
 	}
@@ -698,6 +701,8 @@ func _update_context(delta: float, context: Dictionary) -> void:
 		lookout_scale = clampf(float(context["lookout_scale"]), 0.75, 2.0)
 	if context.has("voyage_count"):
 		voyage_count = maxi(0, int(context["voyage_count"]))
+	if context.has("emissary_grade"):
+		emissary_grade = clampi(int(context.get("emissary_grade", emissary_grade)), 0, EmissaryLedger.MAX_GRADE)
 	if context.has("cargo_value"):
 		cargo_value_aboard = maxi(0, int(context["cargo_value"]))
 	elif context.has("cargo_nodes") and context["cargo_nodes"] is Array:

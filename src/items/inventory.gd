@@ -871,6 +871,7 @@ func use_bucket() -> Dictionary:
 		var splash_pos := pawn.eye_position() + view * 0.9
 		Audio.play_sfx(&"bucket_splash", splash_pos, -1.0)
 		_spawn_water_splash_puff(splash_pos, view)
+		var fires_doused := _douse_nearby_ship_fire(splash_pos, 4.8)
 		var throw_overboard := false
 		if pawn.platform is Ship:
 			var s_plat := pawn.platform as Ship
@@ -895,7 +896,12 @@ func use_bucket() -> Dictionary:
 			foam_pt.y = Sea.height(foam_pt.x, foam_pt.z)
 			Ocean.current.add_foam(foam_pt, 1.35, 0.68)
 		bucket_changed.emit(false)
-		return {"action": &"splash", "full": false, "overboard": throw_overboard}
+		return {
+			"action": &"splash",
+			"full": false,
+			"overboard": throw_overboard,
+			"fires_doused": fires_doused,
+		}
 
 	# Attempt to bail from current or adjacent flooded Ship.
 	var ship := _find_nearby_ship(5.5)
@@ -943,10 +949,10 @@ func use_bucket() -> Dictionary:
 
 ## Throw carried bucket water straight ahead along view direction (RMB on full bucket).
 ## Empties bucket, spawns sculpted splash droplets, adds ocean foam near waterline,
-## and prompts a lighthearted bark from any AI crewmate caught within 4.5 m ahead!
+## extinguishes nearby deck fire flames, and prompts a lighthearted bark from any AI crewmate caught within 4.5 m ahead!
 func splash_bucket_forward() -> Dictionary:
 	if pawn == null or pawn.dead or pawn.station != null or pawn.carried != null or not bucket_full:
-		return {"action": &"none", "full": bucket_full, "splashed_crew": false}
+		return {"action": &"none", "full": bucket_full, "splashed_crew": false, "fires_doused": 0}
 	_use_cooldown = 0.38
 	bucket_full = false
 	_start_swing(&"splash", 0.44)
@@ -958,6 +964,7 @@ func splash_bucket_forward() -> Dictionary:
 	var splash_pos := pawn.eye_position() + view * 0.95
 	Audio.play_sfx(&"bucket_splash", splash_pos, -0.5)
 	_spawn_water_splash_puff(splash_pos, view)
+	var fires_doused := _douse_nearby_ship_fire(splash_pos, 4.8)
 
 	var horiz_v := Vector3(view.x, 0.0, view.z)
 	var fdir := horiz_v.normalized() if horiz_v.length_squared() > 0.01 else pawn.facing()
@@ -998,7 +1005,37 @@ func splash_bucket_forward() -> Dictionary:
 		"full": false,
 		"splashed_crew": splashed_crew,
 		"splashed_name": splashed_name,
+		"fires_doused": fires_doused,
 	}
+
+
+func _douse_nearby_ship_fire(splash_pos: Vector3, radius: float = 4.8) -> int:
+	if pawn == null:
+		return 0
+	var target_ship: Ship = null
+	if pawn.platform is Ship:
+		var plat_ship := pawn.platform as Ship
+		if plat_ship.has_deck_fire():
+			target_ship = plat_ship
+	if target_ship == null and is_inside_tree():
+		var best_d := 6.5
+		for node in get_tree().get_nodes_in_group(&"ship"):
+			var s := node as Ship
+			if s == null or not is_instance_valid(s) or not s.has_deck_fire():
+				continue
+			var d_ship := splash_pos.distance_to(s.global_position)
+			var eff_d := d_ship
+			var sf := s.get_ship_fire()
+			if sf != null:
+				var near_fire := sf.get_nearest_fire_world_pos(splash_pos)
+				if near_fire.is_finite():
+					eff_d = minf(eff_d, splash_pos.distance_to(near_fire))
+			if eff_d <= best_d:
+				best_d = eff_d
+				target_ship = s
+	if target_ship != null and target_ship.has_deck_fire():
+		return target_ship.douse_deck_fire(splash_pos, radius)
+	return 0
 
 
 ## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.8 m).

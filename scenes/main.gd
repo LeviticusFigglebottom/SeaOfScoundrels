@@ -209,6 +209,8 @@ static func _drain_static_visual_caches() -> void:
 	ShipSupplyBarrels.clear_shared_cache()
 	Rowboat.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()
+	ShipEmissaryFlag.clear_shared_cache()
+	ShipFire.clear_shared_cache()
 	WorldEventCloud.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
@@ -568,8 +570,27 @@ func _build_player_ship() -> void:
 	sea_soundscape.bind_ship(player_ship)
 
 	_mount_player_rowboat(player_ship)
+	ShipEmissaryFlag.mount_to_ship(player_ship)
 
 	Net.register_replicated_ship(&"player_sloop", player_ship)
+
+
+func _sync_emissary_visuals() -> void:
+	var comp := &""
+	var grade := 0
+	var mult := 1.0
+	if voyage_manager != null and voyage_manager.emissary != null:
+		comp = voyage_manager.emissary.active_company
+		grade = voyage_manager.emissary.grade
+		mult = voyage_manager.emissary.get_multiplier(comp)
+	if player_ship != null and is_instance_valid(player_ship):
+		var eflag := ShipEmissaryFlag.mount_to_ship(player_ship)
+		if eflag != null:
+			eflag.set_emissary(comp, grade)
+	if world_director != null and is_instance_valid(world_director):
+		world_director.emissary_grade = grade
+	if hud != null and is_instance_valid(hud):
+		hud.set_emissary_status(comp, grade, mult)
 
 
 func _mount_player_rowboat(target_ship: Ship) -> void:
@@ -1111,6 +1132,10 @@ func _build_ui() -> void:
 	)
 	shipwright_menu.ship_class_selected.connect(_on_ship_class_selected)
 	shipwright_menu.settings_changed.connect(_on_settings_changed)
+	if shipwright_menu.has_signal(&"emissary_changed"):
+		shipwright_menu.connect(&"emissary_changed", func(_comp: StringName, _grade: int) -> void:
+			_sync_emissary_visuals()
+		)
 	if shipwright_menu.has_signal(&"ship_name_changed"):
 		shipwright_menu.connect(&"ship_name_changed", func(new_name: String) -> void:
 			if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"set_ship_name"):
@@ -1138,6 +1163,20 @@ func _wire_world_signals() -> void:
 	voyage_manager.voyage_started.connect(_on_voyage_started)
 	voyage_manager.voyage_stage_changed.connect(_on_voyage_stage_changed)
 	voyage_manager.voyage_completed.connect(_on_voyage_completed)
+	if voyage_manager.emissary != null:
+		voyage_manager.emissary.flag_raised.connect(func(_c: StringName, _g: int) -> void:
+			_sync_emissary_visuals()
+		)
+		voyage_manager.emissary.grade_changed.connect(func(_c: StringName, _o: int, _n: int) -> void:
+			_sync_emissary_visuals()
+		)
+		voyage_manager.emissary.flag_lowered.connect(func(_c: StringName, _g: int, _gold: int, _ren: int) -> void:
+			_sync_emissary_visuals()
+		)
+		voyage_manager.emissary.flag_broken.connect(func(_c: StringName, _g: int) -> void:
+			_sync_emissary_visuals()
+		)
+	_sync_emissary_visuals()
 
 	# WorldDirector living-sea event signals.
 	world_director.spawn_rival_ship.connect(_on_director_spawn_rival_ship)
@@ -2175,6 +2214,20 @@ func _on_player_ship_sunk() -> void:
 	# Record ~60% salvage wreck through WorldDirector (never a wipe!).
 	var wreck := world_director.record_ship_wreck(wreck_pos, aboard, _outpost_positions_dict())
 
+	# If flying a Trading Company Emissary Flag, it snaps on sinking and floats as salvage!
+	if voyage_manager != null and voyage_manager.emissary != null and voyage_manager.emissary.is_active():
+		var broken_flag := voyage_manager.emissary.break_flag_on_sink()
+		if not broken_flag.is_empty():
+			var wreck_items: Array = wreck.get("items", [])
+			wreck_items.append({
+				"treasure_id": &"captain_chest",
+				"gold_value": int(broken_flag.get("gold_value", 250)),
+				"display_name": String(broken_flag.get("name", "Broken Emissary Flag")),
+			})
+			wreck["items"] = wreck_items
+			Game.post_notice("%s broke in the wreck - salvage its pennant at the buoy!" % String(broken_flag.get("name", "Emissary Flag")))
+		_sync_emissary_visuals()
+
 	# Remove old aboard treasure instances before spawning floating wreck salvage.
 	for item in aboard:
 		if is_instance_valid(item):
@@ -2738,6 +2791,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 	if sea_soundscape != null and is_instance_valid(sea_soundscape):
 		sea_soundscape.bind_ship(player_ship)
 	_mount_player_rowboat(player_ship)
+	_sync_emissary_visuals()
 	if inventory != null and is_instance_valid(inventory):
 		inventory.map_table = map_table
 	if shipwright_menu != null:

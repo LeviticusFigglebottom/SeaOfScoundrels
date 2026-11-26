@@ -53,6 +53,7 @@ var event_world_pos: Vector3 = Vector3.ZERO
 
 var _visual_root: Node3D = null
 var _cloud_mi: MeshInstance3D = null
+var _body_override: StandardMaterial3D = null
 var _accent_override: StandardMaterial3D = null
 var _configured: bool = false
 var _fade_state: FadeState = FadeState.ACTIVE
@@ -102,6 +103,7 @@ func _exit_tree() -> void:
 				_cloud_mi.set_surface_override_material(si, null)
 		_cloud_mi.mesh = null
 		_cloud_mi.material_override = null
+	_body_override = null
 	_accent_override = null
 	_cloud_mi = null
 	_visual_root = null
@@ -201,6 +203,23 @@ func _apply_animation_state() -> void:
 		_visual_root.rotation = Vector3(sway_x, _anim_time * yaw_speed, sway_z)
 		_visual_root.scale = Vector3.ONE * eff_scale
 
+	if _body_override != null:
+		# Softly warm outer skull-cloud puffs toward golden-hour dawn/sunset horizon tones
+		# so beacons sit harmoniously in pastel sunset skies while eyes keep blazing.
+		var warmth := _golden_hour_factor()
+		if event_kind == &"fort_siege":
+			_body_override.albedo_color = Color.WHITE.lerp(Color(1.00, 0.88, 0.78), warmth * 0.65)
+			_body_override.emission = Color(0.20, 0.27, 0.30).lerp(Color(0.56, 0.34, 0.24), warmth * 0.72)
+			_body_override.emission_energy_multiplier = lerpf(0.30, 0.44, warmth)
+		elif event_kind == &"leviathan":
+			_body_override.albedo_color = Color.WHITE.lerp(Color(0.98, 0.88, 0.92), warmth * 0.42)
+			_body_override.emission = Color(0.24, 0.14, 0.42).lerp(Color(0.46, 0.24, 0.38), warmth * 0.50)
+			_body_override.emission_energy_multiplier = lerpf(0.32, 0.40, warmth)
+		else:
+			_body_override.albedo_color = Color.WHITE.lerp(Color(0.95, 0.96, 0.92), warmth * 0.30)
+			_body_override.emission = Color(0.14, 0.42, 0.46).lerp(Color(0.30, 0.46, 0.44), warmth * 0.35)
+			_body_override.emission_energy_multiplier = lerpf(0.34, 0.40, warmth)
+
 	if _accent_override != null:
 		var base_e := 2.65
 		var pulse_amp := 0.75
@@ -215,6 +234,16 @@ func _apply_animation_state() -> void:
 			pulse_rate = 2.65
 		var pulse := sin(_anim_time * pulse_rate + _phase_offset)
 		_accent_override.emission_energy_multiplier = maxf(0.2, (base_e + pulse * pulse_amp) * eased)
+
+
+static func _golden_hour_factor() -> float:
+	if Weather == null:
+		return 0.0
+	var tod := fposmod(Weather.time_of_day, 24.0)
+	var dawn := maxf(0.0, 1.0 - absf(tod - 6.35) / 1.55)
+	var sunset := maxf(0.0, 1.0 - absf(tod - 17.85) / 1.65)
+	var raw := maxf(dawn, sunset)
+	return raw * raw * (3.0 - 2.0 * raw)
 
 
 func _rebuild_visual() -> void:
@@ -239,7 +268,13 @@ func _rebuild_visual() -> void:
 			_visual_root.add_child(_cloud_mi)
 
 	_cloud_mi.mesh = mesh
-	_cloud_mi.set_surface_override_material(0, null)
+	var shared_body := _body_mat_cache.get(event_kind, null) as StandardMaterial3D
+	if shared_body != null:
+		_body_override = shared_body.duplicate() as StandardMaterial3D
+		_cloud_mi.set_surface_override_material(0, _body_override)
+	else:
+		_body_override = null
+		_cloud_mi.set_surface_override_material(0, null)
 
 	var shared_accent := _accent_mat_cache.get(event_kind, null) as StandardMaterial3D
 	if shared_accent != null:

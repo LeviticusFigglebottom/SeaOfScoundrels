@@ -13,6 +13,7 @@ signal loadout_changed(slot: StringName, unlock_id: StringName)
 signal ship_class_selected(cls: StringName)
 signal ship_name_changed(new_name: String)
 signal armory_loadout_changed(melee_id: StringName, ranged_id: StringName)
+signal emissary_changed(company_id: StringName, grade: int)
 signal settings_changed
 
 const TAB_VOYAGES := &"voyages"
@@ -198,6 +199,58 @@ func accept_voyage(voyage: Dictionary) -> bool:
 	voyage_accepted.emit(voyage_manager.active_voyage)
 	refresh()
 	return true
+
+
+## Raise a Trading Company Emissary flag on `voyage_manager.emissary` and sync ship/director.
+func raise_emissary_flag(company_id: StringName) -> bool:
+	if voyage_manager == null or voyage_manager.emissary == null or not Net.is_host():
+		return false
+	if not voyage_manager.emissary.raise_flag(company_id):
+		return false
+	var grade := voyage_manager.emissary.grade
+	if ship != null and is_instance_valid(ship):
+		var sflag := ship.get_node_or_null(^"ShipEmissaryFlag") as ShipEmissaryFlag
+		if sflag != null:
+			sflag.set_emissary(company_id, grade)
+	if world_director != null and is_instance_valid(world_director):
+		world_director.emissary_grade = grade
+	Audio.play_sfx(&"ui_select", Vector3.INF, -2.0)
+	var cname := EmissaryLedger.company_short_name(company_id)
+	_set_status("Raised %s Emissary flag (Grade I)." % cname)
+	if Game != null:
+		Game.post_notice("Raised %s Emissary Flag (Grade I)!" % cname)
+	emissary_changed.emit(company_id, grade)
+	refresh()
+	return true
+
+
+## Voluntarily lower the active Emissary flag for its cash-out gold & renown bonus.
+func lower_emissary_flag() -> Dictionary:
+	if voyage_manager == null or voyage_manager.emissary == null or not Net.is_host():
+		return {}
+	if not voyage_manager.emissary.is_active():
+		return {}
+	var prof: Profile = Game.profile if (Game != null and Game.profile != null) else voyage_manager.profile
+	var res := voyage_manager.emissary.lower_flag(prof)
+	if Game != null and Game.profile != null and prof == Game.profile:
+		Game.save()
+	if ship != null and is_instance_valid(ship):
+		var sflag := ship.get_node_or_null(^"ShipEmissaryFlag") as ShipEmissaryFlag
+		if sflag != null:
+			sflag.set_emissary(&"", 0)
+	if world_director != null and is_instance_valid(world_director):
+		world_director.emissary_grade = 0
+	Audio.play_sfx(&"coin_jingle", Vector3.INF, -2.0)
+	var comp_id: StringName = res.get("company_id", &"")
+	var cname := EmissaryLedger.company_short_name(comp_id)
+	var bonus_g := int(res.get("bonus_gold", 0))
+	var bonus_r := int(res.get("bonus_renown", 0))
+	_set_status("Lowered %s Emissary flag (+%dg, +%d renown)." % [cname, bonus_g, bonus_r])
+	if Game != null:
+		Game.post_notice("Lowered %s Emissary Flag (+%d gold, +%d renown)!" % [cname, bonus_g, bonus_r])
+	emissary_changed.emit(&"", 0)
+	refresh()
+	return res
 
 
 ## Sync both the player's held treasure map and the ship's MapTableView to `voyage`.
@@ -647,6 +700,9 @@ func _rebuild_voyages_tab() -> void:
 	var map_data: Array[Dictionary] = archipelago.get_map_data() if archipelago != null else VoyageComposer.default_archipelago_roster()
 	var composer: VoyageComposer = voyage_manager.composer if voyage_manager != null else VoyageComposer.new()
 
+	# Trading Company Emissary Desk (top section above voyage cards)
+	_voyage_list_box.add_child(_build_emissary_desk_card())
+
 	# Active voyage banner
 	if voyage_manager != null and voyage_manager.has_active_voyage():
 		var av := voyage_manager.active_voyage
@@ -726,6 +782,82 @@ func _rebuild_voyages_tab() -> void:
 
 	for offer in offers:
 		_voyage_list_box.add_child(_build_voyage_card(offer, false))
+
+
+func _build_emissary_desk_card() -> PanelContainer:
+	var ledger: EmissaryLedger = voyage_manager.emissary if voyage_manager != null else null
+	var active := ledger != null and ledger.is_active()
+	var card := _make_card_panel(
+		Color(0.96, 0.90, 0.74, 0.98) if active else Color(0.92, 0.85, 0.70, 0.96),
+		HudIcons.COL_BRASS if active else HudIcons.COL_INK_SOFT
+	)
+	card.name = "EmissaryDeskCard"
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	card.add_child(v)
+
+	var hdr := Label.new()
+	hdr.name = "EmissaryDeskTitle"
+	hdr.text = "TRADING COMPANY EMISSARY DESK"
+	hdr.add_theme_font_size_override("font_size", 16)
+	hdr.add_theme_color_override("font_color", HudIcons.COL_CRIMSON if active else HudIcons.COL_INK)
+	v.add_child(hdr)
+
+	if active:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		v.add_child(row)
+
+		var cname := EmissaryLedger.company_short_name(ledger.active_company)
+		var roman := ledger.get_grade_roman()
+		var mult := ledger.get_multiplier()
+		var status_lbl := Label.new()
+		status_lbl.name = "EmissaryStatusLabel"
+		status_lbl.text = _to_ascii("Flying: %s Emissary %s (%.2fx Payout)" % [cname, roman, mult])
+		status_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		status_lbl.add_theme_font_size_override("font_size", 15)
+		status_lbl.add_theme_color_override("font_color", Color(0.56, 0.36, 0.06))
+		row.add_child(status_lbl)
+
+		var bonus_gold := ledger.get_lower_bonus_gold()
+		var lower_btn := Button.new()
+		lower_btn.name = "LowerEmissaryButton"
+		lower_btn.text = "Lower Flag (+%dg)" % bonus_gold
+		lower_btn.custom_minimum_size = Vector2(186.0, 38.0)
+		_style_highlight_button(lower_btn, true)
+		lower_btn.pressed.connect(func() -> void: lower_emissary_flag())
+		row.add_child(lower_btn)
+	else:
+		var info_lbl := Label.new()
+		info_lbl.name = "EmissaryStatusLabel"
+		info_lbl.text = "Raise an Emissary flag to multiply matching payouts up to 2.50x (higher hunter risk)."
+		info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		info_lbl.add_theme_font_size_override("font_size", 13)
+		info_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+		v.add_child(info_lbl)
+
+		var btn_row := HBoxContainer.new()
+		btn_row.add_theme_constant_override("separation", 10)
+		v.add_child(btn_row)
+
+		var specs: Array[Array] = [
+			[&"gilded_compass", "Raise Gilded Compass"],
+			[&"sunken_archive", "Raise Sunken Archive"],
+			[&"iron_tide", "Raise Iron Tide"],
+		]
+		for spec: Array in specs:
+			var cid: StringName = spec[0]
+			var label_txt: String = String(spec[1])
+			var rbtn := Button.new()
+			rbtn.name = "RaiseEmissary_" + String(cid)
+			rbtn.text = label_txt
+			rbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rbtn.custom_minimum_size = Vector2(0.0, 38.0)
+			rbtn.pressed.connect(func() -> void: raise_emissary_flag(cid))
+			btn_row.add_child(rbtn)
+
+	return card
 
 
 func _build_voyage_card(voyage: Dictionary, is_story: bool) -> PanelContainer:

@@ -1945,3 +1945,312 @@ func test_wave30_world_event_clouds_spyglass_id_director_lifecycle_and_crew_call
 	Sea.amp_scale = saved_amp
 	_restore_weather()
 
+
+func test_wave31_emissary_grades_stern_flag_payout_multiplier_risk_and_cashout() -> void:
+	_save_weather()
+	var saved_amp := Sea.amp_scale
+	var saved_profile := Game.profile.data.duplicate(true)
+	Sea.amp_scale = 0.0
+	Net.start_single_player()
+	ShipEmissaryFlag.clear_shared_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Wave31ATestHolder"
+	add_child(holder)
+
+	# 1. EmissaryLedger on VoyageManager: raise, step Grade I -> V, exact multipliers & grade_changed signals.
+	var vm := VoyageManager.new()
+	var prof := Profile.new()
+	vm.profile = prof
+	vm.post_notices = true
+	holder.add_child(vm)
+
+	check(vm.emissary != null and not vm.emissary.is_active(), "VoyageManager owns inactive EmissaryLedger initially")
+	check(not vm.emissary.raise_flag(&"invalid_guild"), "raise_flag rejects unknown company")
+
+	var raised_events: Array[StringName] = []
+	var grade_events: Array[Dictionary] = []
+	var lowered_events: Array[Dictionary] = []
+	var broken_events: Array[Dictionary] = []
+	var notices: Array[String] = []
+	var on_notice := func(text: String) -> void:
+		notices.append(text)
+	Game.notice.connect(on_notice)
+
+	vm.emissary.flag_raised.connect(func(cid: StringName) -> void: raised_events.append(cid))
+	vm.emissary.grade_changed.connect(func(cid: StringName, g: int, mult: float) -> void:
+		grade_events.append({"company_id": cid, "grade": g, "multiplier": mult})
+	)
+	vm.emissary.flag_lowered.connect(func(cid: StringName, fg: int, bg: int, br: int) -> void:
+		lowered_events.append({"company_id": cid, "final_grade": fg, "bonus_gold": bg, "bonus_renown": br})
+	)
+	vm.emissary.flag_broken.connect(func(cid: StringName, lg: int) -> void:
+		broken_events.append({"company_id": cid, "lost_grade": lg})
+	)
+
+	check(vm.emissary.raise_flag(&"gilded_compass"), "raise_flag(&'gilded_compass') succeeds")
+	check(vm.emissary.is_active(), "emissary becomes active")
+	check_eq(raised_events.size(), 1, "flag_raised emitted once")
+	check_eq(vm.emissary.grade, 1, "raised flag starts at Grade I")
+	check_near(vm.emissary.get_multiplier(&"gilded_compass"), 1.00, 0.001, "Grade I multiplier == 1.00")
+	check_eq(vm.emissary.get_grade_roman(), "I", "Grade I roman numeral == 'I'")
+
+	# Step XP through thresholds: 100 (II), 260 (III), 480 (IV), 760 (V).
+	var expected_steps: Array[Array] = [
+		[100.0, 2, 1.33, "II"],
+		[160.0, 3, 1.67, "III"],
+		[220.0, 4, 2.00, "IV"],
+		[280.0, 5, 2.50, "V"],
+	]
+	for step_spec: Array in expected_steps:
+		var pts: float = float(step_spec[0])
+		var exp_grade: int = int(step_spec[1])
+		var exp_mult: float = float(step_spec[2])
+		var exp_rom: String = String(step_spec[3])
+		var new_g := vm.emissary.add_progress(pts, &"gilded_compass")
+		check_eq(new_g, exp_grade, "add_progress advances cleanly to Grade %d" % exp_grade)
+		check_near(vm.emissary.get_multiplier(&"gilded_compass"), exp_mult, 0.001,
+			"Grade %d multiplier == %.2f" % [exp_grade, exp_mult])
+		check_near(vm.emissary.get_multiplier(&"iron_tide"), 1.00, 0.001,
+			"non-matching company stays 1.00x at Grade %d" % exp_grade)
+		check_eq(vm.emissary.get_grade_roman(), exp_rom, "Grade %d roman numeral matches" % exp_grade)
+
+	check_eq(grade_events.size(), 5, "grade_changed emitted for Grades I..V (got %d)" % grade_events.size())
+	var expected_mults: Array[float] = [1.0, 1.33, 1.67, 2.0, 2.5]
+	for gi in 5:
+		check_eq(int(grade_events[gi]["grade"]), gi + 1, "grade_changed[%d] grade matches" % gi)
+		check_near(float(grade_events[gi]["multiplier"]), expected_mults[gi], 0.001,
+			"grade_changed[%d] multiplier matches" % gi)
+	check(notices.size() >= 4, "VoyageManager posted grade-up notices for Grades II..V")
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "Emissary notice '%s' is strict ASCII" % n_txt)
+
+	var badge_v := vm.emissary.get_badge_text()
+	check_eq(badge_v, "Gilded Compass Emissary V (2.50x)", "Grade V badge text matches")
+	for ci in badge_v.length():
+		check(badge_v.unicode_at(ci) < 128, "Emissary badge text is strict ASCII")
+
+	# Verify VoyageManager state replication preserves Emissary state faithfully.
+	var snap := vm.get_state()
+	var mirror := VoyageManager.new()
+	mirror.apply_state(snap)
+	check_eq(mirror.emissary.active_company, &"gilded_compass", "replicated emissary company matches")
+	check_eq(mirror.emissary.grade, 5, "replicated emissary grade == 5")
+	check_near(mirror.emissary.xp, 760.0, 0.01, "replicated emissary xp == 760.0")
+	mirror.free()
+
+	# 2. VoyageManager.notify_treasure_sold pays 2.5x gold & renown for Gilded Compass at Grade V, 1.0x for Iron Tide!
+	var gc_entry := TreasureCatalog.get_entry(&"sovereign_chest")  # gilded_compass: 700g, 100 renown
+	var gold_before := int(prof.data["gold"])
+	var gc_ren_before := Economy.get_company_renown(prof, &"gilded_compass")
+	var gc_sale := vm.notify_treasure_sold(gc_entry)
+	check(bool(gc_sale.get("ok", false)), "Gilded Compass Grade V treasure sale succeeds")
+	check_near(float(gc_sale.get("emissary_multiplier", 0.0)), 2.5, 0.001, "sale returns emissary_multiplier == 2.5")
+	check_eq(int(gc_sale.get("emissary_grade", 0)), 5, "sale returns emissary_grade == 5")
+	check_eq(int(gc_sale["gold_awarded"]), roundi(float(gc_entry["gold_value"]) * 2.5),
+		"Gilded Compass treasure pays exact 2.5x gold at Grade V (%d)" % int(gc_sale["gold_awarded"]))
+	check_eq(int(gc_sale["renown_awarded"]), roundi(float(gc_entry["renown_value"]) * 2.5),
+		"Gilded Compass treasure pays exact 2.5x renown at Grade V (%d)" % int(gc_sale["renown_awarded"]))
+	check_eq(int(prof.data["gold"]), gold_before + int(gc_sale["gold_awarded"]), "profile credited 2.5x gold")
+	check_eq(Economy.get_company_renown(prof, &"gilded_compass"), gc_ren_before + int(gc_sale["renown_awarded"]),
+		"profile credited 2.5x renown")
+
+	var it_entry := TreasureCatalog.get_entry(&"captains_skull")  # iron_tide: 600g, 90 renown
+	var it_sale := vm.notify_treasure_sold(it_entry)
+	check(bool(it_sale.get("ok", false)), "non-matching Iron Tide treasure sale succeeds")
+	check_near(float(it_sale.get("emissary_multiplier", 0.0)), 1.0, 0.001, "non-matching sale multiplier == 1.0")
+	check_eq(int(it_sale["gold_awarded"]), int(it_entry["gold_value"]),
+		"non-matching Iron Tide treasure pays exact 1.0x gold")
+	check_eq(int(it_sale["renown_awarded"]), int(it_entry["renown_value"]),
+		"non-matching Iron Tide treasure pays exact 1.0x renown")
+
+	# 3. WorldDirector.get_cargo_risk() strictly increases at emissary_grade == 5 vs 0!
+	var dir := WorldDirector.new(0x31A01)
+	dir.post_notices = false
+	dir.weather_integration = false
+	holder.add_child(dir)
+
+	dir.cargo_value_aboard = 360  # base cargo risk = 0.30
+	dir.emissary_grade = 0
+	var risk_g0 := dir.get_cargo_risk()
+	dir.emissary_grade = 5
+	var risk_g5 := dir.get_cargo_risk()
+	check_near(risk_g0, 0.30, 0.001, "cargo risk at grade 0 == 0.30")
+	check_near(risk_g5, 0.85, 0.001, "cargo risk at grade 5 == 0.30 + 0.55 = 0.85")
+	check(risk_g5 > risk_g0, "WorldDirector.get_cargo_risk() strictly increases at emissary_grade == 5 vs 0")
+
+	dir.cargo_value_aboard = 0
+	dir.emissary_grade = 0
+	var empty_g0 := dir.get_cargo_risk()
+	dir.step(0.1, {"ship_pos": Vector3.ZERO, "in_safe_harbor": true, "emissary_grade": 5})
+	check_eq(dir.emissary_grade, 5, "WorldDirector._update_context accepts emissary_grade")
+	var empty_g5 := dir.get_cargo_risk()
+	check(empty_g5 > empty_g0 and absf(empty_g5 - 0.55) < 0.001,
+		"empty-hold Grade V Emissary still incurs 0.55 hunter risk (got %.2f)" % empty_g5)
+
+	# 4. Lower flag cash-out (+5,000g & +250 renown at Grade V) & break_flag_on_sink() salvage drop!
+	var gold_pre_lower := int(prof.data["gold"])
+	var ren_pre_lower := Economy.get_company_renown(prof, &"gilded_compass")
+	var lower_res := vm.emissary.lower_flag(prof)
+	check_eq(lower_res["company_id"], &"gilded_compass", "lower_flag returns company_id")
+	check_eq(int(lower_res["final_grade"]), 5, "lower_flag returns final_grade == 5")
+	check_eq(int(lower_res["bonus_gold"]), 5000, "Grade V lower_flag bonus_gold == 5000")
+	check_eq(int(lower_res["bonus_renown"]), 250, "Grade V lower_flag bonus_renown == 250")
+	check_eq(int(prof.data["gold"]), gold_pre_lower + 5000, "profile credited +5,000 cash-out gold")
+	check_eq(Economy.get_company_renown(prof, &"gilded_compass"), ren_pre_lower + 250,
+		"profile credited +250 cash-out renown")
+	check(not vm.emissary.is_active() and vm.emissary.grade == 0 and vm.emissary.get_badge_text() == "",
+		"lower_flag resets EmissaryLedger cleanly")
+	check_eq(lowered_events.size(), 1, "flag_lowered emitted once")
+
+	# Raise Iron Tide, advance via VoyageManager milestone hooks (off-company 0.55x + matching 1.0x), then break on sink!
+	check(vm.emissary.raise_flag(&"iron_tide"), "raise Iron Tide Emissary")
+	vm.notify_enemy_defeated(&"drowned_sloop")  # +35 matching -> 35
+	vm.notify_treasure_unearthed(gc_entry)      # +45 * 0.55 = 24.75 -> 59.75
+	vm.notify_treasure_boarded(it_entry)        # +55 * 1.0 = 55 -> 114.75 (Grade II!)
+	check_eq(vm.emissary.grade, 2, "gameplay milestones progress Iron Tide Emissary to Grade II")
+	var broken := vm.emissary.break_flag_on_sink()
+	check_eq(broken.get("id", &""), &"broken_emissary_flag", "break_flag_on_sink returns broken_emissary_flag id")
+	check_eq(broken.get("company_id", &""), &"iron_tide", "broken flag records company_id")
+	check_eq(int(broken.get("grade", 0)), 2, "broken flag records lost grade == 2")
+	check_eq(int(broken.get("gold_value", 0)), 500, "broken flag gold_value == 250 * grade (500)")
+	check_eq(String(broken.get("name", "")), "Broken Emissary Flag (Iron Tide II)", "broken flag display name matches")
+	check(not vm.emissary.is_active() and vm.emissary.grade == 0, "break_flag_on_sink resets active flag")
+	check_eq(broken_events.size(), 1, "flag_broken emitted once")
+
+	# 5. ShipwrightMenu Emissary Desk UI: raise, status readout, emissary_changed signal, and lower cash-out!
+	var menu := ShipwrightMenu.new()
+	holder.add_child(menu)
+	menu.bind(vm, null, null, null, null, null, null, [], dir, holder)
+	menu.open_menu(ShipwrightMenu.TAB_VOYAGES)
+	await get_tree().process_frame
+
+	var menu_events: Array[Dictionary] = []
+	menu.emissary_changed.connect(func(cid: StringName, g: int) -> void:
+		menu_events.append({"company_id": cid, "grade": g})
+	)
+	check(menu.find_child("EmissaryDeskCard", true, false) != null, "ShipwrightMenu renders EmissaryDeskCard")
+	for cid_str: String in ["gilded_compass", "sunken_archive", "iron_tide"]:
+		check(menu.find_child("RaiseEmissary_" + cid_str, true, false) is Button,
+			"ShipwrightMenu renders Raise button for %s when inactive" % cid_str)
+
+	check(menu.raise_emissary_flag(&"gilded_compass"), "ShipwrightMenu.raise_emissary_flag succeeds")
+	vm.emissary.add_progress(100.0, &"gilded_compass")  # Grade II -> 1.33x, +1200g
+	menu.refresh()
+	var status_lbl := menu.find_child("EmissaryStatusLabel", true, false) as Label
+	var lower_btn := menu.find_child("LowerEmissaryButton", true, false) as Button
+	check(status_lbl != null and status_lbl.text == "Flying: Gilded Compass Emissary II (1.33x Payout)",
+		"Emissary Desk shows active status (got '%s')" % (status_lbl.text if status_lbl != null else ""))
+	check(lower_btn != null and lower_btn.text == "Lower Flag (+1200g)",
+		"Emissary Desk shows Lower Flag (+1200g) button (got '%s')" % (lower_btn.text if lower_btn != null else ""))
+	var menu_lower := menu.lower_emissary_flag()
+	check_eq(int(menu_lower.get("bonus_gold", 0)), 1200, "ShipwrightMenu.lower_emissary_flag pays +1200g")
+	check_eq(menu_events.size(), 2, "ShipwrightMenu emitted emissary_changed on raise and lower")
+	menu.close_menu()
+
+	# 6. Mount sculpted ShipEmissaryFlag onto a real Sloop: >= 520 tris, 0 primitives, uv1_world_triplanar == false,
+	#    visible grade pennants == 1..5, hidden at grade 0, and wind flutter animation!
+	var sloop_scene := preload("res://src/ship/sloop.tscn") as PackedScene
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	holder.add_child(sloop)
+	await physics_frames(2)
+
+	var sflag := ShipEmissaryFlag.mount_to_ship(sloop)
+	check(sflag != null and sflag.get_parent() == sloop, "ShipEmissaryFlag.mount_to_ship mounts as child of Ship")
+	var expected_pos := sloop.ship_point(ShipEmissaryFlag.SLOOP_STAFF_LOCAL)
+	check_near(sflag.position.distance_to(expected_pos), 0.0, 0.001,
+		"ShipEmissaryFlag mounted at starboard stern taffrail via ship_point")
+	check(not sflag.visible and sflag.get_visible_grade_pennants() == 0,
+		"ShipEmissaryFlag starts hidden with 0 visible pennants at grade 0")
+
+	var tri_count := sflag.get_triangle_count()
+	print("    Wave 31A ShipEmissaryFlag sculpted triangle count: %d tris" % tri_count)
+	check(tri_count >= 520, "ShipEmissaryFlag has >= 520 sculpted tris (got %d)" % tri_count)
+
+	var mis := _collect_mesh_instances(sflag)
+	check(mis.size() >= 8, "ShipEmissaryFlag builds oak staff, brass finial, banner, and 5 grade pennants")
+	var prim_hits := 0
+	for mi in mis:
+		var m := mi.mesh
+		check(m is ArrayMesh, "ShipEmissaryFlag mesh '%s' is sculpted ArrayMesh" % mi.name)
+		if m is PrimitiveMesh:
+			prim_hits += 1
+		var mat := mi.material_override as StandardMaterial3D
+		check(mat != null, "ShipEmissaryFlag '%s' has StandardMaterial3D override" % mi.name)
+		if mat != null:
+			check(mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+				"ShipEmissaryFlag '%s' uses sRGB vertex colors as albedo" % mi.name)
+			check(mat.uv1_triplanar and not mat.uv1_world_triplanar,
+				"ShipEmissaryFlag '%s' uses object-space triplanar PBR (uv1_world_triplanar == false)" % mi.name)
+			check(mat.normal_enabled and mat.normal_texture != null,
+				"ShipEmissaryFlag '%s' reuses BC7 normal map" % mi.name)
+		if m is ArrayMesh:
+			var am := m as ArrayMesh
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+				var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+				var cols := arr[Mesh.ARRAY_COLOR] as PackedColorArray
+				check_eq(norms.size(), verts.size(), "%s has normal per vertex" % mi.name)
+				check_eq(cols.size(), verts.size(), "%s has color per vertex" % mi.name)
+				var bad_n := 0
+				for n: Vector3 in norms:
+					if not n.is_finite() or absf(n.length() - 1.0) > 0.01:
+						bad_n += 1
+				check_eq(bad_n, 0, "%s has 100%% finite unit normals" % mi.name)
+	check_eq(prim_hits, 0, "ShipEmissaryFlag contains 0 PrimitiveMesh instances")
+
+	# Step through all 3 companies and Grades 1..5 -> 0!
+	for cid: StringName in EmissaryLedger.VALID_COMPANIES:
+		for g in range(1, 6):
+			sflag.set_emissary(cid, g)
+			check(sflag.visible, "ShipEmissaryFlag visible for %s Grade %d" % [cid, g])
+			check_eq(sflag.get_visible_grade_pennants(), g,
+				"ShipEmissaryFlag shows exact %d visible grade pennants for %s" % [g, cid])
+	Weather.set_weather(0.2, 12.0, 1.15, 0.0, 0.3)
+	sflag._process(0.16)
+	var wind_piv := sflag.get_node_or_null(^"EmissaryWindPivot") as Node3D
+	check(wind_piv != null and is_finite(wind_piv.rotation.y), "ShipEmissaryFlag wind flutter animates cleanly")
+
+	sflag.set_emissary(&"gilded_compass", 0)
+	check(not sflag.visible and sflag.get_visible_grade_pennants() == 0,
+		"ShipEmissaryFlag hides completely at grade == 0")
+
+	# 7. Strict-ASCII GameHUD.set_emissary_status(...) badge in top-right objective card!
+	var hud := GameHUD.new()
+	holder.add_child(hud)
+	await get_tree().process_frame
+	check_eq(hud.emissary_badge_text, "", "GameHUD emissary_badge_text starts empty")
+	check(not hud.is_emissary_badge_visible(), "GameHUD EmissaryBadgeLabel starts hidden")
+
+	hud.set_emissary_status(&"gilded_compass", 3, 1.67)
+	check_eq(hud.emissary_badge_text, "Gilded Compass Emissary III (1.67x)",
+		"GameHUD.set_emissary_status formats exact Grade III badge")
+	check(hud.is_emissary_badge_visible(), "GameHUD EmissaryBadgeLabel visible when grade > 0")
+	for ci in hud.emissary_badge_text.length():
+		check(hud.emissary_badge_text.unicode_at(ci) < 128, "GameHUD emissary_badge_text is strict ASCII")
+
+	hud.set_emissary_status(&"gilded_compass", 0, 1.0)
+	check_eq(hud.emissary_badge_text, "", "GameHUD clears emissary_badge_text when grade <= 0")
+	check(not hud.is_emissary_badge_visible(), "GameHUD hides EmissaryBadgeLabel when grade <= 0")
+
+	# 8. Zero-leak teardown!
+	Game.notice.disconnect(on_notice)
+	holder.queue_free()
+	await physics_frames(3)
+	ShipEmissaryFlag.clear_shared_cache()
+	check_eq(ShipEmissaryFlag._active_instances, 0, "ShipEmissaryFlag._active_instances == 0 after teardown")
+	check(ShipEmissaryFlag._oak_mesh == null and ShipEmissaryFlag._brass_mesh == null \
+			and ShipEmissaryFlag._pennant_mesh == null and ShipEmissaryFlag._banner_meshes.is_empty() \
+			and ShipEmissaryFlag._oak_mat == null and ShipEmissaryFlag._brass_mat == null \
+			and ShipEmissaryFlag._cloth_mat == null and ShipEmissaryFlag._pbr_tex_cache.is_empty(),
+		"ShipEmissaryFlag.clear_shared_cache() releases all static caches cleanly with 0 leaks")
+
+	Sea.amp_scale = saved_amp
+	Game.profile.data = saved_profile
+	_restore_weather()
+
+

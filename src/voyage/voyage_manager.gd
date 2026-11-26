@@ -27,6 +27,8 @@ var elapsed_seconds: float = 0.0
 var profile: Profile = null
 ## Modular voyage composer owned by this manager.
 var composer: VoyageComposer = VoyageComposer.new()
+## Host-authoritative Trading Company Emissary Grade ledger.
+var emissary: EmissaryLedger = EmissaryLedger.new()
 ## When false, `Game.post_notice` calls are suppressed (optional for quiet batch sims).
 var post_notices: bool = true
 
@@ -36,6 +38,18 @@ var _voyage_gold_earned: int = 0
 var _voyage_renown_earned: int = 0
 var _voyage_chests_sold: int = 0
 var _late_warned: bool = false
+
+
+func _init() -> void:
+	if emissary != null and not emissary.grade_changed.is_connected(_on_emissary_grade_changed):
+		emissary.grade_changed.connect(_on_emissary_grade_changed)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		if emissary != null and emissary.grade_changed.is_connected(_on_emissary_grade_changed):
+			emissary.grade_changed.disconnect(_on_emissary_grade_changed)
+		emissary = null
 
 
 func _physics_process(delta: float) -> void:
@@ -188,9 +202,14 @@ func notify_clue_solved(_clue_index: int = -1) -> void:
 
 
 func notify_treasure_unearthed(chest: Variant) -> void:
-	if not Net.is_host() or active_voyage.is_empty():
+	if not Net.is_host():
 		return
 	var info := _extract_treasure_info(chest)
+	if emissary != null:
+		var active_comp := StringName(String(active_voyage.get("company_id", info.get("company_id", &""))))
+		emissary.add_progress(45.0, active_comp)
+	if active_voyage.is_empty():
+		return
 	var idx := _find_matching_stage(&"dig_treasure")
 	if idx < 0:
 		return
@@ -208,9 +227,14 @@ func notify_treasure_unearthed(chest: Variant) -> void:
 
 
 func notify_treasure_boarded(chest: Variant) -> void:
-	if not Net.is_host() or active_voyage.is_empty():
+	if not Net.is_host():
 		return
 	var info := _extract_treasure_info(chest)
+	if emissary != null:
+		var active_comp := StringName(String(active_voyage.get("company_id", info.get("company_id", &""))))
+		emissary.add_progress(55.0, active_comp)
+	if active_voyage.is_empty():
+		return
 	_treasure_boarded = true
 	var idx := _find_matching_stage(&"board_treasure")
 	if idx < 0:
@@ -229,7 +253,11 @@ func notify_treasure_boarded(chest: Variant) -> void:
 
 
 func notify_enemy_defeated(enemy_kind: StringName = &"drowned") -> void:
-	if not Net.is_host() or active_voyage.is_empty():
+	if not Net.is_host():
+		return
+	if emissary != null:
+		emissary.add_progress(35.0, &"iron_tide")
+	if active_voyage.is_empty():
 		return
 	_enemies_defeated += 1
 	var st := get_current_stage()
@@ -261,7 +289,7 @@ func notify_enemy_defeated(enemy_kind: StringName = &"drowned") -> void:
 			else:
 				_notice("Wave cleared (%d/%d)!" % [stage_progress, req])
 	elif enemy_kind == &"drowned_sloop" or enemy_kind == &"ghost_ship":
-		_notice("Rival vessel sent to the depths — clear waters ahead!")
+		_notice("Rival vessel sent to the depths -- clear waters ahead!")
 
 
 ## Process a sold treasure (accepts a Carryable, raw treasure info Dictionary,
@@ -270,22 +298,52 @@ func notify_treasure_sold(treasure_info: Variant) -> Dictionary:
 	if not Net.is_host():
 		return {}
 	var info := _extract_treasure_info(treasure_info)
+	var comp_id := _resolve_treasure_company(info)
+	var mult := emissary.get_multiplier(comp_id) if emissary != null else 1.0
+	var sale_emissary_grade := emissary.grade if emissary != null else 0
 	var sale: Dictionary
 	if info.has("gold_awarded") and bool(info.get("ok", false)):
-		sale = info
+		sale = info.duplicate(true)
+		if mult > 1.001 and not sale.has("emissary_multiplier"):
+			var orig_g := int(sale.get("gold_awarded", 0))
+			var orig_r := int(sale.get("renown_awarded", 0))
+			var scaled_g := maxi(orig_g, roundi(float(orig_g) * mult))
+			var scaled_r := maxi(orig_r, roundi(float(orig_r) * mult))
+			var extra_g := scaled_g - orig_g
+			var extra_r := scaled_r - orig_r
+			var prof := _get_profile()
+			if prof != null:
+				if extra_g > 0:
+					prof.add_gold(extra_g)
+					prof.bump_stat("gold_earned", extra_g)
+				if extra_r > 0:
+					prof.add_renown(String(comp_id), extra_r)
+				sale["total_gold"] = int(prof.data.get("gold", 0))
+			sale["gold_awarded"] = scaled_g
+			sale["renown_awarded"] = scaled_r
 	else:
-		sale = Economy.sell_treasure(_get_profile(), info)
+		sale = Economy.sell_treasure(_get_profile(), info, mult)
 
 	if not bool(sale.get("ok", false)):
 		return sale
 
+	sale["emissary_multiplier"] = mult
+	sale["emissary_grade"] = sale_emissary_grade
+
 	var gold_awarded := int(sale.get("gold_awarded", 0))
 	var renown_awarded := int(sale.get("renown_awarded", 0))
-	_notice("Sold %s for %d gold (+%d renown)." % [
-		String(sale.get("name", "Treasure")), gold_awarded, renown_awarded])
+	if mult > 1.001:
+		_notice("Sold %s for %d gold (+%d renown, %.2fx Emissary)." % [
+			String(sale.get("name", "Treasure")), gold_awarded, renown_awarded, mult])
+	else:
+		_notice("Sold %s for %d gold (+%d renown)." % [
+			String(sale.get("name", "Treasure")), gold_awarded, renown_awarded])
 	var rank_msg := String(sale.get("rank_up_notice", ""))
 	if rank_msg != "":
 		_notice(rank_msg)
+
+	if emissary != null:
+		emissary.add_progress(28.0, comp_id)
 
 	if active_voyage.is_empty():
 		return sale
@@ -317,6 +375,7 @@ func get_state() -> Dictionary:
 		"completed_count": completed_count,
 		"treasure_boarded": _treasure_boarded,
 		"late_warned": _late_warned,
+		"emissary": emissary.get_state() if emissary != null else {},
 	}
 
 
@@ -329,6 +388,9 @@ func apply_state(state: Dictionary) -> void:
 	completed_count = int(state.get("completed_count", completed_count))
 	_treasure_boarded = bool(state.get("treasure_boarded", false))
 	_late_warned = bool(state.get("late_warned", false))
+	var em: Variant = state.get("emissary", null)
+	if emissary != null and em is Dictionary:
+		emissary.apply_state(em as Dictionary)
 
 
 static func _matches_captain_prey(enemy_kind: StringName, target: StringName) -> bool:
@@ -354,6 +416,9 @@ func _jump_to_stage(idx: int) -> void:
 
 func _advance_stage() -> void:
 	var stages: Array = active_voyage.get("stages", [])
+	var comp_id := StringName(String(active_voyage.get("company_id", &"")))
+	if emissary != null:
+		emissary.add_progress(60.0, comp_id)
 	current_stage_index += 1
 	stage_progress = 0
 	if current_stage_index >= stages.size():
@@ -368,8 +433,11 @@ func _complete_active_voyage() -> void:
 	var finished := active_voyage
 	var payoff: Dictionary = finished.get("payoff", {})
 	var company_id := StringName(String(finished.get("company_id", &"gilded_compass")))
-	var bonus_gold := 0 if _late_warned else int(payoff.get("bonus_gold", 0))
-	var bonus_renown := int(payoff.get("bonus_renown", 0))
+	var mult := emissary.get_multiplier(company_id) if emissary != null else 1.0
+	var raw_bonus_gold := 0 if _late_warned else int(payoff.get("bonus_gold", 0))
+	var raw_bonus_renown := int(payoff.get("bonus_renown", 0))
+	var bonus_gold := maxi(0, roundi(float(raw_bonus_gold) * mult))
+	var bonus_renown := maxi(0, roundi(float(raw_bonus_renown) * mult))
 	var prof := _get_profile()
 
 	var rank_up_notice := ""
@@ -384,7 +452,7 @@ func _complete_active_voyage() -> void:
 		var new_rank := Economy.get_company_rank(prof, company_id)
 		if new_rank > old_rank:
 			var comp_name := String(Economy.COMPANIES.get(company_id, {}).get("name", String(company_id)))
-			rank_up_notice = "%s: Promoted to Rank %d — %s!" % [
+			rank_up_notice = "%s: Promoted to Rank %d -- %s!" % [
 				comp_name, new_rank, Economy.rank_title(new_rank)]
 
 	completed_count += 1
@@ -397,6 +465,7 @@ func _complete_active_voyage() -> void:
 		"story_chapter": int(finished.get("story_chapter", 0)),
 		"bonus_gold": bonus_gold,
 		"bonus_renown": bonus_renown,
+		"emissary_multiplier": mult,
 		"total_gold_earned": _voyage_gold_earned + bonus_gold,
 		"total_renown_earned": _voyage_renown_earned + bonus_renown,
 		"chests_sold": _voyage_chests_sold,
@@ -416,6 +485,26 @@ func _complete_active_voyage() -> void:
 		summary["title"], bonus_gold, bonus_renown])
 	if rank_up_notice != "":
 		_notice(rank_up_notice)
+
+
+func _on_emissary_grade_changed(company_id: StringName, new_grade: int, multiplier: float) -> void:
+	if new_grade < 2:
+		return
+	var badge := EmissaryLedger.format_badge_text(company_id, new_grade, multiplier)
+	_notice("Emissary Grade Up! %s" % badge)
+	if Audio != null:
+		Audio.play_stinger(&"discovery")
+
+
+func _resolve_treasure_company(info: Dictionary) -> StringName:
+	var raw_id: Variant = info.get("treasure_id", info.get("id", &""))
+	var tid := StringName(String(raw_id))
+	var base := TreasureCatalog.get_entry(tid) if tid != &"" else {}
+	var comp_id := StringName(String(info.get("company_id",
+			base.get("company_id", &"gilded_compass"))))
+	if not Economy.COMPANIES.has(comp_id):
+		comp_id = &"gilded_compass"
+	return comp_id
 
 
 func _extract_treasure_info(raw: Variant) -> Dictionary:
