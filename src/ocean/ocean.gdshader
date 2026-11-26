@@ -205,11 +205,11 @@ vec2 sample_foam_lace(vec2 rest_p, vec2 fdir, float stretch_k, float streak) {
 	if (streak > 0.01) {
 		vec2 along = wind_dir;
 		vec2 across = vec2(-wind_dir.y, wind_dir.x);
-		vec2 suv = vec2(dot(rest_p, along) * 0.16, dot(rest_p, across) * 0.62) * foam_scale;
-		float s1 = texture(foam_tex, suv + w * 0.35).r;
-		float s2 = texture(foam_tex, suv * vec2(0.65, 1.70) + 0.37).b;
-		pattern = mix(pattern, s1 * 0.56 + s2 * 0.44, streak);
-		fil_wall = mix(fil_wall, s1 * 0.50 + s2 * 0.50, streak * 0.75);
+		vec2 suv = vec2(dot(rest_p, along) * 0.30, dot(rest_p, across) * 0.96) * foam_scale;
+		float s1 = texture(foam_tex, suv + w * 0.38).r;
+		float s2 = texture(foam_tex, suv * vec2(0.72, 1.95) + 0.37).b;
+		pattern = mix(pattern, s1 * 0.44 + s2 * 0.56, streak);
+		fil_wall = mix(fil_wall, s1 * 0.40 + s2 * 0.60, streak * 0.78);
 	}
 	return vec2(pattern, fil_wall);
 }
@@ -231,11 +231,15 @@ vec3 foam_mask_flow(float amount, float web_amt, vec2 draped, vec2 off0, vec2 of
 	float pattern = smoothstep(0.12, 0.88, s.x);
 	float thr = 1.0 - amount;
 	float cover = smoothstep(thr - soft, thr + soft, 1.0 - pattern) * smoothstep(0.0, 0.07, amount);
-	float body = smoothstep(thr, thr + 0.42, 1.0 - pattern);
+	// Preserve delicate frothy water pores inside wake, surf & gale foam so high-coverage patches
+	// read as aerated sea-lace instead of solid opaque paint (only tightest crest/lip core saturates).
+	float bubble_lace = 1.0 - smoothstep(0.24, 0.82, s.y);
+	cover *= mix(0.36 + 0.64 * bubble_lace, 1.0, smoothstep(0.84, 0.98, amount));
+	float body = smoothstep(thr + 0.04, thr + 0.48, 1.0 - pattern) * (0.48 + 0.52 * bubble_lace);
 	// Organic frothy webbing draped strictly where wave action / wakes / surf exist
 	float web_edge = mix(0.18, 0.56, clamp(web_amt, 0.0, 1.0));
 	float web_fil = 1.0 - smoothstep(0.06, web_edge, s.y);
-	float web_cover = web_fil * smoothstep(0.02, 0.14, web_amt) * clamp(web_amt * 1.10, 0.0, 0.68);
+	float web_cover = web_fil * smoothstep(0.02, 0.14, web_amt) * clamp(web_amt * 1.12, 0.0, 0.70);
 	return vec3(cover, body, web_cover);
 }
 
@@ -498,20 +502,20 @@ void fragment() {
 		// deep fathomless sapphire rather than painting bright cyan bands across broad swell tops.
 		float deck_angle = smoothstep(0.58, 0.12, abs(V.y));
 		float grazing_sss = smoothstep(0.14, 0.72, facing) * deck_angle;
-		float sss_dist = smoothstep(185.0, 18.0, dist);
-		float wave_steep = smoothstep(0.07, 0.34, length(n_geo.xz) + length(chop_slope) * 0.48);
+		float sss_dist = smoothstep(175.0, 16.0, dist);
+		float wave_steep = smoothstep(0.06, 0.32, length(n_geo.xz) + length(chop_slope) * 0.50);
 
 		float body_k = body_floor
-			+ 0.28 * smoothstep(-0.32, 1.05, eff_h) * (0.28 + 0.72 * deck_angle)
-			+ 0.32 * crest * (0.25 + 0.75 * deck_angle)
-			+ 0.20 * chop_fold * open_sea
+			+ 0.30 * smoothstep(-0.32, 1.05, eff_h) * (0.28 + 0.72 * deck_angle)
+			+ 0.34 * crest * (0.25 + 0.75 * deck_angle)
+			+ 0.22 * chop_fold * open_sea
 			+ 0.14 * facing * facing;
 		body_k *= mix(1.0, 0.12, dist_sapphire) * macro_depth;
-		body_k *= mix(0.36, 1.28, smoothstep(0.42, 0.96, mix(macro_light, slope_light, 0.50)));
+		body_k *= mix(0.36, 1.30, smoothstep(0.42, 0.96, mix(macro_light, slope_light, 0.50)));
 		body_k = max(body_k, body_floor * 0.65);
 
 		float face_lit = mix(macro_light, slope_light, 0.56);
-		float face_contrast = mix(0.28, 1.48, smoothstep(0.36, 0.96, face_lit)) * trough_ao;
+		float face_contrast = mix(0.28, 1.50, smoothstep(0.36, 0.96, face_lit)) * trough_ao;
 		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light * face_contrast * swell_shade;
 
 		// Luminous emerald-aquamarine translucent glow strictly in near-to-mid steep thin crests
@@ -519,24 +523,24 @@ void fragment() {
 		float golden_hour = (1.0 - night_bio) * (1.0 - storm * 0.82) * smoothstep(-0.01, 0.04, L.y) * smoothstep(0.32, 0.08, L.y);
 		float sss_elev = smoothstep(0.005, 0.16, L.y);
 		float sss_key = smoothstep(0.10, 0.56, sun_light.r + sun_light.g * 0.8);
-		float sss_mod = sss_elev * sss_key * (1.0 - night_bio) * mix(1.0, 0.42, storm);
-		vec3 sss_tint = mix(sss_color, vec3(0.24, 0.82, 0.56), golden_hour * 0.42);
+		float sss_mod = sss_elev * sss_key * (1.0 - night_bio) * mix(1.0, 0.44, storm);
+		vec3 sss_tint = mix(sss_color, vec3(0.34, 0.82, 0.50), golden_hour * 0.46);
 		float sss_break = clamp(0.62 + (N.x * 0.9 + N.z * 0.7) * 0.52 + (1.0 - N.y) * 0.85, 0.32, 1.32);
-		float chop_ridge = smoothstep(0.56, 0.92, chop_h) * (0.42 + 0.58 * chop_fold) * open_sea;
+		float chop_ridge = smoothstep(0.54, 0.90, chop_h) * (0.44 + 0.56 * chop_fold) * open_sea;
 		float ridge_thin = clamp(
-			smoothstep(0.36, 0.94, crest) * smoothstep(0.18, 0.92, eff_h) * sss_break * wave_steep
-			+ chop_ridge * smoothstep(0.02, 0.72, h_rel) * 0.72 * wave_steep,
+			smoothstep(0.32, 0.92, crest) * smoothstep(0.14, 0.90, eff_h) * sss_break * wave_steep
+			+ chop_ridge * smoothstep(0.00, 0.70, h_rel) * 0.78 * wave_steep,
 			0.0, 1.0
 		);
 		float thin = clamp(
-			ridge_thin * 1.04
-			+ 0.52 * smoothstep(0.24, 0.94, eff_h) * wave_steep * max(back_lit, side_lit * 0.58) * sss_break,
+			ridge_thin * 1.08
+			+ 0.56 * smoothstep(0.20, 0.92, eff_h) * wave_steep * max(back_lit, side_lit * 0.62) * sss_break,
 			0.0, 1.0
 		);
 		body += sss_tint * sss_strength * sss_mod * (
-				ridge_thin * light * 0.62
-				+ thin * sun_light * (2.15 * back_lit + 0.78 * side_lit)
-		) * (0.04 + 0.96 * grazing_sss) * sss_dist;
+				ridge_thin * light * 0.82
+				+ thin * sun_light * (2.52 * back_lit + 0.96 * side_lit)
+		) * (0.10 + 0.90 * grazing_sss) * sss_dist;
 
 		// 3-zone coastal depth absorption: crystal turquoise shallows (0..3.5 m) -> vivid
 		// emerald-jade reef dropoff (3.5..14 m) -> fathomless dark sapphire-indigo open sea (> 14 m).
@@ -559,7 +563,9 @@ void fragment() {
 		// Crisp, wind-torn whitecaps strictly along the steepest pinched FFT & Gerstner crests.
 		float chop_cap = smoothstep(0.56, 0.88, chop_fold) * smoothstep(0.26, 0.92, eff_h) * mix(0.40, 0.88, storm) * mix(0.60, 1.18, macro_patch) * open_foam;
 		float fair_cap = max(smoothstep(0.44, 1.00, eff_h) * smoothstep(0.93, 0.72, jac) * mix(0.50, 0.42, storm) * open_foam, chop_cap);
-		float field = clamp(field_foam(v_rest, dist) * 1.12, 0.0, 1.0);
+		float field_raw = field_foam(v_rest, dist);
+		// Break up Gaussian wake stamps with organic froth modulation so hull wakes stay lacy, never solid pads!
+		float field = clamp(field_raw * 0.86, 0.0, 0.76);
 		float crest_foam = max(max(f_now, fair_cap), field);
 		float linger = clamp(field - max(f_now, fair_cap), 0.0, 1.0);
 		if (foam_field_on < 0.5 || dist > foam_field_size * 0.31) {
@@ -572,16 +578,16 @@ void fragment() {
 			crest_foam = max(crest_foam, f_trail);
 			linger = max(linger, clamp(f_trail - f_now, 0.0, 1.0));
 		}
-		// Wind streaks: standing foam in rough weather, drawn out downwind into torn spindrift ribbons.
+		// Wind streaks: standing foam in rough weather, drawn out downwind into crisp wind-torn spindrift ribbons.
 		// Gate the extra spindrift tap strictly on active storms (0.00 ms overhead in fair weather!).
 		vec2 wuv = vec2(dot(v_rest, wind_dir) * 0.004, dot(v_rest, vec2(-wind_dir.y, wind_dir.x)) * 0.021);
 		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
 		float spindrift = blot;
 		float standing = 0.0;
 		if (storm > 0.02) {
-			spindrift = texture(foam_tex, wuv * vec2(0.62, 2.75) + vec2(0.0045, 0.13) * sea_time).r;
-			float wind_ribbon = smoothstep(0.30, 0.84, blot) * smoothstep(0.24, 0.78, spindrift * 0.72 + blot * 0.28);
-			standing = storm * storm * wind_ribbon * 0.68 * smoothstep(-0.30, 0.52, eff_h) * deep_water;
+			spindrift = texture(foam_tex, wuv * vec2(0.75, 3.10) + vec2(0.0055, 0.13) * sea_time).r;
+			float wind_ribbon = smoothstep(0.38, 0.86, blot) * smoothstep(0.34, 0.84, spindrift * 0.76 + blot * 0.24);
+			standing = storm * storm * wind_ribbon * 0.46 * smoothstep(-0.20, 0.58, eff_h) * deep_water;
 		}
 		crest_foam = max(crest_foam, standing);
 
@@ -595,19 +601,20 @@ void fragment() {
 			vd0 = max(sd, 0.0);
 			in_water = smoothstep(-0.30, -0.05, sd);
 		}
-		// Gentle beaches get animated multi-band surf wash; steep rocks & hulls get a crisp white collar.
+		// Gentle beaches get crisp scalloped shore-parallel surf wavelets (zero bullseye blot swirl!);
+		// steep rocks & ship hulls get a tight, lacy churning waterline collar (zero thick white pillows!).
 		vec3 scene_n = normalize(cross(dFdy(sw0), dFdx(sw0)));
 		float flatness = smoothstep(0.50, 0.92, abs(scene_n.y));
 		float foam_depth = shore_foam_depth * mix(0.18, 1.0, flatness);
 		float shore = 1.0 - smoothstep(0.0, foam_depth, vd0);
-		float band1 = 0.5 + 0.5 * sin(vd0 * 10.5 / foam_depth + sea_time * 1.65 + blot * 5.5);
-		float band2 = 0.5 + 0.5 * sin(vd0 * 18.0 / foam_depth + sea_time * 2.35 - blot * 3.8);
-		float surf_bands = max(band1 * band1, band2 * band2 * 0.70);
-		float lip_lace = 0.52 + 0.52 * smoothstep(0.20, 0.82, blot * 0.62 + band1 * 0.38);
-		float beach_wash = shore * (0.24 + 0.76 * surf_bands) * 0.92 + smoothstep(0.11, 0.0, vd0) * 0.74 * lip_lace;
-		// Crisp white collar right around steep rocks and ship hulls.
-		float collar_wave = 0.85 + 0.15 * sin(sea_time * 2.2 + dot(v_rest, vec2(0.7, 0.5)));
-		float hull_collar = (smoothstep(0.26, 0.0, vd0) * 0.88 + smoothstep(0.55, 0.08, vd0) * 0.35 * band1) * collar_wave;
+		float band1 = 0.5 + 0.5 * sin(vd0 * 7.6 / foam_depth + sea_time * 1.55 + blot * 1.50);
+		float band2 = 0.5 + 0.5 * sin(vd0 * 12.6 / foam_depth + sea_time * 2.15 - blot * 1.15);
+		float surf_bands = max(band1 * band1, band2 * band2 * 0.58);
+		float lip_lace = 0.58 + 0.46 * smoothstep(0.22, 0.82, blot * 0.56 + band1 * 0.44);
+		float beach_wash = shore * (0.24 + 0.64 * surf_bands) * 0.82 + smoothstep(0.16, 0.0, vd0) * 0.88 * lip_lace;
+		// Tight lacy whitewater collar around steep rocks and ship hulls.
+		float collar_wave = 0.84 + 0.16 * sin(sea_time * 2.2 + dot(v_rest, vec2(0.7, 0.5)));
+		float hull_collar = (smoothstep(0.16, 0.0, vd0) * 0.86 + smoothstep(0.46, 0.06, vd0) * 0.30 * band1 * (0.48 + 0.52 * blot)) * collar_wave;
 		float shore_foam = mix(hull_collar, beach_wash, flatness);
 		shore_foam *= has_floor * in_water;
 
@@ -619,14 +626,16 @@ void fragment() {
 		float near_web_fade = smoothstep(115.0, 10.0, dist);
 		float web_patch = smoothstep(0.24, 0.86, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
 		float ridge_act = smoothstep(0.42, 0.92, crest) * 0.42 + smoothstep(0.12, 0.34, slope_len) * 0.34 + smoothstep(0.60, 0.92, chop_fold) * 0.36;
-		float web_src = max(ridge_act * wave_energy, max(field * 1.0, shore_foam * 0.84));
-		web_src = max(web_src, crest_foam * 0.85 + storm * 0.40 * smoothstep(0.06, 0.24, slope_len) * deep_water);
+		float web_src = max(ridge_act * wave_energy, max(field * 1.0, shore_foam * 0.86));
+		web_src = max(web_src, crest_foam * 0.85 + storm * 0.36 * smoothstep(0.06, 0.24, slope_len) * deep_water);
 		float web_amt = near_web_fade * clamp(web_src, 0.0, 1.0) * mix(0.26, 1.20, web_patch);
 
 		float soft = clamp(0.045 + fp * 0.55, 0.045, 0.45);
-		float amount = clamp(max(min(crest_foam, 0.82), shore_foam), 0.0, 1.0);
-		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
-		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, flow_dir, flow_stretch, soft, quality > 0 ? streak : 0.0);
+		float amount = clamp(max(min(crest_foam, 0.78), shore_foam * 0.92), 0.0, 0.96);
+		float streak = storm * clamp(max(linger, standing) * 1.85 - shore_foam, 0.0, 1.0) * 0.72;
+		// Keep shallow beach surf lace isotropic (un-smeared) while open-sea crests stretch along wave flow.
+		float foam_stretch = flow_stretch * (1.0 - clamp(shore_foam * 0.70, 0.0, 0.70));
+		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, flow_dir, foam_stretch, soft, quality > 0 ? streak : 0.0);
 		// Break distant whitecaps into wind-torn spindrift flecks & streaks instead of solid snow-drifts.
 		float far_fleck = smoothstep(0.24, 0.80, mix(blot * 0.65 + chop_fold * 0.55, spindrift * 0.70 + chop_fold * 0.45, storm * 0.82));
 		float heavy_foam = mix(amount * amount * 0.40 * far_fleck, fm.x, lod_fade);
@@ -695,31 +704,33 @@ void fragment() {
 
 		// --- composite organic wave-action webbing and creamy breaking caps on top
 		vec3 foam_light = ambient_color * 0.86 + sun_light * (0.36 + 0.58 * clamp(dot(N, L), 0.0, 1.0));
+		// Keep night-time ship wake foam subtle moonlit silver-blue so bioluminescent plankton stars pop cleanly!
+		foam_light *= mix(1.0, 0.66, night_bio);
 		float foam_shade = mix(0.80, 1.08, smoothstep(0.75, 1.0, macro_light));
 		vec3 web_tone = mix(foam_under_color, foam_color, 0.76) * foam_light * foam_shade;
 		col = mix(col, web_tone, clamp(web_foam * 0.72, 0.0, 0.72));
 		vec3 thin_tone = mix(foam_under_color, foam_color, 0.68);
 		vec3 foam_lit = mix(thin_tone, foam_color, smoothstep(0.05, 0.72, foam_body)) * foam_light * foam_shade;
-		col = mix(col, foam_lit, heavy_foam * mix(0.80, 0.97, foam_body));
+		col = mix(col, foam_lit, heavy_foam * mix(0.76, 0.95, foam_body));
 
 		// --- nocturnal bioluminescent plankton shimmer in ship wakes, breaking crests & surf (0 extra taps)
-		// Modulated strictly by organic lacy foam filaments & fine ripple glitter so ship wakes
-		// swirl like starry plankton ribbons with zero smooth circular blobs floating in open sea!
+		// Carves lacy starry plankton ribbons out of swirling wake filaments & fine ripple glitter so
+		// night wakes sparkle like living bioluminescence rather than glowing solid oval pads!
 		if (night_bio > 0.001) {
 			float rip_energy = clamp(length(rip_fine + rip_micro * 0.85) * 2.4, 0.0, 1.0);
 			float micro_twinkle = 0.5 + 0.5 * sin(dot(v_rest, vec2(3.7, -2.9)) + sea_time * 2.6 + blot * 9.0);
-			float fine_glitter = smoothstep(0.44, 0.92, rip_energy * 0.62 + micro_twinkle * 0.48);
-			float lace_bio = clamp(heavy_foam * 1.15 + web_foam * 1.35 + shore_foam * 0.85, 0.0, 1.0);
-			float wake_bio = field * smoothstep(0.10, 0.78, lace_bio * 0.82 + fine_glitter * 0.45) * (0.45 + 0.85 * lace_bio);
-			float crest_bio = clamp(heavy_foam * 0.58 + web_foam * 0.52 + shore_foam * 0.52, 0.0, 1.0) * smoothstep(0.20, 0.82, blot * 0.55 + fine_glitter * 0.55);
-			float bio_shimmer = (0.48 + 0.52 * blot) * (0.62 + 0.72 * fine_glitter);
+			float fine_glitter = smoothstep(0.48, 0.94, rip_energy * 0.58 + micro_twinkle * 0.52);
+			float lace_fil = clamp((heavy_foam - foam_body * 0.58) * 1.35 + web_foam * 1.48 + shore_foam * 0.72, 0.0, 1.0);
+			float wake_bio = field * smoothstep(0.18, 0.82, lace_fil * 0.76 + fine_glitter * 0.58) * (0.28 + 0.96 * lace_fil);
+			float crest_bio = clamp(heavy_foam * 0.52 + web_foam * 0.58 + shore_foam * 0.48, 0.0, 1.0) * smoothstep(0.24, 0.84, blot * 0.52 + fine_glitter * 0.58);
+			float bio_shimmer = (0.40 + 0.60 * blot) * (0.50 + 0.92 * fine_glitter);
 			float bio_dist = smoothstep(135.0, 16.0, dist);
-			vec3 bio_col = mix(vec3(0.05, 0.70, 0.90), vec3(0.22, 0.96, 0.98), fine_glitter * 0.62);
-			float bio_intensity = (wake_bio * 0.74 + crest_bio * 0.16) * bio_shimmer * bio_dist * night_bio;
+			vec3 bio_col = mix(vec3(0.03, 0.58, 0.84), vec3(0.26, 0.98, 1.00), fine_glitter * 0.74);
+			float bio_intensity = (wake_bio * 0.62 + crest_bio * 0.16) * bio_shimmer * bio_dist * night_bio;
 			col += bio_col * bio_intensity;
 		}
 
-		alpha_edge = smoothstep(0.0, 0.06, thick0);
+		alpha_edge = smoothstep(0.0, 0.04, thick0);
 		col = mix(texture(screen_tex, SCREEN_UV).rgb, col, alpha_edge);
 
 		// --- aerial haze & bright hazy horizon melt into sky_horizon_color
@@ -739,22 +750,25 @@ void fragment() {
 			col = mirror;
 		} else {
 			T = normalize(T);
-			vec3 sky = ocean_sky(T);
-			float sd = max(dot(T, L), 0.0);
+			vec3 T_sky = normalize(vec3(T.x, max(T.y, 0.06), T.z));
+			vec3 sky = ocean_sky(T_sky);
+			float sd = max(dot(T_sky, L), 0.0);
 			sky += sun_light * (pow(sd, 350.0) * 14.0 + pow(sd, 24.0) * 0.9 + pow(sd, 4.0) * 0.25);
 			vec4 clip = PROJECTION_MATRIX * (VIEW_MATRIX * vec4(T, 0.0));
 			vec2 suv = clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5;
 			vec2 edge = min(suv, 1.0 - suv);
-			float on_screen = step(1e-4, clip.w) * smoothstep(0.0, 0.08, min(edge.x, edge.y));
+			float tn = max(dot(T, N), 0.0);
+			float snell_soft = smoothstep(0.14, 0.46, tn);
+			float on_screen = step(1e-4, clip.w) * smoothstep(0.0, 0.12, min(edge.x, edge.y)) * snell_soft;
 			vec3 sv;
 			float raw_u;
 			float sz = linear_depth(clamp(suv, vec2(0.001), vec2(0.999)), INV_PROJECTION_MATRIX, sv, raw_u);
 			vec3 sw = (INV_VIEW_MATRIX * vec4(sv, 1.0)).xyz;
 			on_screen *= step(1e-5, raw_u) * step(-0.2, sw.y);
-			sky = mix(sky, texture(screen_tex, clamp(suv, vec2(0.001), vec2(0.999))).rgb, on_screen * 0.85);
-			float fr = 0.02 + 0.98 * pow(1.0 - max(dot(T, N), 0.0), 5.0);
-			col = mix(sky, mirror, clamp(fr, 0.0, 1.0));
-			col *= 1.0 + 0.25 * smoothstep(0.6, 1.0, cos_i);
+			sky = mix(sky, texture(screen_tex, clamp(suv, vec2(0.001), vec2(0.999))).rgb, on_screen * 0.80);
+			float fr = clamp(0.04 + 0.96 * pow(1.0 - tn, 2.35), 0.0, 1.0);
+			col = mix(sky, mirror, fr);
+			col *= 1.0 + 0.22 * smoothstep(0.55, 1.0, cos_i);
 		}
 		float f_under = max(smoothstep(foam_crest_start, foam_crest_full, jac), field_foam(v_rest, dist));
 		col *= 1.0 - 0.45 * f_under;

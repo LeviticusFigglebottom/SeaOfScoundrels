@@ -402,11 +402,11 @@ void fragment() {
 	vec3 col_deep = deep_seabed_color * mix(0.84, 1.16, brush_n);
 	vec3 col_shallow = shallow_seabed_color * mix(0.90, 1.10, ripple_n * 0.55 + brush_n * 0.45);
 
-	// Wet shoreline sand: rich dark wet amber with glistening foam edge & washed coral/shingle gravel.
+	// Wet shoreline sand: rich warm golden-amber damp swash sand with subtle sea-foam edge & washed shingle.
 	float shore_foam_band = smoothstep(-0.20, 0.12, h) * smoothstep(0.56, 0.18, h + (brush_n - 0.5) * 0.16);
-	vec3 col_wet = wet_sand_color * vec3(0.88, 0.85, 0.82) * mix(0.84, 1.14, ripple_n * 0.38 + pebble_n * 0.62);
-	col_wet = mix(col_wet, col_wet * vec3(0.74, 0.68, 0.62), shingle_patch * 0.40);
-	col_wet = mix(col_wet, vec3(0.93, 0.96, 0.93), shore_foam_band * smoothstep(0.50, 0.86, brush_n * 0.65 + pebble_n * 0.35) * 0.26);
+	vec3 col_wet = wet_sand_color * vec3(0.92, 0.84, 0.72) * mix(0.84, 1.14, ripple_n * 0.38 + pebble_n * 0.62);
+	col_wet = mix(col_wet, col_wet * vec3(0.76, 0.70, 0.60), shingle_patch * 0.36);
+	col_wet = mix(col_wet, vec3(0.94, 0.97, 0.95), shore_foam_band * smoothstep(0.52, 0.88, brush_n * 0.62 + pebble_n * 0.38) * 0.24);
 	col_wet = mix(col_wet, col_wet * vec3(0.50, 0.46, 0.46), volc * 0.58);
 
 	// Dry sunlit beach: warm wind-drift sand, organic coral shingle pockets & crisp shell flecks.
@@ -646,7 +646,7 @@ void fragment() {
 			float sand_nrm_k = mix(0.28, 1.12, t_dry_in);
 			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 2.25, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail, sa, sn_o);
 			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.12)) * vec3(1.04, 1.02, 0.98);
-			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.56, 0.48, 0.36), 0.56);
+			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.66, 0.54, 0.36), 0.54);
 			vec3 dry_pbr = mix(col_dry, sa_pop, 0.78);
 			tex_alb_acc += mix(wet_pbr, dry_pbr, t_dry_in) * w_sand;
 			tex_nrm_acc += sn_o * w_sand;
@@ -769,12 +769,18 @@ void light() {
 		float fill_str = mix(0.07, 0.28, cliff_m) * warmth * clamp(sun, 0.38, 1.15);
 		DIFFUSE_LIGHT += shadow_plane * cool_fill * fill_str / PI;
 
-		// Glistening wet sand specular + tactile sunlit sheen on worn cobbles, mineral cliff ridges & dew-kissed turf.
+		// Glistening wet sand specular + Fresnel sky-mirror swash film + tactile sunlit sheen on worn cobbles & cliffs.
 		vec3 h_vec = normalize(VIEW + LIGHT);
 		float ndh = clamp(dot(NORMAL, h_vec), 0.0, 1.0);
 		float spec_pow = mix(mix(14.0, 40.0, micro_sheen), 140.0, wet_m);
-		float spec_amp = mix(mix(0.05, 0.20, micro_sheen), 0.68, wet_m);
+		float spec_amp = mix(mix(0.05, 0.20, micro_sheen), 0.72, wet_m);
 		SPECULAR_LIGHT += pow(ndh, spec_pow) * spec_amp * ndl * ATTENUATION * LIGHT_COLOR * sun;
+		if (wet_m > 0.01) {
+			float wet_fres = pow(clamp(1.0 - max(dot(NORMAL, VIEW), 0.0), 0.0, 1.0), 3.4);
+			float sky_gate = clamp(dot(LIGHT_COLOR, vec3(0.333)) * 1.35, 0.08, 1.0);
+			vec3 wet_sky = mix(sky_horizon_color, sky_zenith_color, 0.25) * clamp(sun, 0.42, 1.15);
+			SPECULAR_LIGHT += wet_sky * (wet_fres * 0.36 * wet_m * sky_gate);
+		}
 	} else {
 		// Point/spot lights (campfires, lava caldera, tavern/dock/beacon lanterns).
 		DIFFUSE_LIGHT += ndl * ATTENUATION * LIGHT_COLOR / PI;
