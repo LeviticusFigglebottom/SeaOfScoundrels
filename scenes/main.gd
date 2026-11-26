@@ -208,6 +208,8 @@ static func _drain_static_visual_caches() -> void:
 	ShipHarpoon.clear_shared_cache()
 	ShipSupplyBarrels.clear_shared_cache()
 	Rowboat.clear_shared_cache()
+	ShipDamageVisuals.clear_shared_cache()
+	WorldEventCloud.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
 	Leviathan.clear_shared_cache()
@@ -1147,6 +1149,7 @@ func _wire_world_signals() -> void:
 	world_director.spawn_castaway.connect(_on_director_spawn_castaway)
 	world_director.spawn_storm_cell.connect(_on_director_spawn_storm_cell)
 	world_director.sighting_warning.connect(_on_director_sighting_warning)
+	world_director.event_cloud_spawned.connect(_on_director_event_cloud_spawned)
 
 	# Ship sinking -> zero-wipe salvage wreck & restore at last outpost.
 	player_ship.sunk.connect(_on_player_ship_sunk)
@@ -1886,6 +1889,18 @@ func _on_flotsam_cluster_salvaged(cluster: Node, _pawn: Node, loot: Dictionary) 
 	var sfx_pos := (cluster as Node3D).global_position if (cluster is Node3D and is_instance_valid(cluster)) else Vector3.INF
 	Audio.play_sfx(&"coin_jingle", sfx_pos)
 	Game.post_notice("Salvaged supplies & %d gold from shipwreck flotsam!" % gold)
+
+
+func _on_director_event_cloud_spawned(kind: StringName, world_pos: Vector3, _cloud_node: Node3D) -> void:
+	if not Net.is_host():
+		return
+	var cloud_label := WorldEventCloud.label_for_kind(kind)
+	var from_pos := player_ship.global_position if (player_ship != null and is_instance_valid(player_ship)) else Vector3.ZERO
+	var bearing := WorldDirector.compass_bearing(from_pos, world_pos)
+	for br in crew_brains:
+		if br != null and is_instance_valid(br):
+			if br.notify_event_cloud_sighted(cloud_label, bearing):
+				return
 
 
 func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
@@ -4080,6 +4095,81 @@ func _apply_hero_shot(mode: String) -> void:
 				var wt_cam := wt_target + wt_out * maxf(40.0, wt_r * 0.68) + wt_side * 16.0 + Vector3(0.0, 6.5, 0.0)
 				wt_cam.y = maxf(wt_cam.y, wt_isl.world_surface_height(wt_cam) + 4.5)
 				_mount_shot_camera(wt_cam, wt_target, 55.0)
+
+		"cinder_arch":
+			# Wave I-3 Q16 hero shot: blazing molten lava river pouring through VolcanicObsidianArch_Portal
+			# at the foot of 176 m Cinder Crag caldera under golden-hour sunset skies.
+			Weather.time_of_day = 17.1 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.14, 10.0, -0.45, 0.0, 0.42)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.22)
+			_suppress_shot_hud_overlays()
+			var ca_isl := archipelago.get_island_by_id("cinder_crag")
+			if ca_isl != null:
+				var ca_pos := ca_isl.global_position
+				var ca_m := ca_isl.mooring_transform.origin
+				var ca_sea := Vector3(ca_m.x, 0.0, ca_m.z)
+				ca_sea = ca_sea.normalized() if ca_sea.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
+				var ca_arch := ca_isl.find_child("VolcanicObsidianArch*", true, false) as Node3D
+				var ca_target := ca_pos + Vector3(0.0, 18.0, 0.0)
+				var ca_fwd := ca_sea
+				if ca_arch != null:
+					ca_target = ca_arch.global_position + Vector3(0.0, 6.5, 0.0)
+					var af := ca_arch.global_basis.z
+					af.y = 0.0
+					if af.length_squared() > 0.01:
+						af = af.normalized()
+						if af.dot(ca_sea) < 0.0:
+							af = -af
+						ca_fwd = af
+				var ca_side := (-ca_fwd).cross(Vector3.UP).normalized()
+				var ca_cam := ca_target + ca_fwd * 54.0 + ca_side * 14.0 + Vector3(0.0, 11.0, 0.0)
+				ca_cam.y = maxf(ca_cam.y, ca_isl.world_surface_height(ca_cam) + 4.5)
+				_mount_shot_camera(ca_cam, ca_target, 56.0)
+
+		"smugglers_vault":
+			# Wave I-3 Q16 hero shot: cove-mouth vista into Smuggler's Cove amphitheatre showing
+			# triplanar PBR SmugglersGrotto cavern, PirateGibbet_Gate, CliffCatwalkPier_Cove & campfire.
+			Weather.time_of_day = 16.0 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 8.0, -0.38, 0.0, 0.30)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_suppress_shot_hud_overlays()
+			var sv_isl := archipelago.get_island_by_id("smugglers_cove")
+			if sv_isl != null:
+				var sv_pos := sv_isl.global_position
+				var sv_r := sv_isl.island_radius
+				var sv_m := sv_isl.mooring_transform.origin
+				var sv_sea := Vector3(sv_m.x, 0.0, sv_m.z)
+				sv_sea = sv_sea.normalized() if sv_sea.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
+				var sv_grotto := sv_isl.find_child("SmugglersGrotto*", true, false) as Node3D
+				var sv_target := sv_grotto.global_position + Vector3(0.0, 4.5, 0.0) if sv_grotto != null else (sv_pos + Vector3(0.0, 7.0, 0.0))
+				var sv_side := (-sv_sea).cross(Vector3.UP).normalized()
+				var sv_cam := sv_pos + sv_sea * (sv_r * 0.96) + sv_side * 10.0 + Vector3(0.0, 10.5, 0.0)
+				sv_cam.y = maxf(sv_cam.y, sv_isl.world_surface_height(sv_cam) + 4.5)
+				_mount_shot_camera(sv_cam, sv_target, 58.0)
+
+		"skull_cloud":
+			# Wave 30B horizon sky beacon hero shot: Brigantine sailing toward Sovereign's Bastion
+			# crowned by a colossal blazing emerald-eyed Fort Skull Cloud hovering at y=175 m!
+			Weather.time_of_day = 17.55 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.24, 11.5, -0.42, 0.0, 0.48)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.24)
+			_suppress_shot_hud_overlays()
+			var sc_fort := archipelago.get_island_by_id("sovereigns_bastion")
+			if sc_fort == null:
+				sc_fort = archipelago.get_island_by_id("ironwatch_fort")
+			if sc_fort != null and world_director != null:
+				var sc_fpos := sc_fort.global_position
+				world_director.spawn_event_cloud(&"fort_siege", sc_fpos, true)
+				var sc_dir := Vector3(-0.62, 0.0, 0.78).normalized()
+				var sc_side := (-sc_dir).cross(Vector3.UP).normalized()
+				var sc_ship_pos := sc_fpos + sc_dir * 420.0 + sc_side * 34.0
+				var sc_to := sc_fpos - sc_ship_pos
+				sc_to.y = 0.0
+				_place_sailing_ship(sc_ship_pos, atan2(-sc_to.x, -sc_to.z), 1.0, 6.2)
+				var sc_cam := sc_ship_pos + sc_dir * 42.0 - sc_side * 24.0 + Vector3(0.0, 14.5, 0.0)
+				sc_cam.y = maxf(sc_cam.y, Sea.height(sc_cam.x, sc_cam.z) + 12.0)
+				var sc_look := sc_fpos + Vector3(0.0, 128.0, 0.0)
+				_mount_shot_camera(sc_cam, sc_look, 58.0)
 
 
 func _suppress_shot_hud_overlays() -> void:

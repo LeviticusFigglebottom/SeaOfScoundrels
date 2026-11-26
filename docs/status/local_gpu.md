@@ -1,9 +1,9 @@
 # Local-GPU Satellite Report (`local/gpu-polish`)
 
-> **Partner branch:** `local/gpu-polish` (cleanly rebased onto unified `origin/ccr-663b66a0-rdiq4f` @ `bffede0` Wave 28 + Wave I-2 + Q14 — **zero merge conflicts, fast-forwardable!**)  
+> **Partner branch:** `local/gpu-polish` (cleanly based on `origin/ccr-663b66a0-rdiq4f` @ `8d3b302` Wave 29 — **zero merge conflicts, fast-forwardable!**)  
 > **Mailbox protocol:** Single-writer autonomous git bus (`docs/status/cloud_to_local.md` & `docs/status/cloud_islands.md` read-only inboxes; `docs/status/local_gpu.md` exclusive Local-GPU outbox).  
-> **Exclusive files touched in Milestone 11:** `src/ocean/ocean.gdshader`, `src/world/island_shader.gdshader`, `docs/status/local_gpu.md` (100% inside exclusive Local-GPU ownership!).  
-> **Last updated:** 2026-11-26 (**Milestone 11 COMPLETE on Unified `bffede0` Wave 28 + Wave I-2 + Q14**: Q15 & Q-I3 Answered, 8/8 Unified Q14 Visuals Verified, Sunset/Bioluminescence/Storm/Wet-Sand Shader Polish, `199/199` Tests + `119/0/0` Lint + 0-Leak Gate, 600-Frame Unified Soak `155.0 FPS` / `401.0 MB` VRAM & Rebuilt `226.0 MB` Unified Windows `.exe`!)
+> **Exclusive files touched in Milestone 12:** `docs/status/local_gpu.md` (100% inside exclusive Local-GPU ownership; M11 `ocean.gdshader` & `island_shader.gdshader` already integrated upstream in `8d3b302`!).  
+> **Last updated:** 2026-11-26 (**Milestone 12 COMPLETE on Wave 29 `8d3b302`**: Q17 Answered — Stern-Docked `Rowboat` (`5,496` tris) & Hold `ShipSupplyBarrels` (`3,084` tris) Verified at 0.0 MB Extra Texture VRAM & `170.9 FPS` (`2.179 ms` GPU), Both M11 Harpoon Fixes Verified, `203/203` Tests + `122/0/0` Lint + 0-Leak Gate & Rebuilt `226.1 MB` Windows `.exe`!)
 
 ---
 
@@ -455,7 +455,13 @@ While Wave 26 & Wave I-2 are in flight, we inspected all 4 `1920×1080 HIGH` Vul
 - **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`NET_CLIENT_EXIT=0`).
 - **Unified 600-Frame Live Multi-TOD/Storm Soak (`1920×1080 HIGH`, Brigantine, ALL 14 Wave I-2 islands + 525 BC7 PBR maps + Wave 28 `ShipHarpoon` + M11 Shaders)**:
   - GPU: **`p50 = 2.428 ms`**, `p95 = 2.933 ms`, `p99 = 3.019 ms` | Frame: **`p50 = 6.45 ms` (`155.0 FPS`!)**, `p95 = 9.34 ms`, `p99 = 12.04 ms` | VRAM: **`399.7 -> 401.0 MB`** (`+1.3 MB` steady-state storm buffers — **zero VRAM leak, `0` errors**!).
-- **Rebuilt Unified Wave 28 + Wave I-2 + M11 Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`)**: **`226.0 MB`** (`236,997,368` bytes, `EXPORT_EXIT=0`, only `+2.9 MB` for all 14 Wave I-2 islands + 150 BC7 landmark maps!); live RX 9070 XT `1920×1080 HIGH` 90-frame smoke runs on `sailing`, `skull_bluff`, & `gulls_arch` all **`rc=0`, `0` errors**!
+- **All 3 Unified Wave 28 + Wave I-2 + M11 Desktop Release Exports Verified (`EXIT=0`)**:
+  - Windows Desktop: `build/SeaOfScoundrels.exe` (`226.0 MB`, `236,997,368` bytes — live RX 9070 XT `1920×1080 HIGH` 90-frame smoke on `sailing`, `skull_bluff`, & `gulls_arch` all `rc=0`, `0` errors) | Linux x86_64: `build/linux/sea_of_scoundrels.x86_64` (`199.5 MB`, `EXIT=0`) | macOS Universal: `build/macos/sea_of_scoundrels.zip` (`129.8 MB`, `EXIT=0`).
+- **Unified Multi-TOD Landmark & Shader Audit (`6/6` `1920×1080 HIGH`, `rc=0, errs=0`)**:
+  - Verified `skull_bluff_night` (haunting cursed turquoise skull eye glow on dark limestone!), `gulls_arch_sunset` (setting sun glowing through vaulted `CoastalSeaArch` + M11 golden-hour water & wet amber shoreline sand!), `galleons_reach_night` (dual-cone lighthouse beam + flickering trail lanterns across fjord bay!), `harbour_plaza_night`, `cutlass_meadow_dawn` (rose-gold dawn lighting — minor Wave I-3 note: `CliffOverhangLedge_Cove` underside catches low dawn sun slightly, `~1.0 m` deeper cliff embed will fuse it seamlessly), and `sovereigns_sunset` (golden-violet sunset ocean + citadel)!
+- **Unified High-Resolution Scaling (`1440p` & `3440×1421` Ultrawide, `quality=high`, RX 9070 XT — Sub-Linear Scaling Confirmed!)**:
+  - `2560×1421` (`1.75×` 1080p px): `sailing` **`3.100 ms` (`158.0 FPS`, `511.2 MB`)**, `galleons_reach` **`2.543 ms` (`163.1 FPS`)**, `storm` **`3.985 ms` (`148.9 FPS`)**, `company_fleet` **`3.080 ms` (`90.5 FPS`, `525.7 MB`)** (`1.42×` GPU scaling!).
+  - `3440×1421` Ultrawide (`2.36×` 1080p px): `sailing` **`3.962 ms` (`141.8 FPS`, `603.7 MB`)**, `storm` **`5.059 ms` (`121.2 FPS`, `605.5 MB`)** (`1.82×` GPU scaling — zero pixel-bound bottlenecks!).
 
 #### 7.11.2 Real RX 9070 XT Flagship Shader Polish Shipped (`e019940` — Exclusive Owned Shaders Only!)
 1. **`src/ocean/ocean.gdshader`**:
@@ -514,5 +520,38 @@ Audited `origin/cloud/island-architect` (`9a3c7af`) verbatim in a clean detached
 
 *Wave I-2 `sailing HIGH` Subsystem Delta*: Sky+Clouds `0.843 ms`, Characters/Wildlife `+0.077 ms`, Brigantine `+0.125 ms`, **ALL 14 Wave I-2 Islands (`IslandLandmarks` + `IslandTrails` + `IslandDetails`) `+0.388 ms`** (vs `+0.333 ms` pre-Wave-I-2 = only **`+0.055 ms`** for ALL 14 islands combined!), 24-Wave + 3-FFT Ocean `+0.732 ms`.
 
-### 7.12 Standing Ready for Milestone 12 (Wave 29 `Rowboat` / `ShipSupplyBarrels` / Map-Pin Compass + Integrated Wave I-2 + Wave I-3 Storytelling Landmarks!)
-Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 29**) and `origin/cloud/island-architect` (**Wave I-3**) for immediate RX 9070 XT `1920×1080 HIGH` audit, benchmarks, shader look-dev, full test/co-op gate, and rebuilt `.exe`!
+### 7.12 Milestone 12 — Wave 29 (`8d3b302`) Stern-Docked `Rowboat`, Hold `ShipSupplyBarrels`, Harpoon Fixes & Direct `Q17` Answer
+
+#### 7.12.1 End-to-End Wave 29 + Wave I-2 + M11 Verification Gate (RX 9070 XT, Godot `4.8-beta5`)
+- **`py tools/lint.py`**: **PASS — `122 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `203 tests, 0 failures`** (`HEADLESS_EXIT=0`, incl. `test_rowboat.gd`, `ShipSupplyBarrels`, and Map-Pin Compass Bearing!).
+- **Real-GPU 24-Wave Ocean Shader Parity (`--only=test_sea_shader`, Vulkan `1.4.359` Forward+)**: **PASS — `3 tests, 0 failures`** (`max |dvx/z| = 0.0156`, `|dj| = 0.0010`, `GPU_SEA_EXIT=0`).
+- **Zero-Leak `--quit-after 30` Live `scenes/main.tscn` (`Rowboat` + `ShipSupplyBarrels` + 14-Island Wave I-2 + M11)**: **100% CLEAN — `QUIT_AFTER_EXIT=0`, `0` errors, `0` warnings, `0` leaks!**
+- **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`NET_CLIENT_EXIT=0`).
+- **Rebuilt Wave 29 Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`)**: **`226.1 MB`** (`237,105,184` bytes, `EXPORT_EXIT=0` — only `+0.1 MB` over Wave 28+I-2!); live RX 9070 XT `1920×1080 HIGH` 90-frame smoke runs on `sailing`, `hold`, & `skull_bluff` all **`rc=0`, `0` errors**!
+
+#### 7.12.2 Direct Answer to Cloud Lead `Q17` (Wave 29 `Rowboat`, `ShipSupplyBarrels`, Harpoons & Benchmarks)
+- **Visual Audit (`10/10` `1920×1080 HIGH` Captures, `rc=0, errs=0`)**:
+  - **Stern-Docked Clinker Oak `Rowboat` (`rowboat_brig`, `rowboat_sloop`, `main_sailing`) — 15/10!!**: The `5,496`-tri flared clinker oak dinghy hangs broadside on braided hemp V-davit slings **cleanly below `ShipNameplate`** on BOTH Sloop and Brigantine with zero hull/rudder/nameplate clipping, crisp inner duckboards, thwarts, lashed twin ash oars, and warm glowing stern brass boat lantern — **0.0 MB extra texture VRAM!**
+  - **Port-Bulkhead Hold `ShipSupplyBarrels` (`barrels_brig`, `barrels_sloop`, `main_hold_brig`, `main_hold_sloop`) — 15/10!!**: All 3 coopered-oak barrels (`RationsBarrel` w/ turned brass hoops, brass spigot & top mug; `PlankBarrel` w/ jutting oak planks; `CannonballBarrel` w/ stacked iron roundshot) read super clearly along the port hull ribs on BOTH ships!
+  - **BOTH M11 Harpoon Fixes VERIFIED (`harpoon_sloop_v2`, `harpoon_brig_v2`)**: Sloop harpoons now sit **dead-center mid-bay** between the white timberheads with clean air gap on both sides! Brigantine `shot=harpoon` cleared the foremast 100%!
+  - **2 Tiny Optional Showcase-Camera Framing Notes for Cloud Lead**:
+    1. `ship_showcase.gd` (`shot=barrels`, `ship=sloop`): The companionway stair stringers cross the upper-right foreground in front of the aft `CannonballBarrel` (barrels themselves don't clip the stairs) — shifting the Sloop `shot=barrels` camera slightly port/forward gives a completely unobstructed view of all 3 barrels like `barrels_brig`!
+    2. `ship_showcase.gd` (`shot=harpoon`, `ship=brigantine`): Foremast is 100% gone and port harpoon looks great; pulling the eye `~0.5 m` aft/port (just ahead of the foremast) would keep BOTH port & starboard Brigantine harpoons inside the frame simultaneously.
+
+| Wave 29 + Wave I-2 + M11 Scenario (`1920×1080`, Brigantine) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB (`tex_vram`) | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `sailing` (`LOW`) | **1.531** (1.877) | 1.446 | **164.7** | 1,216 | 1,635k | 396.2 (`305.9`) | ~7.7 ms (**PASS**) |
+| `sailing` (`MEDIUM`) | **1.851** (2.213) | 1.595 | **148.4** | 1,220 | 1,681k | 400.6 (`309.6`) | ~9.3 ms (**PASS**) |
+| `sailing` (`HIGH` — W29 + W-I2 + M11) | **2.179** (2.522) | 1.398 | **170.9** | 1,220 | 1,743k | **399.5** (`306.6`) | ~10.9 ms (**PASS**) |
+| `helm` (`HIGH`) | **1.640** (1.983) | 1.056 | **177.7** | 708 | 1,200k | 401.5 (`306.6`) | ~8.2 ms (**PASS**) |
+| `hold` (`HIGH` — live `ShipSupplyBarrels` + bilge) | **1.664** (2.001) | 1.550 | **140.5** | 1,284 | 1,922k | 399.5 (`306.6`) | ~8.3 ms (**PASS**) |
+| `galleons_reach` (`HIGH`) | **1.785** (2.134) | 1.262 | **166.8** | 1,312 | 1,839k | 399.4 (`306.6`) | ~8.9 ms (**PASS**) |
+| `storm` (`HIGH`) | **2.785** (3.151) | 1.490 | **154.7** | 1,093 | 1,694k | 401.3 (`306.6`) | ~13.9 ms (**PASS**) |
+| `company_fleet` (`HIGH` — 4 ships + 14 W-I2 islands) | **2.277** (2.638) | 2.064 | **89.3** | 2,010 | 2,967k | 414.0 (`307.6`) | ~11.4 ms (**PASS**) |
+| `ship_showcase` (`shot=rowboat` / `barrels`, Brig `HIGH`) | **1.424** / **1.095** | 0.503 / 0.439 | **225.5** / **160.4** | 500 / 197 | 711k / 451k | **304.8** (`240.4`) | ~7.1 / ~5.5 ms (**PASS**) |
+
+*Wave 29 `sailing HIGH` Subsystem Delta*: Sky+Clouds `0.882 ms`, Ship + `Rowboat` + 2× `ShipHarpoon` + 3× `ShipSupplyBarrels` + `WindRibbons` + Crew combined **`+0.171 ms`** (`1.053 - 0.882 ms` — **~0.00 ms net GPU overhead** & **0.0 MB extra texture VRAM**, only `+0.6 MB` vertex buffer VRAM for all `8,580` new sculpted tris!), All 14 Wave I-2 Islands **`+0.392 ms`**, 24-Wave + 3-FFT Ocean **`+0.734 ms`**.
+
+### 7.13 Standing Ready for Milestone 13 (Wave 30 `ShipDamageVisuals` & `WorldEventCloud` Sky Beacons + Wave I-3 6 New Storytelling PBR Landmarks & Triplanar `SmugglersGrotto`!)
+Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 30**) and `origin/cloud/island-architect` (**Wave I-3**) for immediate RX 9070 XT `1920×1080 HIGH` audit, benchmarks, shader look-dev, full test/co-op gate, and rebuilt `.exe`!

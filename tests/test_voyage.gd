@@ -1678,3 +1678,270 @@ func test_wave24d_14_island_roster_and_massive_showcase_shots() -> void:
 	check(main_src.contains("_suppress_shot_hud_overlays"), "scenes/main.gd suppresses HUD overlays on new showcase shots")
 	for prim: String in ["BoxMesh.new", "SphereMesh.new", "CylinderMesh.new", "CapsuleMesh.new", "PrismMesh.new"]:
 		check(not main_src.contains(prim), "scenes/main.gd remains free of raw %s primitives" % prim)
+
+
+func test_wave30_world_event_clouds_spyglass_id_director_lifecycle_and_crew_callouts() -> void:
+	_save_weather()
+	var saved_amp := Sea.amp_scale
+	Sea.amp_scale = 0.0
+	Net.start_single_player()
+	WorldEventCloud.clear_shared_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Wave30BTestHolder"
+	add_child(holder)
+
+	# 1. Verify all 3 sculpted WorldEventCloud variants: tris >= 950, 0 primitives, sRGB vertex colors,
+	#    finite unit normals, strict-ASCII labels, SHADOW_CASTING_SETTING_OFF, and y == 175.0 m.
+	var expected_variants: Array[Array] = [
+		[&"fort_siege", "Fort Skull Cloud", Vector3(200.0, 0.0, -400.0)],
+		[&"ghost_ship", "Ghost Fleet Cloud", Vector3(-600.0, 0.0, -300.0)],
+		[&"leviathan", "Abyssal Tempest Cloud", Vector3(500.0, 0.0, 450.0)],
+	]
+	var tri_report: PackedStringArray = []
+	for spec: Array in expected_variants:
+		var kind: StringName = spec[0]
+		var expected_label: String = String(spec[1])
+		var sea_pos: Vector3 = spec[2] as Vector3
+
+		check_eq(WorldEventCloud.label_for_kind(kind), expected_label,
+			"label_for_kind(%s) returns '%s'" % [kind, expected_label])
+		for ci in expected_label.length():
+			check(expected_label.unicode_at(ci) < 128, "cloud label '%s' is strict ASCII" % expected_label)
+
+		var cloud := WorldEventCloud.new()
+		cloud.configure(kind, sea_pos, true)
+		holder.add_child(cloud)
+		await get_tree().process_frame
+
+		check(cloud.is_in_group(&"world_event_clouds"), "%s auto-registers in world_event_clouds group" % kind)
+		check_eq(cloud.event_kind, kind, "%s preserves event_kind" % kind)
+		check_eq(cloud.display_label, expected_label, "%s sets display_label" % kind)
+		check_near(cloud.event_world_pos.x, sea_pos.x, 0.01, "%s tracks sea-level x" % kind)
+		check_near(cloud.event_world_pos.z, sea_pos.z, 0.01, "%s tracks sea-level z" % kind)
+		check_near(cloud.global_position.y, WorldEventCloud.CLOUD_ALTITUDE, 0.01,
+			"%s hovers at CLOUD_ALTITUDE (175.0 m, got %.2f)" % [kind, cloud.global_position.y])
+
+		var tri_count := cloud.get_triangle_count()
+		tri_report.append("%s=%d" % [String(kind), tri_count])
+		check(tri_count >= 950, "%s sculpted ArrayMesh has >= 950 tris (got %d)" % [kind, tri_count])
+
+		var mis := _collect_mesh_instances(cloud)
+		check(not mis.is_empty(), "%s builds MeshInstance3D" % kind)
+		var prim_hits := 0
+		var has_emissive_accent := false
+		for mi in mis:
+			check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s disables shadow casting" % kind)
+			var m := mi.mesh
+			check(m is ArrayMesh, "%s uses sculpted ArrayMesh" % kind)
+			if m is PrimitiveMesh:
+				prim_hits += 1
+			if m is ArrayMesh:
+				var am := m as ArrayMesh
+				var aabb := am.get_aabb()
+				var span := maxf(aabb.size.x, aabb.size.z)
+				check(span >= 54.0 and span <= 88.0,
+					"%s colossal horizon silhouette span in 54..88 m (got %.1f m)" % [kind, span])
+				check(am.get_surface_count() >= 2, "%s builds body + emissive accent surfaces" % kind)
+				for si in am.get_surface_count():
+					var mat := am.surface_get_material(si) as StandardMaterial3D
+					check(mat != null, "%s surface %d has StandardMaterial3D" % [kind, si])
+					if mat != null:
+						check(mat.vertex_color_use_as_albedo, "%s surface %d vertex_color_use_as_albedo" % [kind, si])
+						check(mat.vertex_color_is_srgb, "%s surface %d vertex_color_is_srgb" % [kind, si])
+						if si >= 1 and mat.emission_enabled:
+							has_emissive_accent = true
+					var arr := am.surface_get_arrays(si)
+					var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+					var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+					var cols := arr[Mesh.ARRAY_COLOR] as PackedColorArray
+					check_eq(norms.size(), verts.size(), "%s surface %d has normal per vertex" % [kind, si])
+					check_eq(cols.size(), verts.size(), "%s surface %d has color per vertex" % [kind, si])
+					var bad_normals := 0
+					for n: Vector3 in norms:
+						if not n.is_finite() or absf(n.length() - 1.0) > 0.01:
+							bad_normals += 1
+					check_eq(bad_normals, 0, "%s surface %d has 100%% finite unit normals" % [kind, si])
+		check_eq(prim_hits, 0, "%s contains zero PrimitiveMesh instances" % kind)
+		check(has_emissive_accent, "%s includes glowing emissive accent surface" % kind)
+
+		# Gentle living sky bob animates visual root while keeping global_position.y steady at 175.0 m.
+		cloud.step_cloud(1.2)
+		check_near(cloud.global_position.y, WorldEventCloud.CLOUD_ALTITUDE, 0.01,
+			"%s keeps global_position.y == 175.0 m during animation" % kind)
+
+		# Smooth fade_out_and_free removes from group immediately and frees when finished.
+		cloud.fade_out_and_free(0.4)
+		check(not cloud.is_in_group(&"world_event_clouds"), "%s leaves spyglass group when fading out" % kind)
+		cloud.step_cloud(0.5)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		check(not is_instance_valid(cloud), "%s frees cleanly after fade_out_and_free()" % kind)
+
+	print("    Wave 30B WorldEventCloud triangles: %s" % ", ".join(tri_report))
+
+	# 2. Verify WorldDirector spawns live WorldEventCloud on trigger_event(&"fort_siege", ...),
+	#    emits event_cloud_spawned / event_cloud_cleared, expires on duration, and frees on exit.
+	var dir := WorldDirector.new(0x30B01)
+	dir.post_notices = false
+	dir.weather_integration = false
+	holder.add_child(dir)
+
+	var spawned_clouds: Array[Dictionary] = []
+	var cleared_kinds: Array[StringName] = []
+	dir.event_cloud_spawned.connect(func(k: StringName, pos: Vector3, node: Node3D) -> void:
+		spawned_clouds.append({"kind": k, "pos": pos, "node": node})
+	)
+	dir.event_cloud_cleared.connect(func(k: StringName) -> void:
+		cleared_kinds.append(k)
+	)
+
+	var fort_pos := Vector3(536.0, 0.0, -1293.0)  # ~1,400 m NNE from origin
+	var fort_evt := dir.trigger_event(&"fort_siege", {
+		"ship_pos": Vector3.ZERO,
+		"ship_forward": Vector3(0.0, 0.0, -1.0),
+		"fort_pos": fort_pos,
+	})
+	check(not fort_evt.is_empty(), "WorldDirector.trigger_event(fort_siege) succeeds")
+	check_eq(spawned_clouds.size(), 1, "event_cloud_spawned emitted once for fort_siege")
+	check_eq(spawned_clouds[0]["kind"], &"fort_siege", "event_cloud_spawned kind is fort_siege")
+	var fort_cloud := spawned_clouds[0]["node"] as WorldEventCloud
+	check(fort_cloud != null and is_instance_valid(fort_cloud), "spawned fort_siege cloud is live WorldEventCloud")
+	check_eq(dir.get_active_event_clouds().size(), 1, "get_active_event_clouds() reports 1 live cloud")
+
+	# 3. Verify Inventory Brass Spyglass identifies distant 1,400 m Fort Skull Cloud & generous 10-deg cone!
+	var pawn_scene := preload("res://src/characters/pawn.tscn") as PackedScene
+	var captain := pawn_scene.instantiate() as Pawn
+	holder.add_child(captain)
+	captain.global_position = Vector3(0.0, 4.0, 0.0)
+	var inv := Inventory.new()
+	inv.input_enabled = false
+	captain.add_child(inv)
+	await physics_frames(1)
+
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+
+	var aim_at := func(world_pt: Vector3, yaw_offset_deg: float = 0.0) -> void:
+		var delta := world_pt - captain.eye_position()
+		var horiz := maxf(Vector2(delta.x, delta.z).length(), 0.001)
+		captain.look_yaw = atan2(-delta.x, -delta.z) + deg_to_rad(yaw_offset_deg)
+		captain.look_pitch = atan2(delta.y, horiz)
+		inv.call(&"_scan_spyglass_sighting")
+
+	aim_at.call(fort_cloud.global_position, 0.0)
+	check_eq(inv.spyglass_sighting, "Fort Skull Cloud",
+		"spyglass identifies 1,400 m distant Fort Skull Cloud (got '%s')" % inv.spyglass_sighting)
+	check_eq(inv.spyglass_sighting_bearing, "NNE",
+		"spyglass computes accurate 16-point bearing NNE (got '%s')" % inv.spyglass_sighting_bearing)
+	check(inv.spyglass_sighting_dist >= 1350.0 and inv.spyglass_sighting_dist <= 1460.0,
+		"spyglass reports accurate 1,400 m slant distance (got %.1f m)" % inv.spyglass_sighting_dist)
+
+	# Generous 10-deg sky cone detects Fort Skull Cloud even 7.5 deg off-center!
+	aim_at.call(fort_cloud.global_position, 7.5)
+	check_eq(inv.spyglass_sighting, "Fort Skull Cloud",
+		"spyglass 10-deg cone detects huge Fort Skull Cloud at 7.5 deg offset")
+
+	# Also verify Ghost Fleet Cloud & Abyssal Tempest Cloud via WorldDirector.spawn_event_cloud() up to 2,300 m.
+	var ghost_cloud := dir.spawn_event_cloud(&"ghost_ship", Vector3(-1755.0, 0.0, 727.0), true)  # ~1,900 m WSW
+	var lev_cloud := dir.spawn_event_cloud(&"leviathan", Vector3(1626.0, 0.0, 1626.0), true)      # ~2,300 m SE
+	check_eq(dir.get_active_event_clouds().size(), 3, "WorldDirector tracks all 3 concurrent cloud variants")
+
+	aim_at.call(ghost_cloud.global_position, 0.0)
+	check_eq(inv.spyglass_sighting, "Ghost Fleet Cloud", "spyglass identifies 1,900 m Ghost Fleet Cloud")
+	check_eq(inv.spyglass_sighting_bearing, "WSW", "spyglass computes WSW bearing for Ghost Fleet Cloud")
+
+	aim_at.call(lev_cloud.global_position, 0.0)
+	check_eq(inv.spyglass_sighting, "Abyssal Tempest Cloud", "spyglass identifies 2,300 m Abyssal Tempest Cloud")
+	check_eq(inv.spyglass_sighting_bearing, "SE", "spyglass computes SE bearing for Abyssal Tempest Cloud")
+
+	# Aging WorldDirector past fort_siege duration (420 s) expires fort_siege and clears its cloud!
+	dir.step(430.0, {"ship_pos": Vector3.ZERO, "in_safe_harbor": true})
+	check(cleared_kinds.has(&"fort_siege"), "aging past fort_siege duration emits event_cloud_cleared")
+	check(fort_cloud.is_fading_out(), "expired fort_siege cloud enters fade_out_and_free")
+	check_eq(dir.get_active_event_clouds().size(), 2, "expired fort_siege cloud removed from active list")
+
+	# 4. Verify CrewBrain.notify_event_cloud_sighted() emits strict-ASCII persona callouts & Carpenter mast-repair AI!
+	var sloop_scene := preload("res://src/ship/sloop.tscn") as PackedScene
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	holder.add_child(sloop)
+	await physics_frames(2)
+
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var cp := pawn_scene.instantiate() as Pawn
+		holder.add_child(cp)
+		cp.global_position = sloop.global_transform * Vector3(0.0, 1.2, 0.0)
+		var cb := CrewBrain.new()
+		cb.persona_id = pid
+		cp.add_child(cb)
+		cb.setup(sloop, captain, pid)
+		await physics_frames(1)
+
+		var spoken: Array[Dictionary] = []
+		cb.callout_spoken.connect(func(speaker: String, text: String, cat: StringName) -> void:
+			spoken.append({"speaker": speaker, "text": text, "cat": cat})
+		)
+		check(cb.notify_event_cloud_sighted("Fort Skull Cloud", "NNE"),
+			"%s notify_event_cloud_sighted returns true" % pid)
+		check_eq(spoken.size(), 1, "%s emitted event_cloud_sighted callout" % pid)
+		if not spoken.is_empty():
+			var line: String = String(spoken[0]["text"])
+			check_eq(spoken[0]["cat"], &"event_cloud_sighted", "%s callout category matches" % pid)
+			check(line.contains("Fort Skull Cloud") and line.contains("NNE"),
+				"%s callout includes cloud label and bearing (got '%s')" % [pid, line])
+			for ci in line.length():
+				check(line.unicode_at(ci) < 128, "%s event_cloud_sighted line is strict ASCII" % pid)
+		check(not cb.notify_event_cloud_sighted("Fort Skull Cloud", "NNE"),
+			"%s EVENT_CLOUD_COOLDOWN prevents immediate spam" % pid)
+
+		# Verify Carpenter prioritizes Station_SailLength when sail_damage_timer > 0 and hull is healthy!
+		if pid == &"carpenter":
+			cp.platform = sloop
+			cp.global_position = sloop.global_transform * Vector3(1.2, 1.15, 0.0)
+			sloop.set(&"sail_damage_timer", 8.0)
+			check_eq(cb.call(&"_choose_task"), &"mend_rigging",
+				"carpenter prioritizes mend_rigging when sail_damage_timer > 0 and hull is intact")
+			var sail_st := sloop.get_station(&"sail_length")
+			check(sail_st != null, "sloop exposes sail_length station")
+			if sail_st != null:
+				cp.enter_station(sail_st)
+				var dmg_before := float(sloop.get(&"sail_damage_timer"))
+				sloop.set_sail_target(1.0)
+				cb.call(&"_tick_mend_rigging", 0.25)
+				var dmg_after := float(sloop.get(&"sail_damage_timer"))
+				check(dmg_after < dmg_before or sloop.sail_target < 1.0,
+					"carpenter hauls [W] on Station_SailLength while mending rigging (timer %.2f -> %.2f)" % [
+						dmg_before, dmg_after])
+				cp.leave_station()
+			# Hull breach must still preempt mast repair!
+			var hs_v: Variant = sloop.get(&"hull_scale")
+			var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+			var breach_slot := sloop.apply_hull_damage(sloop.global_transform * (Vector3(2.0, -0.45, 0.4) * hs), 0.5)
+			check(breach_slot >= 0, "apply_hull_damage opens hull breach slot (%d)" % breach_slot)
+			check_eq(cb.call(&"_choose_task"), &"patch_hole",
+				"urgent hull breach preempts carpenter mast repair")
+			sloop.patch_hole(breach_slot)
+			sloop.set(&"sail_damage_timer", 0.0)
+
+		cp.queue_free()
+		await physics_frames(1)
+
+	# 5. Clean teardown: WorldDirector._exit_tree() frees remaining clouds & clear_shared_cache() leaves 0 leaks!
+	inv.set_secondary_held(false)
+	holder.queue_free()
+	await physics_frames(3)
+	WorldEventCloud.clear_shared_cache()
+	check(not is_instance_valid(dir), "WorldDirector freed cleanly")
+	check(not is_instance_valid(ghost_cloud) and not is_instance_valid(lev_cloud),
+		"WorldDirector._exit_tree() freed all remaining WorldEventClouds")
+	check_eq(WorldEventCloud._active_instances, 0, "WorldEventCloud._active_instances == 0 after teardown")
+	check(WorldEventCloud._mesh_cache.is_empty() and WorldEventCloud._body_mat_cache.is_empty() \
+			and WorldEventCloud._accent_mat_cache.is_empty(),
+		"WorldEventCloud.clear_shared_cache() clears all static caches with 0 leaks")
+
+	Sea.amp_scale = saved_amp
+	_restore_weather()
+

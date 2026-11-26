@@ -2085,3 +2085,244 @@ func test_wave29_ship_supply_barrels_geometry_fill_tiers_and_one_press_restock()
 		and ShipSupplyBarrels._brass_mat == null and ShipSupplyBarrels._pbr_tex_cache.is_empty(),
 		"ShipSupplyBarrels releases all static meshes, PBR materials, and WeakRef cache cleanly (0 leaks)")
 
+
+func test_wave30_physical_mast_tilt_active_repair_bilge_pump_and_cannon_recoil() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(36.0, 0.0, 0.0)
+	await physics_frames(4)
+
+	# 1. ShipDamageVisuals mounted on Sloop & Brigantine, >= 480 sculpted tris, 0 PrimitiveMesh, uv1_world_triplanar == false.
+	var dv_sloop := sloop.get_damage_visuals()
+	var dv_brig := brig.get_damage_visuals()
+	check(dv_sloop != null, "Sloop mounts ShipDamageVisuals via get_damage_visuals()")
+	check(dv_brig != null, "Brigantine mounts ShipDamageVisuals via get_damage_visuals()")
+
+	var pump_sloop := dv_sloop.get_node_or_null(^"BilgePumpRoot") as Node3D
+	var pump_brig := dv_brig.get_node_or_null(^"BilgePumpRoot") as Node3D
+	check(pump_sloop != null and pump_sloop.position.is_equal_approx(sloop.ship_point(Vector3(0.0, -0.85, -2.1))),
+		"Sloop bilge pump mounts at Station_Bilge coordinate")
+	check(pump_brig != null and pump_brig.position.is_equal_approx(brig.ship_point(Vector3(0.0, -0.95, 2.0))),
+		"Brigantine bilge pump mounts at Station_Bilge coordinate")
+	if pump_sloop != null:
+		check(pump_sloop.scale.is_equal_approx(Vector3.ONE * sloop.hull_scale),
+			"Sloop bilge pump scales cleanly with hull_scale")
+	if pump_brig != null:
+		check(pump_brig.scale.is_equal_approx(Vector3.ONE * brig.hull_scale),
+			"Brigantine bilge pump scales cleanly with hull_scale")
+
+	var raw_prims := 0
+	var bad_norms := 0
+	var bad_mats := 0
+	var world_triplanar_hits := 0
+	for n in dv_sloop.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_norms += 1
+		var mat := mi.material_override as StandardMaterial3D
+		if mat == null or not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
+				or not mat.uv1_triplanar:
+			bad_mats += 1
+		elif mat.uv1_world_triplanar:
+			world_triplanar_hits += 1
+	var dmg_tris := dv_sloop.get_triangle_count()
+	print("    Wave 30A ShipDamageVisuals sculpted tris: %d" % dmg_tris)
+	check_eq(raw_prims, 0, "ShipDamageVisuals contains ZERO PrimitiveMeshes")
+	check_eq(bad_norms, 0, "ShipDamageVisuals normals are all finite unit vectors")
+	check_eq(bad_mats, 0, "ShipDamageVisuals uses sRGB vertex colors + triplanar StandardMaterial3D")
+	check_eq(world_triplanar_hits, 0, "ShipDamageVisuals sets uv1_world_triplanar == false on all materials")
+	check(dmg_tris >= 480, "ShipDamageVisuals sculpted triangle count >= 480 (got %d)" % dmg_tris)
+
+	# 2. Chainshot apply_sail_damage(12.0) -> physical yardarm roll tilt > 0.10, splinter burst active,
+	#    focus prompt "Mend damaged rigging", HUD hint, and active [W] hauling repairs >= 2.8x faster!
+	sloop.set_sail_target(0.85)
+	sloop.sail_set = 0.85
+	brig.set_sail_target(0.85)
+	brig.sail_set = 0.85
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(0.0, 1.15, 0.5)))
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.input_enabled = false
+	pc.make_current = false
+	captain.add_child(pc)
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, null, null, sloop, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var repaired_count := [0]
+	var notices: Array[String] = []
+	sloop.sail_repaired.connect(func() -> void: repaired_count[0] += 1)
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	sloop.apply_sail_damage(12.0)
+	brig.apply_sail_damage(12.0)
+	check(dv_sloop.is_splinter_burst_active(), "apply_sail_damage triggers sculpted spar splinter burst")
+	check_near(sloop.get_sail_damage_remaining(), 12.0, 0.05, "get_sail_damage_remaining reports ~12.0 s")
+
+	# Step visuals so smooth yardarm cant settles cleanly past 0.10 rad.
+	for _i in 24:
+		sloop._update_visuals(1.0 / 60.0)
+		brig._update_visuals(1.0 / 60.0)
+	check(not sloop._yards.is_empty(), "Sloop has main Yard pivot")
+	check(not brig._yards.is_empty(), "Brigantine has Yard pivots")
+	if not sloop._yards.is_empty():
+		var sloop_yard := sloop._yards[0]
+		check(absf(sloop_yard.rotation.z) > 0.10,
+			"Chainshot cants Sloop yardarm roll > 0.10 rad (got %.3f)" % sloop_yard.rotation.z)
+	if not brig._yards.is_empty():
+		var brig_yard := brig._yards[0]
+		check(absf(brig_yard.rotation.z) > 0.10,
+			"Chainshot cants Brigantine yardarm roll > 0.10 rad (got %.3f)" % brig_yard.rotation.z)
+
+	var sail_st := sloop.get_station(&"sail_length")
+	check(sail_st != null, "Sloop has Station_SailLength")
+	check_eq(sail_st.get_focus_prompt(), "Mend damaged rigging",
+		"Station_SailLength focus prompt reads 'Mend damaged rigging' while damaged")
+
+	check(captain.enter_station(sail_st), "captain enters Station_SailLength to mend rigging")
+	hud._process(0.05)
+	var dmg_meta := hud.get_tool_meta_text()
+	check(dmg_meta.contains("Rigging Damaged (") and dmg_meta.contains("[Hold W] Mend Rigging | [F] Leave"),
+		"HUD Sail Hoist chip shows damaged rigging mend hint (got '%s')" % dmg_meta)
+	for ci in dmg_meta.length():
+		check(dmg_meta.unicode_at(ci) < 128, "HUD rigging mend hint is strictly ASCII")
+
+	# Compare 1.0 s of active hauling ([W], axis.y = +1.0) on Sloop vs passive decay on Brigantine.
+	var sloop_before := sloop.sail_damage_timer
+	var brig_before := brig.sail_damage_timer
+	const DT := 1.0 / 60.0
+	for _i in 60:
+		sail_st.drive(Vector2(0.0, 1.0), false, false, DT)
+		sloop._tick_controls(DT)
+		brig._tick_controls(DT)
+	var active_drop := sloop_before - sloop.sail_damage_timer
+	var passive_drop := brig_before - brig.sail_damage_timer
+	check(passive_drop > 0.5 and active_drop >= passive_drop * 2.8,
+		"Active [W] rigging repair reduces sail_damage_timer >= 2.8x faster (active=%.2f s vs passive=%.2f s)" % [
+			active_drop, passive_drop])
+
+	# Continue active hauling until fully mended -> emits sail_repaired and restores yardarm roll near 0.0!
+	var mend_ticks := 0
+	while sloop.sail_damage_timer > 0.0 and mend_ticks < 240:
+		sail_st.drive(Vector2(0.0, 1.0), false, false, DT)
+		sloop._tick_controls(DT)
+		mend_ticks += 1
+	check_near(sloop.get_sail_damage_remaining(), 0.0, 0.001, "Active hauling mends sail_damage_timer completely to 0.0")
+	check_eq(repaired_count[0], 1, "sail_repaired signal emitted once when reaching 0.0")
+	check(notices.has("Rigging mended! Full sail restored."),
+		"Player ship posts strict-ASCII 'Rigging mended! Full sail restored.' notice")
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "Ship sail repair notice is strictly ASCII ('%s')" % n_txt)
+
+	# Yardarm roll smoothly returns near 0.0 after repair & splinter burst finishes cleanly!
+	for _i in 100:
+		sloop._update_visuals(DT)
+		dv_sloop.step(DT)
+	if not sloop._yards.is_empty():
+		check(absf(sloop._yards[0].rotation.z) < 0.02,
+			"Repaired Sloop yardarm roll returns near 0.0 (got %.4f)" % sloop._yards[0].rotation.z)
+	check(not dv_sloop.is_splinter_burst_active(), "Splinter burst finishes and hides cleanly after ~1.45 s")
+	check(sail_st.get_focus_prompt() != "Mend damaged rigging",
+		"Station_SailLength focus prompt returns to sail hoist after repair")
+	captain.leave_station()
+
+	# 3. Animated Bilge Pump lever rocking & overboard water plume while driving Station_Bilge!
+	var bilge_st := sloop.get_station(&"bilge")
+	check(bilge_st != null, "Sloop has Station_Bilge")
+	check_near(dv_sloop.get_pump_handle_angle(), 0.0, 0.001, "Bilge pump handle rests at 0.0 when idle")
+	check(not dv_sloop.is_pump_streaming(), "Bilge pump water plume is hidden when idle")
+
+	sloop.water_level = 0.45
+	check(captain.enter_station(bilge_st), "captain enters Station_Bilge")
+	var peak_handle_angle := 0.0
+	var saw_streaming := false
+	for _i in 30:
+		bilge_st.drive(Vector2(0.0, 1.0), true, false, DT)
+		dv_sloop.step(DT)
+		peak_handle_angle = maxf(peak_handle_angle, absf(dv_sloop.get_pump_handle_angle()))
+		if dv_sloop.is_pump_streaming():
+			saw_streaming = true
+	check(peak_handle_angle > 0.18,
+		"Driving Station_Bilge rocks sculpted pump handle lever (peak=%.3f rad)" % peak_handle_angle)
+	check(saw_streaming, "Driving Station_Bilge streams sculpted overboard water plume")
+	captain.leave_station()
+
+	# Idle settle turns off water plume and returns pump lever back to rest.
+	for _i in 80:
+		dv_sloop.step(DT)
+	check(not dv_sloop.is_pump_streaming(), "Bilge pump water plume fades & hides cleanly when idle")
+	check(absf(dv_sloop.get_pump_handle_angle()) < 0.02,
+		"Bilge pump handle returns to rest when idle (got %.4f)" % dv_sloop.get_pump_handle_angle())
+
+	# 4. Cannon barrel recoil kick (0.34 m) + sculpted priming fuse spark + damped spring return < 0.02 within 0.6 s!
+	var stbd_cannon: Dictionary = sloop._cannons[&"starboard"]
+	var stbd_barrel: Node3D = stbd_cannon["barrel"] as Node3D
+	var barrel_rest: Vector3 = stbd_cannon["barrel_rest_pos"] as Vector3
+	check(stbd_barrel != null, "Sloop starboard cannon barrel Node3D exists")
+	check_near(sloop.get_cannon_recoil(&"starboard"), 0.0, 0.001, "Starboard cannon starts with 0.0 recoil")
+
+	var shot := sloop.fire_cannon(&"starboard", captain)
+	check(shot != null, "Sloop fires starboard cannon")
+	var recoil_after_fire := sloop.get_cannon_recoil(&"starboard")
+	check(recoil_after_fire >= 0.20,
+		"Starboard cannon recoil >= 0.20 m right after firing (got %.3f m)" % recoil_after_fire)
+	if stbd_barrel != null:
+		var barrel_disp := stbd_barrel.position.distance_to(barrel_rest)
+		check(barrel_disp >= 0.20,
+			"Starboard cannon barrel shifts along local +Z from barrel_rest_pos (disp=%.3f m)" % barrel_disp)
+	check(dv_sloop.is_fuse_flash_active(), "Firing cannon flares sculpted priming fuse spark star")
+
+	# Advance 0.6 s (36 ticks at 60 Hz) -> recoil decays cleanly to < 0.02 and fuse spark hides!
+	for _i in 36:
+		sloop._tick_cannons(DT)
+		sloop._update_visuals(DT)
+		dv_sloop.step(DT)
+	var recoil_after_decay := sloop.get_cannon_recoil(&"starboard")
+	check(recoil_after_decay < 0.02,
+		"Starboard cannon recoil decays cleanly to < 0.02 m within 0.6 s (got %.4f m)" % recoil_after_decay)
+	if stbd_barrel != null:
+		check(stbd_barrel.position.distance_to(barrel_rest) < 0.02,
+			"Starboard cannon barrel returns cleanly to barrel_rest_pos")
+	check(not dv_sloop.is_fuse_flash_active(), "Cannon priming fuse spark fades out cleanly")
+
+	Game.notice.disconnect(notice_cb)
+
+	# 5. Clean 0-leak ref-counted teardown & ShipDamageVisuals.clear_shared_cache()!
+	await _end()
+	ShipDamageVisuals.clear_shared_cache()
+	check_eq(ShipDamageVisuals._active_instances, 0, "ShipDamageVisuals._active_instances returns to 0 on teardown")
+	check(ShipDamageVisuals._pump_oak_mesh == null and ShipDamageVisuals._pump_iron_mesh == null \
+		and ShipDamageVisuals._pump_brass_mesh == null and ShipDamageVisuals._pump_water_mesh == null \
+		and ShipDamageVisuals._splinter_mesh == null and ShipDamageVisuals._canvas_shred_mesh == null \
+		and ShipDamageVisuals._fuse_spark_mesh == null and ShipDamageVisuals._oak_mat == null \
+		and ShipDamageVisuals._iron_mat == null and ShipDamageVisuals._brass_mat == null \
+		and ShipDamageVisuals._canvas_mat == null and ShipDamageVisuals._water_mat == null \
+		and ShipDamageVisuals._fuse_mat == null and ShipDamageVisuals._pbr_tex_cache.is_empty(),
+		"ShipDamageVisuals.clear_shared_cache() leaves 0 cached meshes/materials/WeakRefs (0 leaks)")
+
+

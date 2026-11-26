@@ -1551,6 +1551,35 @@ func _scan_spyglass_sighting() -> void:
 				nm = isl.get_meta("display_name")
 			best_label = String(nm) if nm != null else String(isl.name)
 
+	# 6. High-altitude World Event Sky Beacons (group `world_event_clouds`).
+	var max_cloud_dist := 2600.0 * r_scale
+	var cloud_cone := cos(deg_to_rad(10.0))
+	for node in get_tree().get_nodes_in_group(&"world_event_clouds"):
+		if not (node is Node3D):
+			continue
+		var cloud := node as Node3D
+		if not cloud.visible:
+			continue
+		if cloud.has_method(&"is_fading_out") and bool(cloud.call(&"is_fading_out")):
+			continue
+		var target_pos := cloud.global_position
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 25.0 or dist > max_cloud_dist:
+			continue
+		var score := to.dot(dir) / dist
+		var req := cloud_cone if best_label == "" else best_score
+		if score >= req and (best_label == "" or score > best_score):
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			var lbl: Variant = cloud.get(&"display_label")
+			if lbl != null and String(lbl).strip_edges() != "":
+				best_label = String(lbl)
+			else:
+				var kind_v: Variant = cloud.get(&"event_kind")
+				best_label = WorldEventCloud.label_for_kind(StringName(String(kind_v))) if kind_v != null else "Fort Skull Cloud"
+
 	var best_bearing := format_compass_bearing(eye, best_pos) if best_label != "" else ""
 	_spyglass_target_pos = best_pos if best_label != "" else Vector3.ZERO
 	if best_label != spyglass_sighting \

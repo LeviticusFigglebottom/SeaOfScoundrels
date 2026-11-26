@@ -25,6 +25,7 @@ signal harpoon_loot_snagged(item_label: String, side: StringName)
 signal lanterns_toggled(lit: bool)
 signal cannon_ordnance_changed(ordnance: StringName)
 signal sail_damaged(duration: float)
+signal sail_repaired()
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -183,6 +184,10 @@ var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard" / &"port_aft
 var _harpoons: Dictionary = {}  # StringName (&"port" / &"starboard") -> ShipHarpoon
 var _harpoon_primary_was: Dictionary = {}  # StringName -> bool
 var _supply_barrels: ShipSupplyBarrels = null
+var _damage_visuals: ShipDamageVisuals = null
+var _yard_damage_tilt: float = 0.0
+var _yard_damage_pitch: float = 0.0
+var _repair_sfx_accum: float = 0.0
 
 var _sink_timer: float = 0.0
 var _sink_list_dir: float = 1.0
@@ -410,6 +415,7 @@ func _exit_tree() -> void:
 	_harpoons.clear()
 	_harpoon_primary_was.clear()
 	_supply_barrels = null
+	_damage_visuals = null
 	_lantern_glass_mats.clear()
 	_window_mats.clear()
 	_lantern_lights.clear()
@@ -581,12 +587,14 @@ func _build_stations() -> void:
 				"carriage": carriage,
 				"barrel": barrel,
 				"base_pos": carriage.position,
+				"barrel_rest_pos": barrel.position if barrel != null else Vector3.ZERO,
 				"base_rot_y": carriage.rotation.y,
 				"base_barrel_rot_x": barrel.rotation.x if barrel != null else 0.0,
 				"yaw": 0.0,
 				"pitch": 0.08,
 				"reload": 0.0,
 				"recoil": 0.0,
+				"recoil_vel": 0.0,
 			}
 
 	_build_harpoons()
@@ -1219,6 +1227,7 @@ func _build_deck_extras() -> void:
 	add_child(supply_it)
 
 	_build_supply_barrels()
+	_build_damage_visuals()
 
 
 func _build_supply_barrels() -> void:
@@ -1230,6 +1239,22 @@ func _build_supply_barrels() -> void:
 	sb.max_planks = MAX_PLANKS
 	add_child(sb)
 	_supply_barrels = sb
+
+
+func _build_damage_visuals() -> void:
+	var dv := ShipDamageVisuals.new()
+	dv.name = "ShipDamageVisuals"
+	dv.ship = self
+	dv.visual_scale = hull_scale
+	add_child(dv)
+	_damage_visuals = dv
+
+
+## Return the sculpted ShipDamageVisuals component (bilge pump, spar splinters, fuse spark), or null.
+func get_damage_visuals() -> ShipDamageVisuals:
+	if _damage_visuals != null and is_instance_valid(_damage_visuals):
+		return _damage_visuals
+	return null
 
 
 ## Return the lower-deck sculpted ShipSupplyBarrels cluster (or null).
@@ -2611,6 +2636,8 @@ func bail(amount: float = 0.14) -> float:
 	water_level = maxf(0.0, water_level - amount)
 	var removed := before - water_level
 	if removed > 0.001:
+		if _damage_visuals != null and is_instance_valid(_damage_visuals):
+			_damage_visuals.trigger_pump_stroke()
 		var bilge := get_station(&"bilge")
 		var pos := bilge.global_position if bilge != null else global_position
 		if enable_effects:
@@ -2697,11 +2724,19 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	_sync_supply_barrels()
 	c["reload"] = CANNON_RELOAD_TIME * reload_modifier
 	c["recoil"] = 0.34
+	c["recoil_vel"] = 0.0
 
 	# Muzzle world position and aim direction (-Z of barrel/carriage).
 	var aim_node := barrel if barrel != null else carriage
 	var muzzle_dir := (-aim_node.global_basis.z).normalized()
 	var muzzle_pos := aim_node.global_position + muzzle_dir * (1.15 * hull_scale)
+
+	if _damage_visuals != null and is_instance_valid(_damage_visuals):
+		var aim_up := aim_node.global_basis.y.normalized()
+		var breech_world := aim_node.global_position - muzzle_dir * (0.62 * hull_scale) + aim_up * (0.24 * hull_scale)
+		var breech_local := global_transform.affine_inverse() * breech_world
+		_damage_visuals.trigger_cannon_fuse_flash(breech_local)
+	_apply_cannon_pose(c)
 
 	var ball := Cannonball.new()
 	ball.name = "Cannonball"
@@ -2733,6 +2768,13 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	Audio.play_sfx(&"cannon_fire", muzzle_pos)
 	cannon_fired.emit(side, ball)
 	return ball
+
+
+## Current recoil displacement (meters, 0.0..0.34) for the given cannon side.
+func get_cannon_recoil(side: StringName) -> float:
+	if not _cannons.has(side):
+		return 0.0
+	return float((_cannons[side] as Dictionary).get("recoil", 0.0))
 
 
 ## Host only. Select active cannon ordnance (&"iron", &"chainshot", or &"flare").
@@ -2767,7 +2809,44 @@ func apply_sail_damage(duration: float = 14.0) -> void:
 	if not Net.is_host() or duration <= 0.0:
 		return
 	sail_damage_timer = maxf(sail_damage_timer, duration)
+	if _damage_visuals != null and is_instance_valid(_damage_visuals):
+		var burst_origin := ship_point(Vector3(0.0, 9.0, -1.0))
+		if not _yards.is_empty() and _yards[0] != null and is_instance_valid(_yards[0]):
+			burst_origin = _local_to_ship(_yards[0]).origin
+		_damage_visuals.trigger_sail_damage_burst(burst_origin)
 	sail_damaged.emit(sail_damage_timer)
+
+
+## Host only. Actively mend chainshot rigging damage by `amount` seconds; returns remaining timer.
+func repair_sail_damage(amount: float) -> float:
+	if not Net.is_host():
+		return sail_damage_timer
+	if amount <= 0.0 or sail_damage_timer <= 0.0:
+		return sail_damage_timer
+	sail_damage_timer = maxf(0.0, sail_damage_timer - amount)
+	_repair_sfx_accum += amount
+	if _repair_sfx_accum >= 1.15:
+		_repair_sfx_accum = 0.0
+		var st_sail := get_station(&"sail_length")
+		Audio.play_sfx(&"rope_creak", st_sail.global_position if st_sail != null else global_position, -2.5)
+	if sail_damage_timer <= 0.0:
+		_complete_sail_repair()
+	return sail_damage_timer
+
+
+## Remaining seconds of chainshot sail rigging damage (0.0 when intact).
+func get_sail_damage_remaining() -> float:
+	return sail_damage_timer
+
+
+func _complete_sail_repair() -> void:
+	_repair_sfx_accum = 0.0
+	var st_sail := get_station(&"sail_length")
+	var sfx_pos := st_sail.global_position if st_sail != null else global_position
+	Audio.play_sfx(&"rope_creak", sfx_pos, -1.0)
+	if faction == &"player" and Game != null:
+		Game.post_notice("Rigging mended! Full sail restored.")
+	sail_repaired.emit()
 
 
 # ------------------------------------------------------------------ harpoons
@@ -3382,6 +3461,8 @@ func get_station_focus_prompt(st: Station) -> String:
 				return "Drop anchor"
 			return "Heave anchor (%d%%)" % int(roundf(anchor_progress * 100.0))
 		&"sail_length":
+			if sail_damage_timer > 0.0:
+				return "Mend damaged rigging"
 			if sail_set < 0.08:
 				return "Lower sails"
 			return "Raise / lower sails (%d%%)" % int(roundf(sail_set * 100.0))
@@ -3409,6 +3490,8 @@ func get_station_active_prompt(st: Station) -> String:
 		&"anchor":
 			return "[Hold W] Heave Anchor (%d%%) | [S] Drop | [F] Let Go" % int(roundf((1.0 - anchor_progress) * 100.0))
 		&"sail_length":
+			if sail_damage_timer > 0.0:
+				return "[Hold W] Mend Rigging (%ds) | [F] Leave" % maxi(1, ceili(sail_damage_timer))
 			return "[S] Lower / [W] Raise Sail (%d%%) | [F] Let Go" % int(roundf(sail_set * 100.0))
 		&"sail_angle":
 			var wind_txt := "FULL WIND" if (_last_wind_catch >= 0.85 and sail_set >= 0.15) else (
@@ -3490,6 +3573,10 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 			else:
 				_helm_detent_timer = 0.0
 		&"sail_length":
+			if sail_damage_timer > 0.0 and (axis.y > 0.1 or primary):
+				# Active on-deck rigging repair (+3.0*delta on top of 1.0*delta decay = 4.0x recovery).
+				repair_sail_damage(3.0 * delta)
+				return
 			# Sea of Thieves standard polarity: [S] lowers/unfurls sail (faster), [W] raises/furls sail (slower).
 			var lower_delta := 0.0
 			if axis.y < -0.05:
@@ -3575,6 +3662,8 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 			reel_harpoon(hside, secondary, delta)
 		&"bilge":
 			if primary or axis.y > 0.3:
+				if _damage_visuals != null and is_instance_valid(_damage_visuals):
+					_damage_visuals.trigger_pump_stroke()
 				bail(0.28 * delta)
 		&"map_table":
 			pass
@@ -3596,6 +3685,8 @@ func _physics_process(delta: float) -> void:
 func _tick_controls(delta: float) -> void:
 	if sail_damage_timer > 0.0:
 		sail_damage_timer = maxf(0.0, sail_damage_timer - delta)
+		if sail_damage_timer <= 0.0:
+			_complete_sail_repair()
 	var prev_helm := helm
 	helm = move_toward(helm, helm_target, 2.4 * delta)
 	if absf(helm - prev_helm) > 0.0005:
@@ -3750,9 +3841,22 @@ func _begin_sinking() -> void:
 
 
 func _tick_cannons(delta: float) -> void:
+	const RECOIL_OMEGA := 12.0  # Critically damped spring (~0.42 s return to rest, < 0.003 at 0.6 s).
+	const RECOIL_K := RECOIL_OMEGA * RECOIL_OMEGA
+	const RECOIL_DAMP := 2.0 * RECOIL_OMEGA
 	for c: Dictionary in _cannons.values():
 		c["reload"] = maxf(0.0, float(c["reload"]) - delta)
-		c["recoil"] = move_toward(float(c["recoil"]), 0.0, 0.72 * delta)
+		var r := float(c["recoil"])
+		var rv := float(c.get("recoil_vel", 0.0))
+		if r > 0.0 or absf(rv) > 0.0001:
+			var step_dt := minf(delta, 0.05)
+			rv += (-RECOIL_K * r - RECOIL_DAMP * rv) * step_dt
+			r = maxf(0.0, r + rv * step_dt)
+			if r < 0.0005 and absf(rv) < 0.005:
+				r = 0.0
+				rv = 0.0
+			c["recoil"] = r
+			c["recoil_vel"] = rv
 
 
 func _tick_hydrodynamics(delta: float) -> void:
@@ -3956,6 +4060,86 @@ func _update_lod() -> void:
 		for hp_val: Variant in _harpoons.values():
 			if hp_val is Node3D and is_instance_valid(hp_val):
 				(hp_val as Node3D).visible = not want_lod
+		if _damage_visuals != null and is_instance_valid(_damage_visuals):
+			_damage_visuals.visible = not want_lod
+
+
+func _animate_rigging(delta: float) -> void:
+	# Yards, sails & furled rolls (1 mast on Sloop, 2 masts on Brigantine).
+	var show_sail := sail_set > 0.06
+	var sail_damaged_now := sail_damage_timer > 0.0
+	var dmg_env := clampf(sail_damage_timer / 4.0, 0.0, 1.0)
+	var target_tilt := 0.24 * dmg_env
+	var target_pitch := 0.065 * dmg_env
+	var tilt_k := clampf(delta * 8.5, 0.0, 1.0) if delta > 0.0 else 1.0
+	_yard_damage_tilt = lerpf(_yard_damage_tilt, target_tilt, tilt_k)
+	_yard_damage_pitch = lerpf(_yard_damage_pitch, target_pitch, tilt_k)
+	if not sail_damaged_now and absf(_yard_damage_tilt) < 0.0008 and absf(_yard_damage_pitch) < 0.0008:
+		_yard_damage_tilt = 0.0
+		_yard_damage_pitch = 0.0
+
+	var dmg_jitter := (sin(_sail_time * 17.5) * 0.042 + cos(_sail_time * 11.3) * 0.022) if sail_damaged_now else 0.0
+	var sail_scale_y := maxf(sail_set * (0.84 if sail_damaged_now else 1.0), 0.08)
+	for yi in _yards.size():
+		var y := _yards[yi]
+		var mast_sign := 1.0 if (yi % 2 == 0) else -0.85
+		y.rotation.y = sail_trim
+		y.rotation.z = _yard_damage_tilt * mast_sign
+		y.rotation.x = _yard_damage_pitch
+	for si in _sails.size():
+		var s := _sails[si]
+		var mast_sign := 1.0 if (si % 2 == 0) else -0.85
+		s.visible = show_sail
+		s.rotation.y = sail_trim + dmg_jitter
+		s.rotation.z = _yard_damage_tilt * mast_sign
+		s.rotation.x = _yard_damage_pitch
+		s.scale.y = sail_scale_y
+	for sfi in _sails_furled.size():
+		var sf := _sails_furled[sfi]
+		var mast_sign := 1.0 if (sfi % 2 == 0) else -0.85
+		sf.visible = not show_sail
+		sf.rotation.y = sail_trim
+		sf.rotation.z = _yard_damage_tilt * mast_sign
+		sf.rotation.x = _yard_damage_pitch
+
+	# Sync LOD sails/yards too so chainshot-crippled masts read cleanly from across the ocean.
+	for lyi in _lod_yards.size():
+		var ly := _lod_yards[lyi]
+		var mast_sign := 1.0 if (lyi % 2 == 0) else -0.85
+		ly.rotation.y = sail_trim
+		ly.rotation.z = _yard_damage_tilt * mast_sign
+		ly.rotation.x = _yard_damage_pitch
+	for lsi in _lod_sails.size():
+		var ls := _lod_sails[lsi]
+		var mast_sign := 1.0 if (lsi % 2 == 0) else -0.85
+		ls.visible = show_sail
+		ls.rotation.y = sail_trim + dmg_jitter
+		ls.rotation.z = _yard_damage_tilt * mast_sign
+		ls.rotation.x = _yard_damage_pitch
+		ls.scale.y = sail_scale_y
+	for lsfi in _lod_sails_furled.size():
+		var lsf := _lod_sails_furled[lsfi]
+		var mast_sign := 1.0 if (lsfi % 2 == 0) else -0.85
+		lsf.visible = not show_sail
+		lsf.rotation.y = sail_trim
+		lsf.rotation.z = _yard_damage_tilt * mast_sign
+		lsf.rotation.x = _yard_damage_pitch
+
+
+func _apply_cannon_pose(c: Dictionary) -> void:
+	var carriage: Node3D = c["carriage"]
+	var barrel: Node3D = c["barrel"]
+	var recoil_m := float(c.get("recoil", 0.0))
+	if carriage != null:
+		carriage.rotation.y = float(c["base_rot_y"]) + float(c["yaw"])
+		# Subtle carriage roll-back inboard (+Z in carriage local space since -Z is muzzle).
+		var local_back := Basis(Vector3.UP, carriage.rotation.y).z
+		carriage.position = (c["base_pos"] as Vector3) + local_back * (recoil_m * 0.40)
+	if barrel != null:
+		barrel.rotation.x = float(c["base_barrel_rot_x"]) + float(c["pitch"])
+		# Visceral barrel recoil kick straight back (+Z) into its carriage relative to barrel_rest_pos.
+		var barrel_back := Basis(Vector3.RIGHT, barrel.rotation.x).z
+		barrel.position = (c["barrel_rest_pos"] as Vector3) + barrel_back * recoil_m
 
 
 func _update_visuals(delta: float) -> void:
@@ -3969,31 +4153,8 @@ func _update_visuals(delta: float) -> void:
 	if _rudder != null:
 		_rudder.rotation.y = helm * deg_to_rad(32.0)
 
-	# Yards, sails & furled rolls (1 mast on Sloop, 2 masts on Brigantine).
-	var show_sail := sail_set > 0.06
+	_animate_rigging(delta)
 	var sail_damaged_now := sail_damage_timer > 0.0
-	var dmg_jitter := (sin(_sail_time * 17.5) * 0.042 + cos(_sail_time * 11.3) * 0.022) if sail_damaged_now else 0.0
-	var sail_scale_y := maxf(sail_set * (0.84 if sail_damaged_now else 1.0), 0.08)
-	for y in _yards:
-		y.rotation.y = sail_trim
-	for s in _sails:
-		s.visible = show_sail
-		s.rotation.y = sail_trim + dmg_jitter
-		s.scale.y = sail_scale_y
-	for sf in _sails_furled:
-		sf.visible = not show_sail
-		sf.rotation.y = sail_trim
-
-	# Sync LOD sails/yards too.
-	for ly in _lod_yards:
-		ly.rotation.y = sail_trim
-	for ls in _lod_sails:
-		ls.visible = show_sail
-		ls.rotation.y = sail_trim + dmg_jitter
-		ls.scale.y = sail_scale_y
-	for lsf in _lod_sails_furled:
-		lsf.visible = not show_sail
-		lsf.rotation.y = sail_trim
 
 	# Masthead flags weathervane to apparent wind.
 	var aw := apparent_wind()
@@ -4052,17 +4213,9 @@ func _update_visuals(delta: float) -> void:
 	if _anchor_node != null:
 		_anchor_node.position = _anchor_base_pos + Vector3(0.0, -anchor_progress * 4.2, 0.0)
 
-	# Cannons (yaw, pitch, recoil).
+	# Cannons (yaw, pitch, carriage & barrel recoil).
 	for c: Dictionary in _cannons.values():
-		var carriage: Node3D = c["carriage"]
-		var barrel: Node3D = c["barrel"]
-		if carriage != null:
-			carriage.rotation.y = float(c["base_rot_y"]) + float(c["yaw"])
-			# Recoil pushes carriage inboard (+Z in carriage local space since -Z is muzzle).
-			var local_back := Basis(Vector3.UP, carriage.rotation.y).z
-			carriage.position = (c["base_pos"] as Vector3) + local_back * float(c["recoil"])
-		if barrel != null:
-			barrel.rotation.x = float(c["base_barrel_rot_x"]) + float(c["pitch"])
+		_apply_cannon_pose(c)
 
 	# Ship's bell damped pendulum (drives both sculpted ShipBellPivot and any GLB Bell).
 	if (_bell_cup_pivot != null or _bell != null) and (absf(_bell_swing) > 0.001 or absf(_bell_vel) > 0.001):
@@ -4284,6 +4437,7 @@ func apply_net_state(state: Dictionary) -> void:
 				_cannons[side]["yaw"] = float(arr[0])
 				_cannons[side]["pitch"] = float(arr[1])
 				_cannons[side]["recoil"] = float(arr[2])
+				_cannons[side]["recoil_vel"] = 0.0
 
 	# Replicate full company livery only when any tint or emblem_mode differs (zero steady-state cost).
 	if state.has("emblem_mode") or state.has("sail_tint") or state.has("flag_tint") \

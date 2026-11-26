@@ -103,6 +103,7 @@ const HARPOON_HAUL_COOLDOWN := 6.0
 const CHAINSHOT_HIT_COOLDOWN := 8.0
 const RUNNING_DARK_COOLDOWN := 6.0
 const ROWBOAT_COOLDOWN := 6.0
+const EVENT_CLOUD_COOLDOWN := 10.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -354,6 +355,8 @@ func _physics_process(delta: float) -> void:
 			_tick_patch_hole(delta)
 		&"bail":
 			_tick_bail(delta)
+		&"mend_rigging":
+			_tick_mend_rigging(delta)
 		&"anchor_drop":
 			_tick_anchor(true, delta)
 		&"anchor_raise":
@@ -382,6 +385,13 @@ func _ship_scale() -> float:
 		if hs != null and float(hs) > 0.01:
 			return float(hs)
 	return 1.0
+
+
+func _needs_mast_repair() -> bool:
+	if ship == null or not is_instance_valid(ship):
+		return false
+	var raw_timer: Variant = ship.get(&"sail_damage_timer")
+	return raw_timer != null and float(raw_timer) > 0.0
 
 
 func _choose_task() -> StringName:
@@ -430,6 +440,10 @@ func _choose_task() -> StringName:
 				return &"patch_hole"
 			if has_ship and ship.water_level > 0.02:
 				return &"bail"
+			if has_ship and persona_id == &"carpenter" and _needs_mast_repair():
+				var repair_sail_st := ship.get_station(&"sail_length")
+				if repair_sail_st != null and (repair_sail_st.occupant == null or repair_sail_st.occupant == pawn):
+					return &"mend_rigging"
 			current_order = &"auto"
 		&"follow":
 			return &"follow"
@@ -439,6 +453,12 @@ func _choose_task() -> StringName:
 			current_order = &"auto"
 		&"shanty":
 			return &"shanty"
+
+	# 2b. Carpenter mast/rigging repair priority when sails are chainshot-damaged and hull is safe.
+	if has_ship and pawn.platform == ship and persona_id == &"carpenter" and _needs_mast_repair():
+		var mast_st := ship.get_station(&"sail_length")
+		if mast_st != null and (mast_st.occupant == null or mast_st.occupant == pawn):
+			return &"mend_rigging"
 
 	# 3. Autonomous combat if hostile ship in broadside range.
 	if has_ship and not hold_fire and pawn.platform == ship:
@@ -497,7 +517,7 @@ func _set_task(t: StringName) -> void:
 		var st_kind := StringName(pawn.station.get(&"kind"))
 		var keep := (t == &"helm" and st_kind == &"helm") \
 			or (t == &"trim_sails" and st_kind == &"sail_angle") \
-			or (t == &"set_sails" and st_kind == &"sail_length") \
+			or ((t == &"set_sails" or t == &"mend_rigging") and st_kind == &"sail_length") \
 			or ((t == &"anchor_drop" or t == &"anchor_raise") and st_kind == &"anchor") \
 			or (t == &"cannons" and st_kind == &"cannon") \
 			or (t == &"bail" and st_kind == &"bilge")
@@ -563,6 +583,23 @@ func _tick_bail(delta: float) -> void:
 			# Fallback direct bail if another crewmate occupies the bilge station.
 			_play_anim(&"bail", 0.55)
 			ship.bail(0.22 * delta * bail_speed_scale)
+
+
+func _tick_mend_rigging(delta: float) -> void:
+	var st := ship.get_station(&"sail_length")
+	if st == null:
+		return
+	if not _needs_mast_repair():
+		if pawn.station == st:
+			pawn.leave_station()
+		return
+	if pawn.station == st:
+		pawn.wish_dir = Vector3.ZERO
+		# Haul [W] (axis = Vector2(0.0, 1.0)) on Station_SailLength to mend damaged rigging.
+		pawn.drive_station(Vector2(0.0, 1.0), false, false, delta)
+		return
+	if _navigate_to_station(st) and st.can_occupy(pawn):
+		pawn.enter_station(st)
 
 
 func _tick_anchor(want_down: bool, delta: float) -> void:
@@ -1750,6 +1787,22 @@ func notify_rowboat_docked() -> bool:
 	if _callout_cooldowns.has("rowboat_docked"):
 		return false
 	_speak(&"rowboat_docked", {}, "rowboat_docked", ROWBOAT_COOLDOWN)
+	return true
+
+
+## Persona horizon callout when a colossal WorldEventCloud sky beacon looms overhead.
+func notify_event_cloud_sighted(cloud_label: String, bearing: String) -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("event_cloud"):
+		return false
+	var clean_cloud := cloud_label.strip_edges()
+	if clean_cloud == "":
+		clean_cloud = "Fort Skull Cloud"
+	var clean_bearing := bearing.strip_edges()
+	if clean_bearing == "":
+		clean_bearing = "ahead"
+	_speak(&"event_cloud_sighted", {"cloud": clean_cloud, "bearing": clean_bearing}, "event_cloud", EVENT_CLOUD_COOLDOWN)
 	return true
 
 

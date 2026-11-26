@@ -1471,7 +1471,9 @@ func _refresh_tool_chip() -> void:
 					meta = "[Hold W] Heave | [S] Drop | [F] Leave"
 			&"sail_length":
 				title = "Sail Hoist"
-				if active_ship != null:
+				if active_ship != null and active_ship.sail_damage_timer > 0.0:
+					meta = "Rigging Damaged (%ds) | [Hold W] Mend Rigging | [F] Leave" % maxi(1, ceili(active_ship.sail_damage_timer))
+				elif active_ship != null:
 					meta = "[S] Lower / [W] Raise (%d%%) | [F] Leave" % int(roundf(active_ship.sail_set * 100.0))
 				else:
 					meta = "[S] Lower / [W] Raise | [F] Leave"

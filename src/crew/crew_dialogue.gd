@@ -117,6 +117,10 @@ const LINES := {
 			"Dinghy's hoisted snug on the davits - ready to make sail, Cap'n!",
 			"Rowboat's fast at the stern! Good to have her back on the blocks!",
 		],
+		&"event_cloud_sighted": [
+			"Eyes to the {bearing}! {cloud} rising over the horizon - glory or doom awaits!",
+			"Steady on the helm - {cloud} gathering off the {bearing}, Cap'n!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -199,6 +203,10 @@ const LINES := {
 			"Rowboat's lashed tight astern! Hope you packed the bow bench with gold!",
 			"Dinghy's hooked and hoisted - clear stern and ready to run, Cap'n!",
 		],
+		&"event_cloud_sighted": [
+			"Look up to the {bearing}, Cap'n! {cloud} looming high over the swells!",
+			"Spyglass confirms it - {cloud} off the {bearing}! Ready the guns and sails!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -280,6 +288,10 @@ const LINES := {
 		&"rowboat_docked": [
 			"Slings secured and cleats tied off - dinghy's safe on the stern davits!",
 			"Hoisted clean with zero splinters! That's proper seamanship, Cap'n!",
+		],
+		&"event_cloud_sighted": [
+			"Blimey! {cloud} brewing to the {bearing} - I'll stack extra planks by the hold!",
+			"Big trouble off the {bearing}, Cap'n - {cloud} hanging right over the waves!",
 		],
 	},
 }

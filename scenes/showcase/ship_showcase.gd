@@ -184,9 +184,9 @@ func _update_camera() -> void:
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2 * sc, -1.0), Vector3.UP)
 		"harpoon":
-			# Foredeck 3/4 view cleanly forward of the foremast framing both bow ShipHarpoons unobstructed.
-			var eye := xf * _ship.ship_point(Vector3(1.15, 3.22, -4.65) if _is_brig else Vector3(1.18, 2.95, -2.15))
-			var look := xf * _ship.ship_point(Vector3(-0.30, 2.65, -7.80) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			# Foredeck 3/4 view cleanly ahead of the foremast framing BOTH bow ShipHarpoons unobstructed.
+			var eye := xf * _ship.ship_point(Vector3(0.65, 3.32, -4.15) if _is_brig else Vector3(1.18, 2.95, -2.15))
+			var look := xf * _ship.ship_point(Vector3(-0.18, 2.68, -7.20) if _is_brig else Vector3(-0.40, 2.35, -4.85))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"rowboat":
 			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
@@ -195,9 +195,9 @@ func _update_camera() -> void:
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 1.4)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"barrels":
-			# Lower-deck hold framing the 3 sculpted coopered-oak ShipSupplyBarrels along the port bulkhead.
-			var eye := xf * _ship.ship_point(Vector3(0.85, 0.25, 3.35) if _is_brig else Vector3(0.75, 0.28, 2.25))
-			var look := xf * _ship.ship_point(Vector3(-1.45, -0.45, 1.55) if _is_brig else Vector3(-1.15, -0.40, 0.65))
+			# Lower-deck hold framing all 3 sculpted coopered-oak ShipSupplyBarrels clear of companionway stringers.
+			var eye := xf * _ship.ship_point(Vector3(0.85, 0.25, 3.35) if _is_brig else Vector3(0.28, 0.16, 1.95))
+			var look := xf * _ship.ship_point(Vector3(-1.45, -0.45, 1.55) if _is_brig else Vector3(-1.22, -0.42, 0.55))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		_:
 			# Quarter-bow hero view showing figurehead, bow wave, billowing sail, and pennant.
@@ -208,6 +208,7 @@ func _update_camera() -> void:
 
 
 func _exit_tree() -> void:
+	ShipDamageVisuals.clear_shared_cache()
 	Rowboat.clear_shared_cache()
 	ShipSupplyBarrels.clear_shared_cache()
 	ShipHarpoon.clear_shared_cache()

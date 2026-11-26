@@ -19,6 +19,8 @@ signal spawn_fort_siege(fort_pos: Vector3, bearing: String)
 signal spawn_castaway(pos: Vector3)
 signal wreck_recorded(wreck: Dictionary)
 signal wreck_salvaged(wreck_id: String, recovered_items: Array)
+signal event_cloud_spawned(kind: StringName, world_pos: Vector3, cloud_node: Node3D)
+signal event_cloud_cleared(kind: StringName)
 
 ## Minimum breather (seconds) between consecutive major world events.
 const MIN_EVENT_GAP := 45.0
@@ -40,6 +42,7 @@ const WRECK_SALVAGE_RATIO := 0.60
 const SAFE_HARBOR_RADIUS := 220.0
 
 const COMPASS_POINTS: Array[String] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+const CLOUD_EVENT_KINDS: Array[StringName] = [&"fort_siege", &"ghost_ship", &"leviathan"]
 
 ## Seconds elapsed since any sighting or world event occurred.
 var time_since_event: float = 0.0
@@ -86,6 +89,7 @@ var _next_flotsam_delay: float = 70.0
 var _shark_cooldown: float = 0.0
 var _has_prev_pos: bool = false
 var _storm_active_id: String = ""
+var _event_clouds: Dictionary = {}  # StringName kind -> WorldEventCloud
 
 
 func _init(seed_value: int = 0) -> void:
@@ -94,6 +98,16 @@ func _init(seed_value: int = 0) -> void:
 	else:
 		_rng.randomize()
 	_roll_next_delays()
+
+
+func _exit_tree() -> void:
+	for raw_cloud in _event_clouds.values():
+		var cloud := raw_cloud as WorldEventCloud
+		if cloud != null and is_instance_valid(cloud) and not cloud.is_queued_for_deletion():
+			if cloud.is_in_group(WorldEventCloud.GROUP):
+				cloud.remove_from_group(WorldEventCloud.GROUP)
+			cloud.queue_free()
+	_event_clouds.clear()
 
 
 func set_seed(seed_value: int) -> void:
@@ -383,6 +397,63 @@ func get_state() -> Dictionary:
 	}
 
 
+## Spawn (or replace) a colossal high-altitude WorldEventCloud beacon for `kind` over `world_pos`.
+func spawn_event_cloud(kind: StringName, world_pos: Vector3, instant: bool = false) -> WorldEventCloud:
+	if not CLOUD_EVENT_KINDS.has(kind):
+		return null
+	if _event_clouds.has(kind):
+		var old_cloud := _event_clouds[kind] as WorldEventCloud
+		_event_clouds.erase(kind)
+		if old_cloud != null and is_instance_valid(old_cloud) and not old_cloud.is_queued_for_deletion():
+			if old_cloud.is_in_group(WorldEventCloud.GROUP):
+				old_cloud.remove_from_group(WorldEventCloud.GROUP)
+			if old_cloud.is_inside_tree():
+				old_cloud.queue_free()
+			else:
+				old_cloud.free()
+
+	var sea_pos := Vector3(world_pos.x, 0.0, world_pos.z)
+	var cloud := WorldEventCloud.new()
+	cloud.name = "WorldEventCloud_%s" % String(kind)
+	cloud.configure(kind, sea_pos, instant)
+	add_child(cloud)
+	if cloud.is_inside_tree():
+		cloud.global_position = Vector3(sea_pos.x, WorldEventCloud.CLOUD_ALTITUDE, sea_pos.z)
+	_event_clouds[kind] = cloud
+	event_cloud_spawned.emit(kind, sea_pos, cloud)
+	return cloud
+
+
+## Clear and fade out (or immediately remove) the active WorldEventCloud for `kind`.
+func clear_event_cloud(kind: StringName, instant: bool = false) -> void:
+	if not _event_clouds.has(kind):
+		return
+	var cloud := _event_clouds[kind] as WorldEventCloud
+	_event_clouds.erase(kind)
+	if cloud != null and is_instance_valid(cloud) and not cloud.is_queued_for_deletion():
+		if instant:
+			if cloud.is_in_group(WorldEventCloud.GROUP):
+				cloud.remove_from_group(WorldEventCloud.GROUP)
+			if cloud.is_inside_tree():
+				cloud.queue_free()
+			else:
+				cloud.free()
+		else:
+			cloud.fade_out_and_free()
+	event_cloud_cleared.emit(kind)
+
+
+## Return all currently active WorldEventCloud sky beacon nodes tracked by this director.
+func get_active_event_clouds() -> Array[WorldEventCloud]:
+	var out: Array[WorldEventCloud] = []
+	for raw_cloud in _event_clouds.values():
+		var cloud := raw_cloud as WorldEventCloud
+		if cloud != null and is_instance_valid(cloud) \
+				and not cloud.is_queued_for_deletion() and not cloud.is_fading_out():
+			out.append(cloud)
+	return out
+
+
 # --- Event Trigger Internals --------------------------------------------
 
 func _trigger_major_event(heading_dir: Vector3, ship_node: Node,
@@ -444,6 +515,8 @@ func _trigger_ghost_ship(heading_dir: Vector3) -> Dictionary:
 		"distance": dist,
 		"message": msg,
 	})
+	if is_inside_tree():
+		spawn_event_cloud(&"ghost_ship", spawn_pos)
 	_emit_warning(msg, spawn_pos, &"ghost_ship", bearing, dist)
 	spawn_ghost_ship.emit(spawn_pos)
 	return evt
@@ -461,6 +534,8 @@ func _trigger_leviathan(heading_dir: Vector3, ship_node: Node) -> Dictionary:
 		"distance": dist,
 		"message": msg,
 	})
+	if is_inside_tree():
+		spawn_event_cloud(&"leviathan", center)
 	_emit_warning(msg, center, &"leviathan", bearing, dist)
 	spawn_leviathan.emit(center, ship_node)
 	return evt
@@ -476,6 +551,8 @@ func _trigger_fort_siege(fort_pos: Vector3) -> Dictionary:
 		"distance": dist,
 		"message": msg,
 	})
+	if is_inside_tree():
+		spawn_event_cloud(&"fort_siege", fort_pos)
 	_emit_warning(msg, fort_pos, &"fort_siege", bearing, dist)
 	spawn_fort_siege.emit(fort_pos, bearing)
 	return evt
@@ -594,11 +671,20 @@ func _age_active_events(delta: float) -> void:
 		evt["age"] = float(evt["age"]) + delta
 		if float(evt["age"]) >= float(evt["duration"]):
 			var id_str := String(evt.get("id", ""))
+			var kind: StringName = evt.get("kind", &"")
 			active_events.remove_at(i)
 			if id_str == _storm_active_id:
 				_storm_active_id = ""
 				if weather_integration and Weather != null:
 					Weather.clear_storm_cell(15.0)
+			if CLOUD_EVENT_KINDS.has(kind) and _event_clouds.has(kind):
+				var still_active := false
+				for rem_evt in active_events:
+					if rem_evt.get("kind", &"") == kind:
+						still_active = true
+						break
+				if not still_active:
+					clear_event_cloud(kind)
 		else:
 			i += 1
 
