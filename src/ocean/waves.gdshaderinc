@@ -95,18 +95,23 @@ vec3 sea_displacement_lod(vec2 p, float cut) {
 	return d;
 }
 
-// Normal and Jacobian at wave time t, dropping waves shorter than `cut`.
+// Normal, Jacobian and Gerstner orbital motion at wave time t, dropping waves
+// shorter than `cut`.
 // lost_var: slope variance of what was dropped (to widen highlights);
 // h: full vertical displacement of rest point p; h_var: variance of the wave
 // heights in this sea state (h / sqrt(h_var) is a unitless crest mask);
-// long_slope: surface slope (dy/dx, dy/dz) of the swell alone (waves over 35 m).
-void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var, out vec2 long_slope) {
+// long_slope: surface slope (dy/dx, dy/dz) of the swell alone (waves over 35 m);
+// flow_vel: horizontal Gerstner orbital velocity d/dt(displacement.xz) (m/s);
+// vert_vel: vertical surface velocity dh/dt (m/s, positive on rising front faces).
+void sea_surface_lod_motion(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var, out vec2 long_slope, out vec2 flow_vel, out float vert_vel) {
 	float dxx = 1.0, dzz = 1.0, dxz = 0.0;
 	float dyx = 0.0, dyz = 0.0;
 	lost_var = 0.0;
 	h = 0.0;
 	h_var = 0.0;
 	long_slope = vec2(0.0);
+	flow_vel = vec2(0.0);
+	vert_vel = 0.0;
 	vec2 st = sea_state();
 	for (int i = 0; i < sea_wave_count; i++) {
 		vec4 a = sea_wave_a[i];
@@ -118,14 +123,17 @@ void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out fl
 		h_var += amp * amp * 0.5;
 		float th = a.z * dot(a.xy, p) - b.y * t + b.z;
 		float cs = cos(th);
+		float sn = sin(th);
 		h += cs * amp;
 		float c = cs * ka * a.w * w;
-		float s = sin(th) * ka * w;
+		float s = sn * ka * w;
 		dxx -= a.x * a.x * c;
 		dzz -= a.y * a.y * c;
 		dxz -= a.x * a.y * c;
 		dyx -= a.x * s;
 		dyz -= a.y * s;
+		flow_vel += a.xy * (cs * b.y * amp * a.w * w);
+		vert_vel += sn * b.y * amp * w;
 		if (a.z < 0.18) {
 			long_slope -= a.xy * s;
 		}
@@ -134,6 +142,19 @@ void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out fl
 	vec3 tz = vec3(dxz, dyz, dzz);
 	n = normalize(cross(tz, tx));
 	j = dxx * dzz - dxz * dxz;
+}
+
+// Normal, Jacobian and horizontal orbital flow velocity d/dt(displacement.xz).
+void sea_surface_lod_flow(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var, out vec2 long_slope, out vec2 flow_vel) {
+	float vert_vel;
+	sea_surface_lod_motion(p, t, cut, n, j, lost_var, h, h_var, long_slope, flow_vel, vert_vel);
+}
+
+// Normal and Jacobian at wave time t, dropping waves shorter than `cut`.
+void sea_surface_lod(vec2 p, float t, float cut, out vec3 n, out float j, out float lost_var, out float h, out float h_var, out vec2 long_slope) {
+	vec2 flow_vel;
+	float vert_vel;
+	sea_surface_lod_motion(p, t, cut, n, j, lost_var, h, h_var, long_slope, flow_vel, vert_vel);
 }
 
 // Jacobian only (cheaper; used for foam).

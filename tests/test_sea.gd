@@ -135,3 +135,111 @@ func test_ocean_mesh_is_watertight_and_in_budget() -> void:
 	# No vertex may sit off the lattice of its ring (that would swim when snapping).
 	for v in verts:
 		check(is_equal_approx(v.x / 0.5, roundf(v.x / 0.5)) and is_equal_approx(v.z / 0.5, roundf(v.z / 0.5)))
+
+func test_orbital_velocity_matches_time_derivative() -> void:
+	var saved_amp := Sea.amp_scale
+	var saved_time := Sea.time
+	Sea.amp_scale = Sea.AMP_CALM
+	Sea.time = 21.5
+	var dt := 0.0005
+	for i in 12:
+		var rx := i * 11.3 - 50.0
+		var rz := i * -7.9 + 25.0
+		var v := Sea.orbital_velocity(rx, rz)
+		Sea.time = 21.5 + dt
+		var dp := Sea.displacement(rx, rz)
+		Sea.time = 21.5 - dt
+		var dm := Sea.displacement(rx, rz)
+		Sea.time = 21.5
+		var fd := Vector2((dp.x - dm.x) / (2.0 * dt), (dp.z - dm.z) / (2.0 * dt))
+		check_near(v.x, fd.x, 0.01, "orbital vx at sample %d" % i)
+		check_near(v.y, fd.y, 0.01, "orbital vz at sample %d" % i)
+		var dj := Sea.displacement_and_jacobian(rx, rz)
+		var d0 := Sea.displacement(rx, rz)
+		check_near(dj.x, d0.x, 1e-4)
+		check_near(dj.y, d0.y, 1e-4)
+		check_near(dj.z, d0.z, 1e-4)
+		check(dj.w > 0.0 and dj.w < 2.0, "jacobian %f out of expected range" % dj.w)
+	Sea.amp_scale = saved_amp
+	Sea.time = saved_time
+
+func test_hull_mask_dry_hold_and_flooding() -> void:
+	var ocean_scene: PackedScene = load("res://src/ocean/ocean.tscn")
+	var ocean: Ocean = ocean_scene.instantiate() as Ocean
+	add_child(ocean)
+	var ship := Node3D.new()
+	ship.position = Vector3(24.0, 0.0, -18.0)
+	ship.rotation = Vector3(0.05, 0.6, -0.04)
+	add_child(ship)
+
+	# Default sloop cutout registration
+	ocean.register_hull_mask(ship, null, 0.0)
+	var xf := ship.global_transform
+	check(ocean.is_point_in_dry_hull(xf * Vector3(0.0, -0.4, 0.0)), "center of dry hold must be inside dry hull")
+	check(ocean.is_point_in_dry_hull(xf * Vector3(1.4, 0.1, 0.0)), "midship interior must be inside dry hull")
+	check(ocean.is_point_in_dry_hull(xf * Vector3(0.2, 0.0, -5.2)), "bow centerline must be inside dry hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(2.4, 0.0, 0.0)), "outside beam must not be in hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(1.5, 0.0, -5.2)), "tapered bow outside beam must not be in hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.0, -6.6)), "ahead of bow must not be in hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.0, 6.6)), "astern of transom must not be in hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, -1.6, 0.0)), "below keel must not be in hull")
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, 2.6, 0.0)), "above gunwale must not be in hull")
+	check_eq(int(ocean.material.get_shader_parameter(&"hull_mask_count")), 1)
+
+	# Partial flooding: below flood line is submerged, upper hold stays dry
+	ocean.update_hull_mask(ship, 0.65)
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, -0.5, 0.0)), "below interior flood line must not be dry")
+	check(ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.85, 0.0)), "above interior flood line must still be dry")
+
+	# Fully sunk: cutout relaxes completely
+	ocean.update_hull_mask(ship, 1.0)
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.0, 0.0)), "fully flooded ship must not be dry")
+
+	# Custom mask_mesh AABB registration (flat mask_water-style mesh)
+	var mask_mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(4.2, 0.02, 12.4)
+	mask_mi.mesh = box
+	ship.add_child(mask_mi)
+	ocean.register_hull_mask(ship, mask_mi, 0.0)
+	check(ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.0, 0.0)), "mask_mesh registration should mark hold dry")
+
+	# Unregister clears shader uniform count and dry-hull check
+	ocean.unregister_hull_mask(ship)
+	check(not ocean.is_point_in_dry_hull(xf * Vector3(0.0, 0.0, 0.0)), "unregistered hull must not be dry")
+	check_eq(int(ocean.material.get_shader_parameter(&"hull_mask_count")), 0)
+
+	remove_child(ship)
+	ship.free()
+	remove_child(ocean)
+	ocean.free()
+
+func test_ocean_quality_switching() -> void:
+	var ocean_scene: PackedScene = load("res://src/ocean/ocean.tscn")
+	var ocean: Ocean = ocean_scene.instantiate() as Ocean
+	add_child(ocean)
+
+	ocean.quality = Ocean.Quality.LOW
+	var tris_low := ocean.triangle_count()
+	check_eq(int(ocean.material.get_shader_parameter(&"quality")), int(Ocean.Quality.LOW))
+	check(ocean.foam_field == null, "LOW quality disables foam field")
+	check(ocean.crest_spray != null and not ocean.crest_spray.is_active(), "LOW quality disables crest spray")
+
+	ocean.quality = Ocean.Quality.MEDIUM
+	var tris_med := ocean.triangle_count()
+	check_eq(int(ocean.material.get_shader_parameter(&"quality")), int(Ocean.Quality.MEDIUM))
+	check(ocean.foam_field != null, "MEDIUM quality enables foam field")
+	check(ocean.crest_spray != null and ocean.crest_spray.is_active(), "MEDIUM quality enables crest spray")
+
+	ocean.quality = Ocean.Quality.HIGH
+	var tris_high := ocean.triangle_count()
+	check_eq(int(ocean.material.get_shader_parameter(&"quality")), int(Ocean.Quality.HIGH))
+	check(ocean.foam_field != null, "HIGH quality enables foam field")
+	check(ocean.crest_spray != null and ocean.crest_spray.is_active(), "HIGH quality enables crest spray")
+
+	check(tris_low < tris_med and tris_med < tris_high,
+			"triangle counts must scale with quality (%d < %d < %d)" % [tris_low, tris_med, tris_high])
+
+	await get_tree().process_frame
+	remove_child(ocean)
+	ocean.free()

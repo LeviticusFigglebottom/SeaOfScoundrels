@@ -12,8 +12,10 @@ const NEAR_SURFACE := 0.6
 
 var material: ShaderMaterial
 var _quad: MeshInstance3D
+var _ocean: Node3D
 
-func setup(_ocean: Node3D) -> void:
+func setup(ocean: Node3D) -> void:
+	_ocean = ocean
 	material = ShaderMaterial.new()
 	material.shader = SHADER
 	material.render_priority = -10  # before the ocean surface
@@ -35,7 +37,12 @@ func set_shaft_steps(steps: int) -> void:
 
 ## Called by Ocean every frame. depth > 0 means the camera is under water.
 func update(cam: Camera3D, depth: float) -> void:
-	var on := depth > -NEAR_SURFACE
+	var in_dry_hull := (
+		_ocean != null
+		and _ocean.has_method(&"is_point_in_dry_hull")
+		and bool(_ocean.call(&"is_point_in_dry_hull", cam.global_position))
+	)
+	var on := (not in_dry_hull) and depth > -NEAR_SURFACE
 	_quad.visible = on
 	if not on:
 		return

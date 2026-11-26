@@ -4,21 +4,25 @@ extends Node3D
 ##   tools/capture.sh res://scenes/showcase/ocean_showcase.tscn calm 3 8 -- shot=calm
 ##
 ## User args (after `--`), all optional:
-##   shot=calm|storm|sunset|night|underwater|shore|waterline|aerial|swell|wake   (default calm)
+##   shot=calm|storm|sunset|night|underwater|shore|waterline|aerial|swell|wake|fair_deck|hull   (default calm)
 ##   quality=low|medium|high   Ocean.quality (default high)
 ##   rain=<0..1>     rain rings (default: 0.8 in the storm shot, else 0)
 ##   amp=<float>     override Sea.amp_scale
+##   flood=<0..1>    hold flood level for shot=hull (default 0)
 ##   t=<seconds>     starting wave time
 ##   scale=<0.25..1> 3D render scale (faster software captures)
 ##   clock=<seconds> start the scripted camera this far into its move
 ##   wire=1          wireframe ocean (mesh inspection)
 
 const ISLAND_POS := Vector3(150.0, 0.0, -150.0)
+const SKY_RIG_SCENE := preload("res://src/sky/sky_rig.tscn")
+const SLOOP_SCENE := preload("res://assets/generated/ship/sloop.glb")
 
 var _args: Dictionary = {}
 var _shot: String = "calm"
 var _cam: Camera3D
 var _floaters: Array[Dictionary] = []
+var _sloop: Node3D
 var _clock: float = 0.0
 var _env: Environment
 var _sun: DirectionalLight3D
@@ -62,22 +66,32 @@ func _ready() -> void:
 	Net.start_single_player()
 	Weather.day_length_seconds = 0.0
 
-	var look_name := "noon"
-	if _shot == "sunset" or _shot == "night":
-		look_name = _shot
-	elif _shot == "storm":
-		look_name = "storm"
-	_build_sky(LOOKS[look_name])
-	_build_island()
-	_build_floaters()
-
-	var storm: float = LOOKS[look_name]["storm"]
-	if _shot == "swell" or _shot == "wake":
-		storm = 0.3
-	if _shot == "storm":
-		Weather.wind_speed = 22.0
-		Weather.wind_heading = 1.0
 	var ocean: Ocean = $Ocean
+	var storm := 0.0
+	if _shot == "fair_deck":
+		_build_real_sky_rig(12.6, 0.42, 0.0, 10.5, 0.52)
+		_build_horizon_islands()
+		storm = 0.0
+	elif _shot == "hull":
+		_build_real_sky_rig(12.2, 0.32, 0.0, 8.5, 0.45)
+		_build_sloop(ocean, float(_args.get("flood", "0.0")))
+		storm = 0.12
+	else:
+		var look_name := "noon"
+		if _shot == "sunset" or _shot == "night":
+			look_name = _shot
+		elif _shot == "storm":
+			look_name = "storm"
+		_build_sky(LOOKS[look_name])
+		_build_island()
+		_build_floaters()
+		storm = float(LOOKS[look_name]["storm"])
+		if _shot == "swell" or _shot == "wake":
+			storm = 0.3
+		if _shot == "storm":
+			Weather.wind_speed = 22.0
+			Weather.wind_heading = 1.0
+
 	ocean.rain_intensity = float(_args.get("rain", "0.8" if _shot == "storm" else "0.0"))
 	ocean.quality = {"low": Ocean.Quality.LOW, "medium": Ocean.Quality.MEDIUM}.get(_args.get("quality", "high"), Ocean.Quality.HIGH)
 	Weather.storminess = storm
@@ -105,17 +119,25 @@ func _ready() -> void:
 	if _args.get("wire", "0") == "1":
 		RenderingServer.set_debug_generate_wireframes(true)
 		get_viewport().debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
-	_update_camera()
 	_update_floaters()
+	_update_sloop()
+	_update_camera()
 
 func _process(delta: float) -> void:
 	_clock += delta
 	if _lagoon:
 		Sea.time += delta  # Sea's own tick is off so it does not ease amp_scale back
-	_update_camera()
 	_update_floaters()
+	_update_sloop()
+	_update_camera()
 
 # --- sky and light ----------------------------------------------------------
+
+func _build_real_sky_rig(hour: float, cloudiness: float, storm: float, wind_spd: float, wind_hdg: float) -> void:
+	Weather.time_of_day = hour
+	Weather.set_weather(storm, wind_spd, wind_hdg, 0.0, cloudiness)
+	var rig := SKY_RIG_SCENE.instantiate()
+	add_child(rig)
 
 func _build_sky(look: Dictionary) -> void:
 	var elev := deg_to_rad(float(look["elev"]))
@@ -132,6 +154,7 @@ func _build_sky(look: Dictionary) -> void:
 	RenderingServer.global_shader_parameter_set(&"sky_horizon_color", Vector3(hor.r, hor.g, hor.b))
 	RenderingServer.global_shader_parameter_set(&"sky_zenith_color", Vector3(zen.r, zen.g, zen.b))
 	RenderingServer.global_shader_parameter_set(&"ambient_color", Vector3(amb.r, amb.g, amb.b))
+	RenderingServer.global_shader_parameter_set(&"cloud_shadow_params", Vector4(1e9, 1e9, 0.0001, 1.0))
 
 	_sun = DirectionalLight3D.new()
 	_sun.light_color = sun_c
@@ -161,6 +184,77 @@ func _build_sky(look: Dictionary) -> void:
 	add_child(we)
 
 # --- props --------------------------------------------------------------------
+
+func _build_horizon_islands() -> void:
+	# Distant stylized sea stacks & island silhouettes along the hazy horizon
+	# for fair_deck horizon depth readability.
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.28, 0.38, 0.44)
+	mat.roughness = 0.95
+	var stacks := [
+		[Vector3(-420.0, -4.0, -780.0), Vector3(110.0, 95.0, 85.0), 0.25],
+		[Vector3(-560.0, -6.0, -1450.0), Vector3(70.0, 125.0, 70.0), 0.7],
+		[Vector3(140.0, -5.0, -1750.0), Vector3(95.0, 80.0, 90.0), -0.4],
+		[Vector3(880.0, -5.0, -1350.0), Vector3(160.0, 62.0, 110.0), 0.9],
+	]
+	for entry: Array in stacks:
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.14
+		cyl.bottom_radius = 1.0
+		cyl.height = 1.0
+		cyl.radial_segments = 7
+		cyl.rings = 2
+		var mi := MeshInstance3D.new()
+		mi.mesh = cyl
+		mi.material_override = mat
+		var pos: Vector3 = entry[0]
+		var sc: Vector3 = entry[1]
+		mi.position = Vector3(pos.x, pos.y + sc.y * 0.42, pos.z)
+		mi.scale = sc
+		mi.rotation.y = float(entry[2])
+		add_child(mi)
+
+func _build_sloop(ocean: Ocean, flood_level: float) -> void:
+	_sloop = SLOOP_SCENE.instantiate() as Node3D
+	_sloop.name = "Sloop"
+	add_child(_sloop)
+	var mask_mesh: MeshInstance3D = null
+	var stack: Array[Node] = [_sloop]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		var n := node.name
+		if n == "mask_water" and node is MeshInstance3D:
+			mask_mesh = node as MeshInstance3D
+			mask_mesh.visible = false
+		elif n.begins_with("col_") or n.begins_with("Hole_") or n.begins_with("HolePatch_") or n == "Sail_Furled":
+			if node is Node3D:
+				(node as Node3D).visible = false
+		for child in node.get_children():
+			stack.append(child)
+	_update_sloop()
+	ocean.register_hull_mask(_sloop, mask_mesh, flood_level)
+
+func _update_sloop() -> void:
+	if _sloop == null:
+		return
+	var x := 0.0
+	var z := -12.0
+	var yaw := 0.32
+	var fwd := Vector3(sin(yaw), 0.0, -cos(yaw))
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	var span := 4.8
+	var beam := 1.9
+	var hc := Sea.height(x, z)
+	var hf := Sea.height(x + fwd.x * span, z + fwd.z * span)
+	var hb := Sea.height(x - fwd.x * span, z - fwd.z * span)
+	var hr := Sea.height(x + right.x * beam, z + right.z * beam)
+	var hl := Sea.height(x - right.x * beam, z - right.z * beam)
+	var f3 := (fwd * span * 2.0 + Vector3.UP * (hf - hb)).normalized()
+	var r3 := (right * beam * 2.0 + Vector3.UP * (hr - hl)).normalized()
+	var up := r3.cross(f3).normalized()
+	r3 = f3.cross(up).normalized()
+	var y := (hc + hf + hb + hr + hl) / 5.0 - 0.18
+	_sloop.global_transform = Transform3D(Basis(r3, up, -f3), Vector3(x, y, z))
 
 func _island_height(x: float, z: float) -> float:
 	var r := sqrt(x * x + z * z)
@@ -304,6 +398,23 @@ func _look(from: Vector3, to: Vector3) -> void:
 func _update_camera() -> void:
 	var t := _clock
 	match _shot:
+		"fair_deck":
+			# Deck-height fair-weather noon view with real SkyRig, looking across
+			# sunlit rolling swells toward the bright hazy horizon & distant islands.
+			var p := Vector3(2.0 + t * 1.1, 0.0, 6.0 - t * 0.8)
+			p.y = Sea.height(p.x, p.z) + 2.45
+			_look(p, Vector3(p.x - 2.0, p.y - 2.1, p.z - 28.0))
+		"hull":
+			# Inspect the sloop's dry hold cutout (`mask_water`) and waterline collar:
+			# sweeps from looking into the open hatch down into the dry hold below sea level.
+			if _sloop != null:
+				var xf := _sloop.global_transform
+				var phase := clampf(t / 2.5, 0.0, 1.0)
+				var from_local := Vector3(0.0, 2.7, 3.6).lerp(Vector3(0.0, 0.25, 1.6), phase)
+				var target_local := Vector3(0.0, -0.55, -0.6).lerp(Vector3(0.0, -0.45, -2.5), phase)
+				_look(xf * from_local, xf * target_local)
+			else:
+				_look(Vector3(0, 3, 6), Vector3(0, 0, -12))
 		"calm":
 			# eye height of a sailor on deck, slow drift
 			var p := Vector3(1.5 + t * 0.6, 0.0, 4.0)

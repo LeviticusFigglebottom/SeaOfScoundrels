@@ -32,26 +32,26 @@ const MAX_WAVES := 32
 ## Waves shorter than about 7 m carry centimetres of height; they live in the
 ## ocean shader as normal-only detail and are deliberately not listed here.
 const WAVE_TABLE: Array[Array] = [
-	# primary ocean swell: four wavelengths within ~25 degrees, so they beat
-	# into sets of big waves and lulls
-	[263.0, 0.36, 1.85, 0.30, 1.00],
-	[191.0, 0.28, 1.55, 0.47, 1.00],
-	[139.0, 0.27, 1.20, 0.16, 1.05],
-	[101.0, 0.23, 0.90, 0.58, 1.10],
-	# crossing swell from an old, distant blow
-	[173.0, 0.12, 0.90, -0.80, 1.00],
-	[113.0, 0.13, 0.75, -0.55, 1.00],
-	# wind sea: steep, wide directional spread
-	[79.0, 0.150, 0.62, 1.05, 1.20],
-	[61.0, 0.115, 0.50, 0.62, 1.20],
-	[47.0, 0.085, 0.40, 1.45, 1.20],
-	[37.0, 0.064, 0.32, 0.85, 1.20],
-	[29.0, 0.045, 0.25, 1.75, 1.15],
-	[22.5, 0.036, 0.195, 0.40, 1.15],
-	[17.3, 0.028, 0.150, 1.25, 1.15],
-	[13.3, 0.022, 0.115, 0.05, 1.10],
-	[10.1, 0.017, 0.088, 1.60, 1.05],
-	[7.7, 0.013, 0.066, 0.75, 1.00],
+	# primary ocean swell (>= 100 m): chunky rolling swells that beat into sets
+	# of big waves and lulls even in fair weather
+	[221.0, 0.22, 1.80, 0.28, 1.00],
+	[163.0, 0.30, 1.54, 0.45, 1.02],
+	[127.0, 0.34, 1.24, 0.14, 1.08],
+	[103.0, 0.34, 0.95, 0.56, 1.15],
+	# crossing swell (>= 100 m): builds chunky 3D peaks and hollows
+	[149.0, 0.17, 0.88, -0.78, 1.02],
+	[107.0, 0.20, 0.76, -0.52, 1.10],
+	# secondary waves and lively wind chop riding on top of the big swells
+	[73.0, 0.205, 0.58, 1.05, 1.22],
+	[57.0, 0.165, 0.46, 0.60, 1.24],
+	[45.0, 0.088, 0.39, 1.45, 1.22],
+	[35.0, 0.130, 0.295, -0.95, 1.24],
+	[27.5, 0.110, 0.230, 1.72, 1.22],
+	[21.3, 0.092, 0.175, 0.38, 1.20],
+	[16.3, 0.075, 0.135, -1.25, 1.18],
+	[12.7, 0.060, 0.102, 0.08, 1.14],
+	[9.7, 0.048, 0.076, 1.58, 1.10],
+	[7.3, 0.036, 0.056, -0.68, 1.06],
 ]
 
 ## `amp_scale` runs from AMP_CALM (the calm column of the table) to AMP_STORM
@@ -74,12 +74,17 @@ var _count: int = 0
 var _materials: Array[WeakRef] = []
 
 # Flat per-wave arrays for the CPU hot path (see _refresh()).
-var _dx: PackedFloat64Array = PackedFloat64Array()   # dir.x * k
-var _dz: PackedFloat64Array = PackedFloat64Array()   # dir.z * k
-var _hx: PackedFloat64Array = PackedFloat64Array()   # dir.x * horizontal amplitude
-var _hz: PackedFloat64Array = PackedFloat64Array()   # dir.z * horizontal amplitude
-var _amp: PackedFloat64Array = PackedFloat64Array()  # vertical amplitude now
-var _ph: PackedFloat64Array = PackedFloat64Array()   # phase - omega * time
+var _dx: PackedFloat64Array = PackedFloat64Array()     # dir.x * k
+var _dz: PackedFloat64Array = PackedFloat64Array()     # dir.z * k
+var _hx: PackedFloat64Array = PackedFloat64Array()     # dir.x * horizontal amplitude
+var _hz: PackedFloat64Array = PackedFloat64Array()     # dir.z * horizontal amplitude
+var _amp: PackedFloat64Array = PackedFloat64Array()    # vertical amplitude now
+var _ph: PackedFloat64Array = PackedFloat64Array()     # phase - omega * time
+var _jxx: PackedFloat64Array = PackedFloat64Array()    # dir.x * dir.x * k * amp * steepness
+var _jzz: PackedFloat64Array = PackedFloat64Array()    # dir.z * dir.z * k * amp * steepness
+var _jxz: PackedFloat64Array = PackedFloat64Array()    # dir.x * dir.z * k * amp * steepness
+var _vx: PackedFloat64Array = PackedFloat64Array()     # dir.x * omega * amp * steepness
+var _vz: PackedFloat64Array = PackedFloat64Array()     # dir.z * omega * amp * steepness
 var _cache_amp: float = -1.0
 var _cache_time: float = -INF
 
@@ -101,7 +106,7 @@ func _build() -> void:
 	while _wa.size() < MAX_WAVES:
 		_wa.append(Vector4.ZERO)
 		_wb.append(Vector4.ZERO)
-	for arr: PackedFloat64Array in [_dx, _dz, _hx, _hz, _amp, _ph]:
+	for arr: PackedFloat64Array in [_dx, _dz, _hx, _hz, _amp, _ph, _jxx, _jzz, _jxz, _vx, _vz]:
 		arr.resize(_count)
 	_cache_amp = -1.0
 	_cache_time = -INF
@@ -152,11 +157,18 @@ func _refresh() -> void:
 			var a := _wa[i]
 			var b := _wb[i]
 			var amp := lerpf(b.x, b.w, blend) * ext
+			var h_amp := amp * a.w
+			var ka_st := a.z * h_amp
 			_amp[i] = amp
 			_dx[i] = a.x * a.z
 			_dz[i] = a.y * a.z
-			_hx[i] = a.x * amp * a.w
-			_hz[i] = a.y * amp * a.w
+			_hx[i] = a.x * h_amp
+			_hz[i] = a.y * h_amp
+			_jxx[i] = a.x * a.x * ka_st
+			_jzz[i] = a.y * a.y * ka_st
+			_jxz[i] = a.x * a.y * ka_st
+			_vx[i] = a.x * b.y * h_amp
+			_vz[i] = a.y * b.y * h_amp
 	if time != _cache_time:
 		_cache_time = time
 		for i in _count:
@@ -176,6 +188,40 @@ func displacement(x: float, z: float) -> Vector3:
 		oz -= _hz[i] * sn
 		oy += _amp[i] * cos(th)
 	return Vector3(ox, oy, oz)
+
+## Fast combined Gerstner displacement (xyz) and surface Jacobian determinant (w)
+## for a rest-plane point (x, z). Used by crest spray and foam queries.
+func displacement_and_jacobian(x: float, z: float) -> Vector4:
+	_refresh()
+	var ox := 0.0
+	var oy := 0.0
+	var oz := 0.0
+	var dxx := 1.0
+	var dzz := 1.0
+	var dxz := 0.0
+	for i in _count:
+		var th := _dx[i] * x + _dz[i] * z + _ph[i]
+		var sn := sin(th)
+		var cs := cos(th)
+		ox -= _hx[i] * sn
+		oz -= _hz[i] * sn
+		oy += _amp[i] * cs
+		dxx -= _jxx[i] * cs
+		dzz -= _jzz[i] * cs
+		dxz -= _jxz[i] * cs
+	return Vector4(ox, oy, oz, dxx * dzz - dxz * dxz)
+
+## Horizontal Gerstner orbital velocity d/dt(displacement.xz) (m/s) of rest point (x, z).
+## Mirrors `flow_vel` in waves.gdshaderinc.
+func orbital_velocity(x: float, z: float) -> Vector2:
+	_refresh()
+	var vx := 0.0
+	var vz := 0.0
+	for i in _count:
+		var cs := cos(_dx[i] * x + _dz[i] * z + _ph[i])
+		vx += _vx[i] * cs
+		vz += _vz[i] * cs
+	return Vector2(vx, vz)
 
 ## Water surface height (world Y) above the world-space point (x, z).
 ## Inverts the horizontal Gerstner displacement with a few fixed-point steps
