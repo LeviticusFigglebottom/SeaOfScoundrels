@@ -287,10 +287,10 @@ void sample_triplanar_cliff(
 				vec2 uv_xm = TILT_M * (uv_x * 2.25) + vec2(2.19, 4.71);
 				vec3 axm = texture(alb_tex, uv_xm).rgb;
 				float lm = dot(axm, vec3(0.299, 0.587, 0.114)) / max(dot(ax, vec3(0.299, 0.587, 0.114)), 0.16);
-				ax = mix(ax, ax * clamp(lm, 0.50, 1.54), near_detail * 0.66);
+				ax = mix(ax, ax * clamp(lm, 0.66, 1.36), near_detail * 0.34);
 				if (nrm_str > 0.02) {
 					vec2 sxm = texture(nrm_tex, uv_xm).xy * 2.0 - 1.0;
-					gx += (INV_TILT_M * vec2(sxm.x, -sxm.y)) * (near_detail * 0.75);
+					gx += (INV_TILT_M * vec2(sxm.x, -sxm.y)) * (near_detail * 0.36);
 				}
 			}
 			if (nrm_str > 0.02) {
@@ -315,10 +315,10 @@ void sample_triplanar_cliff(
 				vec2 uv_zm = TILT_M * (uv_z * 2.25) + vec2(5.13, 1.63);
 				vec3 azm = texture(alb_tex, uv_zm).rgb;
 				float lm = dot(azm, vec3(0.299, 0.587, 0.114)) / max(dot(az, vec3(0.299, 0.587, 0.114)), 0.16);
-				az = mix(az, az * clamp(lm, 0.50, 1.54), near_detail * 0.66);
+				az = mix(az, az * clamp(lm, 0.66, 1.36), near_detail * 0.34);
 				if (nrm_str > 0.02) {
 					vec2 szm = texture(nrm_tex, uv_zm).xy * 2.0 - 1.0;
-					gz += (INV_TILT_M * vec2(szm.x, -szm.y)) * (near_detail * 0.75);
+					gz += (INV_TILT_M * vec2(szm.x, -szm.y)) * (near_detail * 0.36);
 				}
 			}
 			if (nrm_str > 0.02) {
@@ -642,53 +642,55 @@ void fragment() {
 
 		if (w_sand > 0.06) {
 			vec3 sa; vec3 sn_o;
-			// Crisp trade-wind sand ripples & washed shingle/pebbles, preserving glistening wet shore sand!
-			float sand_nrm_k = mix(0.28, 1.12, t_dry_in);
-			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 2.25, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail, sa, sn_o);
-			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.12)) * vec3(1.04, 1.02, 0.98);
-			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.66, 0.54, 0.36), 0.54);
-			vec3 dry_pbr = mix(col_dry, sa_pop, 0.78);
+			// Calibrated for Pass Q3A 1024x1024 shell-flecked sand PBR: crisp natural grain & golden wet swash!
+			float sand_nrm_k = mix(0.24, 0.88, t_dry_in);
+			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.68, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail * 0.58, sa, sn_o);
+			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.06)) * vec3(1.03, 1.01, 0.98);
+			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.68, 0.56, 0.38), 0.54);
+			vec3 dry_pbr = mix(col_dry, sa_pop, 0.80);
 			tex_alb_acc += mix(wet_pbr, dry_pbr, t_dry_in) * w_sand;
 			tex_nrm_acc += sn_o * w_sand;
 			tex_w_acc += w_sand;
 		}
 		if (w_grass > 0.06) {
 			vec3 ga; vec3 gn_o;
-			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 2.15, macro_n, brush_n, tex_nrm_str * 1.32, 0.645, near_detail, ga, gn_o);
-			// Deepen blade/tuft/soil contrast so meadows read as rich dappled turf at both 3 m and 80 m!
-			vec3 ga_rich = pow(max(ga, vec3(0.001)), vec3(1.22)) * vec3(1.06, 1.09, 0.96);
-			ga_rich *= mix(0.80, 1.18, meadow_tuft * 0.62 + tussock_n * 0.38);
-			ga_rich = mix(ga_rich, vec3(0.20, 0.16, 0.10), soil_pocket * 0.52);
+			// Calibrated for Pass Q3A lush multi-tone meadow turf PBR without crushing shadowed slopes!
+			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 1.65, macro_n, brush_n, tex_nrm_str * 1.06, 0.645, near_detail * 0.62, ga, gn_o);
+			vec3 ga_rich = pow(max(ga, vec3(0.001)), vec3(1.08)) * vec3(1.04, 1.06, 0.97);
+			ga_rich *= mix(0.84, 1.15, meadow_tuft * 0.60 + tussock_n * 0.40);
+			ga_rich = mix(ga_rich, vec3(0.20, 0.16, 0.10), soil_pocket * 0.44);
 			tex_alb_acc += (ga_rich * grass_tint) * w_grass;
 			tex_nrm_acc += gn_o * w_grass;
 			tex_w_acc += w_grass;
 		}
 		if (w_dirt > 0.06) {
 			vec3 da; vec3 dn_o;
-			sample_stochastic_ground(tex_dirt_albedo, tex_dirt_normal, xz, terrain_tex_scale * 2.35, macro_n, brush_n, tex_nrm_str * 1.40, 0.89, near_detail, da, dn_o);
-			// Layer gritty PBR earth & pebbles OVER the weathered stepping stones so every stone has fine dust & grain!
-			vec3 da_rich = pow(max(da, vec3(0.001)), vec3(1.14)) * path_mortar_ao;
-			float da_grit = clamp(dot(da, vec3(0.299, 0.587, 0.114)) * 1.45, 0.66, 1.24);
-			vec3 stone_with_grit = ground_col * mix(1.0, da_grit, 0.72);
-			vec3 trail_pbr = mix(da_rich, stone_with_grit, clamp(path_cobble_top * 0.64 + 0.18, 0.0, 0.82));
+			// Calibrated for Pass Q3A baked stepping-stone trail PBR: real footstep scale (~5 m/tile) taking
+			// the lead cleanly (~78%) with zero double-layered stone overlap!
+			sample_stochastic_ground(tex_dirt_albedo, tex_dirt_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 1.16, 0.89, near_detail * 0.36, da, dn_o);
+			vec3 da_rich = pow(max(da, vec3(0.001)), vec3(1.07)) * mix(1.0, path_mortar_ao, 0.35);
+			float da_grit = clamp(dot(da, vec3(0.299, 0.587, 0.114)) * 1.38, 0.72, 1.20);
+			vec3 stone_with_grit = ground_col * mix(1.0, da_grit, 0.68);
+			vec3 trail_pbr = mix(da_rich, stone_with_grit, clamp(path_cobble_top * 0.24 + 0.08, 0.0, 0.34));
 			tex_alb_acc += trail_pbr * w_dirt;
 			tex_nrm_acc += dn_o * w_dirt;
 			tex_w_acc += w_dirt;
 		}
 		if (w_cliff_norm > 0.06) {
 			vec3 ca; vec3 cn_o;
-			sample_triplanar_cliff(tex_cliff_albedo, tex_cliff_normal, v_world, smooth_n, terrain_tex_scale * 1.15, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.42, far_cliff, near_detail, ca, cn_o);
-			// Amplify fracture cavity contrast & chiseled rock micro-texture!
-			vec3 ca_pop = pow(max(ca, vec3(0.001)), vec3(1.16)) * vec3(1.05, 1.03, 1.00);
+			// Calibrated for Pass Q3A chiseled sandstone cliff PBR: monumental coastal strata scale (~11.5 m/tile)
+			// so giant cliffs read as carved geological monoliths instead of tiny masonry bricks!
+			sample_triplanar_cliff(tex_cliff_albedo, tex_cliff_normal, v_world, smooth_n, terrain_tex_scale * 0.64, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.08, far_cliff, near_detail, ca, cn_o);
+			vec3 ca_pop = pow(max(ca, vec3(0.001)), vec3(1.06)) * vec3(1.04, 1.02, 0.99);
 			tex_alb_acc += (ca_pop * cliff_tint) * w_cliff_norm;
 			tex_nrm_acc += cn_o * w_cliff_norm;
 			tex_w_acc += w_cliff_norm;
 		}
 		if (w_cliff_volc > 0.06) {
 			vec3 va; vec3 vn_o;
-			sample_triplanar_cliff(tex_volcanic_albedo, tex_volcanic_normal, v_world, smooth_n, terrain_tex_scale * 0.82, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.55, far_cliff, near_detail, va, vn_o);
-			// Preserve obsidian crust vs dark fissure contrast on 176 m volcanic calderas!
-			vec3 va_pop = pow(max(va, vec3(0.001)), vec3(0.92)) * vec3(1.42, 1.35, 1.45);
+			// Calibrated for Pass Q3A fractured basalt plates: monumental volcanic caldera columns!
+			sample_triplanar_cliff(tex_volcanic_albedo, tex_volcanic_normal, v_world, smooth_n, terrain_tex_scale * 0.56, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.18, far_cliff, near_detail, va, vn_o);
+			vec3 va_pop = pow(max(va, vec3(0.001)), vec3(0.94)) * vec3(1.36, 1.30, 1.38);
 			tex_alb_acc += va_pop * w_cliff_volc;
 			tex_nrm_acc += vn_o * w_cliff_volc;
 			tex_w_acc += w_cliff_volc;
