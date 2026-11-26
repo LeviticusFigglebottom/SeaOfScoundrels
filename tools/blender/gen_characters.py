@@ -816,17 +816,17 @@ def _build_pirate_arm_and_hand(mb, side):
             el.lerp(wr, 0.92),
             wr,
         ]
-        rads = [0.072, 0.076, 0.070, 0.062, 0.058, 0.064, 0.072, 0.052, 0.044]
+        rads = [0.072, 0.076, 0.070, 0.062, 0.058, 0.064, 0.070, 0.046, 0.040]
         scols = [
             mul(C_SHIRT, 0.92), C_SHIRT, mul(C_SHIRT, 1.04), mul(C_SHIRT, 0.95),
             mul(C_SHIRT, 0.92), C_SHIRT, mul(C_SHIRT, 1.05), mul(C_SHIRT, 0.86),
         ]
         tube(mb, path, rads, 8, 'cloth_base', C_SHIRT, (True, True), False, scols=scols)
 
-        # Leather wrist bracer/cuff band
-        tube(mb, [el.lerp(wr, 0.86), wr], [0.050, 0.047], 8, 'leather', C_LEATHER, (True, True), False)
+        # Proud leather wrist bracer/cuff band (cleanly outside sleeve to avoid Z-fighting)
+        tube(mb, [el.lerp(wr, 0.84), wr], [0.058, 0.054], 8, 'leather', C_LEATHER, (True, True), False)
 
-        # Big expressive sculpted pirate hand! (weighted 100% to Hand_side)
+        # Big expressive sculpted pirate hand! (weighted 100% to Hand_side, matching image_3.png)
         h_dir = (ft - wr).normalized()
         up_ref = Vector((0, 0, -1))
         side_v = h_dir.cross(up_ref).normalized()
@@ -839,15 +839,15 @@ def _build_pirate_arm_and_hand(mb, side):
         ))
         with wctx(mb, "Hand_" + side):
             with xf(mb, H):
-                # Chunky palm
-                cbox(mb, (0.0, 0.052, 0.0), (0.044, 0.088, 0.082), 'skin', C_SKIN, 0.014)
-                # Slightly curled finger block (index + massed fingers)
-                cbox(mb, (-sx * 0.014, 0.115, -0.010), (0.036, 0.058, 0.076), 'skin', C_SKIN_WARM, 0.012,
+                # Big chunky palm (~1.35x scale for bold stylized silhouette)
+                cbox(mb, (0.0, 0.062, 0.0), (0.062, 0.108, 0.102), 'skin', C_SKIN, 0.018)
+                # Slightly curled chunky finger block
+                cbox(mb, (-sx * 0.018, 0.138, -0.010), (0.048, 0.072, 0.094), 'skin', C_SKIN_WARM, 0.015,
                      R('Z', sx * 24))
                 # Knuckle ridge highlight
-                cbox(mb, (sx * 0.018, 0.088, 0.0), (0.014, 0.022, 0.074), 'skin', mul(C_SKIN, 1.08), 0.005)
-                # Chunky expressive thumb angled forward/inward
-                cbox(mb, (-sx * 0.018, 0.058, -0.054), (0.032, 0.054, 0.034), 'skin', C_SKIN_WARM, 0.010,
+                cbox(mb, (sx * 0.026, 0.104, 0.0), (0.018, 0.028, 0.092), 'skin', mul(C_SKIN, 1.08), 0.006)
+                # Bold expressive thumb angled forward/inward
+                cbox(mb, (-sx * 0.024, 0.072, -0.068), (0.042, 0.066, 0.044), 'skin', C_SKIN_WARM, 0.012,
                      R('X', -32) @ R('Z', sx * 18))
 
 def _build_pirate_head(mb):
@@ -1123,34 +1123,38 @@ def build_pirate_meshes(arm_obj):
             tube(coat, [el.lerp(wr, 0.68), el.lerp(wr, 0.76)], [0.107, 0.107], 8, 'brass', C_BRASS, (False, False), False)
     meshes.append(build_skinned(coat, arm_obj))
 
-    # ---- 6. Vest_Crew (open leather/canvas sailor's waistcoat)
+    # ---- 6. Vest_Crew (bold open sailor's waistcoat cleanly clearing the white shirt!)
     vest = MB('Vest_Crew', seed=24)
     with wctx(vest, w_torso):
-        def vest_arc(y, rx, rz, gap_deg=32.0):
+        def vest_arc(y, rx, rz, gap_deg=18.0, front_bias=0.14):
             pts = []
             a0 = radians(-90.0 + gap_deg)
             a1 = radians(270.0 - gap_deg)
-            for k in range(11):
-                a = a0 + (a1 - a0) * k / 10.0
-                pts.append(Vector((cos(a) * rx, y, sin(a) * rz)))
+            for k in range(13):
+                a = a0 + (a1 - a0) * k / 12.0
+                ca, sa = cos(a), sin(a)
+                sx_s = (1.0 if ca >= 0 else -1.0) * (abs(ca) ** 0.72)
+                sz_s = (1.0 if sa >= 0 else -1.0) * (abs(sa) ** 0.72)
+                z_val = sz_s * rz * (1.0 + front_bias if sz_s < 0 else 1.0)
+                pts.append(Vector((sx_s * rx, y, z_val)))
             return pts
         v_secs = [
-            vest_arc(0.92, 0.195, 0.144, 34.0),
-            vest_arc(1.04, 0.194, 0.146, 30.0),
-            vest_arc(1.18, 0.222, 0.162, 32.0),
-            vest_arc(1.32, 0.244, 0.166, 38.0),
-            vest_arc(1.40, 0.215, 0.136, 48.0),
+            vest_arc(0.91, 0.222, 0.168, 16.0),
+            vest_arc(1.04, 0.220, 0.170, 15.0),
+            vest_arc(1.18, 0.248, 0.186, 17.0),
+            vest_arc(1.32, 0.268, 0.190, 22.0),
+            vest_arc(1.41, 0.236, 0.158, 30.0),
         ]
         loft(vest, v_secs, 'cloth_primary', C_TINT_HI, closed=False, caps=(False, False), smooth=False,
              scols=[C_TINT_LO, C_TINT_MID, C_TINT_HI, C_TINT_HI])
         # Trim front placket & brass buttons + shoulder straps
         for sx in (-1.0, 1.0):
-            cbox(vest, (sx * 0.118, 1.155, -0.152), (0.044, 0.39, 0.024), 'leather', C_LEATHER, 0.006,
-                 R('Y', -sx * 22))
+            cbox(vest, (sx * 0.085, 1.155, -0.198), (0.044, 0.42, 0.024), 'leather', C_LEATHER, 0.006,
+                 R('Y', -sx * 16))
             for bi in range(4):
-                cbox(vest, (sx * 0.116, 1.01 + bi * 0.075, -0.164), (0.018, 0.018, 0.012), 'brass', C_BRASS, 0.003)
-            # Chunky shoulder leather cap
-            cbox(vest, (sx * 0.185, 1.408, 0.004), (0.095, 0.032, 0.115), 'cloth_primary', C_TINT_MID, 0.008,
+                cbox(vest, (sx * 0.084, 1.00 + bi * 0.078, -0.212), (0.020, 0.020, 0.012), 'brass', C_BRASS, 0.003)
+            # Chunky shoulder vest cap
+            cbox(vest, (sx * 0.190, 1.418, 0.004), (0.108, 0.036, 0.128), 'cloth_primary', C_TINT_MID, 0.008,
                  R('Z', -sx * 12))
     meshes.append(build_skinned(vest, arm_obj))
 
@@ -1341,6 +1345,12 @@ def build_drowned_meshes(arm_obj):
             tube(body, [(sx * 0.03, 1.385, -0.075), (sx * 0.13, 1.395, -0.045), (sx * 0.21, 1.385, 0.012)],
                  0.022, 5, 'bone', C_BONE, (True, True), False)
             cbox(body, (sx * 0.115, 1.315, 0.075), (0.088, 0.125, 0.030), 'bone', C_BONE_DARK, 0.008)
+
+        # Sculpted lumbar spine column + bold vertebrae closing waist gap cleanly
+        tube(body, [(0.0, 0.93, 0.016), (0.0, 1.03, 0.024), (0.0, 1.14, 0.026)],
+             [0.042, 0.038, 0.040], 6, 'bone', C_BONE, (True, True), False)
+        for vy in (0.985, 1.045, 1.105):
+            cbox(body, (0.0, vy, 0.022), (0.082, 0.034, 0.068), 'bone', C_BONE_DARK, 0.008)
 
         # Pelvis bone + sea-rotted tattered breeches & rope waist tie
         pelvis_secs = [

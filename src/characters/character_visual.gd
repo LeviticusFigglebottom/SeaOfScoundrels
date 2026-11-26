@@ -91,7 +91,7 @@ const ARCHETYPES := {
 	},
 }
 
-const DEFAULT_CARRY_LOCAL := Vector3(0.0, 1.0, -0.56)
+const DEFAULT_CARRY_LOCAL := Vector3(0.0, 1.06, -0.44)
 
 @export var archetype: StringName = &"captain":
 	get:

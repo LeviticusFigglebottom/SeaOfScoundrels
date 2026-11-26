@@ -617,13 +617,14 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 		_set_leg(side, th_fwd, base_thigh_out, kn_bend, ft_up, turnout)
 
 	# ---- Arms (jaunty counter-swing, athletic sprint pump, guarded crouch) ----
+	var is_powder := visual != null and visual.get_archetype() == &"drowned_powder"
 	var arm_amp := lerpf(0.50, 0.96, spr) * lerpf(1.0, 0.65, cr)
 	for side_i in 2:
 		var side := -1.0 if side_i == 0 else 1.0
 		var s := -sp if side_i == 0 else sp # opposite to same-side leg
-		var idle_fwd := 0.08 if side > 0.0 else 0.04
-		var idle_out := 0.09 + breath * 0.016
-		var idle_elb := 0.32 if side > 0.0 else 0.26
+		var idle_fwd := 0.14 if side > 0.0 else -0.02
+		var idle_out := (0.06 if side > 0.0 else 0.10) + breath * 0.014
+		var idle_elb := 0.42 if side > 0.0 else 0.30
 
 		var walk_fwd := s * arm_amp + lerpf(0.04, 0.24, spr) + 0.28 * cr
 		var walk_out := lerpf(0.08, 0.16, spr) + 0.12 * cr
@@ -632,10 +633,14 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 
 		var fwd := lerpf(idle_fwd + 0.26 * cr, walk_fwd, mv)
 		var out := lerpf(idle_out + 0.14 * cr, walk_out, mv)
-		var inward := lerpf(0.12 * cr, walk_inward, mv)
+		var inward := lerpf((0.06 if side > 0.0 else 0.02) + 0.12 * cr, walk_inward, mv)
 		var elb := lerpf(idle_elb + 0.72 * cr, walk_elb, mv)
 		var sh_l := breath * 0.025 * (1.0 - mv) + 0.05 * spr * mv
-		_set_arm(side, fwd, out, inward, elb, 0.0, 0.0, sh_l, s * 0.08 * mv)
+		if is_powder and side > 0.0:
+			# Powder-Carrier braces his right arm up to hold the explosive keg on his right shoulder!
+			_set_arm(1.0, 1.18 + s * 0.06 * mv, 0.42, 0.24, 1.72, -0.18, 0.15, 0.16, 0.08)
+		else:
+			_set_arm(side, fwd, out, inward, elb, 0.0, 0.0, sh_l, s * 0.08 * mv)
 
 
 func _pose_airborne(st: _AnimState) -> void:
@@ -907,11 +912,11 @@ func _apply_look_pitch(st: _AnimState) -> void:
 
 
 func _layer_carry(w: float) -> void:
-	# Both arms forward & cupped upward supporting a chest/crate/barrel in front of torso.
+	# Both arms cupped forward at waist/chest height physically gripping the carried chest.
 	_mul_char_rot(_b_spine, _euler_char(0.08 * w, 0.0, 0.0))
 	_mul_char_rot(_b_chest, _euler_char(0.06 * w, 0.0, 0.0))
-	_set_arm(-1.0, 0.70, 0.18, 0.24, 1.24, 0.18, -0.35, 0.06, 0.10, w)
-	_set_arm(1.0, 0.70, 0.18, 0.24, 1.24, 0.18, -0.35, 0.06, 0.10, w)
+	_set_arm(-1.0, 0.38, 0.20, 0.22, 1.02, 0.16, -0.32, 0.04, 0.08, w)
+	_set_arm(1.0, 0.38, 0.20, 0.22, 1.02, 0.16, -0.32, 0.04, 0.08, w)
 
 
 # ------------------------------------------------------------------ layered actions (16)
@@ -1017,10 +1022,10 @@ func _act_heavy(u: float, w: float) -> void:
 	_set_char_rot(_b_spine, _euler_char(pitch * 0.45, twist * 0.42, 0.0), w)
 	_set_char_rot(_b_chest, _euler_char(pitch * 0.55, twist * 0.58, lerpf(-0.14, 0.18, strike)), w)
 	_set_char_rot(_b_head, _euler_char(-pitch * 0.45, -twist * 0.55, 0.0), w)
-	var r_fwd := lerpf(2.32, 0.48, strike)
-	var r_out := lerpf(0.68, 0.12, strike)
-	var r_in := lerpf(-0.62, 0.96, strike)
-	var r_elb := lerpf(1.32, 0.22, strike)
+	var r_fwd := lerpf(2.26, 0.48, strike)
+	var r_out := lerpf(0.88, 0.12, strike)
+	var r_in := lerpf(-0.68, 0.96, strike)
+	var r_elb := lerpf(1.26, 0.22, strike)
 	_set_arm(1.0, r_fwd, r_out, r_in, r_elb, lerpf(-0.40, 0.60, strike), 0.35, 0.22 * (1.0 - strike), lerpf(-0.16, 0.26, strike), w)
 	_set_arm(-1.0, lerpf(1.15, -0.48, strike), lerpf(0.32, 0.78, strike), lerpf(0.35, -0.35, strike), lerpf(0.65, 0.42, strike), 0.0, 0.0, 0.10, 0.0, w)
 
@@ -1061,13 +1066,13 @@ func _act_stagger(u: float, w: float) -> void:
 
 
 func _act_aim_pistol(u: float, w: float) -> void:
-	# Sideways duelist stance: right arm straight down -Z sighting along barrel!
+	# Sideways duelist stance: right arm counter-rotated so barrel aims straight down character -Z!
 	var steady := sin(u * TAU) * 0.015
 	_set_char_rot(_b_spine, _euler_char(0.0, 0.22, 0.0), w)
 	_set_char_rot(_b_chest, _euler_char(0.02, 0.34, 0.0), w)
 	_set_char_rot(_b_neck, _euler_char(0.0, -0.22, 0.0), w)
 	_set_char_rot(_b_head, _euler_char(-0.04, -0.32, 0.10), w)
-	_set_arm(1.0, 1.52 + steady, 0.06, 0.08, 0.14, -0.12, 0.0, 0.08, 0.16, w)
+	_set_arm(1.0, 1.52 + steady, 0.06, -0.48, 0.14, -0.12, 0.0, 0.08, 0.16, w)
 	_set_arm(-1.0, -0.18, 0.34, -0.16, 0.88, 0.0, 0.0, 0.0, -0.10, w)
 
 
@@ -1078,7 +1083,7 @@ func _act_fire_pistol(u: float, w: float) -> void:
 	_set_char_rot(_b_chest, _euler_char(0.12 * kick, 0.34 - 0.12 * kick, -0.06 * kick), w)
 	_set_char_rot(_b_neck, _euler_char(0.05 * kick, -0.22, 0.0), w)
 	_set_char_rot(_b_head, _euler_char(0.08 * kick, -0.30, 0.08), w)
-	_set_arm(1.0, 1.52 + 0.56 * kick, 0.08 + 0.10 * kick, 0.06, 0.14 + 0.42 * kick, -0.35 * kick, 0.0, 0.14 * kick, 0.16 - 0.14 * kick, w)
+	_set_arm(1.0, 1.52 + 0.56 * kick, 0.08 + 0.10 * kick, -0.48, 0.14 + 0.42 * kick, -0.35 * kick, 0.0, 0.14 * kick, 0.16 - 0.14 * kick, w)
 	_set_arm(-1.0, -0.22, 0.38, -0.18, 0.92, 0.0, 0.0, 0.0, -0.10, w)
 
 
@@ -1151,7 +1156,7 @@ func _act_play_instrument(u: float, w: float) -> void:
 
 
 func _act_shout(u: float, w: float) -> void:
-	# Heroic pirate rally bellow: chest puffed high, right fist pumped overhead, left hand cupped to mouth!
+	# Heroic pirate rally bellow: chest puffed high, right fist pumped overhead, left hand cupped clear beside jaw!
 	var roar := smoothstep(0.08, 0.32, u) * (1.0 - smoothstep(0.74, 0.96, u))
 	var vibr := sin(u * TAU * 5.0) * 0.03 * roar
 	_set_char_rot(_b_spine, _euler_char(0.14 * roar, -0.10 * roar, 0.0), w)
@@ -1160,8 +1165,8 @@ func _act_shout(u: float, w: float) -> void:
 	_set_char_rot(_b_head, _euler_char(0.28 * roar + vibr, 0.08 * roar, 0.0), w)
 	# Right arm pumped triumphantly skyward!
 	_set_arm(1.0, 2.42 * roar + 0.25, 0.38 * roar + 0.10, -0.14, 0.42 + vibr * 2.0, 0.15, 0.0, 0.26 * roar, 0.0, w)
-	# Left hand raised cupped beside mouth!
-	_set_arm(-1.0, 1.18 * roar + 0.15, 0.22 * roar, 0.54 * roar, 1.72 * roar + 0.25, 0.20, -0.35, 0.12 * roar, 0.14 * roar, w)
+	# Left hand raised cupped cleanly beside mouth (clear of jaw & coat lapel)!
+	_set_arm(-1.0, 1.12 * roar + 0.15, 0.28 * roar, 0.34 * roar, 1.42 * roar + 0.22, 0.20, -0.30, 0.12 * roar, 0.10 * roar, w)
 
 
 func _act_dodge(u: float, w: float) -> void:

@@ -255,51 +255,47 @@ func _spawn_character(arch: StringName, pos: Vector3, yaw_deg: float) -> Diction
 func _attach_prop_cutlass(vis: CharacterVisual) -> void:
 	if vis.hand_right == null:
 		return
-	var sword := Node3D.new()
+	var sword := ToolMeshes.build_tool(&"cutlass")
 	sword.name = "PropCutlass"
-	# Align grip inside Hand_R palm (bone +Y along fingers, -X thumb/forward).
-	sword.position = Vector3(0.0, 0.075, -0.015)
-	sword.rotation_degrees = Vector3(0.0, 0.0, -82.0)
-
-	var mat_steel := StandardMaterial3D.new()
-	mat_steel.albedo_color = Color(0.76, 0.80, 0.86)
-	mat_steel.metallic = 0.82
-	mat_steel.roughness = 0.28
-	var mat_brass := StandardMaterial3D.new()
-	mat_brass.albedo_color = Color(0.88, 0.68, 0.24)
-	mat_brass.metallic = 0.80
-	mat_brass.roughness = 0.30
-
-	var grip := MeshInstance3D.new()
-	var gm := CylinderMesh.new()
-	gm.top_radius = 0.018
-	gm.bottom_radius = 0.020
-	gm.height = 0.14
-	grip.mesh = gm
-	grip.material_override = mat_brass
-	sword.add_child(grip)
-
-	var guard := MeshInstance3D.new()
-	var gdm := BoxMesh.new()
-	gdm.size = Vector3(0.03, 0.025, 0.13)
-	guard.mesh = gdm
-	guard.position = Vector3(0.0, 0.075, 0.0)
-	guard.material_override = mat_brass
-	sword.add_child(guard)
-
-	var blade := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.016, 0.64, 0.055)
-	blade.mesh = bm
-	blade.position = Vector3(0.0, 0.40, -0.01)
-	blade.material_override = mat_steel
-	sword.add_child(blade)
-
+	# Natural forward-down swashbuckler grip aligned along Hand_R palm.
+	sword.position = Vector3(0.0, 0.085, -0.02)
+	sword.rotation_degrees = Vector3(-18.0, 12.0, -18.0)
+	sword.scale = Vector3.ONE * 0.92
 	vis.hand_right.add_child(sword)
+
+
+func _attach_prop_pistol(vis: CharacterVisual) -> void:
+	if vis.hand_right == null:
+		return
+	var pistol := ToolMeshes.build_tool(&"pistol")
+	pistol.name = "PropPistol"
+	pistol.position = Vector3(0.0, 0.085, -0.025)
+	pistol.rotation_degrees = Vector3(-82.0, 0.0, 0.0)
+	pistol.scale = Vector3.ONE * 0.95
+	vis.hand_right.add_child(pistol)
+
+
+func _attach_prop_tankard(vis: CharacterVisual) -> void:
+	if vis.hand_right == null:
+		return
+	var mug := ToolMeshes.build_tool(&"tankard")
+	mug.name = "PropTankard"
+	mug.position = Vector3(0.0, 0.085, -0.02)
+	mug.rotation_degrees = Vector3(-15.0, 0.0, 0.0)
+	mug.scale = Vector3.ONE * 0.95
+	vis.hand_right.add_child(mug)
 
 
 func _attach_prop_crate(vis: CharacterVisual) -> void:
 	if vis.carry_anchor == null:
+		return
+	var chest_scene: PackedScene = load("res://assets/generated/props/chest_treasure.glb") as PackedScene
+	if chest_scene != null:
+		var chest := chest_scene.instantiate() as Node3D
+		chest.name = "PropChest"
+		chest.position = Vector3(0.0, -0.14, 0.02)
+		chest.scale = Vector3.ONE * 0.62
+		vis.carry_anchor.add_child(chest)
 		return
 	var crate := MeshInstance3D.new()
 	crate.name = "PropCrate"
@@ -341,7 +337,7 @@ func _build_lineup() -> void:
 		var entry := _spawn_character(arch, Vector3(x, 0.0, z), yaw)
 		var vis: CharacterVisual = entry["visual"]
 		var drv: AnimationDriver = entry["driver"]
-		if arch == &"captain" or arch == &"drowned_cutlass" or arch == &"drowned_captain":
+		if arch == &"captain" or arch == &"drowned_cutlass" or arch == &"drowned_captain" or arch == &"drowned_shield":
 			_attach_prop_cutlass(vis)
 		if arch == &"captain":
 			drv.demo_look_pitch = 0.06
@@ -366,6 +362,7 @@ func _build_pirates() -> void:
 		if arch == &"captain":
 			_attach_prop_cutlass(vis)
 		elif arch == &"lookout":
+			_attach_prop_pistol(vis)
 			drv.hold_action(&"aim_pistol", 0.5)
 		elif arch == &"carpenter":
 			drv.demo_carrying = true
@@ -386,7 +383,7 @@ func _build_enemies() -> void:
 		var entry := _spawn_character(arch, Vector3(x, 0.0, z), yaw)
 		var vis: CharacterVisual = entry["visual"]
 		var drv: AnimationDriver = entry["driver"]
-		if arch == &"drowned_cutlass" or arch == &"drowned_captain":
+		if arch == &"drowned_cutlass" or arch == &"drowned_captain" or arch == &"drowned_shield":
 			_attach_prop_cutlass(vis)
 		if arch == &"drowned_shield":
 			drv.hold_action(&"block", 0.45)
@@ -397,16 +394,16 @@ func _build_enemies() -> void:
 
 
 func _build_poses() -> void:
-	# 8 expressive live poses spanning combat, locomotion, stations, carrying & charm!
+	# 8 expressive live poses staggered into clear visual windows (zero back-row occlusion!).
 	var specs := [
 		{"arch": &"captain", "pos": Vector3(-3.3, 0.0, -0.35), "yaw": -18.0, "kind": "action", "action": &"slash_1", "cutlass": true},
-		{"arch": &"lookout", "pos": Vector3(-1.95, 0.0, 0.25), "yaw": -12.0, "kind": "action", "action": &"aim_pistol"},
+		{"arch": &"lookout", "pos": Vector3(-1.95, 0.0, 0.25), "yaw": -12.0, "kind": "action", "action": &"aim_pistol", "pistol": true},
 		{"arch": &"helmsman", "pos": Vector3(-0.65, 0.0, -0.35), "yaw": -4.0, "kind": "station", "station": &"helm"},
 		{"arch": &"carpenter", "pos": Vector3(0.65, 0.0, 0.25), "yaw": 6.0, "kind": "carry", "crate": true},
 		{"arch": &"captain", "pos": Vector3(1.95, 0.0, -0.35), "yaw": 15.0, "kind": "sprint"},
 		{"arch": &"drowned_captain", "pos": Vector3(3.3, 0.0, 0.25), "yaw": 20.0, "kind": "action", "action": &"heavy", "cutlass": true},
-		{"arch": &"lookout", "pos": Vector3(-2.6, 0.0, 1.45), "yaw": -10.0, "kind": "action", "action": &"shout"},
-		{"arch": &"helmsman", "pos": Vector3(2.6, 0.0, 1.45), "yaw": 12.0, "kind": "action", "action": &"drink"},
+		{"arch": &"lookout", "pos": Vector3(-1.3, 0.0, 1.55), "yaw": -8.0, "kind": "action", "action": &"shout"},
+		{"arch": &"helmsman", "pos": Vector3(1.3, 0.0, 1.55), "yaw": 10.0, "kind": "action", "action": &"drink", "tankard": true},
 	]
 	for sp: Dictionary in specs:
 		var entry := _spawn_character(sp["arch"] as StringName, sp["pos"] as Vector3, float(sp["yaw"]))
@@ -414,6 +411,10 @@ func _build_poses() -> void:
 		var drv: AnimationDriver = entry["driver"]
 		if sp.get("cutlass", false):
 			_attach_prop_cutlass(vis)
+		if sp.get("pistol", false):
+			_attach_prop_pistol(vis)
+		if sp.get("tankard", false):
+			_attach_prop_tankard(vis)
 		if sp.get("crate", false):
 			_attach_prop_crate(vis)
 		entry["spec"] = sp
