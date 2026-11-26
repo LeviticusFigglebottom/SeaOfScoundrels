@@ -2,7 +2,7 @@
 # Usage:
 #   blender --background --factory-startup --python tools/blender/gen_island_landmarks.py -- <outdir>
 #   blender --background --python tools/blender/gen_island_landmarks.py -- --only <name> [<name> ...]
-# Writes up to 46 sculpted coastal geology, skyline, harbour, jungle, maritime, world-craft, on-foot craft, story-craft & signature set-piece .glb files into <outdir>/landmarks/.
+# Writes up to 50 sculpted coastal geology, skyline, harbour, jungle, maritime, world-craft, on-foot craft, story-craft, fort/vault & signature set-piece .glb files into <outdir>/landmarks/.
 import argparse
 import bpy
 import os
@@ -67,6 +67,11 @@ try:
 except ImportError:
     STORY_CRAFT_GENERATORS = []
 
+try:
+    from _landmarks_fort_vault import FORT_VAULT_GENERATORS
+except ImportError:
+    FORT_VAULT_GENERATORS = []
+
 
 def _normalize_name(name):
     n = name.strip()
@@ -113,6 +118,7 @@ def main():
         + list(WORLD_CRAFT_GENERATORS)
         + list(ONFOOT_CRAFT_GENERATORS)
         + list(STORY_CRAFT_GENERATORS)
+        + list(FORT_VAULT_GENERATORS)
     )
 
     if args.only:

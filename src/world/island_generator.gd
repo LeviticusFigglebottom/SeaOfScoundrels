@@ -2583,7 +2583,10 @@ static func _spawn_prop(island: Island, scene: PackedScene, node_name: String,
 		cs.transform = local_xform * _relative_transform(mi, inst)
 		prop_body.add_child(cs)
 
-	# Bind wind-sway foliage shader to `mat_foliage` surfaces on palms and ferns.
+	# Bind wind-sway foliage shader to `mat_foliage` surfaces on palms and ferns,
+	# and tint warm-sandstone rock props to dark charred basalt on volcanic islands (Local-GPU M23B).
+	var tint_volcanic_rock := island.archetype == &"volcano_crag" \
+		and (scene == ROCK_BOULDER_SCENE or scene == ROCK_SPIRE_SCENE or scene == ROCK_ARCH_SCENE)
 	for node in inst.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		if mi == null or not mi.visible or mi.mesh == null:
@@ -2627,6 +2630,15 @@ static func _spawn_prop(island: Island, scene: PackedScene, node_name: String,
 					foliage_cache[cache_key] = wind_mat
 					island.register_foliage_material(wind_mat)
 				mi.set_surface_override_material(surf_i, wind_mat)
+			elif tint_volcanic_rock and src_mat is StandardMaterial3D:
+				var vkey := "volc_rock|" + str(src_mat.get_instance_id())
+				var vmat := foliage_cache.get(vkey) as StandardMaterial3D
+				if vmat == null:
+					vmat = (src_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+					var bc := vmat.albedo_color
+					vmat.albedo_color = Color(bc.r * 0.36, bc.g * 0.34, bc.b * 0.40, bc.a)
+					foliage_cache[vkey] = vmat
+				mi.set_surface_override_material(surf_i, vmat)
 
 	return inst
 

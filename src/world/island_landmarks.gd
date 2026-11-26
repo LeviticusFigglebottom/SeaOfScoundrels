@@ -2,7 +2,7 @@ class_name IslandLandmarks
 extends RefCounted
 ## Bespoke 3D signature landmark choreographer across all 14 archipelago islands.
 ##
-## Places our 46 stylized PBR `.glb` landmarks (Waves I-1 through I-11,
+## Places our 50 stylized PBR `.glb` landmarks (Waves I-1 through I-12,
 ## `res://assets/generated/landmarks/`) with slope-aware anti-floating grounding,
 ## inward cliff-normal heel embedding, walkable `col_*` convex collider extraction,
 ## `foliage_wind.gdshader` vine sway binding, horizon/mid visibility ranges,
@@ -62,14 +62,18 @@ const GLB_SUPPLY_CART := "pirate_tavern_supply_cart.glb"
 const GLB_ANCHOR_MEMORIAL := "sunken_anchor_memorial.glb"
 const GLB_SUNDIAL_PLAZA := "ancient_sun_dial_plaza.glb"
 const GLB_OBSIDIAN_VENT := "volcanic_obsidian_fissure_vent.glb"
+const GLB_STONE_WELL := "stone_well_courtyard.glb"
+const GLB_CANNON_BASTION := "ruined_sea_fort_cannon_bastion.glb"
+const GLB_TREASURE_VAULT := "pirate_treasure_vault_door.glb"
+const GLB_CROW_NEST_MAST := "wooden_shipwreck_crow_nest_mast.glb"
 
 const VIS_RANGE_HORIZON := 2200.0
 const VIS_RANGE_MID := 380.0
 const MAX_TRAIL_MARKERS := 8
 
-# Wave I-10/I-11 (Local-GPU M21A/M22A < 0.43 ms LOD optimization): cull mid-scale ground & cove props
-# cleanly beyond 380 m offshore (trimming nearby offshore island cove props during sailing!) while tall
-# iconic horizon silhouettes stay crisp out to 2200 m.
+# Wave I-10/I-11/I-12 (Local-GPU M21A/M22A < 0.43 ms LOD optimization): cull mid-scale ground & cove
+# props cleanly beyond 380 m offshore (24 mid-scale GLBs!) so offshore sailing adds zero extra draw calls
+# while tall iconic horizon silhouettes stay crisp out to 2200 m.
 const MID_RANGE_FILES: Array[String] = [
 	GLB_BOULDER_CLUSTER,
 	GLB_TRAIL_LANTERN,
@@ -91,6 +95,10 @@ const MID_RANGE_FILES: Array[String] = [
 	GLB_ANCHOR_MEMORIAL,
 	GLB_SUNDIAL_PLAZA,
 	GLB_OBSIDIAN_VENT,
+	GLB_STONE_WELL,
+	GLB_CANNON_BASTION,
+	GLB_TREASURE_VAULT,
+	GLB_CROW_NEST_MAST,
 ]
 
 # Auto-mounted OmniLight3D presets for `Lantern_*` GLB empties.
@@ -121,6 +129,10 @@ const COL_CART_LANTERN := Color(1.0, 0.74, 0.34)
 const COL_ANCHOR_LANTERN := Color(1.0, 0.70, 0.30)
 const COL_SUNDIAL_FIRE := Color(1.0, 0.78, 0.32)
 const COL_MAGMA_VENT := Color(1.0, 0.36, 0.08)
+const COL_WELL_LANTERN := Color(1.0, 0.74, 0.36)
+const COL_BASTION_TORCH := Color(1.0, 0.56, 0.18)
+const COL_VAULT_GLOW := Color(0.26, 0.96, 0.78)
+const COL_CROWNEST_LANTERN := Color(1.0, 0.70, 0.28)
 const COL_HARBOUR_AMBER := Color(1.0, 0.72, 0.34)
 const COL_TRAIL_AMBER := Color(1.0, 0.74, 0.36)
 
@@ -361,6 +373,18 @@ static func _populate_skull_bluff(island: Island, basis: Basis, landing_yaw: flo
 			-32.0 * scale_r, -6.0 * scale_r, landing_yaw + 0.45, 1.04, 14.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 eastern approach headland cannon bastion & lower cliff wall pirate treasure vault!
+	var skull_bast_dir := (basis * Vector3(0.45, 0.0, -0.89)).normalized()
+	if _place_cannon_bastion(island, basis, "CannonBastion_Overlook",
+			38.5 * scale_r, -19.5 * scale_r, 14.0 * scale_r, skull_bast_dir, 1.04,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var skull_vault_dir := (basis * Vector3(-0.55, 0.0, -0.84)).normalized()
+	if _place_treasure_vault(island, basis, "TreasureVault_Hollow",
+			-14.0 * scale_r, -12.0 * scale_r, 14.0 * scale_r, 12.0 * scale_r, skull_vault_dir, 1.04,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -480,6 +504,14 @@ static func _populate_twin_spires(island: Island, basis: Basis, landing_yaw: flo
 	# Wave I-11 sunlit ancient sundial plaza crowning a meadow terrace beside Emerald Spire's valley!
 	if _place_sundial_plaza(island, basis, "SundialPlaza_Canyon",
 			14.0 * scale_r, -36.0 * scale_r, landing_yaw - 0.35, 1.06, 16.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+
+	# Wave I-12 treasure vault embedded into the shaded western emerald canyon cliff toe
+	# (strictly behind shot=emerald_waterfall camera lens & >60 m clear of TempleStairway_Canyon!).
+	var canyon_vault_dir := (basis * Vector3(0.92, 0.0, -0.39)).normalized()
+	if _place_treasure_vault(island, basis, "TreasureVault_Canyon",
+			-7.2 * scale_r, -17.0 * scale_r, 12.0 * scale_r, 14.0 * scale_r, canyon_vault_dir, 1.04,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	return count
@@ -640,6 +672,22 @@ static func _populate_grand_citadel(island: Island, basis: Basis, landing_yaw: f
 			30.0, -64.0, landing_yaw - 0.25, 1.12, 18.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 grand highway courtyard well, western promontory cannon bastion & eastern cliff treasure vault!
+	if _place_stone_well(island, basis, "StoneWell_Courtyard",
+			-28.0, -8.0, landing_yaw + 0.32, 1.06, 14.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var cit_bast_dir := (basis * Vector3(-0.32, 0.0, -0.95)).normalized()
+	if _place_cannon_bastion(island, basis, "CannonBastion_Headland",
+			-55.0, -78.0, 16.0, cit_bast_dir, 1.08,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var cit_vault_dir := (basis * Vector3(0.55, 0.0, -0.84)).normalized()
+	if _place_treasure_vault(island, basis, "TreasureVault_Citadel",
+			22.0, -7.0, 14.0, 14.0, cit_vault_dir, 1.08,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -785,6 +833,17 @@ static func _populate_grand_outpost(island: Island, basis: Basis, landing_yaw: f
 			-14.0, 18.0, landing_yaw + 0.25, 1.02, 14.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 upper town courtyard stone well & harbour mouth cliff cannon bastion!
+	if _place_stone_well(island, basis, "StoneWell_Town",
+			-2.0, 14.0, landing_yaw + 0.18, 1.04, 12.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var fjord_bast_dir := (basis * Vector3(0.55, 0.0, -0.84)).normalized()
+	if _place_cannon_bastion(island, basis, "CannonBastion_Fjord",
+			-68.0, -43.0, 16.0, fjord_bast_dir, 1.06,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -859,6 +918,12 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 				52.0, -34.0, landing_yaw - 0.52, 0.98, 14.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+		# Wave I-12 stone well courtyard along the sunlit inland upper village lane behind the outpost plaza
+		# (strictly clear of Title Screen foreground sightline, dock, Tavern, Merchant, Beacon & trails!).
+		if _place_stone_well(island, basis, "StoneWell_Village",
+				27.5, 17.5, landing_yaw - 0.35, 0.98, 10.0,
+				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+			count += 1
 	else:
 		# Barnacle Haven (and custom outposts): eastern harbour sea arch + western bluff catwalk pier!
 		if _place_sea_arch(island, basis, "CoastalSeaArch_Harbour",
@@ -928,6 +993,16 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 			count += 1
 		if _place_anchor_memorial(island, basis, "AnchorMemorial_Point",
 				-50.0, -44.0, landing_yaw + 0.58, 0.98, 14.0,
+				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+			count += 1
+		# Wave I-12 sunlit harbour village green stone well & western harbour bluff cannon bastion!
+		if _place_stone_well(island, basis, "StoneWell_Harbour",
+				7.5, -4.5, landing_yaw - 0.25, 0.98, 10.0,
+				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+			count += 1
+		var barn_bast_dir := (basis * Vector3(-0.35, 0.0, -0.94)).normalized()
+		if _place_cannon_bastion(island, basis, "CannonBastion_Bluff",
+				-41.0, -35.5, 10.0, barn_bast_dir, 0.98,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
 
@@ -1073,6 +1148,13 @@ static func _populate_smuggler_cove(island: Island, basis: Basis, landing_yaw: f
 			-10.0 * scale_r, -2.0 * scale_r, landing_yaw + 0.42, 0.98, 12.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 pirate treasure vault door tucked into Smuggler's Cove amphitheatre rock wall (clear of SmugglersGrotto)!
+	var smug_vault_dir := (basis * Vector3(-0.78, 0.0, -0.62)).normalized()
+	if _place_treasure_vault(island, basis, "TreasureVault_Cove",
+			20.0 * scale_r, 4.0 * scale_r, 14.0 * scale_r, 14.0 * scale_r, smug_vault_dir, 1.02,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -1173,6 +1255,12 @@ static func _populate_treasure_peak(island: Island, basis: Basis, landing_yaw: f
 			37.0 * scale_r, -8.0 * scale_r, landing_yaw - 0.45, 0.94, 14.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 shipwreck crow's-nest lookout mast crowning Cutlass Cay's eastern reef point!
+	if _place_crow_nest_mast(island, basis, "CrowNestMast_Point",
+			48.0 * scale_r, 11.0 * scale_r, landing_yaw - 0.52, 0.94, 14.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -1264,6 +1352,12 @@ static func _populate_sea_arch(island: Island, basis: Basis, landing_yaw: float,
 			38.0 * scale_r, -20.0 * scale_r, landing_yaw - 0.45, 0.98, 14.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 shipwreck crow's-nest lookout mast perched on Gull's Arch outer western bay point!
+	if _place_crow_nest_mast(island, basis, "CrowNestMast_Bay",
+			-42.0 * scale_r, -28.0 * scale_r, landing_yaw + 0.62, 0.98, 16.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -1353,6 +1447,12 @@ static func _populate_crescent_lagoon(island: Island, basis: Basis, landing_yaw:
 	# Wave I-11 sunlit ancient sundial plaza crowning Crescent Atoll's lush northern lagoon rim!
 	if _place_sundial_plaza(island, basis, "SundialPlaza_Atoll",
 			20.0 * scale_r, 10.0 * scale_r, landing_yaw - 0.40, 1.04, 16.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+
+	# Wave I-12 shipwreck crow's-nest lookout mast crowning Crescent Atoll's outer western coral horn!
+	if _place_crow_nest_mast(island, basis, "CrowNestMast_Reef",
+			-50.0 * scale_r, -19.0 * scale_r, landing_yaw + 0.58, 1.04, 18.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	return count
@@ -1447,6 +1547,17 @@ static func _populate_fort_rock(island: Island, basis: Basis, landing_yaw: float
 			-10.5 * scale_r, 16.5 * scale_r, landing_yaw + 0.35, 1.0, 14.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 garrison stone well courtyard & seaward cannon bastion battery overlooking Powder Cove!
+	if _place_stone_well(island, basis, "StoneWell_Garrison",
+			16.0 * scale_r, 4.5 * scale_r, landing_yaw - 0.30, 1.0, 12.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var fort_batt_dir := (basis * Vector3(-0.45, 0.0, -0.89)).normalized()
+	if _place_cannon_bastion(island, basis, "CannonBastion_Battery",
+			-32.0 * scale_r, -13.0 * scale_r, 14.0 * scale_r, fort_batt_dir, 1.02,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -1519,6 +1630,12 @@ static func _populate_wreck_shoal(island: Island, basis: Basis, landing_yaw: flo
 			-34.0 * scale_r, -20.0 * scale_r, landing_yaw + 0.48, 0.94, 14.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-12 shipwreck crow's-nest lookout mast rising above Wrecker's Shoal eastern wreck reef!
+	if _place_crow_nest_mast(island, basis, "CrowNestMast_Shoal",
+			46.0 * scale_r, -12.0 * scale_r, landing_yaw - 0.55, 0.94, 14.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -1563,6 +1680,12 @@ static func _populate_sea_stack(island: Island, basis: Basis, landing_yaw: float
 	# Wave I-11 impaled galleon anchor memorial gripping Siren's Tooth seaward reef shoulder!
 	if _place_anchor_memorial(island, basis, "AnchorMemorial_Fang",
 			-36.0 * scale_r, -14.0 * scale_r, landing_yaw + 0.55, 0.88, 12.0 * scale_r,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+
+	# Wave I-12 shipwreck crow's-nest lookout mast jutting from Siren's Tooth jagged reef skirt!
+	if _place_crow_nest_mast(island, basis, "CrowNestMast_Fang",
+			45.0 * scale_r, -4.0 * scale_r, landing_yaw - 0.45, 0.88, 12.0 * scale_r,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	return count
@@ -4816,6 +4939,432 @@ static func _place_obsidian_vent(island: Island, basis: Basis, node_name: String
 		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
 
 
+static func _place_stone_well(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# StoneWellCourtyard (~4.4 m diameter circular cobbled courtyard apron, r = 2.38 m skirt
+	# plunging cleanly to y_local = -2.70 m) anchors village lanes, harbour greens & fort terraces!
+	var well_basis := Basis(Vector3.UP, yaw)
+	var right_d := well_basis.x
+	var fwd_d := well_basis.z
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 4.0 * scale_f
+	var scale_r := island.island_radius / 60.0
+	var is_fort := island.archetype == &"fort_rock" or island.archetype == &"grand_citadel"
+	var bastion_uv := Vector2(0.0, 18.0 if island.archetype == &"grand_citadel" else 2.0 * scale_r)
+	var bastion_clear := 28.0 if island.archetype == &"grand_citadel" else 23.0
+	var is_volcano := island.archetype == &"volcano_crag"
+	var is_port_scoundrel := island.island_id == "port_scoundrel"
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			if is_fort and Vector2(u, v).distance_to(bastion_uv) < bastion_clear:
+				continue
+			if is_volcano and Vector2(u, v - 4.0 * scale_r).length() < 19.0 * scale_r:
+				continue
+			if island.is_outpost:
+				# Stay strictly clear of dock pier, harbour channel, central plaza, Tavern, Beacon, Merchant & Warehouse!
+				if absf(u) < 16.5 and v < -10.0:
+					continue
+				if is_port_scoundrel and v < 4.0 and u < 24.0:
+					# Preserve Port Scoundrel's Title Screen foreground harbour & plaza sightline 100% unobstructed!
+					continue
+				if Vector2(u + 11.0, v + 7.5).length() < 12.5:
+					continue
+				if Vector2(u - 24.0, v + 6.5).length() < 12.0:
+					continue
+				if Vector2(u - 9.2, v + 18.5).length() < 9.5:
+					continue
+				if Vector2(u + 23.5, v + 16.5).length() < 10.5:
+					continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 3.8 * scale_f):
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < 1.6 or h > 26.0:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.0)
+			if n.y < 0.78:
+				continue
+
+			# 8-point circular cobbled apron check (4 corners +/-1.75 m + 4 cardinals 2.45 m): max_y - min_y <= 2.1!
+			var min_perim_h := INF
+			var max_perim_h := -INF
+			var corner_blocked := false
+			for sx: float in [-1.0, 1.0]:
+				for sz: float in [-1.0, 1.0]:
+					var cp := lp + right_d * (sx * 1.75 * scale_f) + fwd_d * (sz * 1.75 * scale_f)
+					if _in_exclusion_padded(cp.x, cp.z, keepout_zones, 1.4 * scale_f):
+						corner_blocked = true
+						break
+					var ch := island.surface_height(cp.x, cp.z)
+					min_perim_h = minf(min_perim_h, ch)
+					max_perim_h = maxf(max_perim_h, ch)
+				if corner_blocked:
+					break
+			if corner_blocked:
+				continue
+			for sgn: float in [-1.0, 1.0]:
+				var px := lp + right_d * (sgn * 2.45 * scale_f)
+				var pz := lp + fwd_d * (sgn * 2.45 * scale_f)
+				var hx := island.surface_height(px.x, px.z)
+				var hz := island.surface_height(pz.x, pz.z)
+				min_perim_h = minf(min_perim_h, minf(hx, hz))
+				max_perim_h = maxf(max_perim_h, maxf(hx, hz))
+			var min_y := minf(min_perim_h, h)
+			var max_y := maxf(max_perim_h, h)
+			if min_y < 1.2 or max_y - min_y > 2.1 or h - min_perim_h > 1.2:
+				continue
+
+			# Seat cobbled apron at min_perim_h + 0.06 so the -2.70 m skirt buries every perimeter curb stone!
+			var base_y := min_perim_h + 0.06
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.16
+			var score := n.y * 12.0 - (max_y - min_y) * 5.0 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, base_y, lp.z)
+				found = true
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		well_basis * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_STONE_WELL, node_name, xform, 4.6 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_cannon_bastion(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, scan_span: float, prefer_dir: Vector3, scale_f: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# RuinedSeaFortCannonBastion (~7.36 m wide x ~4.68 m deep battered ashlar parapet battery,
+	# skirt x in [-3.68, +3.68], z in [-2.42, +2.26] plunging to y_local = -3.60 m, aiming naval
+	# cannon seaward along -Z) commands coastal bluffs, harbour mouths & fortress headlands!
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 4.8 * scale_f
+	var scale_r := island.island_radius / 60.0
+	var is_fort := island.archetype == &"fort_rock" or island.archetype == &"grand_citadel"
+	var bastion_uv := Vector2(0.0, 18.0 if island.archetype == &"grand_citadel" else 2.0 * scale_r)
+	var bastion_clear := 28.0 if island.archetype == &"grand_citadel" else 23.0
+	var is_volcano := island.archetype == &"volcano_crag"
+	var has_mooring := island.mooring_transform != Transform3D.IDENTITY
+	var moor_xz := Vector2(island.mooring_transform.origin.x, island.mooring_transform.origin.z)
+	var pref_xz := Vector3(prefer_dir.x, 0.0, prefer_dir.z)
+	pref_xz = pref_xz.normalized() if pref_xz.length_squared() > 0.0001 else Vector3(0.0, 0.0, -1.0)
+
+	var best_pos := Vector3.ZERO
+	var best_aim := pref_xz
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			if is_fort and Vector2(u, v).distance_to(bastion_uv) < bastion_clear:
+				continue
+			if is_volcano and Vector2(u, v - 4.0 * scale_r).length() < 19.0 * scale_r:
+				continue
+			if island.is_outpost:
+				# Keep strictly clear of dock piers, central harbour channel & village buildings!
+				if absf(u) < 22.0 and v < 2.0:
+					continue
+				if Vector2(u + 11.0, v + 7.5).length() < 13.5:
+					continue
+				if Vector2(u - 24.0, v + 6.5).length() < 13.5:
+					continue
+				if Vector2(u + 23.5, v + 16.5).length() < 11.5:
+					continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.8 * scale_f):
+				continue
+			if has_mooring and Vector2(lp.x, lp.z).distance_squared_to(moor_xz) < 18.0 * 18.0:
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < 3.5 or h > 36.0:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.2)
+			if n.y < 0.62:
+				continue
+
+			# Aim local -Z smoothly seaward toward preferred ocean/harbour vector blended with bluff slope!
+			var out_xz := _horizontal_outward(n, lp, pref_xz)
+			var aim_raw := pref_xz * 0.72 + out_xz * 0.28
+			aim_raw.y = 0.0
+			var aim_xz := aim_raw.normalized() if aim_raw.length_squared() > 0.001 else pref_xz
+			if aim_xz.dot(pref_xz) < 0.35:
+				aim_xz = pref_xz
+			var right_d := Vector3(-aim_xz.z, 0.0, aim_xz.x)
+			# Ensure seaward firing arc ahead of the gun embrasure does not slam straight into a rising cliff wall!
+			var arc_p := lp + aim_xz * (5.2 * scale_f)
+			if island.surface_height(arc_p.x, arc_p.z) > h + 1.4 * scale_f:
+				continue
+
+			# 8-point battered ashlar foundation check (4 corners +/-3.65 m x +/-2.40 m + 4 cardinals): max_y - min_y <= 3.1!
+			var min_perim_h := INF
+			var max_perim_h := -INF
+			var corner_blocked := false
+			for sx: float in [-1.0, 1.0]:
+				for sz: float in [-1.0, 1.0]:
+					var cp := lp + right_d * (sx * 3.65 * scale_f) + aim_xz * (sz * 2.40 * scale_f)
+					if _in_exclusion_padded(cp.x, cp.z, keepout_zones, 1.6 * scale_f):
+						corner_blocked = true
+						break
+					var ch := island.surface_height(cp.x, cp.z)
+					min_perim_h = minf(min_perim_h, ch)
+					max_perim_h = maxf(max_perim_h, ch)
+				if corner_blocked:
+					break
+			if corner_blocked:
+				continue
+			for sgn: float in [-1.0, 1.0]:
+				var px := lp + right_d * (sgn * 3.75 * scale_f)
+				var pz := lp + aim_xz * (sgn * 2.50 * scale_f)
+				var hx := island.surface_height(px.x, px.z)
+				var hz := island.surface_height(pz.x, pz.z)
+				min_perim_h = minf(min_perim_h, minf(hx, hz))
+				max_perim_h = maxf(max_perim_h, maxf(hx, hz))
+			var min_y := minf(min_perim_h, h)
+			var max_y := maxf(max_perim_h, h)
+			if min_y < 2.2 or max_y - min_y > 3.1 or h - min_perim_h > 1.85:
+				continue
+
+			# Seat battered ashlar battery at min_perim_h + 0.08 so the -3.60 m foundation embeds deeply!
+			var base_y := min_perim_h + 0.08
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.14
+			var score := n.y * 8.5 + clampf(h * 0.14, 0.0, 4.5) - (max_y - min_y) * 2.6 \
+				+ aim_xz.dot(pref_xz) * 3.5 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, base_y, lp.z)
+				best_aim = aim_xz
+				found = true
+
+	if not found:
+		return false
+
+	var yaw := atan2(-best_aim.x, -best_aim.z)
+	var xform := Transform3D(
+		Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_CANNON_BASTION, node_name, xform, 5.8 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_treasure_vault(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, u_span: float, v_span: float,
+		prefer_dir: Vector3, scale_f: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# PirateTreasureVaultDoor (~6.3 m wide x ~5.7 m deep carved stone treasure vault doorway,
+	# x in [-3.16, +3.16], z in [-2.28, +3.40], -3.40 m threshold skirt & +Z tapered rock heel)
+	# embeds dramatically into rising cliff toes facing downslope (-Z) toward trails & coves!
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 4.0 * scale_f
+	var scale_r := island.island_radius / 60.0
+	var is_fort := island.archetype == &"fort_rock" or island.archetype == &"grand_citadel"
+	var bastion_uv := Vector2(0.0, 18.0 if island.archetype == &"grand_citadel" else 2.0 * scale_r)
+	var bastion_clear := 28.0 if island.archetype == &"grand_citadel" else 23.0
+	var is_volcano := island.archetype == &"volcano_crag"
+	var is_smuggler := island.archetype == &"smuggler_cove"
+	var grotto_uv := Vector2(0.0, 6.0 * scale_r)
+	var is_twin_spires := island.archetype == &"twin_spires"
+	var pref_xz := Vector3(prefer_dir.x, 0.0, prefer_dir.z)
+	pref_xz = pref_xz.normalized() if pref_xz.length_squared() > 0.0001 else Vector3(0.0, 0.0, -1.0)
+
+	var best_pos := Vector3.ZERO
+	var best_out := pref_xz
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-5, 6):
+		var u := u0 + float(iu) * (u_span * 0.1)
+		for iv in range(-5, 6):
+			var v := v0 + float(iv) * (v_span * 0.1)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			if is_fort and Vector2(u, v).distance_to(bastion_uv) < bastion_clear:
+				continue
+			if is_volcano and Vector2(u, v - 4.0 * scale_r).length() < 19.0 * scale_r:
+				continue
+			if is_smuggler and Vector2(u, v).distance_to(grotto_uv) < 18.0:
+				continue
+			if is_twin_spires and v > -11.0 * scale_r:
+				# Strictly preserve Emerald Spire's shot=emerald_waterfall camera lens & TempleStairway_Canyon!
+				continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.4 * scale_f):
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < 3.0 or h > 32.0:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.4)
+			if n.y < 0.46 or n.y > 0.88:
+				continue
+			var out_xz := _horizontal_outward(n, lp, pref_xz)
+			var dir_dot := out_xz.dot(pref_xz)
+			if dir_dot < 0.05:
+				continue
+			var side_xz := Vector3(-out_xz.z, 0.0, out_xz.x)
+
+			# Multi-point footing check across front threshold steps (-Z = +out_xz), mid flanks & rear rock heel (+Z = -out_xz)!
+			var front_c := lp + out_xz * (2.30 * scale_f)
+			var front_l := front_c - side_xz * (3.15 * scale_f)
+			var front_r := front_c + side_xz * (3.15 * scale_f)
+			if _in_exclusion_padded(front_c.x, front_c.z, keepout_zones, 2.2 * scale_f):
+				continue
+			var h_fc := island.surface_height(front_c.x, front_c.z)
+			var h_fl := island.surface_height(front_l.x, front_l.z)
+			var h_fr := island.surface_height(front_r.x, front_r.z)
+			var min_front_h := minf(h_fc, minf(h_fl, h_fr))
+			var max_front_h := maxf(h_fc, maxf(h_fl, h_fr))
+			if min_front_h < 1.2 or max_front_h - min_front_h > 2.4 * scale_f:
+				continue
+
+			var mid_l := lp - side_xz * (3.15 * scale_f)
+			var mid_r := lp + side_xz * (3.15 * scale_f)
+			var h_ml := island.surface_height(mid_l.x, mid_l.z)
+			var h_mr := island.surface_height(mid_r.x, mid_r.z)
+			var min_foot_h := minf(min_front_h, minf(h, minf(h_ml, h_mr)))
+
+			var rear_c := lp - out_xz * (3.25 * scale_f)
+			var rear_l := rear_c - side_xz * (2.95 * scale_f)
+			var rear_r := rear_c + side_xz * (2.95 * scale_f)
+			var h_rc := island.surface_height(rear_c.x, rear_c.z)
+			var h_rl := island.surface_height(rear_l.x, rear_l.z)
+			var h_rr := island.surface_height(rear_r.x, rear_r.z)
+			var min_rear_h := minf(h_rc, minf(h_rl, h_rr))
+			# Rear +Z tapered rock heel MUST press cleanly into a rising cliff wall behind the vault!
+			if h_rc < max_front_h + 1.6 * scale_f or min_rear_h < min_front_h + 1.2 * scale_f:
+				continue
+
+			# Seat threshold slightly below min_foot_h so the front steps & -3.40 m skirt bury with zero gap!
+			var base_y := min_foot_h - 0.12
+			if h - base_y > 3.0 * scale_f:
+				continue
+			var rear_rise := h_rc - min_front_h
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.14
+			var score := dir_dot * 9.0 + clampf(rear_rise, 0.0, 9.0) * 1.15 \
+				- (max_front_h - min_front_h) * 2.4 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, base_y, lp.z)
+				best_out = out_xz
+				found = true
+
+	if not found:
+		return false
+
+	var yaw := atan2(-best_out.x, -best_out.z)
+	var xform := Transform3D(
+		Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_TREASURE_VAULT, node_name, xform, 5.4 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_crow_nest_mast(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# WoodenShipwreckCrowNestMast (~8.5 m canted driftwood ship mast & wooden crow's-nest basket
+	# rooted in a barnacle-and-moss coastal reef rock outcrop r = 2.95 m plunging to y_local = -3.60 m)
+	# marks rocky headlands, reef points & shipwreck shoals cleanly clear of moorings & trails!
+	var mast_basis := Basis(Vector3.UP, yaw)
+	var right_d := mast_basis.x
+	var fwd_d := mast_basis.z
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 4.0 * scale_f
+	var has_mooring := island.mooring_transform != Transform3D.IDENTITY
+	var moor_xz := Vector2(island.mooring_transform.origin.x, island.mooring_transform.origin.z)
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.4 * scale_f):
+				continue
+			if has_mooring and Vector2(lp.x, lp.z).distance_squared_to(moor_xz) < 16.0 * 16.0:
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < 0.8 or h > 16.0:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.0)
+			if n.y < 0.64:
+				continue
+
+			# 8-point barnacle reef rock outcrop check (4 corners +/-2.15 m + 4 cardinals 3.00 m): max_y - min_y <= 3.1!
+			var min_perim_h := INF
+			var max_perim_h := -INF
+			var corner_blocked := false
+			for sx: float in [-1.0, 1.0]:
+				for sz: float in [-1.0, 1.0]:
+					var cp := lp + right_d * (sx * 2.15 * scale_f) + fwd_d * (sz * 2.15 * scale_f)
+					if _in_exclusion_padded(cp.x, cp.z, keepout_zones, 1.5 * scale_f):
+						corner_blocked = true
+						break
+					var ch := island.surface_height(cp.x, cp.z)
+					min_perim_h = minf(min_perim_h, ch)
+					max_perim_h = maxf(max_perim_h, ch)
+				if corner_blocked:
+					break
+			if corner_blocked:
+				continue
+			for sgn: float in [-1.0, 1.0]:
+				var px := lp + right_d * (sgn * 3.00 * scale_f)
+				var pz := lp + fwd_d * (sgn * 3.00 * scale_f)
+				var hx := island.surface_height(px.x, px.z)
+				var hz := island.surface_height(pz.x, pz.z)
+				min_perim_h = minf(min_perim_h, minf(hx, hz))
+				max_perim_h = maxf(max_perim_h, maxf(hx, hz))
+			var min_y := minf(min_perim_h, h)
+			var max_y := maxf(max_perim_h, h)
+			if min_y < 0.05 or max_y - min_y > 3.1 or h - min_perim_h > 1.85:
+				continue
+
+			# Seat barnacle reef outcrop at min_perim_h + 0.08 so the -3.60 m rock root buries cleanly!
+			var base_y := min_perim_h + 0.08
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.16
+			var score := n.y * 8.0 + clampf(h * 0.20, 0.0, 3.2) - (max_y - min_y) * 2.4 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, base_y, lp.z)
+				found = true
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		mast_basis * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_CROW_NEST_MAST, node_name, xform, 5.0 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
 # ============================================================ core landmark spawner
 
 static func _load_landmark(filename: String, landmark_cache: Dictionary) -> PackedScene:
@@ -5114,6 +5663,30 @@ static func _mount_lantern_lights(island: Island, inst: Node3D, rng: RandomNumbe
 			light.omni_range = 14.5
 			light.omni_attenuation = 1.25
 			amp = 0.18
+		elif m_name.begins_with("Lantern_Well"):
+			light.light_color = COL_WELL_LANTERN
+			base_energy = 1.55
+			light.omni_range = 12.5
+			light.omni_attenuation = 1.30
+			amp = 0.15
+		elif m_name.begins_with("Lantern_Bastion"):
+			light.light_color = COL_BASTION_TORCH
+			base_energy = 1.90
+			light.omni_range = 15.0
+			light.omni_attenuation = 1.25
+			amp = 0.20
+		elif m_name.begins_with("Lantern_Vault"):
+			light.light_color = COL_VAULT_GLOW
+			base_energy = 1.85
+			light.omni_range = 14.5
+			light.omni_attenuation = 1.25
+			amp = 0.18
+		elif m_name.begins_with("Lantern_CrowNest"):
+			light.light_color = COL_CROWNEST_LANTERN
+			base_energy = 1.75
+			light.omni_range = 14.5
+			light.omni_attenuation = 1.28
+			amp = 0.17
 		elif m_name.begins_with("Lantern_Trail") or m_name.begins_with("Lantern_Rowboat"):
 			light.light_color = COL_TRAIL_AMBER
 			base_energy = 2.6
