@@ -26,8 +26,14 @@ signal released(pawn: Node)
 @export var interact_radius: float = 0.55
 @export var interact_reach: float = 2.8
 
-## Optional sub-identifier (e.g. &"port" or &"starboard" for cannons).
+## Optional sub-identifier (e.g. &"port" or &"starboard" for cannons & harpoons).
 var meta_id: StringName = &""
+## Alias for `meta_id` so callers referencing `station.meta_key` stay in sync.
+var meta_key: StringName:
+	get:
+		return meta_id
+	set(v):
+		meta_id = v
 ## Current occupant (`Pawn` or test stand-in), or null when free.
 var occupant: Node = null
 ## Focus handle found by controllers (layer 4, group `interactables`).
@@ -93,6 +99,8 @@ func get_stand_global() -> Transform3D:
 func can_occupy(pawn: Node) -> bool:
 	if pawn == null or not is_instance_valid(pawn) or not is_inside_tree():
 		return false
+	if kind == &"lantern":
+		return false
 	return not is_occupied()
 
 
@@ -140,6 +148,10 @@ func drive(axis: Vector2, primary: bool, secondary: bool, delta: float) -> void:
 func get_focus_prompt() -> String:
 	if ship != null and is_instance_valid(ship) and ship.has_method(&"get_station_focus_prompt"):
 		return String(ship.call(&"get_station_focus_prompt", self))
+	if kind == &"lantern" and ship != null and is_instance_valid(ship):
+		var lit_v: Variant = ship.get(&"lanterns_lit")
+		if lit_v is bool:
+			return "Douse ship lanterns" if (lit_v as bool) else "Light ship lanterns"
 	return prompt
 
 
@@ -149,6 +161,10 @@ func try_quick_use(pawn: Node) -> bool:
 		return false
 	if ship != null and is_instance_valid(ship) and ship.has_method(&"try_station_quick_use"):
 		return bool(ship.call(&"try_station_quick_use", self, pawn))
+	if kind == &"lantern" and ship != null and is_instance_valid(ship) and ship.has_method(&"toggle_lanterns"):
+		ship.call(&"toggle_lanterns")
+		Audio.play_sfx(&"lantern_click", global_position, -1.0)
+		return true
 	return false
 
 
@@ -156,5 +172,13 @@ func try_quick_use(pawn: Node) -> bool:
 func get_active_prompt() -> String:
 	if ship != null and is_instance_valid(ship) and ship.has_method(&"get_station_active_prompt"):
 		return String(ship.call(&"get_station_active_prompt", self))
+	if kind == &"harpoon":
+		return "[Mouse/WASD] Aim | [LMB] Fire | [Hold RMB] Reel | [R] Release | [F] Leave"
+	if kind == &"cannon":
+		var shot_lbl := "Iron"
+		if ship != null and is_instance_valid(ship) and ship.has_method(&"get_cannon_ordnance_label"):
+			shot_lbl = String(ship.call(&"get_cannon_ordnance_label"))
+		return "[Mouse/WASD] Aim | [LMB] Fire (%s) | [R] Swap Shot | [F] Leave" % shot_lbl
 	return ""
+
 

@@ -672,5 +672,220 @@ func test_crew_sea_of_thieves_sail_hoist_and_anchor_polarity() -> void:
 	await _end()
 
 
+static func _is_strict_ascii(txt: String) -> bool:
+	for i in txt.length():
+		if txt.unicode_at(i) >= 128:
+			return false
+	return true
+
+
+func test_wave28_sea_soundscape_and_crew_harpoon_stealth_callouts() -> void:
+	_begin()
+	Weather.set_weather(0.0, 12.0, 0.0)
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	s.start_anchored = true
+	_root.add_child(s)
+	await physics_frames(8)
+
+	# 1. Verify all 4 SeaSoundscape SFX keys exist in AudioManager's manifest catalogue.
+	for key: StringName in [SeaSoundscape.SFX_HULL_CREAK, SeaSoundscape.SFX_ROPE_CREAK,
+			SeaSoundscape.SFX_SAIL_FLAP, SeaSoundscape.SFX_SAIL_FILL]:
+		check(Audio.has_sound(key), "Audio manifest registers verified key '%s'" % String(key))
+
+	# Freeze hull for deterministic telemetry stepping of SeaSoundscape.
+	s.freeze = true
+	s.rotation = Vector3.ZERO
+	s.linear_velocity = Vector3.ZERO
+	s.angular_velocity = Vector3.ZERO
+	s.sail_set = 0.0
+	s.sail_trim = 0.0
+
+	var soundscape := SeaSoundscape.new()
+	soundscape.set_physics_process(false)
+	_root.add_child(soundscape)
+	soundscape.bind_ship(s)
+
+	# Calm flat stationary ship triggers nothing.
+	soundscape.step(0.1)
+	var idle_counts := soundscape.get_event_counts()
+	check_eq(int(idle_counts[&"hull_creak"]), 0, "calm level ship triggers zero hull_creak")
+	check_eq(int(idle_counts[&"rope_creak"]), 0, "calm stationary ship triggers zero rope_creak")
+	check_eq(int(idle_counts[&"sail_flap"]), 0, "furled ship triggers zero sail_flap")
+	check_eq(int(idle_counts[&"sail_fill"]), 0, "furled ship triggers zero sail_fill")
+	check_eq(soundscape.last_sfx_triggered, &"", "last_sfx_triggered stays empty while idle")
+
+	# 2. Sharp heel triggers &"hull_creak" and respects 4.5..8.0 s cooldown gating.
+	s.rotation = Vector3(0.0, 0.0, 0.22)
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"hull_creak"]), 1,
+		"sharp heel (0.22 rad >= 0.10) triggers hull_creak")
+	check_eq(soundscape.last_sfx_triggered, &"hull_creak", "last_sfx_triggered records hull_creak")
+	for _spam in 5:
+		soundscape.step(0.5)  # 2.5 s total < 4.5 s min cooldown
+	check_eq(int(soundscape.get_event_counts()[&"hull_creak"]), 1,
+		"hull_creak cooldown prevents spam during sustained heel")
+	soundscape.step(6.0)  # now >= 8.5 s elapsed > 8.0 s max cooldown
+	check_eq(int(soundscape.get_event_counts()[&"hull_creak"]), 2,
+		"hull_creak triggers again cleanly once cooldown expires")
+
+	# Roll-velocity trigger even at near-zero heel angle.
+	s.rotation = Vector3.ZERO
+	s.angular_velocity = Vector3(0.0, 0.0, 0.30)
+	soundscape.bind_ship(s)
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"hull_creak"]), 1,
+		"brisk roll velocity (0.30 rad/s >= 0.18) triggers hull_creak")
+
+	# 3. High forward speed under full sail triggers &"rope_creak" with 6.0..10.5 s cooldown.
+	s.rotation = Vector3.ZERO
+	s.angular_velocity = Vector3.ZERO
+	Weather.set_weather(0.0, 12.0, 0.0)
+	s.sail_set = 0.85
+	s.sail_trim = s.ideal_sail_trim()
+	s.linear_velocity = -s.global_basis.z * 6.0
+	soundscape.bind_ship(s)
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"rope_creak"]), 1,
+		"high speed (6.0 m/s >= 4.2) under full sail triggers rope_creak")
+	check_eq(soundscape.last_sfx_triggered, &"rope_creak", "last_sfx_triggered records rope_creak")
+	for _spam in 3:
+		soundscape.step(1.0)  # 3.0 s < 6.0 s min cooldown
+	check_eq(int(soundscape.get_event_counts()[&"rope_creak"]), 1,
+		"rope_creak cooldown prevents spam")
+	soundscape.step(8.0)  # 11.0 s > 10.5 s max cooldown
+	check_eq(int(soundscape.get_event_counts()[&"rope_creak"]), 2,
+		"rope_creak re-triggers after cooldown")
+
+	# 4. Poorly trimmed sail catching headwind triggers &"sail_flap" (cooldown 3.8..6.2 s).
+	s.linear_velocity = Vector3.ZERO
+	s.sail_set = 0.72
+	s.sail_trim = 0.0
+	Weather.set_weather(0.0, 12.0, PI)  # Headwind against bow (-Z) -> wind_catch ~= 0.0 < 0.28
+	soundscape.bind_ship(s)
+	check(s.wind_catch() < 0.28, "headwind setup produces low wind_catch (got %.2f)" % s.wind_catch())
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"sail_flap"]), 1,
+		"luffing headwind sail triggers sail_flap")
+	check_eq(soundscape.last_sfx_triggered, &"sail_flap", "last_sfx_triggered records sail_flap")
+	for _spam in 3:
+		soundscape.step(0.8)  # 2.4 s < 3.8 s min cooldown
+	check_eq(int(soundscape.get_event_counts()[&"sail_flap"]), 1,
+		"sail_flap cooldown prevents spam")
+	soundscape.step(4.2)  # 6.6 s > 6.2 s max cooldown
+	check_eq(int(soundscape.get_event_counts()[&"sail_flap"]), 2,
+		"sail_flap re-triggers cleanly after cooldown")
+
+	# 5. Transitioning from low wind catch (< 0.60) into full billow (>= 0.84) triggers &"sail_fill" (4.0 s cd).
+	Weather.set_weather(0.0, 12.0, 0.0)  # Fair tailwind astern
+	s.sail_trim = s.ideal_sail_trim()
+	check(s.wind_catch() >= 0.84, "fair tailwind setup produces full wind_catch (got %.2f)" % s.wind_catch())
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"sail_fill"]), 1,
+		"transition from luffing into full billow triggers sail_fill")
+	check_eq(soundscape.last_sfx_triggered, &"sail_fill", "last_sfx_triggered records sail_fill")
+	# Quick drop and recovery within 4.0 s cooldown must be gated.
+	Weather.set_weather(0.0, 12.0, PI)
+	soundscape.step(0.5)
+	Weather.set_weather(0.0, 12.0, 0.0)
+	s.sail_trim = s.ideal_sail_trim()
+	soundscape.step(0.5)
+	check_eq(int(soundscape.get_event_counts()[&"sail_fill"]), 1,
+		"sail_fill 4.0 s cooldown prevents rapid re-triggering")
+	# After cooldown elapses, a fresh low->high transition snaps cleanly again.
+	Weather.set_weather(0.0, 12.0, PI)
+	soundscape.step(3.6)
+	Weather.set_weather(0.0, 12.0, 0.0)
+	s.sail_trim = s.ideal_sail_trim()
+	soundscape.step(0.05)
+	check_eq(int(soundscape.get_event_counts()[&"sail_fill"]), 2,
+		"sail_fill re-triggers once 4.0 s cooldown has expired")
+
+	# Disabled flag silences triggers and queue_free tears down cleanly with 0 leaks.
+	soundscape.enabled = false
+	soundscape.reset_state()
+	s.rotation = Vector3(0.0, 0.0, 0.25)
+	soundscape.step(0.1)
+	check_eq(int(soundscape.get_event_counts()[&"hull_creak"]), 0, "disabled SeaSoundscape triggers nothing")
+	soundscape.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(soundscape), "SeaSoundscape frees cleanly with zero leaks")
+
+	# 6. Verify all Wave 28B CrewDialogue pools are strictly ASCII (< 128) across Barnaby, Maren, and Pip.
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var bank: Dictionary = CrewDialogue.LINES[pid]
+		for cat: StringName in [&"harpoon_haul", &"chainshot_hit", &"running_dark", &"lanterns_lit"]:
+			var pool: Array = bank.get(cat, [])
+			check(not pool.is_empty(), "CrewDialogue[%s][%s] has persona lines" % [String(pid), String(cat)])
+			for line: String in pool:
+				check(_is_strict_ascii(line), "strict ASCII line in %s/%s: %s" % [String(pid), String(cat), line])
+
+	# 7. Verify CrewBrain harpoon, chainshot, and running-dark persona callouts & cooldowns.
+	s.rotation = Vector3.ZERO
+	s.freeze = false
+	var barnaby_pair := _make_crew(s, null, &"helmsman", Vector3(-1.3, 1.12, 1.0))
+	var maren_pair := _make_crew(s, null, &"lookout", Vector3(0.0, 1.12, -2.5))
+	var pip_pair := _make_crew(s, null, &"carpenter", Vector3(1.3, 1.12, -0.5))
+	var brains: Array[CrewBrain] = [barnaby_pair[1], maren_pair[1], pip_pair[1]]
+	await physics_frames(4)
+
+	for br: CrewBrain in brains:
+		var spoken: Array[Dictionary] = []
+		br.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+			spoken.append({"speaker": sp, "text": txt, "cat": cat})
+		)
+		check(br.celebrate_harpoon_haul("Corsair Chest"), "%s celebrates harpoon haul" % br.crew_name())
+		check(not br.celebrate_harpoon_haul("Corsair Chest"), "%s harpoon callout gated by 6.0 s cooldown" % br.crew_name())
+		check(br.callout_chainshot_hit(), "%s calls out chainshot hit" % br.crew_name())
+		check(not br.callout_chainshot_hit(), "%s chainshot callout gated by 8.0 s cooldown" % br.crew_name())
+		check(br.comment_running_dark(false), "%s comments when dousing lanterns" % br.crew_name())
+		check(not br.comment_running_dark(false), "%s running-dark callout gated by 6.0 s cooldown" % br.crew_name())
+		check(br.comment_running_dark(true), "%s comments when relighting lanterns" % br.crew_name())
+		check(not br.comment_running_dark(true), "%s lanterns-lit callout gated by 6.0 s cooldown" % br.crew_name())
+
+		check_eq(spoken.size(), 4, "%s emitted all 4 Wave 28B callout categories" % br.crew_name())
+		if spoken.size() == 4:
+			check_eq(spoken[0]["cat"], &"harpoon_haul", "%s category 0 is harpoon_haul" % br.crew_name())
+			check((spoken[0]["text"] as String).contains("Corsair Chest"),
+				"%s harpoon callout includes item label" % br.crew_name())
+			check_eq(spoken[1]["cat"], &"chainshot_hit", "%s category 1 is chainshot_hit" % br.crew_name())
+			check_eq(spoken[2]["cat"], &"running_dark", "%s category 2 is running_dark" % br.crew_name())
+			check_eq(spoken[3]["cat"], &"lanterns_lit", "%s category 3 is lanterns_lit" % br.crew_name())
+			for entry in spoken:
+				check(_is_strict_ascii(String(entry["text"])),
+					"emitted callout is strict ASCII: %s" % String(entry["text"]))
+
+		# Exercise bind_ship() rebind + teardown safety.
+		br.bind_ship(s)
+
+	# Verify organic ship-signal handlers fire once across crew (live signal if 28A merged, direct handler fallback pre-merge).
+	for br: CrewBrain in brains:
+		br._callout_cooldowns.clear()
+	var sig_count := [0]
+	var dark_count := [0]
+	for br: CrewBrain in brains:
+		br.callout_spoken.connect(func(_sp: String, _txt: String, cat: StringName) -> void:
+			if cat == &"harpoon_haul":
+				sig_count[0] += 1
+			elif cat == &"running_dark":
+				dark_count[0] += 1
+		)
+	if s.has_signal(&"harpoon_loot_snagged"):
+		s.emit_signal(&"harpoon_loot_snagged", "Wayfarer Chest", &"port")
+	else:
+		for br: CrewBrain in brains:
+			br._on_ship_harpoon_loot_snagged("Wayfarer Chest", &"port")
+	check_eq(sig_count[0], 1, "harpoon_loot_snagged triggers exactly one crew celebration across the crew")
+
+	if s.has_signal(&"lanterns_toggled"):
+		s.emit_signal(&"lanterns_toggled", false)
+	else:
+		for br: CrewBrain in brains:
+			br._on_ship_lanterns_toggled(false)
+	check_eq(dark_count[0], 1, "lanterns_toggled(false) triggers exactly one running-dark callout across the crew")
+
+	await _end()
+
+
 
 

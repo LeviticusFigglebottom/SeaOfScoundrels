@@ -21,6 +21,10 @@ signal supplies_taken(pawn: Node)
 signal wind_caught(efficiency: float)
 signal anchor_turn_triggered(speed: float, yaw_dir: float)
 signal anchor_raised()
+signal harpoon_loot_snagged(item_label: String, side: StringName)
+signal lanterns_toggled(lit: bool)
+signal cannon_ordnance_changed(ordnance: StringName)
+signal sail_damaged(duration: float)
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -48,6 +52,12 @@ const CANNON_MUZZLE_SPEED := 58.0
 const CANNON_RELOAD_TIME := 2.6
 const MAX_CANNONBALLS := 40
 const MAX_PLANKS := 24
+const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"flare"]
+const CANNON_ORDNANCE_LABELS := {
+	&"iron": "Iron",
+	&"chainshot": "Chainshot",
+	&"flare": "Flare",
+}
 
 # 16 distributed buoyancy probes in ship-local space: [Vector3(x, y, z), weight].
 # Sum of weights = 1.0. Average probe y ~= -0.58 m so equilibrium sits at y ~= 0.0 m.
@@ -89,6 +99,12 @@ var trim_target: float = 0.0
 var anchor_down: bool = false
 ## 0 = stowed at bow, 1 = resting on bottom.
 var anchor_progress: float = 0.0
+## Whether ship deck and cabin lanterns are currently lit (false = running dark under moonlight).
+var lanterns_lit: bool = true
+## Active cannon ordnance type (&"iron", &"chainshot", or &"flare").
+var cannon_ordnance: StringName = &"iron"
+## Remaining seconds of sail rigging damage from chainshot (reduces sail thrust to 0.35x).
+var sail_damage_timer: float = 0.0
 
 # ------------------------------------------------------------------ status & supplies
 
@@ -157,12 +173,15 @@ var _lod_flags: Array[Node3D] = []
 var _sail_mats: Array[ShaderMaterial] = []
 var _flag_mats: Array[ShaderMaterial] = []
 var _window_mats: Array[BaseMaterial3D] = []
+var _lantern_glass_mats: Array[BaseMaterial3D] = []
 var _lantern_lights: Array[OmniLight3D] = []
 var _rope_pairs: Array[Array] = []  # [rope_node, point_a, point_b]
 
 var _stations: Array[Station] = []
 var _stations_by_kind: Dictionary = {}  # StringName -> Array[Station]
 var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard" / &"port_aft" / &"starboard_aft") -> Dictionary state
+var _harpoons: Dictionary = {}  # StringName (&"port" / &"starboard") -> ShipHarpoon
+var _harpoon_primary_was: Dictionary = {}  # StringName -> bool
 
 var _sink_timer: float = 0.0
 var _sink_list_dir: float = 1.0
@@ -244,6 +263,11 @@ static var _bell_bronze_mat: StandardMaterial3D = null
 static var _crows_nest_rungs_sloop: ArrayMesh = null
 static var _crows_nest_rungs_brig: ArrayMesh = null
 static var _crows_nest_rungs_mat: StandardMaterial3D = null
+
+
+## True when this vessel is a two-masted Brigantine.
+func is_brigantine() -> bool:
+	return ship_class == &"brigantine"
 
 
 ## Convert an unscaled GLB ship-local coordinate into this ship's scaled local space.
@@ -382,6 +406,11 @@ func _exit_tree() -> void:
 	hull_crest = null
 	wind_ribbons = null
 	cabin_furnishings = null
+	_harpoons.clear()
+	_harpoon_primary_was.clear()
+	_lantern_glass_mats.clear()
+	_window_mats.clear()
+	_lantern_lights.clear()
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
 	if _active_ship_count == 0:
@@ -557,6 +586,109 @@ func _build_stations() -> void:
 				"reload": 0.0,
 				"recoil": 0.0,
 			}
+
+	_build_harpoons()
+	_build_lantern_station()
+
+
+func _register_station_node(st: Station) -> void:
+	add_child(st)
+	_stations.append(st)
+	if not _stations_by_kind.has(st.kind):
+		_stations_by_kind[st.kind] = []
+	(_stations_by_kind[st.kind] as Array).append(st)
+
+
+func _build_harpoons() -> void:
+	_harpoons.clear()
+	_harpoon_primary_was.clear()
+	var is_brig := is_brigantine()
+	var deck_y := 1.25 if is_brig else 1.10
+	var harpoon_specs: Array[Array] = [
+		[
+			&"port",
+			"Harpoon_Port",
+			"Station_HarpoonPort_Node",
+			"Man port harpoon",
+			Vector3(-1.93, 1.96, -5.70) if is_brig else Vector3(-1.46, 1.68, -4.34),
+			0.26,
+		],
+		[
+			&"starboard",
+			"Harpoon_Starboard",
+			"Station_HarpoonStarboard_Node",
+			"Man starboard harpoon",
+			Vector3(1.93, 1.96, -5.70) if is_brig else Vector3(1.46, 1.68, -4.34),
+			-0.26,
+		],
+	]
+	for spec: Array in harpoon_specs:
+		var side_key: StringName = spec[0]
+		var hp_name: String = spec[1]
+		var st_name: String = spec[2]
+		var st_prompt: String = spec[3]
+		var mount_unscaled: Vector3 = spec[4] as Vector3
+		var neutral_yaw: float = float(spec[5])
+
+		var hp := ShipHarpoon.new()
+		hp.name = hp_name
+		hp.side = side_key
+		hp.ship = self
+		hp.visual_scale = hull_scale
+		hp.transform = Transform3D(Basis(Vector3.UP, neutral_yaw), ship_point(mount_unscaled))
+		hp.loot_snagged.connect(_on_harpoon_loot_snagged.bind(side_key))
+		add_child(hp)
+		_harpoons[side_key] = hp
+		_harpoon_primary_was[side_key] = false
+
+		# Station anchored inboard on solid foredeck below the rail-mounted harpoon!
+		var st := Station.new()
+		st.name = st_name
+		var st_inboard_x := mount_unscaled.x * (0.72 if is_brig else 0.70)
+		var st_origin := ship_point(Vector3(st_inboard_x, deck_y, mount_unscaled.z))
+		st.transform = Transform3D(Basis(Vector3.UP, neutral_yaw), st_origin)
+		st.configure(
+			self,
+			&"harpoon",
+			st_prompt,
+			Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.95)),
+			Vector3(0.0, 1.18 * hull_scale, 0.10),
+			0.65,
+			side_key,
+			2.8
+		)
+		st.released.connect(_on_harpoon_station_released.bind(side_key))
+		_register_station_node(st)
+
+
+func _on_harpoon_loot_snagged(item_label: String, side_key: StringName) -> void:
+	harpoon_loot_snagged.emit(item_label, side_key)
+
+
+func _on_harpoon_station_released(_pawn: Node, side_key: StringName) -> void:
+	_harpoon_primary_was[side_key] = false
+	var hp := get_harpoon(side_key)
+	if hp != null and hp.state == ShipHarpoon.State.TETHERED:
+		hp.release(true)
+
+
+func _build_lantern_station() -> void:
+	var is_brig := is_brigantine()
+	var lantern_unscaled := Vector3(-0.84, 2.25, 6.50) if is_brig else Vector3(-0.78, 2.0, 4.95)
+	var st := Station.new()
+	st.name = "Station_Lantern_Node"
+	st.transform = Transform3D(Basis.IDENTITY, ship_point(lantern_unscaled))
+	st.configure(
+		self,
+		&"lantern",
+		"Douse ship lanterns" if lanterns_lit else "Light ship lanterns",
+		Transform3D.IDENTITY,
+		Vector3(0.0, 1.15, 0.0),
+		0.50,
+		&"",
+		2.8
+	)
+	_register_station_node(st)
 
 
 func _build_ladders() -> void:
@@ -1162,8 +1294,8 @@ func _build_emissary_streamer() -> void:
 	parent_node.add_child(_emissary_streamer)
 
 
-static func _get_streamer_mesh(is_brigantine: bool) -> ArrayMesh:
-	if is_brigantine:
+static func _get_streamer_mesh(is_brig: bool) -> ArrayMesh:
+	if is_brig:
 		if _streamer_mesh_brig == null:
 			_streamer_mesh_brig = _build_emissary_streamer_mesh(5.4)
 		return _streamer_mesh_brig
@@ -1743,11 +1875,13 @@ void fragment() {
 
 func _setup_lights_and_glass() -> void:
 	_window_mats.clear()
+	_lantern_glass_mats.clear()
 	_lantern_lights.clear()
 	if _model == null:
 		return
 
-	# Duplicate window glass materials so night glow never mutates shared glTF resources.
+	# Duplicate window & lantern glass materials so night glow & dousing never mutate shared glTF resources.
+	var lantern_dup_cache: Dictionary = {}
 	for node in _model.find_children("*", "MeshInstance3D", true, false):
 		var mi := node as MeshInstance3D
 		if mi == null or mi.mesh == null:
@@ -1755,7 +1889,9 @@ func _setup_lights_and_glass() -> void:
 		var touched := false
 		for si in mi.mesh.get_surface_count():
 			var mat := mi.mesh.surface_get_material(si) as BaseMaterial3D
-			if mat != null and mat.resource_name == "mat_window_glass":
+			if mat == null:
+				continue
+			if mat.resource_name == "mat_window_glass":
 				if not touched:
 					mi.mesh = mi.mesh.duplicate() as Mesh
 					touched = true
@@ -1764,6 +1900,19 @@ func _setup_lights_and_glass() -> void:
 				dup.emission = Color(1.0, 0.72, 0.34)
 				mi.mesh.surface_set_material(si, dup)
 				_window_mats.append(dup)
+			elif mat.resource_name == "mat_lantern_glass":
+				if not touched:
+					mi.mesh = mi.mesh.duplicate() as Mesh
+					touched = true
+				var ldup: BaseMaterial3D
+				if lantern_dup_cache.has(mat):
+					ldup = lantern_dup_cache[mat] as BaseMaterial3D
+				else:
+					ldup = mat.duplicate() as BaseMaterial3D
+					ldup.emission_enabled = true
+					lantern_dup_cache[mat] = ldup
+					_lantern_glass_mats.append(ldup)
+				mi.mesh.surface_set_material(si, ldup)
 
 	if not enable_effects:
 		return
@@ -1776,10 +1925,11 @@ func _setup_lights_and_glass() -> void:
 		l.name = "Glow"
 		l.light_color = Color(1.0, 0.74, 0.42)
 		var is_hold := nm.contains("Hold")
-		l.light_energy = 1.45 if is_hold else 0.75
+		l.light_energy = (1.45 if is_hold else 0.75) if lanterns_lit else 0.0
 		l.omni_range = (7.5 if is_hold else 6.0) * hull_scale
 		l.omni_attenuation = 1.4
 		l.shadow_enabled = false
+		l.visible = lanterns_lit
 		child.add_child(l)
 		_lantern_lights.append(l)
 
@@ -2023,7 +2173,7 @@ func set_spectral_phase(alpha: float, flare: float = 0.0) -> void:
 		fmat.set_shader_parameter(&"phase_flare", _spectral_flare)
 	for l in _lantern_lights:
 		if is_instance_valid(l):
-			l.visible = _spectral_phase > 0.02
+			l.visible = lanterns_lit and _spectral_phase > 0.02
 	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"set_spectral_alpha"):
 		hull_crest.call(&"set_spectral_alpha", _spectral_phase)
 	visible = _spectral_phase > 0.02
@@ -2266,6 +2416,7 @@ func _apply_current_livery() -> void:
 					mat.emission_enabled = bool(entry["orig_emit_on"])
 					mat.emission = entry["orig_emit"] as Color
 					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+	_update_lantern_visuals()
 
 
 func _ensure_hull_livery_mats() -> void:
@@ -2299,8 +2450,8 @@ func _ensure_hull_livery_mats() -> void:
 				if mat_cache.has(orig):
 					entry = mat_cache[orig] as Dictionary
 				else:
-					# Main-model mat_window_glass was already duplicated per ship in _setup_lights_and_glass().
-					var dup := orig if (kind == &"window" and not is_lod) else orig.duplicate() as BaseMaterial3D
+					# Main-model mat_window_glass & mat_lantern_glass were already duplicated per ship.
+					var dup := orig if ((kind == &"window" or kind == &"lantern") and not is_lod) else orig.duplicate() as BaseMaterial3D
 					entry = {
 						"mat": dup,
 						"ghost_mat": null,
@@ -2527,6 +2678,8 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	ball.shooter_ship = self
 	ball.shooter_pawn = shooter_pawn
 	ball.hull_damage_radius = 0.45 * cannon_radius_modifier
+	if faction == &"player" or cannon_ordnance != &"iron":
+		ball.ordnance_style = cannon_ordnance
 	var host_parent := get_parent() if get_parent() != null else self
 	host_parent.add_child(ball)
 	ball.global_position = muzzle_pos
@@ -2550,6 +2703,158 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	Audio.play_sfx(&"cannon_fire", muzzle_pos)
 	cannon_fired.emit(side, ball)
 	return ball
+
+
+## Host only. Select active cannon ordnance (&"iron", &"chainshot", or &"flare").
+func set_cannon_ordnance(kind: StringName) -> void:
+	if not Net.is_host():
+		return
+	var resolved := kind if CANNON_ORDNANCE_CYCLE.has(kind) else &"iron"
+	if cannon_ordnance == resolved:
+		return
+	cannon_ordnance = resolved
+	cannon_ordnance_changed.emit(cannon_ordnance)
+
+
+## Host only. Cycle active cannon ordnance: iron -> chainshot -> flare -> iron.
+func cycle_cannon_ordnance() -> StringName:
+	if not Net.is_host():
+		return cannon_ordnance
+	var idx := CANNON_ORDNANCE_CYCLE.find(cannon_ordnance)
+	var next_idx := (idx + 1) % CANNON_ORDNANCE_CYCLE.size()
+	set_cannon_ordnance(CANNON_ORDNANCE_CYCLE[next_idx])
+	Audio.play_sfx(&"capstan_clank", global_position, -4.5)
+	return cannon_ordnance
+
+
+## Strict-ASCII display label for the currently selected cannon ordnance.
+func get_cannon_ordnance_label() -> String:
+	return String(CANNON_ORDNANCE_LABELS.get(cannon_ordnance, "Iron"))
+
+
+## Host only. Apply chainshot sail rigging damage for `duration` seconds (reduces sail thrust to 0.35x).
+func apply_sail_damage(duration: float = 14.0) -> void:
+	if not Net.is_host() or duration <= 0.0:
+		return
+	sail_damage_timer = maxf(sail_damage_timer, duration)
+	sail_damaged.emit(sail_damage_timer)
+
+
+# ------------------------------------------------------------------ harpoons
+
+## Return the bow-mounted ShipHarpoon for `&"port"` or `&"starboard"`, or null.
+func get_harpoon(side: StringName) -> ShipHarpoon:
+	var hp: Variant = _harpoons.get(side, null)
+	if hp is ShipHarpoon and is_instance_valid(hp):
+		return hp as ShipHarpoon
+	return null
+
+
+## Host only. Incrementally aim bow harpoon (`&"port"` or `&"starboard"`).
+func aim_harpoon_delta(side: StringName, dyaw: float, dpitch: float) -> void:
+	if not Net.is_host():
+		return
+	var hp := get_harpoon(side)
+	if hp != null:
+		hp.aim_delta(dyaw, dpitch)
+
+
+## Host only. Fire the bow harpoon (`&"port"` or `&"starboard"`). Returns result Dictionary.
+func fire_harpoon(side: StringName, shooter_pawn: Node = null) -> Dictionary:
+	if not Net.is_host() or is_sinking:
+		return {"hit": false, "kind": &"none"}
+	var hp := get_harpoon(side)
+	if hp == null:
+		return {"hit": false, "kind": &"none"}
+	return hp.fire(shooter_pawn)
+
+
+## Host only. Reel an active bow harpoon tether (`[Hold RMB]`).
+func reel_harpoon(side: StringName, active: bool, delta: float) -> void:
+	if not Net.is_host():
+		return
+	var hp := get_harpoon(side)
+	if hp != null:
+		hp.reel(active, delta)
+
+
+## Host only. Release an active bow harpoon tether cleanly (`[R]` or leaving station).
+func release_harpoon(side: StringName) -> void:
+	if not Net.is_host():
+		return
+	var hp := get_harpoon(side)
+	if hp != null:
+		hp.release(true)
+
+
+# ------------------------------------------------------------------ deck lanterns
+
+## Host only. Light or douse all ship deck and cabin lanterns.
+func set_lanterns_lit(lit: bool) -> void:
+	if not Net.is_host():
+		return
+	_apply_lanterns_lit(lit, true)
+
+
+## Host only. Toggle all ship deck and cabin lanterns. Returns new `lanterns_lit` state.
+func toggle_lanterns() -> bool:
+	if not Net.is_host():
+		return lanterns_lit
+	_apply_lanterns_lit(not lanterns_lit, true)
+	return lanterns_lit
+
+
+func _apply_lanterns_lit(lit: bool, emit_sig: bool) -> void:
+	var changed := lanterns_lit != lit
+	lanterns_lit = lit
+	var lst := get_station(&"lantern")
+	if lst != null and is_instance_valid(lst):
+		lst.prompt = "Douse ship lanterns" if lanterns_lit else "Light ship lanterns"
+	_update_lantern_visuals()
+	if changed and emit_sig:
+		lanterns_toggled.emit(lanterns_lit)
+
+
+func _update_lantern_visuals() -> void:
+	var night := 1.0 - Weather.daylight()
+	var has_curse_glow := _effective_glow_accent.get_luminance() > 0.01
+	var flicker := 0.94 + 0.06 * sin(_sail_time * 9.3) * cos(_sail_time * 6.1)
+	var phase_light_scale := _spectral_phase * (1.0 + _spectral_flare * 0.45)
+
+	if not lanterns_lit:
+		for wm in _window_mats:
+			if wm != null:
+				wm.emission_energy_multiplier = 0.0
+		for lg in _lantern_glass_mats:
+			if lg != null:
+				lg.emission_enabled = false
+				lg.emission_energy_multiplier = 0.0
+		for l in _lantern_lights:
+			if l != null and is_instance_valid(l):
+				l.light_energy = 0.0
+				l.visible = false
+		return
+
+	var window_em := (lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)) * _spectral_phase
+	for wm in _window_mats:
+		if wm != null:
+			wm.emission_energy_multiplier = window_em
+	var glass_em := (2.8 if has_curse_glow else lerpf(1.15, 2.4, night)) * _spectral_phase
+	var glass_col := _effective_glow_accent if has_curse_glow else Color(1.0, 0.74, 0.36)
+	for lg in _lantern_glass_mats:
+		if lg != null:
+			lg.emission_enabled = true
+			lg.emission = glass_col
+			lg.emission_energy_multiplier = glass_em
+	for idx in _lantern_lights.size():
+		var l := _lantern_lights[idx]
+		if l == null or not is_instance_valid(l):
+			continue
+		l.visible = _spectral_phase > 0.02
+		var base_e := 1.45 if l.get_parent().name.contains("Hold") else (
+			lerpf(0.95, 1.85, night) if has_curse_glow else lerpf(0.35, 1.35, night)
+		)
+		l.light_energy = base_e * flicker * phase_light_scale
 
 
 static func _get_smoke_puff_texture() -> ImageTexture:
@@ -3019,7 +3324,7 @@ func _spawn_muzzle_flash(pos: Vector3, dir: Vector3) -> void:
 # ------------------------------------------------------------------ station driving
 
 ## Host only. Instant one-tap quick-use for ship stations (e.g. dropping a raised anchor
-## without locking into the capstan). Returns true if consumed.
+## or toggling deck lanterns without locking into the station). Returns true if consumed.
 func try_station_quick_use(st: Station, _pawn: Node) -> bool:
 	if not Net.is_host() or st == null:
 		return false
@@ -3029,6 +3334,10 @@ func try_station_quick_use(st: Station, _pawn: Node) -> bool:
 		_capstan_assist_hands = 0
 		set_anchor(true)
 		Audio.play_sfx(&"capstan_clank", st.global_position, -1.0)
+		return true
+	if st.kind == &"lantern":
+		toggle_lanterns()
+		Audio.play_sfx(&"lantern_click", st.global_position, -1.0)
 		return true
 	return false
 
@@ -3050,6 +3359,8 @@ func get_station_focus_prompt(st: Station) -> String:
 			if _last_wind_catch >= 0.85 and sail_set >= 0.15:
 				return "Trim sails (FULL WIND)"
 			return "Angle sails"
+		&"lantern":
+			return "Douse ship lanterns" if lanterns_lit else "Light ship lanterns"
 	return st.prompt
 
 
@@ -3077,7 +3388,9 @@ func get_station_active_prompt(st: Station) -> String:
 			)
 			return "[A/D] Angle Sail (%s) | [RMB] Square | [F] Let Go" % wind_txt
 		&"cannon":
-			return "[WASD/Mouse] Aim | [LMB] Fire (%d) | [F] Step Off" % cannonballs_remaining
+			return "[Mouse/WASD] Aim | [LMB] Fire (%s) | [R] Swap Shot | [F] Leave" % get_cannon_ordnance_label()
+		&"harpoon":
+			return "[Mouse/WASD] Aim | [LMB] Fire | [Hold RMB] Reel | [R] Release | [F] Leave"
 		&"map_table":
 			return "[WASD] Pan | [LMB/RMB] Zoom | [Space] Pin | [F] Step Off"
 		&"bilge":
@@ -3221,6 +3534,15 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 				c["pitch"] = clampf(float(c["pitch"]) + axis.y * 0.65 * delta, -0.18, 0.42)
 				if primary:
 					fire_cannon(side, st.occupant)
+		&"harpoon":
+			var hside := st.meta_id
+			if absf(axis.x) > 0.05 or absf(axis.y) > 0.05:
+				aim_harpoon_delta(hside, -axis.x * 1.15 * delta, axis.y * 0.90 * delta)
+			var was_prim := bool(_harpoon_primary_was.get(hside, false))
+			if primary and not was_prim:
+				fire_harpoon(hside, st.occupant)
+			_harpoon_primary_was[hside] = primary
+			reel_harpoon(hside, secondary, delta)
 		&"bilge":
 			if primary or axis.y > 0.3:
 				bail(0.28 * delta)
@@ -3242,6 +3564,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _tick_controls(delta: float) -> void:
+	if sail_damage_timer > 0.0:
+		sail_damage_timer = maxf(0.0, sail_damage_timer - delta)
 	var prev_helm := helm
 	helm = move_toward(helm, helm_target, 2.4 * delta)
 	if absf(helm - prev_helm) > 0.0005:
@@ -3494,7 +3818,8 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var billow_surge := 1.12 if (catch >= 0.85 and sail_set >= 0.35) else 1.0
 		var flood_slow := lerpf(1.0, 0.65, water_level)
 		var anchor_hold := 1.0 - clampf((anchor_progress - 0.92) / 0.08, 0.0, 0.94)
-		var thrust := sail_set * wind_factor * drive_coeff * billow_surge * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold
+		var sail_dmg_mult := 0.35 if sail_damage_timer > 0.0 else 1.0
+		var thrust := sail_set * wind_factor * drive_coeff * billow_surge * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold * sail_dmg_mult
 		var fwd_horiz := Vector3(-b.z.x, 0.0, -b.z.z)
 		if fwd_horiz.length_squared() > 0.001:
 			apply_central_force(fwd_horiz.normalized() * thrust)
@@ -3598,6 +3923,9 @@ func _update_lod() -> void:
 			hull_crest.visible = (not want_lod) and (_spectral_phase > 0.05)
 		if _crows_nest_rungs_mi != null and is_instance_valid(_crows_nest_rungs_mi):
 			_crows_nest_rungs_mi.visible = not want_lod
+		for hp_val: Variant in _harpoons.values():
+			if hp_val is Node3D and is_instance_valid(hp_val):
+				(hp_val as Node3D).visible = not want_lod
 
 
 func _update_visuals(delta: float) -> void:
@@ -3613,12 +3941,15 @@ func _update_visuals(delta: float) -> void:
 
 	# Yards, sails & furled rolls (1 mast on Sloop, 2 masts on Brigantine).
 	var show_sail := sail_set > 0.06
+	var sail_damaged_now := sail_damage_timer > 0.0
+	var dmg_jitter := (sin(_sail_time * 17.5) * 0.042 + cos(_sail_time * 11.3) * 0.022) if sail_damaged_now else 0.0
+	var sail_scale_y := maxf(sail_set * (0.84 if sail_damaged_now else 1.0), 0.08)
 	for y in _yards:
 		y.rotation.y = sail_trim
 	for s in _sails:
 		s.visible = show_sail
-		s.rotation.y = sail_trim
-		s.scale.y = maxf(sail_set, 0.08)
+		s.rotation.y = sail_trim + dmg_jitter
+		s.scale.y = sail_scale_y
 	for sf in _sails_furled:
 		sf.visible = not show_sail
 		sf.rotation.y = sail_trim
@@ -3628,8 +3959,8 @@ func _update_visuals(delta: float) -> void:
 		ly.rotation.y = sail_trim
 	for ls in _lod_sails:
 		ls.visible = show_sail
-		ls.rotation.y = sail_trim
-		ls.scale.y = maxf(sail_set, 0.08)
+		ls.rotation.y = sail_trim + dmg_jitter
+		ls.scale.y = sail_scale_y
 	for lsf in _lod_sails_furled:
 		lsf.visible = not show_sail
 		lsf.rotation.y = sail_trim
@@ -3651,8 +3982,11 @@ func _update_visuals(delta: float) -> void:
 	# Update wind-billow shader uniforms across all sails and flags.
 	var ws := clampf(wind_spd / 10.0, 0.1, 2.4)
 	var luff := clampf((1.0 - _last_wind_catch) * (0.4 + 0.6 * sail_set), 0.0, 1.0)
+	if sail_damaged_now:
+		luff = maxf(luff, 0.88)
+	var eff_catch := _last_wind_catch * sail_set * (0.35 if sail_damaged_now else 1.0)
 	for sm in _sail_mats:
-		sm.set_shader_parameter(&"wind_catch", _last_wind_catch * sail_set)
+		sm.set_shader_parameter(&"wind_catch", eff_catch)
 		sm.set_shader_parameter(&"luff_amount", luff)
 		sm.set_shader_parameter(&"wind_strength", ws)
 		sm.set_shader_parameter(&"sail_time", _sail_time)
@@ -3718,18 +4052,8 @@ func _update_visuals(delta: float) -> void:
 		for gm in _ghost_hull_mats:
 			gm.set_shader_parameter(&"wisp_time", _wisp_time)
 
-	# Night cabin glass glow & lantern flicker (cursed vessels keep eerie glow even by day).
-	var night := 1.0 - Weather.daylight()
-	var has_curse_glow := _effective_glow_accent.get_luminance() > 0.01
-	var window_em := (lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)) * _spectral_phase
-	for wm in _window_mats:
-		wm.emission_energy_multiplier = window_em
-	var flicker := 0.94 + 0.06 * sin(_sail_time * 9.3) * cos(_sail_time * 6.1)
-	var phase_light_scale := _spectral_phase * (1.0 + _spectral_flare * 0.45)
-	for idx in _lantern_lights.size():
-		var l := _lantern_lights[idx]
-		var base_e := 1.45 if l.get_parent().name.contains("Hold") else (lerpf(0.95, 1.85, night) if has_curse_glow else lerpf(0.35, 1.35, night))
-		l.light_energy = base_e * flicker * phase_light_scale
+	# Night cabin glass glow & lantern flicker (or full blackout when lanterns_lit == false).
+	_update_lantern_visuals()
 
 	# Rising hold bilge water & ocean hull mask flood update.
 	if _hold_water_mesh != null:
@@ -3870,6 +4194,9 @@ func get_net_state() -> Dictionary:
 		"hull_tint": _livery_hull_tint,
 		"glow_accent": _livery_glow_accent,
 		"ship_name": ship_name,
+		"lanterns_lit": lanterns_lit,
+		"cannon_ordnance": String(cannon_ordnance),
+		"sail_damage_timer": sail_damage_timer,
 	}
 
 
@@ -3898,6 +4225,12 @@ func apply_net_state(state: Dictionary) -> void:
 	is_sinking = bool(state.get("is_sinking", is_sinking))
 	cannonballs_remaining = int(state.get("cannonballs", cannonballs_remaining))
 	planks_remaining = int(state.get("planks", planks_remaining))
+	sail_damage_timer = float(state.get("sail_damage_timer", sail_damage_timer))
+	if state.has("cannon_ordnance"):
+		var ord_sn := StringName(String(state["cannon_ordnance"]))
+		if CANNON_ORDNANCE_CYCLE.has(ord_sn) and ord_sn != cannon_ordnance:
+			cannon_ordnance = ord_sn
+			cannon_ordnance_changed.emit(cannon_ordnance)
 
 	var hole_bits: Array = state.get("holes", [])
 	for i in mini(hole_bits.size(), holes.size()):
@@ -3933,6 +4266,11 @@ func apply_net_state(state: Dictionary) -> void:
 			or not g_acc.is_equal_approx(_livery_glow_accent)
 		if livery_changed:
 			apply_livery(s_tint, f_tint, g_acc, h_tint, e_mode)
+
+	# Replicate deck & cabin lantern lit state (runs dark under moonlight across co-op clients).
+	if state.has("lanterns_lit"):
+		var incoming_lit := bool(state["lanterns_lit"])
+		_apply_lanterns_lit(incoming_lit, incoming_lit != lanterns_lit)
 
 	# Replicate custom ship_name only when non-empty and changed (avoids needless ShipNameplate repaints).
 	if state.has("ship_name"):

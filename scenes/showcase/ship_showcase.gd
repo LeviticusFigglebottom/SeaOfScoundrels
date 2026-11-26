@@ -174,9 +174,26 @@ func _update_camera() -> void:
 			var eye := pos + yaw * Vector3(sin(ang) * 23.5 * sc, 5.8 * sc, -cos(ang) * 23.5 * sc)
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2 * sc, -1.0), Vector3.UP)
+		"harpoon":
+			# Foredeck 3/4 view clear of the foremast framing both sculpted bow-mounted ShipHarpoons, capstan & 2D-FFT ocean.
+			var eye := xf * _ship.ship_point(Vector3(1.48, 3.28, -3.40) if _is_brig else Vector3(1.18, 2.95, -2.15))
+			var look := xf * _ship.ship_point(Vector3(-0.48, 2.60, -6.30) if _is_brig else Vector3(-0.40, 2.35, -4.85))
+			_cam.look_at_from_position(eye, look, Vector3.UP)
 		_:
 			# Quarter-bow hero view showing figurehead, bow wave, billowing sail, and pennant.
 			var ang := 0.66 + _clock * 0.10
 			var eye := pos + yaw * Vector3(sin(ang) * 22.5 * sc, 4.8 * sc, -cos(ang) * 22.5 * sc)
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.2)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.8 * sc, -1.0), Vector3.UP)
+
+
+func _exit_tree() -> void:
+	ShipHarpoon.clear_shared_cache()
+	WindRibbons.clear_shared_cache()
+	ShipNameplate.clear_shared_cache()
+	HullCrest.clear_shared_cache()
+	CaptainCabinFurnishings.clear_shared_cache()
+	Cannonball.clear_shared_cache()
+	ToolMeshes.clear_shared_cache()
+	CombatComponent.clear_shared_vfx_cache()
+

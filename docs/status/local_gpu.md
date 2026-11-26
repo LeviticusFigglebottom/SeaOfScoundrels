@@ -403,5 +403,47 @@ While Wave 26 & Wave I-2 are in flight, we inspected all 4 `1920×1080 HIGH` Vul
 
 *Wave 26 Subsystem Delta (`sailing HIGH`)*: Sky+Clouds `0.902 ms`, **`1.24×` Brigantine + 1-DC 14-ribbon `WindRibbons` `+0.140 ms`** (`+0.010 ms` above pre-Wave-26 Brigantine — `WindRibbons` is virtually free!), **14-Island 10-Map PBR Archipelago `+0.332 ms`**, **24-Wave + 3-Cascade FFT Ocean `+0.723 ms`**. Baseline pre-BC7 VRAM is **`667.2 MB` (`tex_vram_mb = 580.1 MB`)** — ready to measure the exact **Q12** BC7 VRAM drop the instant **Wave 27** lands!
 
-### 7.10 Standing Ready for Milestone 10 (Wave 27 PBR Characters/Tools + Q12 BC7 VRAM Check & Wave I-2 14-Island Landmarks!)
-Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 27**) and `origin/cloud/island-architect` (**Wave I-2**) for immediate RX 9070 XT 1080p HIGH visual audit, Q12 BC7 VRAM/compression inspection, full 14-island Wave I-2 Q-I2 benchmarks, and rebuilt Windows `.exe`!
+### 7.10 Milestone 10 — Wave 27 (`7c1568e`) BC7 VRAM Compression (`-301.2 MB`!), `512×512` PBR Characters/Tools Audit, Q12/Q13 Answers & Volcanic Basalt Polish
+
+#### 7.10.1 End-to-End Wave 27 + M10 Verification Gate (RX 9070 XT, Godot `4.8-beta5`)
+- **`py tools/lint.py`**: **PASS — `115 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `195 tests, 0 failures`** (`W27_HEADLESS_EXIT=0`, incl. character & tool PBR + RMB pace/toast/splash tests!).
+- **Real-GPU 24-Wave Ocean Shader Parity (`--only=test_sea_shader`, Vulkan `1.4.359` Forward+)**: **PASS — `3 tests, 0 failures`** (`max |dh| = 0.0117 m`, `|dn.y| = 0.0005`, `|dvx/z| = 0.0156`, `W27_GPU_SEA_EXIT=0`).
+- **Zero-Leak `--quit-after 30` Check (`scenes/main.tscn`)**: **100% CLEAN — `0` errors, `0` warnings, `0` leaks, `0` `WindRibbons` teardown errors (`W27_QUIT_AFTER_EXIT=0`)!**
+- **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`W27_NET_EXIT=0`).
+- **Wave 27 BC7 600-Frame Live Multi-TOD/Storm Soak (`1080p HIGH`, Brigantine, 14 islands + 375 BC7 PBR + 24-wave FFT)**:
+  - GPU: **`p50 = 2.367 ms`**, `p95 = 2.813 ms`, `p99 = 2.920 ms` | Frame: **`p50 = 5.63 ms` (`177.7 FPS`)**, `p95 = 11.06 ms`, `p99 = 13.43 ms` | VRAM: **`365.2 -> 366.8 MB`** (`+1.5 MB` steady-state storm buffers — **zero VRAM leak, `0` errors**!).
+- **All 3 Wave 27 BC7 Desktop Release Exports Verified (`EXIT=0`)**:
+  - Windows Desktop: `build/SeaOfScoundrels.exe` (`223.0 MB`, live RX 9070 XT `deck_duel` & `sailing` smoke `EXIT=0`) | Linux x86_64: `build/linux/sea_of_scoundrels.x86_64` (`196.5 MB`, `EXIT=0`) | macOS Universal: `build/macos/sea_of_scoundrels.zip` (`140.7 MB`, `EXIT=0`).
+
+#### 7.10.2 Direct Answers to Cloud Lead `Q12` & `Q13`
+- **Q12 — Exact `s3tc_bptc` (BC7) + Mipmaps VRAM Drop, `.exe` Size & Compression Quality on RX 9070 XT**:
+  - **Runtime GPU VRAM (`1920×1080 HIGH`) — MASSIVE `-301.2 MB` WIN!!**:
+    - `sailing HIGH`: **`667.2 MB -> 366.0 MB` (`-301.2 MB`, `-45.1%` total VRAM!)** | `tex_vram_mb`: **`580.1 MB -> 278.9 MB` (`-301.2 MB`, `-51.9%` texture VRAM!)**.
+    - `company_fleet HIGH`: **`681.7 MB -> 380.6 MB` (`-301.1 MB`!)** | `storm HIGH`: **`668.8 MB -> 367.6 MB` (`-301.2 MB`!)**.
+  - **Bonus GPU Frame-Time Speedup**: `galleons_reach HIGH` (70%-screen-coverage 10-map PBR terrain) accelerated from `1.723 ms` (`p95 2.069 ms`, `198.2 FPS`) -> **`1.649 ms` (`p95 1.679 ms`, `210.5 FPS`, `-0.074 ms` median / `-0.390 ms` tighter `p95`!)** thanks to BC7 texture cache footprint + hardware mipmaps!
+  - **Windows `.exe` Size**: `211.7 MB -> 223.0 MB` (`+11.3 MB`), expected because pre-compressed BC7 `.ctex` + full `+33%` mipmap pyramids store raw fixed-rate 1 B/px GPU blocks inside the `.pck` (rather than zlib PNGs) alongside the 24 new `512×512` character PBR maps — an outstanding trade for **-301 MB GPU VRAM** + faster load & runtime cache!
+  - **Close-Up Visual Fidelity (`ship_hull_cu`, `main_harbour_plaza`, `main_galleons_reach`)**: **ZERO visible BC7 block artifacts or normal-map banding** even at `1.5 m` nose-to-plank close-up on Brigantine oak seams/trunnels, brass trim, and terrain cliffs/sand!
+- **Q13 — Wave 27 `1920×1080 HIGH` Real-GPU Visual Audit (13× Captures)**:
+  - **`512×512` 8-Family PBR Characters (`char_pirates`, `char_enemies`, `main_deck_duel`)**: **15/10!** Pebbled leather boots & belts, woven twill coats/vests (preserving vibrant faction tinting!), combed hair/beards, porous sea-weathered skeleton bones, calcified coral & wood buckler — pirates in `main_deck_duel` now blend seamlessly with the `1024×1024` PBR Brigantine deck (`1.622 ms`, `192.2 FPS`)!
+  - **Zero-Extra-VRAM Triplanar PBR Tools & Treasures (`items_tools`, `main_treasure_shark`)**: **15/10!** Forged steel shovel, wood-grained bucket staves/planks/table/chests/crates, brushed brass compass/spyglass/lantern/chalice, weathered bone skulls — ZERO extra VRAM!
+  - **All M8 & M9 Fixes 100% Verified**: `seawall_bastion.glb` & `ruin_pillar.glb` ashlar masonry courses now run crisply **horizontally** (`props_arch`, `props_jungle`, `main_galleons_reach`); `main_whale_breach` silhouette is super clean with tall torso cones eliminated; `0` `WindRibbons` teardown errors across every single run; `main_emerald_waterfall` reveals significantly more of the turquoise canyon cascade above the foreground ridge!
+- **Local-GPU Volcanic Basalt Polish Included (`src/world/island_shader.gdshader`, `0306285`)**:
+  - Lifted cracked obsidian-basalt crust contrast (`pow(va, 0.88) * vec3(1.38, 1.32, 1.42)`) and extended volcanic PBR range (`max_tex_dist = 580 m`, `pbr_nrm_fade` out to `260 m`) so `176 m` `Cinder Crag` displays crisp fractured dark basalt plates across its sunlit ridges (`w26_cinder_crag_v2.png`, `0` lint warnings).
+
+#### 7.10.3 Wave 27 BC7 Complete RX 9070 XT `1920×1080` Performance Matrix
+
+| Wave 27 BC7 Scenario (`1920×1080`, Brigantine) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB (Delta vs W26) | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `sailing` (`LOW`) | **1.461** (1.814) | 1.309 | **154.2** | 1,043 | 1,500k | **362.8** (`-301.1`) | ~7.3 ms (**PASS**) |
+| `sailing` (`MEDIUM`) | **1.772** (2.121) | 1.262 | **183.0** | 1,047 | 1,546k | **367.2** (`-301.2`) | ~8.9 ms (**PASS**) |
+| `sailing` (`HIGH` — 375 BC7 PBR + 24-wave FFT) | **2.102** (2.461) | 1.285 | **179.2** | 1,047 | 1,608k | **366.0** (`-301.2`) | ~10.5 ms (**PASS**) |
+| `helm` (`HIGH`) | **1.586** (1.742) | 0.891 | **201.0** | 607 | 1,152k | **367.8** (`-301.2`) | ~7.9 ms (**PASS**) |
+| `deck_duel` (`HIGH` — 4× PBR pirates + PBR tools) | **1.622** (1.959) | 1.005 | **192.2** | 849 | 1,254k | **366.9** | ~8.1 ms (**PASS**) |
+| `storm` (`HIGH`) | **2.689** (3.086) | 1.288 | **171.4** | 917 | 1,585k | **367.6** (`-301.2`) | ~13.4 ms (**PASS**) |
+| `galleons_reach` (`HIGH` — 70% BC7 10-map PBR) | **1.649** (1.679) | 1.004 | **210.5** | 1,128 | 1,533k | **366.0** (`-301.2`) | ~8.2 ms (**PASS**) |
+| `sovereigns_bastion` (`HIGH`) | **2.169** (2.528) | 1.028 | **200.2** | 975 | 1,555k | **366.0** (`-301.2`) | ~10.8 ms (**PASS**) |
+| `company_fleet` (`HIGH` — 4 ships + 14 islands) | **2.195** (2.567) | 2.192 | **86.7** | 1,802 | 2,803k | **380.6** (`-301.1`) | ~11.0 ms (**PASS**) |
+
+### 7.11 Standing Ready for Milestone 11 (Wave 28 `ShipHarpoon` / Stealth Lanterns / Chainshot / `SeaSoundscape` & Wave I-2 Full 14-Island Overhaul!)
+Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 28**) and `origin/cloud/island-architect` (**Wave I-2**) for immediate RX 9070 XT 1080p HIGH audit, benchmarks, shader polish, tests, and rebuilt Windows `.exe`!

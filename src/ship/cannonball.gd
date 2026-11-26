@@ -16,6 +16,10 @@ const HIT_MASK := 1 | (1 << 1) | (1 << 2)
 const GRAVITY := 9.81
 const SELF_IGNORE_TIME := 0.2
 const MAX_LIFETIME := 12.0
+const FLARE_BURN_DURATION := 9.0
+const FLARE_MAX_LIFETIME := 11.5
+const CHAINSHOT_BREACH_RADIUS := 0.18
+const CHAINSHOT_SAIL_DAMAGE := 14.0
 
 ## World-space velocity (m/s).
 var velocity: Vector3 = Vector3.ZERO
@@ -23,7 +27,7 @@ var velocity: Vector3 = Vector3.ZERO
 @export var drag: float = 0.012
 ## Breach radius passed to `Ship.apply_hull_damage()`.
 @export var hull_damage_radius: float = 0.45
-## Sculpted ordnance variant: &"iron" (Nine-Pounder), &"heavy" (Heavy Culverin), or &"swivel" (Quick-Breech Swivel).
+## Sculpted ordnance variant: &"iron", &"heavy", &"swivel", &"chainshot", or &"flare".
 @export var ordnance_style: StringName = &"iron"
 ## Damage dealt on a direct hit to a `Pawn`.
 @export var pawn_damage: float = 55.0
@@ -38,6 +42,8 @@ var shooter_pawn: Node = null
 
 ## Optional Godot 4.8 Trail3D smoke/tracer ribbon attached to the ball (gracefully skipped on Godot 4.7.x).
 var trail: Node3D = null
+## Signal flare illumination OmniLight3D (only active when ordnance_style resolves to &"flare").
+var flare_light: OmniLight3D = null
 
 var _ball_mesh: MeshInstance3D = null
 var _ball_mat: StandardMaterial3D = null
@@ -45,6 +51,8 @@ var _core_glow_mat: StandardMaterial3D = null
 var _resolved_style: StringName = &"iron"
 var _base_muzzle_emission: float = 0.35
 var _age: float = 0.0
+var _flare_floating: bool = false
+var _flare_burn_elapsed: float = 0.0
 var _impacted: bool = false
 var _cleanup_timer: float = 0.0
 var _spawned_vfx: Array[Node] = []
@@ -73,7 +81,7 @@ static func clear_shared_cache() -> void:
 	_flash_tex = null
 
 
-## Return the resolved ordnance variant (&"iron", &"heavy", or &"swivel").
+## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", or &"flare").
 func get_resolved_ordnance_style() -> StringName:
 	return _resolved_style
 
@@ -102,11 +110,17 @@ func _exit_tree() -> void:
 	_ball_mesh = null
 	_ball_mat = null
 	_core_glow_mat = null
+	if flare_light != null and is_instance_valid(flare_light):
+		flare_light.visible = false
+	flare_light = null
 	if trail != null and is_instance_valid(trail):
 		trail.set(&"emitting", false)
 		trail.set(&"color_gradient", null)
 		trail.set(&"width_curve", null)
 	trail = null
+	_ray_params = null
+	_ray_result = null
+	_exclude_rids.clear()
 	_active_cannonballs = maxi(0, _active_cannonballs - 1)
 	if _active_cannonballs == 0:
 		clear_shared_cache()
@@ -114,6 +128,8 @@ func _exit_tree() -> void:
 
 func _ready() -> void:
 	_resolved_style = _resolve_ordnance_style()
+	if _resolved_style == &"flare":
+		drag = maxf(drag, 0.28)
 	_build_visuals()
 	_ray_params.collision_mask = HIT_MASK
 	_ray_params.collide_with_areas = false
@@ -122,7 +138,8 @@ func _ready() -> void:
 
 
 func _resolve_ordnance_style() -> StringName:
-	if ordnance_style == &"heavy" or ordnance_style == &"swivel":
+	if ordnance_style == &"heavy" or ordnance_style == &"swivel" \
+			or ordnance_style == &"chainshot" or ordnance_style == &"flare":
 		return ordnance_style
 	if ordnance_style == &"iron":
 		if hull_damage_radius >= 0.52:
@@ -189,6 +206,55 @@ func _build_visuals() -> void:
 			trail_c0 = Color(1.0, 0.96, 0.82, 0.80)
 			trail_c1 = Color(0.92, 0.84, 0.64, 0.44)
 			trail_c2 = Color(0.72, 0.68, 0.60, 0.0)
+		&"chainshot":
+			# Twin whirling forged-iron spheres joined by heavy forged chain links for rigging & sail damage.
+			_ball_mat.metallic = 0.82
+			_ball_mat.roughness = 0.34
+			_ball_mat.emission = Color(1.0, 0.55, 0.16)
+			_base_muzzle_emission = 0.34
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission
+			_ball_mesh.set_surface_override_material(0, _ball_mat)
+
+			trail_width = 0.32
+			trail_life = 0.48
+			trail_c0 = Color(0.92, 0.94, 0.98, 0.82)
+			trail_c1 = Color(0.68, 0.72, 0.78, 0.48)
+			trail_c2 = Color(0.42, 0.46, 0.52, 0.0)
+		&"flare":
+			# Glowing brass & crimson-gold marine illumination signal shell with wide-range OmniLight3D.
+			_ball_mat.metallic = 0.84
+			_ball_mat.roughness = 0.24
+			_ball_mat.emission = Color(1.0, 0.52, 0.18)
+			_base_muzzle_emission = 0.65
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission
+			_ball_mesh.set_surface_override_material(0, _ball_mat)
+
+			_core_glow_mat = StandardMaterial3D.new()
+			_core_glow_mat.vertex_color_use_as_albedo = true
+			_core_glow_mat.vertex_color_is_srgb = true
+			_core_glow_mat.albedo_color = Color(1.0, 0.78, 0.32)
+			_core_glow_mat.metallic = 0.10
+			_core_glow_mat.roughness = 0.20
+			_core_glow_mat.emission_enabled = true
+			_core_glow_mat.emission = Color(1.0, 0.42, 0.14)
+			_core_glow_mat.emission_energy_multiplier = 4.2
+			if _ball_mesh.mesh.get_surface_count() > 1:
+				_ball_mesh.set_surface_override_material(1, _core_glow_mat)
+
+			flare_light = OmniLight3D.new()
+			flare_light.name = "FlareLight"
+			flare_light.light_color = Color(1.0, 0.62, 0.28)
+			flare_light.light_energy = 5.5
+			flare_light.omni_range = 65.0
+			flare_light.omni_attenuation = 1.2
+			flare_light.shadow_enabled = false
+			add_child(flare_light)
+
+			trail_width = 0.28
+			trail_life = 0.85
+			trail_c0 = Color(1.0, 0.46, 0.18, 0.90)
+			trail_c1 = Color(1.0, 0.72, 0.32, 0.52)
+			trail_c2 = Color(0.65, 0.44, 0.36, 0.0)
 		_:
 			# Cast-Iron Nine-Pounder: hammered iron shot with raised equatorial seam & warm hot-forge muzzle rim.
 			_ball_mat.metallic = 0.76
@@ -234,7 +300,8 @@ func _refresh_exclusions() -> void:
 			_exclude_rids.append((shooter_ship as CollisionObject3D).get_rid())
 		if shooter_pawn is CollisionObject3D and is_instance_valid(shooter_pawn):
 			_exclude_rids.append((shooter_pawn as CollisionObject3D).get_rid())
-	_ray_params.exclude = _exclude_rids
+	if _ray_params != null:
+		_ray_params.exclude = _exclude_rids
 
 
 func _physics_process(delta: float) -> void:
@@ -245,25 +312,58 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_age += delta
-	if _age >= MAX_LIFETIME:
+	var life_limit := FLARE_MAX_LIFETIME if _resolved_style == &"flare" else MAX_LIFETIME
+	if _age >= life_limit:
 		_finish_without_impact()
 		return
 
-	# Spin faceted ordnance mid-flight & fade initial hot-powder muzzle glow.
+	# Spin faceted ordnance mid-flight & update muzzle / flare illumination glow.
 	if _ball_mesh != null:
-		_ball_mesh.rotate_x(delta * 7.2)
-		_ball_mesh.rotate_y(delta * 4.1)
-	if _age < 0.35 and _ball_mat != null:
-		_ball_mat.emission_energy_multiplier = maxf(0.0, _base_muzzle_emission * (1.0 - _age / 0.35))
+		if _resolved_style == &"chainshot":
+			_ball_mesh.rotate_y(delta * 26.0)
+			_ball_mesh.rotate_x(delta * 8.5)
+		elif _resolved_style == &"flare":
+			_ball_mesh.rotate_z(delta * 6.5)
+		else:
+			_ball_mesh.rotate_x(delta * 7.2)
+			_ball_mesh.rotate_y(delta * 4.1)
 
-	velocity.y -= GRAVITY * delta
-	velocity *= maxf(0.0, 1.0 - drag * delta)
+	if _resolved_style == &"flare":
+		if not _flare_floating and (velocity.y <= 2.2 or _age >= 0.9):
+			_flare_floating = true
+		var burn_env := 1.0
+		if _flare_floating:
+			_flare_burn_elapsed += delta
+			if _flare_burn_elapsed >= FLARE_BURN_DURATION:
+				_finish_without_impact()
+				return
+			if _flare_burn_elapsed > FLARE_BURN_DURATION - 1.2:
+				burn_env = clampf((FLARE_BURN_DURATION - _flare_burn_elapsed) / 1.2, 0.0, 1.0)
+			# Parachute-soft float near apex to bathe dark seas in warm crimson-gold light.
+			velocity.x *= maxf(0.0, 1.0 - 2.4 * delta)
+			velocity.z *= maxf(0.0, 1.0 - 2.4 * delta)
+			velocity.y = move_toward(velocity.y, -1.65, 14.0 * delta)
+		else:
+			velocity.y -= GRAVITY * delta
+			velocity *= maxf(0.0, 1.0 - drag * delta)
+		var pulse := 0.93 + 0.07 * sin(_age * 19.0)
+		if flare_light != null and is_instance_valid(flare_light):
+			flare_light.light_energy = 5.5 * burn_env * pulse
+		if _ball_mat != null:
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission * burn_env
+		if _core_glow_mat != null:
+			_core_glow_mat.emission_energy_multiplier = 4.2 * burn_env * pulse
+	else:
+		if _age < 0.35 and _ball_mat != null:
+			_ball_mat.emission_energy_multiplier = maxf(0.0, _base_muzzle_emission * (1.0 - _age / 0.35))
+		velocity.y -= GRAVITY * delta
+		velocity *= maxf(0.0, 1.0 - drag * delta)
 
 	var from := global_position
 	var to := from + velocity * delta
 
 	var world := get_world_3d()
-	if world != null:
+	if world != null and _ray_params != null:
 		_refresh_exclusions()
 		_ray_params.from = from
 		_ray_params.to = to
@@ -305,21 +405,39 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 	var ship_target := _find_ship(target)
 	var cleanup_delay := 0.5
 
+	if _resolved_style == &"flare":
+		# Signal flares illuminate dark waters and never punch hull breaches or inflict combat damage.
+		if ship_target != null:
+			target = ship_target
+		if _spawn_dust_burst(hit_pos, hit_normal, Color(1.0, 0.56, 0.22)):
+			cleanup_delay = 0.8
+		Audio.play_sfx(&"splash_small", hit_pos, -3.0)
+		_mark_impacted(hit_pos, target, cleanup_delay)
+		return
+
 	if ship_target != null:
 		target = ship_target
+		var is_chain := _resolved_style == &"chainshot"
 		if Net.is_host():
+			if is_chain and ship_target.has_method(&"apply_sail_damage"):
+				ship_target.call(&"apply_sail_damage", CHAINSHOT_SAIL_DAMAGE)
 			if ship_target.has_method(&"apply_hull_damage"):
-				ship_target.call(&"apply_hull_damage", hit_pos, hull_damage_radius)
+				var breach_r := CHAINSHOT_BREACH_RADIUS if is_chain else hull_damage_radius
+				ship_target.call(&"apply_hull_damage", hit_pos, breach_r)
 			if ship_target is RigidBody3D:
 				var rb := ship_target as RigidBody3D
 				var imp_dir := velocity.normalized() if velocity.length_squared() > 0.01 else -hit_normal
 				var rel_pos := hit_pos - rb.global_position
 				# Keep vertical lever arm modest so a hit rocks the ship cleanly without flipping it.
 				rel_pos.y = clampf(rel_pos.y, -1.5, 1.5)
-				rb.apply_impulse(imp_dir * hull_impact_impulse, rel_pos)
+				var imp_scale := 0.55 if is_chain else 1.0
+				rb.apply_impulse(imp_dir * hull_impact_impulse * imp_scale, rel_pos)
 		if _spawn_splinter_burst(hit_pos, hit_normal):
 			cleanup_delay = 1.15
-		Audio.play_sfx(&"hull_impact", hit_pos)
+		if is_chain:
+			Audio.play_sfx(&"sail_flap", hit_pos, 0.0)
+		else:
+			Audio.play_sfx(&"hull_impact", hit_pos)
 	elif target != null and target.has_meta("leviathan"):
 		var lev: Variant = target.get_meta("leviathan")
 		if Net.is_host() and lev != null and is_instance_valid(lev) and (lev as Object).has_method(&"damage_tentacle"):
@@ -347,7 +465,7 @@ func _on_water_hit(hit_pos: Vector3) -> void:
 	if Ocean.current != null:
 		Ocean.current.add_foam(hit_pos, 3.2, 0.95)
 	var spawned := _spawn_splash_burst(hit_pos)
-	Audio.play_sfx(&"splash_large", hit_pos)
+	Audio.play_sfx(&"splash_small" if _resolved_style == &"flare" else &"splash_large", hit_pos)
 	_mark_impacted(hit_pos, null, 1.65 if spawned else 0.5)
 
 
@@ -356,6 +474,9 @@ func _mark_impacted(hit_pos: Vector3, target: Node, cleanup_delay: float = 0.5) 
 	_cleanup_timer = cleanup_delay
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
+	if flare_light != null and is_instance_valid(flare_light):
+		flare_light.light_energy = 0.0
+		flare_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 	impacted.emit(hit_pos, target)
@@ -366,6 +487,9 @@ func _finish_without_impact() -> void:
 	_cleanup_timer = 0.1
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
+	if flare_light != null and is_instance_valid(flare_light):
+		flare_light.light_energy = 0.0
+		flare_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 
@@ -860,9 +984,10 @@ func _spawn_dust_burst(pos: Vector3, normal: Vector3, tint: Color) -> bool:
 # Sculpted Flat-Faceted Ordnance & Jagged Oak Splinter Builders (0 Primitives)
 # ==============================================================================
 
-## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, or `&"swivel"`.
+## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, `&"swivel"`, `&"chainshot"`, or `&"flare"`.
 static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
-	var key := style if (style == &"heavy" or style == &"swivel") else &"iron"
+	var key := style if (style == &"heavy" or style == &"swivel" \
+			or style == &"chainshot" or style == &"flare") else &"iron"
 	if _ball_meshes.has(key):
 		var cached := _ball_meshes[key] as ArrayMesh
 		if cached != null:
@@ -873,6 +998,10 @@ static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
 			built = _build_heavy_ball_mesh()
 		&"swivel":
 			built = _build_swivel_ball_mesh()
+		&"chainshot":
+			built = _build_chainshot_mesh()
+		&"flare":
+			built = _build_flare_mesh()
 		_:
 			built = _build_iron_ball_mesh()
 	_ball_meshes[key] = built
@@ -967,6 +1096,210 @@ static func _build_swivel_ball_mesh() -> ArrayMesh:
 	_add_forged_band(st, Basis.IDENTITY, 0.097, 0.104, 0.011, 12, col_hi, col_mid, col_lo)
 	st.generate_normals()
 	return st.commit()
+
+
+static func _build_chainshot_mesh() -> ArrayMesh:
+	# Twin hammered cast-iron spheres (r = 0.088 m at x = +/-0.195 m) connected by a heavy
+	# interlocking forged-iron chain link bar built strictly via SurfaceTool (0 primitives).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_hi := Color(0.32, 0.34, 0.38)
+	var col_mid := Color(0.16, 0.17, 0.21)
+	var col_lo := Color(0.08, 0.09, 0.11)
+	var col_link_hi := Color(0.42, 0.43, 0.46)
+	var col_link_mid := Color(0.24, 0.25, 0.28)
+
+	for sx: float in [-1.0, 1.0]:
+		var ctr := Vector3(sx * 0.195, 0.0, 0.0)
+		_add_hammered_sphere_at(st, ctr, 0.088, 10, 5, 0.038, 1.7 + sx, col_hi, col_mid, col_lo)
+		# Heavy forged shackle eye lug anchoring the chain into each iron shot.
+		_add_ordnance_tube(st, Vector3(sx * 0.115, 0.0, 0.0), Vector3(sx * 0.085, 0.0, 0.0),
+			0.030, 0.024, 6, col_link_hi, col_lo)
+
+	# Central forged chain link bar with 3 alternating horizontal/vertical heavy chain rings.
+	_add_ordnance_tube(st, Vector3(-0.110, 0.0, 0.0), Vector3(0.110, 0.0, 0.0),
+		0.018, 0.018, 6, col_link_hi, col_link_mid)
+	for li in 3:
+		var lx := -0.072 + float(li) * 0.072
+		var rot_x := 0.0 if (li % 2 == 0) else PI * 0.5
+		_add_chain_link_ring(st, Vector3(lx, 0.0, 0.0), Basis(Vector3.RIGHT, rot_x),
+			0.044, 0.028, 0.013, col_link_hi, col_link_mid, col_lo)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_flare_mesh() -> ArrayMesh:
+	# Glowing brass & crimson-gold marine illumination signal shell:
+	# Surface 0 = turned brass casing, nose cone & 4 stabilizing tail fins;
+	# Surface 1 = blazing crimson-gold magnesium burn ports & tail flame star.
+	var body_st := SurfaceTool.new()
+	body_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_brass_hi := Color(0.98, 0.80, 0.32)
+	var col_brass_mid := Color(0.76, 0.56, 0.18)
+	var col_brass_lo := Color(0.42, 0.28, 0.09)
+	var col_crim := Color(0.84, 0.18, 0.14)
+
+	# Turned brass flare canister aligned along Z (-0.17 nose -> +0.16 tail).
+	var profile: Array[Vector2] = [
+		Vector2(0.0, -0.175),
+		Vector2(0.042, -0.145),
+		Vector2(0.072, -0.095),
+		Vector2(0.082, -0.080),
+		Vector2(0.074, -0.065),
+		Vector2(0.074, 0.085),
+		Vector2(0.084, 0.100),
+		Vector2(0.070, 0.145),
+		Vector2(0.048, 0.165),
+		Vector2(0.0, 0.165),
+	]
+	_add_z_lathe(body_st, profile, 10, col_brass_hi, col_brass_mid, col_brass_lo)
+
+	# Four swept crimson-brass stabilizing tail fins around the rear barrel.
+	for k in 4:
+		var ang := float(k) * PI * 0.5
+		var d := Vector3(cos(ang), sin(ang), 0.0)
+		var p := Vector3(-sin(ang), cos(ang), 0.0) * 0.010
+		var r_in := 0.068
+		var r_out := 0.122
+		var z0 := 0.055
+		var z1 := 0.155
+		var mid := d * ((r_in + r_out) * 0.5) + Vector3(0.0, 0.0, (z0 + z1) * 0.5)
+		var a0 := d * r_in + Vector3(0.0, 0.0, z0) + p
+		var a1 := d * r_in + Vector3(0.0, 0.0, z0) - p
+		var b0 := d * r_out + Vector3(0.0, 0.0, z1 - 0.015) + p
+		var b1 := d * r_out + Vector3(0.0, 0.0, z1 - 0.015) - p
+		var c0 := d * r_in + Vector3(0.0, 0.0, z1) + p
+		var c1 := d * r_in + Vector3(0.0, 0.0, z1) - p
+		_emit_outward_tri(body_st, a0, b0, c0, mid, col_crim, col_brass_hi, col_crim)
+		_emit_outward_tri(body_st, a1, c1, b1, mid, col_crim, col_crim, col_brass_hi)
+		_emit_outward_quad(body_st, a0, a1, b1, b0, mid, col_brass_hi, col_brass_hi, col_crim, col_crim)
+		_emit_outward_quad(body_st, b0, b1, c1, c0, mid, col_crim, col_crim, col_brass_lo, col_brass_lo)
+
+	# Surface 1: blazing crimson-gold magnesium core rings & star exhaust plume!
+	var glow_st := SurfaceTool.new()
+	glow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_g_hi := Color(1.0, 0.94, 0.62)
+	var col_g_mid := Color(1.0, 0.52, 0.18)
+	var col_g_lo := Color(0.92, 0.18, 0.10)
+	for gz: float in [-0.025, 0.035]:
+		_add_z_lathe(glow_st, [
+			Vector2(0.072, gz - 0.018),
+			Vector2(0.088, gz),
+			Vector2(0.072, gz + 0.018),
+		], 10, col_g_hi, col_g_mid, col_g_lo)
+	# Blazing faceted diamond tail flare star behind exhaust nozzle.
+	_add_hammered_sphere_at(glow_st, Vector3(0.0, 0.0, 0.195), 0.062, 8, 4, 0.0, 0.0,
+		col_g_hi, col_g_mid, col_g_lo)
+
+	body_st.generate_normals()
+	var mesh := body_st.commit()
+	glow_st.generate_normals()
+	glow_st.commit(mesh)
+	return mesh
+
+
+static func _add_hammered_sphere_at(st: SurfaceTool, center: Vector3, radius: float, segs: int, rings: int,
+		dent_amp: float, seed_phase: float,
+		col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	var grid: Array[Array] = []
+	for ri in range(rings + 1):
+		var v_frac := float(ri) / float(rings)
+		var phi := v_frac * PI
+		var sy := cos(phi)
+		var sr := sin(phi)
+		var row: Array[Vector3] = []
+		for si in segs:
+			var theta := TAU * float(si) / float(segs)
+			var dir := Vector3(cos(theta) * sr, sy, sin(theta) * sr)
+			var dent := 1.0 + dent_amp * sin(theta * 3.0 + phi * 4.0 + seed_phase) * cos(theta * 2.0 - phi * 3.0) * sr
+			row.append(center + dir * (radius * dent))
+		grid.append(row)
+
+	for ri in rings:
+		for si in segs:
+			var si1 := (si + 1) % segs
+			var p00: Vector3 = grid[ri][si] as Vector3
+			var p01: Vector3 = grid[ri][si1] as Vector3
+			var p10: Vector3 = grid[ri + 1][si] as Vector3
+			var p11: Vector3 = grid[ri + 1][si1] as Vector3
+			var avg_y := ((p00.y + p01.y + p10.y + p11.y) * 0.25 - center.y) / maxf(radius, 0.001)
+			var jitter := 0.08 * sin(float(ri * 7 + si * 13) + seed_phase)
+			var shade := clampf(0.5 + 0.5 * avg_y + jitter, 0.0, 1.0)
+			var fc := col_lo.lerp(col_mid, clampf(shade * 2.0, 0.0, 1.0)) if shade < 0.5 \
+				else col_mid.lerp(col_hi, clampf((shade - 0.5) * 2.0, 0.0, 1.0))
+			if ri == 0:
+				_emit_outward_tri(st, p00, p11, p10, center, col_hi, fc, fc)
+			elif ri == rings - 1:
+				_emit_outward_tri(st, p00, p01, p10, center, fc, fc, col_lo)
+			else:
+				_emit_outward_quad(st, p00, p01, p11, p10, center, fc, fc, fc, fc)
+
+
+static func _add_ordnance_tube(st: SurfaceTool, p0: Vector3, p1: Vector3, r0: float, r1: float,
+		segs: int, col_hi: Color, col_lo: Color) -> void:
+	var axis := p1 - p0
+	if axis.length_squared() < 1e-10:
+		return
+	var dir := axis.normalized()
+	var up_ref := Vector3.UP if absf(dir.y) < 0.92 else Vector3.RIGHT
+	var u := dir.cross(up_ref).normalized()
+	var v := dir.cross(u).normalized()
+	var mid := (p0 + p1) * 0.5
+	for s in segs:
+		var a0 := TAU * float(s) / float(segs)
+		var a1 := TAU * float(s + 1) / float(segs)
+		var d0 := u * cos(a0) + v * sin(a0)
+		var d1 := u * cos(a1) + v * sin(a1)
+		var c0 := col_lo.lerp(col_hi, clampf(0.5 + 0.5 * d0.y, 0.0, 1.0))
+		var c1 := col_lo.lerp(col_hi, clampf(0.5 + 0.5 * d1.y, 0.0, 1.0))
+		_emit_outward_quad(st, p0 + d0 * r0, p0 + d1 * r0, p1 + d1 * r1, p1 + d0 * r1, mid, c0, c1, c1, c0)
+		_emit_outward_tri(st, p0, p0 + d0 * r0, p0 + d1 * r0, mid, col_lo, c0, c1)
+		_emit_outward_tri(st, p1, p1 + d1 * r1, p1 + d0 * r1, mid, col_hi, c1, c0)
+
+
+static func _add_chain_link_ring(st: SurfaceTool, center: Vector3, rot_basis: Basis,
+		rx: float, ry: float, tube_r: float, col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	const LOOP_SEGS := 8
+	var pts: Array[Vector3] = []
+	for i in LOOP_SEGS:
+		var a := TAU * float(i) / float(LOOP_SEGS)
+		pts.append(center + rot_basis * Vector3(cos(a) * rx, sin(a) * ry, 0.0))
+	for i in LOOP_SEGS:
+		var p0 := pts[i]
+		var p1 := pts[(i + 1) % LOOP_SEGS]
+		var col0 := col_hi if i % 2 == 0 else col_mid
+		_add_ordnance_tube(st, p0, p1, tube_r, tube_r, 5, col0, col_lo)
+
+
+static func _add_z_lathe(st: SurfaceTool, profile: Array[Vector2], segs: int,
+		col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	if profile.size() < 2:
+		return
+	var z_mid := (profile[0].y + profile[profile.size() - 1].y) * 0.5
+	var ref_c := Vector3(0.0, 0.0, z_mid)
+	for pi in range(profile.size() - 1):
+		var r0 := profile[pi].x
+		var z0 := profile[pi].y
+		var r1 := profile[pi + 1].x
+		var z1 := profile[pi + 1].y
+		var t0 := float(pi) / maxf(float(profile.size() - 1), 1.0)
+		var t1 := float(pi + 1) / maxf(float(profile.size() - 1), 1.0)
+		var c0 := col_hi.lerp(col_mid, t0) if t0 < 0.5 else col_mid.lerp(col_lo, (t0 - 0.5) * 2.0)
+		var c1 := col_hi.lerp(col_mid, t1) if t1 < 0.5 else col_mid.lerp(col_lo, (t1 - 0.5) * 2.0)
+		for s in segs:
+			var a0 := TAU * float(s) / float(segs)
+			var a1 := TAU * float(s + 1) / float(segs)
+			var p00 := Vector3(cos(a0) * r0, sin(a0) * r0, z0)
+			var p10 := Vector3(cos(a1) * r0, sin(a1) * r0, z0)
+			var p01 := Vector3(cos(a0) * r1, sin(a0) * r1, z1)
+			var p11 := Vector3(cos(a1) * r1, sin(a1) * r1, z1)
+			if r0 <= 0.0004 and r1 > 0.0004:
+				_emit_outward_tri(st, p00, p01, p11, ref_c, c0, c1, c1)
+			elif r1 <= 0.0004 and r0 > 0.0004:
+				_emit_outward_tri(st, p00, p10, p01, ref_c, c0, c0, c1)
+			elif r0 > 0.0004 and r1 > 0.0004:
+				_emit_outward_quad(st, p00, p10, p11, p01, ref_c, c0, c0, c1, c1)
 
 
 static func _build_splinter_mesh() -> ArrayMesh:

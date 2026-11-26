@@ -97,12 +97,39 @@ func add_look(relative: Vector2) -> void:
 	pawn.look_pitch = clampf(pawn.look_pitch - relative.y * mouse_sensitivity, -PITCH_LIMIT, PITCH_LIMIT)
 	if pawn.station != null and is_instance_valid(pawn.station):
 		var sk_v: Variant = pawn.station.get(&"kind")
-		if sk_v != null and StringName(sk_v) == &"cannon":
+		if sk_v != null:
+			var sk := StringName(sk_v)
 			var st_ship: Variant = pawn.station.get(&"ship")
-			if st_ship is Node and is_instance_valid(st_ship) and (st_ship as Node).has_method(&"aim_cannon_delta"):
-				var mid_v: Variant = pawn.station.get(&"meta_id")
+			if st_ship is Node and is_instance_valid(st_ship):
+				var mid_v: Variant = pawn.station.get(&"meta_key")
+				if mid_v == null:
+					mid_v = pawn.station.get(&"meta_id")
 				var side: StringName = StringName(mid_v) if mid_v != null else &""
-				(st_ship as Node).call(&"aim_cannon_delta", side, -relative.x * 0.0018, -relative.y * 0.0016)
+				var ship_node := st_ship as Node
+				if sk == &"cannon" and ship_node.has_method(&"aim_cannon_delta"):
+					ship_node.call(&"aim_cannon_delta", side, -relative.x * 0.0018, -relative.y * 0.0016)
+				elif sk == &"harpoon" and ship_node.has_method(&"aim_harpoon_delta"):
+					ship_node.call(&"aim_harpoon_delta", side, -relative.x * 0.0020, -relative.y * 0.0018)
+
+
+func _handle_station_special_action() -> void:
+	if pawn == null or pawn.station == null or not is_instance_valid(pawn.station):
+		return
+	var sk_v: Variant = pawn.station.get(&"kind")
+	var st_ship: Variant = pawn.station.get(&"ship")
+	if sk_v == null or not (st_ship is Node) or not is_instance_valid(st_ship):
+		return
+	var sk := StringName(sk_v)
+	var ship_node := st_ship as Node
+	if sk == &"cannon" and ship_node.has_method(&"cycle_cannon_ordnance"):
+		ship_node.call(&"cycle_cannon_ordnance")
+	elif sk == &"harpoon" and ship_node.has_method(&"release_harpoon"):
+		var mid_v: Variant = pawn.station.get(&"meta_key")
+		if mid_v == null:
+			mid_v = pawn.station.get(&"meta_id")
+		var side: StringName = StringName(mid_v) if mid_v != null else &""
+		ship_node.call(&"release_harpoon", side)
+
 
 func _physics_process(delta: float) -> void:
 	_update_focus()
@@ -127,6 +154,8 @@ func _physics_process(delta: float) -> void:
 		if Input.is_action_just_pressed(&"leave_station") or Input.is_action_just_pressed(&"interact"):
 			pawn.leave_station()
 		else:
+			if InputMap.has_action(&"heavy_attack") and Input.is_action_just_pressed(&"heavy_attack"):
+				_handle_station_special_action()
 			pawn.drive_station(axis, primary, secondary, delta)
 		return
 	var b := Basis(Vector3.UP, pawn.look_yaw)

@@ -1507,11 +1507,374 @@ func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons()
 		"WindRibbons releases static mesh & shader caches cleanly on teardown (0 leaks)")
 
 
+func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 11.0, 0.0)
+	Weather.time_of_day = 0.5  # Deep night so deck lantern blackout & illumination shine clearly
 
+	var sloop := SLOOP_SCENE.instantiate() as Ship
+	sloop.enable_effects = true
+	_root.add_child(sloop)
+	sloop.global_position = Vector3(0.0, 0.0, 0.0)
 
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(32.0, 0.0, 0.0)
+	await physics_frames(12)
 
+	# ------------------------------------------------------------------
+	# 1. Bow-mounted Sculpted ShipHarpoon on Sloop & Brigantine (0 primitives, triplanar PBR)
+	# ------------------------------------------------------------------
+	var harpoon_tris := 0
+	for spec: Array in [[sloop, "sloop"], [brig, "brigantine"]]:
+		var sh := spec[0] as Ship
+		var lbl := String(spec[1])
+		for side: StringName in [&"port", &"starboard"]:
+			var hp := sh.get_harpoon(side)
+			check(hp != null and is_instance_valid(hp), "%s mounts ShipHarpoon on %s bow" % [lbl, side])
+			var st := sh.get_station(&"harpoon", side)
+			check(st != null, "%s registers Station for %s harpoon" % [lbl, side])
+			if st != null:
+				check_eq(st.meta_key, side, "%s %s harpoon station meta_key matches" % [lbl, side])
+				check(st.transform.basis.get_scale().is_equal_approx(Vector3.ONE),
+					"%s %s harpoon station keeps orthonormal unit basis" % [lbl, side])
+				var ap := st.get_active_prompt()
+				check(ap.begins_with("[Mouse/WASD] Aim") and ap.contains("[Hold RMB] Reel") and ap.contains("[R] Release"),
+					"%s %s harpoon active prompt lists full ASCII controls (got '%s')" % [lbl, side, ap])
+				for ci in ap.length():
+					check(ap.unicode_at(ci) < 128, "harpoon active prompt is strict ASCII")
+			if hp == null:
+				continue
+			var raw_prims := 0
+			var bad_norms := 0
+			var bad_mats := 0
+			for n in hp.find_children("*", "MeshInstance3D", true, false):
+				var mi := n as MeshInstance3D
+				if mi == null or mi.mesh == null:
+					continue
+				if mi.mesh is PrimitiveMesh:
+					raw_prims += 1
+				var am := mi.mesh as ArrayMesh
+				if am != null:
+					for si in am.get_surface_count():
+						var arr := am.surface_get_arrays(si)
+						var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+						for nv in norms:
+							if not nv.is_finite() or nv.length_squared() < 0.5:
+								bad_norms += 1
+				var mat := mi.material_override as StandardMaterial3D
+				if mat != null:
+					if not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
+							or not mat.uv1_triplanar or mat.uv1_world_triplanar:
+						bad_mats += 1
+			check_eq(raw_prims, 0, "%s %s ShipHarpoon contains ZERO PrimitiveMeshes" % [lbl, side])
+			check_eq(bad_norms, 0, "%s %s ShipHarpoon normals are all finite unit vectors" % [lbl, side])
+			check_eq(bad_mats, 0, "%s %s ShipHarpoon uses sRGB vertex colors + object-space triplanar PBR" % [lbl, side])
+			var tris := hp.get_triangle_count()
+			check(tris >= 800, "%s %s ShipHarpoon has rich sculpted geometry (%d >= 800 tris)" % [lbl, side, tris])
+			if harpoon_tris == 0:
+				harpoon_tris = tris
 
+	# 1b. Harpoon magnetic grab cone snags floating Carryable treasure onto foredeck & emits signal!
+	var hp_port := sloop.get_harpoon(&"port")
+	sloop.set_anchor(true)
+	sloop.anchor_progress = 1.0
+	await physics_frames(8)
 
+	var loot_item := Carryable.new()
+	loot_item.name = "FloatingChest"
+	loot_item.item_name = "Sovereign Strongbox"
+	loot_item.add_to_group(&"carryables")
+	var lcol := CollisionShape3D.new()
+	var lbox := BoxShape3D.new()
+	lbox.size = Vector3(0.6, 0.45, 0.45)
+	lcol.shape = lbox
+	loot_item.add_child(lcol)
+	_root.add_child(loot_item)
 
+	var muzzle_p := hp_port.get_muzzle_world_pos()
+	var aim_p := hp_port.get_aim_direction_world()
+	# Place floating chest 14 m ahead along aim ray with slight 1.1 m lateral offset inside 2.6 m grab cone!
+	var lateral := aim_p.cross(Vector3.UP).normalized()
+	loot_item.global_position = muzzle_p + aim_p * 14.0 + lateral * 1.1
+	await physics_frames(2)
 
+	var snagged_events: Array[Array] = []
+	sloop.harpoon_loot_snagged.connect(func(label: String, side_sn: StringName) -> void:
+		snagged_events.append([label, side_sn])
+	)
+	var fire_loot := sloop.fire_harpoon(&"port", null)
+	check(bool(fire_loot.get("hit", false)) and fire_loot.get("kind") == &"loot",
+		"port harpoon snags floating Carryable inside 2.6 m magnetic cone")
+	check_eq(hp_port.state, ShipHarpoon.State.REELING_LOOT, "harpoon enters REELING_LOOT animation state")
+	check_eq(snagged_events.size(), 1, "ship emits harpoon_loot_snagged once")
+	if not snagged_events.is_empty():
+		check_eq(String(snagged_events[0][0]), "Sovereign Strongbox", "harpoon_loot_snagged carries item label")
+		check_eq(snagged_events[0][1], &"port", "harpoon_loot_snagged carries side &'port'")
 
+	# Advance past 0.42 s reel-in animation -> treasure lands squarely on Sloop foredeck!
+	await physics_frames(45)
+	check_eq(hp_port.state, ShipHarpoon.State.IDLE, "harpoon returns cleanly to IDLE after loot reel")
+	var expected_deck := sloop.global_transform * sloop.ship_point(Vector3(-0.95, 1.25, -3.55))
+	var deck_dist := loot_item.global_position.distance_to(expected_deck)
+	check(deck_dist < 1.35, "snagged treasure reels cleanly onto foredeck (dist=%.2f m)" % deck_dist)
+	check(not loot_item.freeze, "delivered treasure is unfrozen and pickable on foredeck")
+
+	# 1c. Harpoon tether pier -> reel pulls ship bow toward pier -> release snaps cleanly!
+	sloop.set_anchor(false)
+	sloop.anchor_progress = 0.0
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+	await physics_frames(4)
+
+	var hp_stbd := sloop.get_harpoon(&"starboard")
+	hp_stbd.cooldown = 0.0
+	var muzzle_s := hp_stbd.get_muzzle_world_pos()
+	var aim_s := hp_stbd.get_aim_direction_world()
+	var pier := StaticBody3D.new()
+	pier.name = "HarpoonTestPier"
+	pier.collision_layer = 1
+	pier.collision_mask = 0
+	var pcol := CollisionShape3D.new()
+	var pbox := BoxShape3D.new()
+	pbox.size = Vector3(5.0, 8.0, 5.0)
+	pcol.shape = pbox
+	pier.add_child(pcol)
+	_root.add_child(pier)
+	pier.global_position = muzzle_s + aim_s * 16.0
+	await physics_frames(4)
+
+	var fire_tether := sloop.fire_harpoon(&"starboard", null)
+	check(bool(fire_tether.get("hit", false)) and fire_tether.get("kind") == &"tether",
+		"starboard harpoon tethers solid pier collider on layer 1")
+	check_eq(hp_stbd.state, ShipHarpoon.State.TETHERED, "harpoon enters TETHERED state")
+	var dist_before_reel := sloop.global_position.distance_to(hp_stbd.tether_world_pos)
+	var len_before_reel := hp_stbd.tether_length
+	for _i in 60:
+		sloop.reel_harpoon(&"starboard", true, 1.0 / 60.0)
+		await physics_frames(1)
+	var dist_after_reel := sloop.global_position.distance_to(hp_stbd.tether_world_pos)
+	check(hp_stbd.tether_length < len_before_reel - 1.5,
+		"reeling shortens tether length smoothly (%.2f -> %.2f m)" % [len_before_reel, hp_stbd.tether_length])
+	check(dist_after_reel < dist_before_reel - 0.5,
+		"reeling pulls ship bow cleanly toward tethered pier (%.2f -> %.2f m)" % [dist_before_reel, dist_after_reel])
+	check(sloop.global_basis.y.y > 0.90, "harpoon reel traction never flips or violently rolls ship")
+
+	sloop.release_harpoon(&"starboard")
+	check_eq(hp_stbd.state, ShipHarpoon.State.IDLE, "release_harpoon() returns harpoon cleanly to IDLE")
+	check(not hp_stbd._rope_mi.visible, "release_harpoon() hides taut rope mesh")
+
+	# ------------------------------------------------------------------
+	# 2. Interactive Deck Lanterns ([F] quick-use blackout + co-op net roundtrip)
+	# ------------------------------------------------------------------
+	var lantern_st := sloop.get_station(&"lantern")
+	check(lantern_st != null and lantern_st.name == &"Station_Lantern_Node",
+		"sloop registers Station_Lantern_Node (kind=&'lantern')")
+	check(brig.get_station(&"lantern") != null, "brigantine registers Station_Lantern_Node")
+	check(sloop.lanterns_lit, "ship lanterns start lit by default")
+	check_eq(lantern_st.get_focus_prompt(), "Douse ship lanterns", "lit lantern station prompt says 'Douse ship lanterns'")
+	check(not sloop._lantern_lights.is_empty(), "ship spawns OmniLight3D lantern glows when enable_effects=true")
+	check(not sloop._lantern_glass_mats.is_empty(), "ship duplicates per-ship mat_lantern_glass materials")
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(-0.6, 2.05, 5.1)))
+	await physics_frames(4)
+
+	var lantern_events: Array[bool] = []
+	sloop.lanterns_toggled.connect(func(lit: bool) -> void: lantern_events.append(lit))
+	check(lantern_st.try_quick_use(captain), "lantern try_quick_use consumes one-tap [F] toggle")
+	check(not sloop.lanterns_lit, "first [F] tap douses ship lanterns (lanterns_lit == false)")
+	check(not lantern_st.is_occupied() and captain.station == null,
+		"dousing ship lanterns does NOT lock pawn into lantern station")
+	check(not lantern_st.can_occupy(captain), "lantern station cannot lock a pawn")
+	check_eq(lantern_st.get_focus_prompt(), "Light ship lanterns", "dark lantern station prompt says 'Light ship lanterns'")
+	check_eq(lantern_events.size(), 1, "lanterns_toggled signal emitted once on douse")
+
+	sloop._update_visuals(0.05)
+	for l in sloop._lantern_lights:
+		check_near(l.light_energy, 0.0, 0.001, "doused lantern OmniLight3D has 0.0 energy")
+		check(not l.visible, "doused lantern OmniLight3D is hidden")
+	for lg in sloop._lantern_glass_mats:
+		check_near(lg.emission_energy_multiplier, 0.0, 0.001, "doused mat_lantern_glass emission is zeroed")
+
+	# Co-op net state roundtrip of lanterns_lit!
+	var snap_dark := sloop.get_net_state()
+	check_eq(bool(snap_dark.get("lanterns_lit", true)), false, "get_net_state exports lanterns_lit = false")
+	var client_sloop := SLOOP_SCENE.instantiate() as Ship
+	client_sloop.enable_effects = true
+	_root.add_child(client_sloop)
+	client_sloop.global_position = Vector3(-34.0, 0.0, 0.0)
+	await physics_frames(4)
+	check(client_sloop.lanterns_lit, "client sloop starts with lanterns lit")
+	client_sloop.apply_net_state(snap_dark)
+	check(not client_sloop.lanterns_lit, "apply_net_state replicates lanterns_lit = false to client ship")
+	for cl in client_sloop._lantern_lights:
+		check_near(cl.light_energy, 0.0, 0.001, "replicated dark client ship zeroes lantern energy")
+
+	# Second [F] tap relights ship lanterns cleanly!
+	check(lantern_st.try_quick_use(captain), "second try_quick_use relights ship lanterns")
+	check(sloop.lanterns_lit, "second [F] tap restores lanterns_lit = true")
+	sloop._update_visuals(0.05)
+	for l in sloop._lantern_lights:
+		check(l.visible and l.light_energy > 0.25, "relit lantern OmniLight3D restores night glow")
+	for lg in sloop._lantern_glass_mats:
+		check(lg.emission_enabled and lg.emission_energy_multiplier > 0.5,
+			"relit mat_lantern_glass restores night emission")
+
+	# ------------------------------------------------------------------
+	# 3. Tactile Cannon Ordnance Cycling ([R]: Iron -> Chainshot -> Flare -> Iron)
+	# ------------------------------------------------------------------
+	var ord_events: Array[StringName] = []
+	sloop.cannon_ordnance_changed.connect(func(k: StringName) -> void: ord_events.append(k))
+	check_eq(sloop.cannon_ordnance, &"iron", "ship cannon starts on &'iron' ordnance")
+	check_eq(sloop.get_cannon_ordnance_label(), "Iron", "Iron label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"chainshot", "1st cycle -> &'chainshot'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Chainshot", "Chainshot label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "2nd cycle -> &'flare'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Flare", "Flare label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "3rd cycle wraps cleanly -> &'iron'")
+	check_eq(ord_events.size(), 3, "cannon_ordnance_changed emitted on each swap")
+
+	# Verify PlayerController mouse-aim on harpoon + [R] station special action + HUD hints!
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.input_enabled = false
+	pc.make_current = false
+	captain.add_child(pc)
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, null, null, sloop, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var cannon_st := sloop.get_station(&"cannon", &"port")
+	check(captain.enter_station(cannon_st), "captain enters port cannon station")
+	pc._handle_station_special_action()
+	check_eq(sloop.cannon_ordnance, &"chainshot", "PlayerController [R] on cannon cycles to &'chainshot'")
+	hud._process(0.05)
+	check(hud.get_tool_meta_text().contains("Chainshot") and hud.get_tool_meta_text().contains("[R] Swap Shot"),
+		"HUD cannon chip displays live Chainshot ordnance and [R] Swap Shot")
+	check(cannon_st.get_active_prompt().contains("Fire (Chainshot)") and cannon_st.get_active_prompt().contains("[R] Swap Shot"),
+		"cannon active prompt shows live ordnance and [R] Swap Shot")
+	captain.leave_station()
+
+	var hp_st := sloop.get_station(&"harpoon", &"port")
+	check(captain.enter_station(hp_st), "captain enters port harpoon station")
+	var yaw_before_mouse := hp_port.aim_yaw
+	pc.add_look(Vector2(60.0, -25.0))
+	check(absf(hp_port.aim_yaw - yaw_before_mouse) > 0.05, "PlayerController mouse look aims harpoon")
+	hud._process(0.05)
+	check_eq(hud.get_tool_title_text(), "Bow Harpoon", "HUD tool chip title shows Bow Harpoon")
+	check(hud.get_tool_meta_text().contains("[Hold RMB] Reel") and hud.get_tool_meta_text().contains("[R] Release"),
+		"HUD harpoon chip displays strict-ASCII reel/release controls")
+	captain.leave_station()
+
+	# 3b. Sculpted zero-primitive meshes for chainshot & flare!
+	var chain_tris := 0
+	var flare_tris := 0
+	for o_spec: Array in [[&"chainshot", 1], [&"flare", 2]]:
+		var o_kind: StringName = o_spec[0]
+		var exp_surfs: int = int(o_spec[1])
+		var test_b := Cannonball.new()
+		test_b.enable_effects = false
+		test_b.ordnance_style = o_kind
+		_root.add_child(test_b)
+		test_b.global_position = Vector3(0.0, 40.0, 0.0)
+		await physics_frames(1)
+		check_eq(test_b.get_resolved_ordnance_style(), o_kind, "Cannonball resolves %s" % o_kind)
+		var mi := test_b.get_node_or_null(^"IronBall") as MeshInstance3D
+		check(mi != null and mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"Cannonball %s uses sculpted ArrayMesh (zero PrimitiveMesh)" % o_kind)
+		if mi != null and mi.mesh is ArrayMesh:
+			var am := mi.mesh as ArrayMesh
+			check_eq(am.get_surface_count(), exp_surfs, "Cannonball %s surface count == %d" % [o_kind, exp_surfs])
+			var t_cnt := 0
+			var bad_n := 0
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				t_cnt += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_n += 1
+			check_eq(bad_n, 0, "Cannonball %s normals are all finite unit vectors" % o_kind)
+			check(t_cnt >= 160, "Cannonball %s has sculpted multi-facet detail (%d >= 160 tris)" % [o_kind, t_cnt])
+			if o_kind == &"chainshot":
+				chain_tris = t_cnt
+			else:
+				flare_tris = t_cnt
+				check(test_b.flare_light != null and test_b.flare_light.omni_range >= 64.0 and test_b.flare_light.light_energy >= 5.0,
+					"Flare shell equips 65 m OmniLight3D illumination (energy=%.1f, range=%.1f)" % [
+						test_b.flare_light.light_energy if test_b.flare_light != null else 0.0,
+						test_b.flare_light.omni_range if test_b.flare_light != null else 0.0])
+		test_b.queue_free()
+	await physics_frames(2)
+
+	# 3c. Live Chainshot impact applies sail_damage_timer > 0 and slows target ship dramatically vs healthy ship!
+	var shooter := _spawn_sloop(Vector3(0.0, 0.0, -70.0))
+	var victim := _spawn_sloop(Vector3(24.0, 0.0, -71.5))
+	var healthy := _spawn_sloop(Vector3(56.0, 0.0, -71.5))
+	await physics_frames(20)
+
+	# First verify Flare hits target hull with ZERO hull breach & ZERO sail damage!
+	shooter.set_cannon_ordnance(&"flare")
+	shooter.aim_cannon(&"starboard", 0.0, -0.02)
+	var flare_shot := shooter.fire_cannon(&"starboard")
+	check(flare_shot != null and flare_shot.get_resolved_ordnance_style() == &"flare", "shooter fires Signal Flare")
+	check(flare_shot.flare_light != null and flare_shot.flare_light.omni_range >= 64.0,
+		"fired Signal Flare illuminates with 65 m OmniLight3D")
+	for _i in 90:
+		await physics_frames(1)
+		if not is_instance_valid(flare_shot) or flare_shot._impacted:
+			break
+	check_eq(victim.open_hole_count(), 0, "Signal Flare impact causes ZERO hull breaches")
+	check_near(victim.sail_damage_timer, 0.0, 0.01, "Signal Flare impact causes ZERO sail damage")
+
+	# Reset cannon reload & fire Chainshot into victim hull!
+	shooter._cannons[&"starboard"]["reload"] = 0.0
+	shooter.set_cannon_ordnance(&"chainshot")
+	shooter.aim_cannon(&"starboard", 0.0, -0.02)
+	var sail_hit_events: Array[float] = []
+	victim.sail_damaged.connect(func(dur: float) -> void: sail_hit_events.append(dur))
+	var chain_shot := shooter.fire_cannon(&"starboard")
+	check(chain_shot != null and chain_shot.get_resolved_ordnance_style() == &"chainshot", "shooter fires Chainshot")
+	for _i in 90:
+		await physics_frames(1)
+		if victim.sail_damage_timer > 0.0:
+			break
+	check(victim.sail_damage_timer > 10.0 and sail_hit_events.size() == 1,
+		"Chainshot impact applies 14 s sail_damage_timer (got %.1f s)" % victim.sail_damage_timer)
+
+	# Race damaged victim vs undamaged healthy sloop downwind -> chainshot slashes forward speed!
+	for sh_r: Ship in [victim, healthy]:
+		for hi in sh_r.holes.size():
+			sh_r.patch_hole(hi)
+		sh_r.water_level = 0.0
+		sh_r.linear_velocity = Vector3.ZERO
+		sh_r.set_sail_target(1.0)
+		sh_r.sail_set = 1.0
+		sh_r.set_trim_target(0.0)
+		sh_r.sail_trim = 0.0
+	await physics_frames(220)
+	var v_damaged := victim.forward_speed()
+	var v_healthy := healthy.forward_speed()
+	print("    Wave 28A tris: harpoon=%d, chainshot=%d, flare=%d | sail_dmg_speed=%.2f vs healthy=%.2f m/s" % [
+		harpoon_tris, chain_tris, flare_tris, v_damaged, v_healthy])
+	check(v_damaged < v_healthy * 0.72,
+		"Chainshot sail damage significantly reduces target forward speed (%.2f vs %.2f m/s)" % [v_damaged, v_healthy])
+
+	# 4. Clean 0-leak teardown releases all static ShipHarpoon & Cannonball caches!
+	await _end()
+	check_eq(ShipHarpoon._active_instances, 0, "ShipHarpoon _active_instances returns to 0 on teardown")
+	check(ShipHarpoon._pedestal_oak_mesh == null and ShipHarpoon._spear_mesh == null \
+		and ShipHarpoon._oak_mat == null and ShipHarpoon._pbr_tex_cache.is_empty(),
+		"ShipHarpoon releases all static sculpted meshes, PBR materials, and WeakRef cache cleanly (0 leaks)")
+	check_eq(Cannonball._active_cannonballs, 0, "Cannonball _active_cannonballs returns to 0 on teardown")
+	check(Cannonball._ball_meshes.is_empty(), "Cannonball releases all ordnance mesh caches including chainshot & flare")

@@ -93,6 +93,22 @@ const LINES := {
 			"Blimey, Cap'n! Keep that bilge-water out of me beard!",
 			"Gah! Cold as the Abyss! Watch where ye sling that bucket!",
 		],
+		&"harpoon_haul": [
+			"Plucked {target} straight off the waves - fine shot, Cap'n!",
+			"Reeled in {target} without even wetting our boots! Well harpooned!",
+		],
+		&"chainshot_hit": [
+			"Their canvas is in ribbons! Bring the broadside round!",
+			"Chainshot tore their rigging clean through - they're dead in the water!",
+		],
+		&"running_dark": [
+			"Dousing the glims - quiet as a ghost on the black tide, Cap'n.",
+			"Lanterns out and rudder steady - they won't spy us till we're alongside.",
+		],
+		&"lanterns_lit": [
+			"Warm deck glow back up - let 'em see our colors!",
+			"Lamps lit bright across the rails - good to see the compass again!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -151,6 +167,22 @@ const LINES := {
 			"Hey! You just soaked my spyglass lens, Cap'n!",
 			"Ack -- salty! Save that splash for the deck boards, Cap'n!",
 		],
+		&"harpoon_haul": [
+			"Dead-eye snagged {target} right from the surf! Nice throw, Cap'n!",
+			"Caught {target} on the barb! Best bow-gunner on the archipelago!",
+		],
+		&"chainshot_hit": [
+			"Direct chainshot! Their mainsail is shredded - press the attack!",
+			"Ripped their canvas wide open! They can't outrun us now, Cap'n!",
+		],
+		&"running_dark": [
+			"Running dark under the stars - rival lookouts won't spot our hull.",
+			"Lamps snuffed! Keep low and let the night cloak our sails.",
+		],
+		&"lanterns_lit": [
+			"Deck lanterns blazing again - shines like a beacon on the swells!",
+			"Lights back on! Every deckhand can see the rigging clear as day.",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -208,6 +240,22 @@ const LINES := {
 		&"splashed": [
 			"Whoa! Refreshing, Cap'n -- though I just dried me apron!",
 			"Hey now! I bail the bilge, I don't need a bath on deck!",
+		],
+		&"harpoon_haul": [
+			"Ha! Yanked {target} right onto the deck - saves me swimming for it!",
+			"Look at that catch - {target} reeled in neat as a herring!",
+		],
+		&"chainshot_hit": [
+			"Ooh, that chainshot made confetti of their sails! Bet their bosun is weeping!",
+			"Shredded their rigging! Good thing it's their canvas and not ours!",
+		],
+		&"running_dark": [
+			"Shh - lanterns doused! Sneaking past 'em like a shadow on the tide.",
+			"All glims out, Cap'n - not even a spark showing from the cabin!",
+		],
+		&"lanterns_lit": [
+			"Lanterns glowing warm again - much easier to swing a hammer with light!",
+			"Back in golden light! Now she looks like a proper ship, Cap'n!",
 		],
 	},
 }

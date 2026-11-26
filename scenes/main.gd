@@ -74,6 +74,7 @@ var enemy_ships: Array[Ship] = []
 var active_sharks: Array[Shark] = []
 var active_leviathans: Array[Leviathan] = []
 var current_music_mood: StringName = &""
+var sea_soundscape: SeaSoundscape = null
 var active_shot_mode: String = ""
 
 var _entities_root: Node3D = null
@@ -203,6 +204,7 @@ static func _drain_static_visual_caches() -> void:
 	HullCrest.clear_shared_cache()
 	CaptainCabinFurnishings.clear_shared_cache()
 	WindRibbons.clear_shared_cache()
+	ShipHarpoon.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
 	Leviathan.clear_shared_cache()
@@ -553,6 +555,12 @@ func _build_player_ship() -> void:
 	_mount_fishing_station(player_ship)
 	_sync_cabin_renown(false)
 	_sync_ship_name()
+
+	if sea_soundscape == null or not is_instance_valid(sea_soundscape):
+		sea_soundscape = SeaSoundscape.new()
+		sea_soundscape.name = "SeaSoundscape"
+		add_child(sea_soundscape)
+	sea_soundscape.bind_ship(player_ship)
 
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 
@@ -2659,7 +2667,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 				cp.leave_station()
 			cp.board(player_ship, _crew_local_pos(player_ship, i))
 		if i < crew_brains.size() and crew_brains[i] != null:
-			crew_brains[i].ship = player_ship
+			crew_brains[i].bind_ship(player_ship)
 	var swap_hs := _ship_scale_of(player_ship)
 	for pid: int in _peer_pawns.keys():
 		var pp: Pawn = _peer_pawns[pid]
@@ -2672,6 +2680,8 @@ func _swap_player_ship_class(cls: StringName) -> void:
 		world_director.player_ship = player_ship
 	if hud != null:
 		hud.ship = player_ship
+	if sea_soundscape != null and is_instance_valid(sea_soundscape):
+		sea_soundscape.bind_ship(player_ship)
 	if shipwright_menu != null:
 		shipwright_menu.ship = player_ship
 		shipwright_menu.map_table = map_table

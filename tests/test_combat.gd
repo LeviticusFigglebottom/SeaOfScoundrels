@@ -840,6 +840,90 @@ func test_blade_slash_arc_boarding_axe_cleave_and_deterministic_hitstop() -> voi
 	check(CombatComponent._slash_arc_mesh == null, "BladeSlashArc static ArrayMesh cache released to null (0 leaks)")
 
 
+class _RunningDarkTargetStub extends Node3D:
+	var lanterns_lit: bool = false
+
+
+func test_wave28_night_running_dark_reduces_ai_ship_aggro_range() -> void:
+	_begin()
+	var player_ship := SLOOP_SCENE.instantiate() as Ship
+	player_ship.enable_effects = false
+	player_ship.faction = &"player"
+	_root.add_child(player_ship)
+	player_ship.global_position = Vector3(0.0, 0.0, 0.0)
+
+	# Place enemy sloop at 360 m: inside full 480 m aggro_range, outside night stealth 297.6 m!
+	var foe := AIShipBrain.spawn_enemy_sloop(&"drowned_sloop", Vector3(360.0, 0.0, 0.0), _root, null)
+	foe.enable_effects = false
+	var ai_brain := foe.get_node(^"AIShipBrain") as AIShipBrain
+	check(ai_brain != null, "enemy sloop exposes AIShipBrain")
+	check_near(AIShipBrain.NIGHT_STEALTH_AGGRO_MULT, 0.62, 0.0001, "NIGHT_STEALTH_AGGRO_MULT is 0.62")
+
+	var dark_stub := _RunningDarkTargetStub.new()
+	dark_stub.lanterns_lit = false
+	_root.add_child(dark_stub)
+	var lit_stub := _RunningDarkTargetStub.new()
+	lit_stub.lanterns_lit = true
+	_root.add_child(lit_stub)
+
+	var has_real_lanterns := player_ship.get(&"lanterns_lit") != null
+	var full_range := ai_brain.aggro_range
+	var stealth_range := full_range * AIShipBrain.NIGHT_STEALTH_AGGRO_MULT
+
+	# 1. At noon (12:00), effective_aggro_range equals aggro_range regardless of lanterns.
+	Weather.time_of_day = 12.0
+	check(Weather.sun_height() > 0.0, "noon sun_height is positive")
+	check_near(ai_brain.effective_aggro_range(player_ship), full_range, 0.01,
+		"noon effective_aggro_range on real Ship equals aggro_range")
+	check_near(ai_brain.effective_aggro_range(lit_stub), full_range, 0.01,
+		"noon effective_aggro_range on lit ship equals aggro_range")
+	check_near(ai_brain.effective_aggro_range(dark_stub), full_range, 0.01,
+		"noon effective_aggro_range on dark ship still equals aggro_range")
+	if has_real_lanterns:
+		player_ship.set(&"lanterns_lit", false)
+		check_near(ai_brain.effective_aggro_range(player_ship), full_range, 0.01,
+			"noon effective_aggro_range ignores doused lanterns on real Ship")
+		player_ship.set(&"lanterns_lit", true)
+
+	# 2. At night (23:00), lit ships keep full aggro_range while dark ships drop to 0.62x!
+	Weather.time_of_day = 23.0
+	check(Weather.sun_height() < 0.0, "23:00 night sun_height is below horizon")
+	check_near(ai_brain.effective_aggro_range(lit_stub), full_range, 0.01,
+		"night effective_aggro_range stays full when lanterns_lit is true")
+	check_near(ai_brain.effective_aggro_range(dark_stub), stealth_range, 0.01,
+		"night effective_aggro_range drops to aggro_range * 0.62 when running dark (%.1f m)" % stealth_range)
+
+	if has_real_lanterns:
+		player_ship.set(&"lanterns_lit", true)
+		check_near(ai_brain.effective_aggro_range(player_ship), full_range, 0.01,
+			"night real Ship with lit lanterns keeps full aggro_range")
+		check_eq(ai_brain._find_player_ship(), player_ship,
+			"patrolling AI spots lit real Ship at 360 m at night")
+
+		player_ship.set(&"lanterns_lit", false)
+		check_near(ai_brain.effective_aggro_range(player_ship), stealth_range, 0.01,
+			"night real Ship running dark drops aggro_range to 0.62x")
+		check(ai_brain._find_player_ship() == null,
+			"patrolling AI cannot spot dark real Ship at 360 m at night (stealth range %.1f m)" % stealth_range)
+
+		# Moving inside 297.6 m lets the AI spot even a dark ship.
+		player_ship.global_position = Vector3(140.0, 0.0, 0.0)
+		check_eq(ai_brain._find_player_ship(), player_ship,
+			"patrolling AI spots dark real Ship once it closes to 220 m")
+
+	# 3. Chainshot sail-damage reaction check (is_sail_damaged + defensive evasive helm bias).
+	check(not ai_brain.is_sail_damaged(), "undamaged enemy ship reports is_sail_damaged() == false")
+	if foe.get(&"sail_damage_timer") != null:
+		foe.set(&"sail_damage_timer", 5.0)
+		check(ai_brain.is_sail_damaged(), "enemy ship with active sail_damage_timer reports is_sail_damaged() == true")
+		ai_brain.target_ship = null
+		await physics_frames(4)
+		check(absf(foe.helm_target) >= AIShipBrain.SAIL_DAMAGE_EVASIVE_HELM_BIAS * 0.9,
+			"sail-damaged enemy ship applies defensive evasive helm bias (helm=%.2f)" % foe.helm_target)
+
+	await _end()
+
+
 
 
 

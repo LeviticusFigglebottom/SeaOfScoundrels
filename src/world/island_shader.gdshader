@@ -471,9 +471,11 @@ void fragment() {
 
 	// --- Optional Wave 25B/26 Non-Repeating Stochastic PBR Terrain Texture Overlay ---
 	// Conditionally samples only the 1-2 active biomes at this pixel (zero cost when disabled!).
-	// Fades micro-normal maps cleanly past 125 m and full albedo past 420 m for < +0.20 ms GPU cost!
-	if (use_terrain_textures && v_cam_dist < 440.0) {
-		float pbr_nrm_fade = smoothstep(130.0, 26.0, v_cam_dist);
+	// Fades micro-normal maps cleanly past 130 m (240 m on giant volcanic massifs) and full albedo
+	// past 430 m (560 m on volcanic calderas) for < +0.10 ms GPU cost!
+	float max_tex_dist = mix(440.0, 580.0, volc);
+	if (use_terrain_textures && v_cam_dist < max_tex_dist) {
+		float pbr_nrm_fade = smoothstep(mix(130.0, 260.0, volc), 26.0, v_cam_dist);
 		float tex_nrm_str = terrain_tex_normal_strength * pbr_nrm_fade;
 		bool far_cliff = v_cam_dist > 145.0;
 		float path_edge_w = dirt_path_mask > 0.005
@@ -523,8 +525,10 @@ void fragment() {
 		}
 		if (w_cliff_volc > 0.08) {
 			vec3 va; vec3 vn_o;
-			sample_triplanar_cliff(tex_volcanic_albedo, tex_volcanic_normal, v_world, smooth_n, terrain_tex_scale * 0.82, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.05, far_cliff, va, vn_o);
-			tex_alb_acc += va * w_cliff_volc;
+			sample_triplanar_cliff(tex_volcanic_albedo, tex_volcanic_normal, v_world, smooth_n, terrain_tex_scale * 0.56, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.15, far_cliff, va, vn_o);
+			// Preserve obsidian crust vs dark fissure contrast on 176 m volcanic calderas!
+			vec3 va_pop = pow(max(va, vec3(0.001)), vec3(0.88)) * vec3(1.38, 1.32, 1.42);
+			tex_alb_acc += va_pop * w_cliff_volc;
 			tex_nrm_acc += vn_o * w_cliff_volc;
 			tex_w_acc += w_cliff_volc;
 		}
@@ -532,8 +536,9 @@ void fragment() {
 		if (tex_w_acc > 0.01) {
 			vec3 pbr_alb = (tex_alb_acc / tex_w_acc) * COLOR.rgb;
 			// Harmonize painted PBR texture detail with painterly procedural biome gradients & crevice shading.
-			vec3 pbr_shaded = pbr_alb * mix(vec3(1.0), clamp(albedo * 1.55, vec3(0.42), vec3(1.32)), 0.42);
-			float tex_fade = smoothstep(430.0, 95.0, v_cam_dist) * terrain_tex_blend * clamp(tex_w_acc, 0.0, 1.0);
+			float shade_mix = mix(0.42, 0.16, volc);
+			vec3 pbr_shaded = pbr_alb * mix(vec3(1.0), clamp(albedo * 1.55, vec3(0.42), vec3(1.32)), shade_mix);
+			float tex_fade = smoothstep(max_tex_dist - 10.0, 95.0, v_cam_dist) * terrain_tex_blend * clamp(tex_w_acc, 0.0, 1.0);
 			albedo = mix(albedo, pbr_shaded, tex_fade);
 			if (pbr_nrm_fade > 0.01) {
 				final_n_world = normalize(final_n_world + (tex_nrm_acc / tex_w_acc) * (0.58 * clamp(tex_w_acc, 0.0, 1.0)));

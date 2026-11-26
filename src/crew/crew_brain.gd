@@ -99,6 +99,9 @@ const SHANTY_ENCORE_LINES := {
 const SIGHTING_ACK_COOLDOWN := 4.0
 const TOAST_ACK_COOLDOWN := 4.0
 const SPLASHED_COOLDOWN := 4.5
+const HARPOON_HAUL_COOLDOWN := 6.0
+const CHAINSHOT_HIT_COOLDOWN := 8.0
+const RUNNING_DARK_COOLDOWN := 6.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -135,6 +138,7 @@ var _reported_islands: Dictionary = {}   # String -> true
 var _reported_ships: Dictionary = {}     # int instance_id -> true
 var _last_wind_heading: float = NAN
 var _was_breached: bool = false
+var _bound_ship: Ship = null
 
 
 func _init() -> void:
@@ -152,9 +156,11 @@ func _ready() -> void:
 	_apply_persona_visual()
 	_last_wind_heading = Weather.wind_heading
 	_banter_timer = _rng.randf_range(22.0, 40.0)
+	_bind_ship_signals()
 
 
 func _exit_tree() -> void:
+	_unbind_ship_signals()
 	_clear_melee_combat()
 	_stop_shanty_join(false)
 
@@ -203,11 +209,48 @@ func get_melee_target() -> Node3D:
 	return null
 
 
+## Bind this crewmate to `p_ship` and safely wire optional ship event signals.
+func bind_ship(p_ship: Ship) -> void:
+	_unbind_ship_signals()
+	ship = p_ship
+	if is_inside_tree():
+		_bind_ship_signals()
+
+
+func _bind_ship_signals() -> void:
+	if _bound_ship != null and _bound_ship != ship:
+		_unbind_ship_signals()
+	if ship == null or not is_instance_valid(ship):
+		return
+	_bound_ship = ship
+	if _bound_ship.has_signal(&"harpoon_loot_snagged"):
+		var cb_harpoon := Callable(self, &"_on_ship_harpoon_loot_snagged")
+		if not _bound_ship.is_connected(&"harpoon_loot_snagged", cb_harpoon):
+			_bound_ship.connect(&"harpoon_loot_snagged", cb_harpoon)
+	if _bound_ship.has_signal(&"lanterns_toggled"):
+		var cb_lanterns := Callable(self, &"_on_ship_lanterns_toggled")
+		if not _bound_ship.is_connected(&"lanterns_toggled", cb_lanterns):
+			_bound_ship.connect(&"lanterns_toggled", cb_lanterns)
+
+
+func _unbind_ship_signals() -> void:
+	if _bound_ship != null and is_instance_valid(_bound_ship):
+		if _bound_ship.has_signal(&"harpoon_loot_snagged"):
+			var cb_harpoon := Callable(self, &"_on_ship_harpoon_loot_snagged")
+			if _bound_ship.is_connected(&"harpoon_loot_snagged", cb_harpoon):
+				_bound_ship.disconnect(&"harpoon_loot_snagged", cb_harpoon)
+		if _bound_ship.has_signal(&"lanterns_toggled"):
+			var cb_lanterns := Callable(self, &"_on_ship_lanterns_toggled")
+			if _bound_ship.is_connected(&"lanterns_toggled", cb_lanterns):
+				_bound_ship.disconnect(&"lanterns_toggled", cb_lanterns)
+	_bound_ship = null
+
+
 ## Assign ship, captain, and persona in one call.
 func setup(p_ship: Ship, p_captain: Pawn, p_persona: StringName = &"helmsman") -> void:
 	if _joining_shanty and p_persona != persona_id:
 		_stop_shanty_join()
-	ship = p_ship
+	bind_ship(p_ship)
 	captain = p_captain
 	persona_id = p_persona
 	_rng.seed = hash(String(persona_id)) ^ 0xC2E47
@@ -1654,6 +1697,88 @@ func react_to_water_splash() -> bool:
 	return true
 
 
+## Cheer when the Captain snags treasure or salvage with the bow harpoon.
+func celebrate_harpoon_haul(item_label: String = "treasure") -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("harpoon_haul"):
+		return false
+	var clean_label := item_label.strip_edges()
+	if clean_label == "":
+		clean_label = "treasure"
+	_speak(&"harpoon_haul", {"target": clean_label}, "harpoon_haul", HARPOON_HAUL_COOLDOWN)
+	return true
+
+
+## Tactical callout when Chainshot shreds a rival ship's sails.
+func callout_chainshot_hit() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("chainshot_hit"):
+		return false
+	_speak(&"chainshot_hit", {}, "chainshot_hit", CHAINSHOT_HIT_COOLDOWN)
+	return true
+
+
+## Persona remark when deck lanterns are doused (running dark) or relit.
+func comment_running_dark(lit: bool) -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	var category: StringName = &"lanterns_lit" if lit else &"running_dark"
+	var cd_key := String(category)
+	if _callout_cooldowns.has(cd_key):
+		return false
+	_speak(category, {}, cd_key, RUNNING_DARK_COOLDOWN)
+	return true
+
+
+func _on_ship_harpoon_loot_snagged(arg0: Variant = null, arg1: Variant = null, _arg2: Variant = null) -> void:
+	if not Net.is_host():
+		return
+	var label := "treasure"
+	if arg0 is String and String(arg0).strip_edges() != "":
+		label = String(arg0).strip_edges()
+	elif arg0 is StringName and String(arg0) != "":
+		label = String(arg0)
+	elif arg0 is Node and is_instance_valid(arg0):
+		var n := arg0 as Node
+		var item_nm: Variant = n.get(&"item_name")
+		var disp_nm: Variant = n.get(&"display_name")
+		if item_nm != null and String(item_nm).strip_edges() != "":
+			label = String(item_nm).strip_edges()
+		elif disp_nm != null and String(disp_nm).strip_edges() != "":
+			label = String(disp_nm).strip_edges()
+		elif n.has_meta(&"display_name"):
+			var meta_nm := String(n.get_meta(&"display_name")).strip_edges()
+			if meta_nm != "":
+				label = meta_nm
+		elif arg1 is String and String(arg1).strip_edges() != "":
+			label = String(arg1).strip_edges()
+	elif arg1 is String and String(arg1).strip_edges() != "":
+		label = String(arg1).strip_edges()
+	if celebrate_harpoon_haul(label):
+		for other in _sibling_crew_brains():
+			if other.ship == ship:
+				other._callout_cooldowns["harpoon_haul"] = HARPOON_HAUL_COOLDOWN
+
+
+func _on_ship_lanterns_toggled(lit_v: Variant = true, _arg1: Variant = null, _arg2: Variant = null) -> void:
+	if not Net.is_host():
+		return
+	var lit := true
+	if lit_v is bool:
+		lit = bool(lit_v)
+	elif ship != null and is_instance_valid(ship):
+		var raw_lit: Variant = ship.get(&"lanterns_lit")
+		if raw_lit != null:
+			lit = bool(raw_lit)
+	if comment_running_dark(lit):
+		var cd_key := "lanterns_lit" if lit else "running_dark"
+		for other in _sibling_crew_brains():
+			if other.ship == ship:
+				other._callout_cooldowns[cd_key] = RUNNING_DARK_COOLDOWN
+
+
 func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> void:
 	var key := cd_key if cd_key != "" else String(category)
 	if _callout_cooldowns.has(key):
@@ -1676,8 +1801,10 @@ func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", co
 		return
 	_callout_cooldowns[key] = cooldown
 	Game.post_notice(text)
-	Audio.play_sfx(&"crew_shout", pawn.global_position, -6.0, 0.08)
+	var voice_db := -11.0 if category == &"running_dark" else -6.0
+	Audio.play_sfx(&"crew_shout", pawn.global_position, voice_db, 0.08)
 	var skip_shout_anim := (category == &"shanty_encore") \
+		or (category == &"running_dark") \
 		or (category == &"battle_cry" and _combat != null and _combat.state != CombatComponent.State.IDLE)
 	if not skip_shout_anim:
 		_play_anim(&"shout", 0.7)

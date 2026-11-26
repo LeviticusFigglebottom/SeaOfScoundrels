@@ -14,6 +14,9 @@ const PHASE_IN_DURATION := 1.1
 const PHASE_MIN_DIST := 25.0
 const PHASE_MAX_DIST := 155.0
 const PHASE_AMBUSH_RANGE := 58.0
+const NIGHT_STEALTH_AGGRO_MULT := 0.62
+const SAIL_DAMAGE_EVASIVE_HELM_BIAS := 0.42
+const SAIL_DAMAGE_EVASIVE_PERIOD := 2.4
 
 @export var archetype: StringName = &"drowned_sloop"  # &"drowned_sloop", &"ghost_ship", or &"corsair_sloop"
 @export var preferred_range: float = 58.0
@@ -32,6 +35,9 @@ var _phase_state: StringName = &"solid"  # &"solid", &"fading_out", &"fading_in"
 var _phase_timer: float = 14.0
 var _phase_elapsed: float = 0.0
 var _phase_ring_stamped: bool = false
+var _evasive_timer: float = 0.0
+var _evasive_sign: float = -1.0
+var _was_sail_damaged: bool = false
 
 
 func _ready() -> void:
@@ -123,10 +129,23 @@ func _physics_process(delta: float) -> void:
 	if archetype == &"ghost_ship":
 		_tick_ghost_phase(delta)
 
+	var sails_torn := is_sail_damaged()
+	if sails_torn:
+		if not _was_sail_damaged:
+			_evasive_timer = 0.0
+			_evasive_sign = -_orbit_sign
+		_evasive_timer += delta
+		if _evasive_timer >= SAIL_DAMAGE_EVASIVE_PERIOD:
+			_evasive_timer = 0.0
+			_evasive_sign = -_evasive_sign
+	else:
+		_evasive_timer = 0.0
+	_was_sail_damaged = sails_torn
+
 	if target_ship == null:
-		# Patrol steadily.
-		ship.set_sail_target(0.65)
-		ship.set_helm_target(0.12)
+		# Patrol steadily (or weave defensively if sails were shredded from afar).
+		ship.set_sail_target(1.0 if sails_torn else 0.65)
+		ship.set_helm_target(_evasive_sign * SAIL_DAMAGE_EVASIVE_HELM_BIAS if sails_torn else 0.12)
 		return
 
 	var to_t := target_ship.global_position - ship.global_position
@@ -142,6 +161,8 @@ func _physics_process(delta: float) -> void:
 	var dir_to := flat.normalized() if dist > 0.1 else Vector3.FORWARD
 	var tangent := Vector3(-dir_to.z, 0.0, dir_to.x) * _orbit_sign
 	var radial_weight := clampf((dist - preferred_range) / 55.0, -0.45, 0.92)
+	if sails_torn:
+		radial_weight = clampf(radial_weight - 0.22, -0.60, 0.70)
 	var desired_dir := (tangent * (1.0 - absf(radial_weight) * 0.5) + dir_to * radial_weight).normalized()
 
 	# Steer around nearby islands so AI sloops never run aground!
@@ -150,10 +171,13 @@ func _physics_process(delta: float) -> void:
 	var desired_hdg := atan2(desired_dir.x, -desired_dir.z)
 	var cur_hdg := atan2(-ship.global_basis.z.x, -ship.global_basis.z.z)
 	var err := wrapf(desired_hdg - cur_hdg, -PI, PI)
-	ship.set_helm_target(clampf(err * 1.15, -1.0, 1.0))
+	var helm_cmd := clampf(err * 1.15, -1.0, 1.0)
+	if sails_torn:
+		helm_cmd = clampf(helm_cmd + _evasive_sign * SAIL_DAMAGE_EVASIVE_HELM_BIAS, -1.0, 1.0)
+	ship.set_helm_target(helm_cmd)
 
-	# Throttle sails to match engagement range cleanly.
-	var want_sail := 1.0 if dist > preferred_range * 1.35 else (0.72 if dist > 32.0 else 0.45)
+	# Throttle sails to match engagement range cleanly (push full canvas when recovering from chainshot).
+	var want_sail := 1.0 if (sails_torn or dist > preferred_range * 1.35) else (0.72 if dist > 32.0 else 0.45)
 	ship.set_sail_target(want_sail)
 
 	# Hold fire while dissolving into or materializing out of the mist.
@@ -336,15 +360,36 @@ func _apply_island_avoidance(desired_dir: Vector3) -> Vector3:
 	return steer.normalized() if steer.length_squared() > 0.001 else desired_dir
 
 
+## Effective spotting range against `target`, shrinking at night when the target runs dark.
+func effective_aggro_range(target: Node3D) -> float:
+	if target == null or not is_instance_valid(target):
+		return aggro_range
+	var is_night_sky := Weather != null and Weather.sun_height() < 0.0
+	var lit_v: Variant = target.get(&"lanterns_lit")
+	var running_dark := lit_v != null and not bool(lit_v)
+	if is_night_sky and running_dark:
+		return aggro_range * NIGHT_STEALTH_AGGRO_MULT
+	return aggro_range
+
+
+## True while this enemy vessel is suffering active Chainshot sail damage.
+func is_sail_damaged() -> bool:
+	if ship == null or not is_instance_valid(ship):
+		return false
+	var sd_v: Variant = ship.get(&"sail_damage_timer")
+	return sd_v != null and float(sd_v) > 0.0
+
+
 func _find_player_ship() -> Ship:
 	var best: Ship = null
-	var best_d := aggro_range
+	var best_d := INF
 	for node in get_tree().get_nodes_in_group(&"ship"):
 		var s := node as Ship
 		if s == null or s == ship or s.is_sinking or s.faction != &"player":
 			continue
+		var max_range := effective_aggro_range(s)
 		var d := ship.global_position.distance_to(s.global_position)
-		if d < best_d:
+		if d < max_range and d < best_d:
 			best_d = d
 			best = s
 	return best

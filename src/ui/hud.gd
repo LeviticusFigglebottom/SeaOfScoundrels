@@ -247,6 +247,9 @@ func _connect_signals() -> void:
 			voyage_manager.voyage_started.connect(_on_voyage_started)
 		if not voyage_manager.voyage_stage_changed.is_connected(_on_voyage_stage_changed):
 			voyage_manager.voyage_stage_changed.connect(_on_voyage_stage_changed)
+	if ship != null:
+		if not ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
+			ship.cannon_ordnance_changed.connect(_on_tool_state_changed)
 
 
 func _disconnect_signals() -> void:
@@ -286,6 +289,9 @@ func _disconnect_signals() -> void:
 			voyage_manager.voyage_started.disconnect(_on_voyage_started)
 		if voyage_manager.voyage_stage_changed.is_connected(_on_voyage_stage_changed):
 			voyage_manager.voyage_stage_changed.disconnect(_on_voyage_stage_changed)
+	if ship != null and is_instance_valid(ship):
+		if ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
+			ship.cannon_ordnance_changed.disconnect(_on_tool_state_changed)
 
 
 ## Explicitly register a `CrewBrain` to receive captain orders (also auto-discovered in tree).
@@ -1471,9 +1477,13 @@ func _refresh_tool_chip() -> void:
 			&"cannon":
 				title = "Ship Cannon"
 				if active_ship != null:
-					meta = "Shot: %d | [WASD/Mouse] Aim | [LMB] Fire" % active_ship.cannonballs_remaining
+					var ord_lbl := active_ship.get_cannon_ordnance_label()
+					meta = "Shot: %s (%d) | [WASD/Mouse] Aim | [LMB] Fire | [R] Swap Shot" % [ord_lbl, active_ship.cannonballs_remaining]
 				else:
-					meta = "[WASD/Mouse] Aim | [LMB] Fire"
+					meta = "[WASD/Mouse] Aim | [LMB] Fire (Iron) | [R] Swap Shot"
+			&"harpoon":
+				title = "Bow Harpoon"
+				meta = "[Mouse/WASD] Aim | [LMB] Fire | [Hold RMB] Reel | [R] Release | [F] Leave"
 			&"map_table":
 				title = "Map Table"
 				meta = "[WASD] Pan | [Space] Pin | [F] Leave"
