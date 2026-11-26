@@ -26,6 +26,7 @@ const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_
 const SAIL_WIND_SHADER: Shader = preload("res://src/ship/sail_wind.gdshader")
 const HOLD_WATER_SHADER: Shader = preload("res://src/ship/hold_water.gdshader")
 const GHOST_HULL_SHADER: Shader = preload("res://src/ship/ghost_hull.gdshader")
+const SHIP_NAMEPLATE_PATH := "res://src/ship/ship_nameplate.gd"
 
 ## Collision layer 2 (ships). Mask deliberately excludes layer 3 (pawns) so
 ## CharacterBody3D pawns never shove the hull (docs/ARCHITECTURE.md).
@@ -200,6 +201,8 @@ var _spray_tex: GradientTexture2D = null
 var _active_muzzle_vfx: Array[Node] = []
 
 var cabin_furnishings: CaptainCabinFurnishings = null
+var ship_nameplate: Node3D = null
+var ship_name: String = "The Gilded Scoundrel"
 var ship_bell_node: Node3D = null
 var ship_bell_interactable: Interactable = null
 var _bell_frame_mi: MeshInstance3D = null
@@ -269,6 +272,7 @@ func _ready() -> void:
 	_setup_ship_bell()
 	_build_deck_extras()
 	_setup_cabin_furnishings()
+	_setup_ship_nameplate()
 	if enable_effects:
 		_build_bow_spray()
 		_setup_lookout_glint()
@@ -333,6 +337,7 @@ func _exit_tree() -> void:
 	_bell_cup_pivot = null
 	ship_bell_interactable = null
 	ship_bell_node = null
+	ship_nameplate = null
 	cabin_furnishings = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
@@ -1096,14 +1101,32 @@ func _setup_ship_bell() -> void:
 	_bell_cup_mi.material_override = _bell_bronze_mat
 	_bell_cup_pivot.add_child(_bell_cup_mi)
 
-	ship_bell_interactable = Interactable.create("Ring ship's bell", 0.7)
+	ship_bell_interactable = Interactable.create("Ring ship's bell", 0.55)
 	ship_bell_interactable.name = "ShipBellInteractable"
-	ship_bell_interactable.reach = 2.6
+	ship_bell_interactable.reach = 1.65
 	ship_bell_interactable.position = Vector3(0.0, 0.22, 0.0)
 	ship_bell_interactable.interacted.connect(func(p: Node) -> void:
 		ring_bell(p)
 	)
 	root.add_child(ship_bell_interactable)
+
+
+func _setup_ship_nameplate() -> void:
+	if faction != &"player" or not ResourceLoader.exists(SHIP_NAMEPLATE_PATH):
+		return
+	var np_gd := load(SHIP_NAMEPLATE_PATH) as GDScript
+	if np_gd != null and np_gd.has_method(&"mount_to_ship"):
+		ship_nameplate = np_gd.call(&"mount_to_ship", self, ship_name) as Node3D
+
+
+## Update the ship's display name and live gilded transom nameplate (if mounted).
+func set_ship_name(new_name: String) -> void:
+	var cleaned := new_name.strip_edges()
+	if cleaned == "":
+		return
+	ship_name = cleaned
+	if ship_nameplate != null and is_instance_valid(ship_nameplate) and ship_nameplate.has_method(&"set_ship_name"):
+		ship_nameplate.call(&"set_ship_name", ship_name)
 
 
 static func _ensure_ship_bell_assets() -> void:
@@ -3065,6 +3088,8 @@ func _update_lod() -> void:
 			cabin_furnishings.visible = not want_lod
 		if ship_bell_node != null and is_instance_valid(ship_bell_node):
 			ship_bell_node.visible = not want_lod
+		if ship_nameplate != null and is_instance_valid(ship_nameplate):
+			ship_nameplate.visible = not want_lod
 
 
 func _update_visuals(delta: float) -> void:

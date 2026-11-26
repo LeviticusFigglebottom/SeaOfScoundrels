@@ -11,6 +11,7 @@ signal spyglass_zoom_changed(amount: float)
 signal lantern_toggled(on: bool)
 signal tipsy_changed(amount: float)
 signal sighting_updated(label: String, distance_m: float)
+signal spyglass_callout_made(label: String, distance_m: float, bearing: String, target_pos: Vector3)
 signal bucket_changed(full: bool)
 signal shanty_playing_changed(playing: bool)
 signal shanty_instrument_changed(instrument: StringName)
@@ -48,6 +49,7 @@ const SHOVEL_REACH := 2.6
 const PLANK_REACH := 3.2
 const BAIL_AMOUNT := 0.16
 const GROG_HEAL := 15.0
+const SPYGLASS_CALLOUT_COOLDOWN := 2.5
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -101,6 +103,9 @@ var tp_tool_node: Node3D = null
 var lantern_lit: bool = true
 var bucket_full: bool = false
 var spyglass_zoom: float = 0.0
+var spyglass_zoomed: bool:
+	get:
+		return active_item == &"spyglass" and (_secondary_held or spyglass_zoom > 0.45)
 var spyglass_sighting: String = ""
 var spyglass_sighting_dist: float = 0.0
 var spyglass_sighting_bearing: String = ""
@@ -139,6 +144,8 @@ var _needle_vel: float = 0.0
 var _use_cooldown: float = 0.0
 var _burp_timer: float = -1.0
 var _sighting_timer: float = 0.0
+var _spyglass_callout_cd: float = 0.0
+var _spyglass_target_pos: Vector3 = Vector3.ZERO
 var _was_zooming_spyglass: bool = false
 var _started_shanty: bool = false
 var _shanty_phase: float = 0.0
@@ -544,9 +551,44 @@ func use_primary() -> Variant:
 			_start_swing(&"inspect", 0.32)
 			return true
 		&"spyglass":
+			if spyglass_zoomed and spyglass_sighting != "":
+				return callout_spyglass_sighting()
 			set_secondary_held(not _secondary_held)
 			return _secondary_held
 	return false
+
+
+## Call out the currently sighted spyglass horizon target to nearby crewmates (2.5 s cooldown).
+func callout_spyglass_sighting() -> bool:
+	if active_item != &"spyglass" or not spyglass_zoomed or spyglass_sighting == "":
+		return false
+	if _spyglass_callout_cd > 0.0:
+		return false
+	_spyglass_callout_cd = SPYGLASS_CALLOUT_COOLDOWN
+	var bearing := spyglass_sighting_bearing if spyglass_sighting_bearing != "" else "ahead"
+	var dist_m := int(roundf(spyglass_sighting_dist))
+	var line := "Captain: %s off the %s - %d m!" % [spyglass_sighting, bearing, dist_m]
+	if Game != null:
+		Game.post_notice(line)
+	var sfx_pos := pawn.eye_position() if pawn != null else Vector3.INF
+	Audio.play_sfx(&"spyglass_slide", sfx_pos, -2.0)
+	spyglass_callout_made.emit(spyglass_sighting, spyglass_sighting_dist, bearing, _spyglass_target_pos)
+
+	if is_inside_tree():
+		var nearest_brain: CrewBrain = null
+		var best_d := INF
+		var my_pos := pawn.global_position if pawn != null else Vector3.ZERO
+		for node in get_tree().get_nodes_in_group(&"crew_brains"):
+			var br := node as CrewBrain
+			if br == null or not is_instance_valid(br) or br.pawn == null or br.pawn.dead:
+				continue
+			var d := my_pos.distance_to(br.pawn.global_position)
+			if d < best_d:
+				best_d = d
+				nearest_brain = br
+		if nearest_brain != null:
+			nearest_brain.acknowledge_captain_sighting(spyglass_sighting, bearing, _spyglass_target_pos)
+	return true
 
 
 ## Trigger a heavy melee strike (cutlass or boarding axe).
@@ -845,6 +887,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	_clock += delta
 	_use_cooldown = maxf(0.0, _use_cooldown - delta)
+	_spyglass_callout_cd = maxf(0.0, _spyglass_callout_cd - delta)
 	if _burp_timer > 0.0:
 		_burp_timer -= delta
 		if _burp_timer <= 0.0:
@@ -965,6 +1008,7 @@ func _tick_spyglass(delta: float) -> void:
 		spyglass_sighting = ""
 		spyglass_sighting_dist = 0.0
 		spyglass_sighting_bearing = ""
+		_spyglass_target_pos = Vector3.ZERO
 		sighting_updated.emit("", 0.0)
 
 
@@ -1152,6 +1196,7 @@ func _scan_spyglass_sighting() -> void:
 			best_label = String(nm) if nm != null else String(isl.name)
 
 	var best_bearing := format_compass_bearing(eye, best_pos) if best_label != "" else ""
+	_spyglass_target_pos = best_pos if best_label != "" else Vector3.ZERO
 	if best_label != spyglass_sighting \
 			or best_bearing != spyglass_sighting_bearing \
 			or absf(best_dist - spyglass_sighting_dist) > 5.0:

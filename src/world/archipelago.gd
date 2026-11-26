@@ -202,6 +202,9 @@ func build_archipelago() -> void:
 			&"outpost", &"outpost_harbour", &"sea_arch",
 		]:
 			ReefFishSchool.populate_for_island(isl, int(spec.get("seed", 1000)) + 131)
+		# Populate peaceful gliding Giant Reef Manta Rays across sunlit tropical lagoons (culled > 85 m).
+		if isl.archetype in [&"crescent_lagoon", &"palm_atoll", &"wreck_shoal", &"treasure_peak", &"treasure_cove"]:
+			MantaRay.populate_for_island(isl, int(spec.get("seed", 1000)) + 211)
 		islands.append(isl)
 		_by_id[isl.island_id] = isl
 		if isl is Outpost:

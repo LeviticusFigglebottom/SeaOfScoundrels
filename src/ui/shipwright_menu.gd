@@ -11,6 +11,7 @@ signal menu_closed
 signal voyage_accepted(voyage: Dictionary)
 signal loadout_changed(slot: StringName, unlock_id: StringName)
 signal ship_class_selected(cls: StringName)
+signal ship_name_changed(new_name: String)
 signal armory_loadout_changed(melee_id: StringName, ranged_id: StringName)
 signal settings_changed
 
@@ -303,6 +304,30 @@ func select_armory_loadout(melee_id: StringName, ranged_id: StringName) -> void:
 	])
 	armory_loadout_changed.emit(selected_melee_weapon, selected_ranged_weapon)
 	refresh()
+
+
+## Cycle the captain's ship name through `Profile.PRESET_SHIP_NAMES`, save profile,
+## repaint the moored ship's stern nameplate immediately, and emit `ship_name_changed`.
+func cycle_ship_name() -> String:
+	var presets: Array[String] = Profile.PRESET_SHIP_NAMES
+	var cur := Game.profile.get_ship_name() if (Game != null and Game.profile != null) else Profile.DEFAULT_SHIP_NAME
+	var idx := presets.find(cur)
+	var next_name: String = presets[(idx + 1) % presets.size()] if idx >= 0 else presets[0]
+	if Game != null and Game.profile != null:
+		next_name = Game.profile.set_ship_name(next_name)
+		Game.save()
+	if ship != null and is_instance_valid(ship):
+		if ship.has_method(&"set_ship_name"):
+			ship.call(&"set_ship_name", next_name)
+		else:
+			var np := ship.get_node_or_null(^"ShipNameplate") as ShipNameplate
+			if np != null:
+				np.set_ship_name(next_name)
+	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+	_set_status("Ship christened: %s" % next_name)
+	ship_name_changed.emit(next_name)
+	refresh()
+	return next_name
 
 
 ## Apply a unified Low (0) / Medium (1) / High (2) graphics preset through UserSettings.
@@ -828,6 +853,36 @@ func _rebuild_shipwright_tab() -> void:
 		btn.pressed.connect(func() -> void: select_ship_class(cid))
 		cls_row.add_child(btn)
 	_shipwright_box.add_child(cls_card)
+
+	# 2a. Custom Stern Ship Nameplate Row
+	var name_card := _make_card_panel(Color(0.91, 0.84, 0.70, 0.96), HudIcons.COL_BRASS)
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 12)
+	name_card.add_child(name_row)
+
+	var name_hdr := Label.new()
+	name_hdr.text = "SHIP NAMEPLATE"
+	name_hdr.add_theme_font_size_override("font_size", 16)
+	name_hdr.add_theme_color_override("font_color", HudIcons.COL_INK)
+	name_row.add_child(name_hdr)
+
+	var cur_ship_name := prof.get_ship_name() if prof != null else Profile.DEFAULT_SHIP_NAME
+	var name_val := Label.new()
+	name_val.name = "ShipNameValueLabel"
+	name_val.text = "\"%s\"" % cur_ship_name
+	name_val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_val.add_theme_font_size_override("font_size", 17)
+	name_val.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	name_row.add_child(name_val)
+
+	var cycle_btn := Button.new()
+	cycle_btn.name = "CycleShipNameButton"
+	cycle_btn.text = "Cycle Ship Name"
+	cycle_btn.custom_minimum_size = Vector2(172.0, 36.0)
+	cycle_btn.pressed.connect(func() -> void: cycle_ship_name())
+	name_row.add_child(cycle_btn)
+	_shipwright_box.add_child(name_card)
 
 	# 2b. Armory Loadout Selector (Melee & Firearm)
 	if inventory != null and is_instance_valid(inventory):

@@ -771,8 +771,8 @@ func test_flotsam_cluster_sculpted_debris_and_salvage() -> void:
 		Sea.time += 0.12
 		c1.call(&"step_buoyancy", 0.12)
 	var expected_y := Sea.height(16.0, -24.0)
-	check(absf(c1.global_position.y - expected_y) < 0.12,
-		"FlotsamCluster rides live Sea.height() (y=%.2f vs sea=%.2f)" % [c1.global_position.y, expected_y])
+	check(c1.global_position.y > expected_y and absf(c1.global_position.y - expected_y) < 0.35,
+		"FlotsamCluster rides cleanly dry-top on live Sea.height() (y=%.2f vs sea=%.2f)" % [c1.global_position.y, expected_y])
 	check(absf(c1.rotation.x) + absf(c1.rotation.z) > 0.01, "FlotsamCluster pitches/rolls naturally with wave chop")
 
 	# 3. Verify host-authoritative idempotent salvage via Interactable.
@@ -905,6 +905,107 @@ func test_reef_fish_school_single_dc_orbit_scatter_and_teardown() -> void:
 	check_eq(ReefFishSchool._active_schools, 0, "all ReefFishSchools exited cleanly")
 	check(ReefFishSchool._fish_mesh == null and ReefFishSchool._fish_mat == null,
 		"ReefFishSchool releases static fish mesh & material caches cleanly to null")
+
+
+func test_manta_ray_sculpted_wing_glide_submerged_and_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Populate a Crescent Lagoon island with CoralReef + MantaRay, plus a second MantaRay to verify sharing.
+	var isl := IslandGenerator.build_island({
+		"id": "test_crescent_manta",
+		"name": "Test Crescent Manta",
+		"archetype": &"crescent_lagoon",
+		"radius": 62.0,
+		"peak_height": 34.0,
+		"landing_yaw": 0.72,
+		"seed": 8803,
+	})
+	_root.add_child(isl)
+	CoralReef.populate_for_island(isl, 8880, 1.15)
+	var manta := MantaRay.populate_for_island(isl, 9014)
+	check(manta != null, "MantaRay.populate_for_island spawns MantaRay on crescent_lagoon")
+	check(manta.is_in_group(MantaRay.GROUP) and manta.is_in_group(MantaRay.GROUP_BEASTS),
+		"MantaRay registers in manta_rays and beasts groups")
+
+	var manta2 := MantaRay.new()
+	manta2.position = Vector3(30.0, -3.2, 0.0)
+	_root.add_child(manta2)
+	await physics_frames(1)
+
+	# 2. Verify sculpted ArrayMeshes (zero PrimitiveMeshes), sRGB material, distance culling, & static sharing.
+	var mis := manta.get_mesh_instances()
+	var mis2 := manta2.get_mesh_instances()
+	check_eq(mis.size(), 3, "MantaRay builds 3 sculpted MeshInstance3Ds (BodyMesh + Left/Right wings)")
+
+	var raw_prims := 0
+	var bad_normals := 0
+	var total_tris := 0
+	var part_tris: Array[int] = []
+	for idx in mis.size():
+		var mi := mis[idx]
+		var mi2 := mis2[idx]
+		check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"MantaRay '%s' uses sculpted ArrayMesh (zero PrimitiveMesh)" % mi.name)
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		check_eq(mi.mesh, mi2.mesh, "MantaRays share statically cached '%s' ArrayMesh" % mi.name)
+		check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"MantaRay '%s' disables shadows" % mi.name)
+		check(mi.visibility_range_end > 0.0 and mi.visibility_range_end <= 90.0,
+			"MantaRay '%s' visibility_range_end <= 90 m (got %.1f)" % [mi.name, mi.visibility_range_end])
+		var mat := mi.material_override as StandardMaterial3D
+		check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+			"MantaRay '%s' uses sRGB vertex-colored PBR material" % mi.name)
+		var arr := (mi.mesh as ArrayMesh).surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var tris := floori(float(verts.size()) / 3.0)
+		part_tris.append(tris)
+		total_tris += tris
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				bad_normals += 1
+
+	print("    MantaRay sculpted meshes: Body=%d, LeftWing=%d, RightWing=%d (total=%d tris)" % [
+		part_tris[0], part_tris[1], part_tris[2], total_tris])
+	check_eq(raw_prims, 0, "MantaRay contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all MantaRay mesh normals are finite unit vectors")
+	check(total_tris >= 420 and total_tris <= 720,
+		"MantaRay sculpted triangle count within target budget (%d tris)" % total_tris)
+
+	# 3. Verify graceful wing-flap oscillation, curving lagoon glide travel, and strict submersion (y <= -1.2 m).
+	var pivots := manta.get_wing_pivots()
+	check_eq(pivots.size(), 2, "MantaRay exposes LeftWingPivot & RightWingPivot")
+	var lp := pivots[0]
+	var rp := pivots[1]
+
+	var min_z := INF
+	var max_z := -INF
+	var prev_pos := manta.get_glide_world_position()
+	var total_travel := 0.0
+	for _step in 26:
+		manta.step_glide(0.15)
+		var cur_pos := manta.get_glide_world_position()
+		check(cur_pos.y <= -1.2, "gliding MantaRay stays strictly submerged (y=%.2f <= -1.2)" % cur_pos.y)
+		total_travel += cur_pos.distance_to(prev_pos)
+		prev_pos = cur_pos
+		min_z = minf(min_z, rp.rotation.z)
+		max_z = maxf(max_z, rp.rotation.z)
+		check_near(lp.rotation.z, -rp.rotation.z, 0.001, "left and right wings flap symmetrically")
+
+	var flap_span := max_z - min_z
+	check(flap_span > 0.55, "MantaRay pectoral wings oscillate gracefully (span=%.3f rad)" % flap_span)
+	check(total_travel > 5.0, "MantaRay glides smoothly along its lagoon path (travel=%.2f m)" % total_travel)
+
+	# 4. Zero-leak teardown releases all static caches cleanly to null when last MantaRay exits tree!
+	await _end()
+	check_eq(MantaRay._active_mantas, 0, "all MantaRays exited cleanly")
+	check(MantaRay._body_mesh == null and MantaRay._wing_left_mesh == null \
+			and MantaRay._wing_right_mesh == null and MantaRay._manta_mat == null,
+		"MantaRay releases all static mesh & material caches cleanly to null")
+
 
 
 

@@ -1281,6 +1281,66 @@ func test_outpost_lighthouse_rotating_beacon_beam() -> void:
 	Weather.apply_state(saved_weather)
 
 
+func test_tavern_bard_interactive_shanty_request_and_teardown() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	var outpost := arch.get_island_by_id("port_scoundrel") as Outpost
+	check(outpost != null, "Port Scoundrel Outpost present")
+	check(outpost.tavern_bard_node != null, "Outpost builds TavernBardNPC")
+	check(outpost.tavern_bard_interactable != null and outpost.tavern_bard_interactable.enabled,
+		"TavernBardNPC attaches enabled TavernBardInteractable")
+	check_eq(outpost.tavern_bard_interactable.name, "TavernBardInteractable", "interactable name matches")
+	check_eq(outpost.tavern_bard_interactable.prompt, "Request a tavern shanty", "initial prompt asks to request shanty")
+	check_near(outpost.tavern_bard_interactable.reach, 2.8, 0.01, "TavernBardInteractable reach is 2.8 m")
+	check(not outpost.tavern_bard_playing, "TavernBard starts idle before shanty request")
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	add_child(captain)
+	captain.global_position = outpost.tavern_bard_node.global_position + Vector3(0.0, 0.1, 1.2)
+
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	# 1. Request shanty via Interactable -> plays spatialized shanty, spawns zero-primitive BardShantyMotes!
+	outpost.tavern_bard_interactable.interact(captain)
+	check(outpost.tavern_bard_playing, "interacting with TavernBard toggles tavern_bard_playing = true")
+	check_eq(outpost.tavern_bard_interactable.prompt, "Silence tavern shanty", "active prompt updates to Silence tavern shanty")
+	check(Audio.is_shanty_playing(), "TavernBard starts Audio shanty playback")
+	check_near(float(Audio._stems[&"concertina"]["goal"]), 1.0, 0.01, "concertina stem active")
+	check_near(float(Audio._stems[&"whistle"]["goal"]), 1.0, 0.01, "whistle stem active")
+	var motes := outpost.tavern_bard_node.get_node_or_null(^"BardShantyMotes") as GPUParticles3D
+	check(motes != null and motes.emitting and motes.amount == 8, "TavernBard spawns emitting 8-mote BardShantyMotes")
+	check(motes != null and motes.draw_pass_1 is ArrayMesh and not (motes.draw_pass_1 is PrimitiveMesh),
+		"BardShantyMotes uses zero-primitive ArrayMesh card")
+	check(notices.has("Tavern Bard: Raise a tankard, Captain - here's a shanty for the harbour!"),
+		"TavernBard posts cheerful harbour toast")
+
+	# 2. Interact again -> silences tavern shanty, removes BardShantyMotes, restores prompt.
+	outpost.tavern_bard_interactable.interact(captain)
+	await get_tree().process_frame
+	check(not outpost.tavern_bard_playing, "second interact silences TavernBard shanty")
+	check_eq(outpost.tavern_bard_interactable.prompt, "Request a tavern shanty", "prompt resets cleanly")
+	check(outpost.tavern_bard_node.get_node_or_null(^"BardShantyMotes") == null, "BardShantyMotes detached on silence")
+	check(not is_instance_valid(motes), "BardShantyMotes freed cleanly on silence")
+
+	# 3. Tear down Outpost while TavernBard is actively playing -> zero leaks!
+	outpost.toggle_tavern_bard_shanty(captain)
+	var live_motes := outpost.tavern_bard_node.get_node_or_null(^"BardShantyMotes") as GPUParticles3D
+	check(live_motes != null and outpost.tavern_bard_playing, "re-enabled TavernBard before teardown check")
+
+	Game.notice.disconnect(notice_cb)
+	captain.queue_free()
+	arch.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(live_motes), "BardShantyMotes freed cleanly on Outpost teardown")
+	Audio.stop_shanty(0.05)
+
+
+
 
 
 

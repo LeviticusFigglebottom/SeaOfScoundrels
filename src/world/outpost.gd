@@ -95,9 +95,12 @@ var harbour_bunting: MeshInstance3D = null
 var tavern_keg_node: Node3D = null
 var tavern_keg_interactable: Interactable = null
 var tavern_bard_node: Node3D = null
+var tavern_bard_interactable: Interactable = null
+var tavern_bard_playing: bool = false
 var campfire_cooking_stove: CookingStove = null
 
 var _harbour_npcs: Array[Dictionary] = []  # {visual, driver, phase, primary, accent, bound, instrument_id, instrument_node, action_timer}
+var _bard_shanty_motes: GPUParticles3D = null
 var _bunting_mat: ShaderMaterial = null
 var _bunting_clock: float = 0.0
 var _bunting_wind_accum: float = 0.25
@@ -165,7 +168,8 @@ func _process(delta: float) -> void:
 			var inst_node := npc.get("instrument_node") as Node3D
 			if inst_node != null and is_instance_valid(inst_node):
 				if inst_id == &"instrument":
-					ToolMeshes.set_concertina_stretch(inst_node, 0.50 + 0.44 * sin(phase * 3.8))
+					var squeeze_rate := 6.4 if tavern_bard_playing else 3.8
+					ToolMeshes.set_concertina_stretch(inst_node, 0.50 + 0.46 * sin(phase * squeeze_rate))
 				elif inst_id == &"hurdy_gurdy":
 					ToolMeshes.set_hurdy_gurdy_crank(inst_node, phase * 4.2)
 			drv.set(&"override_state", {
@@ -192,8 +196,15 @@ func _exit_tree() -> void:
 		beacon_beam.material_override = null
 		beacon_beam.mesh = null
 	beacon_beam = null
+	_detach_bard_shanty_motes(false)
+	if tavern_bard_playing:
+		tavern_bard_playing = false
+		if Audio != null:
+			Audio.set_shanty_emitter(&"concertina", null)
+			Audio.stop_shanty(0.05)
 	tavern_keg_node = null
 	tavern_keg_interactable = null
+	tavern_bard_interactable = null
 	tavern_bard_node = null
 	campfire_cooking_stove = null
 	for npc: Dictionary in _harbour_npcs:
@@ -366,6 +377,150 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		"TavernBardNPC", props_root, bard_pos, bard_yaw,
 		&"lookout", Color(0.74, 0.16, 0.14), Color(0.95, 0.74, 0.22), rng.randf() * TAU,
 		&"instrument")
+	tavern_bard_interactable = Interactable.create("Request a tavern shanty", 1.1)
+	tavern_bard_interactable.name = "TavernBardInteractable"
+	tavern_bard_interactable.reach = 2.8
+	tavern_bard_interactable.position = Vector3(0.0, 1.05, 0.0)
+	tavern_bard_interactable.target = self
+	tavern_bard_interactable.interacted.connect(func(p: Node) -> void:
+		toggle_tavern_bard_shanty(p)
+	)
+	tavern_bard_node.add_child(tavern_bard_interactable)
+
+
+## Toggle the campfire TavernBardNPC's 3D-spatialized hearthside shanty & golden rising musical motes.
+func toggle_tavern_bard_shanty(_pawn: Node = null) -> bool:
+	tavern_bard_playing = not tavern_bard_playing
+	if tavern_bard_playing:
+		if tavern_bard_interactable != null and is_instance_valid(tavern_bard_interactable):
+			tavern_bard_interactable.prompt = "Silence tavern shanty"
+		if Audio != null:
+			Audio.play_shanty([&"concertina", &"whistle"])
+			if tavern_bard_node != null and is_instance_valid(tavern_bard_node):
+				Audio.set_shanty_emitter(&"concertina", tavern_bard_node)
+		_attach_bard_shanty_motes()
+		if Game != null:
+			Game.post_notice("Tavern Bard: Raise a tankard, Captain - here's a shanty for the harbour!")
+	else:
+		if tavern_bard_interactable != null and is_instance_valid(tavern_bard_interactable):
+			tavern_bard_interactable.prompt = "Request a tavern shanty"
+		if Audio != null:
+			Audio.set_shanty_emitter(&"concertina", null)
+			Audio.stop_shanty(0.5)
+		_detach_bard_shanty_motes(true)
+	return tavern_bard_playing
+
+
+func _attach_bard_shanty_motes() -> void:
+	_detach_bard_shanty_motes(true)
+	if tavern_bard_node == null or not is_instance_valid(tavern_bard_node):
+		return
+	var p := _build_bard_shanty_motes()
+	tavern_bard_node.add_child(p)
+	_bard_shanty_motes = p
+
+
+func _detach_bard_shanty_motes(detach_from_parent: bool = true) -> void:
+	if _bard_shanty_motes != null and is_instance_valid(_bard_shanty_motes):
+		_bard_shanty_motes.emitting = false
+		_bard_shanty_motes.visible = false
+		_bard_shanty_motes.draw_pass_1 = null
+		_bard_shanty_motes.process_material = null
+		if detach_from_parent and _bard_shanty_motes.get_parent() != null:
+			_bard_shanty_motes.get_parent().remove_child(_bard_shanty_motes)
+		_bard_shanty_motes.queue_free()
+	_bard_shanty_motes = null
+
+
+static func _build_bard_shanty_motes() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "BardShantyMotes"
+	p.position = Vector3(0.0, 1.38, -0.24)
+	p.amount = 8
+	p.lifetime = 1.45
+	p.explosiveness = 0.16
+	p.randomness = 0.35
+	p.local_coords = false
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-1.5, -0.5, -1.5), Vector3(3.0, 3.0, 3.0))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = 0.24
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 36.0
+	proc.initial_velocity_min = 0.28
+	proc.initial_velocity_max = 0.62
+	proc.gravity = Vector3(0.0, 0.18, 0.0)
+	proc.damping_min = 0.35
+	proc.damping_max = 0.65
+	proc.scale_min = 0.55
+	proc.scale_max = 1.10
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.25))
+	sc_curve.add_point(Vector2(0.28, 1.0))
+	sc_curve.add_point(Vector2(1.0, 0.05))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc_curve
+	proc.scale_curve = sc_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.22, 0.68, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.94, 0.68, 0.0),
+		Color(1.0, 0.85, 0.38, 0.78),
+		Color(1.0, 0.68, 0.22, 0.42),
+		Color(0.95, 0.50, 0.12, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 24
+	ramp.gradient = grad
+	proc.color_ramp = ramp
+	p.process_material = proc
+
+	var radial_grad := Gradient.new()
+	radial_grad.offsets = PackedFloat32Array([0.0, 0.38, 0.76, 1.0])
+	radial_grad.colors = PackedColorArray([
+		Color(1.0, 0.98, 0.86, 1.0),
+		Color(1.0, 0.88, 0.44, 0.68),
+		Color(1.0, 0.70, 0.24, 0.18),
+		Color(1.0, 0.55, 0.12, 0.0),
+	])
+	var mote_tex := GradientTexture2D.new()
+	mote_tex.width = 24
+	mote_tex.height = 24
+	mote_tex.fill = GradientTexture2D.FILL_RADIAL
+	mote_tex.fill_from = Vector2(0.5, 0.5)
+	mote_tex.fill_to = Vector2(0.5, 0.0)
+	mote_tex.gradient = radial_grad
+
+	# Zero-primitive sculpted 2-triangle billboard ArrayMesh card.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := 0.055
+	var n := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-h, -h, 0.0)
+	var v1 := Vector3(h, -h, 0.0)
+	var v2 := Vector3(h, h, 0.0)
+	var v3 := Vector3(-h, h, 0.0)
+	st.set_normal(n); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(n); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(n); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(n); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(n); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(n); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	var card_mesh := st.commit()
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = mote_tex
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	card_mesh.surface_set_material(0, mat)
+	p.draw_pass_1 = card_mesh
+	p.emitting = true
+	return p
 
 
 func _spawn_harbour_npc(npc_name: String, parent_node: Node3D, local_pos: Vector3, yaw_rad: float,

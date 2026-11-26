@@ -793,7 +793,7 @@ func test_interactive_ship_bell_swing_signal_and_zero_primitives() -> void:
 	check(brig.ship_bell_node.position.is_equal_approx(Vector3(0.0, 3.08, 3.98)),
 		"Brigantine ShipBell mounts atop quarterdeck front balustrade rail")
 	check_eq(sloop.ship_bell_interactable.prompt, "Ring ship's bell", "ShipBell interactable prompt matches")
-	check_near(sloop.ship_bell_interactable.reach, 2.6, 0.01, "ShipBell interactable reach is 2.6 m")
+	check_near(sloop.ship_bell_interactable.reach, 1.65, 0.01, "ShipBell interactable reach is 1.65 m")
 	check(Audio.has_sound(&"ship_bell"), "Audio catalogue registers synthesized maritime ship_bell SFX")
 
 	# 2. Verify zero raw PrimitiveMeshes, finite unit normals, and vertex_color_is_srgb = true!

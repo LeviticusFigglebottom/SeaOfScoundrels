@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|rainbow|helm|map_table|hold|cabin|flotsam|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -83,6 +83,8 @@ var _shot_track_world_target: Node3D = null
 var _shot_track_world_blend: float = 0.0
 var _shot_track_world_y_off: float = 3.2
 var _shot_combat_timer: float = -1.0
+var _shot_duel_spark_timer: float = -1.0
+var _shot_duel_clash_local: Vector3 = Vector3.ZERO
 var _bobbing_props: Array[Dictionary] = []   # {node, base_x, base_z, y_off, phase}
 var _reef_bubble_emitters: Array[GPUParticles3D] = []
 var _peer_pawns: Dictionary = {}             # int peer_id -> Pawn
@@ -505,6 +507,7 @@ func _build_player_ship() -> void:
 	# Mount FishingLine & aft-rail interactable on the quarterdeck stern rail.
 	_mount_fishing_station(player_ship)
 	_sync_cabin_renown(false)
+	_sync_ship_name()
 
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 
@@ -994,6 +997,11 @@ func _build_ui() -> void:
 	)
 	shipwright_menu.ship_class_selected.connect(_on_ship_class_selected)
 	shipwright_menu.settings_changed.connect(_on_settings_changed)
+	if shipwright_menu.has_signal(&"ship_name_changed"):
+		shipwright_menu.connect(&"ship_name_changed", func(new_name: String) -> void:
+			if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"set_ship_name"):
+				player_ship.call(&"set_ship_name", new_name)
+		)
 
 
 func _wire_world_signals() -> void:
@@ -1589,6 +1597,17 @@ func _on_voyage_completed(_voyage: Dictionary, summary: Dictionary) -> void:
 func _sync_cabin_renown(force_all: bool = false) -> void:
 	if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"sync_cabin_renown"):
 		player_ship.call(&"sync_cabin_renown", Game.profile if Game != null else null, force_all)
+
+
+func _sync_ship_name() -> void:
+	if player_ship == null or not is_instance_valid(player_ship) or not player_ship.has_method(&"set_ship_name"):
+		return
+	var nm := "The Gilded Scoundrel"
+	if Game != null and Game.profile != null:
+		var saved := String(Game.profile.data.get("ship_name", "")).strip_edges()
+		if saved != "":
+			nm = saved
+	player_ship.call(&"set_ship_name", nm)
 
 
 # ==============================================================================
@@ -2483,6 +2502,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 	_mount_cooking_stove(player_ship)
 	_mount_fishing_station(player_ship)
 	_sync_cabin_renown(false)
+	_sync_ship_name()
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 	player_ship.sunk.connect(_on_player_ship_sunk)
 	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
@@ -2793,16 +2813,21 @@ func _apply_hero_shot(mode: String) -> void:
 	_shot_track_world_target = null
 	_shot_track_world_blend = 0.0
 	_shot_combat_timer = -1.0
+	_shot_duel_spark_timer = -1.0
 	if hud != null:
 		hud.input_enabled = false
 		hud.clear_banners()
+	if player_pawn != null:
+		player_pawn.focus = null
+	if player_controller != null:
+		player_controller.focus_prompt = ""
 	# Show the Captain's full 3D character mesh on external third-person hero cameras.
 	var p_cv := _character_visual_of(player_pawn)
 	if p_cv != null:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
-			"storm", "sunset", "night", "night_sail", "rainbow", "leviathan", "fleet",
-			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam",
+			"storm", "sunset", "night", "night_sail", "night_lighthouse", "rainbow", "leviathan", "fleet",
+			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam", "deck_duel",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
 		p_cv.set_first_person_hidden(not third_person)
@@ -3008,6 +3033,123 @@ func _apply_hero_shot(mode: String) -> void:
 			var cam_p := flotsam_pos - to_ship * 8.4 + cam_right * 3.5 + Vector3(0.0, 2.45, 0.0)
 			var look_p := flotsam_pos + to_ship * (10.2 * sc) - cam_right * 0.45 + Vector3(0.0, 3.25, 0.0)
 			_mount_shot_camera(cam_p, look_p, 56.0)
+
+		"deck_duel":
+			# Concept Art 3 homage: sunlit quarterdeck stairs sword-clash with Captain, Rival Corsair Captain,
+			# Royal-Azure charging Barnaby, golden clash sparks + floating CombatEmbers & orbiting StaggerStars!
+			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 10.5, -0.36, 0.0, 0.42)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.18)
+			_place_sailing_ship(Vector3(72.0, 0.0, -195.0), -0.36, 0.90, 4.6)
+			_apply_company_livery(
+				player_ship,
+				Color(0.96, 0.93, 0.84),
+				Color(0.18, 0.46, 0.90),
+				Color.BLACK,
+				Color(0.62, 0.78, 1.0),
+				4
+			)
+			for br in crew_brains:
+				if br != null and is_instance_valid(br):
+					br.hold_fire = true
+					br.set_physics_process(false)
+
+			var cap_loc := Vector3(1.55, 1.25, 3.30) if is_brig else Vector3(1.18, 1.10, 2.55)
+			var foe1_loc := Vector3(1.65, 1.82, 4.35) if is_brig else Vector3(1.22, 1.56, 3.45)
+			var crew_loc := Vector3(0.45, 2.25, 4.95) if is_brig else Vector3(0.38, 2.00, 3.85)
+			var foe2_loc := Vector3(-0.78, 1.25, 2.45) if is_brig else Vector3(-0.68, 1.10, 1.95)
+			var clash_loc := Vector3(1.60, 2.52, 3.84) if is_brig else Vector3(1.20, 2.26, 3.00)
+			_shot_duel_clash_local = clash_loc
+
+			# Captain at foot of starboard quarterdeck stairs with raised cutlass facing up the treads.
+			if player_pawn != null:
+				player_pawn.board(player_ship, cap_loc)
+				var cap_to_foe := (player_ship.global_transform * foe1_loc) - (player_ship.global_transform * cap_loc)
+				player_pawn.look_yaw = atan2(-cap_to_foe.x, -cap_to_foe.z)
+				if inventory != null:
+					inventory.equip(&"cutlass", true)
+				if player_combat != null:
+					player_combat.set_blocking(true)
+					player_combat._play_anim(&"parry", 4.0)
+
+			# Lunging Rival Corsair Captain clashing blades from mid-stair treads.
+			var foe1 := _spawn_enemy_pawn(&"rival_captain", player_ship.global_transform * foe1_loc)
+			if foe1 != null:
+				foe1.board(player_ship, foe1_loc)
+				var f1_to_cap := (player_ship.global_transform * cap_loc) - (player_ship.global_transform * foe1_loc)
+				foe1.look_yaw = atan2(-f1_to_cap.x, -f1_to_cap.z)
+				var f1_brain := foe1.get_node_or_null(^"EnemyBrain")
+				if f1_brain != null:
+					f1_brain.set_physics_process(false)
+				var f1_cc := foe1.get_node_or_null(^"CombatComponent") as CombatComponent
+				if f1_cc != null:
+					f1_cc._play_anim(&"slash_1", 4.0)
+
+			# Barnaby (crew_pawns[0]) in Royal-Azure coat charging in from quarterdeck rail with Cutlass raised!
+			if not crew_pawns.is_empty() and crew_pawns[0] != null and is_instance_valid(crew_pawns[0]):
+				var barnaby := crew_pawns[0]
+				barnaby.board(player_ship, crew_loc)
+				var b_to_foe := (player_ship.global_transform * foe1_loc) - (player_ship.global_transform * crew_loc)
+				barnaby.look_yaw = atan2(-b_to_foe.x, -b_to_foe.z)
+				var b_cv := _character_visual_of(barnaby)
+				if b_cv != null:
+					b_cv.set_livery(Color(0.14, 0.36, 0.78), Color(0.92, 0.74, 0.24))
+				var b_cc := barnaby.get_node_or_null(^"CombatComponent") as CombatComponent
+				if b_cc != null:
+					b_cc.equip_weapon(&"cutlass")
+					b_cc._play_anim(&"heavy", 4.0)
+
+			# Second Corsair Raider reeling on deck with golden StaggerStars spinning overhead!
+			var foe2 := _spawn_enemy_pawn(&"corsair_raider", player_ship.global_transform * foe2_loc)
+			if foe2 != null:
+				foe2.board(player_ship, foe2_loc)
+				var f2_to_cap := (player_ship.global_transform * cap_loc) - (player_ship.global_transform * foe2_loc)
+				foe2.look_yaw = atan2(-f2_to_cap.x, -f2_to_cap.z)
+				var f2_cc := foe2.get_node_or_null(^"CombatComponent") as CombatComponent
+				if f2_cc != null:
+					f2_cc.apply_stagger(8.0)
+
+			# Fire immediate golden steel-on-steel ParryStarburst + SparkStreaks + drifting CombatEmbers!
+			if player_combat != null:
+				player_combat._spawn_clash_vfx(player_ship.global_transform * clash_loc, &"parried")
+			_shot_duel_spark_timer = 0.42
+
+			# Dynamic low-angle quarterdeck action camera looking up the stairs past Captain's shoulder into the clash!
+			var cam_duel := Vector3(0.32, 1.92, 1.48) if is_brig else Vector3(0.24, 1.72, 1.05)
+			var look_duel := Vector3(1.12, 2.48, 4.35) if is_brig else Vector3(0.88, 2.22, 3.45)
+			_enable_ship_track_shot(cam_duel, look_duel, 58.0)
+
+		"night_lighthouse":
+			# Panoramic moonlit Port Scoundrel harbour showcase: glowing Tavern, HarbourBunting, beach campfire,
+			# moored Brigantine showing glowing stern windows & ShipNameplate, and sweeping golden LighthouseBeam!
+			Weather.time_of_day = 22.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 8.2, -0.37, 0.0, 0.26)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
+			if port != null:
+				var dock_xf := port.global_transform * port.dock_local_transform
+				# Moor Brigantine/Sloop cleanly in the glowing bay angled to showcase stern cabin glow & nameplate.
+				var berth_w := dock_xf * Vector3(7.6, 0.0, -10.5)
+				berth_w.y = Sea.height(berth_w.x, berth_w.z)
+				player_ship.global_transform = Transform3D(Basis(Vector3.UP, port.dock_yaw + 2.38), berth_w)
+				player_ship.set_anchor(true)
+				player_ship.anchor_progress = 1.0
+				player_ship.linear_velocity = Vector3.ZERO
+				player_ship.angular_velocity = Vector3.ZERO
+				_sync_ship_name()
+
+				# Seaward panoramic camera looking straight across the moonlit bay toward Tavern, Pier, Ship & Lighthouse!
+				var cam_w := dock_xf * Vector3(10.5, 11.8, -46.0)
+				var look_w := dock_xf * Vector3(7.2, 11.4, 15.0)
+				_mount_shot_camera(cam_w, look_w, 56.0)
+
+				# Orient Port Scoundrel's dual volumetric LighthouseBeam diagonally across the starry harbour sky!
+				if port.beacon_beam != null and is_instance_valid(port.beacon_beam) and port.beacon_node != null:
+					var cam_fwd := (look_w - cam_w).normalized()
+					var cam_r := cam_fwd.cross(Vector3.UP).normalized()
+					var sweep_world := (cam_r * 0.86 - cam_fwd * 0.50).normalized()
+					var sweep_local := port.beacon_node.global_basis.inverse() * sweep_world
+					port.beacon_beam.rotation.y = atan2(sweep_local.x, sweep_local.z)
+					port._update_beacon_beam(0.0)
 
 		"leviathan":
 			Weather.time_of_day = 17.25 if is_nan(_cli_time) else _cli_time
@@ -3402,6 +3544,17 @@ func _tick_hero_shot_tracking(delta: float) -> void:
 				var pz := anchor.z + sdir.z * glide
 				sh.global_position = Vector3(px, Sea.height(px, pz) - 0.18, pz)
 				sh.rotation.y = atan2(-sdir.x, -sdir.z) + sin(t_sec * 1.4) * 0.08
+	if active_shot_mode != "" and _shot_camera != null:
+		if player_pawn != null:
+			player_pawn.focus = null
+		if player_controller != null:
+			player_controller.focus_prompt = ""
+	if active_shot_mode == "deck_duel" and player_ship != null and is_instance_valid(player_ship):
+		_shot_duel_spark_timer -= delta
+		if _shot_duel_spark_timer <= 0.0:
+			_shot_duel_spark_timer = 0.42
+			if player_combat != null:
+				player_combat._spawn_clash_vfx(player_ship.global_transform * _shot_duel_clash_local, &"parried")
 	if _shot_track_ship:
 		_update_tracked_shot_camera()
 

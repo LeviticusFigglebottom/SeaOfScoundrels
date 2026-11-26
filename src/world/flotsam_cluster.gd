@@ -137,13 +137,15 @@ func step_buoyancy(delta: float) -> void:
 	var sz0 := Sea.height(base_x, base_z - 1.4) if Sea != null else sea_y
 	var sz1 := Sea.height(base_x, base_z + 1.4) if Sea != null else sea_y
 
-	var slope_x := clampf((sx1 - sx0) / 2.8, -0.32, 0.32)
-	var slope_z := clampf((sz1 - sz0) / 2.8, -0.32, 0.32)
-	var pitch := clampf(-slope_z + sin(_bob_clock * 1.45) * 0.055, -0.38, 0.38)
-	var roll := clampf(slope_x + cos(_bob_clock * 1.18) * 0.055, -0.38, 0.38)
+	var slope_x := clampf((sx1 - sx0) / 2.8, -0.22, 0.22)
+	var slope_z := clampf((sz1 - sz0) / 2.8, -0.22, 0.22)
+	var pitch := clampf(-slope_z + sin(_bob_clock * 1.45) * 0.04, -0.26, 0.26)
+	var roll := clampf(slope_x + cos(_bob_clock * 1.18) * 0.04, -0.26, 0.26)
 	var yaw := _base_yaw + sin(_bob_clock * 0.22) * 0.12
 
-	var target_pos := Vector3(base_x, sea_y + sin(_bob_clock * 1.9) * 0.035, base_z)
+	# Ride proudly on top of wave chop (+0.105 m) so horizontal planks stay cleanly above
+	# ocean.gdshader's shallow beach-wash foam threshold while the oak barrel floats half-submerged.
+	var target_pos := Vector3(base_x, sea_y + 0.105 + sin(_bob_clock * 1.9) * 0.024, base_z)
 	if is_inside_tree():
 		global_position = target_pos
 	else:
@@ -151,7 +153,7 @@ func step_buoyancy(delta: float) -> void:
 	rotation = Vector3(pitch, yaw, roll)
 
 	if _barrel_root != null and is_instance_valid(_barrel_root) and _barrel_root.visible:
-		_barrel_root.position.y = -0.20 + sin(_bob_clock * 2.3 + 0.8) * 0.045
+		_barrel_root.position.y = -0.26 + sin(_bob_clock * 2.3 + 0.8) * 0.04
 		_barrel_root.rotation = Vector3(
 			0.18 + sin(_bob_clock * 1.8) * 0.09,
 			0.38,
@@ -179,7 +181,7 @@ func _build_visuals() -> void:
 	# Interactive salvageable cargo barrel floating at the cluster heart.
 	_barrel_root = Node3D.new()
 	_barrel_root.name = "CargoBarrel"
-	_barrel_root.position = Vector3(0.0, -0.20, 0.0)
+	_barrel_root.position = Vector3(0.0, -0.26, 0.0)
 	add_child(_barrel_root)
 
 	if ResourceLoader.exists(BARREL_PROP_PATH):

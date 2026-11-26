@@ -1081,6 +1081,121 @@ func test_captain_multi_instrument_shanty_cycling_and_motes() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 10. Wave 19D: Spyglass LMB Horizon Callout & Crew Acknowledgement
+# ---------------------------------------------------------------------------
+
+func test_spyglass_callout_signals_and_crew_acknowledgement() -> void:
+	_begin()
+	var rig := _make_player_pawn(Vector3(0.0, 4.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var inv: Inventory = rig["inv"]
+
+	# Place a Spectral Ghost Ship cleanly to the East (240 m away).
+	var ghost := SLOOP_SCENE.instantiate() as Ship
+	ghost.enable_effects = false
+	ghost.start_anchored = true
+	ghost.faction = &"ghost"
+	ghost.ship_class = &"sloop"
+	ghost.position = Vector3(240.0, 0.0, 0.0)
+	_root.add_child(ghost)
+
+	# Place Maren (closest crewmate) and Barnaby + Pip (to test all 3 persona ack templates).
+	var maren_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(maren_pawn)
+	maren_pawn.global_position = Vector3(0.0, 4.0, -2.0)
+	var maren := CrewBrain.new()
+	maren.setup(null, captain, &"lookout")
+	maren_pawn.add_child(maren)
+
+	var barnaby_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(barnaby_pawn)
+	barnaby_pawn.global_position = Vector3(0.0, 4.0, 8.0)
+	var barnaby := CrewBrain.new()
+	barnaby.setup(null, captain, &"helmsman")
+	barnaby_pawn.add_child(barnaby)
+
+	var pip_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pip_pawn)
+	pip_pawn.global_position = Vector3(0.0, 4.0, 12.0)
+	var pip := CrewBrain.new()
+	pip.setup(null, captain, &"carpenter")
+	pip_pawn.add_child(pip)
+	await physics_frames(2)
+
+	var callout_events: Array[Dictionary] = []
+	inv.spyglass_callout_made.connect(func(lbl: String, dist_m: float, brg: String, tpos: Vector3) -> void:
+		callout_events.append({"label": lbl, "dist": dist_m, "bearing": brg, "pos": tpos})
+	)
+	var crew_acks: Array[Dictionary] = []
+	for br: CrewBrain in [maren, barnaby, pip]:
+		br.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+			if cat == &"sighting_ack":
+				crew_acks.append({"speaker": sp, "text": txt})
+		)
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	# Aim zoomed spyglass straight East at the Ghost Ship & verify LMB primary callout!
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+	check(inv.spyglass_zoomed, "spyglass_zoomed is true while peering through spyglass")
+	var delta_g := (ghost.global_position + Vector3.UP * 3.5) - captain.eye_position()
+	var horiz := maxf(Vector2(delta_g.x, delta_g.z).length(), 0.001)
+	captain.look_yaw = atan2(-delta_g.x, -delta_g.z)
+	captain.look_pitch = atan2(delta_g.y, horiz)
+	inv.call(&"_scan_spyglass_sighting")
+	check_eq(inv.spyglass_sighting, "Spectral Ghost Ship", "spyglass locks onto Spectral Ghost Ship")
+	check_eq(inv.spyglass_sighting_bearing, "E", "spyglass bearing is E")
+
+	var ok_call: Variant = inv.use_primary()
+	check_eq(bool(ok_call), true, "LMB primary-use calls out sighted target while zoomed")
+	check_eq(callout_events.size(), 1, "spyglass_callout_made emits once")
+	if callout_events.size() == 1:
+		check_eq(callout_events[0]["label"], "Spectral Ghost Ship", "callout label matches")
+		check_eq(callout_events[0]["bearing"], "E", "callout bearing matches")
+		check(float(callout_events[0]["dist"]) > 200.0, "callout distance matches target")
+	var found_cap_notice := false
+	for n_txt in notices:
+		if n_txt.begins_with("Captain: Spectral Ghost Ship off the E - "):
+			found_cap_notice = true
+	check(found_cap_notice, "Captain ASCII callout posted to Game notices")
+
+	# Nearest crewmate (Maren) acknowledges sighting and turns toward East!
+	check_eq(crew_acks.size(), 1, "nearest active CrewBrain acknowledges captain sighting once")
+	if crew_acks.size() == 1:
+		check_eq(crew_acks[0]["speaker"], "Maren", "nearest crewmate Maren responds")
+		check(String(crew_acks[0]["text"]).contains("Spotted Spectral Ghost Ship off the E"),
+			"Maren uses authentic lookout sighting ack template (got '%s')" % String(crew_acks[0]["text"]))
+	var maren_fwd := Vector3(-sin(maren_pawn.look_yaw), 0.0, -cos(maren_pawn.look_yaw))
+	check(maren_fwd.dot(Vector3(1.0, 0.0, 0.0)) > 0.9, "Maren turns toward the sighted East target")
+
+	# Immediate second LMB press obeys 2.5 s anti-spam cooldown cleanly.
+	var spam_call: Variant = inv.use_primary()
+	check_eq(bool(spam_call), false, "repeat LMB press within 2.5 s cooldown is ignored cleanly")
+	check_eq(callout_events.size(), 1, "cooldown prevents duplicate spyglass_callout_made signals")
+
+	# Verify Barnaby & Pip persona templates and 4.0 s sighting_ack cooldown.
+	check(barnaby.acknowledge_captain_sighting("Abyssal Leviathan", "NW", Vector3(-180.0, 0.0, -180.0)),
+		"Barnaby acknowledges sighting cleanly")
+	check(not barnaby.acknowledge_captain_sighting("Abyssal Leviathan", "NW", Vector3(-180.0, 0.0, -180.0)),
+		"Barnaby obeys 4.0 s sighting_ack cooldown")
+	check(pip.acknowledge_captain_sighting("Corsair Raider", "S", Vector3(0.0, 0.0, 220.0)),
+		"Pip acknowledges sighting cleanly")
+	check_eq(crew_acks.size(), 3, "all three persona templates emitted sighting_ack")
+	if crew_acks.size() == 3:
+		check(String(crew_acks[1]["text"]).contains("Aye, Captain! Abyssal Leviathan to the NW"),
+			"Barnaby uses authentic helmsman ack template")
+		check(String(crew_acks[2]["text"]).contains("Corsair Raider to the S? Guns and planks"),
+			"Pip uses authentic carpenter ack template")
+
+	Game.notice.disconnect(notice_cb)
+	inv.set_secondary_held(false)
+	await _end()
+
+
+
 
 
 

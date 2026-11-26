@@ -4,8 +4,22 @@ extends RefCounted
 ## Plain data + JSON so saves are diffable and forward-compatible. Unknown keys
 ## in a file are preserved; missing keys take defaults.
 
+signal changed
+
 const VERSION := 1
 const DEFAULT_PATH := "user://profile.json"
+const DEFAULT_SHIP_NAME := "The Gilded Scoundrel"
+const MAX_SHIP_NAME_LEN := 26
+const PRESET_SHIP_NAMES: Array[String] = [
+	"The Gilded Scoundrel",
+	"Sovereign's Reckoning",
+	"Emerald Cutlass",
+	"Tidebreaker",
+	"Salt-King's Folly",
+	"Starlight Brigand",
+	"Crimson Compass",
+	"Abyssal Dawn",
+]
 
 var data: Dictionary = _defaults()
 
@@ -13,7 +27,7 @@ static func _defaults() -> Dictionary:
 	return {
 		"version": VERSION,
 		"captain_name": "Captain",
-		"ship_name": "The Unsinkable Rumour",
+		"ship_name": DEFAULT_SHIP_NAME,
 		"gold": 0,
 		"renown": {},        # company id -> points
 		"unlocks": [],       # ids of fittings, cosmetics, tools
@@ -22,6 +36,28 @@ static func _defaults() -> Dictionary:
 		"discoveries": [],   # island / landmark ids
 		"stats": {"voyages_completed": 0, "chests_sold": 0, "times_sunk": 0},
 	}
+
+static func sanitize_ship_name(raw: String) -> String:
+	var out := ""
+	for i in raw.length():
+		var code := raw.unicode_at(i)
+		if code >= 32 and code <= 126:
+			out += char(code)
+	out = out.strip_edges()
+	if out.length() > MAX_SHIP_NAME_LEN:
+		out = out.substr(0, MAX_SHIP_NAME_LEN).strip_edges()
+	if out.is_empty():
+		return DEFAULT_SHIP_NAME
+	return out
+
+func get_ship_name() -> String:
+	return sanitize_ship_name(String(data.get("ship_name", DEFAULT_SHIP_NAME)))
+
+func set_ship_name(new_name: String) -> String:
+	var clean := sanitize_ship_name(new_name)
+	data["ship_name"] = clean
+	changed.emit()
+	return clean
 
 func add_gold(amount: int) -> void:
 	data["gold"] = maxi(0, int(data["gold"]) + amount)
@@ -66,6 +102,9 @@ func save(path: String = DEFAULT_PATH) -> Error:
 	if dir.file_exists(path.get_file()):
 		dir.remove(path.get_file())
 	return dir.rename(tmp.get_file(), path.get_file())
+
+func save_to(path: String = DEFAULT_PATH) -> Error:
+	return save(path)
 
 func load_from(path: String = DEFAULT_PATH) -> bool:
 	if not FileAccess.file_exists(path):

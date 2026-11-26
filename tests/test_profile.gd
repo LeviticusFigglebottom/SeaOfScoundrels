@@ -453,5 +453,131 @@ func test_tool_variant_sidegrades_persistence_and_inventory_effects() -> void:
 	await physics_frames(2)
 
 
+func test_ship_nameplate_persistence_painting_and_zero_leak_teardown() -> void:
+	var sloop_scene: PackedScene = preload("res://src/ship/sloop.tscn")
+	var brig_scene: PackedScene = preload("res://src/ship/brigantine.tscn")
+	var name_path := "user://test_ship_name_profile.json"
+
+	# 1. Profile default, sanitization, changed signal & save_to/load_from roundtrip.
+	var p := Profile.new()
+	check_eq(p.get_ship_name(), "The Gilded Scoundrel", "Profile defaults to The Gilded Scoundrel")
+	check_eq(Profile.PRESET_SHIP_NAMES.size(), 8, "Profile provides 8 preset ship names")
+
+	var changed_hits := [0]
+	p.changed.connect(func() -> void: changed_hits[0] += 1)
+	check_eq(p.set_ship_name("   "), "The Gilded Scoundrel", "whitespace falls back to default ship name")
+	var sanitized := p.set_ship_name("  " + char(0x2605) + "A Very Long Pirate Vessel Name Beyond Limit!  ")
+	check(sanitized.length() <= Profile.MAX_SHIP_NAME_LEN, "ship_name caps length <= 26 chars (%d)" % sanitized.length())
+	check(not sanitized.contains(char(0x2605)), "ship_name strips non-ASCII glyphs")
+	check_eq(p.set_ship_name("Crimson Compass"), "Crimson Compass", "set_ship_name stores clean ASCII name")
+	check_eq(changed_hits[0], 3, "Profile.set_ship_name emits changed signal")
+
+	check_eq(p.save_to(name_path), OK, "Profile.save_to persists ship_name cleanly")
+	var loaded := Profile.new()
+	check(loaded.load_from(name_path), "Profile.load_from reloads saved ship_name")
+	check_eq(loaded.get_ship_name(), "Crimson Compass", "reloaded Profile preserves Crimson Compass")
+
+	# 2. Mount ShipNameplate onto BOTH Sloop & Brigantine and verify zero-primitive meshes + 512x112 gold-leaf texture!
+	Net.start_single_player()
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	add_child(sloop)
+
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	brig.start_anchored = true
+	brig.position = Vector3(26.0, 0.0, 0.0)
+	add_child(brig)
+	await physics_frames(1)
+
+	var sloop_plate := ShipNameplate.mount_to_ship(sloop, loaded.get_ship_name())
+	var brig_plate := ShipNameplate.mount_to_ship(brig, "Sovereign's Reckoning")
+	check(sloop_plate != null and brig_plate != null, "ShipNameplate.mount_to_ship mounts on Sloop and Brigantine")
+	check(sloop_plate.position.is_equal_approx(ShipNameplate.SLOOP_POS), "Sloop nameplate sits at exact stern frieze pos")
+	check(brig_plate.position.is_equal_approx(ShipNameplate.BRIG_POS), "Brigantine nameplate sits at exact stern frieze pos")
+
+	var raw_prims := 0
+	var bad_normals := 0
+	var srgb_missing := 0
+	for plate: ShipNameplate in [sloop_plate, brig_plate]:
+		for node in plate.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			if mi.mesh is PrimitiveMesh:
+				raw_prims += 1
+			var am := mi.mesh as ArrayMesh
+			if am != null:
+				for si in am.get_surface_count():
+					var arr := am.surface_get_arrays(si)
+					var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+					for nv in norms:
+						if not nv.is_finite() or nv.length_squared() < 0.5:
+							bad_normals += 1
+					var mat := mi.get_surface_override_material(si) as StandardMaterial3D
+					if mat != null and mat.vertex_color_use_as_albedo and not mat.vertex_color_is_srgb:
+						srgb_missing += 1
+	check_eq(raw_prims, 0, "ShipNameplate contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "ShipNameplate mesh normals are all finite unit vectors")
+	check_eq(srgb_missing, 0, "ShipNameplate vertex-colored frame materials enable vertex_color_is_srgb")
+
+	# Inspect painted 512x112 ImageTexture for rich mahogany woodgrain + gleaming gold-leaf pixels!
+	var tex1 := sloop_plate.get_plaque_texture()
+	check(tex1 != null and tex1.get_width() == 512 and tex1.get_height() == 112,
+		"ShipNameplate paints crisp 512x112 ImageTexture")
+	if tex1 != null:
+		var img := tex1.get_image()
+		var gold_px := 0
+		var wood_px := 0
+		for py in range(0, 112, 2):
+			for px in range(0, 512, 2):
+				var c := img.get_pixel(px, py)
+				if c.r > 0.72 and c.g > 0.52 and c.b < 0.68:
+					gold_px += 1
+				elif c.r > 0.08 and c.r < 0.45 and c.b < 0.16:
+					wood_px += 1
+		check(gold_px >= 250 and wood_px >= 4000,
+			"plaque texture paints rich gold-on-mahogany lettering (gold_px=%d, wood_px=%d)" % [gold_px, wood_px])
+
+	# Repaint cleanly on set_ship_name("Tidebreaker").
+	sloop_plate.set_ship_name("Tidebreaker")
+	check_eq(sloop_plate.current_name, "Tidebreaker", "set_ship_name updates current_name")
+	check(sloop_plate.get_plaque_texture() != tex1, "set_ship_name repaints a fresh plaque ImageTexture")
+
+	# 3. Verify ShipwrightMenu Ship Nameplate row & cycle_ship_name() integration!
+	var saved_game_prof := Game.profile
+	Game.profile = loaded
+	var menu := ShipwrightMenu.new()
+	add_child(menu)
+	menu.bind(null, null, sloop, null, null)
+	menu.refresh()
+	check(menu.find_child("CycleShipNameButton", true, false) is Button,
+		"ShipwrightMenu renders CycleShipNameButton")
+	check(menu.find_child("ShipNameValueLabel", true, false) is Label,
+		"ShipwrightMenu renders ShipNameValueLabel")
+
+	var emitted_names: Array[String] = []
+	menu.ship_name_changed.connect(func(nm: String) -> void: emitted_names.append(nm))
+	var next_nm := menu.cycle_ship_name()
+	check_eq(next_nm, "Abyssal Dawn", "cycle_ship_name advances from Crimson Compass -> Abyssal Dawn")
+	check_eq(loaded.get_ship_name(), "Abyssal Dawn", "cycle_ship_name persists into Profile")
+	check_eq(sloop_plate.current_name, "Abyssal Dawn", "cycle_ship_name updates moored ShipNameplate live")
+	check_eq(emitted_names.size(), 1, "cycle_ship_name emits ship_name_changed signal")
+	Game.profile = saved_game_prof
+
+	menu.queue_free()
+	sloop.queue_free()
+	brig.queue_free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(name_path))
+	await physics_frames(2)
+
+	check(ShipNameplate._frame_mesh_sloop == null and ShipNameplate._frame_mesh_brig == null
+		and ShipNameplate._plaque_mesh_sloop == null and ShipNameplate._wood_mat == null
+		and ShipNameplate._brass_mat == null,
+		"ShipNameplate releases all static mesh & material caches cleanly on teardown")
+
+
+
 
 

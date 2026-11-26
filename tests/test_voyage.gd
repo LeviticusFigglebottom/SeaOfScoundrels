@@ -1344,8 +1344,25 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	check(main_src.contains("\"night_sail\":"), "scenes/main.gd registers shot=night_sail")
 	check(main_src.contains("\"cabin\":"), "scenes/main.gd registers shot=cabin")
 	check(main_src.contains("\"flotsam\":"), "scenes/main.gd registers shot=flotsam")
+	check(main_src.contains("\"deck_duel\":"), "scenes/main.gd registers shot=deck_duel")
+	check(main_src.contains("\"night_lighthouse\":"), "scenes/main.gd registers shot=night_lighthouse")
 	check(main_src.contains("sync_cabin_renown"), "scenes/main.gd wires live sync_cabin_renown updates")
 	check(main_src.contains("flotsam_cluster.gd") and main_src.contains("flotsam_salvaged"),
 		"scenes/main.gd wires FlotsamCluster & flotsam_salvaged rewards cleanly")
+
+	# Verify tightened ShipBellInteractable reach (<= 1.8 m) & Ship.set_ship_name() API with zero leaks.
+	var sloop_scene := preload("res://src/ship/sloop.tscn")
+	var test_ship := sloop_scene.instantiate() as Ship
+	test_ship.enable_effects = false
+	add_child(test_ship)
+	await get_tree().process_frame
+	check(test_ship.ship_bell_interactable != null and test_ship.ship_bell_interactable.reach <= 1.8,
+		"ShipBellInteractable reach tightened <= 1.8 m (got %.2f)" % (
+			test_ship.ship_bell_interactable.reach if test_ship.ship_bell_interactable != null else -1.0))
+	test_ship.set_ship_name("The Crimson Cutlass")
+	check_eq(test_ship.ship_name, "The Crimson Cutlass", "Ship.set_ship_name() updates ship_name cleanly")
+	test_ship.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 

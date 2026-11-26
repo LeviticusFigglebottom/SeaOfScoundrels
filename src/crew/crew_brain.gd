@@ -96,6 +96,13 @@ const SHANTY_ENCORE_LINES := {
 	],
 }
 
+const SIGHTING_ACK_COOLDOWN := 4.0
+const SIGHTING_ACK_TEMPLATES := {
+	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
+	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
+	&"carpenter": "{target} to the {bearing}? Guns and planks at the ready, Captain!",
+}
+
 var _rng := RandomNumberGenerator.new()
 var _route: Array[Vector3] = []  # ship-local waypoints when moving across decks
 var _route_is_local: bool = true
@@ -1436,6 +1443,25 @@ func _tick_lookout(delta: float) -> void:
 		_speak(&"banter", {}, "banter", 40.0)
 
 
+## Acknowledge a target sighted through the Captain's spyglass with a persona response.
+func acknowledge_captain_sighting(target_label: String, bearing: String, target_pos: Vector3) -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("sighting_ack"):
+		return false
+	# Briefly turn toward the sighted horizon target if not pinned to the helm.
+	var on_helm := pawn.station != null and StringName(pawn.station.get(&"kind")) == &"helm"
+	if not on_helm:
+		var look_d := target_pos - pawn.global_position
+		look_d.y = 0.0
+		if look_d.length_squared() > 0.01:
+			pawn.look_yaw = atan2(-look_d.x, -look_d.z)
+	var safe_bearing := bearing if bearing != "" else "ahead"
+	_speak(&"sighting_ack", {"target": target_label, "bearing": safe_bearing}, "sighting_ack", SIGHTING_ACK_COOLDOWN)
+	_play_anim(&"shout", 0.6)
+	return true
+
+
 func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> void:
 	var key := cd_key if cd_key != "" else String(category)
 	if _callout_cooldowns.has(key):
@@ -1449,6 +1475,11 @@ func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", co
 		var encores: Array = SHANTY_ENCORE_LINES.get(persona_id, SHANTY_ENCORE_LINES[&"helmsman"])
 		if not encores.is_empty():
 			text = "%s: %s" % [crew_name(), String(encores[_rng.randi_range(0, encores.size() - 1)])]
+	elif text == "" and category == &"sighting_ack":
+		var tmpl := String(SIGHTING_ACK_TEMPLATES.get(persona_id, SIGHTING_ACK_TEMPLATES[&"lookout"]))
+		tmpl = tmpl.replace("{target}", String(vars.get("target", "sighting")))
+		tmpl = tmpl.replace("{bearing}", String(vars.get("bearing", "ahead")))
+		text = "%s: %s" % [crew_name(), tmpl]
 	if text == "":
 		return
 	_callout_cooldowns[key] = cooldown
