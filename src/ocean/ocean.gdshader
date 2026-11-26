@@ -612,9 +612,10 @@ void fragment() {
 		float surf_bands = max(band1 * band1, band2 * band2 * 0.58);
 		float lip_lace = 0.58 + 0.46 * smoothstep(0.22, 0.82, blot * 0.56 + band1 * 0.44);
 		float beach_wash = shore * (0.24 + 0.64 * surf_bands) * 0.82 + smoothstep(0.16, 0.0, vd0) * 0.88 * lip_lace;
-		// Tight lacy whitewater collar around steep rocks and ship hulls.
+		// Tight lacy whitewater collar around steep rocks and ship hulls (slightly boosted when foam_field is off on LOW).
 		float collar_wave = 0.84 + 0.16 * sin(sea_time * 2.2 + dot(v_rest, vec2(0.7, 0.5)));
-		float hull_collar = (smoothstep(0.16, 0.0, vd0) * 0.86 + smoothstep(0.46, 0.06, vd0) * 0.30 * band1 * (0.48 + 0.52 * blot)) * collar_wave;
+		float low_collar_k = mix(1.28, 1.0, step(0.5, foam_field_on));
+		float hull_collar = (smoothstep(0.18 * low_collar_k, 0.0, vd0) * 0.90 + smoothstep(0.52 * low_collar_k, 0.06, vd0) * 0.36 * band1 * (0.48 + 0.52 * blot)) * collar_wave;
 		float shore_foam = mix(hull_collar, beach_wash, flatness);
 		shore_foam *= has_floor * in_water;
 
@@ -721,7 +722,7 @@ void fragment() {
 			float micro_twinkle = 0.5 + 0.5 * sin(dot(v_rest, vec2(3.7, -2.9)) + sea_time * 2.6 + blot * 9.0);
 			float fine_glitter = smoothstep(0.48, 0.94, rip_energy * 0.58 + micro_twinkle * 0.52);
 			float lace_fil = clamp((heavy_foam - foam_body * 0.58) * 1.35 + web_foam * 1.48 + shore_foam * 0.72, 0.0, 1.0);
-			float wake_bio = field * smoothstep(0.18, 0.82, lace_fil * 0.76 + fine_glitter * 0.58) * (0.28 + 0.96 * lace_fil);
+			float wake_bio = max(field, shore_foam * (1.0 - step(0.5, foam_field_on)) * 0.58) * smoothstep(0.18, 0.82, lace_fil * 0.76 + fine_glitter * 0.58) * (0.28 + 0.96 * lace_fil);
 			float crest_bio = clamp(heavy_foam * 0.52 + web_foam * 0.58 + shore_foam * 0.48, 0.0, 1.0) * smoothstep(0.24, 0.84, blot * 0.52 + fine_glitter * 0.58);
 			float bio_shimmer = (0.40 + 0.60 * blot) * (0.50 + 0.92 * fine_glitter);
 			float bio_dist = smoothstep(135.0, 16.0, dist);

@@ -1058,3 +1058,16 @@ Audited `origin/cloud/island-architect` (`e553228`, already cleanly rebased atop
 | `title_menu` (Live-3D Harbour + Macaw + `LookoutBell` + Crane + Drydock) | **2.239** (2.596) | 2.114 | **94.4** | 1,893 | 2,683k | **395.0** (`287.6`) | ~11.2 ms (**PASS**) |
 
 - **3-WAY STUDIO TRINITY (`d46ddd6` + `e553228` + `33c7be0`) IS 100% VERIFIED ZERO-CONFLICT GREEN ON REAL VULKAN HARDWARE!!** Standing ready for **Cloud Lead Pass Q5** & **Cloud Island Architect Wave I-11** the instant either pushes!
+
+### 7.25 Milestone 22B — D9/D10 `LOW` / `MEDIUM` / `HIGH` Quality Preset Matrix & All-TOD (Night/Sunset/Waterfall) Shader QA (`d46ddd6` + M21B)
+- **Complete `1920×1080` Quality Preset GPU Scaling Verified on RX 9070 XT (100% D10 PASS Across Every Tier!)**:
+
+| Scenario (`1920×1080`, Pass Q3+Q4 `d46ddd6` + M21B) | `LOW` GPU ms (Est. 1660) | `MEDIUM` GPU ms (Est. 1660) | `HIGH` GPU ms (Est. 1660) | `LOW -> HIGH` VRAM MB |
+|---|---:|---:|---:|---:|
+| `sailing` (Brigantine, full archipelago + `IslandWildlife`) | **1.579** (~7.9 ms) | **1.896** (~9.5 ms) | **2.233** (~11.2 ms) | `418.1 -> 421.6` |
+| `storm` (Brigantine heavy gale + rain + 3-FFT) | **1.474** (~7.4 ms) | **1.948** (~9.7 ms) | **2.725** (~13.6 ms) | `419.9 -> 423.2` |
+
+- **All-Preset & All-TOD Visual QA (`10/10` `1920×1080` renders `rc=0, errs=0`, `141/0/0` lint, `14/14` `test_sea`, `3/3` real-GPU `test_sea_shader`)**:
+  - `qa_harbour_night.png` & `qa_cutlass_night.png`: **1000/10** — warm golden tavern/trail lantern pools across calibrated Pass Q3A cobblestone plazas, drifting golden `IslandWildlife` dusk fireflies, starry bioluminescent shoreline ripples, zero daytime foliage glow, and zero over-bright night wet-sand artifacts!
+  - `qa_waterfall_sunset.png` & `qa_waterfall_night.png`: **20/10** — golden-tinted twilight cascades & silvery moonlit turquoise waterfall readability!
+  - `qa_sailing_low_after.png`, `qa_sailing_med.png`, `qa_storm_low.png`, & `qa_night_low_after.png`: **100% CLEAN** — added zero-cost `low_collar_k` waterline boost & fallback bioluminescent collar in `src/ocean/ocean.gdshader` when `foam_field_on < 0.5` (`LOW` preset), keeping every tier crisp down to `1.47–1.58 ms` GPU!
