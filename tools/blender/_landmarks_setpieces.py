@@ -733,12 +733,13 @@ def gen_ancient_temple_stairway(outdir):
     for sgn in (-1.0, 1.0):
         ox = sgn * 3.22
         oz = LAND_Z0 + 2.25
-        lean = R('Z', -1.8 if sgn > 0 else 0.9) @ R('X', 0.8 if sgn < 0 else -0.6)
+        lean = R('Z', -0.8 if sgn > 0 else 0.7) @ R('X', 0.6 if sgn < 0 else -0.5)
         with xf(mb, T(ox, LAND_Y, oz) @ lean):
-            sculpt_stone_block(mb, (0.0, 0.34, 0.0), (1.76, 0.68, 1.76), 'temple_stone',
-                               C_TEMPLE_MID, rng, chip=0.06, moss_col=C_LEDGE_MOSS)
-            sculpt_stone_block(mb, (0.0, 0.82, 0.0), (1.48, 0.32, 1.48), 'temple_stone',
-                               C_TEMPLE_HI, rng, chip=0.05, moss_col=C_LEDGE_MOSS)
+            # Plinths plunge solidly down into the stepped cheek-wall parapet (y = -0.25..+1.06) so zero gap shows!
+            sculpt_stone_block(mb, (0.0, 0.25, 0.0), (1.78, 1.00, 1.78), 'temple_stone',
+                               C_TEMPLE_MID, rng, chip=0.05, moss_col=C_LEDGE_MOSS)
+            sculpt_stone_block(mb, (0.0, 0.84, 0.0), (1.50, 0.44, 1.50), 'temple_stone',
+                               C_TEMPLE_HI, rng, chip=0.04, moss_col=C_LEDGE_MOSS)
 
             def oct_sec(y_l, hw, ch_f=0.22):
                 c = hw * (1.0 - ch_f)
@@ -750,7 +751,7 @@ def gen_ancient_temple_stairway(outdir):
                 ]
 
             shaft_levels = [
-                (0.95, 0.64, C_TEMPLE_MID),
+                (0.76, 0.65, C_TEMPLE_MID),
                 (2.25, 0.59, C_TEMPLE_HI),
                 (2.42, 0.53, C_TEMPLE_DARK),
                 (2.58, 0.57, C_TEMPLE_HI),

@@ -1522,7 +1522,7 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 
 	var palms_placed := 0
 	var palm_positions: Array[Vector3] = []
-	for _attempt in palm_target * 10:
+	for _attempt in palm_target * 12:
 		if palms_placed >= palm_target:
 			break
 		var ang := rng.randf() * TAU
@@ -1530,6 +1530,8 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var px := cos(ang) * rad
 		var pz := sin(ang) * rad
 		if _in_exclusion(px, pz, placed):
+			continue
+		if _is_point_on_trail(island, px, pz, 0.92):
 			continue
 		var h := island.surface_height(px, pz)
 		if h < 1.35 or h > max_palm_h:
@@ -1560,6 +1562,8 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					var cx := px + cos(c_ang) * c_dist
 					var cz := pz + sin(c_ang) * c_dist
 					if _in_exclusion(cx, cz, keepout_zones):
+						continue
+					if _is_point_on_trail(island, cx, cz, 0.92):
 						continue
 					if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.95):
 						continue
@@ -1610,6 +1614,8 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			var fz := palm_p.z + sin(f_ang) * f_dist
 			if _in_exclusion(fx, fz, keepout_zones):
 				continue
+			if _is_point_on_trail(island, fx, fz, 0.85):
+				continue
 			if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.35):
 				continue
 			var fh := island.surface_height(fx, fz)
@@ -1626,7 +1632,7 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			ferns_placed += 1
 
 	# Fill remaining ferns along beach/grass rims and highland benches.
-	for _attempt in fern_target * 8:
+	for _attempt in fern_target * 10:
 		if ferns_placed >= fern_target:
 			break
 		var ang := rng.randf() * TAU
@@ -1634,6 +1640,8 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var fx := cos(ang) * rad
 		var fz := sin(ang) * rad
 		if _in_exclusion(fx, fz, keepout_zones):
+			continue
+		if _is_point_on_trail(island, fx, fz, 0.85):
 			continue
 		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.8):
 			continue
@@ -1663,6 +1671,8 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var rx := cos(ang) * rad
 		var rz := sin(ang) * rad
 		if _in_exclusion(rx, rz, placed):
+			continue
+		if _is_point_on_trail(island, rx, rz, 1.0):
 			continue
 		var h := island.surface_height(rx, rz)
 		if h < -1.0 or h > max_rock_h:
@@ -2293,6 +2303,61 @@ static func _far_from_all(pos: Vector3, existing: Array[Vector3], min_dist: floa
 		if dx * dx + dz * dz < d2:
 			return false
 	return true
+
+
+## Returns true if local island point `(local_x, local_z)` falls inside
+## `trail_half_width * clearance_scale` of any painted trail segment in `trail_polylines`.
+static func _is_point_on_trail(island: Island, local_x: float, local_z: float,
+		clearance_scale: float = 0.88) -> bool:
+	if island == null or not island.has_meta(&"trail_polylines"):
+		return false
+	var raw_trails: Variant = island.get_meta(&"trail_polylines", [])
+	if not (raw_trails is Array):
+		return false
+	var trail_hw := maxf(0.0, float(island.get_meta(&"trail_half_width", 3.0)))
+	var clear_r := trail_hw * clearance_scale
+	if clear_r <= 0.001:
+		return false
+	var clear_r_sq := clear_r * clear_r
+	var yaw := float(island.get_meta(&"landing_yaw", 0.0))
+	var cos_y := cos(yaw)
+	var sin_y := sin(yaw)
+	var u := local_x * cos_y - local_z * sin_y
+	var v := local_x * sin_y + local_z * cos_y
+
+	var min_dist_sq := INF
+	for poly_var: Variant in (raw_trails as Array):
+		var pts := PackedVector2Array()
+		if poly_var is PackedVector2Array:
+			pts = poly_var as PackedVector2Array
+		elif poly_var is Array:
+			for p_var: Variant in (poly_var as Array):
+				if p_var is Vector2:
+					pts.append(p_var as Vector2)
+		var count := pts.size()
+		if count < 2:
+			continue
+		for i in range(count - 1):
+			var a := pts[i]
+			var b := pts[i + 1]
+			var dx := b.x - a.x
+			var dy := b.y - a.y
+			var len_sq := dx * dx + dy * dy
+			var d_sq: float
+			if len_sq <= 0.0001:
+				var px := u - a.x
+				var py := v - a.y
+				d_sq = px * px + py * py
+			else:
+				var t := clampf(((u - a.x) * dx + (v - a.y) * dy) / len_sq, 0.0, 1.0)
+				var px := u - (a.x + dx * t)
+				var py := v - (a.y + dy * t)
+				d_sq = px * px + py * py
+			if d_sq < min_dist_sq:
+				min_dist_sq = d_sq
+				if min_dist_sq < clear_r_sq:
+					return true
+	return min_dist_sq < clear_r_sq
 
 
 static func _smoothstep(edge0: float, edge1: float, x: float) -> float:
@@ -3288,6 +3353,14 @@ static func _build_smugglers_grotto(island: Island, grotto_xform: Transform3D,
 	var vault_mat := StandardMaterial3D.new()
 	vault_mat.vertex_color_use_as_albedo = true
 	vault_mat.vertex_color_is_srgb = true
+	vault_mat.uv1_triplanar = true
+	vault_mat.uv1_world_triplanar = false
+	vault_mat.uv1_scale = Vector3(0.24, 0.24, 0.24)
+	vault_mat.albedo_texture = TEX_CLIFF_ALB
+	vault_mat.albedo_color = Color(1.18, 1.15, 1.10)
+	vault_mat.normal_enabled = true
+	vault_mat.normal_scale = 0.72
+	vault_mat.normal_texture = TEX_CLIFF_NRM
 	vault_mat.roughness = 0.92
 	vault_mat.metallic = 0.0
 	vault_mat.metallic_specular = 0.24
@@ -3375,6 +3448,7 @@ static func _build_smugglers_grotto(island: Island, grotto_xform: Transform3D,
 		var glow_mat := StandardMaterial3D.new()
 		glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		glow_mat.vertex_color_use_as_albedo = true
+		glow_mat.vertex_color_is_srgb = true
 		glow_mat.albedo_color = Color(2.1, 1.55, 0.75)
 		glow_mat.emission_enabled = true
 		glow_mat.emission = Color(1.0, 0.70, 0.24)
@@ -3400,6 +3474,7 @@ static func _build_smugglers_grotto(island: Island, grotto_xform: Transform3D,
 	table_mi.mesh = wood_st.commit()
 	var table_mat := StandardMaterial3D.new()
 	table_mat.vertex_color_use_as_albedo = true
+	table_mat.vertex_color_is_srgb = true
 	table_mat.roughness = 0.86
 	table_mat.metallic = 0.02
 	table_mi.material_override = table_mat
@@ -3411,6 +3486,7 @@ static func _build_smugglers_grotto(island: Island, grotto_xform: Transform3D,
 	metal_mi.mesh = metal_st.commit()
 	var metal_mat := StandardMaterial3D.new()
 	metal_mat.vertex_color_use_as_albedo = true
+	metal_mat.vertex_color_is_srgb = true
 	metal_mat.roughness = 0.38
 	metal_mat.metallic = 0.78
 	metal_mi.material_override = metal_mat

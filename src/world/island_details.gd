@@ -1145,13 +1145,16 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 	# 1. Systematically scan radial & elevation rings across grounded lower cliff skirts & mountain bases
 	#    (keeps monumental 15-24 m rocky buttresses rooted directly into the valley floor / coastal earth!).
 	var max_h: float
-	if is_volcanic or arch == &"sea_stack":
+	var min_h := 1.6
+	if is_volcanic:
 		max_h = maxf(8.0, island.peak_height * 0.58)
+	elif arch == &"sea_stack":
+		min_h = 0.7
+		max_h = clampf(island.peak_height * 0.22, 8.5, 11.5)
 	elif radius < 70.0:
 		max_h = clampf(island.peak_height * 0.24, 9.0, 14.0)
 	else:
 		max_h = clampf(island.peak_height * 0.26, 11.0, 18.5)
-	var min_h := 1.6
 	var candidates: Array[Dictionary] = []  # {pos: Vector3, normal: Vector3, ny: float, az: float}
 
 	var radial_steps := clampi(int(roundf(radius / 3.4)), 14, 38)
@@ -1194,8 +1197,8 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 
 	var tall_aabb := tall_mesh.get_aabb()
 	var wide_aabb := wide_mesh.get_aabb() if use_wide_layer else tall_aabb
-	var primary_spacing := clampf(radius * 0.14, 10.0, 16.5)
-	var fallback_spacing := maxf(6.2, primary_spacing * 0.56)
+	var primary_spacing := clampf(radius * 0.14, 7.6 if arch == &"sea_stack" else 10.0, 16.5)
+	var fallback_spacing := maxf(4.6 if arch == &"sea_stack" else 6.2, primary_spacing * 0.56)
 	var cell_size := maxf(8.0, primary_spacing)
 	var grid: Dictionary = {}
 
