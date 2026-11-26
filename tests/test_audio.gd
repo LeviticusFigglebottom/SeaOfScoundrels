@@ -30,9 +30,9 @@ func test_catalogue_loads() -> void:
 		check(a.has_sound(sound), "catalogue should list '%s'" % sound)
 	for layer in ["sea_calm", "sea_rough", "wind_light", "wind_storm", "rain", "underwater", "shore_surf", "below_deck"]:
 		check(a.catalogue["ambience"].has(layer), "ambience layer '%s'" % layer)
-	for m in ["shanty", "sailing", "combat"]:
+	for m in ["shanty", "sailing", "combat", "sail_day", "sail_night", "storm"]:
 		check(a.catalogue["music"].has(m), "music '%s'" % m)
-	for s in ["ship_sighted", "treasure_found", "danger", "victory", "sunk"]:
+	for s in ["ship_sighted", "treasure_found", "danger", "victory", "sunk", "discovery"]:
 		check(a.catalogue["stingers"].has(s), "stinger '%s'" % s)
 	for stem in ["concertina", "drum", "whistle"]:
 		check(a.catalogue["music"]["shanty"]["stems"].has(stem), "shanty stem '%s'" % stem)
@@ -125,7 +125,7 @@ func test_music_and_stingers() -> void:
 	a.play_music(&"combat", 0.05)
 	await physics_frames(10)
 	check_eq(a.current_music(), &"combat")
-	for s in [&"ship_sighted", &"treasure_found", &"danger", &"victory", &"sunk"]:
+	for s in [&"ship_sighted", &"treasure_found", &"danger", &"victory", &"sunk", &"discovery"]:
 		a.play_stinger(s)
 	a.play_stinger(&"no_such_stinger")
 	a.play_music(&"no_such_music")

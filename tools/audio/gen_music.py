@@ -163,6 +163,99 @@ COMBAT = {
 	],
 }
 
+# --- "Trade Wind Reach" : sunlit daylight voyage, D major, 6/8, eighth = 0.30 s -
+# Sprightly open-water cruise (dotted quarter ~67 bpm). Form A1 B1 A2 B2 = 32 bars = 57.6 s.
+SD_A = ("A5:2 F#5:1 D5:2 F#5:1 | E5:3 C#5:2 E5:1 | F#5:2 B5:1 F#5:2 D5:1 | G5:2 B5:1 A5:2 E5:1 | "
+		"F#5:2 A5:1 D6:2 A5:1 | B5:2 G5:1 D5:2 G5:1 | G5:2 E5:1 C#5:2 E5:1 | D5:4 r:2")
+SD_A_WH = ("~A5:2 F#5:1 D5:2 F#5:1 | E5:3 C#5:2 E5:1 | ~F#5:2 B5:1 F#5:2 D5:1 | G5:2 B5:1 ~A5:2 E5:1 | "
+		   "~F#5:2 A5:1 ~D6:2 A5:1 | B5:2 G5:1 D5:2 G5:1 | G5:2 E5:1 C#5:2 E5:1 | ~D5:4 r:2")
+SD_B = ("B5:3 D6:2 B5:1 | A5:3 F#5:2 D5:1 | G5:2 B5:1 E6:2 B5:1 | C#6:3 A5:2 E5:1 | "
+		"D6:2 B5:1 F#5:2 B5:1 | G5:2 B5:1 D6:2 B5:1 | C#6:2 A5:1 E5:2 G5:1 | F#5:3 D5:2 r:1")
+SD_B_WH = ("~B5:3 D6:2 B5:1 | ~A5:3 F#5:2 D5:1 | G5:2 B5:1 ~E6:2 B5:1 | ~C#6:3 A5:2 E5:1 | "
+		   "~D6:2 B5:1 F#5:2 B5:1 | G5:2 B5:1 ~D6:2 B5:1 | C#6:2 A5:1 E5:2 G5:1 | ~F#5:3 D5:2 r:1")
+SD_CH_A = ["D", "D", "A", "A", "Bm", "Bm", "G", "A", "D", "D", "G", "G", "Em", "A", "D", "D"]
+SD_CH_B = ["G", "G", "D", "D", "Em", "Em", "A", "A", "Bm", "Bm", "G", "G", "A", "A", "D", "D"]
+SD_DR_LIGHT = "d--t-- d--k-t d--t-- d--k-t d--t-- d--k-t d--t-- d--t-k"
+SD_DR_FULL = "D--t-k d--t-k D--t-k d--tkt D--t-k d--t-k D--t-k d-kt-k"
+
+SAIL_DAY = {
+	"name": "sail_day", "title": "Trade Wind Reach", "key": "D major", "bpm": 60.0 / 0.30, "beats_per_bar": 6,
+	"form": [("A1", 8), ("B1", 8), ("A2", 8), ("B2", 8)], "loop": True,
+	"reverb": dict(wet=0.22, t60=1.4, damp=0.48, seed=6), "lufs": -17.5, "stems": [],
+	"tracks": [
+		{"id": "whistle", "stem": "whistle", "inst": "whistle", "gain": -4.0, "pan": 0.25, "soft": True,
+		 "parts": {"B1": SD_B_WH, "A2": SD_A_WH, "B2": SD_B_WH}},
+		{"id": "concertina_melody", "stem": "concertina", "inst": "concertina", "gain": -4.5, "pan": -0.22,
+		 "parts": {"A1": SD_A, "B1": SD_B, "B2": SD_B}, "transpose_by": {"B2": -12},
+		 "vel": {"A1": 0.85, "B1": 0.60, "B2": 0.65}, "bright": 0.78, "legato": True},
+		{"id": "concertina_pad", "stem": "concertina", "inst": "concertina", "gain": -14.0, "pan": -0.15,
+		 "pad": {"A2": SD_CH_A, "B2": SD_CH_B}, "bright": 0.6},
+		{"id": "cittern", "stem": "pluck", "inst": "pluck", "gain": -5.5, "pan": 0.05,
+		 "arp": {"A1": SD_CH_A, "B1": SD_CH_B, "A2": SD_CH_A, "B2": SD_CH_B}},
+		{"id": "drum", "stem": "drum", "inst": "drum", "gain": -11.0, "pan": 0.0,
+		 "patterns": {"B1": SD_DR_LIGHT, "A2": SD_DR_LIGHT, "B2": SD_DR_FULL}},
+	],
+}
+
+# --- "Starlight Watch" : moonlit nocturnal voyage, E minor, 6/8, eighth = 0.44 s -
+# Slow gentle swell rocking under the stars (dotted quarter ~45.5 bpm). 24 bars = 63.36 s.
+SN_A = ("B5:3 G5:2 E5:1 | G5:3 E5:3 | D5:2 G5:1 B5:2 A5:1 | F#5:4 r:2 | "
+		"E5:3 G5:2 B5:1 | C6:3 A5:2 E5:1 | F#5:3 D5:2 F#5:1 | E5:5 r:1")
+SN_B = ("G5:3 C6:2 B5:1 | B5:3 G5:2 D5:1 | A5:3 F#5:2 D5:1 | G5:4 r:2 | "
+		"A5:2 C6:1 E6:2 C6:1 | B5:3 G5:2 E5:1 | F#5:3 A5:2 F#5:1 | E5:4 r:2")
+SN_CH_A = ["Em", "Em", "C", "C", "G", "G", "D", "D", "Em", "Em", "Am", "Am", "Bm", "Bm", "Em", "Em"]
+SN_CH_B = ["C", "C", "G", "G", "D", "D", "Em", "Em", "Am", "Am", "Em", "Em", "D", "D", "Em", "Em"]
+
+SAIL_NIGHT = {
+	"name": "sail_night", "title": "Starlight Watch", "key": "E minor", "bpm": 60.0 / 0.44, "beats_per_bar": 6,
+	"form": [("A1", 8), ("B", 8), ("A2", 8)], "loop": True,
+	"reverb": dict(wet=0.34, t60=2.2, damp=0.58, seed=8), "lufs": -19.5, "stems": [],
+	"tracks": [
+		{"id": "whistle", "stem": "whistle", "inst": "whistle", "gain": -5.5, "pan": 0.22, "soft": True,
+		 "parts": {"A1": SN_A, "B": SN_B}},
+		{"id": "concertina_melody", "stem": "concertina", "inst": "concertina", "gain": -6.0, "pan": -0.22,
+		 "parts": {"A2": SN_A}, "transpose_by": {"A2": -12}, "vel": {"A2": 0.65}, "bright": 0.48, "legato": True},
+		{"id": "concertina_pad", "stem": "concertina", "inst": "concertina", "gain": -15.5, "pan": -0.1,
+		 "pad": {"A1": SN_CH_A, "B": SN_CH_B, "A2": SN_CH_A}, "bright": 0.42},
+		{"id": "cittern", "stem": "pluck", "inst": "pluck", "gain": -5.0, "pan": 0.05,
+		 "arp": {"A1": SN_CH_A, "B": SN_CH_B, "A2": SN_CH_A}},
+		{"id": "hurdy_drone", "stem": "hurdy_gurdy", "inst": "hurdy_drone", "gain": -16.5, "pan": 0.0,
+		 "notes": ["E2", "B2"], "levels": {"A1": (0.0, 0.25), "B": (0.35, 0.55, 0.35), "A2": (0.25, 0.0)}},
+	],
+}
+
+# --- "Gale of the Drowned" : heavy storm sailing, A minor, 4/4, 126 bpm --------
+# Heavier, brooding tempest swell distinct from combat's 150 bpm D-minor fury. 24 bars = 45.7 s.
+ST_A = ("A4:1.5 C5:.5 E5:1 D5:.5 C5:.5 | F5:1.5 E5:.5 C5:2 | D5:1.5 F5:.5 A5:1 G5:.5 F5:.5 | E5:2 B4:1 r:1 | "
+		"A4:1.5 C5:.5 E5:1 G5:1 | G5:1.5 F5:.5 D5:2 | F5:1 E5:1 D5:1 B4:1 | >A4:2.5 r:1.5")
+ST_B = (">A5:1.5 G5:.5 F5:1 C5:1 | B5:1.5 A5:.5 G5:2 | C6:1.5 B5:.5 A5:1 E5:1 | B5:2 G5:1 E5:1 | "
+		"A5:1.5 F5:.5 D5:1 F5:1 | A5:1 C6:1 A5:1 F5:1 | B5:1.5 A5:.5 G5:1 B5:1 | >A5:2.5 r:1.5")
+ST_CH_A = ["Am", "Am", "F", "F", "Dm", "Dm", "Em", "Em", "Am", "Am", "G", "G", "F", "Em", "Am", "Am"]
+ST_CH_B = ["F", "F", "G", "G", "Am", "Am", "Em", "Em", "Dm", "Dm", "F", "F", "G", "G", "Am", "Am"]
+ST_DR_A = "D--dD-t- D-d-D-tt D--dD-t- D-d-D-tt D--dD-t- D-d-D-tt D-d-D-t- D-D-tTtT"
+ST_DR_B = "D-dDD-t- D-dDD-tt D-dDD-t- D-dDD-tt D-dDD-t- D-dDD-tt D-dDD-t- D-dDtTtT"
+
+STORM = {
+	"name": "storm", "title": "Gale of the Drowned", "key": "A minor", "bpm": 126.0, "beats_per_bar": 4,
+	"form": [("A", 8), ("B", 8), ("A2", 8)], "loop": True,
+	"reverb": dict(wet=0.24, t60=1.6, damp=0.62, seed=9), "lufs": -15.8, "stems": [],
+	"tracks": [
+		{"id": "concertina_melody", "stem": "concertina", "inst": "concertina", "gain": -1.0, "pan": -0.24,
+		 "parts": {"A": ST_A, "B": ST_B, "A2": ST_A}, "bright": 0.72},
+		{"id": "whistle", "stem": "whistle", "inst": "whistle", "gain": -5.5, "pan": 0.28,
+		 "parts": {"B": ST_B}},
+		{"id": "concertina_stabs", "stem": "concertina", "inst": "concertina", "gain": -7.5, "pan": -0.32,
+		 "stabs": {"A": ST_CH_A, "B": ST_CH_B, "A2": ST_CH_A}, "bright": 0.65},
+		{"id": "bass", "stem": "pluck", "inst": "pluck", "gain": -4.0, "pan": 0.05,
+		 "riff": {"A": ST_CH_A, "B": ST_CH_B, "A2": ST_CH_A}, "ring": 0.18},
+		{"id": "drum", "stem": "drum", "inst": "drum", "gain": -1.5, "pan": 0.0, "war": True,
+		 "patterns": {"A": ST_DR_A, "B": ST_DR_B, "A2": ST_DR_B}},
+		{"id": "hurdy_drone", "stem": "hurdy_gurdy", "inst": "hurdy_drone", "gain": -7.0, "pan": 0.12,
+		 "notes": ["A2", "E3", "A3"], "levels": {"A": (0.65, 0.9), "B": 1.0, "A2": (0.95, 0.75)},
+		 "buzz": {"A": "B---b-b- " * 8, "B": "B-b-B-bb " * 8, "A2": "B-bbB--- " * 8}},
+	],
+}
+
 # --- Stingers: one or two bars each, not looped ---------------------------------
 STINGERS = [
 	{"name": "ship_sighted", "key": "D major", "bpm": 150.0, "beats_per_bar": 4, "form": [("X", 2)],
@@ -212,9 +305,20 @@ STINGERS = [
 		  "levels": {"X": (0.8, 0.6, 0.0)}, "droop": 2.0},
 		 {"id": "drum", "inst": "drum", "gain": -6.0, "pan": 0.0, "war": True, "patterns": {"X": "d------- d------- d-------"}},
 	 ]},
+	{"name": "discovery", "key": "G major", "bpm": 128.0, "beats_per_bar": 4, "form": [("X", 2)],
+	 "reverb": dict(wet=0.28, t60=1.8, damp=0.45, seed=7), "lufs": -16.5, "tail": 2.0,
+	 "tracks": [
+		 {"id": "whistle", "inst": "whistle", "gain": -2.5, "pan": 0.22,
+		  "parts": {"X": "D5:.5 G5:.5 B5:1 ~D6:1.5 B5:.5 | ~G6:3 r:1"}},
+		 {"id": "pluck", "inst": "pluck", "gain": -4.0, "pan": -0.1,
+		  "parts": {"X": "G4:.5 B4:.5 D5:.5 G5:.5 B5:1 D6:1 | [G3 D4 G4 B4 D5 G5]:4"}},
+		 {"id": "concertina", "inst": "concertina", "gain": -7.5, "pan": -0.25, "bright": 0.78, "legato": True,
+		  "parts": {"X": "[G4 B4 D5]:2 [C4 G4 C5]:2 | [G4 B4 D5 G5]:4"}},
+		 {"id": "drum", "inst": "drum", "gain": -7.0, "pan": 0.0, "patterns": {"X": "--t-d--- D-------"}},
+	 ]},
 ]
 
-SONGS = [SHANTY, SAILING, COMBAT]
+SONGS = [SHANTY, SAILING, COMBAT, SAIL_DAY, SAIL_NIGHT, STORM]
 
 # ----------------------------------------------------------------------------
 # Score parsing
@@ -673,6 +777,12 @@ def pitch_checks() -> list:
 	out.append({"file": "music/sailing.ogg", "label": "concertina", "notes": notes_of(SAILING, "concertina_melody"), "mono": False})
 	out.append({"file": "music/combat.ogg", "label": "concertina", "notes": notes_of(COMBAT, "concertina_melody"), "mono": False})
 	out.append({"file": "music/combat.ogg", "label": "whistle", "notes": notes_of(COMBAT, "whistle"), "mono": False})
+	out.append({"file": "music/sail_day.ogg", "label": "whistle", "notes": notes_of(SAIL_DAY, "whistle"), "mono": False})
+	out.append({"file": "music/sail_day.ogg", "label": "concertina", "notes": notes_of(SAIL_DAY, "concertina_melody"), "mono": False})
+	out.append({"file": "music/sail_night.ogg", "label": "whistle", "notes": notes_of(SAIL_NIGHT, "whistle"), "mono": False})
+	out.append({"file": "music/sail_night.ogg", "label": "concertina", "notes": notes_of(SAIL_NIGHT, "concertina_melody"), "mono": False})
+	out.append({"file": "music/storm.ogg", "label": "concertina", "notes": notes_of(STORM, "concertina_melody"), "mono": False})
+	out.append({"file": "music/storm.ogg", "label": "whistle", "notes": notes_of(STORM, "whistle"), "mono": False})
 	for st in STINGERS:
 		tid = next(t["id"] for t in st["tracks"] if "parts" in t)
 		out.append({"file": "music/stinger_%s.ogg" % st["name"], "label": tid, "notes": notes_of(st, tid), "mono": False})
