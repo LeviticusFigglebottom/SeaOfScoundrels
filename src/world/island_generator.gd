@@ -36,6 +36,56 @@ const ARCHETYPES: Array[StringName] = [
 	&"smuggler_cove",
 ]
 
+## Non-outpost tropical beach archetypes that wash up a glinting `MessageBottle`.
+const BOTTLE_ARCHETYPES: Array[StringName] = [
+	&"treasure_peak",
+	&"smuggler_cove",
+	&"crescent_lagoon",
+	&"wreck_shoal",
+	&"sea_arch",
+	&"palm_atoll",
+]
+
+## Deterministic washed-up bottle clues pointing to other archipelago islands & high-value loot.
+const BOTTLE_CLUE_TARGETS: Array[Dictionary] = [
+	{
+		"target_id": "smugglers_cove",
+		"target_name": "Smuggler's Cove",
+		"treasure_id": &"corsair_chest",
+		"clue_text": "Salt-stained chart: a Corsair's War-Chest lies buried along the hidden beach of Smuggler's Cove!",
+	},
+	{
+		"target_id": "crescent_atoll",
+		"target_name": "Crescent Atoll",
+		"treasure_id": &"archive_chalice",
+		"clue_text": "Wax-sealed cipher: a Gilded Tide-Chalice gleams beneath the palms of Crescent Atoll!",
+	},
+	{
+		"target_id": "skull_bluff",
+		"target_name": "Skull Bluff",
+		"treasure_id": &"captains_skull",
+		"clue_text": "Torn bounty writ: a Drowned Captain's Skull rests above the south sand spit of Skull Bluff!",
+	},
+	{
+		"target_id": "ironwatch_fort",
+		"target_name": "Ironwatch Fort",
+		"treasure_id": &"sovereign_chest",
+		"clue_text": "Smuggler's ledger scrap: a Sovereign's Strongbox awaits on Ironwatch Fort's coastal bastion!",
+	},
+	{
+		"target_id": "wreckers_shoal",
+		"target_name": "Wrecker's Shoal",
+		"treasure_id": &"corsair_chest",
+		"clue_text": "Waterlogged logbook page: a Corsair's War-Chest washed ashore near the broken hull of Wrecker's Shoal!",
+	},
+	{
+		"target_id": "cutlass_cay",
+		"target_name": "Cutlass Cay",
+		"treasure_id": &"archive_chalice",
+		"clue_text": "Sun-faded map scrap: a Gilded Tide-Chalice waits by the Split Palm of Cutlass Cay!",
+	},
+]
+
 const LAYER_WORLD_STATIC := 1
 const SEA_FLOOR_Y := -20.0
 const CONTOUR_SAMPLES := 36
@@ -1188,6 +1238,76 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		placed.append(Vector3(rx, rz, 3.6))
 		rocks_placed += 1
 
+	# 6. Washed-up glinting MessageBottle along dry upper golden beaches on tropical islands.
+	if not island.is_outpost and BOTTLE_ARCHETYPES.has(arch):
+		_spawn_beach_message_bottle(island, landing_yaw, placed, keepout_zones)
+
+
+static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3]) -> MessageBottle:
+	var basis := Basis(Vector3.UP, landing_yaw)
+	var chosen := Vector3.ZERO
+	var found := false
+
+	# Pass 1: Prefer dry upper golden shoreline flanking the welcoming landing cove.
+	var passes: Array[Array] = [
+		[0.65, 2.35, 0.88, 1.35, 19],
+		[0.45, 3.00, 0.84, PI, 32],
+	]
+	for pass_cfg: Array in passes:
+		if found:
+			break
+		var h_min: float = float(pass_cfg[0])
+		var h_max: float = float(pass_cfg[1])
+		var n_min: float = float(pass_cfg[2])
+		var half_arc: float = float(pass_cfg[3])
+		var steps_a: int = int(pass_cfg[4])
+		for ring_frac: float in [0.76, 0.84, 0.68, 0.90, 0.60, 0.95]:
+			if found:
+				break
+			var r_cand := island.island_radius * ring_frac
+			for ai in range(steps_a):
+				# Sweep symmetrically outward from the seaward cove flanks so it sits beside—not blocking—landing.
+				var u := 0.0 if steps_a <= 1 else (float(ai) / float(steps_a - 1)) * 2.0 - 1.0
+				var ang := -PI * 0.5 + u * half_arc
+				var lp := basis * Vector3(cos(ang) * r_cand, 0.0, sin(ang) * r_cand)
+				if _in_exclusion(lp.x, lp.z, keepout_zones) or _in_exclusion(lp.x, lp.z, placed):
+					continue
+				if not _far_from_all(Vector3(lp.x, 0.0, lp.z), island.dig_points, 4.5):
+					continue
+				var h := island.surface_height(lp.x, lp.z)
+				if h < h_min or h > h_max:
+					continue
+				if island.surface_normal(lp.x, lp.z).y < n_min:
+					continue
+				chosen = Vector3(lp.x, h, lp.z)
+				found = true
+				break
+
+	if not found:
+		return null
+
+	var clue_idx := absi(island.island_id.hash()) % BOTTLE_CLUE_TARGETS.size()
+	var clue: Dictionary = BOTTLE_CLUE_TARGETS[clue_idx]
+	if String(clue["target_id"]) == island.island_id:
+		clue_idx = (clue_idx + 1) % BOTTLE_CLUE_TARGETS.size()
+		clue = BOTTLE_CLUE_TARGETS[clue_idx]
+
+	var bottle := MessageBottle.new()
+	bottle.name = "BeachMessageBottle"
+	bottle.clue_id = StringName("bottle_%s" % island.island_id)
+	bottle.target_island_id = String(clue["target_id"])
+	bottle.target_island_name = String(clue["target_name"])
+	bottle.treasure_id = StringName(clue["treasure_id"])
+	bottle.clue_text = String(clue["clue_text"])
+	var seaward_yaw := atan2(chosen.x, chosen.z) + 0.42
+	bottle.position = chosen
+	bottle.rotation = Vector3(0.0, seaward_yaw, 0.0)
+	island.add_child(bottle)
+	placed.append(Vector3(chosen.x, chosen.z, 2.5))
+	keepout_zones.append(Vector3(chosen.x, chosen.z, 2.5))
+	return bottle
+
 
 static func _spawn_campfire(island: Island, node_name: String, pos: Vector3,
 		rng: RandomNumberGenerator, prop_body: StaticBody3D, props_root: Node3D,
@@ -1205,6 +1325,15 @@ static func _spawn_campfire(island: Island, node_name: String, pos: Vector3,
 	light.position = marker.position if marker != null else Vector3(0.0, 0.55, 0.0)
 	fire.add_child(light)
 	island.register_flicker_light(light, 3.0, 0.22, rng.randf() * TAU)
+
+	# Interactive tripod cookpot suspended over the beach campfire embers so
+	# captains can sear fresh island crab claws and fish right on shore!
+	var stove := CookingStove.new()
+	stove.name = "CampfireCookingStove"
+	stove.set(&"build_hearth", false)
+	stove.set(&"build_campfire_tripod", true)
+	stove.position = Vector3.ZERO
+	fire.add_child(stove)
 	return fire
 
 

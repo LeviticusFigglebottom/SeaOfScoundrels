@@ -636,3 +636,137 @@ func test_hud_combat_feedback_vignette_and_hull_alert() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 8. Wave 12A: MapTableView Course Bearing, Wind Feather, Pin Toggle & Threats
+# ---------------------------------------------------------------------------
+
+class MockThreatNode:
+	extends Node3D
+	var dead: bool = false
+
+
+func test_map_table_course_bearing_wind_pins_and_threats() -> void:
+	_begin()
+	# 1. Exact 16-point compass bearing & distance formatting (-Z North, +X East).
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(0.0, 0.0, -480.0)), "N  480 m", "due North bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(184.0, 0.0, -443.0)), "NNE  480 m", "NNE intercardinal bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(300.0, 0.0, -300.0)), "NE  424 m", "NE bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(250.0, 0.0, 0.0)), "E  250 m", "due East bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(200.0, 0.0, 200.0)), "SE  283 m", "SE bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(0.0, 0.0, 500.0)), "S  500 m", "due South bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(-200.0, 0.0, 200.0)), "SW  283 m", "SW bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(-350.0, 0.0, 0.0)), "W  350 m", "due West bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(-200.0, 0.0, -200.0)), "NW  283 m", "NW bearing")
+	check_eq(MapTableView.format_course_bearing(Vector3.ZERO, Vector3(-184.0, 0.0, -443.0)), "NNW  480 m", "NNW intercardinal bearing")
+
+	# 2. Live wind feather & sepia course-bearing snapshot fields.
+	Weather.set_weather(0.15, 14.0, 0.75)
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+	ship.global_position = Vector3.ZERO
+
+	var mtv := MapTableView.new()
+	check(mtv.mount_to_ship(ship), "MapTableView mounts cleanly to sloop")
+	mtv.set_voyage_target(Vector3(400.0, 0.0, -400.0))
+	mtv.refresh_now()
+	var snap := mtv.get_last_snapshot()
+	check_near(float(snap.get("wind_heading", -99.0)), 0.75, 0.01, "snapshot records live Weather.wind_heading")
+	check(float(snap.get("wind_speed", 0.0)) >= 13.0, "snapshot records live Weather wind speed")
+	check(String(snap.get("course_bearing_text", "")).begins_with("NE"),
+		"course bearing plots to active voyage target (got '%s')" % String(snap.get("course_bearing_text", "")))
+	check(not bool(snap.get("course_from_pin", true)), "voyage course is marked non-pin")
+
+	# 3. Interactive pin toggle (newest pin overrides voyage target for course bearing).
+	var added := mtv.toggle_marker_at(Vector3(-300.0, 0.0, 0.0))
+	check(added and mtv.markers.size() == 1, "toggle_marker_at drops new pin when empty")
+	mtv.refresh_now()
+	snap = mtv.get_last_snapshot()
+	check(bool(snap.get("course_from_pin", false)), "player pin takes priority for course bearing line")
+	check(String(snap.get("course_bearing_text", "")).begins_with("W"),
+		"course bearing updates to newest pin (got '%s')" % String(snap.get("course_bearing_text", "")))
+
+	var removed := not mtv.toggle_marker_at(Vector3(-260.0, 0.0, 25.0))
+	check(removed and mtv.markers.is_empty(), "toggle_marker_at clears nearest existing pin within 90 m")
+
+	# Verify station occupation activates plotting reticle and edge-triggered Spacebar pin toggle.
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	pc.input_enabled = true
+	captain.board(ship, Vector3(0.0, -0.82, 2.5))
+	var map_st := ship.get_station(&"map_table")
+	check(map_st != null and captain.enter_station(map_st), "captain occupies Station_MapTable")
+	mtv.view_center = Vector2(180.0, -320.0)
+	Input.action_press(&"jump")
+	mtv._poll_table_station_controls(1.0 / 60.0)
+	mtv._poll_table_station_controls(1.0 / 60.0)  # holding Space must NOT double-toggle
+	Input.action_release(&"jump")
+	check_eq(mtv.markers.size(), 1, "edge-triggered Spacebar drops exactly 1 pin at view_center")
+	check_near(mtv.markers[0].x, 180.0, 0.1, "Spacebar pin placed at view_center.x")
+	mtv.refresh_now()
+	check(bool(mtv.get_last_snapshot().get("station_occupied", false)),
+		"snapshot flags station_occupied for brass plotting reticle")
+
+	# Re-pressing Spacebar clears the pin right at view_center.
+	mtv._poll_table_station_controls(1.0 / 60.0)
+	Input.action_press(&"jump")
+	mtv._poll_table_station_controls(1.0 / 60.0)
+	Input.action_release(&"jump")
+	check_eq(mtv.markers.size(), 0, "second Spacebar press clears pin at view_center")
+	captain.leave_station()
+
+	# 4. World-threat ink stamps: active Leviathan sigil & clustered active Fort Siege centroid.
+	var lev_active := MockThreatNode.new()
+	lev_active.add_to_group(&"leviathan")
+	_root.add_child(lev_active)
+	lev_active.global_position = Vector3(260.0, 0.0, -520.0)
+
+	var lev_dead := MockThreatNode.new()
+	lev_dead.dead = true
+	lev_dead.add_to_group(&"leviathan")
+	_root.add_child(lev_dead)
+	lev_dead.global_position = Vector3(-500.0, 0.0, -600.0)
+
+	var bat_a := FortBattery.new()
+	bat_a.enable_effects = false
+	bat_a.siege_active = true
+	_root.add_child(bat_a)
+	bat_a.global_position = Vector3(-380.0, 12.0, -490.0)
+
+	var bat_b := FortBattery.new()
+	bat_b.enable_effects = false
+	bat_b.siege_active = true
+	_root.add_child(bat_b)
+	bat_b.global_position = Vector3(-420.0, 12.0, -510.0)
+
+	var bat_destroyed := FortBattery.new()
+	bat_destroyed.enable_effects = false
+	bat_destroyed.siege_active = true
+	bat_destroyed.destroyed = true
+	_root.add_child(bat_destroyed)
+	bat_destroyed.global_position = Vector3(500.0, 12.0, -700.0)
+
+	var bat_idle := FortBattery.new()
+	bat_idle.enable_effects = false
+	bat_idle.siege_active = false
+	_root.add_child(bat_idle)
+	bat_idle.global_position = Vector3(600.0, 12.0, -800.0)
+
+	mtv.refresh_now()
+	await get_tree().process_frame
+	snap = mtv.get_last_snapshot()
+	var levs: Array = snap.get("leviathans", [])
+	var forts: Array = snap.get("fort_sieges", [])
+	check_eq(levs.size(), 1, "chart plots exactly 1 active Leviathan sigil (ignoring defeated)")
+	check_eq(forts.size(), 1, "chart clusters 2 active FortBatteries into 1 Fort Siege emblem")
+	if forts.size() == 1:
+		var fc: Vector3 = forts[0]
+		check_near(fc.x, -400.0, 0.5, "Fort Siege centroid X matches clustered active batteries")
+		check_near(fc.z, -500.0, 0.5, "Fort Siege centroid Z matches clustered active batteries")
+
+	await _end()
+
+
+

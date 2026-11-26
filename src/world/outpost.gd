@@ -91,6 +91,7 @@ var harbour_bunting: MeshInstance3D = null
 var tavern_keg_node: Node3D = null
 var tavern_keg_interactable: Interactable = null
 var tavern_bard_node: Node3D = null
+var campfire_cooking_stove: CookingStove = null
 
 var _harbour_npcs: Array[Dictionary] = []  # {visual, driver, phase, primary, accent, bound, instrument_id, instrument_node, action_timer}
 var _bunting_mat: ShaderMaterial = null
@@ -183,6 +184,7 @@ func _exit_tree() -> void:
 	tavern_keg_node = null
 	tavern_keg_interactable = null
 	tavern_bard_node = null
+	campfire_cooking_stove = null
 	for npc: Dictionary in _harbour_npcs:
 		npc["instrument_node"] = null
 	_harbour_npcs.clear()
@@ -275,13 +277,22 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 	voyage_board_interactable.interacted.connect(_on_voyage_board_interacted)
 	notice_board_node.add_child(voyage_board_interactable)
 
-	# 6. Harbour Campfire in the square.
+	# 6. Harbour Campfire in the square with an interactive forged-iron tripod cooking skillet!
 	var fire_pos: Vector3 = harbour_pt.call(1.8, -14.0)
 	fire_pos.y = surface_height(fire_pos.x, fire_pos.z)
 	var fire_node := _place_outpost_prop(
 		CAMPFIRE_SCENE, "OutpostCampfire", Transform3D(Basis(Vector3.UP, rng.randf() * TAU), fire_pos),
 		prop_body, props_root)
 	_attach_lantern_from_empty(fire_node, "Lantern_Fire", Color(1.0, 0.56, 0.18), 3.2, 16.0, 0.22, rng.randf() * TAU)
+
+	var campfire_stove := CookingStove.new()
+	campfire_stove.name = "CampfireCookingStove"
+	campfire_stove.build_hearth = false
+	campfire_stove.build_campfire_tripod = true
+	campfire_stove.position = fire_pos
+	campfire_stove.rotation.y = dock_yaw + 0.35
+	props_root.add_child(campfire_stove)
+	campfire_cooking_stove = campfire_stove
 
 	# 7. Quartermaster Supply Crates & Barrels near the dock ramp head.
 	var qm_pos: Vector3 = harbour_pt.call(-3.8, -23.0)
@@ -299,7 +310,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 
 	# Accent barrels and supply crates around the plaza and pier entrance.
 	var clutter_specs: Array[Array] = [
-		[BARREL_SCENE, "DockBarrel_A", -2.9, -23.6, 0.4],
+		[BARREL_SCENE, "DockBarrel_A", -2.9, -21.8, 0.4],
 		[BARREL_SCENE, "DockBarrel_B", -4.7, -22.2, 1.8],
 		[CRATE_SCENE, "StallCrate_A", 12.2, -16.8, -0.5],
 		[BARREL_SCENE, "TavernBarrel_A", -5.4, -10.8, 0.9],

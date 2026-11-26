@@ -459,11 +459,13 @@ func _set_telegraph_visuals(active: bool) -> void:
 func _build_emplacement() -> void:
 	_oak_mat = StandardMaterial3D.new()
 	_oak_mat.vertex_color_use_as_albedo = true
+	_oak_mat.vertex_color_is_srgb = true
 	_oak_mat.roughness = 0.86
 	_oak_mat.metallic = 0.04
 
 	_iron_mat = StandardMaterial3D.new()
 	_iron_mat.vertex_color_use_as_albedo = true
+	_iron_mat.vertex_color_is_srgb = true
 	_iron_mat.roughness = 0.42
 	_iron_mat.metallic = 0.78
 

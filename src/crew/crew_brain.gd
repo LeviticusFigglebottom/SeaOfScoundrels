@@ -5,7 +5,8 @@ extends Node
 ## Uses the exact same Pawn intent fields and Station `drive()` API as a human
 ## player (docs/ARCHITECTURE.md). Priority hierarchy:
 ##   1. Survival: patch open hull breaches & bail rising bilge water.
-##   2. Active Captain Order (from the Command Wheel).
+##   2. Active Captain Order (from the Command Wheel), including ashore/boarding
+##      melee escort combat during `"Follow Me"` (`&"follow"`).
 ##   3. Combat: fire ship cannons at hostile ships in broadside arc (unless hold_fire).
 ##   4. Autonomous sailing: trim sails into the wind, steer autopilot heading if helm free.
 ##   5. Hauling: fetch dropped treasure chests nearby onto the ship's deck.
@@ -52,6 +53,31 @@ const NAV_HOLD_FOOT := Vector3(0.0, -0.85, -0.35)
 const NAV_HOLD_AFT := Vector3(0.8, -0.85, 1.9)
 const NAV_HOLD_FORE := Vector3(0.5, -0.85, -2.0)
 
+# Ashore / boarding melee escort combat tuning
+const ESCORT_DETECT_RANGE := 15.0
+const ESCORT_LEASH_RANGE := 18.0
+const ESCORT_ENGAGE_RANGE := 1.85
+const ESCORT_ATTACK_REACH := 2.35
+const ESCORT_BATTLE_CRY_COOLDOWN := 9.5
+
+const BATTLE_CRY_LINES := {
+	&"helmsman": [
+		"Stand clear, Cap'n -- I've got your flank!",
+		"Steel out! Let's send these bilge-rats packing!",
+		"Back to the locker with ye!",
+	],
+	&"lookout": [
+		"Hostiles close! Covering you, Cap'n!",
+		"Watch your left -- I'll cut this one down!",
+		"Not on my watch! Draw blades!",
+	],
+	&"carpenter": [
+		"Don't worry, Cap'n -- I swing a cutlass as brisk as a hammer!",
+		"Oi! Nobody touches my Captain!",
+		"I'll patch you up after I finish this lot!",
+	],
+}
+
 var _rng := RandomNumberGenerator.new()
 var _route: Array[Vector3] = []  # ship-local waypoints when moving across decks
 var _route_is_local: bool = true
@@ -60,6 +86,12 @@ var _patch_slot: int = -1
 var _target_carryable: Carryable = null
 var _target_enemy_ship: Ship = null
 var _cannon_side: StringName = &"starboard"
+var _combat: CombatComponent = null
+var _melee_target: Node3D = null
+var _melee_target_cc: CombatComponent = null
+var _melee_attack_cd: float = 0.0
+var _melee_block_timer: float = 0.0
+var _melee_combo_count: int = 0
 var _joining_shanty: bool = false
 var _clock: float = 0.0
 var _shanty_phase: float = 0.0
@@ -91,6 +123,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_clear_melee_combat()
 	_stop_shanty_join(false)
 
 
@@ -123,6 +156,13 @@ func crew_name() -> String:
 func get_held_shanty_instrument() -> Node3D:
 	if _shanty_tool_node != null and is_instance_valid(_shanty_tool_node):
 		return _shanty_tool_node
+	return null
+
+
+## Return the currently engaged ashore/boarding melee threat (or null when not fighting).
+func get_melee_target() -> Node3D:
+	if _melee_target != null and is_instance_valid(_melee_target) and not _is_target_defeated(_melee_target):
+		return _melee_target
 	return null
 
 
@@ -190,6 +230,7 @@ func give_order(order: StringName, target: Variant = null) -> void:
 
 ## Gracefully yield this crew slot when a human co-op peer joins.
 func yield_to_human_player() -> void:
+	_clear_melee_combat()
 	if pawn != null and pawn.station != null:
 		pawn.leave_station()
 	if pawn != null and pawn.carried != null:
@@ -203,6 +244,7 @@ func yield_to_human_player() -> void:
 func _physics_process(delta: float) -> void:
 	_clock += delta
 	if not Net.is_host() or pawn == null or pawn.dead:
+		_clear_melee_combat()
 		if _joining_shanty:
 			_stop_shanty_join()
 		if pawn != null:
@@ -331,12 +373,24 @@ func _choose_task() -> StringName:
 	if Audio.is_shanty_playing() and has_ship and pawn.platform == ship:
 		return &"shanty"
 
+	# 8. Autonomous close-quarters defense when ashore or facing boarders on deck.
+	if not hold_fire and _resolve_combat() != null:
+		var off_ship := not has_ship or pawn.platform != ship
+		var cap_ashore := captain != null and is_instance_valid(captain) and not captain.dead and (not has_ship or captain.platform != ship)
+		if off_ship or cap_ashore:
+			if _find_nearby_melee_threat(_resolve_combat(), false) != null:
+				return &"follow"
+		elif has_ship and _find_nearby_melee_threat(_resolve_combat(), true) != null:
+			return &"follow"
+
 	return &"idle"
 
 
 func _set_task(t: StringName) -> void:
 	if t == current_task:
 		return
+	if current_task == &"follow" and t != &"follow":
+		_clear_melee_combat()
 	# Release station cleanly if switching to a task that does not use it.
 	if pawn.station != null:
 		var st_kind := StringName(pawn.station.get(&"kind"))
@@ -564,9 +618,19 @@ func _tick_fetch_treasure(_delta: float) -> void:
 		_move_world_towards(item.global_position, 1.8)
 
 
-func _tick_follow(_delta: float) -> void:
+func _tick_follow(delta: float) -> void:
+	var cc := _resolve_combat()
+	if cc != null:
+		var same_ship_only := current_order != &"follow" and ship != null and is_instance_valid(ship) and pawn.platform == ship
+		var threat := _update_melee_target(cc, same_ship_only)
+		if threat != null:
+			_tick_escort_melee(cc, delta)
+			return
+		_clear_melee_combat()
+
 	if captain == null or not is_instance_valid(captain):
 		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
 		return
 	var d := captain.global_position - pawn.global_position
 	var flat_d := Vector2(d.x, d.z).length()
@@ -578,6 +642,226 @@ func _tick_follow(_delta: float) -> void:
 		_navigate_ship_local(captain.platform_local_position(), 2.4)
 	else:
 		_move_world_towards(captain.global_position, 2.4, flat_d > 5.5)
+
+
+func _resolve_combat() -> CombatComponent:
+	if _combat != null and is_instance_valid(_combat):
+		return _combat
+	if pawn == null or not is_instance_valid(pawn):
+		return null
+	var cc := pawn.get_node_or_null(^"CombatComponent") as CombatComponent
+	if cc == null:
+		for child in pawn.get_children():
+			if child is CombatComponent:
+				cc = child as CombatComponent
+				break
+	_combat = cc
+	return _combat
+
+
+func _clear_melee_combat() -> void:
+	if _combat != null and is_instance_valid(_combat) and _combat.is_blocking:
+		_combat.set_blocking(false)
+	_melee_target = null
+	_melee_target_cc = null
+	_melee_block_timer = 0.0
+	_melee_combo_count = 0
+
+
+func _update_melee_target(cc: CombatComponent, same_ship_only: bool) -> Node3D:
+	var my_pos := pawn.global_position
+	var has_cap := captain != null and is_instance_valid(captain) and not captain.dead
+	var cap_pos := captain.global_position if has_cap else my_pos
+
+	if _melee_target != null:
+		if not is_instance_valid(_melee_target) or _is_target_defeated(_melee_target):
+			_melee_target = null
+			_melee_target_cc = null
+		else:
+			var d_me := my_pos.distance_to(_melee_target.global_position)
+			var d_cap := cap_pos.distance_to(_melee_target.global_position)
+			var dy := absf(_melee_target.global_position.y - my_pos.y)
+			var out_of_leash := minf(d_me, d_cap) > ESCORT_LEASH_RANGE or (has_cap and d_cap > ESCORT_LEASH_RANGE + 4.0) or dy > 5.5
+			if same_ship_only and not (_melee_target is Pawn and (_melee_target as Pawn).platform == ship):
+				out_of_leash = true
+			if out_of_leash:
+				_melee_target = null
+				_melee_target_cc = null
+
+	var fresh := _find_nearby_melee_threat(cc, same_ship_only)
+	if _melee_target == null:
+		_melee_target = fresh
+		_melee_target_cc = _combat_component_of(fresh)
+	elif fresh != null and fresh != _melee_target:
+		# Switch cleanly if another hostile rushes right into our face.
+		var cur_d := my_pos.distance_to(_melee_target.global_position)
+		var new_d := my_pos.distance_to(fresh.global_position)
+		if new_d < 3.0 and new_d + 1.5 < cur_d:
+			_melee_target = fresh
+			_melee_target_cc = _combat_component_of(fresh)
+	return _melee_target
+
+
+func _find_nearby_melee_threat(cc: CombatComponent, same_ship_only: bool) -> Node3D:
+	if pawn == null or not is_inside_tree():
+		return null
+	var my_pos := pawn.global_position
+	var has_cap := captain != null and is_instance_valid(captain) and not captain.dead
+	var cap_pos := captain.global_position if has_cap else my_pos
+	var my_faction := cc.faction if cc != null else &"player"
+
+	var best: Node3D = null
+	var best_score := INF
+
+	# 1. Hostile combatants (Drowned, Tidecallers, Corsairs).
+	for node in get_tree().get_nodes_in_group(&"combatants"):
+		var other_cc := node as CombatComponent
+		if other_cc == null or other_cc == cc or other_cc.faction == my_faction or other_cc.faction == &"player":
+			continue
+		var other_p := other_cc.pawn
+		if other_p == null or not is_instance_valid(other_p) or other_p.dead:
+			continue
+		if same_ship_only and other_p.platform != ship:
+			continue
+		if absf(other_p.global_position.y - my_pos.y) > 5.5:
+			continue
+		var d_me := my_pos.distance_to(other_p.global_position)
+		var d_cap := cap_pos.distance_to(other_p.global_position)
+		if minf(d_me, d_cap) > ESCORT_DETECT_RANGE:
+			continue
+		var score := minf(d_me, d_cap * 0.92)
+		if score < best_score:
+			best_score = score
+			best = other_p
+
+	# 2. Hostile wildlife / beasts (IslandCrab, Shark, ReefEel).
+	if not same_ship_only:
+		for node in get_tree().get_nodes_in_group(&"beasts"):
+			if not (node is Node3D) or not node.has_method(&"apply_damage"):
+				continue
+			if _is_target_defeated(node):
+				continue
+			var fac: Variant = node.get(&"faction")
+			if fac != null and StringName(fac) == &"player":
+				continue
+			var beast := node as Node3D
+			if absf(beast.global_position.y - my_pos.y) > 4.5:
+				continue
+			var d_me := my_pos.distance_to(beast.global_position)
+			var d_cap := cap_pos.distance_to(beast.global_position)
+			if minf(d_me, d_cap) > ESCORT_DETECT_RANGE:
+				continue
+			# Don't leap off dry ground/deck into deep water to chase distant aquatic predators.
+			if (beast is Shark or beast is ReefEel) and not pawn.is_swimming() and d_me > 3.2:
+				continue
+			var score := minf(d_me, d_cap * 0.95) + 1.0
+			if score < best_score:
+				best_score = score
+				best = beast
+
+	return best
+
+
+func _tick_escort_melee(cc: CombatComponent, delta: float) -> void:
+	if _melee_target == null or not is_instance_valid(_melee_target) or _is_target_defeated(_melee_target):
+		_clear_melee_combat()
+		return
+
+	# Ensure a melee weapon (cutlass) is ready for close-quarters escort combat.
+	var spec: Dictionary = CombatComponent.WEAPONS.get(cc.equipped_weapon, {})
+	if spec.get("type") != &"melee":
+		cc.equip_weapon(&"cutlass")
+
+	_melee_attack_cd = maxf(0.0, _melee_attack_cd - delta)
+	if _melee_block_timer > 0.0:
+		_melee_block_timer = maxf(0.0, _melee_block_timer - delta)
+		if _melee_block_timer <= 0.0 and cc.is_blocking:
+			cc.set_blocking(false)
+
+	var to_t := _melee_target.global_position - pawn.global_position
+	var flat_to := Vector3(to_t.x, 0.0, to_t.z)
+	var dist := flat_to.length()
+	if dist > 0.05:
+		pawn.look_yaw = atan2(-flat_to.x, -flat_to.z)
+
+	# Atmospheric persona battle-cry on engagement (generous cooldown prevents spam).
+	_speak(&"battle_cry", {}, "battle_cry", ESCORT_BATTLE_CRY_COOLDOWN)
+
+	# Reactive cutlass block / timed parry when facing a threat mid-windup.
+	var enemy_winding := _melee_target_cc != null and is_instance_valid(_melee_target_cc) \
+		and _melee_target_cc.state == CombatComponent.State.WINDUP
+	if enemy_winding and dist <= 2.9 and _melee_block_timer <= 0.0 \
+			and cc.state == CombatComponent.State.IDLE and cc.stamina >= 22.0:
+		if _rng.randf() < 0.55:
+			cc.set_blocking(true)
+			_melee_block_timer = 0.36
+			pawn.wish_dir = Vector3.ZERO
+			pawn.wish_sprint = false
+			return
+
+	if _melee_block_timer > 0.0:
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+		return
+
+	# Close smoothly to cutlass engagement range (~1.85 m) and keep clean spacing.
+	if dist > ESCORT_ENGAGE_RANGE:
+		if cc.is_blocking:
+			cc.set_blocking(false)
+		if ship != null and pawn.platform == ship and _melee_target is Pawn and (_melee_target as Pawn).platform == ship:
+			_navigate_ship_local((_melee_target as Pawn).platform_local_position(), ESCORT_ENGAGE_RANGE)
+		else:
+			_move_world_towards(_melee_target.global_position, ESCORT_ENGAGE_RANGE, dist > 3.8)
+	elif dist < 0.95 and dist > 0.05:
+		pawn.wish_dir = -(flat_to / dist) * 0.55
+		pawn.wish_sprint = false
+	else:
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+
+	# Re-aim toward the threat after movement so every strike lands squarely inside arc_cos.
+	if dist > 0.05:
+		pawn.look_yaw = atan2(-flat_to.x, -flat_to.z)
+
+	if dist <= ESCORT_ATTACK_REACH and _melee_attack_cd <= 0.0 \
+			and cc.state != CombatComponent.State.STAGGERED \
+			and cc.state != CombatComponent.State.WINDUP \
+			and cc.state != CombatComponent.State.ACTIVE:
+		var target_guarding := _melee_target_cc != null and is_instance_valid(_melee_target_cc) \
+			and (_melee_target_cc.has_shield or _melee_target_cc.is_blocking)
+		var want_heavy := (target_guarding and cc.stamina >= 30.0) or (_melee_combo_count >= 3 and cc.stamina >= 38.0)
+		if want_heavy and cc.heavy_attack():
+			_melee_combo_count = 0
+			_melee_attack_cd = _rng.randf_range(0.65, 0.95)
+		elif cc.primary_attack():
+			_melee_combo_count += 1
+			_melee_attack_cd = _rng.randf_range(0.28, 0.52)
+
+
+static func _combat_component_of(node: Node) -> CombatComponent:
+	if node == null or not is_instance_valid(node):
+		return null
+	var cc := node.get_node_or_null(^"CombatComponent") as CombatComponent
+	if cc != null:
+		return cc
+	for child in node.get_children():
+		if child is CombatComponent:
+			return child as CombatComponent
+	return null
+
+
+static func _is_target_defeated(node: Node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return true
+	if node is Pawn:
+		return (node as Pawn).dead
+	var d: Variant = node.get(&"dead")
+	if d is bool and bool(d):
+		return true
+	var hp: Variant = node.get(&"health")
+	if (hp is float or hp is int) and float(hp) <= 0.0:
+		return true
+	return false
 
 
 func _tick_shanty(delta: float) -> void:
@@ -1034,12 +1318,17 @@ func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", co
 	if _callout_cooldowns.has(key):
 		return
 	var text := CrewDialogue.format_line(persona_id, category, vars, _rng)
+	if text == "" and category == &"battle_cry":
+		var cries: Array = BATTLE_CRY_LINES.get(persona_id, BATTLE_CRY_LINES[&"helmsman"])
+		if not cries.is_empty():
+			text = "%s: %s" % [crew_name(), String(cries[_rng.randi_range(0, cries.size() - 1)])]
 	if text == "":
 		return
 	_callout_cooldowns[key] = cooldown
 	Game.post_notice(text)
 	Audio.play_sfx(&"crew_shout", pawn.global_position, -6.0, 0.08)
-	_play_anim(&"shout", 0.7)
+	if category != &"battle_cry" or _combat == null or _combat.state == CombatComponent.State.IDLE:
+		_play_anim(&"shout", 0.7)
 	callout_spoken.emit(crew_name(), text, category)
 
 

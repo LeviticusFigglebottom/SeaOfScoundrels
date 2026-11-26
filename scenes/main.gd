@@ -18,6 +18,7 @@ const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const BARREL_PROP_SCENE: PackedScene = preload("res://assets/generated/props/barrel_prop.glb")
 const CRATE_PROP_SCENE: PackedScene = preload("res://assets/generated/props/crate_supply.glb")
+const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 
 const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
 
@@ -994,10 +995,11 @@ func _wire_world_signals() -> void:
 		)
 		outpost.treasure_sold.connect(_on_outpost_treasure_sold)
 
-	# Wire every DigSite currently on every island.
+	# Wire every DigSite currently on every island + emergent beach MessageBottles.
 	for isl in archipelago.get_islands():
 		for ds in isl.get_dig_sites():
 			_wire_dig_site(ds)
+	_wire_message_bottles()
 
 	# VoyageManager signals.
 	voyage_manager.voyage_started.connect(_on_voyage_started)
@@ -1298,13 +1300,14 @@ func _prepare_active_voyage_world(voyage: Dictionary) -> void:
 		elif not target_isl.dig_points.is_empty():
 			dig_local = target_isl.dig_points[0]
 
-		# Activate Fort Bastion signal brazier & coastal sea-batteries + place vault treasure for Fort Sieges.
+		# Activate Fort Bastion signal brazier & coastal sea-batteries + FortVault + Sovereign hoard.
 		if shape == &"fort_siege":
 			var bastion := target_isl.get_node_or_null(^"FortBastion") as Node3D
 			if bastion != null:
 				dig_local = bastion.position
 				if bastion.has_method(&"set_siege_active"):
 					bastion.call(&"set_siege_active", true)
+				_ensure_fort_vault(bastion)
 			if not already_built:
 				var vault_world: Vector3
 				if bastion != null:
@@ -1547,18 +1550,180 @@ func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
 		local_pt.y = fort.surface_height(local_pt.x, local_pt.z) + 0.15
 		_spawn_enemy_pawn(defenders[i], fort.global_transform * local_pt)
 
-	# Activate Ironwatch Fort's blazing Signal Brazier and 4 coastal sea-battery cannons!
-	var bastion := fort.get_node_or_null(^"FortBastion")
-	if bastion != null and bastion.has_method(&"set_siege_active"):
-		bastion.call(&"set_siege_active", true)
+	# Activate Ironwatch Fort's blazing Signal Brazier, coastal batteries & locked FortVault gate!
+	var bastion := fort.get_node_or_null(^"FortBastion") as Node3D
+	if bastion != null:
+		if bastion.has_method(&"set_siege_active"):
+			bastion.call(&"set_siege_active", true)
+		_ensure_fort_vault(bastion)
 
-	# Place Fort Vault chest on the terrace!
-	var vault_local := fort.dig_points[0] if not fort.dig_points.is_empty() else Vector3(0.0, 0.0, 0.0)
-	vault_local.y = fort.surface_height(vault_local.x, vault_local.z) + 0.35
-	var vault_world := fort.global_transform * vault_local
+	# Place Sovereign Chest hoard on the fort courtyard dais behind the barred FortVault gate!
+	var vault_world: Vector3
+	if bastion != null:
+		vault_world = bastion.global_transform * Vector3(0.0, 0.38, 0.0)
+	else:
+		var vault_local := fort.dig_points[0] if not fort.dig_points.is_empty() else Vector3.ZERO
+		vault_local.y = fort.surface_height(vault_local.x, vault_local.z) + 0.35
+		vault_world = fort.global_transform * vault_local
 	var vault_chest := TreasureCatalog.create_treasure_carryable(&"sovereign_chest", vault_world)
 	_entities_root.add_child(vault_chest)
 	vault_chest.global_position = vault_world
+
+
+func _ensure_fort_vault(bastion: Node3D) -> Node3D:
+	if bastion == null or not is_instance_valid(bastion):
+		return null
+	var vault := bastion.get_node_or_null(^"FortVault") as Node3D
+	if vault == null:
+		vault = FORT_VAULT_SCRIPT.new() as Node3D
+		vault.name = "FortVault"
+		# Fits flush inside FortBastion Bay 0 stone gateway (WALL_R = 11.4, courtyard floor y = 0.06).
+		vault.position = Vector3(0.0, 0.06, -11.4)
+		bastion.add_child(vault)
+
+	var bats := _collect_bastion_batteries(bastion)
+	var alive_count := 0
+	for bat in bats:
+		if not bat.destroyed:
+			alive_count += 1
+		if not bat.has_meta(&"fort_vault_wired"):
+			bat.set_meta(&"fort_vault_wired", true)
+			bat.battery_destroyed.connect(func(_b: FortBattery) -> void:
+				_check_fort_vault_unlock(bastion, vault)
+			)
+
+	if vault.has_method(&"set_siege_cleared"):
+		vault.call(&"set_siege_cleared", alive_count == 0)
+	return vault
+
+
+func _check_fort_vault_unlock(bastion: Node3D, vault: Node3D) -> void:
+	if not Net.is_host() or bastion == null or not is_instance_valid(bastion):
+		return
+	if vault == null or not is_instance_valid(vault):
+		return
+	for bat in _collect_bastion_batteries(bastion):
+		if not bat.destroyed:
+			return
+	if vault.has_method(&"set_siege_cleared"):
+		vault.call(&"set_siege_cleared", true)
+	if vault.has_method(&"open_vault"):
+		vault.call(&"open_vault")
+
+
+static func _collect_bastion_batteries(bastion: Node3D) -> Array[FortBattery]:
+	var out: Array[FortBattery] = []
+	if bastion == null or not is_instance_valid(bastion):
+		return out
+	var raw_bats: Variant = bastion.get(&"batteries")
+	if raw_bats is Array:
+		for item in (raw_bats as Array):
+			if item is FortBattery and is_instance_valid(item) and not out.has(item as FortBattery):
+				out.append(item as FortBattery)
+	for child in bastion.get_children():
+		if child is FortBattery and is_instance_valid(child) and not out.has(child as FortBattery):
+			out.append(child as FortBattery)
+	return out
+
+
+func _wire_message_bottles() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	for bottle in tree.get_nodes_in_group(&"message_bottles"):
+		if bottle == null or not is_instance_valid(bottle):
+			continue
+		if bottle.has_meta(&"bottle_wired") or not bottle.has_signal(&"bottle_collected"):
+			continue
+		bottle.set_meta(&"bottle_wired", true)
+		var arg_count := 2
+		for sig_info in bottle.get_signal_list():
+			var sd: Dictionary = sig_info as Dictionary
+			if StringName(sd.get("name", &"")) == &"bottle_collected":
+				arg_count = (sd.get("args", []) as Array).size()
+				break
+		if arg_count == 1:
+			bottle.connect(&"bottle_collected", func(a: Variant) -> void:
+				_on_message_bottle_collected(bottle, a, null)
+			)
+		elif arg_count == 3:
+			bottle.connect(&"bottle_collected", func(a: Variant, b: Variant, c: Variant) -> void:
+				var clue_v: Variant = b if b is Dictionary else a
+				_on_message_bottle_collected(bottle, clue_v, c as Node)
+			)
+		else:
+			bottle.connect(&"bottle_collected", func(a: Variant, b: Variant) -> void:
+				var clue_v: Variant = a if a is Dictionary else b
+				var col_n: Node = b as Node if b is Node else (a as Node if a is Node else null)
+				_on_message_bottle_collected(bottle, clue_v, col_n)
+			)
+
+
+func _on_message_bottle_collected(bottle: Node, clue_arg: Variant, _collector: Node) -> void:
+	if not Net.is_host() or archipelago == null:
+		return
+	var clue: Dictionary = {}
+	if clue_arg is Dictionary:
+		clue = clue_arg as Dictionary
+	elif bottle != null and is_instance_valid(bottle):
+		if bottle.has_method(&"get_clue"):
+			var c_res: Variant = bottle.call(&"get_clue")
+			if c_res is Dictionary:
+				clue = c_res as Dictionary
+		elif bottle.get(&"clue") is Dictionary:
+			clue = bottle.get(&"clue") as Dictionary
+		else:
+			clue = {
+				"target_island_id": String(bottle.get(&"target_island_id")),
+				"treasure_id": bottle.get(&"treasure_id"),
+			}
+
+	var target_id := String(clue.get("target_island_id", ""))
+	var target_isl := archipelago.get_island_by_id(target_id) if target_id != "" else null
+	if target_isl == null:
+		target_isl = archipelago.get_island_by_id("cutlass_cay")
+	if target_isl == null:
+		for isl in archipelago.get_islands():
+			if not (isl is Outpost):
+				target_isl = isl
+				break
+	if target_isl == null:
+		return
+
+	var tid := StringName(String(clue.get("treasure_id", &"captains_skull")))
+	if not TreasureCatalog.has_treasure(tid):
+		tid = &"archive_chalice"
+
+	# Pick an unused dig_points spot on the target island (or a clean offset beach clearing).
+	var existing_sites := target_isl.get_dig_sites()
+	var chosen_spot := Vector3.ZERO
+	var found_unused := false
+	for cand in target_isl.dig_points:
+		var busy := false
+		for ds in existing_sites:
+			if ds != null and is_instance_valid(ds) and ds.position.distance_to(cand) < 2.6:
+				busy = true
+				break
+		if not busy:
+			chosen_spot = cand
+			found_unused = true
+			break
+	if not found_unused:
+		var base_pt := target_isl.dig_points[0] if not target_isl.dig_points.is_empty() else Vector3(0.0, 0.0, 12.0)
+		chosen_spot = base_pt + Vector3(3.4, 0.0, -2.2)
+		chosen_spot.y = target_isl.surface_height(chosen_spot.x, chosen_spot.z)
+
+	var bonus_site := target_isl.spawn_dig_site(chosen_spot, tid)
+	_wire_dig_site(bonus_site)
+
+	var t_entry := TreasureCatalog.get_entry(tid)
+	var t_name := String(t_entry.get("name", "Buried Hoard"))
+	var company_str := String(t_entry.get("company_id", &"gilded_compass"))
+	if Game != null and Game.profile != null:
+		Game.profile.add_renown(company_str, 35)
+		Game.save()
+	Audio.play_stinger(&"discovery")
+	Game.post_notice("Message in a Bottle! Rumor of a buried %s on %s!" % [t_name, target_isl.display_name])
 
 
 func _on_director_spawn_castaway(pos: Vector3) -> void:
@@ -2434,7 +2599,7 @@ func _apply_hero_shot(mode: String) -> void:
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "leviathan", "fleet",
 			"fort_siege", "harbour_plaza", "smugglers_grotto",
-			"cinder_crag", "coral_reef"
+			"cinder_crag", "coral_reef", "fishing"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -2684,7 +2849,8 @@ func _apply_hero_shot(mode: String) -> void:
 				_enable_ship_track_shot(cam_local_galley, look_local_galley, 58.0)
 
 		"fishing":
-			# Golden-hour stern-rail showcase: flexed 3-section bamboo rod, amber taut catenary line, painted bobber & splashes!
+			# Unobstructed port-outboard golden-hour showcase: flexed 3-section bamboo rod, glowing amber
+			# 14-segment catenary line, painted cork-and-crimson bobber + splashes, and sunset horizon!
 			Weather.time_of_day = 17.15 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.06, 9.0, -0.35, 0.0, 0.42)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.16)
@@ -2693,24 +2859,26 @@ func _apply_hero_shot(mode: String) -> void:
 			player_ship.anchor_progress = 1.0
 			player_ship.linear_velocity = Vector3.ZERO
 			if fishing_line != null:
-				if player_pawn != null:
-					player_pawn.board(player_ship, fishing_line.position + Vector3(0.45, 0.0, -0.45))
-					_fishing_pawn = player_pawn
-				var cast_local_dir := Vector3(-0.39, 0.0, 0.92).normalized()
+				var cast_local_dir := Vector3(-0.18, 0.0, 0.984).normalized()
 				var cast_world_dir := (player_ship.global_basis * cast_local_dir)
 				cast_world_dir.y = 0.0
 				cast_world_dir = cast_world_dir.normalized()
+				if player_pawn != null:
+					player_pawn.board(player_ship, fishing_line.position + Vector3(0.18, 0.0, 0.10))
+					player_pawn.look_yaw = atan2(-cast_world_dir.x, -cast_world_dir.z)
+					_fishing_pawn = player_pawn
 				fishing_line.cancel_cast()
-				fishing_line.cast_line(fishing_line.global_position, cast_world_dir, 7.8)
+				fishing_line.cast_line(fishing_line.global_position, cast_world_dir, 7.6)
 				fishing_line.state = FishingLine.State.HOOKED
 				fishing_line.hooked_species = FishingLine.SPECIES[2]
 				fishing_line.fish_fighting = true
 				fishing_line.line_tension = 0.80
-				fishing_line.distance_out = 7.8
+				fishing_line.distance_out = 7.6
 				fishing_line.step(0.016, fishing_line.global_position, false)
-				var cam_local_fish := fishing_line.position + Vector3(0.75, 1.75, -1.10)
-				var look_local_fish := fishing_line.position + Vector3(-1.75, -0.20, 4.10)
-				_enable_ship_track_shot(cam_local_fish, look_local_fish, 62.0)
+				# Port-outboard camera 1.8 m clear of hull, shrouds, backstay & balustrade posts!
+				var cam_local_fish := fishing_line.position + Vector3(-2.07, 1.65, -0.77)
+				var look_local_fish := fishing_line.position + Vector3(-0.75, 0.0, 4.15)
+				_enable_ship_track_shot(cam_local_fish, look_local_fish, 58.0)
 
 		"treasure_shark":
 			# Golden-afternoon beach cove showcase on Cutlass Cay: 6 signature sculpted treasures + circling/charging Sharks!
@@ -2812,7 +2980,7 @@ func _tick_hero_shot_tracking(delta: float) -> void:
 			var t_sec := float(Time.get_ticks_msec()) * 0.001
 			fishing_line.fish_fighting = true
 			fishing_line.line_tension = 0.80 + sin(t_sec * 4.5) * 0.05
-			fishing_line.distance_out = 7.8
+			fishing_line.distance_out = 7.6
 			fishing_line.step(0.0, fishing_line.global_position, false)
 	elif active_shot_mode == "treasure_shark":
 		var t_sec := float(Time.get_ticks_msec()) * 0.001

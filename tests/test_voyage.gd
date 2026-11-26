@@ -1215,3 +1215,68 @@ func _simulate_sailing_session(seed_value: int, cargo_value: int,
 	totals["sailing_distance"] = dir.sailing_distance
 	dir.free()
 	return totals
+
+
+func test_fort_vault_sculpted_gate_locking_swing_and_teardown() -> void:
+	Net.start_single_player()
+	var vault_gd: GDScript = preload("res://src/world/fort_vault.gd")
+	var vault: Node3D = vault_gd.new() as Node3D
+	add_child(vault)
+
+	# 1. Verify sculpted zero-primitive ArrayMesh frame + double gates + golden treasury glow light.
+	var frame_mi := vault.get_node_or_null(^"VaultArchFrame") as MeshInstance3D
+	var left_piv := vault.get_node_or_null(^"LeftGatePivot") as Node3D
+	var right_piv := vault.get_node_or_null(^"RightGatePivot") as Node3D
+	var left_mi := vault.get_node_or_null(^"LeftGatePivot/LeftGateMesh") as MeshInstance3D
+	var right_mi := vault.get_node_or_null(^"RightGatePivot/RightGateMesh") as MeshInstance3D
+	var glow := vault.get_node_or_null(^"VaultTreasuryGlow") as OmniLight3D
+
+	check(frame_mi != null and frame_mi.mesh is ArrayMesh, "FortVault builds sculpted ArrayMesh stone arch frame")
+	check(left_mi != null and left_mi.mesh is ArrayMesh, "FortVault builds sculpted LeftGateMesh ArrayMesh")
+	check(right_mi != null and right_mi.mesh is ArrayMesh, "FortVault builds sculpted RightGateMesh ArrayMesh")
+	check(glow != null and not glow.shadow_enabled and glow.omni_range >= 9.0, "FortVault has shadowless golden VaultTreasuryGlow OmniLight3D")
+
+	var total_tris := 0
+	var primitive_hits := 0
+	for mi in _collect_mesh_instances(vault):
+		if mi.mesh != null:
+			var m := mi.mesh
+			if m is BoxMesh or m is CylinderMesh or m is CapsuleMesh or m is SphereMesh or m is PrismMesh:
+				primitive_hits += 1
+			total_tris += _count_mesh_triangles(m)
+	check_eq(primitive_hits, 0, "FortVault contains zero raw primitive meshes")
+	check(total_tris >= 3000, "FortVault has rich sculpted flat-faceted geometry (%d tris)" % total_tris)
+
+	# 2. Verify locked state blocks passage & set_siege_cleared(true) updates interactable prompt.
+	check_eq(bool(vault.get(&"is_locked")), true, "FortVault starts locked")
+	check_eq(bool(vault.get(&"is_open")), false, "FortVault starts closed")
+	check(bool(vault.call(&"is_blocking")), "FortVault StaticBody3D blocks passage while locked")
+	var it := vault.get(&"interactable") as Interactable
+	check(it != null and it.prompt == "Unlock Ironwatch Fort Vault", "locked FortVault interactable prompt matches")
+
+	vault.call(&"set_siege_cleared", true)
+	check_eq(bool(vault.get(&"is_locked")), false, "set_siege_cleared(true) clears lock flag")
+	check_eq(it.prompt, "Open Ironwatch Fort Vault", "unlocked FortVault prompt updates to Open")
+	check(bool(vault.call(&"is_blocking")), "FortVault still blocks until open_vault() runs")
+
+	# 3. Verify open_vault() disables collision, emits vault_opened exactly once, and swings gates ±108°.
+	var opened_count := [0]
+	vault.connect(&"vault_opened", func(_v: Node, _opener: Node) -> void: opened_count[0] += 1)
+	check(bool(vault.call(&"open_vault")), "open_vault() returns true on first call")
+	check(not bool(vault.call(&"open_vault")), "second open_vault() is a no-op")
+	check_eq(opened_count[0], 1, "vault_opened emits exactly once")
+	check_eq(bool(vault.get(&"is_open")), true, "FortVault marked open")
+	check(not bool(vault.call(&"is_blocking")), "FortVault collision blocker disabled immediately on open_vault()")
+
+	# Step full 1.35 s smooth opening curve.
+	for _i in 30:
+		vault.call(&"step_animation", 0.05)
+	check_near(left_piv.rotation.y, -deg_to_rad(108.0), 0.02, "LeftGatePivot swings smoothly inward to -108 deg")
+	check_near(right_piv.rotation.y, deg_to_rad(108.0), 0.02, "RightGatePivot swings smoothly inward to +108 deg")
+
+	# 4. Zero-leak teardown.
+	vault.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(vault), "FortVault freed cleanly with zero leaks")
+

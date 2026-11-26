@@ -16,6 +16,7 @@ const DEFAULT_LOADOUT := {
 	&"trait": &"",
 	&"flag": &"",
 	&"sail_cosmetic": &"",
+	&"hull_livery": &"",
 }
 
 const COMPANIES := {
@@ -316,6 +317,64 @@ const UNLOCKS := {
 		"tint": Color(0.14, 0.22, 0.42),
 		"modifiers": {},
 	},
+
+	# --- Hull paint liveries --------------------------------------------
+	&"hull_royal_azure": {
+		"id": &"hull_royal_azure",
+		"name": "Admiral's Azure Hull",
+		"slot": &"hull_livery",
+		"category": &"cosmetic",
+		"cost": 350,
+		"company_id": &"gilded_compass",
+		"req_rank": 1,
+		"is_default": false,
+		"summary": "Royal cobalt-blue timber coat finished in warm maritime varnish.",
+		"tint": Color(0.62, 0.78, 1.0),
+		"glow_accent": Color.BLACK,
+		"modifiers": {},
+	},
+	&"hull_crimson_corsair": {
+		"id": &"hull_crimson_corsair",
+		"name": "Privateer Crimson Hull",
+		"slot": &"hull_livery",
+		"category": &"cosmetic",
+		"cost": 450,
+		"company_id": &"iron_tide",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Lacquered dark crimson-mahogany planking favored by bold privateers.",
+		"tint": Color(1.0, 0.56, 0.48),
+		"glow_accent": Color.BLACK,
+		"modifiers": {},
+	},
+	&"hull_emerald_archive": {
+		"id": &"hull_emerald_archive",
+		"name": "Archive Verdigris Hull",
+		"slot": &"hull_livery",
+		"category": &"cosmetic",
+		"cost": 450,
+		"company_id": &"sunken_archive",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Seaworn turquoise-jade patina with a subtle emerald lantern shimmer.",
+		"tint": Color(0.58, 0.94, 0.84),
+		"glow_accent": Color(0.18, 0.72, 0.58),
+		"modifiers": {},
+	},
+	&"hull_obsidian_sovereign": {
+		"id": &"hull_obsidian_sovereign",
+		"name": "Sovereign Pitch & Gold",
+		"slot": &"hull_livery",
+		"category": &"cosmetic",
+		"cost": 750,
+		"company_id": &"gilded_compass",
+		"req_rank": 4,
+		"is_default": false,
+		"summary": "Dramatic charred-pitch hull crowned with a rich amber lantern glow.",
+		"tint": Color(0.42, 0.40, 0.44),
+		"glow_accent": Color(0.95, 0.68, 0.22),
+		"modifiers": {},
+	},
 }
 
 
@@ -547,6 +606,7 @@ static func get_ship_modifiers(profile: Profile) -> Dictionary:
 		"trait_id": get_equipped(profile, &"trait"),
 		"flag_id": get_equipped(profile, &"flag"),
 		"sail_cosmetic_id": get_equipped(profile, &"sail_cosmetic"),
+		"hull_livery_id": get_equipped(profile, &"hull_livery"),
 	}
 	for slot in [&"hull", &"sail", &"cannon", &"trait"]:
 		var equipped_id: StringName = get_equipped(profile, slot)

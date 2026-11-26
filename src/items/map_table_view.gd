@@ -3,10 +3,12 @@ extends Node3D
 ## Live diegetic parchment nautical chart rendered onto a SubViewport texture
 ## and mounted directly on top of a Ship's wooden `MapTable` mesh.
 ##
-## Displays parchment gridlines, decorative compass rose, all archipelago islands
-## (discovered named in sepia ink, undiscovered as faint silhouettes), player ship
-## silhouette + live heading arrow, active voyage crimson dashed circle, active
-## Weather storm cell swirl, salvage wreck X markers, and player-placed pins.
+## Displays parchment gridlines, decorative compass rose, live wind-direction feather,
+## all archipelago islands (discovered named in sepia ink, undiscovered as faint
+## silhouettes), player ship silhouette + live heading arrow, sepia course-bearing
+## rhumb line & compass readout, active voyage crimson dashed circle, active Weather
+## storm cell swirl, live Leviathan & Fort Siege threat stamps, salvage wreck X
+## markers, and interactive player-placed pins.
 ## Throttled to redraw every 0.15 s so it stays ultra-cheap at runtime.
 
 signal marker_placed(world_pos: Vector3)
@@ -24,6 +26,15 @@ const BRIGANTINE_TABLE_TOP_Y := 0.897
 const MIN_SPAN := 420.0
 const MAX_SPAN := 5600.0
 const MAX_TRAIL_POINTS := 48
+const PIN_TOGGLE_RADIUS_M := 90.0
+const FORT_CLUSTER_RADIUS_M := 160.0
+
+const COMPASS_16: Array[String] = [
+	"N", "NNE", "NE", "ENE",
+	"E", "ESE", "SE", "SSE",
+	"S", "SSW", "SW", "WSW",
+	"W", "WNW", "NW", "NNW",
+]
 
 ## Ship whose position/heading is plotted on the chart (auto-set by `mount_to_ship`).
 var tracked_ship: Node3D = null
@@ -62,6 +73,8 @@ var _dirty: bool = true
 var _storm_phase: float = 0.0
 var _mounted_ship: Ship = null
 var _table_station: Station = null
+var _station_player_active: bool = false
+var _jump_was_down: bool = false
 
 
 func _ready() -> void:
@@ -70,6 +83,14 @@ func _ready() -> void:
 	_build_surface_mesh()
 	_refresh_islands_cache()
 	refresh_now()
+
+
+func _exit_tree() -> void:
+	if _surface_mat != null:
+		_surface_mat.albedo_texture = null
+		_surface_mat.emission_texture = null
+	if _viewport != null and is_instance_valid(_viewport):
+		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 
 ## Mount this MapTableView cleanly onto `ship`'s `MapTable` node in `sloop.glb`.
@@ -141,10 +162,48 @@ func place_marker(world_pos: Vector3) -> void:
 	marker_placed.emit(world_pos)
 
 
+## Drop a pin at `world_pos`, or clear the nearest existing pin within `toggle_radius_m`.
+## Returns true when a new pin was dropped, or false when an existing nearby pin was cleared.
+func toggle_marker_at(world_pos: Vector3, toggle_radius_m: float = PIN_TOGGLE_RADIUS_M) -> bool:
+	var nearest_idx := -1
+	var nearest_d := toggle_radius_m
+	var p2 := Vector2(world_pos.x, world_pos.z)
+	for i in markers.size():
+		var m2 := Vector2(markers[i].x, markers[i].z)
+		var d := p2.distance_to(m2)
+		if d <= nearest_d:
+			nearest_d = d
+			nearest_idx = i
+	if nearest_idx >= 0:
+		markers.remove_at(nearest_idx)
+		_dirty = true
+		return false
+	place_marker(world_pos)
+	return true
+
+
 ## Remove all player-placed chart markers.
 func clear_markers() -> void:
 	markers.clear()
 	_dirty = true
+
+
+## Format the 16-point compass bearing and horizontal distance between two world positions.
+## Uses Sea of Scoundrels world axes (-Z North, +X East), e.g. "NNE  480 m".
+static func format_course_bearing(from_pos: Vector3, to_pos: Vector3) -> String:
+	var dx := to_pos.x - from_pos.x
+	var dz := to_pos.z - from_pos.z
+	var dist := sqrt(dx * dx + dz * dz)
+	if dist < 0.5:
+		return "N  0 m"
+	var ang := fposmod(atan2(dx, -dz), TAU)
+	var idx := int(roundf(ang / (TAU / 16.0))) % 16
+	return "%s  %d m" % [COMPASS_16[idx], int(roundf(dist))]
+
+
+## Return the latest rendered chart draw snapshot (useful for telemetry and tests).
+func get_last_snapshot() -> Dictionary:
+	return _canvas.snapshot if _canvas != null else {}
 
 
 ## Return the live SubViewport texture applied to the table surface.
@@ -226,19 +285,35 @@ func _process(delta: float) -> void:
 
 
 func _poll_table_station_controls(delta: float) -> void:
+	var prev_active := _station_player_active
+	_station_player_active = false
 	if _table_station == null or not is_instance_valid(_table_station):
+		_jump_was_down = false
+		if prev_active:
+			_dirty = true
 		return
 	var occ := _table_station.occupant
 	if occ == null or not is_instance_valid(occ):
+		_jump_was_down = false
+		if prev_active:
+			_dirty = true
 		return
-	# Only let the local player pan/zoom the table when standing at Station_MapTable.
+	# Only let the local player pan/zoom/pin the table when standing at Station_MapTable.
 	var has_pc := false
 	for c in occ.get_children():
 		if c is PlayerController and (c as PlayerController).input_enabled and not (c as PlayerController).look_paused:
 			has_pc = true
 			break
 	if not has_pc:
+		_jump_was_down = false
+		if prev_active:
+			_dirty = true
 		return
+
+	_station_player_active = true
+	if not prev_active:
+		_dirty = true
+
 	var ax := Vector2(
 		Input.get_action_strength(&"move_right") - Input.get_action_strength(&"move_left"),
 		Input.get_action_strength(&"move_back") - Input.get_action_strength(&"move_forward")
@@ -249,6 +324,13 @@ func _poll_table_station_controls(delta: float) -> void:
 		zoom_by(1.0 - 0.85 * delta)
 	elif Input.is_action_pressed(&"secondary"):
 		zoom_by(1.0 + 0.85 * delta)
+
+	var jump_down := Input.is_action_pressed(&"jump")
+	if jump_down and not _jump_was_down:
+		var added := toggle_marker_at(Vector3(view_center.x, 0.0, view_center.y))
+		var pin_sfx := &"map_rustle" if Audio.has_sound(&"map_rustle") else (&"ui_select" if added else &"ui_back")
+		Audio.play_sfx(pin_sfx, global_position, -4.0)
+	_jump_was_down = jump_down
 
 
 func _auto_detect_parent_ship() -> void:
@@ -488,6 +570,77 @@ func _build_draw_snapshot() -> Dictionary:
 			if wp is Vector3:
 				wrecks.append(wp as Vector3)
 
+	# Determine active course-bearing target (newest player pin overrides voyage target).
+	var course_target := Vector3.INF
+	var course_from_pin := false
+	if not markers.is_empty():
+		course_target = markers[markers.size() - 1]
+		course_from_pin = true
+	elif target_pos.is_finite():
+		course_target = target_pos
+	var course_bearing_text := ""
+	if ship_pos.is_finite() and course_target.is_finite():
+		course_bearing_text = format_course_bearing(ship_pos, course_target)
+
+	# Scan live world-threat positions (active Leviathans & active FortBattery clusters).
+	var leviathans: Array[Vector3] = []
+	var fort_sieges: Array[Vector3] = []
+	if is_inside_tree():
+		var seen_lev: Dictionary = {}
+		for grp: StringName in [&"world_events", &"leviathan", &"bosses"]:
+			for node in get_tree().get_nodes_in_group(grp):
+				if not (node is Node3D) or not is_instance_valid(node):
+					continue
+				var nid := node.get_instance_id()
+				if seen_lev.has(nid):
+					continue
+				var is_lev := (node is Leviathan) \
+					or node.is_in_group(&"leviathan") \
+					or node.is_in_group(&"bosses")
+				if not is_lev:
+					continue
+				if node.has_method(&"is_defeated") and bool(node.call(&"is_defeated")):
+					continue
+				var dead_v: Variant = node.get(&"dead")
+				if dead_v is bool and bool(dead_v):
+					continue
+				seen_lev[nid] = true
+				leviathans.append((node as Node3D).global_position)
+
+		var active_bats: Array[Vector3] = []
+		for node in get_tree().get_nodes_in_group(&"fort_batteries"):
+			if not (node is Node3D) or not is_instance_valid(node):
+				continue
+			var dest_v: Variant = node.get(&"destroyed")
+			if dest_v is bool and bool(dest_v):
+				continue
+			var dead_b: Variant = node.get(&"dead")
+			if dead_b is bool and bool(dead_b):
+				continue
+			var siege_v: Variant = node.get(&"siege_active")
+			var act_v: Variant = node.get(&"is_active")
+			var is_sieging := (siege_v is bool and bool(siege_v)) or (act_v is bool and bool(act_v))
+			if not is_sieging:
+				continue
+			active_bats.append((node as Node3D).global_position)
+
+		var cluster_sums: Array[Vector3] = []
+		var cluster_counts: Array[int] = []
+		for bpos in active_bats:
+			var merged := false
+			for ci in cluster_sums.size():
+				var cen := cluster_sums[ci] / float(cluster_counts[ci])
+				if Vector2(bpos.x - cen.x, bpos.z - cen.z).length() <= FORT_CLUSTER_RADIUS_M:
+					cluster_sums[ci] += bpos
+					cluster_counts[ci] += 1
+					merged = true
+					break
+			if not merged:
+				cluster_sums.append(bpos)
+				cluster_counts.append(1)
+		for ci in cluster_sums.size():
+			fort_sieges.append(cluster_sums[ci] / float(cluster_counts[ci]))
+
 	return {
 		"view_center": view_center,
 		"view_span": view_span,
@@ -497,13 +650,20 @@ func _build_draw_snapshot() -> Dictionary:
 		"trail": _trail.duplicate(),
 		"target_pos": target_pos,
 		"target_label": target_label,
+		"course_target": course_target,
+		"course_from_pin": course_from_pin,
+		"course_bearing_text": course_bearing_text,
 		"markers": markers.duplicate(),
 		"wrecks": wrecks,
+		"leviathans": leviathans,
+		"fort_sieges": fort_sieges,
+		"station_occupied": _station_player_active,
 		"storm_intensity": Weather.storm_intensity if Weather != null else 0.0,
 		"storm_center": Weather.storm_center if Weather != null else Vector3.ZERO,
 		"storm_radius": Weather.storm_radius if Weather != null else 0.0,
 		"storm_phase": _storm_phase,
 		"wind_heading": Weather.wind_heading if Weather != null else 0.0,
+		"wind_speed": Weather.local_wind_speed() if Weather != null else 8.0,
 	}
 
 
@@ -626,30 +786,56 @@ class _ChartCanvas extends Control:
 			_draw_dashed_circle(tp, 44.0, COL_CRIMSON, 3.2, 18)
 			_draw_dashed_circle(tp, 50.0, Color(COL_CRIMSON.r, COL_CRIMSON.g, COL_CRIMSON.b, 0.45), 1.5, 22)
 
-		# 7. Salvage wreck X markers.
+		# 7. Salvage wreck X markers & live world-threat ink stamps (Leviathan, Fort Siege).
 		for wp: Vector3 in snapshot.get("wrecks", []):
 			var wpx := _w2c(Vector2(wp.x, wp.z))
 			_draw_wreck_marker(wpx, font)
 
-		# 8. Player-placed chart markers.
+		for lpos: Vector3 in snapshot.get("leviathans", []):
+			var lpx := _w2c(Vector2(lpos.x, lpos.z))
+			_draw_leviathan_sigil(lpx, font)
+
+		for fpos: Vector3 in snapshot.get("fort_sieges", []):
+			var fpx := _w2c(Vector2(fpos.x, fpos.z))
+			_draw_fort_siege_stamp(fpx, font)
+
+		# 8. Sepia navigator's course-bearing dashed rhumb line + compass heading readout.
+		var spos: Vector3 = snapshot.get("ship_pos", Vector3.INF)
+		var ctarget: Vector3 = snapshot.get("course_target", Vector3.INF)
+		var bearing_txt := String(snapshot.get("course_bearing_text", ""))
+		if spos.is_finite() and ctarget.is_finite() and bearing_txt != "":
+			var ship_px_c := _w2c(Vector2(spos.x, spos.z))
+			var tgt_px_c := _w2c(Vector2(ctarget.x, ctarget.z))
+			_draw_course_bearing_line(ship_px_c, tgt_px_c, bearing_txt, bool(snapshot.get("course_from_pin", false)), font)
+
+		# 9. Player-placed chart markers.
 		for mp: Vector3 in snapshot.get("markers", []):
 			var mpx := _w2c(Vector2(mp.x, mp.z))
 			draw_arc(mpx, 14.0, 0.0, TAU, 24, COL_CRIMSON, 2.8, true)
 			draw_circle(mpx, 4.5, COL_CRIMSON)
 
-		# 9. Ship wake breadcrumb trail + Player ship silhouette & live heading arrow!
+		# 10. Ship wake breadcrumb trail + Player ship silhouette & live heading arrow!
 		var trail: Array = snapshot.get("trail", [])
 		for i in range(trail.size() - 1):
 			var a := _w2c(trail[i] as Vector2)
 			var b := _w2c(trail[i + 1] as Vector2)
 			draw_line(a, b, Color(COL_INK.r, COL_INK.g, COL_INK.b, 0.32), 2.0, true)
 
-		var spos: Vector3 = snapshot.get("ship_pos", Vector3.INF)
 		if spos.is_finite():
 			var ship_px := _w2c(Vector2(spos.x, spos.z))
 			_draw_ship_marker(ship_px, float(snapshot.get("ship_heading", 0.0)))
 
-		# 10. Decorative nautical compass rose & crisp double ink chart border.
+		# 11. Brass-divider center plotting reticle when player is actively inspecting Station_MapTable.
+		if bool(snapshot.get("station_occupied", false)):
+			_draw_plotting_reticle(size * 0.5, font)
+
+		# 12. Decorative nautical compass rose, live wind-direction feather, & double ink border.
+		_draw_wind_feather(
+			Vector2(w - 224.0, h - 92.0),
+			float(snapshot.get("wind_heading", 0.0)),
+			float(snapshot.get("wind_speed", 8.0)),
+			font
+		)
 		_draw_compass_rose(rose_c, 58.0, font)
 		_draw_chart_border(w, h)
 
@@ -711,9 +897,9 @@ class _ChartCanvas extends Control:
 		var max_y := size.y - 30.0
 		var max_x := maxf(margin_x, size.x - margin_x - tw)
 
-		# Avoid physical top-left brass paperweight & bottom-right compass rose / candle.
+		# Avoid physical top-left brass paperweight & bottom-right compass rose / wind feather.
 		var paperweight_rect := Rect2(0.0, 0.0, 182.0, 188.0)
-		var compass_rect := Rect2(size.x - 204.0, size.y - 196.0, 204.0, 196.0)
+		var compass_rect := Rect2(size.x - 270.0, size.y - 196.0, 270.0, 196.0)
 
 		var candidates: Array[Vector2] = [
 			Vector2(center.x - tw * 0.5, center.y + r_px + 18.0),
@@ -791,6 +977,156 @@ class _ChartCanvas extends Control:
 		draw_line(pos + Vector2(-r, r), pos + Vector2(r, -r), COL_CRIMSON, 3.2, true)
 		if font != null:
 			draw_string(font, pos + Vector2(-22.0, 22.0), "WRECK", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_CRIMSON)
+
+	func _draw_course_bearing_line(from_px: Vector2, to_px: Vector2, label_txt: String, is_pin: bool, font: Font) -> void:
+		var delta := to_px - from_px
+		var total_len := delta.length()
+		if total_len < 32.0:
+			return
+		var dir := delta / total_len
+		var perp := Vector2(-dir.y, dir.x)
+		var line_col := Color(0.52, 0.14, 0.09, 0.86) if is_pin else Color(0.32, 0.17, 0.08, 0.84)
+		var start_d := 20.0
+		var end_d := total_len - 18.0
+		var dash_len := 10.0
+		var gap_len := 7.0
+		var d := start_d
+		while d < end_d:
+			var seg_end := minf(d + dash_len, end_d)
+			draw_line(from_px + dir * d, from_px + dir * seg_end, line_col, 2.1, true)
+			d += dash_len + gap_len
+		# Subtle navigator's divider tick notches along longer plotted courses.
+		var tick_d := start_d + 72.0
+		while tick_d < end_d - 36.0:
+			var tp := from_px + dir * tick_d
+			draw_line(tp - perp * 4.0, tp + perp * 4.0, Color(line_col.r, line_col.g, line_col.b, 0.65), 1.4, true)
+			tick_d += 88.0
+
+		if font == null:
+			return
+		var fs := 13
+		var tsz := font.get_string_size(label_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var tw := tsz.x
+		var th := 15.0
+		# Offset label gently perpendicular to the dashed rhumb line, clamped inside chart margins.
+		var mid := from_px.lerp(to_px, 0.5)
+		var side := -1.0 if perp.y > 0.0 else 1.0
+		var lbl_center := mid + perp * (14.0 * side)
+		var bx := clampf(lbl_center.x - tw * 0.5, 36.0, maxf(36.0, size.x - 36.0 - tw))
+		var by := clampf(lbl_center.y + th * 0.35, 44.0, size.y - 34.0)
+		var pill := Rect2(bx - 6.0, by - th + 1.0, tw + 12.0, th + 5.0)
+		draw_rect(pill, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.88), true)
+		draw_rect(pill, Color(line_col.r, line_col.g, line_col.b, 0.65), false, 1.3)
+		draw_string(font, Vector2(bx, by), label_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, line_col)
+
+	func _draw_wind_feather(center: Vector2, heading_rad: float, wind_spd: float, font: Font) -> void:
+		var r := 29.0
+		draw_circle(center, r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.86))
+		draw_arc(center, r, 0.0, TAU, 28, COL_INK, 1.7, true)
+		draw_arc(center, r - 4.0, 0.0, TAU, 24, Color(COL_INK_SOFT.r, COL_INK_SOFT.g, COL_INK_SOFT.b, 0.50), 1.0, true)
+
+		# Weather.mean_wind_vector = (sin(h), 0, -cos(h)) -> 2D chart direction (sin(h), -cos(h)).
+		var dir := Vector2(sin(heading_rad), -cos(heading_rad))
+		var perp := Vector2(-dir.y, dir.x)
+		var tail := center - dir * 19.0
+		var tip := center + dir * 20.0
+		draw_line(tail, tip - dir * 5.0, COL_INK, 2.2, true)
+		var head := PackedVector2Array([
+			tip,
+			tip - dir * 10.0 + perp * 5.2,
+			tip - dir * 7.2,
+			tip - dir * 10.0 - perp * 5.2,
+		])
+		draw_colored_polygon(head, COL_INK)
+		draw_circle(center, 2.2, COL_GOLD)
+
+		# Nautical feather barbs scaled by live Weather.wind_speed (1..5 barbs; crimson accent in gales).
+		var barbs := clampi(int(roundf(wind_spd / 4.2)), 1, 5)
+		var gale := wind_spd >= 15.5
+		for i in barbs:
+			var t := float(i) * 4.2
+			var root_pt := tail + dir * (1.5 + t)
+			var barb_len := 8.5 - float(i) * 0.6
+			var b_col := COL_CRIMSON if (gale and i == 0) else COL_INK_SOFT
+			var wing_dir := (-dir * 0.72 + perp * 0.69).normalized()
+			var wing_dir_r := (-dir * 0.72 - perp * 0.69).normalized()
+			draw_line(root_pt, root_pt + wing_dir * barb_len, b_col, 1.7, true)
+			draw_line(root_pt, root_pt + wing_dir_r * barb_len, b_col, 1.7, true)
+
+		if font != null:
+			var lbl := "WIND"
+			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+			draw_string(font, Vector2(center.x - tw * 0.5, center.y + r + 14.0), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_INK_SOFT)
+
+	func _draw_plotting_reticle(center: Vector2, font: Font) -> void:
+		var col_brass := Color(0.56, 0.36, 0.12, 0.72)
+		var col_ink := Color(COL_INK.r, COL_INK.g, COL_INK.b, 0.56)
+		_draw_dashed_circle(center, 15.0, col_brass, 1.5, 12)
+		for dir: Vector2 in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+			draw_line(center + dir * 7.0, center + dir * 22.0, col_ink, 1.5, true)
+		draw_circle(center, 2.0, COL_CRIMSON)
+		if font != null:
+			var hint := "[Space] Drop / Clear Pin"
+			var tw := font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			var px := center.x - tw * 0.5
+			var py := size.y - 34.0
+			draw_rect(Rect2(px - 7.0, py - 13.0, tw + 14.0, 18.0), Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.82), true)
+			draw_string(font, Vector2(px, py), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, COL_INK_SOFT)
+
+	func _draw_leviathan_sigil(pos: Vector2, font: Font) -> void:
+		var verm_sepia := Color(0.64, 0.14, 0.12, 0.94)
+		var wash := Color(0.26, 0.12, 0.16, 0.24)
+		draw_circle(pos, 23.0, wash)
+		_draw_dashed_circle(pos, 24.0, Color(verm_sepia.r, verm_sepia.g, verm_sepia.b, 0.58), 1.6, 14)
+		# Six curled sea-monster tentacle star arms spiraling from the abyssal crown.
+		for arm in 6:
+			var base_a := float(arm) / 6.0 * TAU - PI * 0.5
+			var pts := PackedVector2Array()
+			for step in 9:
+				var t := float(step) / 8.0
+				var r := 5.5 + t * 18.0
+				var curl := sin(t * PI * 1.35) * 0.34 + t * t * 0.42
+				var a := base_a + curl
+				pts.append(pos + Vector2(cos(a), sin(a)) * r)
+			draw_polyline(pts, verm_sepia if arm % 2 == 0 else COL_INK, 2.3, true)
+		draw_circle(pos, 6.2, COL_INK)
+		draw_circle(pos, 3.2, COL_GOLD)
+		draw_circle(pos, 1.4, COL_CRIMSON)
+		if font != null:
+			var lbl := "LEVIATHAN"
+			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			var px := pos.x - tw * 0.5
+			var py := pos.y + 37.0
+			draw_rect(Rect2(px - 4.0, py - 12.0, tw + 8.0, 15.0), Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.80), true)
+			draw_string(font, Vector2(px, py), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, verm_sepia)
+
+	func _draw_fort_siege_stamp(pos: Vector2, font: Font) -> void:
+		var r := 17.5
+		draw_circle(pos, r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.86))
+		draw_arc(pos, r, 0.0, TAU, 8, COL_CRIMSON, 2.4, true)
+		draw_arc(pos, r - 3.5, 0.0, TAU, 8, Color(COL_INK.r, COL_INK.g, COL_INK.b, 0.65), 1.1, true)
+		# Crossed-cannons crimson siege emblem.
+		for ang_deg: float in [-38.0, 38.0]:
+			var a := deg_to_rad(ang_deg)
+			var d := Vector2(cos(a), sin(a))
+			var p := Vector2(-d.y, d.x)
+			var barrel := PackedVector2Array([
+				pos - d * 11.5 - p * 2.8,
+				pos + d * 11.5 - p * 1.8,
+				pos + d * 11.5 + p * 1.8,
+				pos - d * 11.5 + p * 2.8,
+			])
+			draw_colored_polygon(barrel, COL_INK)
+			draw_circle(pos - d * 12.5, 2.3, COL_CRIMSON)
+			draw_circle(pos + d * 12.6, 2.0, COL_GOLD)
+		draw_circle(pos, 2.6, COL_CRIMSON)
+		if font != null:
+			var lbl := "FORT SIEGE"
+			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+			var px := pos.x - tw * 0.5
+			var py := pos.y + 32.0
+			draw_rect(Rect2(px - 4.0, py - 12.0, tw + 8.0, 15.0), Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.80), true)
+			draw_string(font, Vector2(px, py), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, COL_CRIMSON)
 
 	func _draw_dashed_circle(center: Vector2, radius: float, col: Color, width: float, dashes: int) -> void:
 		var seg := TAU / float(dashes)

@@ -177,8 +177,8 @@ const CATALOG := {
 		"buoyancy": 1.65,
 		"float_radius": 0.18,
 		"shape": &"chalice",
-		"tint": Color(0.92, 0.74, 0.24),
-		"accent_tint": Color(0.18, 0.68, 0.74),
+		"tint": Color(0.98, 0.74, 0.16),
+		"accent_tint": Color(0.16, 0.70, 0.76),
 		"cursed": false,
 		"curse_flood_rate": 0.0,
 		"fragile": false,
@@ -197,8 +197,8 @@ const CATALOG := {
 		"buoyancy": 1.85,
 		"float_radius": 0.26,
 		"shape": &"crate",
-		"tint": Color(0.78, 0.56, 0.30),
-		"accent_tint": Color(0.76, 0.22, 0.16),
+		"tint": Color(0.76, 0.44, 0.16),
+		"accent_tint": Color(0.80, 0.20, 0.14),
 		"cursed": false,
 		"curse_flood_rate": 0.0,
 		"fragile": true,
@@ -550,6 +550,7 @@ static func _get_vcol_mat(roughness: float, metallic: float,
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color.WHITE
 	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
 	mat.roughness = roughness
 	mat.metallic = metallic
 	if emissive_energy > 0.001:
@@ -1154,12 +1155,12 @@ static func _sculpt_chalice_mesh(tint: Color, accent: Color, _tier: int, cursed:
 	var gem_st := SurfaceTool.new()
 	gem_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var gold_hi := tint.lightened(0.20)
+	var gold_hi := tint.lerp(Color(1.0, 0.90, 0.44), 0.34)
 	var gold_mid := tint
-	var gold_sh := tint.darkened(0.26)
-	var gold_deep := tint.darkened(0.44)
-	var bowl_dark := tint.darkened(0.66)
-	var bowl_floor := tint.darkened(0.80)
+	var gold_sh := Color(tint.r * 0.76, tint.g * 0.54, tint.b * 0.32)
+	var gold_deep := Color(tint.r * 0.54, tint.g * 0.34, tint.b * 0.16)
+	var bowl_dark := Color(tint.r * 0.34, tint.g * 0.19, tint.b * 0.08)
+	var bowl_floor := Color(tint.r * 0.18, tint.g * 0.10, tint.b * 0.04)
 	var gem_hi := accent.lerp(Color.WHITE, 0.36)
 	var gem_mid := accent
 	var gem_lo := accent.darkened(0.36)
@@ -1266,7 +1267,7 @@ static func _sculpt_chalice_mesh(tint: Color, accent: Color, _tier: int, cursed:
 		_add_faceted_gem(gold_st, Vector3(side_sgn * 0.144, 0.264, 0.0),
 			0.010, 0.010, 0.012, 6, gold_hi, gold_mid, gold_deep)
 
-	_commit_surface(mesh, gold_st, _get_vcol_mat(0.24, 0.86))
+	_commit_surface(mesh, gold_st, _get_vcol_mat(0.26, 0.74))
 	_commit_surface(mesh, gem_st, _get_vcol_mat(0.18, 0.22, accent, 1.8 if cursed else 0.58))
 	return mesh
 
@@ -1282,26 +1283,27 @@ static func _sculpt_crate_mesh(tint: Color, accent: Color, _tier: int, cursed: b
 	var metal_st := SurfaceTool.new()
 	metal_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var frame_hi := tint.lightened(0.12)
-	var frame_mid := tint.darkened(0.06)
-	var frame_lo := tint.darkened(0.28)
-	var plank_a := tint.darkened(0.13)
-	var plank_b := tint.darkened(0.22)
-	var seam_dark := tint.darkened(0.54)
-	var brace_hi := tint.lightened(0.06)
-	var brace_mid := tint.darkened(0.10)
-	var brace_lo := tint.darkened(0.30)
-	var rope_hi := Color(0.80, 0.68, 0.46)
-	var rope_lo := Color(0.52, 0.41, 0.24)
-	var seal_hi := accent.lightened(0.14)
+	var warm_oak := tint.lerp(Color(0.84, 0.50, 0.17), 0.30)
+	var frame_hi := warm_oak.lerp(Color(0.95, 0.68, 0.28), 0.28)
+	var frame_mid := warm_oak
+	var frame_lo := Color(warm_oak.r * 0.64, warm_oak.g * 0.50, warm_oak.b * 0.36)
+	var plank_a := Color(minf(warm_oak.r * 0.94, 1.0), warm_oak.g * 0.84, warm_oak.b * 0.70)
+	var plank_b := Color(warm_oak.r * 0.78, warm_oak.g * 0.64, warm_oak.b * 0.48)
+	var seam_dark := Color(warm_oak.r * 0.28, warm_oak.g * 0.19, warm_oak.b * 0.11)
+	var brace_hi := warm_oak.lerp(Color(0.93, 0.63, 0.24), 0.22)
+	var brace_mid := Color(warm_oak.r * 0.88, warm_oak.g * 0.76, warm_oak.b * 0.60)
+	var brace_lo := Color(warm_oak.r * 0.58, warm_oak.g * 0.44, warm_oak.b * 0.30)
+	var rope_hi := Color(0.86, 0.70, 0.40)
+	var rope_lo := Color(0.56, 0.40, 0.19)
+	var seal_hi := accent.lerp(Color(1.0, 0.44, 0.28), 0.22)
 	var seal_mid := accent
-	var seal_lo := accent.darkened(0.30)
-	var iron_hi := Color(0.34, 0.36, 0.40)
-	var iron_mid := Color(0.21, 0.23, 0.27)
-	var iron_lo := Color(0.10, 0.11, 0.14)
-	var gold_hi := Color(0.98, 0.82, 0.32)
-	var gold_mid := Color(0.88, 0.68, 0.20)
-	var gold_lo := Color(0.58, 0.42, 0.10)
+	var seal_lo := accent.darkened(0.32)
+	var iron_hi := Color(0.24, 0.22, 0.21)
+	var iron_mid := Color(0.14, 0.13, 0.125)
+	var iron_lo := Color(0.075, 0.07, 0.07)
+	var gold_hi := Color(1.0, 0.86, 0.34)
+	var gold_mid := Color(0.98, 0.74, 0.16)
+	var gold_lo := Color(0.62, 0.40, 0.08)
 
 	var cy := 0.270  # Crate spans y = 0.000..0.540, x/z = -0.270..+0.270.
 
@@ -1433,8 +1435,8 @@ static func _sculpt_crate_mesh(tint: Color, accent: Color, _tier: int, cursed: b
 	_add_faceted_gem(metal_st, Vector3(0.0, 0.553, 0.0), 0.018, 0.009, 0.018, 6,
 		gold_hi, gold_mid, gold_lo)
 
-	_commit_surface(mesh, wood_st, _get_vcol_mat(0.78, 0.05))
-	_commit_surface(mesh, metal_st, _get_vcol_mat(0.28, 0.84, accent if cursed else Color.BLACK, 1.4 if cursed else 0.0))
+	_commit_surface(mesh, wood_st, _get_vcol_mat(0.74, 0.03))
+	_commit_surface(mesh, metal_st, _get_vcol_mat(0.28, 0.76, accent if cursed else Color.BLACK, 1.4 if cursed else 0.0))
 	return mesh
 
 

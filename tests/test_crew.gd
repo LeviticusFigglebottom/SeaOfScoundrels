@@ -366,3 +366,96 @@ func test_castaway_raft_sculpted_geometry_npc_and_rescue() -> void:
 	check(not is_instance_valid(raft), "CastawayRaft tears down cleanly with zero dangling refs")
 	await _end()
 
+
+func test_crew_follow_escort_engages_hostile_enemy_and_resumes_follow() -> void:
+	_begin()
+	# Build dry island ground platform well above sea level (top surface y = 20.0).
+	var ground := StaticBody3D.new()
+	ground.collision_layer = 1
+	var cs := CollisionShape3D.new()
+	var bx := BoxShape3D.new()
+	bx.size = Vector3(44.0, 1.0, 44.0)
+	cs.shape = bx
+	ground.add_child(cs)
+	_root.add_child(ground)
+	ground.global_position = Vector3(0.0, 19.5, 0.0)
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.teleport(Vector3(0.0, 20.05, 0.0))
+
+	var crew_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(crew_pawn)
+	crew_pawn.teleport(Vector3(-1.8, 20.05, 1.4))
+	var crew_cc := CombatComponent.new()
+	crew_cc.name = "CombatComponent"
+	crew_cc.faction = &"player"
+	crew_cc.equipped_weapon = &"cutlass"
+	crew_cc.enable_effects = false
+	crew_pawn.add_child(crew_cc)
+	var brain := CrewBrain.new()
+	brain.setup(null, captain, &"lookout")
+	crew_pawn.add_child(brain)
+
+	var enemy := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(enemy)
+	enemy.teleport(Vector3(7.5, 20.05, 0.0))
+	enemy.max_health = 45.0
+	enemy.health = 45.0
+	var enemy_cc := CombatComponent.new()
+	enemy_cc.name = "CombatComponent"
+	enemy_cc.faction = &"drowned"
+	enemy_cc.equipped_weapon = &"cutlass"
+	enemy_cc.enable_effects = false
+	enemy.add_child(enemy_cc)
+
+	var battle_cries := [0]
+	brain.callout_spoken.connect(func(_sp: String, _txt: String, cat: StringName) -> void:
+		if cat == &"battle_cry":
+			battle_cries[0] += 1
+	)
+	var hits_landed := [0]
+	var total_dmg := [0.0]
+	crew_cc.hit_landed.connect(func(_tgt: Pawn, dmg: float, _heavy: bool) -> void:
+		hits_landed[0] += 1
+		total_dmg[0] += dmg
+	)
+
+	await physics_frames(8)
+	brain.give_order(&"follow")
+
+	var spotted := false
+	var min_enemy_dist := INF
+	for _i in 420:
+		await physics_frames(1)
+		if brain.get_melee_target() == enemy:
+			spotted = true
+		min_enemy_dist = minf(min_enemy_dist, crew_pawn.global_position.distance_to(enemy.global_position))
+		if enemy.dead:
+			break
+
+	print("    escort combat: spotted=%s min_dist=%.2f m hits=%d dmg=%.1f enemy_dead=%s cries=%d" % [
+		str(spotted), min_enemy_dist, hits_landed[0], total_dmg[0], str(enemy.dead), battle_cries[0]
+	])
+	check(spotted, "crewmate on &'follow' spots nearby hostile drowned combatant")
+	check(min_enemy_dist < 2.35, "crewmate closes into cutlass engagement range (min_dist=%.2f)" % min_enemy_dist)
+	check(hits_landed[0] >= 1 and total_dmg[0] >= 15.0, "crewmate deals real melee damage via CombatComponent")
+	check(enemy.dead, "crewmate defeats hostile drowned combatant cleanly")
+	check_eq(battle_cries[0], 1, "persona battle-cry fires once with cooldown preventing spam")
+
+	# Move captain across the beach and verify crewmate seamlessly resumes escorting.
+	captain.teleport(Vector3(-8.5, 20.05, -2.0))
+	for _i in 320:
+		await physics_frames(1)
+		if crew_pawn.global_position.distance_to(captain.global_position) < 3.0:
+			break
+	var dist_to_cap := crew_pawn.global_position.distance_to(captain.global_position)
+	print("    after combat: dist_to_captain=%.2f m melee_target=%s order=%s" % [
+		dist_to_cap, str(brain.get_melee_target()), String(brain.current_order)
+	])
+	check(brain.get_melee_target() == null, "melee target clears once threats are defeated")
+	check_eq(brain.current_order, &"follow", "crewmate keeps &'follow' order intact")
+	check(dist_to_cap < 3.2, "crewmate seamlessly resumes following captain (dist=%.2f m)" % dist_to_cap)
+	await _end()
+
+

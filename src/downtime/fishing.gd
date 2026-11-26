@@ -380,6 +380,7 @@ func _build_bobber() -> void:
 
 	_bobber_mat = StandardMaterial3D.new()
 	_bobber_mat.vertex_color_use_as_albedo = true
+	_bobber_mat.vertex_color_is_srgb = true
 	_bobber_mat.roughness = 0.34
 	_bobber_mat.metallic = 0.10
 	_bobber_mat.clearcoat_enabled = true
@@ -447,6 +448,7 @@ func _get_bobber_swivel_world_pos() -> Vector3:
 func _build_fishing_rod() -> void:
 	_rod_mat = StandardMaterial3D.new()
 	_rod_mat.vertex_color_use_as_albedo = true
+	_rod_mat.vertex_color_is_srgb = true
 	_rod_mat.roughness = 0.40
 	_rod_mat.metallic = 0.16
 
@@ -671,6 +673,7 @@ func _build_line_ribbon() -> void:
 	_line_mat = StandardMaterial3D.new()
 	_line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_line_mat.vertex_color_use_as_albedo = true
+	_line_mat.vertex_color_is_srgb = true
 	_line_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	_line_mesh_inst = MeshInstance3D.new()
@@ -856,6 +859,7 @@ func _spawn_leaping_fish(species: Dictionary, start_pos: Vector3, target_pos: Ve
 
 	_fish_body_mat = StandardMaterial3D.new()
 	_fish_body_mat.vertex_color_use_as_albedo = true
+	_fish_body_mat.vertex_color_is_srgb = true
 	_fish_body_mat.roughness = 0.22
 	_fish_body_mat.metallic = 0.14
 	_fish_body_mat.clearcoat_enabled = true
@@ -869,6 +873,7 @@ func _spawn_leaping_fish(species: Dictionary, start_pos: Vector3, target_pos: Ve
 
 	_fish_eye_mat = StandardMaterial3D.new()
 	_fish_eye_mat.vertex_color_use_as_albedo = true
+	_fish_eye_mat.vertex_color_is_srgb = true
 	_fish_eye_mat.roughness = 0.06
 	_fish_eye_mat.metallic = 0.18
 	_fish_eye_mat.clearcoat_enabled = true

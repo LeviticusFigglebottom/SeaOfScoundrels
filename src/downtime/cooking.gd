@@ -18,24 +18,27 @@ const BURN_TIME := 18.0
 const SKILLET_CENTER := Vector3(-0.055, 0.678, -0.040)
 const FOOD_BASE_POS := Vector3(-0.055, 0.695, -0.040)
 const STEAM_POS := Vector3(-0.055, 0.748, -0.040)
+const TRIPOD_SKILLET_CENTER := Vector3(0.0, 0.560, 0.0)
+const TRIPOD_FOOD_BASE_POS := Vector3(0.0, 0.576, 0.0)
+const TRIPOD_STEAM_POS := Vector3(0.0, 0.630, 0.0)
 const FLUE_CENTER := Vector2(0.205, 0.185)
 
-# Painterly cast-iron, hammered copper, brass, coal & food palettes.
-const COL_IRON_HI := Color(0.28, 0.29, 0.32)
-const COL_IRON_MID := Color(0.18, 0.19, 0.21)
-const COL_IRON_DARK := Color(0.11, 0.12, 0.14)
-const COL_IRON_PANEL := Color(0.13, 0.14, 0.16)
-const COL_IRON_SOOT := Color(0.055, 0.055, 0.065)
-const COL_IRON_OILED := Color(0.12, 0.125, 0.135)
-const COL_RIVET := Color(0.32, 0.33, 0.36)
+# Painterly soot-black wrought cast-iron, hammered copper, brass, coal & food palettes (sRGB).
+const COL_IRON_HI := Color(0.16, 0.145, 0.135)
+const COL_IRON_MID := Color(0.08, 0.075, 0.08)
+const COL_IRON_DARK := Color(0.055, 0.050, 0.052)
+const COL_IRON_PANEL := Color(0.068, 0.062, 0.064)
+const COL_IRON_SOOT := Color(0.032, 0.028, 0.030)
+const COL_IRON_OILED := Color(0.065, 0.060, 0.062)
+const COL_RIVET := Color(0.20, 0.185, 0.17)
 
-const COL_BRASS_HI := Color(0.92, 0.74, 0.30)
-const COL_BRASS_MID := Color(0.78, 0.58, 0.20)
-const COL_BRASS_DARK := Color(0.52, 0.37, 0.12)
+const COL_BRASS_HI := Color(0.96, 0.78, 0.30)
+const COL_BRASS_MID := Color(0.82, 0.60, 0.19)
+const COL_BRASS_DARK := Color(0.54, 0.37, 0.11)
 
-const COL_COPPER_HI := Color(0.95, 0.58, 0.32)
-const COL_COPPER_MID := Color(0.84, 0.43, 0.20)
-const COL_COPPER_DARK := Color(0.58, 0.27, 0.12)
+const COL_COPPER_HI := Color(0.96, 0.58, 0.30)
+const COL_COPPER_MID := Color(0.84, 0.42, 0.18)
+const COL_COPPER_DARK := Color(0.56, 0.25, 0.10)
 
 const COL_COAL_CORE := Color(1.00, 0.76, 0.22)
 const COL_COAL_HOT := Color(1.00, 0.38, 0.07)
@@ -57,6 +60,7 @@ const COL_CRAB_MEAT := Color(1.00, 0.99, 0.95)
 const COL_CRAB_TIP := Color(0.86, 0.82, 0.74)
 
 @export var build_hearth: bool = true
+@export var build_campfire_tripod: bool = false
 
 var cooking_item: Dictionary = {}
 var elapsed: float = 0.0
@@ -64,6 +68,7 @@ var cook_state: StringName = &"empty"  # &"empty", &"raw", &"cooked", &"burnt"
 var interactable: Interactable = null
 
 var _hearth_mesh: MeshInstance3D = null
+var _tripod_mesh: MeshInstance3D = null
 var _coal_mesh: MeshInstance3D = null
 var _hearth_light: OmniLight3D = null
 var _skillet_mesh: MeshInstance3D = null
@@ -93,11 +98,13 @@ var _food_base_yaw: float = 0.32
 
 func _ready() -> void:
 	interactable = Interactable.create("Cook fish or crab on pan", 0.7)
-	interactable.position = Vector3(0.0, 0.4, 0.0)
+	interactable.position = Vector3(0.0, 0.62, 0.0) if (build_campfire_tripod and not build_hearth) else Vector3(0.0, 0.4, 0.0)
 	interactable.interacted.connect(_on_interacted)
 	add_child(interactable)
 	if build_hearth:
 		_build_hearth_visual()
+	elif build_campfire_tripod:
+		_build_campfire_tripod_visual()
 	_build_food_visual()
 
 
@@ -114,13 +121,18 @@ func _exit_tree() -> void:
 	if _steam_proc != null:
 		_steam_proc.color_ramp = null
 		_steam_proc.scale_curve = null
-	for mi: MeshInstance3D in [_hearth_mesh, _coal_mesh, _skillet_mesh, _food_mesh]:
+	for mi: MeshInstance3D in [_hearth_mesh, _tripod_mesh, _coal_mesh, _skillet_mesh, _food_mesh]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
 				for surf_i in mi.mesh.get_surface_count():
 					mi.set_surface_override_material(surf_i, null)
 			mi.mesh = null
 			mi.material_override = null
+	_hearth_mesh = null
+	_tripod_mesh = null
+	_coal_mesh = null
+	_skillet_mesh = null
+	_food_mesh = null
 	_steam_tex = null
 	_steam_mat = null
 	_steam_proc = null
@@ -137,36 +149,57 @@ func _exit_tree() -> void:
 	_crab_mesh = null
 
 
+func _food_base_pos() -> Vector3:
+	return TRIPOD_FOOD_BASE_POS if (build_campfire_tripod and not build_hearth) else FOOD_BASE_POS
+
+
+func _steam_base_pos() -> Vector3:
+	return TRIPOD_STEAM_POS if (build_campfire_tripod and not build_hearth) else STEAM_POS
+
+
 # ==============================================================================
-# 1. Sculpted Cast-Iron Naval Galley Hearth, Glowing Coal Bed & Copper Skillet
+# 1. Sculpted Cast-Iron Naval Galley Hearth, Campfire Tripod & Copper Skillet
 # ==============================================================================
+
+func _ensure_hardware_materials() -> void:
+	if _iron_mat == null:
+		_iron_mat = StandardMaterial3D.new()
+		_iron_mat.vertex_color_use_as_albedo = true
+		_iron_mat.vertex_color_is_srgb = true
+		_iron_mat.metallic = 0.62
+		_iron_mat.roughness = 0.48
+
+	if _brass_mat == null:
+		_brass_mat = StandardMaterial3D.new()
+		_brass_mat.vertex_color_use_as_albedo = true
+		_brass_mat.vertex_color_is_srgb = true
+		_brass_mat.metallic = 0.84
+		_brass_mat.roughness = 0.28
+
+	if _skillet_iron_mat == null:
+		_skillet_iron_mat = StandardMaterial3D.new()
+		_skillet_iron_mat.vertex_color_use_as_albedo = true
+		_skillet_iron_mat.vertex_color_is_srgb = true
+		_skillet_iron_mat.metallic = 0.62
+		_skillet_iron_mat.roughness = 0.36
+		_skillet_iron_mat.clearcoat_enabled = true
+		_skillet_iron_mat.clearcoat = 0.26
+		_skillet_iron_mat.clearcoat_roughness = 0.24
+
+	if _copper_mat == null:
+		_copper_mat = StandardMaterial3D.new()
+		_copper_mat.vertex_color_use_as_albedo = true
+		_copper_mat.vertex_color_is_srgb = true
+		_copper_mat.metallic = 0.86
+		_copper_mat.roughness = 0.26
+
 
 func _build_hearth_visual() -> void:
-	_iron_mat = StandardMaterial3D.new()
-	_iron_mat.vertex_color_use_as_albedo = true
-	_iron_mat.metallic = 0.68
-	_iron_mat.roughness = 0.50
-
-	_brass_mat = StandardMaterial3D.new()
-	_brass_mat.vertex_color_use_as_albedo = true
-	_brass_mat.metallic = 0.84
-	_brass_mat.roughness = 0.28
-
-	_skillet_iron_mat = StandardMaterial3D.new()
-	_skillet_iron_mat.vertex_color_use_as_albedo = true
-	_skillet_iron_mat.metallic = 0.72
-	_skillet_iron_mat.roughness = 0.34
-	_skillet_iron_mat.clearcoat_enabled = true
-	_skillet_iron_mat.clearcoat = 0.28
-	_skillet_iron_mat.clearcoat_roughness = 0.24
-
-	_copper_mat = StandardMaterial3D.new()
-	_copper_mat.vertex_color_use_as_albedo = true
-	_copper_mat.metallic = 0.86
-	_copper_mat.roughness = 0.26
+	_ensure_hardware_materials()
 
 	_coal_mat = StandardMaterial3D.new()
 	_coal_mat.vertex_color_use_as_albedo = true
+	_coal_mat.vertex_color_is_srgb = true
 	_coal_mat.roughness = 0.84
 	_coal_mat.metallic = 0.04
 	_coal_mat.emission_enabled = true
@@ -203,15 +236,161 @@ func _build_hearth_visual() -> void:
 	add_child(_hearth_light)
 
 	# 1d. Heavy copper-rimmed cast-iron frying skillet resting on cooktop.
+	_mount_skillet_mesh(SKILLET_CENTER)
+
+
+func _build_campfire_tripod_visual() -> void:
+	_ensure_hardware_materials()
+
+	# Sculpted 3-leg forged-iron campfire cooking tripod + link chain + 3-point bridle.
+	var tripod_array := _build_campfire_tripod_mesh()
+	_tripod_mesh = MeshInstance3D.new()
+	_tripod_mesh.name = "CampfireTripod"
+	_tripod_mesh.mesh = tripod_array
+	_tripod_mesh.set_surface_override_material(0, _iron_mat)
+	if tripod_array.get_surface_count() > 1:
+		_tripod_mesh.set_surface_override_material(1, _brass_mat)
+	add_child(_tripod_mesh)
+
+	# Hanging copper-rimmed cast-iron skillet suspended cleanly at y = 0.56 m over the embers!
+	_mount_skillet_mesh(TRIPOD_SKILLET_CENTER)
+
+
+func _mount_skillet_mesh(local_pos: Vector3) -> void:
 	var skillet_array := _build_skillet_mesh()
 	_skillet_mesh = MeshInstance3D.new()
 	_skillet_mesh.name = "FryingSkillet"
-	_skillet_mesh.position = SKILLET_CENTER
+	_skillet_mesh.position = local_pos
 	_skillet_mesh.mesh = skillet_array
 	_skillet_mesh.set_surface_override_material(0, _skillet_iron_mat)
 	if skillet_array.get_surface_count() > 1:
 		_skillet_mesh.set_surface_override_material(1, _copper_mat)
 	add_child(_skillet_mesh)
+
+
+static func _build_campfire_tripod_mesh() -> ArrayMesh:
+	var iron_st := SurfaceTool.new()
+	iron_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var brass_st := SurfaceTool.new()
+	brass_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const LEG_FOOT_R := 0.68
+	const APEX_Y := 1.46
+	const PAN_RIM_Y := TRIPOD_SKILLET_CENTER.y + 0.046
+	const PAN_RIM_R := 0.198
+	const BRIDLE_Y := 0.85
+
+	# 1. Three splayed forged-iron tripod legs planted firmly at y = 0.0 (r = 0.68 m straddling fire ring).
+	for li in 3:
+		var ang := deg_to_rad(30.0 + float(li) * 120.0)
+		var rdir := Vector3(cos(ang), 0.0, sin(ang))
+		var foot := rdir * LEG_FOOT_R
+		# Beveled octagonal forged iron foot pad resting flush at y = 0.0 (+ shallow sand spike).
+		var foot_rings: Array[Array] = [
+			[-0.060, 0.000, COL_IRON_SOOT],
+			[-0.060, 0.012, COL_IRON_SOOT],
+			[0.000, 0.044, COL_IRON_DARK],
+			[0.022, 0.040, COL_IRON_MID],
+			[0.036, 0.024, COL_IRON_HI],
+		]
+		_append_lathe_y(iron_st, foot_rings, 6, foot)
+
+		# Slightly arched forged iron tripod shaft converging to apex + decorative crossed finial!
+		var p_bot := foot + Vector3(0.0, 0.024, 0.0)
+		var p_mid := rdir * (LEG_FOOT_R * 0.52) + Vector3(0.0, APEX_Y * 0.52, 0.0)
+		var p_apex := rdir * 0.028 + Vector3(0.0, APEX_Y, 0.0)
+		var p_tip := -rdir * 0.068 + Vector3(0.0, APEX_Y + 0.135, 0.0)
+		_append_tube_chain(
+			iron_st,
+			[p_bot, p_mid, p_apex, p_tip],
+			[0.022, 0.020, 0.018, 0.011],
+			[COL_IRON_DARK, COL_IRON_MID, COL_IRON_HI, COL_IRON_HI],
+			6
+		)
+		# Decorative forged spear-tip finial capping each crossed iron leg.
+		_append_cone_spike(iron_st, p_tip, p_tip + (-rdir * 0.018 + Vector3(0.0, 0.036, 0.0)),
+			0.013, COL_IRON_HI, COL_RIVET)
+
+		# Small forged reinforcement sleeve & brass stud midway up each leg.
+		_append_cylinder_between(
+			iron_st,
+			p_mid - Vector3(0.0, 0.03, 0.0),
+			p_mid + Vector3(0.0, 0.03, 0.0),
+			0.025, 0.025, 6, COL_IRON_DARK, COL_IRON_HI
+		)
+		_append_rivet_dome(brass_st, p_mid + rdir * 0.024, rdir, 0.009, 0.006, COL_BRASS_HI)
+
+	# 2. Forged iron apex binding crown collar + gleaming brass hinge ring & suspension hook.
+	var crown_rings: Array[Array] = [
+		[APEX_Y - 0.052, 0.056, COL_IRON_DARK],
+		[APEX_Y - 0.036, 0.068, COL_IRON_HI],
+		[APEX_Y + 0.022, 0.068, COL_IRON_HI],
+		[APEX_Y + 0.038, 0.054, COL_IRON_DARK],
+	]
+	_append_lathe_y(iron_st, crown_rings, 8)
+	var brass_band: Array[Array] = [
+		[APEX_Y - 0.022, 0.069, COL_BRASS_DARK],
+		[APEX_Y - 0.008, 0.074, COL_BRASS_HI],
+		[APEX_Y + 0.008, 0.074, COL_BRASS_HI],
+		[APEX_Y + 0.022, 0.069, COL_BRASS_DARK],
+	]
+	_append_lathe_y(brass_st, brass_band, 8)
+
+	# Apex suspension pin & hook directly beneath the binding crown.
+	_append_cylinder_between(iron_st, Vector3(0.0, APEX_Y - 0.03, 0.0), Vector3(0.0, APEX_Y - 0.11, 0.0),
+		0.016, 0.012, 6, COL_IRON_MID, COL_IRON_HI)
+
+	# 3. Sculpted 7-link forged iron suspension chain descending from apex hook to bridle ring.
+	var chain_top_y := APEX_Y - 0.105
+	var chain_links := 7
+	var link_step := (chain_top_y - BRIDLE_Y) / float(chain_links)
+	for ci in chain_links:
+		var cy := chain_top_y - (float(ci) + 0.5) * link_step
+		var link_h := link_step * 0.62
+		var link_w := 0.022
+		var dir_x := Vector3.RIGHT if (ci % 2 == 0) else Vector3.FORWARD
+		var p_t := Vector3(0.0, cy + link_h, 0.0)
+		var p_b := Vector3(0.0, cy - link_h, 0.0)
+		var p_tl := Vector3(0.0, cy + link_h * 0.55, 0.0) - dir_x * link_w
+		var p_tr := Vector3(0.0, cy + link_h * 0.55, 0.0) + dir_x * link_w
+		var p_bl := Vector3(0.0, cy - link_h * 0.55, 0.0) - dir_x * link_w
+		var p_br := Vector3(0.0, cy - link_h * 0.55, 0.0) + dir_x * link_w
+		_append_cylinder_between(iron_st, p_t, p_tl, 0.0075, 0.0075, 5, COL_IRON_HI, COL_IRON_MID)
+		_append_cylinder_between(iron_st, p_t, p_tr, 0.0075, 0.0075, 5, COL_IRON_HI, COL_IRON_MID)
+		_append_cylinder_between(iron_st, p_tl, p_bl, 0.0075, 0.0075, 5, COL_IRON_MID, COL_IRON_DARK)
+		_append_cylinder_between(iron_st, p_tr, p_br, 0.0075, 0.0075, 5, COL_IRON_MID, COL_IRON_DARK)
+		_append_cylinder_between(iron_st, p_bl, p_b, 0.0075, 0.0075, 5, COL_IRON_DARK, COL_IRON_HI)
+		_append_cylinder_between(iron_st, p_br, p_b, 0.0075, 0.0075, 5, COL_IRON_DARK, COL_IRON_HI)
+
+	# Forged iron + brass swivel bridle collector ring at y = BRIDLE_Y.
+	var bridle_rings: Array[Array] = [
+		[BRIDLE_Y - 0.020, 0.020, COL_BRASS_DARK],
+		[BRIDLE_Y - 0.008, 0.032, COL_BRASS_HI],
+		[BRIDLE_Y + 0.008, 0.032, COL_BRASS_HI],
+		[BRIDLE_Y + 0.020, 0.020, COL_BRASS_DARK],
+	]
+	_append_lathe_y(brass_st, bridle_rings, 8)
+
+	# 4. Three forged-iron bail chains & riveted rim lug brackets cradling the hanging cast-iron skillet!
+	for bi in 3:
+		# Offset 60 deg from handle direction so all 3 bail chains clear the skillet handle cleanly!
+		var bang := deg_to_rad(25.0 + float(bi) * 120.0)
+		var bdir := Vector3(cos(bang), 0.0, sin(bang))
+		var top_pt := bdir * 0.026 + Vector3(0.0, BRIDLE_Y - 0.012, 0.0)
+		var rim_pt := bdir * PAN_RIM_R + Vector3(0.0, PAN_RIM_Y, 0.0)
+		_append_cylinder_between(iron_st, top_pt, rim_pt, 0.007, 0.007, 5, COL_IRON_HI, COL_IRON_MID)
+		# Small forged iron lug ear & brass rivet gripping the skillet rim.
+		_append_beveled_box(
+			iron_st, rim_pt + bdir * 0.008 - Vector3(0.0, 0.010, 0.0),
+			Vector3(0.024, 0.026, 0.024), 0.005, COL_IRON_HI, COL_IRON_MID, COL_IRON_DARK
+		)
+		_append_rivet_dome(brass_st, rim_pt + bdir * 0.020 - Vector3(0.0, 0.010, 0.0), bdir, 0.006, 0.004, COL_BRASS_HI)
+
+	iron_st.generate_normals()
+	var mesh := iron_st.commit()
+	brass_st.generate_normals()
+	brass_st.commit(mesh)
+	return mesh
 
 
 static func _build_galley_hearth_mesh() -> ArrayMesh:
@@ -609,6 +788,7 @@ func _build_food_visual() -> void:
 
 	_food_mat = StandardMaterial3D.new()
 	_food_mat.vertex_color_use_as_albedo = true
+	_food_mat.vertex_color_is_srgb = true
 	_food_mat.albedo_color = Color(0.95, 0.66, 0.58)
 	_food_mat.roughness = 0.34
 	_food_mat.metallic = 0.06
@@ -619,7 +799,7 @@ func _build_food_visual() -> void:
 	_food_mesh = MeshInstance3D.new()
 	_food_mesh.name = "SizzlingFood"
 	_food_mesh.mesh = _fish_mesh
-	_food_mesh.position = FOOD_BASE_POS
+	_food_mesh.position = _food_base_pos()
 	_food_mesh.rotation = Vector3(0.0, _food_base_yaw, 0.0)
 	_food_mesh.material_override = _food_mat
 	_food_mesh.visible = false
@@ -640,57 +820,57 @@ func _build_steam_particles() -> void:
 	_steam_mat.albedo_texture = _steam_tex
 
 	_steam_quad = QuadMesh.new()
-	_steam_quad.size = Vector2(0.24, 0.24)
+	_steam_quad.size = Vector2(0.32, 0.32)
 	_steam_quad.material = _steam_mat
 
 	var scale_curve := Curve.new()
-	scale_curve.add_point(Vector2(0.0, 0.42))
-	scale_curve.add_point(Vector2(0.35, 1.05))
-	scale_curve.add_point(Vector2(1.0, 1.68))
+	scale_curve.add_point(Vector2(0.0, 0.48))
+	scale_curve.add_point(Vector2(0.35, 1.12))
+	scale_curve.add_point(Vector2(1.0, 1.82))
 	_steam_scale_tex = CurveTexture.new()
 	_steam_scale_tex.curve = scale_curve
 
 	_steam_ramp = _make_color_ramp(
 		PackedFloat32Array([0.0, 0.20, 0.68, 1.0]),
 		PackedColorArray([
-			Color(0.97, 0.96, 0.93, 0.0),
-			Color(0.97, 0.96, 0.93, 0.24),
-			Color(0.94, 0.93, 0.90, 0.14),
-			Color(0.92, 0.92, 0.90, 0.0),
+			Color(0.98, 0.96, 0.91, 0.0),
+			Color(0.98, 0.96, 0.91, 0.42),
+			Color(0.95, 0.92, 0.87, 0.24),
+			Color(0.92, 0.90, 0.86, 0.0),
 		])
 	)
 
 	_steam_proc = ParticleProcessMaterial.new()
 	_steam_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
 	_steam_proc.emission_ring_axis = Vector3.UP
-	_steam_proc.emission_ring_radius = 0.105
+	_steam_proc.emission_ring_radius = 0.115
 	_steam_proc.emission_ring_inner_radius = 0.018
 	_steam_proc.emission_ring_height = 0.02
 	_steam_proc.direction = Vector3.UP
-	_steam_proc.spread = 20.0
-	_steam_proc.initial_velocity_min = 0.18
-	_steam_proc.initial_velocity_max = 0.32
-	_steam_proc.gravity = Vector3(0.0, 0.14, 0.0)
-	_steam_proc.damping_min = 0.25
-	_steam_proc.damping_max = 0.45
+	_steam_proc.spread = 22.0
+	_steam_proc.initial_velocity_min = 0.20
+	_steam_proc.initial_velocity_max = 0.36
+	_steam_proc.gravity = Vector3(0.0, 0.16, 0.0)
+	_steam_proc.damping_min = 0.22
+	_steam_proc.damping_max = 0.42
 	_steam_proc.angle_min = 0.0
 	_steam_proc.angle_max = 360.0
 	_steam_proc.angular_velocity_min = -26.0
 	_steam_proc.angular_velocity_max = 26.0
-	_steam_proc.scale_min = 0.65
-	_steam_proc.scale_max = 1.08
+	_steam_proc.scale_min = 0.84
+	_steam_proc.scale_max = 1.38
 	_steam_proc.scale_curve = _steam_scale_tex
 	_steam_proc.color_ramp = _steam_ramp
 
 	_steam_particles = GPUParticles3D.new()
 	_steam_particles.name = "CookingSteam"
-	_steam_particles.position = STEAM_POS
-	_steam_particles.amount = 16
-	_steam_particles.lifetime = 1.65
+	_steam_particles.position = _steam_base_pos()
+	_steam_particles.amount = 18
+	_steam_particles.lifetime = 1.80
 	_steam_particles.local_coords = true
 	_steam_particles.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	_steam_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_steam_particles.visibility_aabb = AABB(Vector3(-0.6, -0.1, -0.6), Vector3(1.2, 1.4, 1.2))
+	_steam_particles.visibility_aabb = AABB(Vector3(-0.7, -0.1, -0.7), Vector3(1.4, 1.6, 1.4))
 	_steam_particles.process_material = _steam_proc
 	_steam_particles.draw_pass_1 = _steam_quad
 	_steam_particles.emitting = false
@@ -978,7 +1158,7 @@ func _update_food_visual() -> void:
 		_steam_particles.visible = active
 		_steam_particles.emitting = active
 	if not active:
-		_food_mesh.position = FOOD_BASE_POS
+		_food_mesh.position = _food_base_pos()
 		_food_mesh.rotation = Vector3(0.0, _food_base_yaw, 0.0)
 		return
 
@@ -1023,45 +1203,45 @@ func _update_steam_profile() -> void:
 	if _steam_proc == null:
 		return
 	if cook_state == &"raw":
-		_steam_proc.initial_velocity_min = 0.16
-		_steam_proc.initial_velocity_max = 0.28
-		_steam_proc.scale_min = 0.62
-		_steam_proc.scale_max = 1.02
+		_steam_proc.initial_velocity_min = 0.20
+		_steam_proc.initial_velocity_max = 0.34
+		_steam_proc.scale_min = 0.84
+		_steam_proc.scale_max = 1.36
 		_steam_ramp = _make_color_ramp(
-			PackedFloat32Array([0.0, 0.22, 0.68, 1.0]),
+			PackedFloat32Array([0.0, 0.20, 0.68, 1.0]),
 			PackedColorArray([
-				Color(0.97, 0.96, 0.93, 0.0),
-				Color(0.97, 0.96, 0.93, 0.24),
-				Color(0.94, 0.93, 0.90, 0.13),
-				Color(0.92, 0.92, 0.90, 0.0),
+				Color(0.98, 0.96, 0.91, 0.0),
+				Color(0.98, 0.96, 0.91, 0.42),
+				Color(0.95, 0.92, 0.87, 0.24),
+				Color(0.92, 0.90, 0.86, 0.0),
 			])
 		)
 	elif cook_state == &"cooked":
-		_steam_proc.initial_velocity_min = 0.22
-		_steam_proc.initial_velocity_max = 0.38
-		_steam_proc.scale_min = 0.80
-		_steam_proc.scale_max = 1.28
+		_steam_proc.initial_velocity_min = 0.24
+		_steam_proc.initial_velocity_max = 0.42
+		_steam_proc.scale_min = 1.02
+		_steam_proc.scale_max = 1.56
 		_steam_ramp = _make_color_ramp(
-			PackedFloat32Array([0.0, 0.20, 0.66, 1.0]),
+			PackedFloat32Array([0.0, 0.18, 0.66, 1.0]),
 			PackedColorArray([
-				Color(1.00, 0.95, 0.84, 0.0),
-				Color(1.00, 0.95, 0.84, 0.38),
-				Color(0.96, 0.90, 0.78, 0.22),
+				Color(1.00, 0.95, 0.85, 0.0),
+				Color(1.00, 0.95, 0.85, 0.42),
+				Color(0.96, 0.90, 0.78, 0.25),
 				Color(0.92, 0.88, 0.80, 0.0),
 			])
 		)
 	else:
-		_steam_proc.initial_velocity_min = 0.28
-		_steam_proc.initial_velocity_max = 0.48
-		_steam_proc.scale_min = 1.05
-		_steam_proc.scale_max = 1.65
+		_steam_proc.initial_velocity_min = 0.30
+		_steam_proc.initial_velocity_max = 0.50
+		_steam_proc.scale_min = 1.20
+		_steam_proc.scale_max = 1.84
 		_steam_ramp = _make_color_ramp(
 			PackedFloat32Array([0.0, 0.18, 0.62, 1.0]),
 			PackedColorArray([
-				Color(0.16, 0.15, 0.15, 0.0),
-				Color(0.15, 0.14, 0.14, 0.66),
-				Color(0.22, 0.21, 0.21, 0.40),
-				Color(0.26, 0.25, 0.25, 0.0),
+				Color(0.14, 0.13, 0.13, 0.0),
+				Color(0.14, 0.13, 0.13, 0.58),
+				Color(0.20, 0.19, 0.19, 0.36),
+				Color(0.24, 0.23, 0.23, 0.0),
 			])
 		)
 	_steam_proc.color_ramp = _steam_ramp
@@ -1128,7 +1308,7 @@ func _physics_process(delta: float) -> void:
 		var hop := absf(sin(_anim_time * 19.0)) * 0.0024 * vig
 		var shim_x := sin(_anim_time * 23.0) * 0.0016 * vig
 		var shim_z := cos(_anim_time * 17.0) * 0.0016 * vig
-		_food_mesh.position = FOOD_BASE_POS + Vector3(shim_x, hop, shim_z)
+		_food_mesh.position = _food_base_pos() + Vector3(shim_x, hop, shim_z)
 		_food_mesh.rotation = Vector3(
 			sin(_anim_time * 14.5) * 0.036 * vig,
 			_food_base_yaw + cos(_anim_time * 11.0) * 0.026 * vig,

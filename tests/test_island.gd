@@ -905,4 +905,163 @@ func test_outpost_harbour_life_bunting_grog_keg_and_bard() -> void:
 		"Outpost releases static mesh cache cleanly after all Outposts exit tree")
 
 
+func test_message_bottles_and_campfire_cookpots() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	# 1. Tropical beach islands deterministically wash up glinting MessageBottles.
+	var tropical_ids: Array[String] = [
+		"cutlass_cay",
+		"smugglers_cove",
+		"crescent_atoll",
+		"wreckers_shoal",
+		"gulls_arch",
+	]
+	var bottles: Array[MessageBottle] = []
+	for tid in tropical_ids:
+		var isl := arch.get_island_by_id(tid)
+		check(isl != null, "Archipelago contains tropical island '%s'" % tid)
+		var bottle := isl.get_node_or_null(^"BeachMessageBottle") as MessageBottle
+		check(bottle != null, "tropical island '%s' spawns BeachMessageBottle" % tid)
+		if bottle == null:
+			continue
+		bottles.append(bottle)
+		check(bottle.is_in_group(MessageBottle.GROUP), "%s bottle is in group message_bottles" % tid)
+		check(bottle.interactable != null and bottle.interactable.enabled,
+			"%s bottle has enabled Interactable" % tid)
+		check_near(bottle.interactable.reach, 2.8, 0.01, "%s bottle reach == 2.8 m" % tid)
+
+		# Grounded cleanly on dry upper golden sand clear of dig sites.
+		var surf_y := isl.surface_height(bottle.position.x, bottle.position.z)
+		check_near(bottle.position.y, surf_y, 0.05, "%s bottle grounded at surface_height()" % tid)
+		check(bottle.position.y >= 0.40 and bottle.position.y <= 3.10,
+			"%s bottle sits on dry beach shoreline (y=%.2f)" % [tid, bottle.position.y])
+		for dp in isl.dig_points:
+			var d_dig := Vector2(bottle.position.x - dp.x, bottle.position.z - dp.z).length()
+			check(d_dig >= 4.0, "%s bottle clears dig site (dist=%.2f m)" % [tid, d_dig])
+
+		# Clue points to a different archipelago island & valid catalog treasure.
+		var clue := bottle.get_clue_dict()
+		check(String(clue["clue_id"]) != "", "%s bottle has clue_id" % tid)
+		check(String(clue["target_island_id"]) != "" and String(clue["target_island_id"]) != tid,
+			"%s bottle clue points to another island (%s)" % [tid, String(clue["target_island_id"])])
+		check(arch.get_island_by_id(String(clue["target_island_id"])) != null,
+			"%s bottle clue target exists in Archipelago" % tid)
+		check(TreasureCatalog.has_treasure(StringName(clue["treasure_id"])),
+			"%s bottle clue treasure '%s' exists in TreasureCatalog" % [tid, String(clue["treasure_id"])])
+		check(String(clue["clue_text"]).strip_edges() != "", "%s bottle has readable clue_text" % tid)
+
+	# Outposts must not wash up beach bottles.
+	var op0 := arch.get_outpost(0)
+	check(op0.get_node_or_null(^"BeachMessageBottle") == null,
+		"Outposts do not spawn BeachMessageBottle")
+
+	# 2. Verify sculpted ArrayMesh geometry, zero raw primitives, and static mesh sharing.
+	check(bottles.size() >= 2, "at least 2 MessageBottles spawned across tropical islands")
+	var b0 := bottles[0]
+	var b1 := bottles[1]
+	var core_mi0 := b0.find_child("BottleCoreMesh", true, false) as MeshInstance3D
+	var glass_mi0 := b0.find_child("BottleGlassMesh", true, false) as MeshInstance3D
+	var glint_mi0 := b0.find_child("BottleGlint", true, false) as MeshInstance3D
+	var core_mi1 := b1.find_child("BottleCoreMesh", true, false) as MeshInstance3D
+	var glass_mi1 := b1.find_child("BottleGlassMesh", true, false) as MeshInstance3D
+
+	check(core_mi0 != null and core_mi0.mesh is ArrayMesh, "MessageBottle builds sculpted BottleCoreMesh")
+	check(glass_mi0 != null and glass_mi0.mesh is ArrayMesh, "MessageBottle builds sculpted BottleGlassMesh")
+	check(glint_mi0 != null and glint_mi0.mesh is ArrayMesh, "MessageBottle builds sculpted BottleGlint")
+	check_eq(glint_mi0.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"BottleGlint disables shadows")
+	if core_mi0 != null and core_mi1 != null:
+		check_eq(core_mi0.mesh, core_mi1.mesh, "MessageBottles share statically cached BottleCoreMesh")
+	if glass_mi0 != null and glass_mi1 != null:
+		check_eq(glass_mi0.mesh, glass_mi1.mesh, "MessageBottles share statically cached BottleGlassMesh")
+
+	var raw_prims: Array[String] = []
+	var total_bottle_tris := 0
+	for node in b0.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims.append(mi.name)
+		total_bottle_tris += _count_array_mesh_tris(mi.mesh)
+	check(raw_prims.is_empty(), "MessageBottle has zero raw PrimitiveMeshes (found: %s)" % str(raw_prims))
+	check(total_bottle_tris >= 500, "MessageBottle has hero sculpted triangle count (%d >= 500)" % total_bottle_tris)
+	print("    MessageBottle sculpted tris: total=%d (core=%d, glass=%d, glint=%d)" % [
+		total_bottle_tris,
+		_count_array_mesh_tris(core_mi0.mesh),
+		_count_array_mesh_tris(glass_mi0.mesh),
+		_count_array_mesh_tris(glint_mi0.mesh),
+	])
+
+	# 3. Verify idempotent host-authoritative bottle_collected signal & cleanup of visuals.
+	var received: Array[Dictionary] = []
+	b0.bottle_collected.connect(func(bot: MessageBottle, pawn_node: Node, c: Dictionary) -> void:
+		received.append({"bottle": bot, "pawn": pawn_node, "clue": c})
+	)
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	add_child(captain)
+	captain.global_position = b0.global_position + Vector3(0.0, 0.1, -1.0)
+
+	b0.interactable.interact(captain)
+	check_eq(received.size(), 1, "interacting with MessageBottle emits bottle_collected once")
+	check(b0.collected, "MessageBottle marks collected = true")
+	check(not b0.interactable.enabled, "collected MessageBottle disables interactable")
+	var vis_root := b0.get_node_or_null(^"BottleVisual") as Node3D
+	check(vis_root != null and not vis_root.visible, "collected MessageBottle hides visuals")
+	check(not glint_mi0.visible, "collected MessageBottle hides sunlit glint star")
+	if received.size() == 1:
+		check_eq(received[0]["bottle"], b0, "bottle_collected passes bottle instance")
+		check_eq(received[0]["pawn"], captain, "bottle_collected passes interacting Pawn")
+		var c: Dictionary = received[0]["clue"] as Dictionary
+		check_eq(c["clue_id"], b0.clue_id, "bottle_collected clue_id matches")
+		check_eq(c["target_island_id"], b0.target_island_id, "bottle_collected target_island_id matches")
+		check_eq(c["treasure_id"], b0.treasure_id, "bottle_collected treasure_id matches")
+
+	# Re-interacting or calling collect() again must be strictly idempotent.
+	b0.interactable.interact(captain)
+	check(not b0.collect(captain), "repeat collect() returns false idempotently")
+	check_eq(received.size(), 1, "bottle_collected never fires twice")
+	captain.queue_free()
+
+	# 4. Verify BeachCampfire across tropical/fort islands includes CampfireCookingStove!
+	var campfire_islands: Array[String] = ["cutlass_cay", "smugglers_cove", "ironwatch_fort"]
+	for cid in campfire_islands:
+		var isl := arch.get_island_by_id(cid)
+		var fire := isl.find_child("BeachCampfire", true, false) as Node3D
+		check(fire != null, "%s has BeachCampfire" % cid)
+		if fire == null:
+			continue
+		var stove := fire.get_node_or_null(^"CampfireCookingStove") as CookingStove
+		check(stove != null, "%s BeachCampfire attaches CampfireCookingStove" % cid)
+		if stove != null:
+			check(not stove.build_hearth, "%s CampfireCookingStove sets build_hearth = false" % cid)
+			check(stove.interactable != null and stove.interactable.enabled,
+				"%s CampfireCookingStove exposes active Interactable" % cid)
+
+	arch.queue_free()
+	await physics_frames(3)
+	check(MessageBottle._opaque_mesh == null and MessageBottle._glass_mesh == null and MessageBottle._glint_mesh == null,
+		"MessageBottle releases static mesh cache cleanly after all bottles exit tree")
+
+
+func _count_array_mesh_tris(mesh: Mesh) -> int:
+	var total := 0
+	if mesh == null:
+		return 0
+	for si in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(si)
+		var raw_idx: Variant = arrays[Mesh.ARRAY_INDEX]
+		if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+			total += floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+		else:
+			var raw_verts: Variant = arrays[Mesh.ARRAY_VERTEX]
+			if raw_verts is PackedVector3Array:
+				total += floori(float((raw_verts as PackedVector3Array).size()) / 3.0)
+	return total
+
+
+
 

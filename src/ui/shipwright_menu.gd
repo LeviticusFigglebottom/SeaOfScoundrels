@@ -23,6 +23,7 @@ const SLOT_SECTIONS: Array[Array] = [
 	[&"sail", "Sail Rigging (Downwind vs. Close-Hauled)"],
 	[&"cannon", "Broadside Cannons (Breach vs. Reload)"],
 	[&"trait", "Crew Trait"],
+	[&"hull_livery", "Hull Paint"],
 	[&"sail_cosmetic", "Sail Livery"],
 	[&"flag", "Masthead Pennant"],
 ]
@@ -361,6 +362,8 @@ static func apply_economy_to_ship(
 		target_ship.apply_modifiers(bridged)
 		var sail_tint := Color.WHITE
 		var flag_tint := Color.WHITE
+		var glow_accent := Color.BLACK
+		var hull_tint := Color.WHITE
 		var sail_cos := StringName(String(mods.get("sail_cosmetic_id", &"")))
 		if sail_cos != &"":
 			var se := Economy.get_unlock(sail_cos)
@@ -371,7 +374,14 @@ static func apply_economy_to_ship(
 			var fe := Economy.get_unlock(flag_cos)
 			if fe.has("tint") and fe["tint"] is Color:
 				flag_tint = fe["tint"] as Color
-		target_ship.apply_livery(sail_tint, flag_tint)
+		var hull_cos := StringName(String(mods.get("hull_livery_id", &"")))
+		if hull_cos != &"":
+			var he := Economy.get_unlock(hull_cos)
+			if he.has("tint") and he["tint"] is Color:
+				hull_tint = he["tint"] as Color
+			if he.has("glow_accent") and he["glow_accent"] is Color:
+				glow_accent = he["glow_accent"] as Color
+		target_ship.apply_livery(sail_tint, flag_tint, glow_accent, hull_tint)
 
 	for b in crew_brains:
 		if b != null and is_instance_valid(b):
@@ -834,6 +844,9 @@ func _rebuild_shipwright_tab() -> void:
 			desc.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 			text_v.add_child(desc)
 
+			if entry.has("tint") and entry["tint"] is Color:
+				h.add_child(_make_swatch_chip(entry["tint"] as Color, String(uid)))
+
 			var act_btn := Button.new()
 			act_btn.name = "UnlockBtn_" + String(uid)
 			act_btn.custom_minimum_size = Vector2(156.0, 38.0)
@@ -1004,6 +1017,27 @@ static func _style_highlight_button(btn: Button, active: bool) -> void:
 			HudIcons.make_parchment_box(HudIcons.COL_GOLD, HudIcons.COL_CRIMSON, 2, 5, 12, 7))
 	else:
 		btn.remove_theme_stylebox_override("normal")
+
+
+static func _make_swatch_chip(swatch_color: Color, uid_str: String) -> PanelContainer:
+	var frame := PanelContainer.new()
+	frame.name = "Swatch_" + uid_str
+	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.13, 0.08, 1.0)
+	sb.border_color = HudIcons.COL_INK
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(3)
+	sb.set_content_margin_all(2)
+	frame.add_theme_stylebox_override("panel", sb)
+
+	var chip := ColorRect.new()
+	chip.name = "SwatchColor"
+	chip.custom_minimum_size = Vector2(18.0, 18.0)
+	chip.color = swatch_color
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.add_child(chip)
+	return frame
 
 
 static func _clear_children(container: Node) -> void:

@@ -524,6 +524,7 @@ static func _make_vcol_mat(roughness: float, metallic: float) -> StandardMateria
 	var m := StandardMaterial3D.new()
 	m.albedo_color = Color.WHITE
 	m.vertex_color_use_as_albedo = true
+	m.vertex_color_is_srgb = true
 	m.roughness = roughness
 	m.metallic = metallic
 	return m
