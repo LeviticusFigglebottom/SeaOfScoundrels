@@ -1,19 +1,1773 @@
 extends Node3D
-## Main scene. Interim: the real ocean under the real sky with a free camera
-## position, until ship, crew and world are integrated.
+## Sea of Scoundrels — Full Playable Vertical Slice Main Scene.
+##
+## Assembles SkyRig, Ocean, 11-island Archipelago, Sloop/Brigantine Ship with
+## live MapTableView, CookingStove & FishingLine, first-person Captain Pawn +
+## Inventory + CombatComponent + 3 AI Crewmates (or Co-op peers), GameHUD,
+## ShipwrightMenu, VoyageManager (Story Chapters + Procedural Contracts),
+## WorldDirector living-sea events, and live Audio ambience & adaptive music.
+##
+## CLI user args (passed after `--`):
+##   host | join=IP | port=N
+##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold
+
+const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
+const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
+const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
+const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
+const BARREL_PROP_SCENE: PackedScene = preload("res://assets/generated/props/barrel_prop.glb")
+const CRATE_PROP_SCENE: PackedScene = preload("res://assets/generated/props/crate_supply.glb")
+
+const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
+
+const CREW_SPECS: Array[Dictionary] = [
+	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.02, 4.65)},
+	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.12, -3.20)},
+	{"persona": &"carpenter", "local_pos": Vector3(1.05, 1.12, -0.35)},
+]
+
+const PEER_TINTS: Array[Array] = [
+	[Color(0.58, 0.16, 0.22), Color(0.90, 0.72, 0.24)],
+	[Color(0.16, 0.46, 0.34), Color(0.86, 0.56, 0.18)],
+	[Color(0.36, 0.22, 0.52), Color(0.88, 0.74, 0.30)],
+]
+
+# --- Live world & gameplay references ----------------------------------------
+
+var sky_rig: Node3D = null
+var ocean: Ocean = null
+var archipelago: Archipelago = null
+var player_ship: Ship = null
+var map_table: MapTableView = null
+var cooking_stove: CookingStove = null
+var fishing_line: FishingLine = null
+var fishing_interactable: Interactable = null
+
+var player_pawn: Pawn = null
+var player_controller: PlayerController = null
+var player_combat: CombatComponent = null
+var inventory: Inventory = null
+
+var crew_pawns: Array[Pawn] = []
+var crew_brains: Array[CrewBrain] = []
+
+var hud: GameHUD = null
+var shipwright_menu: ShipwrightMenu = null
+var voyage_manager: VoyageManager = null
+var world_director: WorldDirector = null
+var user_settings: UserSettings = null
+
+var active_enemies: Array[Pawn] = []
+var enemy_ships: Array[Ship] = []
+var active_sharks: Array[Shark] = []
+var active_leviathans: Array[Leviathan] = []
+var current_music_mood: StringName = &""
+var active_shot_mode: String = ""
+
+var _entities_root: Node3D = null
+var _shot_camera: Camera3D = null
+var _bobbing_props: Array[Dictionary] = []   # {node, base_x, base_z, y_off, phase}
+var _peer_pawns: Dictionary = {}             # int peer_id -> Pawn
+var _peer_yielded_crew: Dictionary = {}      # int peer_id -> int crew index
+var _wired_dig_sites: Dictionary = {}        # int instance_id -> true
+var _boarded_chests: Dictionary = {}         # int instance_id -> true
+var _spawned_voyage_id: String = ""
+var _return_complication_fired: bool = false
+var _fishing_pawn: Pawn = null
+
+var _cargo_check_accum: float = 0.0
+var _discovery_accum: float = 0.0
+var _music_accum: float = 0.0
+var _revive_timer: float = -1.0
+var _ship_restoring: bool = false
+
+# Parsed CLI options
+var _cli_host: bool = false
+var _cli_join_ip: String = ""
+var _cli_port: int = Net.DEFAULT_PORT
+var _cli_time: float = NAN
+var _cli_storm: float = NAN
+var _cli_cloud: float = NAN
+var _cli_quality: String = ""
+var _cli_ship_class: StringName = &"sloop"
+
 
 func _ready() -> void:
-	Net.start_single_player()
-	add_child(load("res://src/sky/sky_rig.tscn").instantiate())
-	add_child(load("res://src/ocean/ocean.tscn").instantiate())
-	var cam := Camera3D.new()
-	cam.position = Vector3(0, 4, 0)
-	cam.rotation_degrees = Vector3(-4, 30, 0)
-	cam.far = 8000.0
-	add_child(cam)
-	for a in OS.get_cmdline_user_args():
-		if a.begins_with("time="):
-			Weather.time_of_day = float(a.trim_prefix("time="))
-		if a.begins_with("storm="):
-			Weather.storminess = float(a.trim_prefix("storm="))
-			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, Weather.storminess)
+	_parse_cli_args()
+	_start_network_session()
+
+	user_settings = UserSettings.new()
+	user_settings.load_from()
+	if _cli_ship_class == &"sloop" and Game != null and Game.profile != null:
+		var saved_cls := String(Game.profile.data.get("ship_class", "sloop"))
+		if saved_cls == "brigantine":
+			_cli_ship_class = &"brigantine"
+
+	_entities_root = Node3D.new()
+	_entities_root.name = "Entities"
+	add_child(_entities_root)
+
+	_build_environment_and_world()
+	_build_player_ship()
+	_build_player_and_crew()
+	_build_voyage_and_director()
+	_build_ui()
+	_wire_world_signals()
+
+	# Apply persistent settings first, then explicit CLI overrides.
+	user_settings.apply_all(self)
+	_apply_cli_overrides()
+
+	# Start Story Chapter 1 automatically if no voyage is currently active.
+	if Net.is_host():
+		var map_data := archipelago.get_map_data()
+		voyage_manager.refresh_offers(map_data, 3, &"port_scoundrel")
+		if not voyage_manager.has_active_voyage():
+			voyage_manager.start_starter_voyage(map_data)
+		# Ensure Cutlass Cay & active voyage are populated immediately.
+		if voyage_manager.has_active_voyage():
+			_prepare_active_voyage_world(voyage_manager.active_voyage)
+		_update_cargo_value()
+
+	if active_shot_mode != "":
+		_apply_hero_shot(active_shot_mode)
+
+	_update_live_audio(true)
+	_update_adaptive_music(true)
+
+
+func _exit_tree() -> void:
+	_disconnect_autoload_signals()
+	if Net != null:
+		Net.unregister_replicated_ship(&"player_sloop")
+		Net.unregister_replicated_pawn(Net.local_id())
+		for pid: int in _peer_pawns.keys():
+			Net.unregister_replicated_pawn(pid)
+
+
+# ==============================================================================
+# CLI & Network Session
+# ==============================================================================
+
+func _parse_cli_args() -> void:
+	for raw_arg in OS.get_cmdline_user_args():
+		var a := String(raw_arg).strip_edges()
+		if a == "host":
+			_cli_host = true
+		elif a.begins_with("join="):
+			_cli_join_ip = a.trim_prefix("join=")
+		elif a.begins_with("port="):
+			_cli_port = maxi(1, int(a.trim_prefix("port=")))
+		elif a.begins_with("time="):
+			_cli_time = float(a.trim_prefix("time="))
+		elif a.begins_with("storm="):
+			_cli_storm = clampf(float(a.trim_prefix("storm=")), 0.0, 1.0)
+		elif a.begins_with("cloud="):
+			_cli_cloud = clampf(float(a.trim_prefix("cloud=")), 0.0, 1.0)
+		elif a.begins_with("quality="):
+			_cli_quality = a.trim_prefix("quality=").to_lower()
+		elif a.begins_with("ship="):
+			var s_arg := a.trim_prefix("ship=").to_lower()
+			if s_arg == "brigantine":
+				_cli_ship_class = &"brigantine"
+			else:
+				_cli_ship_class = &"sloop"
+		elif a.begins_with("shot="):
+			active_shot_mode = a.trim_prefix("shot=").to_lower()
+
+
+func _start_network_session() -> void:
+	if _cli_host:
+		var err := Net.host(_cli_port)
+		if err != OK:
+			push_warning("Main: Net.host(%d) failed (%s), falling back to single-player." % [_cli_port, error_string(err)])
+			Net.start_single_player()
+	elif _cli_join_ip != "":
+		var err := Net.join(_cli_join_ip, _cli_port)
+		if err != OK:
+			push_warning("Main: Net.join(%s, %d) failed (%s), falling back to single-player." % [_cli_join_ip, _cli_port, error_string(err)])
+			Net.start_single_player()
+	else:
+		Net.start_single_player()
+
+
+# ==============================================================================
+# World, Ship, Crew, Voyage & UI Construction
+# ==============================================================================
+
+func _build_environment_and_world() -> void:
+	# Fair morning sailing weather by default (overridden cleanly by CLI args or storms).
+	if Net.is_host():
+		Weather.time_of_day = 10.2
+		Weather.set_weather(0.06, 9.0, -0.35, 0.0, 0.38)
+		Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.06)
+
+	sky_rig = SKY_RIG_SCENE.instantiate() as Node3D
+	sky_rig.name = "SkyRig"
+	add_child(sky_rig)
+
+	ocean = OCEAN_SCENE.instantiate() as Ocean
+	ocean.name = "Ocean"
+	add_child(ocean)
+
+	archipelago = Archipelago.new()
+	archipelago.name = "Archipelago"
+	archipelago.add_to_group(&"archipelago")
+	add_child(archipelago)
+
+	# Ensure Port Scoundrel starts discovered in the captain's chart log.
+	if Game != null and Game.profile != null:
+		Game.profile.discover("port_scoundrel")
+
+
+func _build_player_ship() -> void:
+	var ship_scene := _resolve_ship_scene(_cli_ship_class)
+	player_ship = ship_scene.instantiate() as Ship
+	player_ship.name = "PlayerShip"
+	player_ship.faction = &"player"
+	player_ship.start_anchored = true
+	add_child(player_ship)
+
+	var home_outpost := archipelago.get_outpost(0)
+	if home_outpost != null:
+		var moor_xf := home_outpost.get_world_mooring_transform()
+		moor_xf.origin.y = Sea.height(moor_xf.origin.x, moor_xf.origin.z)
+		player_ship.global_transform = moor_xf
+	else:
+		player_ship.global_position = Vector3(0.0, Sea.height(0.0, -40.0), -40.0)
+
+	# Mount live diegetic MapTableView in the ship hold.
+	map_table = MapTableView.new()
+	map_table.name = "MapTableView"
+	map_table.mount_to_ship(player_ship)
+	map_table.set_archipelago_data(_build_chart_map_data())
+
+	# Mount CookingStove in the ship hold (starboard mid-aft, clear of map table & aisle).
+	_mount_cooking_stove(player_ship)
+
+	# Mount FishingLine & aft-rail interactable on the quarterdeck stern rail.
+	_mount_fishing_station(player_ship)
+
+	Net.register_replicated_ship(&"player_sloop", player_ship)
+
+
+func _resolve_ship_scene(cls: StringName) -> PackedScene:
+	if cls == &"brigantine" and ResourceLoader.exists(BRIGANTINE_SCENE_PATH):
+		var loaded := load(BRIGANTINE_SCENE_PATH) as PackedScene
+		if loaded != null:
+			return loaded
+	return SLOOP_SCENE
+
+
+func _mount_cooking_stove(target_ship: Ship) -> void:
+	cooking_stove = CookingStove.new()
+	cooking_stove.name = "CookingStove"
+	cooking_stove.position = Vector3(1.25, -0.85, 0.85)
+	target_ship.add_child(cooking_stove)
+
+	# Stylized chunky cast-iron galley stove + glowing embers + iron skillet visual.
+	var stove_mat := StandardMaterial3D.new()
+	stove_mat.albedo_color = Color(0.16, 0.16, 0.18)
+	stove_mat.metallic = 0.65
+	stove_mat.roughness = 0.55
+
+	var body := MeshInstance3D.new()
+	body.name = "StoveBody"
+	var bx := BoxMesh.new()
+	bx.size = Vector3(0.58, 0.68, 0.54)
+	body.mesh = bx
+	body.position = Vector3(0.0, 0.34, 0.0)
+	body.material_override = stove_mat
+	cooking_stove.add_child(body)
+
+	var ember := MeshInstance3D.new()
+	ember.name = "EmberGrate"
+	var ebx := BoxMesh.new()
+	ebx.size = Vector3(0.36, 0.14, 0.04)
+	ember.mesh = ebx
+	ember.position = Vector3(-0.28, 0.24, 0.0)
+	var emat := StandardMaterial3D.new()
+	emat.albedo_color = Color(1.0, 0.44, 0.12)
+	emat.emission_enabled = true
+	emat.emission = Color(1.0, 0.42, 0.10)
+	emat.emission_energy_multiplier = 2.4
+	ember.material_override = emat
+	cooking_stove.add_child(ember)
+
+	var pan := MeshInstance3D.new()
+	pan.name = "FryingPan"
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.20
+	cyl.bottom_radius = 0.16
+	cyl.height = 0.06
+	cyl.radial_segments = 12
+	pan.mesh = cyl
+	pan.position = Vector3(0.0, 0.71, 0.0)
+	pan.material_override = stove_mat
+	cooking_stove.add_child(pan)
+
+	# Intercept stove interaction when player holds freshly caught fish from FishingLine.
+	if cooking_stove.interactable != null:
+		cooking_stove.interactable.position = Vector3(-0.1, 0.65, 0.0)
+		cooking_stove.interactable.reach = 2.8
+
+
+func _mount_fishing_station(target_ship: Ship) -> void:
+	fishing_line = FishingLine.new()
+	fishing_line.name = "FishingLine"
+	fishing_line.position = Vector3(-1.48, 2.0, 5.72)
+	target_ship.add_child(fishing_line)
+
+	# Timber rod rest & angled bamboo rod visual at the aft rail.
+	var rod_mat := StandardMaterial3D.new()
+	rod_mat.albedo_color = Color(0.56, 0.38, 0.20)
+	rod_mat.roughness = 0.78
+	var rod := MeshInstance3D.new()
+	rod.name = "FishingRodProp"
+	var rcyl := CylinderMesh.new()
+	rcyl.top_radius = 0.014
+	rcyl.bottom_radius = 0.028
+	rcyl.height = 1.9
+	rcyl.radial_segments = 8
+	rod.mesh = rcyl
+	rod.position = Vector3(0.0, 1.05, 0.55)
+	rod.rotation_degrees = Vector3(38.0, 0.0, 8.0)
+	rod.material_override = rod_mat
+	fishing_line.add_child(rod)
+
+	fishing_interactable = Interactable.create("Cast fishing line", 0.85)
+	fishing_interactable.name = "FishingInteractable"
+	fishing_interactable.position = Vector3(0.0, 0.95, 0.0)
+	fishing_interactable.reach = 2.8
+	fishing_interactable.interacted.connect(_on_fishing_interacted)
+	fishing_line.add_child(fishing_interactable)
+
+	fishing_line.fish_caught.connect(_on_fish_caught)
+	fishing_line.line_snapped.connect(_on_fishing_line_snapped)
+
+
+func _build_player_and_crew() -> void:
+	# 1. Local Captain Pawn boarded on the quarterdeck facing the bow & Cutlass Cay.
+	player_pawn = PAWN_SCENE.instantiate() as Pawn
+	player_pawn.name = "PlayerCaptain"
+	add_child(player_pawn)
+	player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+	var bow_fwd := -player_ship.global_basis.z
+	player_pawn.look_yaw = atan2(-bow_fwd.x, -bow_fwd.z)
+
+	var p_cv := _character_visual_of(player_pawn)
+	if p_cv != null:
+		p_cv.set_archetype(&"captain")
+		p_cv.set_first_person_hidden(true)
+
+	player_controller = PlayerController.new()
+	player_controller.name = "PlayerController"
+	player_controller.make_current = true
+	player_controller.capture_mouse = (active_shot_mode == "")
+	player_controller.input_enabled = (active_shot_mode == "")
+	player_pawn.add_child(player_controller)
+
+	player_combat = CombatComponent.new()
+	player_combat.name = "CombatComponent"
+	player_combat.faction = &"player"
+	player_combat.equipped_weapon = &"cutlass"
+	player_pawn.add_child(player_combat)
+
+	inventory = Inventory.new()
+	inventory.name = "Inventory"
+	inventory.input_enabled = (active_shot_mode == "")
+	player_pawn.add_child(inventory)
+	inventory.bind(player_pawn, player_controller, player_combat, p_cv)
+
+	player_pawn.died.connect(_on_player_died)
+	Net.register_replicated_pawn(Net.local_id(), player_pawn)
+
+	# 2. Three AI Crewmates: Barnaby (helmsman), Maren (lookout), Pip (carpenter).
+	crew_pawns.clear()
+	crew_brains.clear()
+	for spec in CREW_SPECS:
+		var persona: StringName = spec["persona"]
+		var local_pos: Vector3 = spec["local_pos"]
+		var cp := PAWN_SCENE.instantiate() as Pawn
+		cp.name = "Crew_" + String(persona).capitalize()
+		add_child(cp)
+		cp.board(player_ship, local_pos)
+		cp.look_yaw = player_pawn.look_yaw
+
+		var c_cv := _character_visual_of(cp)
+		if c_cv != null:
+			c_cv.set_archetype(persona)
+
+		var c_cc := CombatComponent.new()
+		c_cc.name = "CombatComponent"
+		c_cc.faction = &"player"
+		c_cc.equipped_weapon = &"cutlass"
+		cp.add_child(c_cc)
+
+		var brain := CrewBrain.new()
+		brain.name = "CrewBrain"
+		brain.setup(player_ship, player_pawn, persona)
+		cp.add_child(brain)
+
+		crew_pawns.append(cp)
+		crew_brains.append(brain)
+
+
+func _build_voyage_and_director() -> void:
+	voyage_manager = VoyageManager.new()
+	voyage_manager.name = "VoyageManager"
+	add_child(voyage_manager)
+
+	world_director = WorldDirector.new()
+	world_director.name = "WorldDirector"
+	world_director.player_ship = player_ship
+	world_director.enabled = true
+	# Stepped explicitly from Main._physics_process so safe-harbour outposts & swimmers are supplied.
+	world_director.set_physics_process(false)
+	var home_outpost := archipelago.get_outpost(0)
+	if home_outpost != null:
+		world_director.set_last_outpost(StringName(home_outpost.island_id), home_outpost.global_position)
+	add_child(world_director)
+
+	# Wire MapTableView live references.
+	if map_table != null:
+		map_table.voyage_manager = voyage_manager
+		map_table.world_director = world_director
+		map_table.refresh_now()
+
+	# Apply Economy sidegrades, liveries & crew traits from Game.profile.
+	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
+
+
+func _build_ui() -> void:
+	hud = GameHUD.new()
+	hud.name = "GameHUD"
+	hud.input_enabled = (active_shot_mode == "")
+	add_child(hud)
+	hud.bind(player_pawn, player_controller, inventory, player_combat, player_ship, voyage_manager, sky_rig)
+	for b in crew_brains:
+		hud.register_crew_brain(b)
+
+	shipwright_menu = ShipwrightMenu.new()
+	shipwright_menu.name = "ShipwrightMenu"
+	add_child(shipwright_menu)
+	shipwright_menu.bind(
+		voyage_manager,
+		archipelago,
+		player_ship,
+		player_controller,
+		user_settings,
+		inventory,
+		map_table,
+		crew_brains,
+		world_director,
+		self
+	)
+	shipwright_menu.menu_opened.connect(_on_shipwright_opened)
+	shipwright_menu.menu_closed.connect(_on_shipwright_closed)
+	shipwright_menu.voyage_accepted.connect(_on_voyage_started)
+	shipwright_menu.ship_class_selected.connect(_on_ship_class_selected)
+	shipwright_menu.settings_changed.connect(_on_settings_changed)
+
+
+func _wire_world_signals() -> void:
+	# Wire every Outpost's Voyage Board & Merchant Stall signals.
+	for outpost in archipelago.get_outposts():
+		var out_id := StringName(outpost.island_id)
+		outpost.voyage_board_used.connect(func(_pawn: Node) -> void:
+			_on_outpost_voyage_board_used(out_id)
+		)
+		outpost.treasure_sold.connect(_on_outpost_treasure_sold)
+
+	# Wire every DigSite currently on every island.
+	for isl in archipelago.get_islands():
+		for ds in isl.get_dig_sites():
+			_wire_dig_site(ds)
+
+	# VoyageManager signals.
+	voyage_manager.voyage_started.connect(_on_voyage_started)
+	voyage_manager.voyage_completed.connect(_on_voyage_completed)
+
+	# WorldDirector living-sea event signals.
+	world_director.spawn_rival_ship.connect(_on_director_spawn_rival_ship)
+	world_director.spawn_ghost_ship.connect(_on_director_spawn_ghost_ship)
+	world_director.spawn_shark_pack.connect(_on_director_spawn_shark_pack)
+	world_director.spawn_leviathan.connect(_on_director_spawn_leviathan)
+	world_director.spawn_flotsam_barrels.connect(_on_director_spawn_flotsam)
+	world_director.spawn_fort_siege.connect(_on_director_spawn_fort_siege)
+	world_director.spawn_castaway.connect(_on_director_spawn_castaway)
+	world_director.spawn_storm_cell.connect(_on_director_spawn_storm_cell)
+	world_director.sighting_warning.connect(_on_director_sighting_warning)
+
+	# Ship sinking -> zero-wipe salvage wreck & restore at last outpost.
+	player_ship.sunk.connect(_on_player_ship_sunk)
+
+	# Autoload signals (cleaned up in _exit_tree).
+	if not Weather.thunder_heard.is_connected(_on_thunder_heard):
+		Weather.thunder_heard.connect(_on_thunder_heard)
+	if not Net.peer_joined.is_connected(_on_net_peer_joined):
+		Net.peer_joined.connect(_on_net_peer_joined)
+	if not Net.peer_left.is_connected(_on_net_peer_left):
+		Net.peer_left.connect(_on_net_peer_left)
+	if not Net.client_intent_received.is_connected(_on_net_client_intent):
+		Net.client_intent_received.connect(_on_net_client_intent)
+
+
+func _disconnect_autoload_signals() -> void:
+	if Weather != null and Weather.thunder_heard.is_connected(_on_thunder_heard):
+		Weather.thunder_heard.disconnect(_on_thunder_heard)
+	if Net != null:
+		if Net.peer_joined.is_connected(_on_net_peer_joined):
+			Net.peer_joined.disconnect(_on_net_peer_joined)
+		if Net.peer_left.is_connected(_on_net_peer_left):
+			Net.peer_left.disconnect(_on_net_peer_left)
+		if Net.client_intent_received.is_connected(_on_net_client_intent):
+			Net.client_intent_received.disconnect(_on_net_client_intent)
+
+
+func _apply_cli_overrides() -> void:
+	if not is_nan(_cli_time):
+		Weather.time_of_day = _cli_time
+	if not is_nan(_cli_cloud):
+		Weather.cloudiness = _cli_cloud
+	if not is_nan(_cli_storm):
+		Weather.storminess = _cli_storm
+		Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, _cli_storm)
+	if _cli_quality != "":
+		var lv := 1
+		if _cli_quality == "low":
+			lv = 0
+		elif _cli_quality == "high":
+			lv = 2
+		if ocean != null:
+			ocean.quality = lv as Ocean.Quality
+		if sky_rig != null:
+			sky_rig.set(&"cloud_quality", lv)
+
+
+# ==============================================================================
+# Frame & Physics Ticks
+# ==============================================================================
+
+func _process(delta: float) -> void:
+	_tick_bobbing_props(delta)
+	_update_live_audio(false)
+	_music_accum += delta
+	if _music_accum >= 1.0:
+		_music_accum = 0.0
+		_update_adaptive_music(false)
+
+
+func _physics_process(delta: float) -> void:
+	# Step fishing line if active.
+	_tick_fishing(delta)
+
+	if not Net.is_host():
+		_send_local_client_intent()
+		return
+
+	# Player auto-revive back aboard ship if downed.
+	if _revive_timer > 0.0:
+		_revive_timer -= delta
+		if _revive_timer <= 0.0:
+			_revive_timer = -1.0
+			_revive_player_aboard_ship()
+
+	# Periodic island discovery, voyage arrival, cargo hazard & WorldDirector checks.
+	_cargo_check_accum += delta
+	if _cargo_check_accum >= 0.45:
+		var dt := _cargo_check_accum
+		_cargo_check_accum = 0.0
+		_tick_aboard_treasures(dt)
+		_check_return_complication()
+
+	_discovery_accum += delta
+	if _discovery_accum >= 0.60:
+		_discovery_accum = 0.0
+		_tick_discovery_and_arrivals()
+
+	_tick_world_director(delta)
+
+
+func _tick_world_director(delta: float) -> void:
+	if world_director == null or not world_director.enabled:
+		return
+	if player_ship == null or not is_instance_valid(player_ship) or player_ship.is_sinking:
+		return
+
+	var swimming_deep := false
+	var swimmer_pos := player_ship.global_position
+	if player_pawn != null and is_instance_valid(player_pawn) and player_pawn.is_swimming():
+		var near_isl := archipelago.nearest_island(player_pawn.global_position)
+		if near_isl == null or near_isl.seabed_depth(player_pawn.global_position) > 6.0:
+			swimming_deep = true
+			swimmer_pos = player_pawn.global_position
+
+	world_director.step(delta, {
+		"ship_pos": player_ship.global_position,
+		"ship_velocity": player_ship.linear_velocity,
+		"ship_forward": -player_ship.global_basis.z,
+		"ship_node": player_ship,
+		"cargo_value": world_director.cargo_value_aboard,
+		"outpost_positions": _outpost_positions_array(),
+		"pawn_swimming_deep": swimming_deep,
+		"swimmer_pos": swimmer_pos,
+		"voyage_count": voyage_manager.completed_count if voyage_manager != null else 0,
+	})
+
+
+func _tick_discovery_and_arrivals() -> void:
+	if archipelago == null or player_ship == null or not is_instance_valid(player_ship):
+		return
+	var check_points: Array[Vector3] = [player_ship.global_position]
+	if player_pawn != null and is_instance_valid(player_pawn):
+		check_points.append(player_pawn.global_position)
+
+	for pt in check_points:
+		var newly_found := archipelago.check_discovery(pt)
+		if newly_found != null:
+			_play_stinger_safe(&"discovery", &"ship_sighted")
+			if map_table != null:
+				map_table.set_archipelago_data(_build_chart_map_data())
+				map_table.refresh_now()
+			Game.save()
+
+	# Check arrival at islands for voyage progression & last-outpost bookmarking.
+	var near_isl := archipelago.nearest_island(player_ship.global_position)
+	if near_isl != null:
+		var d := Vector2(
+			player_ship.global_position.x - near_isl.global_position.x,
+			player_ship.global_position.z - near_isl.global_position.z
+		).length()
+		if d <= near_isl.island_radius + 75.0:
+			if near_isl is Outpost:
+				world_director.set_last_outpost(StringName(near_isl.island_id), near_isl.global_position)
+			if voyage_manager != null and voyage_manager.has_active_voyage():
+				voyage_manager.notify_island_arrived(StringName(near_isl.island_id))
+
+
+func _tick_aboard_treasures(dt: float) -> void:
+	var aboard := _collect_aboard_treasures()
+	var res := TreasureCatalog.step_aboard_hazards(aboard, player_ship, dt)
+	if world_director != null:
+		world_director.cargo_value_aboard = int(res.get("total_cargo_value", 0))
+
+	if voyage_manager != null and voyage_manager.has_active_voyage():
+		for item in aboard:
+			var iid: int = (item as Object).get_instance_id()
+			if not _boarded_chests.has(iid):
+				_boarded_chests[iid] = true
+				voyage_manager.notify_treasure_boarded(item)
+
+
+func _update_cargo_value() -> int:
+	var aboard := _collect_aboard_treasures()
+	var total := WorldDirector.sum_cargo_value(aboard)
+	if world_director != null:
+		world_director.cargo_value_aboard = total
+	return total
+
+
+func _collect_aboard_treasures() -> Array:
+	var out: Array = []
+	if player_ship == null or not is_instance_valid(player_ship) or not is_inside_tree():
+		return out
+	var inv_xf := player_ship.global_transform.affine_inverse()
+	for node in get_tree().get_nodes_in_group(TreasureCatalog.TREASURE_GROUP):
+		if not (node is Node3D) or not is_instance_valid(node):
+			continue
+		if node.has_meta(&"_merchant_sold"):
+			continue
+		var holder: Variant = node.get(&"holder")
+		if holder is Pawn and (holder as Pawn).platform == player_ship:
+			out.append(node)
+			continue
+		var local_p := inv_xf * (node as Node3D).global_position
+		if absf(local_p.x) <= 2.6 and absf(local_p.z) <= 7.0 and local_p.y >= -1.4 and local_p.y <= 3.6:
+			out.append(node)
+	return out
+
+
+func _check_return_complication() -> void:
+	if _return_complication_fired or voyage_manager == null or not voyage_manager.is_hauling_home():
+		return
+	var comp: Dictionary = voyage_manager.active_voyage.get("complication", {})
+	if StringName(String(comp.get("trigger", &""))) != &"on_return":
+		return
+	if player_ship == null or player_ship.anchor_down:
+		return
+	var target_id := String(voyage_manager.active_voyage.get("target_island_id", ""))
+	var target_isl := archipelago.get_island_by_id(target_id)
+	if target_isl != null:
+		var dist_from_isl := player_ship.global_position.distance_to(target_isl.global_position)
+		if dist_from_isl < target_isl.island_radius + 70.0:
+			return
+	_return_complication_fired = true
+	var threat := StringName(String(comp.get("threat_archetype", &"drowned_sloop")))
+	if threat == &"drowned_sloop" or threat == &"ghost_ship" or threat == &"storm_cell":
+		world_director.trigger_event(threat, {
+			"ship_pos": player_ship.global_position,
+			"ship_forward": -player_ship.global_basis.z,
+			"ship_node": player_ship,
+		})
+
+
+# ==============================================================================
+# Voyage World Setup & Gameplay Event Callbacks
+# ==============================================================================
+
+func _on_voyage_started(voyage: Dictionary) -> void:
+	if not Net.is_host():
+		return
+	_prepare_active_voyage_world(voyage)
+
+
+func _prepare_active_voyage_world(voyage: Dictionary) -> void:
+	if voyage.is_empty() or archipelago == null:
+		return
+	var vid := String(voyage.get("id", ""))
+	var already_built := (vid != "" and vid == _spawned_voyage_id)
+	_spawned_voyage_id = vid
+	_return_complication_fired = false
+
+	var target_id := String(voyage.get("target_island_id", ""))
+	var target_isl := archipelago.get_island_by_id(target_id)
+	var payoff: Dictionary = voyage.get("payoff", {})
+	var treasures: Array = payoff.get("treasures", [])
+	var primary_tid: StringName = StringName(String(treasures[0])) if not treasures.is_empty() else &"wayfarer_chest"
+	var shape := StringName(String(voyage.get("shape", &"buried_hoard")))
+
+	var dig_local := Vector3.ZERO
+	if target_isl != null:
+		# Ensure target island has a live DigSite for dig/riddle/wreck voyages.
+		var site_dict: Dictionary = voyage.get("site", {})
+		var want_digs := int(site_dict.get("dig_count", 0))
+		if want_digs > 0 or shape == &"buried_hoard" or shape == &"riddle_trail" or shape == &"wreck_salvage":
+			var live_site := _ensure_island_dig_site(target_isl, primary_tid)
+			if live_site != null:
+				dig_local = live_site.position
+		elif not target_isl.dig_points.is_empty():
+			dig_local = target_isl.dig_points[0]
+
+		# Spawn island guardians once per voyage start.
+		if not already_built:
+			_spawn_voyage_guardians(target_isl, voyage)
+
+		# Sync held treasure map & MapTableView.
+		if inventory != null:
+			inventory.set_treasure_map(
+				target_isl.display_name,
+				target_isl.contour_points,
+				dig_local,
+				target_isl.island_radius
+			)
+		if map_table != null:
+			map_table.set_voyage_target(target_isl.global_position)
+			map_table.refresh_now()
+
+	if not already_built:
+		if shape == &"cargo_run":
+			_spawn_cargo_run_crates(voyage)
+		elif shape == &"open_sea_hunt":
+			var hunt_pos: Vector3 = voyage.get("target_position", Vector3(300.0, 0.0, -300.0))
+			var threat := StringName(String(voyage.get("complication", {}).get("threat_archetype", &"drowned_sloop")))
+			_spawn_enemy_vessel(threat, hunt_pos)
+
+
+func _ensure_island_dig_site(isl: Island, tid: StringName) -> DigSite:
+	for ds in isl.get_dig_sites():
+		if not ds.is_unearthed:
+			ds.treasure_id = tid
+			_wire_dig_site(ds)
+			return ds
+	var pt := isl.dig_points[0] if not isl.dig_points.is_empty() else Vector3(0.0, 0.0, 12.0)
+	var created := isl.spawn_dig_site(pt, tid)
+	_wire_dig_site(created)
+	return created
+
+
+func _wire_dig_site(ds: DigSite) -> void:
+	if ds == null or not is_instance_valid(ds):
+		return
+	var iid := ds.get_instance_id()
+	if _wired_dig_sites.has(iid):
+		return
+	_wired_dig_sites[iid] = true
+	ds.unearthed.connect(_on_dig_site_unearthed)
+
+
+func _spawn_voyage_guardians(isl: Island, voyage: Dictionary) -> void:
+	var site_info: Dictionary = voyage.get("site", {})
+	var faction := StringName(String(site_info.get("enemy_faction", &"drowned")))
+	if faction == &"none" or faction == &"sharks":
+		return
+
+	var archetypes: Array[StringName] = []
+	if String(voyage.get("id", "")) == "story_ch1_salt_kings_ledger" or isl.island_id == "cutlass_cay":
+		# Story Chapter 1 guarantees all 4 distinct Drowned archetypes on Cutlass Cay!
+		archetypes = [&"drowned_cutlass", &"drowned_shield", &"drowned_powder", &"drowned_captain"]
+	elif faction == &"tidecallers":
+		archetypes = [&"tidecaller", &"drowned_cutlass", &"tidecaller"]
+	else:
+		archetypes = [&"drowned_cutlass", &"drowned_shield", &"drowned_powder"]
+		if bool(site_info.get("has_captain", false)):
+			archetypes.append(&"drowned_captain")
+
+	var spawns := isl.enemy_spawns
+	for i in archetypes.size():
+		var local_pt := Vector3(float(i - 1) * 4.5, 0.0, 10.0)
+		if not spawns.is_empty():
+			local_pt = spawns[i % spawns.size()]
+		local_pt.y = isl.surface_height(local_pt.x, local_pt.z) + 0.15
+		var world_pt := isl.global_transform * local_pt
+		_spawn_enemy_pawn(archetypes[i], world_pt)
+
+
+func _spawn_cargo_run_crates(voyage: Dictionary) -> void:
+	var origin_id := String(voyage.get("origin_outpost_id", "port_scoundrel"))
+	var origin_outpost := archipelago.get_island_by_id(origin_id) as Outpost
+	var spawn_base := player_ship.global_transform * Vector3(0.0, 1.35, -1.6)
+	if origin_outpost != null:
+		spawn_base = origin_outpost.get_world_pier_end() + Vector3(0.0, 1.4, 0.0)
+	var treasures: Array = voyage.get("payoff", {}).get("treasures", [&"spice_crate"])
+	for i in mini(treasures.size(), 2):
+		var pos := spawn_base + Vector3(float(i) * 0.9, 0.2, 0.0)
+		var crate := TreasureCatalog.create_treasure_carryable(&"spice_crate", pos)
+		_entities_root.add_child(crate)
+		crate.global_position = pos
+
+
+func _on_dig_site_unearthed(chest: Carryable) -> void:
+	if not Net.is_host():
+		return
+	if voyage_manager != null and voyage_manager.has_active_voyage():
+		voyage_manager.notify_treasure_unearthed(chest)
+	_update_cargo_value()
+
+
+func _on_outpost_treasure_sold(item: Node, gold: int, renown: int) -> void:
+	if not Net.is_host():
+		return
+	var base := TreasureCatalog.inspect_carryable(item)
+	var fallback_nm: Variant = item.get(&"item_name") if item != null and is_instance_valid(item) else "Treasure"
+	var sale_receipt := {
+		"ok": true,
+		"treasure_id": base.get("treasure_id", &"plain_cargo"),
+		"name": String(base.get("name", String(fallback_nm))),
+		"company_id": base.get("company_id", &"gilded_compass"),
+		"gold_awarded": gold,
+		"renown_awarded": renown,
+		"rank_up_notice": "",
+	}
+	if voyage_manager != null:
+		voyage_manager.notify_treasure_sold(sale_receipt)
+	_update_cargo_value()
+	Game.save()
+	if shipwright_menu != null and shipwright_menu.is_open:
+		shipwright_menu.refresh()
+
+
+func _on_voyage_completed(_voyage: Dictionary, summary: Dictionary) -> void:
+	if not Net.is_host():
+		return
+	Audio.play_stinger(&"victory")
+	if map_table != null:
+		map_table.set_voyage_target(Vector3.INF)
+		map_table.refresh_now()
+	if bool(summary.get("is_story", false)) and shipwright_menu != null:
+		var next_ch := mini(VoyageComposer.STORY_CHAPTER_COUNT, int(summary.get("story_chapter", 1)) + 1)
+		shipwright_menu.selected_story_chapter = next_ch
+	Game.save()
+
+
+# ==============================================================================
+# WorldDirector Living-Sea Spawners & Ship Sinking Salvage
+# ==============================================================================
+
+func _on_director_spawn_rival_ship(spawn_pos: Vector3, archetype: StringName, _target: Node) -> void:
+	_spawn_enemy_vessel(archetype, spawn_pos)
+
+
+func _on_director_spawn_ghost_ship(spawn_pos: Vector3) -> void:
+	_spawn_enemy_vessel(&"ghost_ship", spawn_pos)
+
+
+func _on_director_spawn_shark_pack(center: Vector3, count: int) -> void:
+	if not Net.is_host():
+		return
+	for i in maxi(1, count):
+		var ang := float(i) / float(maxi(1, count)) * TAU
+		var pos := Vector3(center.x + cos(ang) * 9.0, Sea.height(center.x, center.z) - 0.35, center.z + sin(ang) * 9.0)
+		var shark := Shark.new()
+		shark.name = "Shark_%d" % i
+		_entities_root.add_child(shark)
+		shark.global_position = pos
+		active_sharks.append(shark)
+
+
+func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
+	if not Net.is_host():
+		return
+	var lev := Leviathan.new()
+	lev.target_ship = target as Ship if target is Ship else player_ship
+	_entities_root.add_child(lev)
+	lev.global_position = Vector3(center.x, 0.0, center.z)
+	active_leviathans.append(lev)
+
+
+func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:
+	if not Net.is_host():
+		return
+	# Spawn bobbing salvage barrels/crates plus one real floating treasure chest!
+	for i in maxi(1, count):
+		var ang := float(i) / float(maxi(1, count)) * TAU + 0.3
+		var rad := 2.4 + float(i % 2) * 2.2
+		var bx := pos.x + cos(ang) * rad
+		var bz := pos.z + sin(ang) * rad
+		var prop_scene := BARREL_PROP_SCENE if (i % 2 == 0) else CRATE_PROP_SCENE
+		var barrel := prop_scene.instantiate() as Node3D
+		barrel.name = "FlotsamBarrel_%d" % i
+		_entities_root.add_child(barrel)
+		barrel.global_position = Vector3(bx, Sea.height(bx, bz) - 0.15, bz)
+		var it := Interactable.create("Salvage flotsam supplies", 1.2)
+		it.position = Vector3(0.0, 0.55, 0.0)
+		it.interacted.connect(func(_p: Node) -> void:
+			if not Net.is_host():
+				return
+			if player_ship != null and is_instance_valid(player_ship):
+				player_ship.cannonballs_remaining = mini(Ship.MAX_CANNONBALLS, player_ship.cannonballs_remaining + 6)
+				player_ship.planks_remaining = mini(Ship.MAX_PLANKS, player_ship.planks_remaining + 4)
+			Game.profile.add_gold(35)
+			Audio.play_sfx(&"coin_jingle", barrel.global_position)
+			Game.post_notice("Salvaged supplies & 35 gold from flotsam!")
+			barrel.queue_free()
+		)
+		barrel.add_child(it)
+		_bobbing_props.append({"node": barrel, "x": bx, "z": bz, "y_off": -0.18, "phase": float(i) * 1.3})
+
+	var chest_pos := Vector3(pos.x, Sea.height(pos.x, pos.z) + 0.25, pos.z)
+	var chest := TreasureCatalog.create_treasure_carryable(&"driftwood_chest", chest_pos)
+	_entities_root.add_child(chest)
+	chest.global_position = chest_pos
+
+
+func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
+	if not Net.is_host():
+		return
+	var fort := archipelago.get_island_by_id("ironwatch_fort")
+	if fort == null:
+		fort = archipelago.nearest_island(fort_pos)
+	if fort == null:
+		return
+
+	var defenders: Array[StringName] = [
+		&"drowned_cutlass",
+		&"drowned_shield",
+		&"drowned_powder",
+		&"tidecaller",
+		&"drowned_captain",
+	]
+	for i in defenders.size():
+		var local_pt := Vector3(float(i - 2) * 3.8, 0.0, 8.0)
+		if not fort.enemy_spawns.is_empty():
+			local_pt = fort.enemy_spawns[i % fort.enemy_spawns.size()]
+		local_pt.y = fort.surface_height(local_pt.x, local_pt.z) + 0.15
+		_spawn_enemy_pawn(defenders[i], fort.global_transform * local_pt)
+
+	# Place Fort Vault chest on the terrace!
+	var vault_local := fort.dig_points[0] if not fort.dig_points.is_empty() else Vector3(0.0, 0.0, 0.0)
+	vault_local.y = fort.surface_height(vault_local.x, vault_local.z) + 0.35
+	var vault_world := fort.global_transform * vault_local
+	var vault_chest := TreasureCatalog.create_treasure_carryable(&"sovereign_chest", vault_world)
+	_entities_root.add_child(vault_chest)
+	vault_chest.global_position = vault_world
+
+
+func _on_director_spawn_castaway(pos: Vector3) -> void:
+	if not Net.is_host():
+		return
+	var raft := Node3D.new()
+	raft.name = "CastawayRaft"
+	_entities_root.add_child(raft)
+	raft.global_position = Vector3(pos.x, Sea.height(pos.x, pos.z), pos.z)
+
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.albedo_color = Color(0.46, 0.31, 0.18)
+	wood_mat.roughness = 0.85
+	var deck := MeshInstance3D.new()
+	var dbox := BoxMesh.new()
+	dbox.size = Vector3(2.8, 0.24, 2.4)
+	deck.mesh = dbox
+	deck.material_override = wood_mat
+	raft.add_child(deck)
+
+	var lantern := OmniLight3D.new()
+	lantern.light_color = Color(1.0, 0.72, 0.28)
+	lantern.light_energy = 2.6
+	lantern.omni_range = 16.0
+	lantern.position = Vector3(0.9, 1.4, -0.7)
+	raft.add_child(lantern)
+
+	var beacon := MeshInstance3D.new()
+	var bsp := SphereMesh.new()
+	bsp.radius = 0.18
+	bsp.height = 0.36
+	beacon.mesh = bsp
+	beacon.position = lantern.position
+	var bmat := StandardMaterial3D.new()
+	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bmat.albedo_color = Color(1.0, 0.86, 0.45)
+	beacon.material_override = bmat
+	raft.add_child(beacon)
+
+	var npc_vis := CharacterVisual.new()
+	npc_vis.name = "CastawayVisual"
+	npc_vis.archetype = &"carpenter"
+	npc_vis.position = Vector3(-0.2, 0.12, 0.0)
+	raft.add_child(npc_vis)
+
+	var rescue_it := Interactable.create("Rescue Castaway", 1.5)
+	rescue_it.position = Vector3(0.0, 1.1, 0.0)
+	rescue_it.reach = 4.2
+	rescue_it.interacted.connect(func(_p: Node) -> void:
+		if not Net.is_host():
+			return
+		rescue_it.enabled = false
+		Game.profile.add_gold(150)
+		Game.save()
+		Audio.play_sfx(&"coin_jingle", raft.global_position)
+		Game.post_notice("Castaway rescued! 'Bless ye, Cap'n — take 150 gold & beware the fort!'")
+		raft.queue_free()
+	)
+	raft.add_child(rescue_it)
+	_bobbing_props.append({"node": raft, "x": pos.x, "z": pos.z, "y_off": 0.04, "phase": 0.7})
+
+
+func _on_director_spawn_storm_cell(_center: Vector3, _radius: float, _velocity: Vector3) -> void:
+	if map_table != null:
+		map_table.refresh_now()
+
+
+func _on_director_sighting_warning(_msg: String, _pos: Vector3, event_kind: StringName,
+		_bearing: String, _dist: float) -> void:
+	if event_kind == &"rival_ship" or event_kind == &"ghost_ship":
+		Audio.play_stinger(&"ship_sighted")
+	elif event_kind == &"leviathan" or event_kind == &"fort_siege":
+		Audio.play_stinger(&"danger")
+
+
+func _on_player_ship_sunk() -> void:
+	if not Net.is_host() or _ship_restoring:
+		return
+	_ship_restoring = true
+	var wreck_pos := player_ship.global_position
+	var aboard := _collect_aboard_treasures()
+
+	# Record ~60% salvage wreck through WorldDirector (never a wipe!).
+	var wreck := world_director.record_ship_wreck(wreck_pos, aboard, _outpost_positions_dict())
+
+	# Remove old aboard treasure instances before spawning floating wreck salvage.
+	for item in aboard:
+		if is_instance_valid(item):
+			var holder: Variant = item.get(&"holder")
+			if holder is Pawn:
+				(holder as Pawn).release_carried(item as Node3D)
+			(item as Node).queue_free()
+
+	_spawn_wreck_salvage_marker(wreck)
+
+	if Game != null and Game.profile != null:
+		Game.profile.bump_stat("times_sunk", 1)
+		Game.save()
+
+	# Restore ship cleanly at the last visited Outpost mooring!
+	_restore_player_ship_at_outpost(StringName(String(wreck.get("restore_outpost_id", &"port_scoundrel"))))
+	if map_table != null:
+		map_table.refresh_now()
+	_ship_restoring = false
+
+
+func _spawn_wreck_salvage_marker(wreck: Dictionary) -> void:
+	var wpos: Vector3 = wreck.get("position", Vector3.ZERO)
+	var items: Array = wreck.get("items", [])
+
+	# Floating red-and-brass salvage buoy so the wreck is readable from afar.
+	var buoy := Node3D.new()
+	buoy.name = "SalvageBuoy_" + String(wreck.get("id", "wreck"))
+	_entities_root.add_child(buoy)
+	buoy.global_position = Vector3(wpos.x, Sea.height(wpos.x, wpos.z), wpos.z)
+
+	var body := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.25
+	cyl.bottom_radius = 0.42
+	cyl.height = 1.6
+	cyl.radial_segments = 10
+	body.mesh = cyl
+	body.position = Vector3(0.0, 0.5, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.84, 0.16, 0.14)
+	mat.emission_enabled = true
+	mat.emission = Color(0.95, 0.35, 0.12)
+	mat.emission_energy_multiplier = 0.8
+	body.material_override = mat
+	buoy.add_child(body)
+	_bobbing_props.append({"node": buoy, "x": wpos.x, "z": wpos.z, "y_off": 0.0, "phase": 0.2})
+
+	for i in items.size():
+		var info: Dictionary = items[i]
+		var tid := StringName(String(info.get("treasure_id", &"wayfarer_chest")))
+		var ang := float(i) / float(maxi(1, items.size())) * TAU
+		var sx := wpos.x + cos(ang) * 3.0
+		var sz := wpos.z + sin(ang) * 3.0
+		var chest := TreasureCatalog.create_treasure_carryable(tid, Vector3(sx, Sea.height(sx, sz) + 0.35, sz))
+		if info.has("gold_value"):
+			chest.set_meta(&"gold_value", int(info["gold_value"]))
+		chest.set_meta(&"salvaged_from_wreck", true)
+		_entities_root.add_child(chest)
+		chest.global_position = Vector3(sx, Sea.height(sx, sz) + 0.35, sz)
+
+
+func _restore_player_ship_at_outpost(outpost_id: StringName) -> void:
+	if player_ship == null or not is_instance_valid(player_ship):
+		return
+	var target_outpost := archipelago.get_island_by_id(String(outpost_id)) as Outpost
+	if target_outpost == null:
+		target_outpost = archipelago.get_outpost(0)
+	var moor_xf := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -40.0))
+	if target_outpost != null:
+		moor_xf = target_outpost.get_world_mooring_transform()
+	moor_xf.origin.y = Sea.height(moor_xf.origin.x, moor_xf.origin.z)
+
+	var clean_holes: Array[int] = []
+	for _i in Ship.HOLE_SLOTS:
+		clean_holes.append(0)
+	player_ship.apply_net_state({
+		"origin": moor_xf.origin,
+		"quat": moor_xf.basis.get_rotation_quaternion(),
+		"lin_vel": Vector3.ZERO,
+		"ang_vel": Vector3.ZERO,
+		"helm": 0.0,
+		"helm_target": 0.0,
+		"sail_set": 0.0,
+		"sail_target": 0.0,
+		"sail_trim": 0.0,
+		"trim_target": 0.0,
+		"anchor_down": true,
+		"anchor_progress": 1.0,
+		"water_level": 0.0,
+		"is_sinking": false,
+		"holes": clean_holes,
+		"cannonballs": Ship.MAX_CANNONBALLS,
+		"planks": Ship.MAX_PLANKS,
+	})
+	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
+
+	# Re-board captain and active crewmates cleanly on the restored ship.
+	if player_pawn != null and is_instance_valid(player_pawn):
+		if player_pawn.station != null:
+			player_pawn.leave_station()
+		var cap_spawn := player_ship.global_transform * Vector3(0.0, 2.02, 4.15)
+		if player_pawn.dead:
+			player_pawn.revive(cap_spawn)
+		else:
+			player_pawn.heal(player_pawn.max_health)
+		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+
+	for i in crew_pawns.size():
+		var cp := crew_pawns[i]
+		if cp != null and is_instance_valid(cp) and cp.visible:
+			if cp.station != null:
+				cp.leave_station()
+			var c_local := CREW_SPECS[i]["local_pos"] as Vector3
+			if cp.dead:
+				cp.revive(player_ship.global_transform * c_local)
+			else:
+				cp.heal(cp.max_health)
+			cp.board(player_ship, c_local)
+
+
+func _spawn_enemy_pawn(archetype: StringName, world_pos: Vector3) -> Pawn:
+	var p := EnemyBrain.spawn_enemy(archetype, world_pos, _entities_root)
+	# Ensure CharacterVisual loads the exact archetype GLB rig (drowned/tidecaller/pirate).
+	var cv := _character_visual_of(p)
+	if cv != null:
+		cv.set_archetype(archetype)
+	var brain := p.get_node_or_null(^"EnemyBrain") as EnemyBrain
+	if brain != null:
+		brain.enemy_defeated.connect(_on_enemy_pawn_defeated)
+	active_enemies.append(p)
+	return p
+
+
+func _on_enemy_pawn_defeated(arch: StringName, _pos: Vector3) -> void:
+	if Net.is_host() and voyage_manager != null and voyage_manager.has_active_voyage():
+		voyage_manager.notify_enemy_defeated(arch)
+
+
+func _spawn_enemy_vessel(archetype: StringName, world_pos: Vector3) -> Ship:
+	if not Net.is_host():
+		return null
+	var spawn_arch := archetype
+	if spawn_arch == &"drowned_sloop_raider":
+		spawn_arch = &"drowned_sloop"
+	var enemy := AIShipBrain.spawn_enemy_sloop(spawn_arch, world_pos, _entities_root, player_ship)
+	if archetype == &"drowned_sloop_raider":
+		enemy.speed_modifier = 1.04
+	var sunk_kind := &"ghost_ship" if spawn_arch == &"ghost_ship" else &"drowned_sloop"
+	enemy.sunk.connect(func() -> void:
+		if Net.is_host() and voyage_manager != null and voyage_manager.has_active_voyage():
+			voyage_manager.notify_enemy_defeated(sunk_kind)
+	)
+	enemy_ships.append(enemy)
+	return enemy
+
+
+# ==============================================================================
+# Fishing, Cooking & Player Revive Helpers
+# ==============================================================================
+
+func _on_fishing_interacted(pawn: Node) -> void:
+	if not Net.is_host() or fishing_line == null or not (pawn is Pawn):
+		return
+	var p := pawn as Pawn
+	if fishing_line.state == FishingLine.State.IDLE:
+		var stern_dir := player_ship.global_basis.z if player_ship != null else p.facing()
+		if fishing_line.cast_line(fishing_line.global_position, stern_dir, 11.0):
+			_fishing_pawn = p
+			if fishing_interactable != null:
+				fishing_interactable.prompt = "Stow fishing line (hold LMB to reel)"
+			Game.post_notice("Line cast off the stern — hold LMB to reel when it bites!")
+	else:
+		fishing_line.cancel_cast()
+		_fishing_pawn = null
+		if fishing_interactable != null:
+			fishing_interactable.prompt = "Cast fishing line"
+
+
+func _tick_fishing(delta: float) -> void:
+	if fishing_line == null or fishing_line.state == FishingLine.State.IDLE:
+		return
+	if _fishing_pawn == null or not is_instance_valid(_fishing_pawn) or _fishing_pawn.dead:
+		fishing_line.cancel_cast()
+		_fishing_pawn = null
+		if fishing_interactable != null:
+			fishing_interactable.prompt = "Cast fishing line"
+		return
+	if _fishing_pawn.global_position.distance_to(fishing_line.global_position) > 4.2:
+		fishing_line.cancel_cast()
+		_fishing_pawn = null
+		if fishing_interactable != null:
+			fishing_interactable.prompt = "Cast fishing line"
+		return
+	var reeling := Input.is_action_pressed(&"primary") if (_fishing_pawn == player_pawn and active_shot_mode == "") else false
+	fishing_line.step(delta, fishing_line.global_position, reeling)
+
+
+func _on_fish_caught(species: Dictionary) -> void:
+	_fishing_pawn = null
+	if fishing_interactable != null:
+		fishing_interactable.prompt = "Cast fishing line"
+	# Auto-place onto empty hold stove if convenient, or store for cooking.
+	if cooking_stove != null and cooking_stove.cooking_item.is_empty():
+		cooking_stove.place_food(species)
+
+
+func _on_fishing_line_snapped(species: Dictionary) -> void:
+	_fishing_pawn = null
+	if fishing_interactable != null:
+		fishing_interactable.prompt = "Cast fishing line"
+	Game.post_notice("Line snapped! The %s got away." % String(species.get("name", "fish")))
+
+
+func _on_player_died() -> void:
+	if not Net.is_host():
+		return
+	Game.post_notice("Downed! Crew hauling you back aboard...")
+	_revive_timer = 3.0
+
+
+func _revive_player_aboard_ship() -> void:
+	if player_pawn == null or not is_instance_valid(player_pawn):
+		return
+	var has_ship := player_ship != null and is_instance_valid(player_ship)
+	var respawn_pos := player_ship.global_transform * Vector3(0.0, 2.02, 4.15) if has_ship else player_pawn.global_position
+	player_pawn.revive(respawn_pos)
+	if has_ship:
+		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+	Game.post_notice("Back on your feet, Captain!")
+
+
+# ==============================================================================
+# UI Coordination
+# ==============================================================================
+
+func _on_outpost_voyage_board_used(outpost_id: StringName) -> void:
+	if shipwright_menu == null:
+		return
+	shipwright_menu.origin_outpost_id = outpost_id
+	if hud != null and hud.pause_open:
+		hud.set_pause_open(false)
+	shipwright_menu.open_menu(ShipwrightMenu.TAB_VOYAGES)
+
+
+func _on_shipwright_opened(_tab: StringName) -> void:
+	if hud != null:
+		hud.input_enabled = false
+
+
+func _on_shipwright_closed() -> void:
+	if hud != null and active_shot_mode == "":
+		hud.input_enabled = true
+
+
+func _on_ship_class_selected(cls: StringName) -> void:
+	_cli_ship_class = cls
+	if cls == &"brigantine" and not ResourceLoader.exists(BRIGANTINE_SCENE_PATH):
+		Game.post_notice("Brigantine hull commissioned at the drydock (sailing Sloop in harbour).")
+	else:
+		Game.post_notice("Ship class set to %s." % String(cls).capitalize())
+
+
+func _on_settings_changed() -> void:
+	if hud != null and user_settings != null:
+		var subs := bool(user_settings.data.get("subtitles_enabled", true))
+		if not subs:
+			hud.clear_banners()
+
+
+# ==============================================================================
+# Co-op Peer Management & AI Slot Yielding
+# ==============================================================================
+
+func _on_net_peer_joined(peer_id: int) -> void:
+	if not Net.is_host() or _peer_pawns.has(peer_id):
+		return
+	var pp := PAWN_SCENE.instantiate() as Pawn
+	pp.name = "Peer_%d" % peer_id
+	add_child(pp)
+	var offset_idx := _peer_pawns.size()
+	var local_spawn := Vector3(0.9 * float(offset_idx + 1) - 1.2, 1.12, 0.4)
+	if player_ship != null and is_instance_valid(player_ship):
+		pp.board(player_ship, local_spawn)
+
+	var cv := _character_visual_of(pp)
+	if cv != null:
+		cv.set_archetype(&"captain")
+		var tint_pair: Array = PEER_TINTS[offset_idx % PEER_TINTS.size()]
+		cv.set_tint(tint_pair[0] as Color, tint_pair[1] as Color)
+
+	var cc := CombatComponent.new()
+	cc.name = "CombatComponent"
+	cc.faction = &"player"
+	cc.equipped_weapon = &"cutlass"
+	pp.add_child(cc)
+
+	_peer_pawns[peer_id] = pp
+	Net.register_replicated_pawn(peer_id, pp)
+	_yield_one_ai_crewmate(peer_id)
+	Game.post_notice("Co-op crewmate joined aboard! (Peer %d)" % peer_id)
+
+
+func _on_net_peer_left(peer_id: int) -> void:
+	if _peer_pawns.has(peer_id):
+		var pp: Pawn = _peer_pawns[peer_id]
+		_peer_pawns.erase(peer_id)
+		Net.unregister_replicated_pawn(peer_id)
+		if is_instance_valid(pp):
+			if pp.station != null:
+				pp.leave_station()
+			pp.queue_free()
+	_restore_ai_crewmate(peer_id)
+	Game.post_notice("Co-op crewmate departed — AI crew resumed station.")
+
+
+func _yield_one_ai_crewmate(peer_id: int) -> void:
+	# Yield the last active AI crewmate slot (carpenter -> lookout -> helmsman).
+	for idx in range(crew_brains.size() - 1, -1, -1):
+		if _peer_yielded_crew.values().has(idx):
+			continue
+		var brain := crew_brains[idx]
+		var cp := crew_pawns[idx]
+		if brain != null and is_instance_valid(brain):
+			brain.yield_to_human_player()
+		if cp != null and is_instance_valid(cp):
+			cp.visible = false
+			cp.set_physics_process(false)
+			cp.collision_layer = 0
+		_peer_yielded_crew[peer_id] = idx
+		return
+
+
+func _restore_ai_crewmate(peer_id: int) -> void:
+	if not _peer_yielded_crew.has(peer_id):
+		return
+	var idx: int = int(_peer_yielded_crew[peer_id])
+	_peer_yielded_crew.erase(peer_id)
+	if idx < 0 or idx >= crew_brains.size():
+		return
+	var brain := crew_brains[idx]
+	var cp := crew_pawns[idx]
+	if cp != null and is_instance_valid(cp):
+		cp.visible = true
+		cp.collision_layer = Pawn.LAYER_PAWN
+		cp.set_physics_process(true)
+		if player_ship != null and is_instance_valid(player_ship):
+			cp.board(player_ship, CREW_SPECS[idx]["local_pos"] as Vector3)
+	if brain != null and is_instance_valid(brain):
+		brain.set_physics_process(true)
+
+
+func _on_net_client_intent(peer_id: int, intent: Dictionary) -> void:
+	if not Net.is_host() or not _peer_pawns.has(peer_id):
+		return
+	var pp: Pawn = _peer_pawns[peer_id]
+	if not is_instance_valid(pp) or pp.dead:
+		return
+	if intent.has("wish_dir") and intent["wish_dir"] is Vector3:
+		pp.wish_dir = intent["wish_dir"] as Vector3
+	if intent.has("wish_sprint"):
+		pp.wish_sprint = bool(intent["wish_sprint"])
+	if intent.has("wish_jump"):
+		pp.wish_jump = bool(intent["wish_jump"])
+	if intent.has("look_yaw"):
+		pp.look_yaw = float(intent["look_yaw"])
+	if intent.has("look_pitch"):
+		pp.look_pitch = float(intent["look_pitch"])
+	if bool(intent.get("leave_station", false)) and pp.station != null:
+		pp.leave_station()
+	elif pp.station != null and intent.has("station_axis"):
+		var ax: Vector2 = intent["station_axis"] as Vector2 if intent["station_axis"] is Vector2 else Vector2.ZERO
+		pp.drive_station(ax, bool(intent.get("primary", false)), bool(intent.get("secondary", false)), 1.0 / 60.0)
+	if bool(intent.get("interact", false)):
+		pp.interact()
+	if bool(intent.get("attack", false)):
+		var cc := pp.get_node_or_null(^"CombatComponent") as CombatComponent
+		if cc != null:
+			cc.primary_attack()
+
+
+func _send_local_client_intent() -> void:
+	if player_pawn == null or not is_instance_valid(player_pawn):
+		return
+	var ax := Vector2(
+		Input.get_action_strength(&"move_right") - Input.get_action_strength(&"move_left"),
+		Input.get_action_strength(&"move_forward") - Input.get_action_strength(&"move_back")
+	)
+	Net.send_client_intent({
+		"wish_dir": player_pawn.wish_dir,
+		"wish_sprint": player_pawn.wish_sprint,
+		"wish_jump": player_pawn.wish_jump,
+		"look_yaw": player_pawn.look_yaw,
+		"look_pitch": player_pawn.look_pitch,
+		"station_axis": ax,
+		"primary": Input.is_action_pressed(&"primary"),
+		"secondary": Input.is_action_pressed(&"secondary"),
+		"interact": Input.is_action_just_pressed(&"interact"),
+		"leave_station": Input.is_action_just_pressed(&"leave_station"),
+		"attack": Input.is_action_just_pressed(&"primary"),
+	})
+
+
+# ==============================================================================
+# Live Audio Ambience, Thunder & Adaptive Music
+# ==============================================================================
+
+func _update_live_audio(snap: bool) -> void:
+	if Audio == null:
+		return
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	var listener_pos := cam.global_position if cam != null else (player_pawn.global_position if player_pawn != null else Vector3.ZERO)
+
+	Audio.set_sea_state(Sea.sea_state())
+	Audio.set_wind(clampf(Weather.wind_vector().length() / 22.0, 0.0, 1.0))
+	Audio.set_rain(Weather.rain_intensity())
+	if archipelago != null:
+		Audio.set_shore(archipelago.nearest_shore_factor(listener_pos))
+	if player_ship != null and is_instance_valid(player_ship):
+		Audio.set_ship_speed(clampf(player_ship.speed_knots() / 14.0, 0.0, 1.0))
+	var sheltered := bool(sky_rig.get(&"camera_sheltered")) if sky_rig != null else false
+	Audio.set_below_deck(1.0 if sheltered else 0.0)
+	var submerged := Ocean.current != null and Ocean.current.camera_submerged
+	Audio.set_underwater(submerged)
+	if snap:
+		Audio.snap_ambience()
+
+
+func _on_thunder_heard(_direction: Vector3, distance: float, intensity: float) -> void:
+	var sfx_id := &"thunder_near" if distance < 900.0 else &"thunder_far"
+	var db := lerpf(-8.0, 0.0, clampf(intensity, 0.0, 1.0))
+	Audio.play_sfx(sfx_id, Vector3.INF, db, 0.04)
+
+
+func _update_adaptive_music(force: bool) -> void:
+	if Audio == null or Audio.is_shanty_playing():
+		return
+	var desired := _compute_music_mood()
+	if not force and desired == current_music_mood:
+		return
+	current_music_mood = desired
+	var track := _resolve_music_track(desired)
+	if track != &"":
+		Audio.play_music(track, 2.2)
+
+
+func _compute_music_mood() -> StringName:
+	if _is_in_active_combat():
+		return &"combat"
+	if Weather.storminess >= 0.58:
+		return &"storm"
+	if Weather.is_night():
+		return &"sail_night"
+	return &"sail_day"
+
+
+func _is_in_active_combat() -> bool:
+	if player_ship != null and is_instance_valid(player_ship):
+		for es in enemy_ships:
+			if is_instance_valid(es) and not es.is_sinking:
+				if es.global_position.distance_to(player_ship.global_position) < 220.0:
+					return true
+		for lev in active_leviathans:
+			if is_instance_valid(lev) and lev.active:
+				return true
+	if player_pawn != null and is_instance_valid(player_pawn):
+		for ep in active_enemies:
+			if is_instance_valid(ep) and not ep.dead:
+				if ep.global_position.distance_to(player_pawn.global_position) < 24.0:
+					return true
+	return false
+
+
+func _resolve_music_track(mood: StringName) -> StringName:
+	var music_dict: Dictionary = Audio.catalogue.get("music", {})
+	if music_dict.has(String(mood)):
+		return mood
+	if mood == &"combat":
+		return &"combat" if music_dict.has("combat") else &"sailing"
+	if mood == &"storm":
+		return &"combat" if music_dict.has("combat") else &"sailing"
+	return &"sailing" if music_dict.has("sailing") else &""
+
+
+func _play_stinger_safe(preferred: StringName, fallback: StringName) -> void:
+	var stingers: Dictionary = Audio.catalogue.get("stingers", {})
+	if stingers.has(String(preferred)):
+		Audio.play_stinger(preferred)
+	elif stingers.has(String(fallback)):
+		Audio.play_stinger(fallback)
+
+
+# ==============================================================================
+# Hero Showcase Capture Framing (`shot=...` CLI arg ONLY)
+# ==============================================================================
+
+func _apply_hero_shot(mode: String) -> void:
+	var cutlass := archipelago.get_island_by_id("cutlass_cay")
+	var port := archipelago.get_outpost(0)
+	if hud != null:
+		hud.input_enabled = false
+		hud.clear_banners()
+
+	match mode:
+		"outpost_dock":
+			Weather.time_of_day = 10.0 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 7.0, -0.37, 0.0, 0.35)
+			Sea.amp_scale = Sea.AMP_CALM
+			if port != null:
+				var pier_xf := port.global_transform * port.dock_local_transform
+				var cam_pos := pier_xf * Vector3(-5.8, 4.6, -1.5)
+				var look_at_pt := player_ship.global_position + Vector3(0.0, 3.2, -1.0)
+				_mount_shot_camera(cam_pos, look_at_pt, 56.0)
+
+		"sailing":
+			Weather.time_of_day = 10.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 11.0, -0.35, 0.0, 0.38)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			var mid := Vector3(72.0, 0.0, -190.0)
+			_place_sailing_ship(mid, -0.38, 1.0, 6.2)
+			var cam_pos := player_ship.global_transform * Vector3(13.5, 5.2, -13.5)
+			var look_pt := player_ship.global_transform * Vector3(0.0, 3.8, -0.5)
+			_mount_shot_camera(cam_pos, look_pt, 54.0)
+
+		"island_approach":
+			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.04, 9.5, -0.37, 0.0, 0.34)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
+			var isl_pos := cutlass.global_position if cutlass != null else Vector3(165.0, 0.0, -415.0)
+			var ship_pos := isl_pos + Vector3(-42.0, 0.0, 96.0)
+			var yaw := atan2(-(isl_pos.x - ship_pos.x), -(isl_pos.z - ship_pos.z))
+			_place_sailing_ship(ship_pos, yaw, 0.85, 4.8)
+			var cam_pos := player_ship.global_transform * Vector3(11.0, 6.4, 15.0)
+			var look_pt := isl_pos + Vector3(0.0, 12.0, 0.0)
+			_mount_shot_camera(cam_pos, look_pt, 56.0)
+
+		"combat":
+			Weather.time_of_day = 14.5 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.24, 12.5, -0.2, 0.0, 0.56)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.28)
+			_place_sailing_ship(Vector3(60.0, 0.0, -210.0), -0.35, 0.9, 5.2)
+			var foe_pos := player_ship.global_transform * Vector3(44.0, 0.0, -12.0)
+			var foe := _spawn_enemy_vessel(&"drowned_sloop", foe_pos)
+			if foe != null:
+				foe.rotation.y = player_ship.rotation.y + 0.12
+				player_ship.aim_cannon(&"starboard", 0.0, 0.12)
+				player_ship.fire_cannon(&"starboard", player_pawn)
+			var cam_pos := player_ship.global_transform * Vector3(-11.0, 6.5, 16.0)
+			var look_pt := player_ship.global_position.lerp(foe_pos, 0.42) + Vector3(0.0, 3.2, 0.0)
+			_mount_shot_camera(cam_pos, look_pt, 58.0)
+
+		"storm":
+			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.92, 21.0, 0.3, 0.0, 1.0)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.92)
+			_place_sailing_ship(Vector3(-120.0, 0.0, -260.0), 0.15, 0.75, 5.5)
+			Weather.strike_lightning(Vector3(0.25, 0.0, -0.96).normalized(), 520.0, 0.9)
+			var cam_pos := player_ship.global_transform * Vector3(14.0, 4.8, -14.5)
+			var look_pt := player_ship.global_transform * Vector3(0.0, 3.5, 0.0)
+			_mount_shot_camera(cam_pos, look_pt, 58.0)
+
+		"sunset":
+			Weather.time_of_day = 17.85 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 8.5, -0.5, 0.0, 0.44)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.12)
+			_place_sailing_ship(Vector3(85.0, 0.0, -210.0), -0.42, 1.0, 5.8)
+			var cam_pos := player_ship.global_transform * Vector3(13.0, 4.4, 14.0)
+			var look_pt := player_ship.global_transform * Vector3(0.0, 4.2, -3.0)
+			_mount_shot_camera(cam_pos, look_pt, 56.0)
+
+		"night":
+			Weather.time_of_day = 23.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 7.5, -0.37, 0.0, 0.30)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
+			if port != null:
+				var pier_xf := port.global_transform * port.dock_local_transform
+				var cam_pos := pier_xf * Vector3(-6.2, 4.5, -2.0)
+				var look_pt := player_ship.global_position + Vector3(0.0, 3.0, -2.0)
+				_mount_shot_camera(cam_pos, look_pt, 56.0)
+
+		"helm":
+			Weather.time_of_day = 10.6 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 10.5, -0.37, 0.0, 0.36)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_place_sailing_ship(Vector3(76.0, 0.0, -195.0), -0.37, 1.0, 6.0)
+			var helm_eye := player_ship.global_transform * Vector3(0.0, 3.65, 5.75)
+			var helm_look := player_ship.global_transform * Vector3(0.0, 2.55, -24.0)
+			_mount_shot_camera(helm_eye, helm_look, 74.0)
+
+		"map_table":
+			Weather.time_of_day = 12.0 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 6.0, 0.0, 0.0, 0.30)
+			Sea.amp_scale = 0.0
+			if map_table != null:
+				map_table.refresh_now()
+				var table_top := map_table.global_position + Vector3(0.0, MapTableView.SHIP_TABLE_TOP_Y, 0.0)
+				var cam_pos := player_ship.global_transform * Vector3(0.0, 0.85, 3.15)
+				_mount_shot_camera(cam_pos, table_top, 52.0)
+
+		"hold":
+			Weather.time_of_day = 14.0 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.15, 9.0, 0.0, 0.0, 0.45)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.15)
+			player_ship.water_level = 0.18
+			if map_table != null:
+				map_table.refresh_now()
+			var cam_pos := player_ship.global_transform * Vector3(-0.75, 0.55, -2.35)
+			var look_pt := player_ship.global_transform * Vector3(0.35, -0.15, 2.35)
+			_mount_shot_camera(cam_pos, look_pt, 68.0)
+
+
+func _place_sailing_ship(pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_speed: float) -> void:
+	var sy := Sea.height(pos_xz.x, pos_xz.z)
+	var b := Basis(Vector3.UP, yaw_rad)
+	player_ship.global_transform = Transform3D(b, Vector3(pos_xz.x, sy, pos_xz.z))
+	player_ship.set_anchor(false)
+	player_ship.anchor_progress = 0.0
+	player_ship.set_sail_target(sail_val)
+	player_ship.sail_set = sail_val
+	player_ship.set_trim_target(player_ship.ideal_sail_trim())
+	player_ship.sail_trim = player_ship.ideal_sail_trim()
+	player_ship.linear_velocity = -b.z * fwd_speed
+	player_ship.angular_velocity = Vector3.ZERO
+	# Re-board player and crew cleanly onto the moved ship.
+	if player_pawn != null:
+		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+		player_pawn.look_yaw = yaw_rad
+	for i in crew_pawns.size():
+		if crew_pawns[i] != null:
+			crew_pawns[i].board(player_ship, CREW_SPECS[i]["local_pos"] as Vector3)
+
+
+func _mount_shot_camera(world_pos: Vector3, look_target: Vector3, fov_deg: float) -> void:
+	if _shot_camera == null:
+		_shot_camera = Camera3D.new()
+		_shot_camera.name = "HeroShotCamera"
+		_shot_camera.near = 0.08
+		_shot_camera.far = 8000.0
+		add_child(_shot_camera)
+	_shot_camera.fov = fov_deg
+	_shot_camera.global_position = world_pos
+	_shot_camera.look_at(look_target, Vector3.UP)
+	_shot_camera.make_current()
+
+
+# ==============================================================================
+# Utilities
+# ==============================================================================
+
+func _tick_bobbing_props(delta: float) -> void:
+	var idx := 0
+	while idx < _bobbing_props.size():
+		var entry: Dictionary = _bobbing_props[idx]
+		var node: Variant = entry["node"]
+		if not is_instance_valid(node):
+			_bobbing_props.remove_at(idx)
+			continue
+		var n3 := node as Node3D
+		var x: float = float(entry["x"])
+		var z: float = float(entry["z"])
+		var y_off: float = float(entry["y_off"])
+		var phase: float = float(entry["phase"]) + delta * 1.4
+		entry["phase"] = phase
+		n3.global_position = Vector3(x, Sea.height(x, z) + y_off, z)
+		n3.rotation.x = sin(phase) * 0.09
+		n3.rotation.z = cos(phase * 0.85) * 0.09
+		idx += 1
+
+
+func _build_chart_map_data() -> Array[Dictionary]:
+	var raw := archipelago.get_map_data()
+	var enriched: Array[Dictionary] = []
+	for d in raw:
+		var copy := d.duplicate(true)
+		if copy.has("contour_points") and not copy.has("contour"):
+			copy["contour"] = copy["contour_points"]
+		enriched.append(copy)
+	return enriched
+
+
+func _outpost_positions_array() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	for op in archipelago.get_outposts():
+		out.append(op.global_position)
+	return out
+
+
+func _outpost_positions_dict() -> Dictionary:
+	var out := {}
+	for op in archipelago.get_outposts():
+		out[StringName(op.island_id)] = op.global_position
+	return out
+
+
+static func _character_visual_of(p: Pawn) -> CharacterVisual:
+	if p == null:
+		return null
+	var cv := p.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
+	if cv != null:
+		return cv
+	var found := p.find_children("*", "CharacterVisual", true, false)
+	if not found.is_empty():
+		return found[0] as CharacterVisual
+	return null
