@@ -116,13 +116,19 @@ void fragment() {
 	float cluster_dapple = smoothstep(0.22, 0.82, cluster_n);
 
 	// Deep cool emerald-teal canopy interior self-AO + ground-root contact darkening -> warm sunlit tips.
-	vec3 n_w = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);
+	// On untextured MultiMesh ground flora (grass/ferns), blend world normal gently skyward (BOTW/SoT
+	// painterly turf smoothing) and anchor roots cleanly into earth shadow so clumps never read as flat polygons!
+	float is_ground_flora = (1.0 - step(0.5, use_albedo_tex)) * is_leaf;
+	vec3 n_w_raw = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);
+	vec3 n_w = normalize(mix(n_w_raw, normalize(n_w_raw + vec3(0.0, 0.72, 0.0)), is_ground_flora * 0.42));
 	float up_ao = mix(0.64, 1.08, smoothstep(-0.40, 0.72, n_w.y));
-	float crown_ao = mix(0.60, 1.08, smoothstep(0.04, 0.84, v_tip_weight));
-	float canopy_ao = mix(1.0, clamp(up_ao * crown_ao * mix(0.78, 1.18, cluster_dapple), 0.40, 1.20), is_leaf);
+	float crown_ao = mix(mix(0.60, 0.54, is_ground_flora), 1.08, smoothstep(0.03, 0.82, v_tip_weight));
+	// Soft macro meadow-patch harmony so ground flora blends organically into Pass Q3A turf underneath.
+	float meadow_patch = foliage_noise3(vec3(v_world.xz * 0.24, 1.7));
+	float canopy_ao = mix(1.0, clamp(up_ao * crown_ao * mix(0.78, 1.18, cluster_dapple) * mix(1.0, mix(0.86, 1.12, meadow_patch), is_ground_flora), 0.36, 1.22), is_leaf);
 
 	// Painterly tropical frond gradient: rich deep jade shadow core -> sunlit golden-lime outer leaflets.
-	vec3 jade_base = vec3(0.56, 0.82, 0.72);
+	vec3 jade_base = mix(vec3(0.56, 0.82, 0.72), vec3(0.48, 0.74, 0.56), is_ground_flora);
 	vec3 gold_tip = vec3(1.24, 1.18, 0.70);
 	vec3 grad_tint = mix(vec3(1.0), mix(jade_base, gold_tip, smoothstep(0.06, 0.90, v_tip_weight)), is_leaf);
 	// Per-frond hue shift + sunlit leaf-cluster & subtle pinnate-vein contrast breakup (zero corduroy striping!).
@@ -130,27 +136,32 @@ void fragment() {
 	vec3 leaf_col = base_col * grad_tint * mix(vec3(1.0), frond_shift, is_leaf) * canopy_ao;
 
 	// Highlight central frond spine & natural pinnate ribs (gentle on close blades, bolder on palm/banyan canopies).
-	float vein_shade = mix(0.92, 1.08, vein_ridge * 0.78 + fine_fiber * 0.22);
-	leaf_col *= mix(1.0, mix(1.0, vein_shade, 0.44 * near_foliage), is_leaf);
-	leaf_col = mix(leaf_col, leaf_col * vec3(1.16, 1.20, 0.78), midrib * 0.28 * is_leaf * near_foliage);
+	float vein_shade = mix(0.91, 1.09, vein_ridge * 0.72 + fine_fiber * 0.28);
+	leaf_col *= mix(1.0, mix(1.0, vein_shade, mix(0.44, 0.56, is_ground_flora) * near_foliage), is_leaf);
+	leaf_col = mix(leaf_col, leaf_col * vec3(1.16, 1.20, 0.78), midrib * mix(0.28, 0.34, is_ground_flora) * is_leaf * near_foliage);
 
 	ALBEDO = leaf_col;
 	float base_rough = use_roughness_tex > 0.5 ? texture(roughness_tex, UV).g : roughness_val;
-	float waxy_tip = mix(base_rough + 0.10, max(base_rough - 0.16, 0.26), v_tip_weight);
-	float vein_rough = mix(0.08, -0.09, vein_ridge * 0.65 + cluster_dapple * 0.35) * is_leaf * near_foliage;
-	ROUGHNESS = clamp(waxy_tip + vein_rough, 0.20, 0.94);
+	float waxy_tip = mix(base_rough + 0.14, max(base_rough - 0.14, 0.30), v_tip_weight);
+	float vein_rough = mix(0.08, -0.08, vein_ridge * 0.65 + cluster_dapple * 0.35) * is_leaf * near_foliage;
+	ROUGHNESS = clamp(waxy_tip + vein_rough + is_ground_flora * 0.08, 0.24, 0.96);
 
 	if (use_normal_tex > 0.5) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;
 		NORMAL_MAP_DEPTH = normal_scale * 1.22;
 	} else if (near_foliage > 0.02) {
-		// Analytical pinnate leaflet & canopy cluster micro-normal relief for untextured MultiMesh foliage.
+		// Analytical cylindrical blade curvature, central keel & pinnate leaflet micro-normal relief
+		// for untextured MultiMesh foliage (eliminates harsh flat-triangle facets on 2.2 m closeups!).
 		vec3 f_t = normalize(cross(abs(n_w.y) < 0.92 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n_w));
 		vec3 f_b = cross(n_w, f_t);
-		float d_vein = cos(vein_phase) * 0.22 + (cluster_n - 0.5) * 0.34;
-		float d_rib = (UV.x * 2.0 - 1.0) * midrib * 0.32;
-		vec3 n_pert = normalize(n_w + (f_t * (d_vein + d_rib) + f_b * (d_vein * 0.75)) * (near_foliage * is_leaf));
+		float u_signed = UV.x * 2.0 - 1.0;
+		float blade_curve = u_signed * (0.28 * is_ground_flora);
+		float d_vein = cos(vein_phase) * 0.20 + (cluster_n - 0.5) * 0.30;
+		float d_rib = u_signed * midrib * 0.34;
+		vec3 n_pert = normalize(n_w + (f_t * (d_vein + d_rib + blade_curve) + f_b * (d_vein * 0.68)) * (near_foliage * is_leaf));
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_pert, 0.0)).xyz);
+	} else if (is_ground_flora > 0.05) {
+		NORMAL = normalize((VIEW_MATRIX * vec4(n_w, 0.0)).xyz);
 	}
 	METALLIC = 0.0;
 	SPECULAR = mix(0.28, 0.36, v_tip_weight * is_leaf);
