@@ -105,6 +105,7 @@ const RUNNING_DARK_COOLDOWN := 6.0
 const ROWBOAT_COOLDOWN := 6.0
 const EVENT_CLOUD_COOLDOWN := 10.0
 const FIRE_CALLOUT_COOLDOWN := 7.0
+const CANNON_SELF_LAUNCH_COOLDOWN := 6.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -235,6 +236,10 @@ func _bind_ship_signals() -> void:
 		var cb_lanterns := Callable(self, &"_on_ship_lanterns_toggled")
 		if not _bound_ship.is_connected(&"lanterns_toggled", cb_lanterns):
 			_bound_ship.connect(&"lanterns_toggled", cb_lanterns)
+	if _bound_ship.has_signal(&"pawn_cannon_launched"):
+		var cb_launch := Callable(self, &"_on_ship_pawn_cannon_launched")
+		if not _bound_ship.is_connected(&"pawn_cannon_launched", cb_launch):
+			_bound_ship.connect(&"pawn_cannon_launched", cb_launch)
 
 
 func _unbind_ship_signals() -> void:
@@ -247,6 +252,10 @@ func _unbind_ship_signals() -> void:
 			var cb_lanterns := Callable(self, &"_on_ship_lanterns_toggled")
 			if _bound_ship.is_connected(&"lanterns_toggled", cb_lanterns):
 				_bound_ship.disconnect(&"lanterns_toggled", cb_lanterns)
+		if _bound_ship.has_signal(&"pawn_cannon_launched"):
+			var cb_launch := Callable(self, &"_on_ship_pawn_cannon_launched")
+			if _bound_ship.is_connected(&"pawn_cannon_launched", cb_launch):
+				_bound_ship.disconnect(&"pawn_cannon_launched", cb_launch)
 	_bound_ship = null
 
 
@@ -1918,6 +1927,27 @@ func _on_ship_lanterns_toggled(lit_v: Variant = true, _arg1: Variant = null, _ar
 		for other in _sibling_crew_brains():
 			if other.ship == ship:
 				other._callout_cooldowns[cd_key] = RUNNING_DARK_COOLDOWN
+
+
+## Cheer when the Captain blasts themselves out of a ship cannon.
+func cheer_cannon_self_launch() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("cannon_self_launch"):
+		return false
+	_speak(&"cannon_self_launch", {}, "cannon_self_launch", CANNON_SELF_LAUNCH_COOLDOWN)
+	return true
+
+
+func _on_ship_pawn_cannon_launched(_side: Variant = &"", launched_pawn: Variant = null) -> void:
+	if not Net.is_host():
+		return
+	if launched_pawn == pawn:
+		return
+	if cheer_cannon_self_launch():
+		for other in _sibling_crew_brains():
+			if other.ship == ship:
+				other._callout_cooldowns["cannon_self_launch"] = CANNON_SELF_LAUNCH_COOLDOWN
 
 
 func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> void:

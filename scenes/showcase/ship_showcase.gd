@@ -63,7 +63,7 @@ func _ready() -> void:
 			time_h = 14.5
 			storm = 0.18
 			wind_spd = 9.5
-		"fire":
+		"fire", "rage_chest":
 			time_h = 18.25
 			storm = 0.24
 			wind_spd = 11.0
@@ -130,6 +130,28 @@ func _ready() -> void:
 			sfire.ignite_zone(0, 1.0)
 			sfire.ignite_zone(1, 0.95)
 			sfire.ignite_zone(2, 0.92)
+
+	if _shot == "rage_chest":
+		var deck_y := 1.24 if _is_brig else 1.08
+		var z_shift := -0.75 if _is_brig else 0.0
+		var loot_specs: Array[Array] = [
+			[&"blazing_rage_chest", Vector3(-0.06, deck_y, -2.42 + z_shift), 0.22],
+			[&"commodity_spiced_silk", Vector3(-0.92, deck_y, -2.62 + z_shift), 0.44],
+			[&"commodity_cinder_rum", Vector3(0.78, deck_y, -2.38 + z_shift), -0.34],
+		]
+		for spec in loot_specs:
+			var tid: StringName = spec[0]
+			if not TreasureCatalog.has_treasure(tid):
+				continue
+			var lpos := _ship.ship_point(spec[1] as Vector3)
+			var item := TreasureCatalog.create_treasure_carryable(tid, Vector3.ZERO)
+			item.freeze = true
+			_ship.add_child(item)
+			item.position = lpos
+			item.rotation.y = float(spec[2])
+			if tid == &"blazing_rage_chest":
+				item.set_meta(&"rage_heat", 0.88)
+				TreasureCatalog.sync_rage_visual(item)
 
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
@@ -223,6 +245,11 @@ func _update_camera() -> void:
 			var look := xf * _ship.ship_point(Vector3(0.0, 2.0, -2.2) if _is_brig else Vector3(0.0, 1.8, -1.2))
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.0)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"rage_chest":
+			# Intimate foredeck dusk close-up cleanly ahead of the mainmast framing glowing BlazingRageChest & Trade Crates.
+			var eye := xf * _ship.ship_point(Vector3(0.32, 2.48, -2.05) if _is_brig else Vector3(0.28, 2.34, -1.32))
+			var look := xf * _ship.ship_point(Vector3(-0.06, 1.46, -3.22) if _is_brig else Vector3(-0.06, 1.32, -2.55))
+			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"rowboat":
 			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
 			var eye := xf * _ship.ship_point(Vector3(5.6, 2.65, 14.4) if _is_brig else Vector3(4.8, 2.35, 11.8))
@@ -243,6 +270,9 @@ func _update_camera() -> void:
 
 
 func _exit_tree() -> void:
+	if Audio != null and Audio.has_method(&"shutdown"):
+		Audio.shutdown()
+	TreasureCatalog.clear_mesh_cache()
 	ShipFire.clear_shared_cache()
 	ShipEmissaryFlag.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()

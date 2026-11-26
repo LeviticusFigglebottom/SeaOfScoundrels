@@ -14,6 +14,7 @@ signal ship_class_selected(cls: StringName)
 signal ship_name_changed(new_name: String)
 signal armory_loadout_changed(melee_id: StringName, ranged_id: StringName)
 signal emissary_changed(company_id: StringName, grade: int)
+signal commodity_purchased(commodity_id: StringName, cost: int, item: Node)
 signal settings_changed
 
 const TAB_VOYAGES := &"voyages"
@@ -61,6 +62,7 @@ var map_table: MapTableView = null
 var world_director: WorldDirector = null
 var scene_root: Node = null
 var _crew_brains: Array[CrewBrain] = []
+var _trade_spawn_seq: int = 0
 
 var _theme: Theme = null
 var _backdrop: ColorRect = null
@@ -251,6 +253,73 @@ func lower_emissary_flag() -> Dictionary:
 	emissary_changed.emit(&"", 0)
 	refresh()
 	return res
+
+
+## Host-only. Purchase a Merchant Trade Route commodity crate at `origin_outpost_id`,
+## deduct gold from the active captain profile, and spawn the physical Carryable onto
+## the moored ship deck (or nearby outpost pier).
+func buy_trade_commodity(commodity_id: StringName) -> Dictionary:
+	var prof: Profile = Game.profile if (Game != null and Game.profile != null) else (voyage_manager.profile if voyage_manager != null else null)
+	var spawn_info := _resolve_trade_crate_spawn()
+	var spawn_pos: Vector3 = spawn_info["position"] as Vector3
+	var spawn_parent: Node = spawn_info["parent"] as Node
+
+	var res := TradeRoutes.purchase_commodity(prof, commodity_id, origin_outpost_id, spawn_pos, spawn_parent)
+	if not bool(res.get("ok", false)):
+		var reason := String(res.get("reason", "Cannot purchase trade crate."))
+		_set_status(reason)
+		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
+		return res
+
+	if Game != null and Game.profile != null and prof == Game.profile:
+		Game.save()
+	Audio.play_sfx(&"coin_jingle", Vector3.INF, -2.0)
+	var item_node: Node = res.get("item", null) as Node
+	var crate_name := String(item_node.get_meta(&"treasure_name", String(commodity_id))) if item_node != null else String(commodity_id)
+	var dest_name := String(res.get("best_dest_name", "another port"))
+	var cost := int(res.get("cost", 0))
+	_set_status("Loaded %s (-%dg). Sail to %s for top profit!" % [crate_name, cost, dest_name])
+	if Game != null:
+		Game.post_notice("Bought %s (-%dg) - haul to %s for high demand!" % [crate_name, cost, dest_name])
+	commodity_purchased.emit(commodity_id, cost, item_node)
+	refresh()
+	return res
+
+
+func _resolve_trade_crate_spawn() -> Dictionary:
+	var spawn_parent: Node = null
+	if scene_root != null and is_instance_valid(scene_root):
+		var entities := scene_root.get_node_or_null(^"Entities")
+		spawn_parent = entities if entities != null else scene_root
+	elif ship != null and is_instance_valid(ship) and ship.get_parent() != null:
+		spawn_parent = ship.get_parent()
+	elif get_parent() != null:
+		spawn_parent = get_parent()
+
+	var slot_idx := _trade_spawn_seq % 4
+	_trade_spawn_seq += 1
+	var offset_x := -0.75 + 0.50 * float(slot_idx)
+	var spawn_pos := Vector3(offset_x, 2.0, 0.0)
+
+	if ship != null and is_instance_valid(ship):
+		var hs_v: Variant = ship.get(&"hull_scale")
+		var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+		var deck_local := Vector3(offset_x * 0.7, 1.45, -1.25) * hs
+		spawn_pos = (ship.global_transform * deck_local) if ship.is_inside_tree() else (ship.position + deck_local)
+	elif archipelago != null and is_instance_valid(archipelago):
+		var isl := archipelago.get_island_by_id(String(origin_outpost_id))
+		if isl is Outpost:
+			var op := isl as Outpost
+			if op.merchant_stall != null and is_instance_valid(op.merchant_stall) and op.merchant_stall.is_inside_tree():
+				spawn_pos = op.merchant_stall.global_position + Vector3(offset_x, 0.9, -1.6)
+			elif op.is_inside_tree():
+				spawn_pos = op.global_position + Vector3(offset_x, 2.5, 0.0)
+	elif player_controller != null and is_instance_valid(player_controller):
+		var p_node := player_controller.get_parent() as Node3D
+		if p_node != null and p_node.is_inside_tree():
+			spawn_pos = p_node.global_position + Vector3(offset_x, 1.0, -1.2)
+
+	return {"position": spawn_pos, "parent": spawn_parent}
 
 
 ## Sync both the player's held treasure map and the ship's MapTableView to `voyage`.
@@ -703,6 +772,9 @@ func _rebuild_voyages_tab() -> void:
 	# Trading Company Emissary Desk (top section above voyage cards)
 	_voyage_list_box.add_child(_build_emissary_desk_card())
 
+	# Merchant Commodity Trade Manifest for the current Outpost
+	_voyage_list_box.add_child(_build_trade_manifest_card())
+
 	# Active voyage banner
 	if voyage_manager != null and voyage_manager.has_active_voyage():
 		var av := voyage_manager.active_voyage
@@ -856,6 +928,78 @@ func _build_emissary_desk_card() -> PanelContainer:
 			rbtn.custom_minimum_size = Vector2(0.0, 38.0)
 			rbtn.pressed.connect(func() -> void: raise_emissary_flag(cid))
 			btn_row.add_child(rbtn)
+
+	return card
+
+
+func _build_trade_manifest_card() -> PanelContainer:
+	var port_name := TradeRoutes.get_outpost_name(origin_outpost_id)
+	var manifest := TradeRoutes.get_outpost_manifest(origin_outpost_id)
+	var prof: Profile = Game.profile if (Game != null and Game.profile != null) else (voyage_manager.profile if voyage_manager != null else null)
+	var gold := int(prof.data.get("gold", 0)) if prof != null else 0
+
+	var card := _make_card_panel(Color(0.93, 0.87, 0.72, 0.98), HudIcons.COL_BRASS)
+	card.name = "TradeManifestCard"
+
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	card.add_child(v)
+
+	var hdr := Label.new()
+	hdr.name = "TradeManifestTitle"
+	hdr.text = _to_ascii("MERCHANT TRADE MANIFEST - %s" % port_name.to_upper())
+	hdr.add_theme_font_size_override("font_size", 16)
+	hdr.add_theme_color_override("font_color", HudIcons.COL_INK)
+	v.add_child(hdr)
+
+	var sub := Label.new()
+	sub.text = "Buy surplus cargo crates here and sail to high-demand outposts for 1.9x-2.3x arbitrage!"
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.add_theme_font_size_override("font_size", 13)
+	sub.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	v.add_child(sub)
+
+	for entry: Dictionary in manifest:
+		var cid := entry["id"] as StringName
+		var cname := String(entry["name"])
+		var buy_price := int(entry["buy_price"])
+		var dest_name := String(entry["best_dest_name"])
+		var best_sell := int(entry["best_sell_price"])
+		var profit := int(entry["projected_profit"])
+		var demand_lbl := String(entry["demand_label"])
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		v.add_child(row)
+
+		var info_v := VBoxContainer.new()
+		info_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info_v.add_theme_constant_override("separation", 2)
+		row.add_child(info_v)
+
+		var name_lbl := Label.new()
+		name_lbl.text = _to_ascii("%s (Buy %dg)" % [cname, buy_price])
+		name_lbl.add_theme_font_size_override("font_size", 15)
+		name_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
+		info_v.add_child(name_lbl)
+
+		var route_lbl := Label.new()
+		route_lbl.text = _to_ascii("Best Port: %s  |  Payout: %dg (+%dg profit)  |  %s" % [
+			dest_name, best_sell, profit, demand_lbl])
+		route_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		route_lbl.add_theme_font_size_override("font_size", 13)
+		route_lbl.add_theme_color_override("font_color", Color(0.45, 0.30, 0.10))
+		info_v.add_child(route_lbl)
+
+		var buy_btn := Button.new()
+		buy_btn.name = "BuyCommodity_" + String(cid)
+		buy_btn.text = "Buy Crate (%dg)" % buy_price
+		buy_btn.custom_minimum_size = Vector2(168.0, 38.0)
+		buy_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		buy_btn.disabled = (gold < buy_price)
+		buy_btn.tooltip_text = "Load %s onto your moored ship deck" % cname if gold >= buy_price else "Requires %dg" % buy_price
+		buy_btn.pressed.connect(func() -> void: buy_trade_commodity(cid))
+		row.add_child(buy_btn)
 
 	return card
 

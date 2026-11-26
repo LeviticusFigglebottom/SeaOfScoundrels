@@ -225,6 +225,111 @@ const CATALOG := {
 		"fragile": false,
 		"description": "Bronze-bound strongbox holding the Salt-King's ciphered shipping ledgers and tide-vault bearings.",
 	},
+	&"blazing_rage_chest": {
+		"id": &"blazing_rage_chest",
+		"name": "Chest of Blazing Rage",
+		"tier": 4,
+		"tier_label": "Cursed Relic",
+		"gold_value": 820,
+		"renown_value": 115,
+		"company_id": &"iron_tide",
+		"mass_kg": 30.0,
+		"carry_speed_factor": 0.66,
+		"buoyancy": 1.45,
+		"float_radius": 0.30,
+		"shape": &"rage_chest",
+		"tint": Color(0.24, 0.14, 0.12),
+		"accent_tint": Color(1.0, 0.42, 0.08),
+		"cursed": true,
+		"curse_flood_rate": 0.0,
+		"curse_heat_rate": 0.055,
+		"fragile": false,
+		"description": "Forged from volcanic iron. Builds searing ember heat aboard ship and ignites deck fires unless cooled with water!",
+	},
+	&"commodity_spiced_silk": {
+		"id": &"commodity_spiced_silk",
+		"name": "Spiced Silk Crate",
+		"tier": 2,
+		"tier_label": "Trade Goods",
+		"gold_value": 120,
+		"renown_value": 24,
+		"company_id": &"gilded_compass",
+		"mass_kg": 15.0,
+		"carry_speed_factor": 0.78,
+		"buoyancy": 1.85,
+		"float_radius": 0.26,
+		"shape": &"crate",
+		"tint": Color(0.62, 0.34, 0.18),
+		"accent_tint": Color(0.84, 0.18, 0.36),
+		"cursed": false,
+		"curse_flood_rate": 0.0,
+		"fragile": false,
+		"commodity": true,
+		"description": "Bolts of saffron-dyed merchant silk sealed in cedar. Surplus at Port Scoundrel; top coin at Galleon's Reach.",
+	},
+	&"commodity_cinder_rum": {
+		"id": &"commodity_cinder_rum",
+		"name": "Cinder Rum Cask",
+		"tier": 2,
+		"tier_label": "Trade Goods",
+		"gold_value": 140,
+		"renown_value": 28,
+		"company_id": &"gilded_compass",
+		"mass_kg": 17.0,
+		"carry_speed_factor": 0.76,
+		"buoyancy": 1.80,
+		"float_radius": 0.26,
+		"shape": &"crate",
+		"tint": Color(0.46, 0.26, 0.14),
+		"accent_tint": Color(0.92, 0.42, 0.12),
+		"cursed": false,
+		"curse_flood_rate": 0.0,
+		"fragile": false,
+		"commodity": true,
+		"description": "Charred-oak casks of volcanic rum. Surplus at Barnacle Haven; prized by merchants at Port Scoundrel.",
+	},
+	&"commodity_gilded_tea": {
+		"id": &"commodity_gilded_tea",
+		"name": "Gilded Tea Chest",
+		"tier": 2,
+		"tier_label": "Trade Goods",
+		"gold_value": 160,
+		"renown_value": 32,
+		"company_id": &"gilded_compass",
+		"mass_kg": 16.0,
+		"carry_speed_factor": 0.78,
+		"buoyancy": 1.82,
+		"float_radius": 0.26,
+		"shape": &"crate",
+		"tint": Color(0.32, 0.42, 0.24),
+		"accent_tint": Color(0.94, 0.74, 0.18),
+		"cursed": false,
+		"curse_flood_rate": 0.0,
+		"fragile": false,
+		"commodity": true,
+		"description": "Tin-lined merchant chest of gilded highland tea. Surplus at Galleon's Reach; high demand at Barnacle Haven.",
+	},
+	&"commodity_sea_salt": {
+		"id": &"commodity_sea_salt",
+		"name": "Refined Sea-Salt Keg",
+		"tier": 1,
+		"tier_label": "Trade Goods",
+		"gold_value": 100,
+		"renown_value": 20,
+		"company_id": &"gilded_compass",
+		"mass_kg": 18.0,
+		"carry_speed_factor": 0.77,
+		"buoyancy": 1.78,
+		"float_radius": 0.26,
+		"shape": &"crate",
+		"tint": Color(0.56, 0.62, 0.66),
+		"accent_tint": Color(0.22, 0.62, 0.78),
+		"cursed": false,
+		"curse_flood_rate": 0.0,
+		"fragile": false,
+		"commodity": true,
+		"description": "Brine-dried sea salt stocked at every port. High demand rotates across outposts each day.",
+	},
 }
 
 
@@ -269,6 +374,8 @@ static func pick_random_for_tier(rng: RandomNumberGenerator, min_tier: int,
 	var candidates: Array[StringName] = []
 	for key in CATALOG.keys():
 		var entry: Dictionary = CATALOG[key]
+		if bool(entry.get("commodity", false)):
+			continue
 		var tier: int = int(entry["tier"])
 		if tier < min_tier or tier > max_tier:
 			continue
@@ -319,6 +426,10 @@ static func create_treasure_carryable(treasure_id: StringName,
 	item.set_meta(&"cursed", bool(entry["cursed"]))
 	item.set_meta(&"fragile", bool(entry["fragile"]))
 	item.set_meta(&"curse_flood_rate", float(entry["curse_flood_rate"]))
+	var heat_rate := float(entry.get("curse_heat_rate", 0.0))
+	item.set_meta(&"curse_heat_rate", heat_rate)
+	if heat_rate > 0.0:
+		item.set_meta(&"rage_heat", 0.0)
 	item.set_meta(&"integrity", 1.0)
 	item.set_meta(&"tint", entry["tint"])
 
@@ -348,6 +459,12 @@ static func create_treasure_carryable(treasure_id: StringName,
 		var drips := _build_weeping_drips_particles()
 		visual.add_child(drips)
 		item.tree_exiting.connect(_cleanup_hazard_particles.bind(drips), CONNECT_ONE_SHOT)
+
+	# Cursed volcanic BlazingRageChests mount a lightweight ember glow + rising ember motes!
+	if heat_rate > 0.0:
+		var glow := _build_rage_ember_glow()
+		visual.add_child(glow)
+		item.tree_exiting.connect(_cleanup_rage_ember_glow.bind(glow), CONNECT_ONE_SHOT)
 
 	# Explicit Interactable so prompts are ready even before _ready() runs.
 	var handle := Interactable.create("Pick up %s" % entry["name"], 0.6)
@@ -381,6 +498,9 @@ static func inspect_carryable(node: Node) -> Dictionary:
 		"cursed": bool(node.get_meta(&"cursed", base.get("cursed", false))),
 		"fragile": is_fragile,
 		"curse_flood_rate": float(node.get_meta(&"curse_flood_rate", base.get("curse_flood_rate", 0.0))),
+		"curse_heat_rate": float(node.get_meta(&"curse_heat_rate", base.get("curse_heat_rate", 0.0))),
+		"rage_heat": float(node.get_meta(&"rage_heat", 0.0)),
+		"commodity": bool(base.get("commodity", false)),
 		"integrity": integrity,
 	}
 
@@ -445,6 +565,110 @@ static func sync_fragile_visual(item: Node) -> void:
 	item.set_meta(&"distress_severity", severity)
 
 
+## Sync the RageEmberGlow visual intensity (ember particles & unshadowed glow light) with `rage_heat`.
+static func sync_rage_visual(item: Node) -> void:
+	if item == null or not is_instance_valid(item):
+		return
+	var visual := item.get_node_or_null(^"Visual") as Node3D
+	if visual == null:
+		return
+	var glow := visual.get_node_or_null(^"RageEmberGlow") as Node3D
+	if glow == null:
+		return
+	var heat := clampf(float(item.get_meta(&"rage_heat", 0.0)), 0.0, 1.0)
+	var embers := glow.get_node_or_null(^"EmberParticles") as GPUParticles3D
+	if embers != null and is_instance_valid(embers):
+		embers.amount_ratio = clampf(lerpf(0.25, 1.0, heat), 0.15, 1.0)
+		embers.visible = true
+		embers.emitting = true
+	var light := glow.get_node_or_null(^"EmberLight") as OmniLight3D
+	if light != null and is_instance_valid(light):
+		light.light_energy = lerpf(0.45, 2.8, heat)
+		light.visible = true
+
+
+## Host-only. Tick volcanic heat build-up on a `BlazingRageChest` aboard `ship`.
+## Cools gently when submerged in seawater or below deck in >= 0.16 flooded bilge water;
+## otherwise heats up and erupts into real ShipFire deck flames at `rage_heat >= 1.0`!
+static func tick_rage_chest_aboard(item: Node, ship: Node, delta: float) -> Dictionary:
+	if item == null or not is_instance_valid(item):
+		return {"erupted": false, "heat": 0.0, "cooled": false}
+	var heat_rate := float(item.get_meta(&"curse_heat_rate", 0.0))
+	var heat := clampf(float(item.get_meta(&"rage_heat", 0.0)), 0.0, 1.0)
+	if not Net.is_host() or delta <= 0.0 or heat_rate <= 0.0:
+		return {"erupted": false, "heat": heat, "cooled": false}
+
+	var hold_water := 0.0
+	if ship != null:
+		var wl: Variant = ship.get("water_level")
+		if wl is float or wl is int:
+			hold_water = float(wl)
+
+	var in_seawater := false
+	var below_deck := false
+	if item is Node3D and item.is_inside_tree():
+		var item_pos := (item as Node3D).global_position
+		if Sea != null and Sea.depth(item_pos) > 0.04:
+			in_seawater = true
+		if ship is Node3D and ship.is_inside_tree():
+			var hs_v: Variant = ship.get(&"hull_scale")
+			var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+			var local_p := (ship as Node3D).global_transform.affine_inverse() * item_pos
+			below_deck = (local_p.y / hs) < 0.35
+	elif ship != null and not (ship is Node3D):
+		below_deck = true
+
+	var is_wet := in_seawater or (hold_water >= 0.16 and below_deck)
+	if is_wet:
+		heat = clampf(heat - 0.14 * delta, 0.0, 1.0)
+		item.set_meta(&"rage_heat", heat)
+		sync_rage_visual(item)
+		return {"erupted": false, "heat": heat, "cooled": true}
+
+	heat += heat_rate * delta
+	if heat >= 1.0:
+		heat = 0.20
+		item.set_meta(&"rage_heat", heat)
+		sync_rage_visual(item)
+		var erupt_pos := Vector3.ZERO
+		if item is Node3D and item.is_inside_tree():
+			erupt_pos = (item as Node3D).global_position
+		elif ship is Node3D and ship.is_inside_tree():
+			erupt_pos = (ship as Node3D).global_position
+		if ship != null and ship.has_method(&"ignite_deck_fire"):
+			ship.call(&"ignite_deck_fire", erupt_pos, false)
+		if Audio != null:
+			var sfx_id: StringName = &"fire_burst" if Audio.catalogue.get("sfx", {}).has("fire_burst") else &"cannon_fire"
+			Audio.play_sfx(sfx_id, erupt_pos, -2.5)
+		if Game != null:
+			Game.post_notice("The Chest of Blazing Rage erupted! Grab a water bucket!")
+		return {"erupted": true, "heat": heat, "cooled": false}
+
+	heat = clampf(heat, 0.0, 1.0)
+	item.set_meta(&"rage_heat", heat)
+	sync_rage_visual(item)
+	return {"erupted": false, "heat": heat, "cooled": false}
+
+
+## Host-only. Splash water onto a `BlazingRageChest` to reduce its `rage_heat` cleanly (clamped >= 0.0).
+static func cool_rage_chest(item: Node, amount: float = 0.65) -> bool:
+	if not Net.is_host() or item == null or not is_instance_valid(item):
+		return false
+	if float(item.get_meta(&"curse_heat_rate", 0.0)) <= 0.0:
+		return false
+	if amount <= 0.0:
+		return false
+	var prev_heat := float(item.get_meta(&"rage_heat", 0.0))
+	var next_heat := clampf(prev_heat - amount, 0.0, 1.0)
+	item.set_meta(&"rage_heat", next_heat)
+	sync_rage_visual(item)
+	if Audio != null:
+		var cool_pos := (item as Node3D).global_position if (item is Node3D and item.is_inside_tree()) else Vector3.INF
+		var hiss_sfx: StringName = &"steam_hiss" if Audio.catalogue.get("sfx", {}).has("steam_hiss") else &"splash_small"
+		Audio.play_sfx(hiss_sfx, cool_pos, -1.5)
+	return true
+
+
 ## Apply impact damage when a fragile cargo item is dropped hard.
 static func notify_drop_impact(item: Node, impact_speed: float) -> Dictionary:
 	if impact_speed <= FRAGILE_IMPACT_THRESHOLD:
@@ -454,9 +678,9 @@ static func notify_drop_impact(item: Node, impact_speed: float) -> Dictionary:
 
 
 ## Tick cursed & fragile treasures aboard a ship (host-only, duck-typed ship API).
-## Returns {flood_added: float, damaged_count: int, total_cargo_value: int}.
+## Returns {flood_added: float, damaged_count: int, fires_ignited: int, total_cargo_value: int}.
 static func step_aboard_hazards(items: Array, ship: Node, delta: float) -> Dictionary:
-	var result := {"flood_added": 0.0, "damaged_count": 0, "total_cargo_value": 0}
+	var result := {"flood_added": 0.0, "damaged_count": 0, "fires_ignited": 0, "total_cargo_value": 0}
 	if delta <= 0.0:
 		return result
 	var hold_water: float = 0.0
@@ -476,6 +700,12 @@ static func step_aboard_hazards(items: Array, ship: Node, delta: float) -> Dicti
 		var flood_rate: float = float(node.get_meta(&"curse_flood_rate", 0.0))
 		if is_cursed and flood_rate > 0.0 and Net.is_host():
 			flood_total += flood_rate * delta
+
+		var heat_rate: float = float(node.get_meta(&"curse_heat_rate", 0.0))
+		if heat_rate > 0.0 and Net.is_host():
+			var rage_res := tick_rage_chest_aboard(node, ship, delta)
+			if bool(rage_res.get("erupted", false)):
+				result["fires_ignited"] = int(result["fires_ignited"]) + 1
 
 		var is_fragile: bool = bool(node.get_meta(&"fragile", false))
 		if is_fragile and Net.is_host():
@@ -507,7 +737,7 @@ static func step_aboard_hazards(items: Array, ship: Node, delta: float) -> Dicti
 	return result
 
 
-## Alias for `step_aboard_hazards()` ticking cursed bilge flooding and fragile cargo distress.
+## Alias for `step_aboard_hazards()` ticking cursed bilge flooding, volcanic rage heat, and fragile cargo distress.
 static func tick_aboard_hazards(items: Array, ship: Node, delta: float) -> Dictionary:
 	return step_aboard_hazards(items, ship, delta)
 
@@ -539,7 +769,7 @@ static func _load_pbr_tex(path: String) -> Texture2D:
 
 
 ## Return the cached flat-faceted sculpted ArrayMesh for any catalogue entry
-## (`&"skull"`, `&"chalice"`, `&"crate"`, or sculpted banded pirate `&"chest"`/`&"coffer"`).
+## (`&"skull"`, `&"chalice"`, `&"crate"`, `&"rage_chest"`, or sculpted banded pirate `&"chest"`/`&"coffer"`).
 static func build_sculpted_mesh(entry: Dictionary) -> ArrayMesh:
 	var shape_kind: StringName = StringName(entry.get("shape", &"chest"))
 	var tint: Color = entry.get("tint", Color(0.56, 0.42, 0.28)) as Color
@@ -559,6 +789,8 @@ static func build_sculpted_mesh(entry: Dictionary) -> ArrayMesh:
 			mesh = _sculpt_chalice_mesh(tint, accent, tier, cursed)
 		&"crate":
 			mesh = _sculpt_crate_mesh(tint, accent, tier, cursed)
+		&"rage_chest":
+			mesh = _sculpt_rage_chest_mesh(tint, accent, tier, cursed)
 		_:
 			mesh = _sculpt_chest_mesh(tint, accent, tier, cursed, shape_kind == &"coffer")
 
@@ -673,6 +905,90 @@ static func _cleanup_hazard_particles(p: GPUParticles3D) -> void:
 		p.visible = false
 		p.draw_pass_1 = null
 		p.process_material = null
+
+
+static func _cleanup_rage_ember_glow(glow: Node3D) -> void:
+	if glow == null or not is_instance_valid(glow):
+		return
+	var embers := glow.get_node_or_null(^"EmberParticles") as GPUParticles3D
+	if embers != null and is_instance_valid(embers):
+		_cleanup_hazard_particles(embers)
+	var light := glow.get_node_or_null(^"EmberLight") as OmniLight3D
+	if light != null and is_instance_valid(light):
+		light.light_energy = 0.0
+		light.visible = false
+
+
+static func _build_rage_ember_glow() -> Node3D:
+	var root := Node3D.new()
+	root.name = "RageEmberGlow"
+	root.position = Vector3(0.0, 0.34, 0.0)
+
+	var p := GPUParticles3D.new()
+	p.name = "EmberParticles"
+	p.amount = 12
+	p.lifetime = 0.95
+	p.emitting = true
+	p.amount_ratio = 0.30
+	p.local_coords = true
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-0.70, -0.35, -0.70), Vector3(1.40, 1.35, 1.40))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	proc.emission_box_extents = Vector3(0.30, 0.10, 0.20)
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 42.0
+	proc.initial_velocity_min = 0.24
+	proc.initial_velocity_max = 0.62
+	proc.gravity = Vector3(0.0, 0.25, 0.0)
+	proc.scale_min = 0.65
+	proc.scale_max = 1.25
+	p.process_material = proc
+	p.draw_pass_1 = _get_rage_ember_mesh()
+	root.add_child(p)
+
+	var light := OmniLight3D.new()
+	light.name = "EmberLight"
+	light.position = Vector3(0.0, 0.06, -0.10)
+	light.light_color = Color(1.0, 0.42, 0.08)
+	light.light_energy = 0.55
+	light.omni_range = 3.8
+	light.shadow_enabled = false
+	root.add_child(light)
+
+	return root
+
+
+static func _get_rage_ember_mesh() -> ArrayMesh:
+	const KEY := "fx|rage_ember_spark"
+	var cached := _get_cached_mesh(KEY)
+	if cached != null:
+		return cached
+
+	var mat := _get_fx_additive_mat(Color(1.00, 0.46, 0.08, 0.96), Color(1.00, 0.38, 0.06), 2.10)
+	var mesh := ArrayMesh.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Sculpted 6-faceted volcanic cinder spark shard (~0.052 m tall).
+	var c_core := Color(1.00, 0.94, 0.60)
+	var c_mid := Color(1.00, 0.44, 0.08)
+	var c_bot := Color(0.84, 0.14, 0.04)
+	var top_p := Vector3(0.0, 0.030, 0.0)
+	var bot_p := Vector3(0.0, -0.022, 0.0)
+	var ring: Array[Vector3] = []
+	for k in 6:
+		var a := float(k) / 6.0 * TAU
+		var r := 0.018 if k % 2 == 0 else 0.011
+		ring.append(Vector3(cos(a) * r, 0.002, sin(a) * r))
+	for k in 6:
+		var nk := (k + 1) % 6
+		_emit_outward_tri(st, top_p, c_core, ring[k], c_mid, ring[nk], c_mid, Vector3.ZERO)
+		_emit_outward_tri(st, bot_p, c_bot, ring[nk], c_mid, ring[k], c_mid, Vector3.ZERO)
+	_commit_surface(mesh, st, mat)
+	_mesh_cache[KEY] = weakref(mesh)
+	return mesh
 
 
 static func _build_weeping_drips_particles() -> GPUParticles3D:
@@ -1854,6 +2170,252 @@ static func _sculpt_chest_mesh(tint: Color, accent: Color, tier: int,
 	if has_glow:
 		var glow_col := accent if cursed else (Color(0.16, 0.46, 0.96) if is_coffer else Color(0.92, 0.16, 0.22))
 		_commit_surface(mesh, glow_st, _get_vcol_mat(0.20, 0.18, glow_col, 2.4 if cursed else 0.72))
+	return mesh
+
+
+# ==============================================================================
+# Archetype 5: Hero-Grade Sculpted Volcanic Chest of Blazing Rage (`&"rage_chest"`)
+# ==============================================================================
+
+static func _sculpt_rage_chest_mesh(tint: Color, accent: Color, _tier: int, _cursed: bool) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	var hull_st := SurfaceTool.new()
+	hull_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var iron_st := SurfaceTool.new()
+	iron_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var magma_st := SurfaceTool.new()
+	magma_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var obs_hi := tint.lightened(0.16)
+	var obs_mid := tint
+	var obs_sh := tint.darkened(0.26)
+	var obs_deep := Color(0.06, 0.04, 0.04)
+
+	var iron_hi := Color(0.36, 0.29, 0.27)
+	var iron_mid := Color(0.21, 0.17, 0.16)
+	var iron_lo := Color(0.09, 0.07, 0.07)
+	var horn_tip := Color(0.48, 0.24, 0.14)
+
+	var magma_core := Color(1.00, 0.92, 0.52)
+	var magma_hot := accent.lerp(Color(1.0, 0.82, 0.28), 0.45)
+	var magma_mid := accent
+	var magma_deep := Color(0.76, 0.14, 0.03)
+
+	# 1. Tapered Faceted Obsidian-Iron Lower Hull (y = 0.028..0.280) with Armored Side Slabs.
+	var bot_ring: Array[Vector3] = [
+		Vector3(-0.298, 0.028, -0.188),
+		Vector3(0.298, 0.028, -0.188),
+		Vector3(0.298, 0.028, 0.188),
+		Vector3(-0.298, 0.028, 0.188),
+	]
+	var top_ring: Array[Vector3] = [
+		Vector3(-0.326, 0.280, -0.216),
+		Vector3(0.326, 0.280, -0.216),
+		Vector3(0.326, 0.280, 0.216),
+		Vector3(-0.326, 0.280, 0.216),
+	]
+	var hull_c := Vector3(0.0, 0.154, 0.0)
+	_emit_outward_quad(hull_st, bot_ring[0], obs_deep, bot_ring[3], obs_deep, bot_ring[2], obs_deep, bot_ring[1], obs_deep, hull_c)
+	_emit_outward_quad(hull_st, top_ring[0], obs_hi, top_ring[1], obs_hi, top_ring[2], obs_hi, top_ring[3], obs_hi, hull_c)
+	for i in range(4):
+		var ni := (i + 1) % 4
+		_emit_outward_quad(hull_st,
+			bot_ring[i], obs_sh,
+			bot_ring[ni], obs_sh,
+			top_ring[ni], obs_mid,
+			top_ring[i], obs_mid,
+			hull_c)
+
+	# Horizontal volcanic basalt-iron armor plates framing magma crevices on front/back/sides.
+	for course_i in range(3):
+		var py := 0.074 + float(course_i) * 0.076
+		var frac := (py - 0.028) / 0.252
+		var hx := lerpf(0.300, 0.328, frac)
+		var hz := lerpf(0.190, 0.218, frac)
+		var c_p := obs_mid if course_i % 2 == 0 else obs_sh
+		for fz: float in [-1.0, 1.0]:
+			_add_beveled_block(hull_st, Vector3(0.0, py, fz * hz), Vector3(hx * 1.92, 0.056, 0.018), 0.004,
+				c_p.lightened(0.08), c_p, obs_deep)
+		for fx: float in [-1.0, 1.0]:
+			_add_beveled_block(hull_st, Vector3(fx * hx, py, 0.0), Vector3(0.018, 0.056, hz * 1.90), 0.004,
+				c_p.lightened(0.08), c_p, obs_deep)
+
+	# 2. Armored Arched Volcanic Barrel Lid (8-segment faceted obsidian vault, y = 0.280..0.440).
+	var lid_n := 8
+	var lid_c := Vector3(0.0, 0.312, 0.0)
+	var lid_l: Array[Vector3] = []
+	var lid_r: Array[Vector3] = []
+	var lid_cols: Array[Color] = []
+	for i in range(lid_n + 1):
+		var ang := PI * float(i) / float(lid_n)
+		var lz := -0.220 * cos(ang)
+		var ly := 0.280 + 0.158 * sin(ang)
+		lid_l.append(Vector3(-0.330, ly, lz))
+		lid_r.append(Vector3(0.330, ly, lz))
+		var stave_c := obs_sh.lerp(obs_hi, sin(ang))
+		if i % 2 == 1:
+			stave_c = stave_c.darkened(0.10)
+		lid_cols.append(stave_c)
+	for i in range(lid_n):
+		_emit_outward_quad(hull_st, lid_l[i], lid_cols[i], lid_r[i], lid_cols[i],
+			lid_r[i + 1], lid_cols[i + 1], lid_l[i + 1], lid_cols[i + 1], lid_c)
+	var end_l := Vector3(-0.330, 0.280, 0.0)
+	var end_r := Vector3(0.330, 0.280, 0.0)
+	for i in range(lid_n):
+		_emit_outward_tri(hull_st, end_l, obs_sh, lid_l[i], lid_cols[i], lid_l[i + 1], lid_cols[i + 1], lid_c)
+		_emit_outward_tri(hull_st, end_r, obs_sh, lid_r[i + 1], lid_cols[i + 1], lid_r[i], lid_cols[i], lid_c)
+
+	# Heavy obsidian furnace crown plate atop lid crest.
+	_add_beveled_block(hull_st, Vector3(0.0, 0.440, 0.0), Vector3(0.32, 0.022, 0.14), 0.005,
+		obs_hi, obs_mid, obs_deep)
+
+	# 3. Grounded Forged-Iron Claw Feet (y = 0.000..0.036), Lower Corner Shoes & Mid-Seam Collar.
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			_add_beveled_block(iron_st, Vector3(sx * 0.270, 0.018, sz * 0.160), Vector3(0.096, 0.036, 0.096), 0.006,
+				iron_hi, iron_mid, iron_lo)
+			_add_beveled_block(iron_st, Vector3(sx * 0.314, 0.068, sz * 0.202), Vector3(0.072, 0.084, 0.072), 0.006,
+				iron_hi, iron_mid, iron_lo)
+	# Heavy iron seam collar framing the glowing magma lid joint.
+	_add_beveled_block(iron_st, Vector3(0.0, 0.264, 0.0), Vector3(0.674, 0.026, 0.448), 0.005,
+		iron_hi, iron_mid, iron_lo)
+	_add_beveled_block(iron_st, Vector3(0.0, 0.300, 0.0), Vector3(0.674, 0.024, 0.448), 0.005,
+		iron_hi, iron_mid, iron_lo)
+
+	# 4. Twin Heavy Riveted Volcanic Iron Straps Wrapping Hull & Barrel Lid + Spiked Studs!
+	for sx: float in [-0.232, 0.232]:
+		_add_beveled_block(iron_st, Vector3(sx, 0.154, 0.0), Vector3(0.062, 0.266, 0.452), 0.006,
+			iron_hi, iron_mid, iron_lo)
+		var s_in_l: Array[Vector3] = []
+		var s_in_r: Array[Vector3] = []
+		var s_out_l: Array[Vector3] = []
+		var s_out_r: Array[Vector3] = []
+		for i in range(lid_n + 1):
+			var ang := PI * float(i) / float(lid_n)
+			var ca := cos(ang)
+			var sa := sin(ang)
+			s_in_l.append(Vector3(sx - 0.031, 0.280 + 0.154 * sa, -0.216 * ca))
+			s_in_r.append(Vector3(sx + 0.031, 0.280 + 0.154 * sa, -0.216 * ca))
+			s_out_l.append(Vector3(sx - 0.031, 0.280 + 0.172 * sa, -0.234 * ca))
+			s_out_r.append(Vector3(sx + 0.031, 0.280 + 0.172 * sa, -0.234 * ca))
+		var strap_c := Vector3(sx, 0.302, 0.0)
+		for i in range(lid_n):
+			var top_col := iron_mid.lerp(iron_hi, sin(PI * (float(i) + 0.5) / float(lid_n)))
+			_emit_outward_quad(iron_st, s_out_l[i], top_col, s_out_r[i], top_col, s_out_r[i + 1], top_col, s_out_l[i + 1], top_col, strap_c)
+			_emit_outward_quad(iron_st, s_in_l[i], iron_lo, s_out_l[i], iron_mid, s_out_l[i + 1], iron_mid, s_in_l[i + 1], iron_lo, strap_c)
+			_emit_outward_quad(iron_st, s_in_r[i + 1], iron_lo, s_out_r[i + 1], iron_mid, s_out_r[i], iron_mid, s_in_r[i], iron_lo, strap_c)
+		# Sharp forged volcanic iron pyramid rivets along straps.
+		for ri in [1, 3, 5, 7]:
+			var ang := PI * float(ri) / float(lid_n)
+			var r_nrm := Vector3(0.0, sin(ang), -cos(ang)).normalized()
+			_add_pyramid_stud(iron_st, Vector3(sx, 0.280 + 0.173 * sin(ang), -0.235 * cos(ang)),
+				0.018, 0.016, iron_hi, iron_lo, r_nrm)
+		for ry: float in [0.095, 0.210]:
+			_add_pyramid_stud(iron_st, Vector3(sx, ry, -0.228), 0.016, 0.013, iron_hi, iron_lo, Vector3.FORWARD)
+			_add_pyramid_stud(iron_st, Vector3(sx, ry, 0.228), 0.016, 0.013, iron_hi, iron_lo, Vector3.BACK)
+
+	# 5. Four Forged Demon-Horn Corner Clasps Curving Upward & Outward from Lid Corners!
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			# Bolted corner clasp collar.
+			_add_beveled_block(iron_st, Vector3(sx * 0.326, 0.286, sz * 0.216), Vector3(0.056, 0.068, 0.056), 0.006,
+				iron_hi, iron_mid, iron_lo)
+			# Swept curving forged iron demon horn rising cleanly above corner shoulder.
+			var horn_pts: Array[Vector3] = [
+				Vector3(sx * 0.332, 0.304, sz * 0.220),
+				Vector3(sx * 0.362, 0.348, sz * 0.244),
+				Vector3(sx * 0.374, 0.398, sz * 0.254),
+				Vector3(sx * 0.354, 0.444, sz * 0.236),
+				Vector3(sx * 0.318, 0.472, sz * 0.206),
+			]
+			var horn_rads: Array[float] = [0.022, 0.018, 0.014, 0.009, 0.003]
+			_add_swept_tube(iron_st, horn_pts, horn_rads, 6, horn_tip, iron_lo, false, true)
+
+	# 6. Front Ember Keyhole Grate & Volcanic Furnace Lockplate (-Z front face).
+	# Heavy wrought-iron grate frame.
+	_add_beveled_block(iron_st, Vector3(0.0, 0.215, -0.234), Vector3(0.172, 0.164, 0.026), 0.006,
+		iron_hi, iron_mid, iron_lo)
+	# Glowing molten firebox core behind the iron grate bars!
+	_add_beveled_block(magma_st, Vector3(0.0, 0.215, -0.242), Vector3(0.128, 0.118, 0.016), 0.004,
+		magma_core, magma_hot, magma_deep)
+	# Three vertical wrought-iron furnace grate bars + center ember keyhole diamond.
+	for gx: float in [-0.042, 0.0, 0.042]:
+		_add_beveled_block(iron_st, Vector3(gx, 0.215, -0.252), Vector3(0.016, 0.132, 0.014), 0.003,
+			iron_hi, iron_mid, iron_lo)
+	_add_beveled_block(iron_st, Vector3(0.0, 0.215, -0.253), Vector3(0.146, 0.018, 0.014), 0.003,
+		iron_hi, iron_mid, iron_lo)
+	_add_faceted_gem(magma_st, Vector3(0.0, 0.215, -0.261), 0.024, 0.012, 0.032, 6,
+		magma_core, magma_hot, magma_deep, Basis(Vector3.RIGHT, -PI * 0.5))
+
+	# 7. Heavy Top Iron Ring Handles atop Domed Lid + Side Iron Carry Shackles!
+	for sx: float in [-0.125, 0.125]:
+		_add_beveled_block(iron_st, Vector3(sx, 0.452, 0.0), Vector3(0.046, 0.028, 0.052), 0.005,
+			iron_hi, iron_mid, iron_lo)
+		_add_torus(iron_st, Vector3(sx, 0.474, 0.0), Vector3.BACK, 0.038, 0.011, 10, 5, iron_hi, iron_lo)
+	for side_sgn: float in [-1.0, 1.0]:
+		_add_beveled_block(iron_st, Vector3(side_sgn * 0.336, 0.172, 0.0), Vector3(0.028, 0.088, 0.128), 0.005,
+			iron_hi, iron_mid, iron_lo)
+		_add_torus(iron_st, Vector3(side_sgn * 0.354, 0.142, 0.0), Vector3(side_sgn, 0.0, 0.0),
+			0.050, 0.012, 10, 5, iron_hi, iron_lo)
+
+	# 8. Glowing Jagged Magma Fracture Bands & Volcanic Seam Veins (`magma_st`).
+	# Continuous molten lid-seam band glowing between upper & lower iron flanges (y = 0.282).
+	_add_beveled_block(magma_st, Vector3(0.0, 0.282, -0.228), Vector3(0.678, 0.018, 0.014), 0.004,
+		magma_core, magma_hot, magma_deep)
+	_add_beveled_block(magma_st, Vector3(0.0, 0.282, 0.228), Vector3(0.678, 0.018, 0.014), 0.004,
+		magma_core, magma_hot, magma_deep)
+	_add_beveled_block(magma_st, Vector3(-0.339, 0.282, 0.0), Vector3(0.014, 0.018, 0.460), 0.004,
+		magma_core, magma_hot, magma_deep)
+	_add_beveled_block(magma_st, Vector3(0.339, 0.282, 0.0), Vector3(0.014, 0.018, 0.460), 0.004,
+		magma_core, magma_hot, magma_deep)
+
+	# Jagged magma fractures arching across domed obsidian lid & crackling down front/back hull!
+	for side_sgn: float in [-1.0, 1.0]:
+		var lid_pts: Array[Vector3] = []
+		var lid_rads: Array[float] = []
+		for i in range(9):
+			var frac := float(i) / 8.0
+			var ang := lerpf(0.16, PI - 0.16, frac)
+			var zig := sin(frac * PI * 4.0) * 0.024 * side_sgn
+			var px := side_sgn * 0.108 + zig
+			var py := 0.280 + 0.166 * sin(ang)
+			var pz := -0.226 * cos(ang)
+			lid_pts.append(Vector3(px, py, pz))
+			lid_rads.append(0.0095 * (0.65 + 0.55 * sin(frac * PI)))
+		_add_swept_tube(magma_st, lid_pts, lid_rads, 5, magma_core, magma_deep, false, true)
+
+		# Diagonal molten hull cracks on front & back obsidian panels.
+		for face_z: float in [-1.0, 1.0]:
+			var crack_pts: Array[Vector3] = [
+				Vector3(side_sgn * 0.140, 0.274, face_z * 0.226),
+				Vector3(side_sgn * 0.112, 0.214, face_z * 0.218),
+				Vector3(side_sgn * 0.158, 0.148, face_z * 0.211),
+				Vector3(side_sgn * 0.126, 0.072, face_z * 0.204),
+			]
+			var crack_rads: Array[float] = [0.010, 0.0085, 0.007, 0.005]
+			_add_swept_tube(magma_st, crack_pts, crack_rads, 5, magma_core, magma_deep, false, true)
+
+		# Molten side-panel magma fissures radiating past carry shackles.
+		var side_pts: Array[Vector3] = [
+			Vector3(side_sgn * 0.334, 0.276, -0.095),
+			Vector3(side_sgn * 0.326, 0.200, -0.060),
+			Vector3(side_sgn * 0.320, 0.125, -0.105),
+			Vector3(side_sgn * 0.312, 0.062, -0.068),
+		]
+		_add_swept_tube(magma_st, side_pts, [0.009, 0.0075, 0.0065, 0.0045], 5, magma_hot, magma_deep, false, true)
+
+	# Glowing central crown magma rift on lid crest.
+	var crown_pts: Array[Vector3] = [
+		Vector3(-0.075, 0.451, -0.025),
+		Vector3(-0.022, 0.453, 0.018),
+		Vector3(0.026, 0.453, -0.016),
+		Vector3(0.078, 0.451, 0.024),
+	]
+	_add_swept_tube(magma_st, crown_pts, [0.007, 0.010, 0.010, 0.007], 5, magma_core, magma_mid, false, true)
+
+	_commit_surface(mesh, hull_st, _get_vcol_mat(0.72, 0.16))
+	_commit_surface(mesh, iron_st, _get_vcol_mat(0.30, 0.84))
+	_commit_surface(mesh, magma_st, _get_vcol_mat(0.18, 0.14, accent, 2.75))
 	return mesh
 
 

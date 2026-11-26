@@ -89,7 +89,8 @@ func test_treasure_catalog_and_carryable() -> void:
 		check(csf > 0.0 and csf <= 1.0, "entry %s carry_speed_factor in (0, 1]" % tid)
 		if bool(entry["cursed"]):
 			cursed_count += 1
-			check(float(entry["curse_flood_rate"]) > 0.0, "cursed %s has flood rate" % tid)
+			check(float(entry["curse_flood_rate"]) > 0.0 or float(entry.get("curse_heat_rate", 0.0)) > 0.0,
+				"cursed %s has flood or heat rate" % tid)
 		if bool(entry["fragile"]):
 			fragile_count += 1
 
@@ -2254,3 +2255,341 @@ func test_wave31_emissary_grades_stern_flag_payout_multiplier_risk_and_cashout()
 	_restore_weather()
 
 
+func test_wave33_blazing_rage_chest_fire_cooling_and_merchant_trade_routes() -> void:
+	_save_weather()
+	var saved_amp := Sea.amp_scale
+	var saved_profile := Game.profile.data.duplicate(true)
+	Sea.amp_scale = 0.0
+	Weather.day = 0
+	Weather.storminess = 0.0
+	Net.start_single_player()
+	TreasureCatalog.clear_mesh_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Wave33BTestHolder"
+	add_child(holder)
+
+	var notices: Array[String] = []
+	var on_notice := func(text: String) -> void:
+		notices.append(text)
+	Game.notice.connect(on_notice)
+
+	# ------------------------------------------------------------------
+	# 1. BlazingRageChest sculpted ArrayMesh (>= 420 tris, 0 primitives, 0 extra VRAM)
+	# ------------------------------------------------------------------
+	check(TreasureCatalog.has_treasure(&"blazing_rage_chest"), "blazing_rage_chest registered in TreasureCatalog")
+	var rage_entry := TreasureCatalog.get_entry(&"blazing_rage_chest")
+	check_eq(String(rage_entry["name"]), "Chest of Blazing Rage", "blazing_rage_chest name matches")
+	check_eq(int(rage_entry["gold_value"]), 820, "blazing_rage_chest gold_value == 820")
+	check_eq(int(rage_entry["renown_value"]), 115, "blazing_rage_chest renown_value == 115")
+	check_eq(rage_entry["company_id"], &"iron_tide", "blazing_rage_chest company_id == iron_tide")
+	check(bool(rage_entry["cursed"]), "blazing_rage_chest is cursed")
+	check_near(float(rage_entry.get("curse_heat_rate", 0.0)), 0.055, 0.0001, "curse_heat_rate == 0.055")
+
+	var rage_mesh_v: Mesh = TreasureCatalog.build_sculpted_mesh(rage_entry)
+	check(rage_mesh_v is ArrayMesh and not (rage_mesh_v is PrimitiveMesh), "blazing_rage_chest mesh is sculpted ArrayMesh")
+	var rage_mesh := rage_mesh_v as ArrayMesh
+	var rage_tris := _count_mesh_triangles(rage_mesh)
+	print("    Wave 33B BlazingRageChest sculpted triangle count: %d tris" % rage_tris)
+	check(rage_tris >= 420, "blazing_rage_chest sculpted mesh has >= 420 tris (got %d)" % rage_tris)
+	check(rage_mesh.get_surface_count() >= 3, "blazing_rage_chest has obsidian, forged iron, and magma surfaces")
+
+	var rage_aabb := rage_mesh.get_aabb()
+	check(rage_aabb.position.y >= -0.015 and rage_aabb.position.y <= 0.025,
+		"blazing_rage_chest grounded near y=0 (min_y=%.3f)" % rage_aabb.position.y)
+	check(rage_aabb.size.y >= 0.32 and rage_aabb.size.y <= 0.65,
+		"blazing_rage_chest height in carry range (got %.3f)" % rage_aabb.size.y)
+
+	var has_magma_emissive := false
+	for si in rage_mesh.get_surface_count():
+		var mat := rage_mesh.surface_get_material(si) as StandardMaterial3D
+		check(mat != null, "blazing_rage_chest surface %d has StandardMaterial3D" % si)
+		if mat != null:
+			check(mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+				"blazing_rage_chest surface %d uses sRGB vertex colors as albedo" % si)
+			if mat.emission_enabled:
+				has_magma_emissive = true
+			else:
+				check(mat.uv1_triplanar and not mat.uv1_world_triplanar,
+					"blazing_rage_chest surface %d uses object-space triplanar PBR" % si)
+				check(mat.normal_enabled and mat.normal_texture != null and mat.roughness_texture != null,
+					"blazing_rage_chest surface %d reuses WeakRef-cached BC7 ship PBR maps" % si)
+		var arr := rage_mesh.surface_get_arrays(si)
+		var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+		var cols := arr[Mesh.ARRAY_COLOR] as PackedColorArray
+		check_eq(norms.size(), verts.size(), "blazing_rage_chest surface %d normal count matches vertices" % si)
+		check_eq(cols.size(), verts.size(), "blazing_rage_chest surface %d color count matches vertices" % si)
+		var bad_n := 0
+		for n: Vector3 in norms:
+			if not n.is_finite() or absf(n.length() - 1.0) > 0.01:
+				bad_n += 1
+		check_eq(bad_n, 0, "blazing_rage_chest surface %d has 100%% finite unit normals" % si)
+	check(has_magma_emissive, "blazing_rage_chest includes emissive magma fracture surface")
+
+	# ------------------------------------------------------------------
+	# 2. Live BlazingRageChest aboard a Sloop -> heat buildup -> ShipFire ignition -> Bucket Cooling!
+	# ------------------------------------------------------------------
+	var sloop_scene := preload("res://src/ship/sloop.tscn") as PackedScene
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	holder.add_child(sloop)
+	await physics_frames(2)
+
+	var hs_v: Variant = sloop.get(&"hull_scale")
+	var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+	var deck_world := sloop.global_transform * (Vector3(0.0, 1.15, -2.6) * hs)
+	var rage_chest := TreasureCatalog.create_treasure_carryable(&"blazing_rage_chest", deck_world)
+	rage_chest.freeze = true
+	holder.add_child(rage_chest)
+	rage_chest.global_position = deck_world
+	await physics_frames(1)
+
+	check_near(float(rage_chest.get_meta(&"curse_heat_rate", 0.0)), 0.055, 0.0001, "Carryable sets curse_heat_rate meta")
+	check_near(float(rage_chest.get_meta(&"rage_heat", -1.0)), 0.0, 0.0001, "Carryable initializes rage_heat == 0.0")
+	var glow_node := rage_chest.get_node(^"Visual").get_node_or_null(^"RageEmberGlow") as Node3D
+	check(glow_node != null, "BlazingRageChest mounts RageEmberGlow visual node")
+	if glow_node != null:
+		var embers := glow_node.get_node_or_null(^"EmberParticles") as GPUParticles3D
+		check(embers != null and embers.draw_pass_1 is ArrayMesh and not (embers.draw_pass_1 is PrimitiveMesh),
+			"RageEmberGlow uses sculpted ember ArrayMesh (0 PrimitiveMesh)")
+		var elight := glow_node.get_node_or_null(^"EmberLight") as OmniLight3D
+		check(elight != null and not elight.shadow_enabled, "RageEmberGlow EmberLight is unshadowed")
+
+	# Confirm zero PrimitiveMesh across entire visual hierarchy!
+	var rage_mis := _collect_mesh_instances(rage_chest.get_node(^"Visual"))
+	check(not rage_mis.is_empty(), "BlazingRageChest visual contains MeshInstance3D")
+	for mi in rage_mis:
+		check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"BlazingRageChest '%s' has zero PrimitiveMesh" % mi.name)
+
+	# Tick aboard hazards: 10 s -> rage_heat = 0.55 (no eruption yet); +9 s -> erupts and ignites real ShipFire!
+	check(not sloop.has_deck_fire(), "Sloop starts with no deck fire")
+	var h1 := TreasureCatalog.tick_aboard_hazards([rage_chest], sloop, 10.0)
+	check_eq(int(h1.get("fires_ignited", -1)), 0, "no eruption yet at 10 s (heat=0.55)")
+	check_near(float(rage_chest.get_meta(&"rage_heat", 0.0)), 0.55, 0.005, "rage_heat advanced to 0.55 after 10 s")
+	check(not sloop.has_deck_fire(), "Sloop still fire-free before threshold")
+
+	var h2 := TreasureCatalog.tick_aboard_hazards([rage_chest], sloop, 9.0)
+	check_eq(int(h2.get("fires_ignited", 0)), 1, "BlazingRageChest erupted through tick_aboard_hazards()")
+	check_near(float(rage_chest.get_meta(&"rage_heat", 0.0)), 0.20, 0.005, "rage_heat resets to 0.20 after eruption")
+	check(sloop.has_deck_fire() and sloop.get_active_fire_count() >= 1,
+		"BlazingRageChest eruption ignites real ShipFire deck flames on Sloop!")
+	var saw_erupt_notice := false
+	for nt: String in notices:
+		if nt.contains("Chest of Blazing Rage erupted"):
+			saw_erupt_notice = true
+	check(saw_erupt_notice, "BlazingRageChest eruption posted strict-ASCII warning notice")
+
+	# Wet hold cooling check: move chest below deck with water_level >= 0.16 -> cools cleanly!
+	var hold_world := sloop.global_transform * (Vector3(0.0, -0.65, 0.0) * hs)
+	rage_chest.global_position = hold_world
+	rage_chest.set_meta(&"rage_heat", 0.60)
+	sloop.add_water(0.22)
+	var cool_tick := TreasureCatalog.tick_rage_chest_aboard(rage_chest, sloop, 2.0)
+	check(not bool(cool_tick.get("erupted", true)) and bool(cool_tick.get("cooled", false)),
+		"flooded hold (>=0.16) below deck gently cools BlazingRageChest")
+	check_near(float(rage_chest.get_meta(&"rage_heat", 1.0)), 0.32, 0.01, "flooded hold cooled rage_heat by 0.14 * 2.0")
+	sloop.bail(1.0)
+	rage_chest.global_position = deck_world
+
+	# Inventory.splash_bucket_forward() cools BlazingRageChest AND douses nearby deck fire!
+	var pawn_scene := preload("res://src/characters/pawn.tscn") as PackedScene
+	var captain := pawn_scene.instantiate() as Pawn
+	holder.add_child(captain)
+	captain.platform = sloop
+	captain.global_position = sloop.global_transform * (Vector3(0.0, 1.15, -1.2) * hs)
+	captain.look_yaw = sloop.rotation.y
+	captain.look_pitch = -0.15
+	var inv := Inventory.new()
+	inv.input_enabled = false
+	captain.add_child(inv)
+	await physics_frames(1)
+
+	rage_chest.set_meta(&"rage_heat", 0.90)
+	inv.equip(&"bucket", true)
+	inv.bucket_full = true
+	var splash_res := inv.splash_bucket_forward()
+	check_eq(splash_res.get("action", &""), &"splash_forward", "splash_bucket_forward() succeeded")
+	check(int(splash_res.get("rage_chests_cooled", 0)) >= 1,
+		"splash_bucket_forward() cooled BlazingRageChest (got %s)" % str(splash_res))
+	check_near(float(rage_chest.get_meta(&"rage_heat", 1.0)), 0.15, 0.01,
+		"splash_bucket_forward() reduced rage_heat by 0.75 (0.90 -> 0.15)")
+	var saw_cool_notice := false
+	for nt: String in notices:
+		if nt.contains("Splashed the Chest of Blazing Rage - steam hisses"):
+			saw_cool_notice = true
+	check(saw_cool_notice, "bucket splash posted strict-ASCII steam-hiss notice")
+
+	# Also verify Inventory.use_bucket() cools BlazingRageChest to 0.0 floor!
+	rage_chest.set_meta(&"rage_heat", 0.50)
+	inv.bucket_full = true
+	var use_res := inv.use_bucket()
+	check_eq(use_res.get("action", &""), &"splash", "use_bucket() splashed carried water")
+	check(int(use_res.get("rage_chests_cooled", 0)) >= 1, "use_bucket() cooled BlazingRageChest")
+	check_near(float(rage_chest.get_meta(&"rage_heat", 1.0)), 0.0, 0.001, "rage_heat clamped cleanly at 0.0")
+
+	# ------------------------------------------------------------------
+	# 3. 3-Outpost Merchant Commodity Trade Routes (1.8x-2.4x Arbitrage)
+	# ------------------------------------------------------------------
+	var all_comms := TradeRoutes.get_all_commodities()
+	check_eq(all_comms.size(), 4, "TradeRoutes defines 4 merchant commodity types")
+	for c_id: StringName in [
+		&"commodity_spiced_silk",
+		&"commodity_cinder_rum",
+		&"commodity_gilded_tea",
+		&"commodity_sea_salt",
+	]:
+		check(TradeRoutes.is_commodity(c_id), "%s is registered commodity" % c_id)
+		check(TreasureCatalog.has_treasure(c_id), "%s exists in TreasureCatalog" % c_id)
+	check(not TradeRoutes.is_commodity(&"blazing_rage_chest"), "blazing_rage_chest is not a commodity")
+
+	# Triangle leg 1: Port Scoundrel -> Galleon's Reach (Spiced Silk 2.25x = 270g)
+	check_eq(TradeRoutes.get_buy_price(&"commodity_spiced_silk", &"port_scoundrel"), 120, "Spiced Silk buy == 120g")
+	check_eq(TradeRoutes.get_sell_price(&"commodity_spiced_silk", &"port_scoundrel"), 102, "Spiced Silk surplus == 102g")
+	check_eq(TradeRoutes.get_sell_price(&"commodity_spiced_silk", &"barnacle_haven"), 150, "Spiced Silk fair == 150g")
+	check_eq(TradeRoutes.get_sell_price(&"commodity_spiced_silk", &"galleons_reach"), 270, "Spiced Silk high demand == 270g (2.25x)")
+	check_eq(TradeRoutes.get_best_destination_outpost(&"commodity_spiced_silk"), &"galleons_reach", "Spiced Silk best dest == galleons_reach")
+	check_eq(TradeRoutes.get_demand_label(&"commodity_spiced_silk", &"port_scoundrel"), "SURPLUS", "surplus demand label")
+	check_eq(TradeRoutes.get_demand_label(&"commodity_spiced_silk", &"barnacle_haven"), "FAIR", "fair demand label")
+	check_eq(TradeRoutes.get_demand_label(&"commodity_spiced_silk", &"galleons_reach"), "HIGH DEMAND (2.25x!)", "high demand label")
+
+	# Triangle leg 2: Barnacle Haven -> Port Scoundrel (Cinder Rum 2.20x = 308g)
+	check_eq(TradeRoutes.get_buy_price(&"commodity_cinder_rum", &"barnacle_haven"), 140, "Cinder Rum buy == 140g")
+	check_eq(TradeRoutes.get_sell_price(&"commodity_cinder_rum", &"port_scoundrel"), 308, "Cinder Rum high demand == 308g (2.20x)")
+	check_eq(TradeRoutes.get_best_destination_outpost(&"commodity_cinder_rum"), &"port_scoundrel", "Cinder Rum best dest == port_scoundrel")
+
+	# Triangle leg 3: Galleon's Reach -> Barnacle Haven (Gilded Tea 2.30x = 368g)
+	check_eq(TradeRoutes.get_buy_price(&"commodity_gilded_tea", &"galleons_reach"), 160, "Gilded Tea buy == 160g")
+	check_eq(TradeRoutes.get_sell_price(&"commodity_gilded_tea", &"barnacle_haven"), 368, "Gilded Tea high demand == 368g (2.30x)")
+	check_eq(TradeRoutes.get_best_destination_outpost(&"commodity_gilded_tea"), &"barnacle_haven", "Gilded Tea best dest == barnacle_haven")
+
+	# Rotating Sea-Salt high demand across all 3 outposts by Weather.day (1.90x = 190g)
+	var seen_salt_dests: Dictionary = {}
+	for d_idx in 3:
+		Weather.day = d_idx
+		var s_dest := TradeRoutes.get_best_destination_outpost(&"commodity_sea_salt")
+		seen_salt_dests[s_dest] = true
+		check_eq(TradeRoutes.get_buy_price(&"commodity_sea_salt", &"port_scoundrel"), 100, "Sea-Salt buy == 100g")
+		check_eq(TradeRoutes.get_sell_price(&"commodity_sea_salt", s_dest), 190, "Sea-Salt high demand == 190g (1.90x)")
+	check_eq(seen_salt_dests.size(), 3, "Sea-Salt high demand rotates cleanly across all 3 outposts")
+	Weather.day = 0
+
+	# Outpost manifest check for all 3 ports.
+	for op_id: StringName in TradeRoutes.OUTPOST_IDS:
+		var manifest := TradeRoutes.get_outpost_manifest(op_id)
+		check(not manifest.is_empty(), "Outpost %s exposes local trade manifest" % op_id)
+		for row: Dictionary in manifest:
+			check(int(row["projected_profit"]) > 0, "%s manifest item '%s' has positive profit" % [op_id, row["name"]])
+
+	# ------------------------------------------------------------------
+	# 4. ShipwrightMenu Trade Manifest UI -> Buy Crate -> Sell at High-Demand MerchantStall!
+	# ------------------------------------------------------------------
+	Game.profile.data["gold"] = 500
+	var vm := VoyageManager.new()
+	vm.profile = Game.profile
+	holder.add_child(vm)
+
+	var menu := ShipwrightMenu.new()
+	menu.origin_outpost_id = &"port_scoundrel"
+	holder.add_child(menu)
+	menu.bind(vm, null, sloop, null, null, inv, null, [], null, holder)
+	menu.open_menu(ShipwrightMenu.TAB_VOYAGES)
+	await get_tree().process_frame
+
+	check(menu.find_child("TradeManifestCard", true, false) != null, "ShipwrightMenu renders TradeManifestCard")
+	var silk_btn := menu.find_child("BuyCommodity_commodity_spiced_silk", true, false) as Button
+	check(silk_btn != null and not silk_btn.disabled, "ShipwrightMenu renders enabled Buy Crate button for Spiced Silk")
+	if silk_btn != null:
+		check_eq(silk_btn.text, "Buy Crate (120g)", "Buy Crate button shows exact 120g cost")
+
+	var buy_res := menu.buy_trade_commodity(&"commodity_spiced_silk")
+	check(bool(buy_res.get("ok", false)), "ShipwrightMenu.buy_trade_commodity(&'commodity_spiced_silk') succeeds")
+	check_eq(int(buy_res.get("cost", 0)), 120, "buy_trade_commodity reports 120g cost")
+	check_eq(int(Game.profile.data["gold"]), 380, "buying Spiced Silk deducted 120g (500 -> 380)")
+	var crate_item := buy_res.get("item", null) as Carryable
+	check(crate_item != null and is_instance_valid(crate_item), "buy_trade_commodity spawned live physical Carryable")
+	check_eq(crate_item.get_meta(&"origin_outpost_id", &""), &"port_scoundrel", "crate tagged with origin_outpost_id")
+	check_eq(crate_item.get_meta(&"treasure_id", &""), &"commodity_spiced_silk", "crate tagged with commodity treasure_id")
+
+	# Sell Spiced Silk crate at a high-demand Galleon's Reach MerchantStall -> pays 270g (> 1.8x buy price)!
+	var galleons_outpost := Outpost.new()
+	galleons_outpost.island_id = "galleons_reach"
+	galleons_outpost.display_name = "Galleon's Reach"
+	holder.add_child(galleons_outpost)
+	var stall := MerchantStall.new()
+	stall.merchant_name = "Galleon's Reach Factor"
+	galleons_outpost.add_child(stall)
+	await physics_frames(1)
+
+	check_eq(stall.get_outpost_id(), &"galleons_reach", "MerchantStall resolves ancestor Outpost.island_id")
+
+	var sold_events: Array[Dictionary] = []
+	stall.treasure_sold.connect(func(it: Node, g: int, r: int) -> void:
+		sold_events.append({"item": it, "gold": g, "renown": r})
+	)
+	var gold_before_sell := int(Game.profile.data["gold"])
+	check(stall.accept_carryable(crate_item), "Galleon's Reach MerchantStall accepts Spiced Silk crate")
+	check_eq(sold_events.size(), 1, "MerchantStall emitted treasure_sold once")
+	var sold_gold := int(sold_events[0]["gold"])
+	check_eq(sold_gold, 270, "Spiced Silk pays exact 2.25x arbitrage payout (270g) at Galleon's Reach")
+	check(float(sold_gold) > 1.8 * 120.0, "arbitrage payout strictly exceeds 1.8x buy price")
+	check_eq(int(Game.profile.data["gold"]), gold_before_sell + 270, "profile credited 270g arbitrage payout")
+
+	# Verify stacking cleanly with Wave 31A Gilded Compass Emissary Grade V (2.5x)!
+	check(vm.emissary.raise_flag(&"gilded_compass"), "raise Gilded Compass Emissary for trade stacking check")
+	vm.emissary.add_progress(760.0, &"gilded_compass")  # Grade V = 2.50x
+	var em_sale := vm.notify_treasure_sold({
+		"ok": true,
+		"treasure_id": &"commodity_spiced_silk",
+		"name": "Spiced Silk Crate",
+		"company_id": &"gilded_compass",
+		"gold_awarded": sold_gold,
+		"renown_awarded": int(sold_events[0]["renown"]),
+	})
+	check_eq(int(em_sale.get("gold_awarded", 0)), roundi(270.0 * 2.5),
+		"Emissary Grade V stacks cleanly on top of 2.25x arbitrage (270g * 2.5 = 675g)")
+
+	menu.close_menu()
+
+	# ------------------------------------------------------------------
+	# 5. Strict ASCII verification across all new strings, descriptions & notices!
+	# ------------------------------------------------------------------
+	var ascii_strings: Array[String] = []
+	for tid: StringName in [
+		&"blazing_rage_chest",
+		&"commodity_spiced_silk",
+		&"commodity_cinder_rum",
+		&"commodity_gilded_tea",
+		&"commodity_sea_salt",
+	]:
+		var e := TreasureCatalog.get_entry(tid)
+		ascii_strings.append(String(e["name"]))
+		ascii_strings.append(String(e["tier_label"]))
+		ascii_strings.append(String(e["description"]))
+	for c_entry: Dictionary in all_comms:
+		ascii_strings.append(String(c_entry["name"]))
+		ascii_strings.append(String(c_entry["description"]))
+		ascii_strings.append(String(c_entry["best_dest_name"]))
+		for op_id: StringName in TradeRoutes.OUTPOST_IDS:
+			ascii_strings.append(TradeRoutes.get_demand_label(c_entry["id"] as StringName, op_id))
+	for nt: String in notices:
+		ascii_strings.append(nt)
+	for s: String in ascii_strings:
+		for ci in s.length():
+			check(s.unicode_at(ci) < 128, "strict ASCII check failed on '%s' at idx %d" % [s, ci])
+
+	# ------------------------------------------------------------------
+	# 6. Clean zero-leak teardown!
+	# ------------------------------------------------------------------
+	Game.notice.disconnect(on_notice)
+	holder.queue_free()
+	await physics_frames(3)
+	TreasureCatalog.clear_mesh_cache()
+	ShipFire.clear_shared_cache()
+	MerchantStall.clear_shared_cache()
+
+	Sea.amp_scale = saved_amp
+	Game.profile.data = saved_profile
+	_restore_weather()

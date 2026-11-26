@@ -19,9 +19,33 @@ static var _doubloon_mesh: ArrayMesh = null
 static var _doubloon_mat: StandardMaterial3D = null
 
 @export var merchant_name: String = "Port Factor"
+@export var outpost_id: StringName = &""
 
 var interactable: Interactable = null
 var _coin_burst: CPUParticles3D = null
+
+
+## Resolve the owning Outpost ID (explicit export, ancestor Outpost/Island, or merchant_name fallback).
+func get_outpost_id() -> StringName:
+	if outpost_id != &"":
+		return outpost_id
+	var cur: Node = get_parent()
+	while cur != null:
+		if cur is Outpost or cur is Island:
+			var iid: Variant = cur.get(&"island_id")
+			if iid != null and String(iid) != "":
+				return StringName(String(iid))
+		if cur.has_meta(&"island_id"):
+			var mid := String(cur.get_meta(&"island_id"))
+			if mid != "":
+				return StringName(mid)
+		cur = cur.get_parent()
+	var lower_nm := merchant_name.to_lower()
+	if lower_nm.contains("galleon"):
+		return &"galleons_reach"
+	if lower_nm.contains("barnacle"):
+		return &"barnacle_haven"
+	return &"port_scoundrel"
 
 
 ## Release statically cached sculpted doubloon mesh & material cleanly.
@@ -183,6 +207,8 @@ func _on_interacted(pawn: Node) -> void:
 
 
 ## Accept and sell a carried treasure item (host-authoritative).
+## Applies 3-Outpost `TradeRoutes` arbitrage pricing for merchant commodity crates
+## (stacking cleanly with active Emissary Grade multipliers via VoyageManager).
 ## Queues the sold item for removal so `Carryable.hand_to()` finishes cleanly.
 func accept_carryable(item: Node) -> bool:
 	if not Net.is_host() or item == null or not is_instance_valid(item):
@@ -205,6 +231,24 @@ func accept_carryable(item: Node) -> bool:
 			"fragile": false,
 		}
 
+	var tid := StringName(String(info.get("treasure_id", &"")))
+	var is_trade_commodity := TradeRoutes.is_commodity(tid)
+	var stall_outpost := get_outpost_id()
+	var demand_label := ""
+	var trade_profit := 0
+	if is_trade_commodity:
+		var sell_price := TradeRoutes.get_sell_price(tid, stall_outpost)
+		var demand_mult := TradeRoutes.get_demand_multiplier(tid, stall_outpost)
+		demand_label = TradeRoutes.get_demand_label(tid, stall_outpost)
+		info["gold_value"] = sell_price
+		info["base_gold_value"] = sell_price
+		if demand_mult >= 1.80:
+			var base_ren := int(info.get("renown_value", 20))
+			info["renown_value"] = maxi(base_ren, roundi(float(base_ren) * 1.5))
+		var origin_id := StringName(String(item.get_meta(&"origin_outpost_id", stall_outpost)))
+		var paid := int(item.get_meta(&"purchase_price", TradeRoutes.get_buy_price(tid, origin_id)))
+		trade_profit = sell_price - paid
+
 	var receipt := Economy.sell_treasure(Game.profile, info)
 	if not bool(receipt.get("ok", false)):
 		item.remove_meta(&"_merchant_sold")
@@ -219,7 +263,16 @@ func accept_carryable(item: Node) -> bool:
 	if _coin_burst != null:
 		_coin_burst.restart()
 		_coin_burst.emitting = true
-	Game.post_notice("Sold %s for %d gold (+%d renown)" % [sold_name, gold, renown])
+	if is_trade_commodity:
+		var port_name := TradeRoutes.get_outpost_name(stall_outpost)
+		if trade_profit > 0:
+			Game.post_notice("Trade Sale! %s at %s (%s) for %d gold (+%dg profit, +%d renown)!" % [
+				sold_name, port_name, demand_label, gold, trade_profit, renown])
+		else:
+			Game.post_notice("Trade Sale: %s at %s (%s) for %d gold (+%d renown)." % [
+				sold_name, port_name, demand_label, gold, renown])
+	else:
+		Game.post_notice("Sold %s for %d gold (+%d renown)" % [sold_name, gold, renown])
 	if bool(receipt.get("ranked_up", false)):
 		var promo := String(receipt.get("rank_up_notice", ""))
 		if promo != "":

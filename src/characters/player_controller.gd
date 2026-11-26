@@ -43,6 +43,7 @@ var _dip: float = 0.0
 var _dip_vel: float = 0.0
 var _trauma: float = 0.0
 var _trauma_clock: float = 0.0
+var _cannon_cam_blend: float = 0.0
 
 func _init() -> void:
 	# Run before the pawn so intent is applied in the same tick.
@@ -196,14 +197,16 @@ func _find_focus() -> Interactable:
 	var eye := pawn.eye_position()
 	var dir := pawn.view_dir()
 	var space := get_world_3d().direct_space_state
+	var ray_reach := maxf(interact_reach, 5.5) if pawn.is_swimming() else maxf(interact_reach, 4.8)
 	# 1. Straight ray: the thing under the crosshair.
-	var q := PhysicsRayQueryParameters3D.create(eye, eye + dir * interact_reach,
+	var q := PhysicsRayQueryParameters3D.create(eye, eye + dir * ray_reach,
 		Pawn.LAYER_WORLD | Pawn.LAYER_SHIP | Interactable.LAYER, [pawn.get_rid()])
 	q.collide_with_areas = true
 	var hit := space.intersect_ray(q)
 	if not hit.is_empty() and hit.collider is Interactable:
 		var it := hit.collider as Interactable
-		if it.can_interact(pawn) and _usable(it):
+		var eff_reach := maxf(interact_reach, it.reach) if (it.get_target() is Ladder) else minf(interact_reach, it.reach)
+		if eye.distance_to(hit.position) <= eff_reach and it.can_interact(pawn) and _usable(it):
 			return it
 	# 2. Nearest to the view axis inside a cone, with line of sight.
 	var best: Interactable = null
@@ -214,7 +217,8 @@ func _find_focus() -> Interactable:
 			continue
 		var to := it.global_position - eye
 		var dist := to.length()
-		if dist > minf(interact_reach, it.reach) or dist < 0.05:
+		var eff_reach := maxf(interact_reach, it.reach) if (it.get_target() is Ladder) else minf(interact_reach, it.reach)
+		if dist > eff_reach or dist < 0.05:
 			continue
 		var score := to.dot(dir) / dist
 		if score <= best_score:
@@ -229,6 +233,8 @@ func _find_focus() -> Interactable:
 	return best
 
 func _usable(it: Interactable) -> bool:
+	if pawn.mode == Pawn.Mode.LADDER and it.get_target() == pawn.ladder:
+		return false
 	# Hauling: only containers are worth pointing at.
 	if pawn.carried != null:
 		return pawn._container_of(it) != null
@@ -249,12 +255,48 @@ func get_camera_trauma() -> float:
 func _on_landed(impact_speed: float) -> void:
 	_dip_vel -= clampf(impact_speed * 0.11, 0.2, 1.3)
 
+func _get_loaded_cannon_pose() -> Dictionary:
+	if pawn == null or pawn.station == null or not is_instance_valid(pawn.station):
+		return {}
+	var sk_v: Variant = pawn.station.get(&"kind")
+	if sk_v == null or StringName(sk_v) != &"cannon":
+		return {}
+	var st_ship: Variant = pawn.station.get(&"ship")
+	if not (st_ship is Node) or not is_instance_valid(st_ship):
+		return {}
+	var ship_node := st_ship as Node
+	var mid_v: Variant = pawn.station.get(&"meta_key")
+	if mid_v == null:
+		mid_v = pawn.station.get(&"meta_id")
+	var side: StringName = StringName(mid_v) if mid_v != null else &""
+	if not ship_node.has_method(&"is_pawn_loaded_in_cannon") \
+			or not bool(ship_node.call(&"is_pawn_loaded_in_cannon", side)):
+		return {}
+	if not ship_node.has_method(&"get_cannon_muzzle_pose"):
+		return {}
+	var pose_v: Variant = ship_node.call(&"get_cannon_muzzle_pose", side)
+	return pose_v as Dictionary if pose_v is Dictionary else {}
+
 func _process(delta: float) -> void:
 	_update_camera(delta)
 
 func _update_camera(delta: float) -> void:
 	if pawn == null:
 		return
+	var cannon_pose := _get_loaded_cannon_pose()
+	var in_cannon := not cannon_pose.is_empty()
+	if in_cannon:
+		var muzzle_dir: Vector3 = (cannon_pose["dir"] as Vector3).normalized()
+		var barrel_yaw := atan2(-muzzle_dir.x, -muzzle_dir.z)
+		var barrel_pitch := clampf(asin(clampf(muzzle_dir.y, -0.99, 0.99)), -PITCH_LIMIT, PITCH_LIMIT)
+		var align_k := 1.0 if delta <= 0.0 else clampf(delta * 14.0, 0.0, 1.0)
+		pawn.look_yaw = lerp_angle(pawn.look_yaw, barrel_yaw, align_k)
+		pawn.look_pitch = lerpf(pawn.look_pitch, barrel_pitch, align_k)
+		_cannon_cam_blend = 1.0 if delta <= 0.0 else move_toward(_cannon_cam_blend, 1.0, delta * 6.5)
+	elif pawn.station == null:
+		_cannon_cam_blend = 0.0
+	else:
+		_cannon_cam_blend = 0.0 if delta <= 0.0 else move_toward(_cannon_cam_blend, 0.0, delta * 6.5)
 	# Head bob follows distance walked RELATIVE to the deck.
 	var rel := pawn.get_relative_velocity()
 	var speed := Vector2(rel.x, rel.z).length()
@@ -270,6 +312,11 @@ func _update_camera(delta: float) -> void:
 	position = Vector3(0.0, pawn.current_eye_height + pawn.visual_offset_y, 0.0)
 	var b := Basis(Vector3.UP, pawn.look_yaw) * Basis(Vector3.RIGHT, pawn.look_pitch)
 	var cam_pos := Vector3(0.0, bob_y + _dip, 0.0) + b.x * bob_x
+	if in_cannon and _cannon_cam_blend > 0.001 and is_inside_tree():
+		var m_dir: Vector3 = (cannon_pose["dir"] as Vector3).normalized()
+		var m_pos: Vector3 = cannon_pose["pos"] as Vector3
+		var eye_local := to_local(m_pos - m_dir * 0.14)
+		cam_pos = cam_pos.lerp(eye_local, _cannon_cam_blend)
 	_trauma = maxf(0.0, _trauma - delta * 1.85)
 	if _trauma > 0.001 and bob_amount > 0.001:
 		var sh := _trauma * _trauma

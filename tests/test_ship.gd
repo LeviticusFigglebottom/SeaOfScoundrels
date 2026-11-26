@@ -2560,4 +2560,190 @@ func test_wave31_firebomb_ordnance_spreading_ship_fire_bucket_douse_and_crew_fir
 		"Cannonball.clear_shared_cache() clears _firebomb_mesh and _ball_meshes cleanly (0 leaks)")
 
 
+func test_wave33_cannon_self_launch_and_interactive_boarding_ladders() -> void:
+	_begin()
+	Weather.set_weather(0.0, 0.0, 0.0)
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	await physics_frames(8)
+
+	# 1. Verify strict-ASCII CrewDialogue &"cannon_self_launch" callouts for all 3 personas.
+	for persona: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var line := CrewDialogue.format_line(persona, &"cannon_self_launch")
+		check(line.length() > 8, "CrewDialogue has cannon_self_launch line for %s" % String(persona))
+		for ci in line.length():
+			check(line.unicode_at(ci) < 128, "CrewDialogue %s/cannon_self_launch is strictly ASCII ('%s')" % [
+				String(persona), line])
+
+	# 2. Spawn Captain Pawn with PlayerController + AI CrewBrain mate (Barnaby) bound to sloop.
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(1.1, 1.12, -1.5)))
+	var pc := PlayerController.new()
+	pc.name = "PlayerController"
+	pc.capture_mouse = false
+	pc.input_enabled = false
+	pc.make_current = false
+	captain.add_child(pc)
+
+	var crew_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(crew_pawn)
+	var brain := CrewBrain.new()
+	brain.name = "CrewBrain"
+	crew_pawn.add_child(brain)
+	brain.setup(sloop, captain, &"helmsman")
+	crew_pawn.board(sloop, sloop.ship_point(Vector3(-0.8, 1.12, 1.8)))
+	await physics_frames(4)
+
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	var launched_events: Array[Array] = []
+	sloop.pawn_cannon_launched.connect(func(side: StringName, lp: Node) -> void:
+		launched_events.append([side, lp])
+	)
+
+	var crew_events: Array[Dictionary] = []
+	brain.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+		crew_events.append({"speaker": sp, "text": txt, "cat": cat})
+	)
+
+	# 3. Verify normal & loaded cannon prompts + [RMB] climb-in / climb-out edge latch + station release cleanup.
+	var stbd_st := sloop.get_station(&"cannon", &"starboard")
+	check(stbd_st != null, "Sloop has starboard cannon station")
+	var normal_prompt := stbd_st.get_active_prompt()
+	check(normal_prompt.contains("[RMB] Climb In") and normal_prompt.contains("Fire (Iron)")
+		and normal_prompt.contains("[R] Swap Shot"),
+		"Normal cannon active prompt includes [RMB] Climb In alongside Fire and [R] Swap Shot (got '%s')" % normal_prompt)
+	for ci in normal_prompt.length():
+		check(normal_prompt.unicode_at(ci) < 128, "Normal cannon prompt is strictly ASCII")
+
+	check(captain.enter_station(stbd_st), "Captain enters starboard cannon station")
+	# Rising edge of [RMB] loads captain into cannon; holding [RMB] keeps loaded; next rising edge unloads!
+	captain.drive_station(Vector2.ZERO, false, true, 0.016)
+	check(sloop.is_pawn_loaded_in_cannon(&"starboard"), "[RMB] rising edge loads occupant into cannon barrel")
+	captain.drive_station(Vector2.ZERO, false, true, 0.016)
+	check(sloop.is_pawn_loaded_in_cannon(&"starboard"), "Holding [RMB] does not immediately unload occupant")
+	captain.drive_station(Vector2.ZERO, false, false, 0.016)
+	captain.drive_station(Vector2.ZERO, false, true, 0.016)
+	check(not sloop.is_pawn_loaded_in_cannon(&"starboard"), "Second [RMB] press cleanly climbs back out")
+	captain.drive_station(Vector2.ZERO, false, false, 0.016)
+	captain.leave_station()
+
+	# Verify leaving station via [F] while loaded also clears loaded_pawn cleanly.
+	check(sloop.load_pawn_into_cannon(&"starboard", captain), "load_pawn_into_cannon succeeds directly")
+	check(sloop.is_pawn_loaded_in_cannon(&"starboard"), "is_pawn_loaded_in_cannon reports true")
+	captain.leave_station()
+	check(not sloop.is_pawn_loaded_in_cannon(&"starboard"), "leave_station automatically unloads pawn from cannon")
+
+	# 4. Load Captain into starboard cannon, verify loaded prompt & camera shift, then LAUNCH!
+	sloop.aim_cannon(&"starboard", 0.0, 0.22)
+	check(sloop.load_pawn_into_cannon(&"starboard", captain), "Captain climbs into starboard cannon barrel")
+	check(sloop.is_pawn_loaded_in_cannon(&"starboard"), "is_pawn_loaded_in_cannon true after load")
+	var loaded_prompt := stbd_st.get_active_prompt()
+	check_eq(loaded_prompt, "[WASD] Aim  [LMB] LAUNCH YOURSELF!  [RMB] Climb Out  [F] Leave",
+		"Loaded cannon active prompt matches strict-ASCII spec")
+	for ci in loaded_prompt.length():
+		check(loaded_prompt.unicode_at(ci) < 128, "Loaded cannon prompt is strictly ASCII")
+	check(notices.has("Loaded into cannon! [WASD] Aim  [LMB] LAUNCH!  [F/X] Climb out"),
+		"Loading into cannon posts strict-ASCII HUD notice")
+
+	pc._update_camera(0.0)
+	check(pc._cannon_cam_blend > 0.9, "PlayerController blends camera cleanly toward cannon muzzle while loaded")
+
+	var hp_before := captain.health
+	var launch_origin := sloop.global_position
+	check(sloop.launch_pawn_from_cannon(&"starboard"), "launch_pawn_from_cannon succeeds")
+	check(not sloop.is_pawn_loaded_in_cannon(&"starboard"), "cannon barrel cleared after self-launch")
+	check_eq(launched_events.size(), 1, "pawn_cannon_launched emitted once")
+	if not launched_events.is_empty():
+		check_eq(launched_events[0][0], &"starboard", "pawn_cannon_launched reports &'starboard'")
+		check(launched_events[0][1] == captain, "pawn_cannon_launched reports launched Captain pawn")
+	check(captain.cannon_launched, "Captain pawn.cannon_launched is true right after launch")
+	check(captain.station == null and captain.platform == null, "Captain detached from station and ship on launch")
+	check(pc.get_camera_trauma() >= 0.45, "Captain PlayerController receives >= 0.45 camera trauma on launch")
+	check(sloop.get_cannon_recoil(&"starboard") >= 0.30, "Starboard cannon kicks back with recoil on launch")
+
+	# Verify CrewBrain received pawn_cannon_launched and spoke strict-ASCII &"cannon_self_launch" callout!
+	var saw_crew_cheer := false
+	for ev: Dictionary in crew_events:
+		if ev["cat"] == &"cannon_self_launch":
+			saw_crew_cheer = true
+			var txt := String(ev["text"])
+			for ci in txt.length():
+				check(txt.unicode_at(ci) < 128, "Crew cannon_self_launch callout is strictly ASCII ('%s')" % txt)
+	check(saw_crew_cheer, "CrewBrain hears pawn_cannon_launched and cheers strict-ASCII &'cannon_self_launch'")
+
+	# Step physics frames until Captain splashes down cleanly into the ocean!
+	var splashed := false
+	for _i in 320:
+		await physics_frames(1)
+		if captain.mode == Pawn.Mode.SWIM:
+			splashed = true
+			break
+	var horiz_dist := Vector2(captain.global_position.x - launch_origin.x, captain.global_position.z - launch_origin.z).length()
+	print("    Wave 33A cannon self-launch: horiz_dist=%.1f m, mode=%d, hp=%.1f" % [horiz_dist, captain.mode, captain.health])
+	check(horiz_dist > 25.0, "Cannon self-launch soars > 25 m horizontally (got %.1f m)" % horiz_dist)
+	check(splashed and captain.mode == Pawn.Mode.SWIM, "Launched Captain splashes down cleanly into Mode.SWIM")
+	check(not captain.cannon_launched, "Water splashdown clears pawn.cannon_launched = false")
+	check_near(captain.health, hp_before, 0.01, "Ocean splashdown deals 0 fall damage (HP preserved)")
+
+	# 5. Interactive [F] Hull Boarding Ladders on BOTH Friendly & Hostile Enemy Ships!
+	for lad_name: String in ["Ladder_Port", "Ladder_Starboard"]:
+		var player_lad := sloop.get_node_or_null(NodePath(lad_name)) as Ladder
+		check(player_lad != null, "Player sloop has %s" % lad_name)
+		var player_it := player_lad.get_node_or_null(^"BoardingLadderInteractable") as Interactable if player_lad != null else null
+		check(player_it != null, "Player %s carries BoardingLadderInteractable" % lad_name)
+		if player_it != null:
+			check_eq(player_it.prompt, "Climb boarding ladder", "Friendly %s prompt matches strict ASCII" % lad_name)
+			check_near(player_it.reach, 3.8 * sloop.hull_scale, 0.02, "Friendly %s reach matches 3.8 * hull_scale" % lad_name)
+
+	var enemy_ship := SLOOP_SCENE.instantiate() as Ship
+	enemy_ship.faction = &"drowned"
+	enemy_ship.enable_effects = false
+	_root.add_child(enemy_ship)
+	enemy_ship.global_position = Vector3(85.0, 0.0, 0.0)
+	await physics_frames(6)
+
+	var enemy_port_lad: Ladder = null
+	var enemy_port_it: Interactable = null
+	for lad_name: String in ["Ladder_Port", "Ladder_Starboard"]:
+		var e_lad := enemy_ship.get_node_or_null(NodePath(lad_name)) as Ladder
+		check(e_lad != null, "Enemy drowned ship has %s" % lad_name)
+		var e_it := e_lad.get_node_or_null(^"BoardingLadderInteractable") as Interactable if e_lad != null else null
+		check(e_it != null, "Enemy %s carries BoardingLadderInteractable" % lad_name)
+		if e_it != null:
+			check_eq(e_it.prompt, "Board enemy ship", "Hostile %s prompt reads 'Board enemy ship'" % lad_name)
+			for ci in e_it.prompt.length():
+				check(e_it.prompt.unicode_at(ci) < 128, "Hostile boarding ladder prompt is strictly ASCII")
+			if lad_name == "Ladder_Port":
+				enemy_port_lad = e_lad
+				enemy_port_it = e_it
+
+	# Swim Captain alongside enemy ship's port boarding ladder and interact with [F]!
+	check(enemy_port_lad != null and enemy_port_it != null, "Enemy port boarding ladder ready")
+	if enemy_port_lad != null and enemy_port_it != null:
+		var swim_pos := enemy_port_it.global_position + enemy_port_lad.global_basis.z * 1.4
+		swim_pos.y = Sea.height(swim_pos.x, swim_pos.z) - captain.swim_float_depth
+		captain.teleport(swim_pos)
+		await physics_frames(3)
+		check_eq(captain.mode, Pawn.Mode.SWIM, "Captain is swimming alongside hostile ship")
+		check(enemy_port_it.can_interact(captain), "Swimmer can interact with enemy BoardingLadderInteractable")
+		captain.host_interact(enemy_port_it)
+		check_eq(captain.mode, Pawn.Mode.LADDER, "Interacting with enemy boarding ladder latches Captain into Mode.LADDER")
+		check(captain.platform == enemy_ship, "Captain boards hostile enemy_ship platform upon grabbing ladder")
+		check(captain.ladder == enemy_port_lad, "Captain is latched onto enemy ship's Ladder_Port")
+
+	Game.notice.disconnect(notice_cb)
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "Wave 33A notice is strictly ASCII ('%s')" % n_txt)
+
+	await _end()
+
+
+
 

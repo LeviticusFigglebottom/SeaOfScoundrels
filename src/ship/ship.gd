@@ -15,6 +15,7 @@ signal hole_patched(slot_index: int)
 signal bailed(amount: float)
 signal sunk
 signal cannon_fired(side: StringName, cannonball: Cannonball)
+signal pawn_cannon_launched(side: StringName, launched_pawn: Node)
 signal bell_rung(pawn: Node)
 signal ship_bell_rung(by_pawn: Node)
 signal supplies_taken(pawn: Node)
@@ -133,7 +134,10 @@ var cannon_radius_modifier: float = 1.0
 ## Uniform scale applied to hull models, collision points, buoyancy probes, and ship props.
 @export var hull_scale: float = DEFAULT_HULL_SCALE
 ## Optional faction tag (&"player", &"drowned", &"ghost", &"corsair").
-@export var faction: StringName = &"player"
+@export var faction: StringName = &"player":
+	set(v):
+		faction = v
+		_refresh_boarding_ladder_prompts()
 ## Optional starting anchor state.
 @export var start_anchored: bool = false
 ## Build lights and particle emitters (set false only if a micro-benchmark wants bare physics).
@@ -416,6 +420,9 @@ func _exit_tree() -> void:
 	cabin_furnishings = null
 	_harpoons.clear()
 	_harpoon_primary_was.clear()
+	for c_state: Dictionary in _cannons.values():
+		c_state["loaded_pawn"] = null
+		c_state["secondary_latch"] = false
 	_supply_barrels = null
 	_damage_visuals = null
 	_ship_fire = null
@@ -569,6 +576,8 @@ func _build_stations() -> void:
 		add_child(st)
 		_stations.append(st)
 		var kind: StringName = spec[1]
+		if kind == &"cannon":
+			st.released.connect(_on_cannon_station_released.bind(spec[6] as StringName))
 		if not _stations_by_kind.has(kind):
 			_stations_by_kind[kind] = []
 		(_stations_by_kind[kind] as Array).append(st)
@@ -586,6 +595,7 @@ func _build_stations() -> void:
 		var carriage := _n(cname)
 		var barrel := _n(cname + "/" + cname + "_Barrel")
 		if carriage != null:
+			var cannon_st := get_station(&"cannon", side_key)
 			_cannons[side_key] = {
 				"carriage": carriage,
 				"barrel": barrel,
@@ -593,11 +603,14 @@ func _build_stations() -> void:
 				"barrel_rest_pos": barrel.position if barrel != null else Vector3.ZERO,
 				"base_rot_y": carriage.rotation.y,
 				"base_barrel_rot_x": barrel.rotation.x if barrel != null else 0.0,
+				"base_stand_point": cannon_st.stand_point if cannon_st != null else Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.12)),
 				"yaw": 0.0,
 				"pitch": 0.08,
 				"reload": 0.0,
 				"recoil": 0.0,
 				"recoil_vel": 0.0,
+				"loaded_pawn": null,
+				"secondary_latch": false,
 			}
 
 	_build_harpoons()
@@ -711,6 +724,7 @@ func _build_ladders() -> void:
 		["Station_Ladder_Port", "Ladder_Port", -PI * 0.5],
 		["Station_Ladder_Starboard", "Ladder_Starboard", PI * 0.5],
 	]
+	var board_prompt := "Board enemy ship" if faction != &"player" else "Climb boarding ladder"
 	for spec in ladder_specs:
 		var marker := _n(String(spec[0]))
 		if marker == null:
@@ -727,7 +741,36 @@ func _build_ladders() -> void:
 		lad.transform = Transform3D(Basis(Vector3.UP, float(spec[2])), Vector3(lp.x, lp.y - 1.6 * hull_scale, lp.z))
 		add_child(lad)
 
+		# Interactive [F] boarding handle positioned outboard at the waterline midpoint.
+		var board_it := Interactable.create(board_prompt, 0.85 * hull_scale)
+		board_it.name = "BoardingLadderInteractable"
+		board_it.target = lad
+		board_it.reach = 3.8 * hull_scale
+		board_it.position = Vector3(0.0, 1.35 * hull_scale, 0.55)
+		board_it.interacted.connect(_on_boarding_ladder_interacted.bind(lad))
+		lad.add_child(board_it)
+
 	_build_crows_nest_ladder()
+
+
+func _refresh_boarding_ladder_prompts() -> void:
+	if not is_node_ready():
+		return
+	var board_prompt := "Board enemy ship" if faction != &"player" else "Climb boarding ladder"
+	for lad_name: String in ["Ladder_Port", "Ladder_Starboard"]:
+		var lad := get_node_or_null(NodePath(lad_name)) as Ladder
+		if lad == null:
+			continue
+		var board_it := lad.get_node_or_null(^"BoardingLadderInteractable") as Interactable
+		if board_it != null:
+			board_it.prompt = board_prompt
+
+
+func _on_boarding_ladder_interacted(p: Node, lad: Ladder) -> void:
+	if not Net.is_host() or lad == null or not is_instance_valid(lad):
+		return
+	if p is Pawn:
+		(p as Pawn).grab_ladder(lad)
 
 
 func _build_crows_nest_ladder() -> void:
@@ -2825,6 +2868,169 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	return ball
 
 
+func _find_player_controller(p: Node) -> PlayerController:
+	if p == null or not is_instance_valid(p):
+		return null
+	var pc := p.get_node_or_null(^"PlayerController") as PlayerController
+	if pc != null:
+		return pc
+	for child in p.get_children():
+		if child is PlayerController:
+			return child as PlayerController
+	return null
+
+
+func _on_cannon_station_released(_pawn: Node, side_key: StringName) -> void:
+	if _cannons.has(side_key):
+		var c: Dictionary = _cannons[side_key]
+		c["secondary_latch"] = false
+	unload_pawn_from_cannon(side_key)
+
+
+## World-space cannon muzzle pose {"pos": Vector3, "dir": Vector3, "breech": Vector3}
+## for the given cannon side (empty Dictionary if side is invalid).
+func get_cannon_muzzle_pose(side: StringName) -> Dictionary:
+	if not _cannons.has(side):
+		return {}
+	var c: Dictionary = _cannons[side]
+	var carriage: Node3D = c["carriage"]
+	var barrel: Node3D = c["barrel"]
+	if carriage == null or not is_instance_valid(carriage):
+		return {}
+	var aim_node := barrel if (barrel != null and is_instance_valid(barrel)) else carriage
+	var muzzle_dir := (-aim_node.global_basis.z).normalized()
+	var muzzle_pos := aim_node.global_position + muzzle_dir * (1.55 * hull_scale)
+	var breech_pos := aim_node.global_position - muzzle_dir * (0.25 * hull_scale)
+	return {
+		"pos": muzzle_pos,
+		"dir": muzzle_dir,
+		"breech": breech_pos,
+	}
+
+
+## True when a living Pawn is currently loaded inside the given cannon barrel.
+func is_pawn_loaded_in_cannon(side: StringName) -> bool:
+	if not _cannons.has(side):
+		return false
+	var c: Dictionary = _cannons[side]
+	var lp: Variant = c.get("loaded_pawn", null)
+	if lp == null or not is_instance_valid(lp) or not (lp is Pawn):
+		if lp != null:
+			c["loaded_pawn"] = null
+		return false
+	var p := lp as Pawn
+	if p.dead:
+		c["loaded_pawn"] = null
+		return false
+	return true
+
+
+## Host only. Climb a living Pawn into the given cannon barrel for self-launch.
+func load_pawn_into_cannon(side: StringName, p: Node) -> bool:
+	if not Net.is_host() or is_sinking or not _cannons.has(side):
+		return false
+	if not (p is Pawn) or not is_instance_valid(p):
+		return false
+	var pawn_node := p as Pawn
+	if pawn_node.dead:
+		return false
+	var c: Dictionary = _cannons[side]
+	if is_pawn_loaded_in_cannon(side) and c["loaded_pawn"] != pawn_node:
+		return false
+	var carriage: Node3D = c["carriage"]
+	var barrel: Node3D = c["barrel"]
+	if carriage == null or not is_instance_valid(carriage):
+		return false
+	var st := get_station(&"cannon", side)
+	if st != null:
+		if st.is_occupied() and st.occupant != pawn_node:
+			return false
+		if pawn_node.station != st:
+			if pawn_node.station != null:
+				pawn_node.leave_station()
+			if not pawn_node.enter_station(st):
+				return false
+	c["loaded_pawn"] = pawn_node
+	_apply_cannon_pose(c)
+	var aim_node := barrel if (barrel != null and is_instance_valid(barrel)) else carriage
+	var muzzle_dir := (-aim_node.global_basis.z).normalized()
+	var muzzle_pos := aim_node.global_position + muzzle_dir * (1.55 * hull_scale)
+	if st != null:
+		st.stand_point = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.28))
+	pawn_node.look_yaw = atan2(-muzzle_dir.x, -muzzle_dir.z)
+	pawn_node.look_pitch = clampf(asin(clampf(muzzle_dir.y, -0.99, 0.99)), -1.4, 1.4)
+	var load_sfx := &"wood_creak" if Audio.has_sound(&"wood_creak") else &"hull_creak"
+	Audio.play_sfx(load_sfx, muzzle_pos, -2.0)
+	if Game != null and (faction == &"player" or _find_player_controller(pawn_node) != null):
+		Game.post_notice("Loaded into cannon! [WASD] Aim  [LMB] LAUNCH!  [F/X] Climb out")
+	return true
+
+
+## Unload any Pawn currently inside the given cannon barrel and restore normal gunner stance.
+func unload_pawn_from_cannon(side: StringName) -> void:
+	if not _cannons.has(side):
+		return
+	var c: Dictionary = _cannons[side]
+	c["loaded_pawn"] = null
+	var st := get_station(&"cannon", side)
+	if st != null and c.has("base_stand_point"):
+		st.stand_point = c["base_stand_point"] as Transform3D
+
+
+## Host only. Blast the loaded Pawn out of the given cannon barrel along its aim vector.
+func launch_pawn_from_cannon(side: StringName) -> bool:
+	if not Net.is_host() or is_sinking or not _cannons.has(side):
+		return false
+	if not is_pawn_loaded_in_cannon(side):
+		return false
+	var c: Dictionary = _cannons[side]
+	var p := c["loaded_pawn"] as Pawn
+	var carriage: Node3D = c["carriage"]
+	var barrel: Node3D = c["barrel"]
+	if carriage == null or not is_instance_valid(carriage):
+		unload_pawn_from_cannon(side)
+		return false
+
+	_apply_cannon_pose(c)
+	var aim_node := barrel if (barrel != null and is_instance_valid(barrel)) else carriage
+	var muzzle_dir := (-aim_node.global_basis.z).normalized()
+	var muzzle_pos := aim_node.global_position + muzzle_dir * (1.55 * hull_scale)
+
+	c["recoil"] = 0.34
+	c["recoil_vel"] = 0.0
+	c["secondary_latch"] = false
+	if _damage_visuals != null and is_instance_valid(_damage_visuals):
+		var aim_up := aim_node.global_basis.y.normalized()
+		var breech_world := aim_node.global_position - muzzle_dir * (0.62 * hull_scale) + aim_up * (0.24 * hull_scale)
+		var breech_local := global_transform.affine_inverse() * breech_world
+		_damage_visuals.trigger_cannon_fuse_flash(breech_local)
+	_apply_cannon_pose(c)
+
+	if enable_effects:
+		_spawn_muzzle_flash(muzzle_pos, muzzle_dir)
+	Audio.play_sfx(&"cannon_fire", muzzle_pos)
+	apply_impulse(-muzzle_dir * 1800.0, muzzle_pos - global_position)
+
+	unload_pawn_from_cannon(side)
+	if p.station != null:
+		p.leave_station()
+	if p.has_method(&"unboard"):
+		p.call(&"unboard")
+	else:
+		p._set_platform(null)
+	p.global_position = muzzle_pos
+	p.look_yaw = atan2(-muzzle_dir.x, -muzzle_dir.z)
+	p.look_pitch = clampf(asin(clampf(muzzle_dir.y, -0.99, 0.99)), -1.4, 1.4)
+	p.launch_from_cannon(muzzle_dir * 34.0 + Vector3.UP * 5.2 + linear_velocity * 0.55)
+
+	var pc := _find_player_controller(p)
+	if pc != null:
+		pc.add_camera_trauma(0.48)
+
+	pawn_cannon_launched.emit(side, p)
+	return true
+
+
 ## Current recoil displacement (meters, 0.0..0.34) for the given cannon side.
 func get_cannon_recoil(side: StringName) -> float:
 	if not _cannons.has(side):
@@ -3556,7 +3762,9 @@ func get_station_active_prompt(st: Station) -> String:
 			)
 			return "[A/D] Angle Sail (%s) | [RMB] Square | [F] Let Go" % wind_txt
 		&"cannon":
-			return "[Mouse/WASD] Aim | [LMB] Fire (%s) | [R] Swap Shot | [F] Leave" % get_cannon_ordnance_label()
+			if is_pawn_loaded_in_cannon(st.meta_id):
+				return "[WASD] Aim  [LMB] LAUNCH YOURSELF!  [RMB] Climb Out  [F] Leave"
+			return "[Mouse/WASD] Aim | [LMB] Fire (%s) | [RMB] Climb In | [R] Swap Shot | [F] Leave" % get_cannon_ordnance_label()
 		&"harpoon":
 			return "[Mouse/WASD] Aim | [LMB] Fire | [Hold RMB] Reel | [R] Release | [F] Leave"
 		&"map_table":
@@ -3704,8 +3912,20 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 				var c: Dictionary = _cannons[side]
 				c["yaw"] = clampf(float(c["yaw"]) - axis.x * 0.85 * delta, -0.58, 0.58)
 				c["pitch"] = clampf(float(c["pitch"]) + axis.y * 0.65 * delta, -0.18, 0.42)
+				if absf(axis.x) > 0.001 or absf(axis.y) > 0.001:
+					_apply_cannon_pose(c)
+				var was_sec := bool(c.get("secondary_latch", false))
+				if secondary and not was_sec:
+					if not is_pawn_loaded_in_cannon(side):
+						load_pawn_into_cannon(side, st.occupant)
+					else:
+						unload_pawn_from_cannon(side)
+				c["secondary_latch"] = secondary
 				if primary:
-					fire_cannon(side, st.occupant)
+					if is_pawn_loaded_in_cannon(side):
+						launch_pawn_from_cannon(side)
+					else:
+						fire_cannon(side, st.occupant)
 		&"harpoon":
 			var hside := st.meta_id
 			if absf(axis.x) > 0.05 or absf(axis.y) > 0.05:

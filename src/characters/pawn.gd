@@ -104,6 +104,9 @@ var ladder: Ladder = null
 var visual_offset_y: float = 0.0
 ## Smoothed eye height above the feet (follows crouching).
 var current_eye_height: float = 1.6
+## True while soaring through the air after launching out of a ship cannon.
+var cannon_launched: bool = false
+var _cannon_air_time: float = 0.0
 
 var _anchor_local: Vector3 = Vector3.ZERO
 # While airborne over a platform the pawn is anchored to the deck point it is
@@ -210,6 +213,8 @@ func ride_local_position() -> Vector3:
 ## Put the pawn on a platform at a platform-local feet position, moving with
 ## it from the first tick (spawning crew on a ship under way).
 func board(body: PhysicsBody3D, local_feet: Vector3) -> void:
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	_set_platform(null)
 	if mode != Mode.WALK and mode != Mode.STATION:
 		_set_mode(Mode.WALK)
@@ -220,6 +225,29 @@ func board(body: PhysicsBody3D, local_feet: Vector3) -> void:
 	_coyote = COYOTE_TIME
 	if not crouched and _headroom_blocked():
 		_crouch()
+
+## Detach from the currently ridden platform, preserving world velocity.
+func unboard() -> void:
+	_set_platform(null)
+
+## Launch this pawn ballistically out of a ship cannon.
+func launch_from_cannon(launch_vel: Vector3) -> void:
+	if station != null and Net.is_host():
+		leave_station()
+	else:
+		station = null
+	ladder = null
+	_ladder_cooldown = maxf(_ladder_cooldown, 0.35)
+	_set_platform(null)
+	if crouched:
+		crouched = false
+		_set_shape_height(stand_height)
+	velocity = launch_vel
+	cannon_launched = true
+	_cannon_air_time = 0.0
+	_coyote = 0.0
+	_jump_buffer = 0.0
+	_set_mode(Mode.WALK)
 
 ## Depth of the feet below the sea surface as far as movement is concerned.
 ## A pawn riding a ship that is not sinking is dry, even in the hold below
@@ -232,6 +260,8 @@ func water_depth() -> float:
 
 ## Move the pawn somewhere without physics. Forgets the platform.
 func teleport(world_position: Vector3) -> void:
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	_set_platform(null)
 	global_position = world_position
 	velocity = Vector3.ZERO
@@ -383,6 +413,10 @@ func _tick_walk(delta: float) -> void:
 	motion_mode = CharacterBody3D.MOTION_MODE_GROUNDED
 	_try_stand_up(delta)
 	var grounded := is_on_floor()
+	if cannon_launched:
+		_cannon_air_time += delta
+		if _cannon_air_time <= 0.25:
+			grounded = false
 	_coyote = COYOTE_TIME if grounded else maxf(0.0, _coyote - delta)
 	var wish := _clean_wish()
 	var moving := wish.length_squared() > 0.0001
@@ -397,7 +431,11 @@ func _tick_walk(delta: float) -> void:
 	if depth > wade_depth:
 		speed *= lerpf(1.0, 0.5, clampf((depth - wade_depth) / (swim_enter_depth - wade_depth), 0.0, 1.0))
 	var hv := Vector3(velocity.x, 0.0, velocity.z)
-	if grounded:
+	if cannon_launched and not grounded:
+		hv *= exp(-0.12 * delta)
+		if moving:
+			hv += wish * (2.4 * delta)
+	elif grounded:
 		hv = hv.move_toward(wish * speed, (ground_accel if moving else ground_decel) * delta)
 	elif moving:
 		hv = hv.move_toward(wish * speed, air_accel * delta)
@@ -405,6 +443,8 @@ func _tick_walk(delta: float) -> void:
 	if grounded:
 		vy = minf(vy, 0.0)
 		vy = 0.0
+	elif cannon_launched:
+		vy = maxf(vy - 9.81 * delta, -terminal_speed)
 	else:
 		vy = maxf(vy - gravity * delta, -terminal_speed)
 	var jumping := false
@@ -416,16 +456,22 @@ func _tick_walk(delta: float) -> void:
 		jumped.emit()
 	velocity = Vector3(hv.x, vy, hv.z)
 	var eff_snap := maxf(snap_length, 0.55) if platform != null else snap_length
-	floor_snap_length = 0.0 if (jumping or vy > 0.0) else eff_snap
-	if not jumping and (grounded or _coyote > 0.0) and vy <= 0.0:
+	floor_snap_length = 0.0 if (jumping or vy > 0.0 or cannon_launched) else eff_snap
+	if not jumping and not cannon_launched and (grounded or _coyote > 0.0) and vy <= 0.0:
 		_try_step_up(hv, delta)
 	var before := global_position
 	var fall_speed := -vy
 	move_and_slide()
 	if is_on_ceiling() and velocity.y > 0.0:
 		velocity.y = 0.0
+	var was_cannon_landing := false
+	if cannon_launched and is_on_floor() and _cannon_air_time > 0.25:
+		cannon_launched = false
+		_cannon_air_time = 0.0
+		was_cannon_landing = true
 	if is_on_floor() and not grounded and fall_speed > LAND_SIGNAL_SPEED:
-		landed.emit(fall_speed)
+		var impact := minf(fall_speed * 0.45, 7.5) if was_cannon_landing else fall_speed
+		landed.emit(impact)
 	_check_crouch_trigger(moving)
 	_refresh_platform()
 	# Dead zone: a pawn standing still on a platform keeps its stored anchor,
@@ -518,12 +564,20 @@ func _try_stand_up(delta: float) -> void:
 # -------------------------------------------------------------------- swim
 
 func _enter_swim() -> void:
+	var was_cannon := cannon_launched
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	_set_platform(null)
 	_have_prev_surface = false
 	if crouched:
 		crouched = false
 		_set_shape_height(stand_height)
 	_set_mode(Mode.SWIM)
+	if was_cannon:
+		if Ocean.current != null:
+			Ocean.current.add_foam(global_position, 4.6, 1.0)
+		var splash_sfx := &"splash_big" if Audio.has_sound(&"splash_big") else &"splash_large"
+		Audio.play_sfx(splash_sfx, global_position)
 
 func _tick_swim(delta: float) -> void:
 	var surface := Sea.height(global_position.x, global_position.z)
@@ -562,6 +616,44 @@ func _tick_swim(delta: float) -> void:
 
 # ------------------------------------------------------------------ ladder
 
+## Host only. Latch directly onto `lad` (e.g. interactive `[F]` hull boarding ladders).
+func grab_ladder(lad: Ladder) -> bool:
+	if not Net.is_host() or dead or station != null:
+		return false
+	if lad == null or not is_instance_valid(lad) or not lad.is_inside_tree():
+		return false
+	if mode == Mode.LADDER and ladder == lad:
+		return false
+	cannon_launched = false
+	_cannon_air_time = 0.0
+	var xf := lad.global_transform
+	var lp := xf.affine_inverse() * global_position
+	var min_y := maxf(-lad.reach_below + 0.25, 0.05)
+	var max_y := maxf(min_y, lad.height - 0.35)
+	var rung_y := clampf(lp.y, min_y, max_y)
+	var ideal_local := Vector3(0.0, rung_y, lad.standoff)
+	var world_before := global_position
+	global_position = xf * ideal_local
+	ladder = lad
+	_ladder_t = rung_y
+	_ladder_cooldown = 0.0
+	_set_platform(lad.get_platform())
+	velocity = Vector3.ZERO
+	var raw_off := xf.affine_inverse() * world_before - ideal_local
+	raw_off.y = 0.0
+	if raw_off.length() > 0.65:
+		raw_off = raw_off.normalized() * 0.65
+	_ladder_off = raw_off
+	if crouched:
+		crouched = false
+		_set_shape_height(stand_height)
+	var into := lad.into_dir()
+	if absf(into.x) + absf(into.z) > 0.01:
+		look_yaw = atan2(-into.x, -into.z)
+	_set_mode(Mode.LADDER)
+	Audio.play_sfx(&"rope_creak", global_position, -3.0)
+	return true
+
 func _try_grab_ladder() -> bool:
 	if _ladder_cooldown > 0.0 or dead or not is_inside_tree():
 		return false
@@ -596,6 +688,8 @@ func _try_grab_ladder() -> bool:
 	return false
 
 func _mount_ladder(l: Ladder, local_pos: Vector3) -> void:
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	ladder = l
 	_ladder_t = local_pos.y
 	var ideal := Vector3(0.0, _ladder_t, l.standoff)
@@ -691,6 +785,8 @@ func enter_station(st: Node3D) -> bool:
 	return true
 
 func _adopt_station(st: Node3D) -> void:
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	if carried != null:
 		drop_carried()
 	station = st
@@ -843,6 +939,8 @@ func heal(amount: float) -> void:
 
 func _die() -> void:
 	dead = true
+	cannon_launched = false
+	_cannon_air_time = 0.0
 	if station != null:
 		leave_station()
 	if carried != null:

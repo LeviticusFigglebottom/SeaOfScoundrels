@@ -141,6 +141,10 @@ const LINES := {
 			"Every cursed keel sent to the seabed! Finest fighting ship on the archipelago, Cap'n!",
 			"The sea is ours, Captain! Not a rival flag left standing on the horizon!",
 		],
+		&"cannon_self_launch": [
+			"Blimey, Cap'n! Fired yourself clean out of the barrel - watch the splash!",
+			"There goes the Captain like a human cannonball! Fair flight, Cap'n!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -247,6 +251,10 @@ const LINES := {
 			"Clear skies and empty waves, Cap'n! We swept the whole armada clean!",
 			"Victory on the high seas! Wait till the tavern hears how we sank the lot of 'em!",
 		],
+		&"cannon_self_launch": [
+			"Whoa! Captain's airborne! Right over the swells - stick the landing!",
+			"Human shot away! Best boarding move on the archipelago, Cap'n!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -352,6 +360,10 @@ const LINES := {
 		&"skirmish_victory": [
 			"Not a single hostile hull left floating! Raise a tankard, Captain!",
 			"We did it, Cap'n! Barely a scratch on my oak planks and a hold full of bounty gold!",
+		],
+		&"cannon_self_launch": [
+			"Haha! Mind your hat, Cap'n - that barrel packs a wallop!",
+			"Up and over the gunwale! I'll keep the sloop afloat till you swim back, Cap'n!",
 		],
 	},
 }

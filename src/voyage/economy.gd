@@ -824,7 +824,7 @@ static func sell_treasure(profile: Profile, treasure_info: Dictionary,
 	var company_name := String(COMPANIES[company_id]["name"])
 	var rank_up_notice := ""
 	if ranked_up:
-		rank_up_notice = "%s: Promoted to Rank %d — %s!" % [company_name, new_rank, new_title]
+		rank_up_notice = "%s: Promoted to Rank %d -- %s!" % [company_name, new_rank, new_title]
 
 	return {
 		"ok": true,

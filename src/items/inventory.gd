@@ -872,6 +872,7 @@ func use_bucket() -> Dictionary:
 		Audio.play_sfx(&"bucket_splash", splash_pos, -1.0)
 		_spawn_water_splash_puff(splash_pos, view)
 		var fires_doused := _douse_nearby_ship_fire(splash_pos, 4.8)
+		var rage_chests_cooled := _cool_nearby_rage_chests(splash_pos, 4.8)
 		var throw_overboard := false
 		if pawn.platform is Ship:
 			var s_plat := pawn.platform as Ship
@@ -901,6 +902,7 @@ func use_bucket() -> Dictionary:
 			"full": false,
 			"overboard": throw_overboard,
 			"fires_doused": fires_doused,
+			"rage_chests_cooled": rage_chests_cooled,
 		}
 
 	# Attempt to bail from current or adjacent flooded Ship.
@@ -949,10 +951,17 @@ func use_bucket() -> Dictionary:
 
 ## Throw carried bucket water straight ahead along view direction (RMB on full bucket).
 ## Empties bucket, spawns sculpted splash droplets, adds ocean foam near waterline,
-## extinguishes nearby deck fire flames, and prompts a lighthearted bark from any AI crewmate caught within 4.5 m ahead!
+## extinguishes nearby deck fire flames, cools nearby BlazingRageChests, and prompts
+## a lighthearted bark from any AI crewmate caught within 4.5 m ahead!
 func splash_bucket_forward() -> Dictionary:
 	if pawn == null or pawn.dead or pawn.station != null or pawn.carried != null or not bucket_full:
-		return {"action": &"none", "full": bucket_full, "splashed_crew": false, "fires_doused": 0}
+		return {
+			"action": &"none",
+			"full": bucket_full,
+			"splashed_crew": false,
+			"fires_doused": 0,
+			"rage_chests_cooled": 0,
+		}
 	_use_cooldown = 0.38
 	bucket_full = false
 	_start_swing(&"splash", 0.44)
@@ -965,6 +974,7 @@ func splash_bucket_forward() -> Dictionary:
 	Audio.play_sfx(&"bucket_splash", splash_pos, -0.5)
 	_spawn_water_splash_puff(splash_pos, view)
 	var fires_doused := _douse_nearby_ship_fire(splash_pos, 4.8)
+	var rage_chests_cooled := _cool_nearby_rage_chests(splash_pos, 4.8)
 
 	var horiz_v := Vector3(view.x, 0.0, view.z)
 	var fdir := horiz_v.normalized() if horiz_v.length_squared() > 0.01 else pawn.facing()
@@ -1006,6 +1016,7 @@ func splash_bucket_forward() -> Dictionary:
 		"splashed_crew": splashed_crew,
 		"splashed_name": splashed_name,
 		"fires_doused": fires_doused,
+		"rage_chests_cooled": rage_chests_cooled,
 	}
 
 
@@ -1036,6 +1047,29 @@ func _douse_nearby_ship_fire(splash_pos: Vector3, radius: float = 4.8) -> int:
 	if target_ship != null and target_ship.has_deck_fire():
 		return target_ship.douse_deck_fire(splash_pos, radius)
 	return 0
+
+
+func _cool_nearby_rage_chests(splash_pos: Vector3, radius: float = 4.8) -> int:
+	if pawn == null or not is_inside_tree():
+		return 0
+	var cooled := 0
+	for node in get_tree().get_nodes_in_group(TreasureCatalog.TREASURE_GROUP):
+		if not (node is Node3D) or not is_instance_valid(node):
+			continue
+		if node.has_meta(&"_merchant_sold"):
+			continue
+		if float(node.get_meta(&"curse_heat_rate", 0.0)) <= 0.0:
+			continue
+		var chest_node := node as Node3D
+		var dist := minf(
+			splash_pos.distance_to(chest_node.global_position),
+			pawn.global_position.distance_to(chest_node.global_position)
+		)
+		if dist <= radius and TreasureCatalog.cool_rage_chest(chest_node, 0.75):
+			cooled += 1
+	if cooled > 0 and Game != null:
+		Game.post_notice("Splashed the Chest of Blazing Rage - steam hisses off its iron bands!")
+	return cooled
 
 
 ## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.8 m).
