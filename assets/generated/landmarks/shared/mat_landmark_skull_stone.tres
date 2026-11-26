@@ -1,0 +1,16 @@
+[gd_resource type="StandardMaterial3D" load_steps=4 format=3]
+
+[ext_resource type="Texture2D" path="res://assets/generated/landmarks/shared/lm_skull_stone_albedo.png" id="1"]
+[ext_resource type="Texture2D" path="res://assets/generated/landmarks/shared/lm_skull_stone_rough.png" id="2"]
+[ext_resource type="Texture2D" path="res://assets/generated/landmarks/shared/lm_skull_stone_normal.png" id="3"]
+
+[resource]
+resource_name = "mat_landmark_skull_stone"
+vertex_color_use_as_albedo = true
+albedo_texture = ExtResource("1")
+roughness = 1.0
+roughness_texture = ExtResource("2")
+roughness_texture_channel = 1
+normal_enabled = true
+normal_scale = 1.05
+normal_texture = ExtResource("3")

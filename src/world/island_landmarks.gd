@@ -2,7 +2,7 @@ class_name IslandLandmarks
 extends RefCounted
 ## Bespoke 3D signature landmark choreographer across all 14 archipelago islands.
 ##
-## Places our 22 stylized PBR `.glb` landmarks (Waves I-1 through I-4,
+## Places our 26 stylized PBR `.glb` landmarks (Waves I-1 through I-5,
 ## `res://assets/generated/landmarks/`) with slope-aware anti-floating grounding,
 ## inward cliff-normal heel embedding, walkable `col_*` convex collider extraction,
 ## `foliage_wind.gdshader` vine sway binding, horizon/mid visibility ranges,
@@ -38,6 +38,10 @@ const GLB_SUMMIT_CRAG := "cliff_summit_crag_spire.glb"
 const GLB_RUIN_AQUEDUCT := "cliff_ruin_aqueduct_arch.glb"
 const GLB_PIRATE_WATCHPOST := "cliffside_pirate_watchpost.glb"
 const GLB_STRATA_RIB := "upper_cliff_strata_rib.glb"
+const GLB_PIRATE_CAMP := "pirate_camp_canopy.glb"
+const GLB_SUNKEN_STERN := "sunken_galleon_stern.glb"
+const GLB_CORAL_ARCH := "giant_tidal_coral_arch.glb"
+const GLB_LAVA_SHRINE := "obsidian_lava_cauldron_shrine.glb"
 
 const VIS_RANGE_HORIZON := 2200.0
 const VIS_RANGE_MID := 460.0
@@ -55,6 +59,9 @@ const COL_SKULL_EYE := Color(0.16, 0.98, 0.78)
 const COL_MAGMA_ARCH := Color(1.0, 0.42, 0.10)
 const COL_BRAZIER_FIRE := Color(1.0, 0.58, 0.18)
 const COL_WATCHPOST_BEACON := Color(1.0, 0.72, 0.30)
+const COL_CAMP_FIRE := Color(1.0, 0.70, 0.28)
+const COL_STERN_BRASS := Color(1.0, 0.76, 0.34)
+const COL_CALDERA_SHRINE := Color(1.0, 0.38, 0.08)
 const COL_HARBOUR_AMBER := Color(1.0, 0.72, 0.34)
 const COL_TRAIL_AMBER := Color(1.0, 0.74, 0.36)
 
@@ -243,6 +250,12 @@ static func _populate_skull_bluff(island: Island, basis: Basis, landing_yaw: flo
 				14.0 * scale_r, 14.0 * scale_r, 18.0, 64.0, rib_dir, float(spec[4]),
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 coastal storytelling: heeled gilded galleon stern grounded on Skull Bluff's outer eastern spit!
+	if _place_sunken_stern(island, basis, "SunkenStern_Spit",
+			28.0 * scale_r, -54.0 * scale_r, landing_yaw - 0.68, 1.06, 26.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -317,6 +330,12 @@ static func _populate_twin_spires(island: Island, basis: Basis, landing_yaw: flo
 				float(spec[3]), float(spec[4]), float(spec[5]), float(spec[6]), rib_dir, float(spec[8]),
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 coastal storytelling: pirate expedition camp canopy on Emerald Spire's sunlit landing cove!
+	if _place_pirate_camp(island, basis, "PirateCamp_CanyonCove",
+			-9.5 * scale_r, -40.0 * scale_r, landing_yaw - 0.38, 1.04, 18.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -543,6 +562,11 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 				-34.0, -34.0, landing_yaw + 0.72, 1.0, 16.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+		# Wave I-5 coastal storytelling: vibrant tidal coral arch framing Port Scoundrel's outer eastern cove!
+		if _place_coral_arch(island, basis, "TidalCoralArch_OuterCove",
+				60.0, -52.0, landing_yaw - 0.65, 1.02, 18.0,
+				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+			count += 1
 	else:
 		# Barnacle Haven (and custom outposts): eastern harbour sea arch + western bluff catwalk pier!
 		if _place_sea_arch(island, basis, "CoastalSeaArch_Harbour",
@@ -562,6 +586,11 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 			count += 1
 		if _place_beached_rowboat(island, basis, "BeachedRowboat_Harbour",
 				-32.0, -34.0, landing_yaw + 0.65, 1.0, 16.0,
+				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+			count += 1
+		# Wave I-5 coastal storytelling: giant tidal coral arch rising from Barnacle Haven's western shallows!
+		if _place_coral_arch(island, basis, "TidalCoralArch_HarbourWest",
+				-68.0, -58.0, landing_yaw + 0.62, 1.0, 18.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
 
@@ -666,6 +695,12 @@ static func _populate_smuggler_cove(island: Island, basis: Basis, landing_yaw: f
 				14.0 * scale_r, 16.0 * scale_r, 16.0, 56.0, rib_dir, float(spec[4]),
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 coastal storytelling: smuggler's beach camp canopy tucked inside the hidden pocket cove!
+	if _place_pirate_camp(island, basis, "PirateCamp_HiddenCove",
+			-10.0 * scale_r, -9.0 * scale_r, landing_yaw - 0.55, 0.98, 16.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -711,6 +746,16 @@ static func _populate_treasure_peak(island: Island, basis: Basis, landing_yaw: f
 	if _place_upper_strata_rib(island, basis, "UpperStrataRib_Main",
 			2.0 * scale_r, 6.0 * scale_r, 20.0 * scale_r, 16.0 * scale_r,
 			16.0, 56.0, peak_rib_dir, 0.92,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+
+	# Wave I-5 coastal storytelling: treasure-hunter camp on Golden Cove & vibrant tidal coral arch!
+	if _place_pirate_camp(island, basis, "PirateCamp_GoldenCove",
+			-16.0 * scale_r, -34.0 * scale_r, landing_yaw - 0.32, 0.96, 14.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_coral_arch(island, basis, "TidalCoralArch_Cove",
+			42.0 * scale_r, -44.0 * scale_r, landing_yaw - 0.58, 0.96, 16.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	return count
@@ -768,6 +813,16 @@ static func _populate_sea_arch(island: Island, basis: Basis, landing_yaw: float,
 			16.0, 50.0, arch_rib_dir, 1.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
+
+	# Wave I-5 coastal storytelling: beach camp on Tern Tide Bay & western reef tidal coral arch!
+	if _place_pirate_camp(island, basis, "PirateCamp_TideBay",
+			-26.0 * scale_r, -38.0 * scale_r, landing_yaw - 0.52, 1.0, 16.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_coral_arch(island, basis, "TidalCoralArch_Reef",
+			-46.0 * scale_r, -50.0 * scale_r, landing_yaw + 0.58, 1.04, 20.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -811,6 +866,24 @@ static func _populate_crescent_lagoon(island: Island, basis: Basis, landing_yaw:
 				boulder_uvs[bi].x, boulder_uvs[bi].y, 14.0, rng.randf_range(0.92, 1.16),
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 lagoon & reef storytelling: sunlit beach camp, twin inner lagoon coral arches & sunken galleon stern!
+	if _place_pirate_camp(island, basis, "PirateCamp_Lagoon",
+			22.0 * scale_r, -34.0 * scale_r, landing_yaw + 0.75, 1.04, 20.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_sunken_stern(island, basis, "SunkenStern_Reef",
+			48.0 * scale_r, -35.0 * scale_r, landing_yaw - 0.85, 1.08, 26.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_coral_arch(island, basis, "TidalCoralArch_LagoonW",
+			-12.0 * scale_r, -16.0 * scale_r, landing_yaw + 0.55, 1.08, 22.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_coral_arch(island, basis, "TidalCoralArch_LagoonE",
+			11.0 * scale_r, -11.0 * scale_r, landing_yaw - 0.55, 1.06, 22.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -923,6 +996,12 @@ static func _populate_wreck_shoal(island: Island, basis: Basis, landing_yaw: flo
 				boulder_uvs[bi].x, boulder_uvs[bi].y, 12.0, rng.randf_range(0.82, 1.04),
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 coastal storytelling: heeled gilded galleon stern grounded in the eastern surf shoal!
+	if _place_sunken_stern(island, basis, "SunkenStern_Shoal",
+			38.0 * scale_r, -52.0 * scale_r, landing_yaw - 0.62, 1.0, 18.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -949,6 +1028,12 @@ static func _populate_sea_stack(island: Island, basis: Basis, landing_yaw: float
 	# Wave I-3: Bleached Leviathan Ribcage half-submerged across the shallow seaward coral shelf!
 	if _place_leviathan_ribcage(island, basis, "LeviathanRibcage_Shelf",
 			4.0 * scale_r, -22.0 * scale_r, landing_yaw - 0.32, 0.86, 12.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+
+	# Wave I-5 coastal storytelling: broken gilded galleon stern grounded on Siren's western shoal!
+	if _place_sunken_stern(island, basis, "SunkenStern_Fang",
+			-44.0 * scale_r, -40.0 * scale_r, landing_yaw + 0.72, 0.90, 16.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	return count
@@ -992,6 +1077,17 @@ static func _populate_volcano_crag(island: Island, basis: Basis, landing_yaw: fl
 				target_u, target_v, yaw, sc_base, 18.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
+
+	# Wave I-5 volcanic storytelling: twin molten obsidian cauldron shrines framing the caldera landing
+	# approach & upper SE volcanic ridge trail (strictly clear of lava rivers, fumaroles & trails!).
+	if _place_lava_shrine(island, basis, "LavaCauldronShrine_Approach",
+			11.0 * scale_r, -41.0 * scale_r, landing_yaw - 0.25, 1.06, 24.0, 4.0, 16.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	if _place_lava_shrine(island, basis, "LavaCauldronShrine_Ridge",
+			24.0 * scale_r, -36.0 * scale_r, landing_yaw + 0.35, 1.10, 28.0, 14.0, 34.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
 	return count
 
 
@@ -2127,6 +2223,278 @@ static func _place_upper_strata_rib(island: Island, basis: Basis, node_name: Str
 		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
 
 
+static func _place_pirate_camp(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# PirateCampCanopy (~6.2 m x 4.6 m, posts plunging to y_local = -1.25 m, guy-line stakes to -0.82 m)
+	# requires strict flat sunlit sandy beach / grassy cove ground clear of footpaths & keepouts!
+	var camp_basis := Basis(Vector3.UP, yaw)
+	var right_d := camp_basis.x
+	var fwd_d := camp_basis.z
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 3.8 * scale_f
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 3.8 * scale_f):
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < 1.6 or h > 8.5:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.0)
+			if n.y < 0.80:
+				continue
+
+			# Sample inner camp footprint (4 corner posts, map crate, kegs & campfire ring) and
+			# outer guy-line beach stakes separately so inner props sit flush without burying
+			# while every -1.25 m corner post & -0.82 m beach stake roots cleanly below terrain!
+			var min_foot := _min_footprint_height(island, lp.x, lp.z, 2.0 * scale_f)
+			var max_foot := h
+			var min_stake := min_foot
+			for sx: float in [-1.0, 1.0]:
+				for sz: float in [-1.0, 1.0]:
+					var post_p := lp + right_d * (sx * 2.15 * scale_f) + fwd_d * (sz * 1.55 * scale_f)
+					var stake_p := lp + right_d * (sx * 3.05 * scale_f) + fwd_d * (sz * 2.25 * scale_f)
+					var hp := island.surface_height(post_p.x, post_p.z)
+					var hs := island.surface_height(stake_p.x, stake_p.z)
+					min_foot = minf(min_foot, hp)
+					max_foot = maxf(max_foot, hp)
+					min_stake = minf(min_stake, hs)
+			if min_foot < 1.25 or min_stake < 0.90:
+				continue
+			if h - min_foot > 0.85 * scale_f:
+				continue
+			var mount_y := min_foot - 0.12 * scale_f
+			# Keep outer -0.82 m beach stakes embedded >= 0.30 m & prevent uphill sand burying campfire/kegs.
+			if min_stake < mount_y - 0.52 * scale_f:
+				continue
+			if max_foot - min_foot > 0.85 * scale_f:
+				continue
+
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.16
+			var score := n.y * 12.0 - (max_foot - min_foot) * 6.0 - (h - min_foot) * 3.0 \
+				- absf(h - 3.0) * 0.45 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, mount_y, lp.z)
+				found = true
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		camp_basis * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_PIRATE_CAMP, node_name, xform, 5.0 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_sunken_stern(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# SunkenGalleonStern (~9.5 m wide x ~9.2 m tall, heeled broken hull plunging to y_local = -3.6 m)
+	# grounds dramatically in shallow turquoise shoals & sandy surf (`h = -1.8..+1.8 m`)!
+	var has_mooring := island.mooring_transform != Transform3D.IDENTITY
+	var moor_xz := Vector2(island.mooring_transform.origin.x, island.mooring_transform.origin.z)
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.4 * scale_f):
+				continue
+			if has_mooring and Vector2(lp.x, lp.z).distance_squared_to(moor_xz) < 18.0 * 18.0:
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < -1.8 or h > 1.8:
+				continue
+			var min_foot := _min_footprint_height_8(island, lp.x, lp.z, 4.2 * scale_f)
+			if min_foot < -3.6 * scale_f or h - min_foot > 3.2 * scale_f:
+				continue
+			var mount_y := minf(h - 0.35 * scale_f, min_foot + 2.4 * scale_f)
+			if mount_y < -2.1 * scale_f:
+				continue
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.18
+			var score := 12.0 - absf(h + 0.15) * 1.6 - (h - min_foot) * 1.1 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, mount_y, lp.z)
+				found = true
+
+	# Fallback radial seaward walk if nominal coordinates sit too far inland on a shifted reef.
+	if not found:
+		var out_uv := Vector2(u0, v0)
+		out_uv = out_uv.normalized() if out_uv.length_squared() >= 1.0 else Vector2(0.0, -1.0)
+		for step_i in range(1, 16):
+			var cand_uv := Vector2(u0, v0) + out_uv * (float(step_i) * 3.0)
+			var lp := basis * Vector3(cand_uv.x, 0.0, cand_uv.y)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.4 * scale_f):
+				continue
+			if has_mooring and Vector2(lp.x, lp.z).distance_squared_to(moor_xz) < 18.0 * 18.0:
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < -1.8 or h > 1.8:
+				continue
+			var min_foot := _min_footprint_height_8(island, lp.x, lp.z, 4.2 * scale_f)
+			if min_foot < -3.6 * scale_f or h - min_foot > 3.2 * scale_f:
+				continue
+			var mount_y := minf(h - 0.35 * scale_f, min_foot + 2.4 * scale_f)
+			if mount_y < -2.1 * scale_f:
+				continue
+			best_pos = Vector3(lp.x, mount_y, lp.z)
+			found = true
+			break
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_SUNKEN_STERN, node_name, xform, 6.8 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_coral_arch(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		placed: Array[Vector3], keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# GiantTidalCoralArch (~10.5 m wide x ~6.2 m tall, twin reef piers at +/-4.2 m plunging to y_local = -3.25 m)
+	# rises out of crystal turquoise coastal shallows (`h = -2.0..+0.7 m`), strictly clear of docks & moorings!
+	var arch_basis := Basis(Vector3.UP, yaw)
+	var right_dir := arch_basis.x
+	var has_mooring := island.mooring_transform != Transform3D.IDENTITY
+	var moor_xz := Vector2(island.mooring_transform.origin.x, island.mooring_transform.origin.z)
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			# Never intrude on an outpost's central seaward pier / sailing approach channel!
+			if island.is_outpost and absf(u) < 26.0 and v < -18.0:
+				continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 5.0 * scale_f):
+				continue
+			if has_mooring and Vector2(lp.x, lp.z).distance_squared_to(moor_xz) < 22.0 * 22.0:
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < -2.0 or h > 0.7:
+				continue
+
+			var p_l := lp - right_dir * (4.2 * scale_f)
+			var p_r := lp + right_dir * (4.2 * scale_f)
+			if _in_exclusion_padded(p_l.x, p_l.z, keepout_zones, 2.6 * scale_f):
+				continue
+			if _in_exclusion_padded(p_r.x, p_r.z, keepout_zones, 2.6 * scale_f):
+				continue
+
+			var h_l := _min_footprint_height(island, p_l.x, p_l.z, 1.2 * scale_f)
+			var h_r := _min_footprint_height(island, p_r.x, p_r.z, 1.2 * scale_f)
+			if minf(h_l, h_r) < -3.1 * scale_f:
+				continue
+			var span_diff := absf(h_l - h_r)
+			if span_diff > 2.4 * scale_f:
+				continue
+
+			var mount_y := minf(h - 0.20 * scale_f, minf(h_l, h_r) + 2.2 * scale_f)
+			if mount_y < -2.0 * scale_f or mount_y > 0.65 * scale_f:
+				continue
+
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.16
+			var score := 12.0 - absf(h + 0.65) * 2.4 - span_diff * 1.4 - dist_pen
+			if score > best_score:
+				best_score = score
+				best_pos = Vector3(lp.x, mount_y, lp.z)
+				found = true
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		arch_basis * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_CORAL_ARCH, node_name, xform, 6.4 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
+static func _place_lava_shrine(island: Island, basis: Basis, node_name: String,
+		u0: float, v0: float, yaw: float, scale_f: float, scan_span: float,
+		h_min: float, h_max: float, placed: Array[Vector3],
+		keepout_zones: Array[Vector3], rng: RandomNumberGenerator,
+		prop_body: StaticBody3D, props_root: Node3D, foliage_cache: Dictionary,
+		landmark_cache: Dictionary) -> bool:
+	# ObsidianLavaCauldronShrine (~6.4 m wide x ~5.8 m tall, basalt ring plunging to y_local = -2.25 m)
+	# seats cleanly on Cinder Crag volcanic terrace/ridge benches (`h = 4.0..34.0 m`, `n.y >= 0.65`)!
+	var eff_h_min := maxf(4.0, h_min)
+	var eff_h_max := minf(34.0, h_max)
+	var h_mid := (eff_h_min + eff_h_max) * 0.5
+	var trail_polys := IslandTrails.get_trail_polylines(island.archetype, island.island_radius, island.island_id)
+	var trail_clear := IslandTrails.get_trail_half_width(island.archetype) + 3.8 * scale_f
+
+	var best_pos := Vector3.ZERO
+	var best_score := -INF
+	var found := false
+
+	for iu in range(-4, 5):
+		var u := u0 + float(iu) * (scan_span * 0.125)
+		for iv in range(-4, 5):
+			var v := v0 + float(iv) * (scan_span * 0.125)
+			if not trail_polys.is_empty() and _min_dist_to_trails_uv(u, v, trail_polys) < trail_clear:
+				continue
+			var lp := basis * Vector3(u, 0.0, v)
+			if _in_exclusion_padded(lp.x, lp.z, keepout_zones, 4.0 * scale_f):
+				continue
+			var h := island.surface_height(lp.x, lp.z)
+			if h < eff_h_min or h > eff_h_max:
+				continue
+			var n := island.surface_normal(lp.x, lp.z, 2.2)
+			if n.y < 0.65:
+				continue
+			var min_foot := _min_footprint_height_8(island, lp.x, lp.z, 2.9 * scale_f)
+			if min_foot < 2.5 or h - min_foot > 1.8 * scale_f:
+				continue
+			var dist_pen := Vector2(u - u0, v - v0).length() * 0.16
+			var score := n.y * 8.0 - (h - min_foot) * 1.8 - absf(h - h_mid) * 0.22 - dist_pen
+			if score > best_score:
+				best_score = score
+				var mount_y := minf(h - 0.35 * scale_f, min_foot + 1.45 * scale_f)
+				best_pos = Vector3(lp.x, mount_y, lp.z)
+				found = true
+
+	if not found:
+		return false
+
+	var xform := Transform3D(
+		Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(scale_f, scale_f, scale_f)),
+		best_pos)
+	return _spawn_landmark(island, GLB_LAVA_SHRINE, node_name, xform, 5.2 * scale_f,
+		placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null
+
+
 # ============================================================ core landmark spawner
 
 static func _load_landmark(filename: String, landmark_cache: Dictionary) -> PackedScene:
@@ -2270,6 +2638,12 @@ static func _mount_lantern_lights(island: Island, inst: Node3D, rng: RandomNumbe
 			light.omni_range = 21.0
 			light.omni_attenuation = 1.25
 			amp = 0.22
+		elif m_name.begins_with("Lantern_CalderaShrine"):
+			light.light_color = COL_CALDERA_SHRINE
+			base_energy = 5.4
+			light.omni_range = 22.0
+			light.omni_attenuation = 1.25
+			amp = 0.24
 		elif m_name.begins_with("Lantern_Brazier"):
 			light.light_color = COL_BRAZIER_FIRE
 			base_energy = 5.2
@@ -2282,6 +2656,18 @@ static func _mount_lantern_lights(island: Island, inst: Node3D, rng: RandomNumbe
 			light.omni_range = 24.0
 			light.omni_attenuation = 1.25
 			amp = 0.18
+		elif m_name.begins_with("Lantern_Camp"):
+			light.light_color = COL_CAMP_FIRE
+			base_energy = 3.8
+			light.omni_range = 18.0
+			light.omni_attenuation = 1.25
+			amp = 0.22
+		elif m_name.begins_with("Lantern_Stern"):
+			light.light_color = COL_STERN_BRASS
+			base_energy = 3.6
+			light.omni_range = 17.0
+			light.omni_attenuation = 1.30
+			amp = 0.16
 		elif m_name.begins_with("Lantern_Trail") or m_name.begins_with("Lantern_Rowboat"):
 			light.light_color = COL_TRAIL_AMBER
 			base_energy = 2.6
@@ -2350,3 +2736,38 @@ static func _min_footprint_height(island: Island, x: float, z: float, rad: float
 	h_min = minf(h_min, island.surface_height(x, z + rad))
 	h_min = minf(h_min, island.surface_height(x, z - rad))
 	return h_min
+
+
+static func _min_footprint_height_8(island: Island, x: float, z: float, rad: float) -> float:
+	var h_min := _min_footprint_height(island, x, z, rad)
+	var diag := rad * 0.70710678
+	h_min = minf(h_min, island.surface_height(x + diag, z + diag))
+	h_min = minf(h_min, island.surface_height(x - diag, z + diag))
+	h_min = minf(h_min, island.surface_height(x + diag, z - diag))
+	h_min = minf(h_min, island.surface_height(x - diag, z - diag))
+	return h_min
+
+
+static func _min_dist_to_trails_uv(u: float, v: float, polylines: Array[PackedVector2Array]) -> float:
+	var min_sq := 1e12
+	for poly in polylines:
+		var n := poly.size()
+		for i in range(n - 1):
+			var a := poly[i]
+			var b := poly[i + 1]
+			var dx := b.x - a.x
+			var dy := b.y - a.y
+			var len_sq := dx * dx + dy * dy
+			var d_sq: float
+			if len_sq <= 0.0001:
+				var px := u - a.x
+				var py := v - a.y
+				d_sq = px * px + py * py
+			else:
+				var t := clampf(((u - a.x) * dx + (v - a.y) * dy) / len_sq, 0.0, 1.0)
+				var px := u - (a.x + dx * t)
+				var py := v - (a.y + dy * t)
+				d_sq = px * px + py * py
+			if d_sq < min_sq:
+				min_sq = d_sq
+	return sqrt(min_sq)

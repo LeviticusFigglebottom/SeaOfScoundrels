@@ -1,11 +1,12 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (22 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (26 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details & steep-slope cliff buttresses across all 14 island archetypes.
 
 const IslandDetailsCls := preload("res://src/world/island_details.gd")
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
 const LANDMARK_DIR := "res://assets/generated/landmarks/"
+const SHARED_LANDMARK_TEX_PREFIX := "res://assets/generated/landmarks/shared/"
 
 const GEOLOGY_LANDMARKS: Array[String] = [
 	"cliff_buttress_tall.glb",
@@ -41,6 +42,13 @@ const SKYLINE_LANDMARKS: Array[String] = [
 	"upper_cliff_strata_rib.glb",
 ]
 
+const COASTAL_LANDMARKS: Array[String] = [
+	"pirate_camp_canopy.glb",
+	"sunken_galleon_stern.glb",
+	"giant_tidal_coral_arch.glb",
+	"obsidian_lava_cauldron_shrine.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -64,6 +72,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_ruin_aqueduct_arch.glb": 4,
 	"cliffside_pirate_watchpost.glb": 2,
 	"upper_cliff_strata_rib.glb": 1,
+	"pirate_camp_canopy.glb": 2,
+	"sunken_galleon_stern.glb": 2,
+	"giant_tidal_coral_arch.glb": 2,
+	"obsidian_lava_cauldron_shrine.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -77,6 +89,9 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"pirate_warning_gibbet.glb": ["Lantern_Gallows"],
 	"coastal_signal_brazier.glb": ["Lantern_Brazier"],
 	"cliffside_pirate_watchpost.glb": ["Lantern_Watchpost"],
+	"pirate_camp_canopy.glb": ["Lantern_Camp"],
+	"sunken_galleon_stern.glb": ["Lantern_Stern"],
+	"obsidian_lava_cauldron_shrine.glb": ["Lantern_CalderaShrine"],
 }
 
 const COMPACT_LANDMARKS: Array[String] = [
@@ -147,13 +162,30 @@ func _count_bad_normals(mesh: Mesh) -> int:
 	return bad
 
 
+func _record_shared_landmark_tex(tex: Texture2D, filename: String, mesh_name: String,
+		slot_name: String, unique_pbr_paths: Dictionary, non_shared_errors: Array[String]) -> void:
+	if tex == null:
+		return
+	var rp := tex.resource_path
+	var key := rp if not rp.is_empty() else "<embedded:%s:%s:%s>" % [filename, mesh_name, slot_name]
+	unique_pbr_paths[key] = true
+	if not rp.begins_with(SHARED_LANDMARK_TEX_PREFIX):
+		non_shared_errors.append("%s (%s:%s -> %s)" % [
+			filename, mesh_name, slot_name, rp if not rp.is_empty() else "<embedded>",
+		])
+
+
 func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	var all_landmarks: Array[String] = []
 	all_landmarks.append_array(GEOLOGY_LANDMARKS)
 	all_landmarks.append_array(SETPIECE_LANDMARKS)
 	all_landmarks.append_array(STORYTELLING_LANDMARKS)
 	all_landmarks.append_array(SKYLINE_LANDMARKS)
-	check_eq(all_landmarks.size(), 22, "expected 22 sculpted landmark GLBs")
+	all_landmarks.append_array(COASTAL_LANDMARKS)
+	check_eq(all_landmarks.size(), 26, "expected 26 sculpted landmark GLBs")
+
+	var unique_pbr_paths := {}
+	var non_shared_tex_errors: Array[String] = []
 
 	for filename in all_landmarks:
 		var path := LANDMARK_DIR + filename
@@ -208,6 +240,12 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 					var has_normal := std.normal_texture != null
 					if has_albedo and has_normal:
 						pbr_surfaces += 1
+					_record_shared_landmark_tex(std.albedo_texture, filename, String(vmi.name),
+						"albedo", unique_pbr_paths, non_shared_tex_errors)
+					_record_shared_landmark_tex(std.normal_texture, filename, String(vmi.name),
+						"normal", unique_pbr_paths, non_shared_tex_errors)
+					_record_shared_landmark_tex(std.roughness_texture, filename, String(vmi.name),
+						"roughness", unique_pbr_paths, non_shared_tex_errors)
 					if has_albedo or has_normal:
 						var arrays := mesh.surface_get_arrays(si)
 						var tang_var: Variant = arrays[Mesh.ARRAY_TANGENT] if not arrays.is_empty() else null
@@ -249,6 +287,15 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 					"missing Node3D lantern empty %s in %s" % [empty_name, filename])
 
 		inst.free()
+
+	# Shared Landmark PBR Texture Deduplication contract across all 26 GLBs.
+	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
+		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
+	check(non_shared_tex_errors.is_empty(),
+		"every landmark textured material must resolve from %s (offenders: %s)" % [
+			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
+	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
+		"expected <= 36 unique shared landmark PBR texture paths across all 26 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -710,6 +757,26 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check(aqueduct_total >= 4, "Wave I-4 spawns >= 4 RuinAqueduct* landmarks (got %d)" % aqueduct_total)
 	check(watchpost_total >= 6, "Wave I-4 spawns >= 6 PirateWatchpost* landmarks (got %d)" % watchpost_total)
 	check(strata_total >= 14, "Wave I-4 spawns >= 14 UpperStrataRib* landmarks (got %d)" % strata_total)
+
+	# 2d. Verify Wave I-5 coastal, reef & volcanic caldera landmarks across the 14-island archipelago!
+	var camp_total := 0
+	var stern_total := 0
+	var coral_arch_total := 0
+	var lava_shrine_total := 0
+	for isl_i5 in all_islands:
+		camp_total += isl_i5.find_children("PirateCamp_*", "Node3D", true, false).size()
+		stern_total += isl_i5.find_children("SunkenStern_*", "Node3D", true, false).size()
+		coral_arch_total += isl_i5.find_children("TidalCoralArch_*", "Node3D", true, false).size()
+		lava_shrine_total += isl_i5.find_children("LavaCauldronShrine_*", "Node3D", true, false).size()
+	var cinder_shrines := 0
+	if cinder_isl != null:
+		cinder_shrines = cinder_isl.find_children("LavaCauldronShrine_*", "Node3D", true, false).size()
+	print("    wave_i5 coastal/reef landmarks: camps=%d sterns=%d coral_arches=%d lava_shrines=%d" % [
+		camp_total, stern_total, coral_arch_total, lava_shrine_total])
+	check(camp_total >= 4, "Wave I-5 spawns >= 4 PirateCamp_* landmarks (got %d)" % camp_total)
+	check(stern_total >= 3, "Wave I-5 spawns >= 3 SunkenStern_* landmarks (got %d)" % stern_total)
+	check(coral_arch_total >= 4, "Wave I-5 spawns >= 4 TidalCoralArch_* landmarks (got %d)" % coral_arch_total)
+	check(cinder_shrines >= 2, "Cinder Crag spawns >= 2 LavaCauldronShrine_* landmarks (got %d)" % cinder_shrines)
 
 	# Verify zero-VRAM triplanar cliff PBR wired onto FortBastion & SmugglersGrotto stone meshes.
 	var fort_isl := archipelago.get_island_by_id("ironwatch_fort")

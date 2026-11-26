@@ -34,6 +34,11 @@ try:
 except ImportError:
     SKYLINE_GENERATORS = []
 
+try:
+    from _landmarks_coastal import COASTAL_GENERATORS
+except ImportError:
+    COASTAL_GENERATORS = []
+
 
 def main():
     argv = sys.argv
@@ -49,6 +54,7 @@ def main():
         + list(STORYTELLING_A_GENERATORS)
         + list(STORYTELLING_B_GENERATORS)
         + list(SKYLINE_GENERATORS)
+        + list(COASTAL_GENERATORS)
     )
     lm_dir = os.path.join(outdir, 'landmarks')
     print('gen_island_landmarks: writing %d landmarks to %s' % (len(generators), lm_dir))

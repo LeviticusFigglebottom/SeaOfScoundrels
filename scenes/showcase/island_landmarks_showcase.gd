@@ -1,5 +1,5 @@
 extends Node3D
-## Visual verification showcase for Wave I-2..I-4 sculpted 3D island landmarks (22 PBR GLBs),
+## Visual verification showcase for Wave I-2..I-5 sculpted 3D island landmarks (26 BC7 PBR GLBs),
 ## winding walkable terrain trails, and native batched MultiMesh `IslandDetails` ground foliage,
 ## highland cliff-ledge scrub, coastal dressing & steep-slope cliff buttresses across all 14 islands.
 ##
@@ -7,8 +7,8 @@ extends Node3D
 ##   tools/capture.sh res://scenes/showcase/island_landmarks_showcase.tscn cutlass_overhaul 2 5 -- shot=cutlass_overhaul
 ##
 ## User args (after `--`), all optional:
-##   shot=<name>       18 visual audit shots (4 galleries + all 14 archipelago islands):
-##                     gallery_geology|gallery_setpieces|gallery_storytelling|gallery_skyline|
+##   shot=<name>       19 visual audit shots (5 galleries + all 14 archipelago islands):
+##                     gallery_geology|gallery_setpieces|gallery_storytelling|gallery_skyline|gallery_coastal|
 ##                     cutlass_overhaul|skull_bluff|emerald_temple|galleons_catwalk|cinder_basalt|gulls_arch|
 ##                     sovereigns_bastion|ironwatch_fort|crescent_atoll|barnacle_haven|
 ##                     wreckers_shoal|sirens_tooth|smugglers_cove|port_scoundrel
@@ -25,7 +25,7 @@ extends Node3D
 ##   5=emerald_temple      6=galleons_catwalk    7=cinder_basalt      8=gulls_arch
 ##   9=gallery_storytelling 0=sovereigns_bastion Q=ironwatch_fort     W=crescent_atoll
 ##   E=barnacle_haven      R=wreckers_shoal      T=sirens_tooth       Y=smugglers_cove
-##   U=port_scoundrel      I=gallery_skyline
+##   U=port_scoundrel      I=gallery_skyline     O=gallery_coastal
 
 const LANDMARK_DIR := "res://assets/generated/landmarks/"
 
@@ -67,6 +67,13 @@ const SKYLINE_GLBS: Array[String] = [
 	"cliff_ruin_aqueduct_arch.glb",
 	"cliffside_pirate_watchpost.glb",
 	"upper_cliff_strata_rib.glb",
+]
+
+const COASTAL_GLBS: Array[String] = [
+	"pirate_camp_canopy.glb",
+	"sunken_galleon_stern.glb",
+	"giant_tidal_coral_arch.glb",
+	"obsidian_lava_cauldron_shrine.glb",
 ]
 
 ## Open sunlit tropical water well clear of all 14 archipelago islands for gallery staging.
@@ -259,6 +266,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			next_shot = "port_scoundrel"
 		KEY_I:
 			next_shot = "gallery_skyline"
+		KEY_O:
+			next_shot = "gallery_coastal"
 	if next_shot != "" and next_shot != _shot:
 		_shot = next_shot
 		_clock = 0.0
@@ -296,6 +305,8 @@ func _apply_shot_weather() -> void:
 			default_time = 15.8
 		"gallery_skyline":
 			default_time = 15.4
+		"gallery_coastal":
+			default_time = 15.2
 		"cutlass_overhaul":
 			default_time = 10.4
 		"skull_bluff":
@@ -433,12 +444,30 @@ func _mount_landmark_lanterns(inst: Node3D, register_island: Island) -> void:
 			light.omni_range = 18.0
 			light.omni_attenuation = 1.25
 			amp = 0.16
+		elif m_name.begins_with("Lantern_CalderaShrine"):
+			light.light_color = Color(1.0, 0.38, 0.08)
+			light.light_energy = 5.8
+			light.omni_range = 22.0
+			light.omni_attenuation = 1.25
+			amp = 0.22
 		elif m_name.begins_with("Lantern_MagmaArch") or m_name.begins_with("Lantern_Magma"):
 			light.light_color = Color(1.0, 0.42, 0.10)
 			light.light_energy = 5.4
 			light.omni_range = 20.0
 			light.omni_attenuation = 1.25
 			amp = 0.20
+		elif m_name.begins_with("Lantern_Camp"):
+			light.light_color = Color(1.0, 0.70, 0.28)
+			light.light_energy = 4.0
+			light.omni_range = 16.0
+			light.omni_attenuation = 1.30
+			amp = 0.18
+		elif m_name.begins_with("Lantern_Stern"):
+			light.light_color = Color(1.0, 0.76, 0.34)
+			light.light_energy = 3.8
+			light.omni_range = 16.0
+			light.omni_attenuation = 1.30
+			amp = 0.16
 		elif m_name.begins_with("Lantern_Rowboat") or m_name.begins_with("Lantern_Gallows") \
 				or m_name.begins_with("Lantern_Brazier") or m_name.begins_with("Lantern_Watchpost"):
 			light.light_color = Color(1.0, 0.72, 0.30)
@@ -596,7 +625,8 @@ func _rebuild_gallery_for_shot() -> void:
 	if _gallery_root == null:
 		return
 	var is_gallery := _shot == "gallery_geology" or _shot == "gallery_setpieces" \
-			or _shot == "gallery_storytelling" or _shot == "gallery_skyline"
+			or _shot == "gallery_storytelling" or _shot == "gallery_skyline" \
+			or _shot == "gallery_coastal"
 	_gallery_root.visible = is_gallery
 	if not is_gallery:
 		return
@@ -609,8 +639,72 @@ func _rebuild_gallery_for_shot() -> void:
 		_layout_storytelling_gallery()
 	elif _shot == "gallery_skyline":
 		_layout_skyline_gallery()
+	elif _shot == "gallery_coastal":
+		_layout_coastal_gallery()
 	else:
 		_layout_setpieces_gallery()
+
+
+func _layout_coastal_gallery() -> void:
+	# Stage Wave I-5 coastal, reef & volcanic caldera landmarks cleanly on the sunlit sandbar.
+	var items: Array[Dictionary] = []
+	var total_span := 0.0
+	var gap := 4.6
+	for i in COASTAL_GLBS.size():
+		var fn := COASTAL_GLBS[i]
+		var inst := _spawn_landmark(fn, _gallery_root, "Coastal_%02d" % i, Transform3D.IDENTITY, null, true)
+		if inst == null:
+			continue
+		var bb := _compute_visual_aabb(inst)
+		var footprint_w := clampf(maxf(bb.size.x, bb.size.z * 0.78), 6.0, 24.0)
+		items.append({"node": inst, "aabb": bb, "width": footprint_w, "file": fn})
+		total_span += footprint_w
+	if items.is_empty():
+		_gallery_bounds = AABB(Vector3(-24.0, 0.0, -10.0), Vector3(48.0, 14.0, 20.0))
+		return
+	total_span += gap * float(maxi(0, items.size() - 1))
+
+	var cursor_x := -total_span * 0.5
+	var bounds := AABB()
+	var has_bounds := false
+	for i in items.size():
+		var entry: Dictionary = items[i]
+		var inst := entry["node"] as Node3D
+		var bb: AABB = entry["aabb"]
+		var w := float(entry["width"])
+		var fn := String(entry["file"])
+		var cx := cursor_x + w * 0.5
+		cursor_x += w + gap
+
+		var t_norm := cx / maxf(total_span * 0.5, 1.0)
+		var cz := -4.4 + t_norm * t_norm * 4.4
+		if fn == "giant_tidal_coral_arch.glb":
+			cz += 1.6
+		elif fn == "pirate_camp_canopy.glb":
+			cz += 2.0
+		var ground_y := _sandbar_y(cx, cz) - 0.12
+		var yaw := PI - t_norm * 0.24
+		if fn == "sunken_galleon_stern.glb":
+			yaw += 0.34
+		elif fn == "pirate_camp_canopy.glb":
+			yaw -= 0.20
+		var center_off := Vector3(bb.get_center().x, 0.0, bb.get_center().z)
+		var rot := Basis(Vector3.UP, yaw)
+		var pos := Vector3(cx, ground_y, cz) - rot * center_off
+		inst.transform = Transform3D(rot, pos)
+
+		var local_bb := _compute_visual_aabb(inst)
+		for ci in 8:
+			var pt := inst.transform * local_bb.get_endpoint(ci)
+			pt.y = maxf(pt.y, 0.0)
+			if not has_bounds:
+				bounds = AABB(pt, Vector3.ZERO)
+				has_bounds = true
+			else:
+				bounds = bounds.expand(pt)
+
+	if has_bounds:
+		_gallery_bounds = bounds
 
 
 func _layout_skyline_gallery() -> void:
@@ -1068,7 +1162,7 @@ func _update_camera() -> void:
 		return
 
 	match _shot:
-		"gallery_geology", "gallery_setpieces", "gallery_storytelling", "gallery_skyline":
+		"gallery_geology", "gallery_setpieces", "gallery_storytelling", "gallery_skyline", "gallery_coastal":
 			var ctr := GALLERY_ORIGIN + _gallery_bounds.get_center()
 			var span_x := maxf(_gallery_bounds.size.x, 30.0)
 			var span_y := maxf(_gallery_bounds.size.y, 10.0)
