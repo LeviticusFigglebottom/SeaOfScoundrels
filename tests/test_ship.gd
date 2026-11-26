@@ -1002,6 +1002,160 @@ func test_sculpted_bow_hull_crest_medallions_liveries_and_teardown() -> void:
 			"HullCrest releases static _sloop_mesh, _brig_mesh, and _frame_mat caches on teardown")
 
 
+func test_sculpted_cannonball_ordnance_variants_and_fort_battery_zero_primitives() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+
+	# 1. Verify all 3 Cannonball ordnance variants (both explicit & auto-detected from hull_damage_radius)!
+	var b_iron := Cannonball.new()
+	b_iron.enable_effects = false
+	b_iron.hull_damage_radius = 0.45
+	_root.add_child(b_iron)
+	b_iron.global_position = Vector3(0.0, 20.0, 0.0)
+
+	var b_heavy := Cannonball.new()
+	b_heavy.enable_effects = false
+	b_heavy.hull_damage_radius = 0.45 * 1.25  # Auto-detects &"heavy" from cannon_heavy_shot sidegrade!
+	_root.add_child(b_heavy)
+	b_heavy.global_position = Vector3(2.0, 20.0, 0.0)
+
+	var b_swivel := Cannonball.new()
+	b_swivel.enable_effects = false
+	b_swivel.hull_damage_radius = 0.45 * 0.85  # Auto-detects &"swivel" from cannon_quick_swivel sidegrade!
+	_root.add_child(b_swivel)
+	b_swivel.global_position = Vector3(4.0, 20.0, 0.0)
+
+	var b_explicit_heavy := Cannonball.new()
+	b_explicit_heavy.enable_effects = false
+	b_explicit_heavy.ordnance_style = &"heavy"
+	b_explicit_heavy.hull_damage_radius = 0.45
+	_root.add_child(b_explicit_heavy)
+	b_explicit_heavy.global_position = Vector3(6.0, 20.0, 0.0)
+	await physics_frames(2)
+
+	check_eq(b_iron.get_resolved_ordnance_style(), &"iron", "default radius 0.45 resolves to &'iron'")
+	check_eq(b_heavy.get_resolved_ordnance_style(), &"heavy", "heavy sidegrade radius >= 0.52 auto-detects &'heavy'")
+	check_eq(b_swivel.get_resolved_ordnance_style(), &"swivel", "swivel sidegrade radius <= 0.40 auto-detects &'swivel'")
+	check_eq(b_explicit_heavy.get_resolved_ordnance_style(), &"heavy", "explicit ordnance_style=&'heavy' honored")
+
+	var tri_counts := {}
+	var widths := {}
+	for spec: Array in [[b_iron, "iron", 1], [b_heavy, "heavy", 2], [b_swivel, "swivel", 1]]:
+		var cb := spec[0] as Cannonball
+		var lbl := String(spec[1])
+		var exp_surfs := int(spec[2])
+		var mi := cb.get_node_or_null(^"IronBall") as MeshInstance3D
+		check(mi != null and mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"Cannonball %s uses sculpted ArrayMesh (zero SphereMesh/PrimitiveMesh)" % lbl)
+		if mi != null and mi.mesh is ArrayMesh:
+			var am := mi.mesh as ArrayMesh
+			check_eq(am.get_surface_count(), exp_surfs, "Cannonball %s surface count == %d" % [lbl, exp_surfs])
+			var tris := 0
+			var bad_norms := 0
+			var srgb_missing := 0
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_norms += 1
+				var mat := mi.get_surface_override_material(si) as StandardMaterial3D
+				if mat != null and mat.vertex_color_use_as_albedo and not mat.vertex_color_is_srgb:
+					srgb_missing += 1
+			tri_counts[lbl] = tris
+			widths[lbl] = am.get_aabb().size.x
+			check(tris >= 120, "Cannonball %s has sculpted multi-facet detail (%d >= 120 tris)" % [lbl, tris])
+			check_eq(bad_norms, 0, "Cannonball %s normals are all finite unit vectors" % lbl)
+			check_eq(srgb_missing, 0, "Cannonball %s materials enable vertex_color_is_srgb" % lbl)
+
+	check(float(widths["swivel"]) < float(widths["iron"]) and float(widths["iron"]) < float(widths["heavy"]),
+		"Ordnance silhouette sizes scale distinctly: swivel (%.3f) < iron (%.3f) < heavy (%.3f)" % [
+			float(widths["swivel"]), float(widths["iron"]), float(widths["heavy"])])
+	check(b_swivel.trail.width < b_iron.trail.width and b_iron.trail.width < b_heavy.trail.width,
+		"Trail3D widths scale distinctly: swivel < iron < heavy")
+	var heavy_mi := b_heavy.get_node(^"IronBall") as MeshInstance3D
+	var heavy_glow_mat := heavy_mi.get_surface_override_material(1) as StandardMaterial3D
+	check(heavy_glow_mat != null and heavy_glow_mat.emission_enabled and heavy_glow_mat.emission_energy_multiplier >= 2.0,
+		"Heavy culverin shot features glowing orange-gold core seams (surface 1)")
+
+	# 2. Verify sculpted jagged oak plank splinter ArrayMesh (ZERO BoxMesh!).
+	var spl_mesh: Mesh = Cannonball.get_splinter_mesh()
+	check(spl_mesh != null and spl_mesh is ArrayMesh and not (spl_mesh is PrimitiveMesh),
+		"Cannonball hull splinter uses sculpted ArrayMesh (zero BoxMesh)")
+	var spl_tris := 0
+	var spl_bad_n := 0
+	if spl_mesh is ArrayMesh:
+		var spl_am := spl_mesh as ArrayMesh
+		var arr := spl_am.surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		spl_tris = floori(float(verts.size()) / 3.0)
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				spl_bad_n += 1
+		var spl_mat := spl_am.surface_get_material(0) as StandardMaterial3D
+		check(spl_mat != null and spl_mat.vertex_color_use_as_albedo and spl_mat.vertex_color_is_srgb,
+			"Oak plank splinter material enables sRGB vertex colors (honey oak vs dark bark)")
+	check(spl_tris >= 40, "Oak plank splinter has sculpted tapered jagged geometry (%d >= 40 tris)" % spl_tris)
+	check_eq(spl_bad_n, 0, "Oak plank splinter normals are all finite unit vectors")
+
+	# 3. Verify FortBattery uses ZERO SphereMesh/PrimitiveMesh on PrimingFuseSpark & IronShot_0..3!
+	var bat := FortBattery.new()
+	bat.enable_effects = false
+	_root.add_child(bat)
+	bat.global_position = Vector3(12.0, 2.0, 0.0)
+	await physics_frames(2)
+
+	var bat_prims := 0
+	var bat_bad_n := 0
+	var fuse_tris := 0
+	var shot_tris := 0
+	var shot_count := 0
+	for n in bat.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			bat_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				var t := floori(float(verts.size()) / 3.0)
+				if mi.name == &"PrimingFuseSpark":
+					fuse_tris += t
+				elif String(mi.name).begins_with("IronShot_"):
+					shot_count += 1
+					if shot_tris == 0:
+						shot_tris = t
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bat_bad_n += 1
+	check_eq(bat_prims, 0, "FortBattery contains ZERO SphereMesh/BoxMesh/PrimitiveMesh instances")
+	check_eq(bat_bad_n, 0, "FortBattery sculpted meshes have all finite unit normals")
+	check_eq(shot_count, 4, "FortBattery stacks 4 sculpted coastal iron shot balls")
+	check(fuse_tris >= 24, "FortBattery PrimingFuseSpark uses sculpted diamond crystal (%d >= 24 tris)" % fuse_tris)
+	check(shot_tris >= 120, "FortBattery coastal IronShot uses sculpted hammered iron mesh (%d >= 120 tris)" % shot_tris)
+	print("    Ordnance & Fort sculpted tris: iron=%d, heavy=%d, swivel=%d, splinter=%d, fort_fuse=%d, fort_shot=%d" % [
+		int(tri_counts["iron"]), int(tri_counts["heavy"]), int(tri_counts["swivel"]), spl_tris, fuse_tris, shot_tris])
+
+	# 4. Clean 0-leak teardown releases ALL static caches on both Cannonball and FortBattery!
+	spl_mesh = null
+	await _end()
+	check_eq(Cannonball._active_cannonballs, 0, "Cannonball _active_cannonballs returns to 0 on teardown")
+	check(Cannonball._ball_meshes.is_empty() and Cannonball._splinter_mesh == null and Cannonball._splinter_mat == null,
+		"Cannonball releases all static ordnance & splinter caches on teardown")
+	check_eq(FortBattery._active_batteries, 0, "FortBattery _active_batteries returns to 0 on teardown")
+	check(FortBattery._fuse_spark_mesh == null and FortBattery._coastal_shot_mesh == null \
+		and FortBattery._coastal_shot_mat == null,
+		"FortBattery releases all static fuse spark & coastal shot caches on teardown")
+
+
+
 
 
 

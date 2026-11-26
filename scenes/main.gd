@@ -3125,14 +3125,15 @@ func _apply_hero_shot(mode: String) -> void:
 					ch_node.visible = false
 
 			var deck_y := 1.25 if is_brig else 1.10
-			var cap_loc := Vector3(-0.74, deck_y, -0.75)
-			var foe1_loc := Vector3(0.74, deck_y, -0.75)
-			var crew_loc := Vector3(-1.55, deck_y, -2.10)
-			var foe2_loc := Vector3(1.55, deck_y, -2.35)
-			var clash_loc := Vector3(0.0, deck_y + 1.18, -0.75)
+			# Completely open flat solid planked waist AFT of the mainmast (zero mast, zero hatch, zero bell occlusion!).
+			var cap_loc := Vector3(-0.68, deck_y, 1.68) if is_brig else Vector3(-0.66, deck_y, 1.15)
+			var foe1_loc := Vector3(0.68, deck_y, 1.68) if is_brig else Vector3(0.66, deck_y, 1.15)
+			var foe2_loc := Vector3(-1.45, deck_y, 0.05) if is_brig else Vector3(-1.25, deck_y, -0.35)
+			var crew_loc := Vector3(1.68, deck_y, 0.25) if is_brig else Vector3(1.38, deck_y, -0.25)
+			var clash_loc := Vector3(0.0, deck_y + 1.18, cap_loc.z)
 			_shot_duel_clash_local = clash_loc
 
-			# Captain on open main deck facing starboard (+X) in active mid-slash (slash_2).
+			# Captain on open solid waist facing starboard (+X) in active mid-slash (slash_2).
 			if player_pawn != null:
 				player_pawn.board(player_ship, cap_loc)
 				var cap_to_foe := (player_ship.global_transform * foe1_loc) - (player_ship.global_transform * cap_loc)
@@ -3157,7 +3158,7 @@ func _apply_hero_shot(mode: String) -> void:
 					f1_cc.set_blocking(true)
 					f1_cc._play_anim(&"block", 4.0)
 
-			# Barnaby (crew_pawns[0]) in Royal-Azure coat charging toward the duel with cutlass raised!
+			# Barnaby (crew_pawns[0]) in Royal-Azure coat charging cleanly from starboard-fore!
 			if not crew_pawns.is_empty() and crew_pawns[0] != null and is_instance_valid(crew_pawns[0]):
 				var barnaby := crew_pawns[0]
 				barnaby.board(player_ship, crew_loc)
@@ -3171,7 +3172,7 @@ func _apply_hero_shot(mode: String) -> void:
 					b_cc.equip_weapon(&"cutlass")
 					b_cc._play_anim(&"heavy", 4.0)
 
-			# Staggered Corsair Raider cleanly visible in open deck space with spinning golden StaggerStars!
+			# Staggered Corsair Raider cleanly visible in open port-fore corridor with spinning golden StaggerStars!
 			var foe2 := _spawn_enemy_pawn(&"corsair_raider", player_ship.global_transform * foe2_loc)
 			if foe2 != null:
 				foe2.board(player_ship, foe2_loc)
@@ -3191,7 +3192,7 @@ func _apply_hero_shot(mode: String) -> void:
 			clash_glow.shadow_enabled = false
 			player_ship.add_child(clash_glow)
 
-			# Fire dual fiery steel sparks + drifting CombatEmbers + optional golden slash crescent right at the blades!
+			# Fire dual fiery steel sparks + drifting CombatEmbers + golden slash crescent right at the crossed blades!
 			var clash_world := player_ship.global_transform * clash_loc
 			if player_combat != null:
 				player_combat._spawn_clash_vfx(clash_world, &"parried")
@@ -3200,21 +3201,21 @@ func _apply_hero_shot(mode: String) -> void:
 					player_combat.call(&"spawn_showcase_slash_arc", clash_world, player_ship.global_basis * Basis(Vector3.UP, 0.35), &"heavy", true)
 			_shot_duel_spark_timer = 0.42
 
-			# Unobstructed main-deck action camera framing both clashing captains, StaggerStars, Barnaby & billowing mainsail!
-			var cam_duel := Vector3(-1.85, deck_y + 1.25, 1.95)
-			var look_duel := Vector3(0.12, deck_y + 1.38, -1.65)
-			_enable_ship_track_shot(cam_duel, look_duel, 56.0)
+			# Zero-occlusion quarterdeck-edge camera looking straight forward down the sunlit waist!
+			var cam_duel := Vector3(-0.82, deck_y + 1.52, 4.35) if is_brig else Vector3(-0.62, deck_y + 1.48, 3.25)
+			var look_duel := Vector3(0.05, deck_y + 1.18, 0.80) if is_brig else Vector3(0.02, deck_y + 1.24, 0.15)
+			_enable_ship_track_shot(cam_duel, look_duel, 58.0)
 
 		"whale_breach":
 			# Golden-hour sunset open-sea showcase: sailing Brigantine/Sloop left-foreground + monumental 14 m Humpback Whale
-			# soaring out of exploding white spray curtain 21.5 m off the starboard bow!
+			# soaring in full-length broadside profile out of exploding spray curtain 21.5 m off the starboard bow!
 			Weather.time_of_day = 17.55 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.08, 10.8, -0.38, 0.0, 0.38)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.22)
 			_place_sailing_ship(Vector3(64.0, 0.0, -205.0), -0.38, 0.94, 5.2)
 			var whale_pos := player_ship.global_transform * Vector3(11.5, 0.0, -19.5)
 			whale_pos.y = Sea.height(whale_pos.x, whale_pos.z)
-			var whale := _spawn_whale_breach(whale_pos, player_ship.rotation.y - 0.52)
+			var whale := _spawn_whale_breach(whale_pos, player_ship.rotation.y - 1.28)
 			if whale != null and whale.has_method(&"force_breach_apex"):
 				whale.call(&"force_breach_apex")
 			_enable_ship_track_shot(Vector3(1.5 * sc, 4.0 * sc, 13.8 * sc), Vector3(6.2 * sc, 4.6 * sc, -10.0 * sc), 52.0)

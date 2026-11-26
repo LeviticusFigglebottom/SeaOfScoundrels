@@ -1372,3 +1372,106 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	await get_tree().process_frame
 
 
+func test_cargo_hazard_vfx_and_zero_primitive_doubloons_digsite() -> void:
+	Net.start_single_player()
+	var holder := Node3D.new()
+	holder.name = "Wave22BTestHolder"
+	add_child(holder)
+
+	# 1. Cursed Weeping Bilge Chest spawns WeepingDrips GPUParticles3D with WeakRef-cached sculpted teardrop ArrayMesh.
+	var weep_a := TreasureCatalog.create_treasure_carryable(&"weeping_bilge_chest", Vector3(0.0, 0.0, 0.0))
+	var weep_b := TreasureCatalog.create_treasure_carryable(&"weeping_bilge_chest", Vector3(2.0, 0.0, 0.0))
+	holder.add_child(weep_a)
+	holder.add_child(weep_b)
+	var drips_a := weep_a.get_node(^"Visual").get_node_or_null(^"WeepingDrips") as GPUParticles3D
+	var drips_b := weep_b.get_node(^"Visual").get_node_or_null(^"WeepingDrips") as GPUParticles3D
+	check(drips_a != null and drips_a.emitting, "weeping_bilge_chest spawns emitting WeepingDrips GPUParticles3D")
+	check_eq(drips_a.amount, 10, "WeepingDrips spawns 10 glowing beads")
+	check_eq(drips_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "WeepingDrips disables shadows")
+	check(drips_a.draw_pass_1 is ArrayMesh and not (drips_a.draw_pass_1 is PrimitiveMesh),
+		"WeepingDrips uses sculpted teardrop ArrayMesh (zero PrimitiveMesh)")
+	check_eq(drips_a.draw_pass_1, drips_b.draw_pass_1, "WeepingDrips shares WeakRef-cached teardrop ArrayMesh")
+	var drop_tris := _count_mesh_triangles(drips_a.draw_pass_1)
+	check(drop_tris >= 24, "sculpted teardrop bead has faceted volume (%d tris)" % drop_tris)
+
+	# Non-cursed chests must NOT spawn WeepingDrips.
+	var plain := TreasureCatalog.create_treasure_carryable(&"wayfarer_chest", Vector3(4.0, 0.0, 0.0))
+	holder.add_child(plain)
+	check(plain.get_node(^"Visual").get_node_or_null(^"WeepingDrips") == null,
+		"non-cursed chest does not spawn WeepingDrips")
+
+	# 2. Fragile cargo visual distress activates below 0.85 integrity via apply_fragile_damage() / sync_fragile_visual().
+	var fragile := TreasureCatalog.create_treasure_carryable(&"spice_crate", Vector3(6.0, 0.0, 0.0))
+	holder.add_child(fragile)
+	check(fragile.get_node(^"Visual").get_node_or_null(^"FragileDistress") == null,
+		"intact fragile crate has no distress motes at 100% integrity")
+	var d_small := TreasureCatalog.apply_fragile_damage(fragile, 0.08)  # 0.92 >= 0.85
+	check(bool(d_small.get("damaged", false)) and not bool(fragile.get_meta(&"distress_active", false)),
+		"fragile cargo stays calm above 0.85 integrity")
+	var d_heavy := TreasureCatalog.apply_fragile_damage(fragile, 0.30)  # 0.62 < 0.85
+	check(bool(d_heavy.get("damaged", false)) and bool(fragile.get_meta(&"distress_active", false)),
+		"apply_fragile_damage() below 0.85 triggers fragile distress state")
+	var distress := fragile.get_node(^"Visual").get_node_or_null(^"FragileDistress") as GPUParticles3D
+	check(distress != null and distress.emitting and distress.visible,
+		"FragileDistress amber warning GPUParticles3D activates cleanly")
+	check(distress.draw_pass_1 is ArrayMesh and not (distress.draw_pass_1 is PrimitiveMesh),
+		"FragileDistress uses sculpted diamond ArrayMesh (zero PrimitiveMesh)")
+	var distress_tris := _count_mesh_triangles(distress.draw_pass_1)
+	check(distress_tris >= 16, "sculpted amber distress mote has faceted diamond form (%d tris)" % distress_tris)
+
+	# 3. MerchantStall uses statically cached sculpted Octagonal Embossed Spanish Doubloon ArrayMesh (zero CylinderMesh).
+	var stall_a := MerchantStall.new()
+	var stall_b := MerchantStall.new()
+	holder.add_child(stall_a)
+	holder.add_child(stall_b)
+	var coin_p_a := stall_a.get_node_or_null(^"GoldCoinBurst") as CPUParticles3D
+	var coin_p_b := stall_b.get_node_or_null(^"GoldCoinBurst") as CPUParticles3D
+	check(coin_p_a != null and coin_p_a.mesh is ArrayMesh and not (coin_p_a.mesh is PrimitiveMesh),
+		"MerchantStall GoldCoinBurst uses sculpted octagonal doubloon ArrayMesh (zero CylinderMesh)")
+	check_eq(coin_p_a.mesh, coin_p_b.mesh, "MerchantStalls share statically cached doubloon ArrayMesh")
+	var coin_mat := coin_p_a.material_override as StandardMaterial3D
+	check(coin_mat != null and coin_mat.vertex_color_use_as_albedo and coin_mat.vertex_color_is_srgb,
+		"MerchantStall doubloon uses sRGB vertex-colored gold PBR material")
+	var doubloon_tris := _count_mesh_triangles(coin_p_a.mesh)
+	check(doubloon_tris >= 80, "Octagonal Embossed Spanish Doubloon has chamfered rim & crown boss (%d tris)" % doubloon_tris)
+
+	# 4. DigSite uses statically cached sculpted Earth Clods & 4-Point Diamond Gold Sparkles (zero BoxMesh).
+	var site_a := DigSite.new()
+	var site_b := DigSite.new()
+	holder.add_child(site_a)
+	holder.add_child(site_b)
+	var dirt_a := site_a.get_node_or_null(^"DirtPuffParticles") as CPUParticles3D
+	var dirt_b := site_b.get_node_or_null(^"DirtPuffParticles") as CPUParticles3D
+	var gold_a := site_a.get_node_or_null(^"TreasureGlintParticles") as CPUParticles3D
+	var gold_b := site_b.get_node_or_null(^"TreasureGlintParticles") as CPUParticles3D
+	check(dirt_a != null and dirt_a.mesh is ArrayMesh and not (dirt_a.mesh is PrimitiveMesh),
+		"DigSite DirtPuffParticles uses sculpted Earth Clod ArrayMesh (zero BoxMesh)")
+	check(gold_a != null and gold_a.mesh is ArrayMesh and not (gold_a.mesh is PrimitiveMesh),
+		"DigSite TreasureGlintParticles uses sculpted 4-Point Diamond Gold Sparkle ArrayMesh (zero BoxMesh)")
+	check_eq(dirt_a.mesh, dirt_b.mesh, "DigSites share statically cached earth clod ArrayMesh")
+	check_eq(gold_a.mesh, gold_b.mesh, "DigSites share statically cached gold sparkle ArrayMesh")
+	var clod_mat := dirt_a.material_override as StandardMaterial3D
+	var spark_mat := gold_a.material_override as StandardMaterial3D
+	check(clod_mat != null and clod_mat.vertex_color_is_srgb, "DigSite clod uses sRGB vertex color material")
+	check(spark_mat != null and spark_mat.vertex_color_is_srgb, "DigSite sparkle uses sRGB vertex color material")
+	var clod_tris := _count_mesh_triangles(dirt_a.mesh)
+	var spark_tris := _count_mesh_triangles(gold_a.mesh)
+	check(clod_tris >= 24 and spark_tris >= 16,
+		"DigSite sculpted particle tris (clod=%d, sparkle=%d)" % [clod_tris, spark_tris])
+	print("    Wave 22B sculpted particle meshes: WeepingDroplet=%d, FragileMote=%d, SpanishDoubloon=%d, EarthClod=%d, GoldSparkle=%d tris" % [
+		drop_tris, distress_tris, doubloon_tris, clod_tris, spark_tris])
+
+	# 5. Clean zero-leak teardown releases all static caches cleanly to null!
+	holder.queue_free()
+	await physics_frames(3)
+	TreasureCatalog.clear_mesh_cache()
+	check_eq(MerchantStall._active_stalls, 0, "all MerchantStalls exited cleanly")
+	check(MerchantStall._doubloon_mesh == null and MerchantStall._doubloon_mat == null,
+		"MerchantStall releases static doubloon cache cleanly to null")
+	check_eq(DigSite._active_dig_sites, 0, "all DigSites exited cleanly")
+	check(DigSite._clod_mesh == null and DigSite._clod_mat == null \
+			and DigSite._sparkle_mesh == null and DigSite._sparkle_mat == null,
+		"DigSite releases static clod & sparkle caches cleanly to null")
+
+
+

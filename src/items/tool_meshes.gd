@@ -201,6 +201,102 @@ static func set_spyglass_extension(spy_node: Node3D, ext_01: float) -> void:
 		tubes.position.z = -clampf(ext_01, 0.0, 1.0) * 0.16
 
 
+## Apply visible 3D first-person/third-person styling for Economy `tool_variant` sidegrades
+## (`tool_far_spyglass`/`tool_gilded_spyglass`, `tool_relic_shovel`/`tool_master_shovel`,
+## `tool_heavy_bailer`/`tool_cooper_bucket`), or reset cleanly to standard visuals when `variant_id == &""`.
+static func apply_tool_variant_visual(item_id: StringName, node: Node3D, variant_id: StringName) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var is_far_spyglass := variant_id == &"tool_far_spyglass" or variant_id == &"tool_gilded_spyglass"
+	var is_relic_shovel := variant_id == &"tool_relic_shovel" or variant_id == &"tool_master_shovel"
+	var is_heavy_bailer := variant_id == &"tool_heavy_bailer" or variant_id == &"tool_cooper_bucket"
+	var applied := &""
+
+	match item_id:
+		&"spyglass":
+			var tubes := node.get_node_or_null(^"DrawTubes") as Node3D
+			var eyepiece := node.get_node_or_null(^"BrassEyepiece") as MeshInstance3D
+			var brass_tubes := tubes.get_node_or_null(^"TelescopingBrass") as MeshInstance3D if tubes != null else null
+			var lens := tubes.get_node_or_null(^"ObjectiveLens") as MeshInstance3D if tubes != null else null
+			var accent_ring := tubes.get_node_or_null(^"VariantAccentRing") as MeshInstance3D if tubes != null else null
+			if is_far_spyglass:
+				applied = variant_id
+				if tubes != null:
+					tubes.scale = Vector3(1.0, 1.0, 1.22)
+				if eyepiece != null:
+					eyepiece.material_override = _make_mat(COL_GOLD_BRIGHT, 0.18, 0.94)
+				if brass_tubes != null:
+					brass_tubes.material_override = _make_mat(COL_GOLD_BRIGHT, 0.16, 0.95)
+				if lens != null:
+					lens.material_override = _make_mat(Color(0.18, 0.56, 0.96, 0.80), 0.06, 0.25, Color(0.14, 0.54, 0.98), 0.65, true)
+				if tubes != null:
+					if accent_ring == null:
+						var rot_z := Basis(Vector3.RIGHT, -PI * 0.5)
+						var ring_mesh := _lathe_mesh([
+							Vector2(0.036, 0.432),
+							Vector2(0.046, 0.436),
+							Vector2(0.046, 0.456),
+							Vector2(0.038, 0.458),
+						], 16, Transform3D(rot_z, Vector3.ZERO))
+						accent_ring = _make_mesh_node("VariantAccentRing", ring_mesh,
+							_make_mat(Color(0.16, 0.54, 0.95), 0.14, 0.82, Color(0.12, 0.48, 0.92), 0.55))
+						tubes.add_child(accent_ring)
+					accent_ring.visible = true
+			else:
+				if tubes != null:
+					tubes.scale = Vector3.ONE
+				if eyepiece != null:
+					eyepiece.material_override = _make_mat(COL_BRASS, 0.24, 0.88)
+				if brass_tubes != null:
+					brass_tubes.material_override = _make_mat(COL_BRASS, 0.22, 0.90)
+				if lens != null:
+					lens.material_override = _make_mat(COL_LENS, 0.08, 0.25, Color(0.12, 0.26, 0.40), 0.25, true)
+				if accent_ring != null:
+					accent_ring.visible = false
+
+		&"shovel":
+			var blade := node.get_node_or_null(^"SpadeBlade") as MeshInstance3D
+			var runic_band := node.get_node_or_null(^"VariantRunicBand") as MeshInstance3D
+			if is_relic_shovel:
+				applied = variant_id
+				if blade != null:
+					blade.material_override = _make_mat(Color(0.84, 0.64, 0.24), 0.26, 0.88)
+				if runic_band == null:
+					var band_mesh := _lathe_mesh([
+						Vector2(0.025, 0.305),
+						Vector2(0.032, 0.312),
+						Vector2(0.032, 0.376),
+						Vector2(0.025, 0.384),
+					], 12)
+					runic_band = _make_mesh_node("VariantRunicBand", band_mesh,
+						_make_mat(Color(0.14, 0.88, 0.72), 0.20, 0.35, Color(0.14, 0.92, 0.76), 1.45))
+					node.add_child(runic_band)
+				runic_band.visible = true
+			else:
+				if blade != null:
+					blade.material_override = _make_mat(COL_IRON, 0.44, 0.76)
+				if runic_band != null:
+					runic_band.visible = false
+
+		&"bucket":
+			var staves := node.get_node_or_null(^"OakStaves") as Node3D
+			var bands := node.get_node_or_null(^"IronBands") as MeshInstance3D
+			var water := node.get_node_or_null(^"WaterFill") as Node3D
+			var target_scale := Vector3(1.16, 1.06, 1.16) if is_heavy_bailer else Vector3.ONE
+			if is_heavy_bailer:
+				applied = variant_id
+			for child_n: Node3D in [staves, bands, water]:
+				if child_n != null:
+					child_n.scale = target_scale
+			if bands != null:
+				if is_heavy_bailer:
+					bands.material_override = _make_mat(Color(0.32, 0.34, 0.39), 0.20, 0.92)
+				else:
+					bands.material_override = _make_mat(COL_IRON, 0.46, 0.74)
+
+	node.set_meta(&"tool_variant_id", applied)
+
+
 # ==============================================================================
 # Individual tool builders
 # ==============================================================================

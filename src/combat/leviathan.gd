@@ -187,7 +187,24 @@ var _spray_tex: ImageTexture = null
 var _spray_mat: StandardMaterial3D = null
 var _seg_body_meshes: Array[ArrayMesh] = []
 var _seg_vein_meshes: Array[ArrayMesh] = []
+var _eye_meshes: Array[MeshInstance3D] = []
 var _active_bursts: Array[GPUParticles3D] = []
+
+static var _active_leviathans: int = 0
+static var _eye_rim_mesh: ArrayMesh = null
+static var _eye_iris_mesh: ArrayMesh = null
+static var _eye_pupil_mesh: ArrayMesh = null
+
+
+## Release statically cached sculpted Leviathan eye meshes cleanly.
+static func clear_shared_cache() -> void:
+	_eye_rim_mesh = null
+	_eye_iris_mesh = null
+	_eye_pupil_mesh = null
+
+
+func _enter_tree() -> void:
+	_active_leviathans += 1
 
 
 func _ready() -> void:
@@ -216,6 +233,11 @@ func _exit_tree() -> void:
 				remove_child(p)
 			p.queue_free()
 	_active_bursts.clear()
+	for emi in _eye_meshes:
+		if emi != null and is_instance_valid(emi):
+			emi.mesh = null
+			emi.material_override = null
+	_eye_meshes.clear()
 	if _ink_mat != null:
 		_ink_mat.set_shader_parameter(&"foam_tex", null)
 		_ink_mat = null
@@ -231,6 +253,9 @@ func _exit_tree() -> void:
 	_eye_rim_mat = null
 	_seg_body_meshes.clear()
 	_seg_vein_meshes.clear()
+	_active_leviathans = maxi(0, _active_leviathans - 1)
+	if _active_leviathans == 0:
+		clear_shared_cache()
 
 
 ## Return 0..1 telegraph/windup intensity for tentacle `index`.
@@ -1010,26 +1035,44 @@ func _build_crown() -> void:
 	beak_inst.material_override = beak_mat
 	_crown_root.add_child(beak_inst)
 
-	# 4. Pair of glowing amber-aqua abyssal eyes nestled beneath the brow ridges.
+	# 4. Pair of 100% sculpted flat-faceted abyssal kraken eyes nestled beneath the brow ridges.
+	if _eye_rim_mesh == null:
+		_eye_rim_mesh = _build_eye_socket_rim_mesh()
+	if _eye_iris_mesh == null:
+		_eye_iris_mesh = _build_eye_iris_dome_mesh()
+	if _eye_pupil_mesh == null:
+		_eye_pupil_mesh = _build_eye_slit_pupil_mesh()
+
 	_eye_iris_mat = StandardMaterial3D.new()
-	_eye_iris_mat.albedo_color = COL_EYE_AMBER
+	_eye_iris_mat.albedo_color = Color.WHITE
+	_eye_iris_mat.vertex_color_use_as_albedo = true
+	_eye_iris_mat.vertex_color_is_srgb = true
 	_eye_iris_mat.roughness = 0.14
+	_eye_iris_mat.clearcoat_enabled = true
+	_eye_iris_mat.clearcoat = 0.85
 	_eye_iris_mat.emission_enabled = true
 	_eye_iris_mat.emission = COL_EYE_AMBER
-	_eye_iris_mat.emission_energy_multiplier = 3.6
+	_eye_iris_mat.emission_energy_multiplier = 3.2
 
 	_eye_rim_mat = StandardMaterial3D.new()
-	_eye_rim_mat.albedo_color = COL_EYE_AQUA
-	_eye_rim_mat.roughness = 0.18
+	_eye_rim_mat.albedo_color = Color.WHITE
+	_eye_rim_mat.vertex_color_use_as_albedo = true
+	_eye_rim_mat.vertex_color_is_srgb = true
+	_eye_rim_mat.roughness = 0.24
+	_eye_rim_mat.metallic = 0.14
+	_eye_rim_mat.clearcoat_enabled = true
+	_eye_rim_mat.clearcoat = 0.65
 	_eye_rim_mat.emission_enabled = true
 	_eye_rim_mat.emission = COL_EYE_AQUA
-	_eye_rim_mat.emission_energy_multiplier = 2.8
+	_eye_rim_mat.emission_energy_multiplier = 1.4
 
 	var pupil_mat := StandardMaterial3D.new()
-	pupil_mat.albedo_color = Color(0.015, 0.012, 0.025)
-	pupil_mat.roughness = 0.10
+	pupil_mat.albedo_color = Color.WHITE
+	pupil_mat.vertex_color_use_as_albedo = true
+	pupil_mat.vertex_color_is_srgb = true
+	pupil_mat.roughness = 0.08
 	pupil_mat.clearcoat_enabled = true
-	pupil_mat.clearcoat = 0.90
+	pupil_mat.clearcoat = 0.95
 
 	for side_i in 2:
 		var sx := -1.0 if side_i == 0 else 1.0
@@ -1039,42 +1082,31 @@ func _build_crown() -> void:
 		eye_pivot.rotation_degrees = Vector3(-6.0, -sx * 32.0, 0.0)
 		_crown_root.add_child(eye_pivot)
 
-		# Glowing aqua bioluminescent outer sclera collar.
-		var rim_mesh := SphereMesh.new()
-		rim_mesh.radius = 0.42
-		rim_mesh.height = 0.84
-		rim_mesh.radial_segments = 14
-		rim_mesh.rings = 8
+		# Sculpted 12-segment flanged armored kraken eye-socket bezel.
 		var rim_inst := MeshInstance3D.new()
 		rim_inst.name = "AquaRim"
-		rim_inst.mesh = rim_mesh
-		rim_inst.scale = Vector3(1.12, 0.82, 0.62)
+		rim_inst.mesh = _eye_rim_mesh
 		rim_inst.material_override = _eye_rim_mat
 		eye_pivot.add_child(rim_inst)
+		_eye_meshes.append(rim_inst)
 
-		# Fiery glowing amber-gold inner iris dome.
-		var iris_mesh := SphereMesh.new()
-		iris_mesh.radius = 0.31
-		iris_mesh.height = 0.62
-		iris_mesh.radial_segments = 14
-		iris_mesh.rings = 8
+		# Sculpted 12-segment faceted convex crystal cat-iris dome.
 		var iris_inst := MeshInstance3D.new()
 		iris_inst.name = "AmberIris"
-		iris_inst.mesh = iris_mesh
-		iris_inst.position = Vector3(0.0, 0.0, -0.10)
-		iris_inst.scale = Vector3(1.02, 0.78, 0.66)
+		iris_inst.mesh = _eye_iris_mesh
+		iris_inst.position = Vector3(0.0, 0.0, -0.08)
 		iris_inst.material_override = _eye_iris_mat
 		eye_pivot.add_child(iris_inst)
+		_eye_meshes.append(iris_inst)
 
-		# Vertical predatory obsidian slit pupil.
-		var pupil_mesh := BoxMesh.new()
-		pupil_mesh.size = Vector3(0.085, 0.44, 0.08)
+		# Sculpted tapered 6-facet vertical abyssal diamond-slit pupil lens.
 		var pupil_inst := MeshInstance3D.new()
 		pupil_inst.name = "SlitPupil"
-		pupil_inst.mesh = pupil_mesh
+		pupil_inst.mesh = _eye_pupil_mesh
 		pupil_inst.position = Vector3(0.0, 0.0, -0.29)
 		pupil_inst.material_override = pupil_mat
 		eye_pivot.add_child(pupil_inst)
+		_eye_meshes.append(pupil_inst)
 
 	# 5. Glowing cyan-aqua temple veins sweeping back behind the eyes.
 	_crown_vein_mat = _make_vein_material()
@@ -1084,6 +1116,202 @@ func _build_crown() -> void:
 	crown_vein_inst.material_override = _crown_vein_mat
 	crown_vein_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_crown_root.add_child(crown_vein_inst)
+
+
+static func _build_eye_socket_rim_mesh() -> ArrayMesh:
+	# 12-segment flanged hexagonal-oval ridged armored kraken eye-socket bezel facing -Z.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 12
+	var col_chitin_dark := Color(0.045, 0.115, 0.150)
+	var col_chitin_mid := Color(0.085, 0.215, 0.255)
+	var col_aqua_inner := COL_EYE_AQUA
+
+	# 4 profile rings from rear socket mount -> outer armored ridge -> front flanged lip -> inner glowing sclera rim.
+	var prof: Array[Array] = [
+		[0.54, 0.42, 0.14, col_chitin_dark],
+		[0.50, 0.39, -0.05, col_chitin_mid],
+		[0.42, 0.33, -0.17, col_chitin_mid.lerp(col_aqua_inner, 0.45)],
+		[0.31, 0.24, -0.10, col_aqua_inner],
+	]
+	var rings: Array[Array] = []
+	var cols: Array[Array] = []
+	for pi in prof.size():
+		var row: Array = prof[pi]
+		var rx := float(row[0])
+		var ry := float(row[1])
+		var z0 := float(row[2])
+		var base_c: Color = row[3] as Color
+		var ring: Array[Vector3] = []
+		var rcols: Array[Color] = []
+		for k in SEGS:
+			var a := float(k) / float(SEGS) * TAU
+			var ca := cos(a)
+			var sa := sin(a)
+			# Hexagonal-oval armor flanging + heavier overhanging upper brow hood (sa > 0).
+			var ridge := 1.0 + 0.085 * cos(a * 6.0)
+			var brow := 0.08 * maxf(sa, 0.0) if (pi == 1 or pi == 2) else 0.0
+			var z_hood := -0.07 * maxf(sa, 0.0) if pi == 2 else 0.0
+			ring.append(Vector3(ca * rx * ridge, sa * ry * ridge + brow, z0 + z_hood))
+			var c := base_c.lightened(0.08) if (k % 2 == 0 and pi == 1) else base_c
+			rcols.append(c)
+		rings.append(ring)
+		cols.append(rcols)
+
+	var center_ref := Vector3(0.0, 0.0, 0.18)
+	for pi in range(rings.size() - 1):
+		var r0: Array = rings[pi]
+		var r1: Array = rings[pi + 1]
+		var c0: Array = cols[pi]
+		var c1: Array = cols[pi + 1]
+		for k in SEGS:
+			var nk := (k + 1) % SEGS
+			_emit_eye_quad(st, r0[k] as Vector3, r1[k] as Vector3, r1[nk] as Vector3, r0[nk] as Vector3,
+				center_ref, c0[k] as Color, c1[k] as Color, c1[nk] as Color, c0[nk] as Color)
+
+	# Close back of socket cleanly so there are zero open seams.
+	var back_c := Vector3(0.0, 0.0, 0.18)
+	var r_back: Array = rings[0]
+	var c_back: Array = cols[0]
+	for k in SEGS:
+		var nk := (k + 1) % SEGS
+		_emit_eye_tri(st, back_c, r_back[nk] as Vector3, r_back[k] as Vector3, Vector3(0.0, 0.0, -0.10),
+			col_chitin_dark, c_back[nk] as Color, c_back[k] as Color)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_eye_iris_dome_mesh() -> ArrayMesh:
+	# 12-segment faceted convex crystal eyeball dome glowing fierce amber-gold to aqua rim!
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 12
+	var col_core := Color(1.00, 0.86, 0.24)
+	var col_mid := COL_EYE_AMBER
+	var col_edge := COL_EYE_AMBER.lerp(COL_EYE_AQUA, 0.55)
+	var col_rim := COL_EYE_AQUA
+
+	# Latitudinal rings from outer back equator toward convex front apex (-Z).
+	var rings_spec: Array[Array] = [
+		[0.33, 0.255, 0.04, col_rim],
+		[0.31, 0.240, -0.07, col_edge],
+		[0.24, 0.185, -0.16, col_mid],
+		[0.13, 0.105, -0.21, col_core],
+	]
+	var rings: Array[Array] = []
+	var rcols: Array[Color] = []
+	for spec in rings_spec:
+		var rx := float(spec[0])
+		var ry := float(spec[1])
+		var z := float(spec[2])
+		var ring: Array[Vector3] = []
+		for k in SEGS:
+			var a := float(k) / float(SEGS) * TAU
+			ring.append(Vector3(cos(a) * rx, sin(a) * ry, z))
+		rings.append(ring)
+		rcols.append(spec[3] as Color)
+
+	var ctr := Vector3(0.0, 0.0, 0.06)
+	for ri in range(rings.size() - 1):
+		var r0: Array = rings[ri]
+		var r1: Array = rings[ri + 1]
+		var c0 := rcols[ri]
+		var c1 := rcols[ri + 1]
+		for k in SEGS:
+			var nk := (k + 1) % SEGS
+			_emit_eye_quad(st, r0[k] as Vector3, r1[k] as Vector3, r1[nk] as Vector3, r0[nk] as Vector3,
+				ctr, c0, c1, c1, c0)
+
+	var front_apex := Vector3(0.0, 0.0, -0.232)
+	var r_front: Array = rings[rings.size() - 1]
+	for k in SEGS:
+		var nk := (k + 1) % SEGS
+		_emit_eye_tri(st, front_apex, r_front[k] as Vector3, r_front[nk] as Vector3, ctr, col_core, col_core, col_core)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_eye_slit_pupil_mesh() -> ArrayMesh:
+	# Tapered 6-facet vertical abyssal diamond-slit lens protruding cleanly in front of the iris!
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_void := Color(0.014, 0.012, 0.024)
+	var col_edge := Color(0.045, 0.032, 0.072)
+
+	var top_pt := Vector3(0.0, 0.225, 0.048)
+	var bot_pt := Vector3(0.0, -0.225, 0.048)
+	# Upper, mid, and lower 6-facet curved vertical slit cross-sections hugging the convex dome!
+	var stations: Array[Array] = [
+		[0.125, 0.028, -0.020, 0.035],
+		[0.000, 0.044, -0.038, 0.028],
+		[-0.125, 0.028, -0.020, 0.035],
+	]
+	var rings: Array[Array] = []
+	for s in stations:
+		var y := float(s[0])
+		var hw := float(s[1])
+		var zf := float(s[2])
+		var zb := float(s[3])
+		var zm := lerpf(zf, zb, 0.45)
+		rings.append([
+			Vector3(0.0, y, zf),
+			Vector3(hw, y, zm),
+			Vector3(hw * 0.65, y, zb),
+			Vector3(0.0, y, zb + 0.012),
+			Vector3(-hw * 0.65, y, zb),
+			Vector3(-hw, y, zm),
+		])
+
+	var ctr := Vector3(0.0, 0.0, 0.015)
+	for ri in range(rings.size() - 1):
+		var r0: Array = rings[ri]
+		var r1: Array = rings[ri + 1]
+		for k in 6:
+			var nk := (k + 1) % 6
+			var c := col_void if (k == 0 or k == 5) else col_edge
+			_emit_eye_quad(st, r0[k] as Vector3, r1[k] as Vector3, r1[nk] as Vector3, r0[nk] as Vector3, ctr, c, c, c, c)
+
+	var r_top: Array = rings[0]
+	var r_bot: Array = rings[rings.size() - 1]
+	for k in 6:
+		var nk := (k + 1) % 6
+		_emit_eye_tri(st, top_pt, r_top[nk] as Vector3, r_top[k] as Vector3, ctr, col_edge, col_void, col_void)
+		_emit_eye_tri(st, bot_pt, r_bot[k] as Vector3, r_bot[nk] as Vector3, ctr, col_edge, col_void, col_void)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _emit_eye_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_emit_eye_tri(st, a, b, c, ref_center, ca, cb, cc)
+	_emit_eye_tri(st, a, c, d, ref_center, ca, cc, cd)
+
+
+static func _emit_eye_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)
 
 
 func _build_crown_mantle_mesh() -> ArrayMesh:

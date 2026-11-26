@@ -171,3 +171,107 @@ func test_leviathan_bioluminescent_telegraph_and_spray_teardown() -> void:
 	root.queue_free()
 	await physics_frames(2)
 	check(not is_instance_valid(lev), "Leviathan with active spray bursts frees cleanly with zero errors")
+
+
+func test_leviathan_and_enemy_powder_vfx_zero_primitives() -> void:
+	Net.start_single_player()
+	Sea.amp_scale = 0.0
+	var root := Node3D.new()
+	add_child(root)
+
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	root.add_child(ship)
+
+	var lev := Leviathan.new()
+	lev.target_ship = ship
+	root.add_child(lev)
+	await physics_frames(2)
+
+	# 1. Walk EVERY MeshInstance3D under Leviathan (including AbyssalCrown eyes): strictly 0 PrimitiveMeshes!
+	var mesh_nodes := lev.find_children("*", "MeshInstance3D", true, false)
+	check(mesh_nodes.size() >= 10, "Leviathan builds full crown, eye & tentacle mesh hierarchy (%d)" % mesh_nodes.size())
+	var raw_prims := 0
+	var bad_normals := 0
+	for n in mesh_nodes:
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		check(am != null, "Leviathan mesh '%s' uses sculpted ArrayMesh" % mi.name)
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+	check_eq(raw_prims, 0, "Leviathan contains zero raw PrimitiveMeshes (no SphereMesh/BoxMesh)")
+	check_eq(bad_normals, 0, "all sculpted Leviathan normals are finite unit vectors")
+
+	var crown := lev.get_crown_node()
+	var eye_l := crown.get_node_or_null(^"EyeLeft") if crown != null else null
+	var rim_tris := 0
+	var iris_tris := 0
+	var pupil_tris := 0
+	if eye_l != null:
+		for part_name: String in ["AquaRim", "AmberIris", "SlitPupil"]:
+			var emi := eye_l.get_node_or_null(NodePath(part_name)) as MeshInstance3D
+			check(emi != null and emi.mesh is ArrayMesh, "Leviathan eye '%s' uses sculpted ArrayMesh" % part_name)
+			if emi != null:
+				var mat := emi.material_override as StandardMaterial3D
+				check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+					"Leviathan eye '%s' uses sRGB vertex-colored material" % part_name)
+				var am := emi.mesh as ArrayMesh
+				var tris := floori(float((am.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3.0)
+				if part_name == "AquaRim":
+					rim_tris = tris
+				elif part_name == "AmberIris":
+					iris_tris = tris
+				else:
+					pupil_tris = tris
+
+	# 2. Verify EnemyBrain powder-keg blast shrapnel uses sculpted Jagged Charred Barrel-Stave ArrayMesh (0 BoxMesh)!
+	var enemy_pawn := EnemyBrain.spawn_enemy(&"drowned_powder", Vector3.ZERO, root)
+	var brain := enemy_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	brain._spawn_keg_explosion_vfx(Vector3(0.0, 1.0, 0.0))
+
+	var blast_fx := root.get_node_or_null(^"KegExplosionVFX") as Node3D
+	check(blast_fx != null, "EnemyBrain spawns KegExplosionVFX")
+	var shards := blast_fx.get_node_or_null(^"BarrelShards") as GPUParticles3D if blast_fx != null else null
+	check(shards != null, "KegExplosionVFX contains BarrelShards GPUParticles3D")
+	var shard_tris := 0
+	if shards != null:
+		check(shards.draw_pass_1 is ArrayMesh and not (shards.draw_pass_1 is PrimitiveMesh),
+			"BarrelShards uses sculpted ArrayMesh (zero BoxMesh)")
+		var sh_mat := shards.material_override as StandardMaterial3D
+		check(sh_mat != null and sh_mat.vertex_color_use_as_albedo and sh_mat.vertex_color_is_srgb,
+			"BarrelShards uses sRGB vertex-colored charred oak & iron material")
+		if shards.draw_pass_1 is ArrayMesh:
+			var sam := shards.draw_pass_1 as ArrayMesh
+			var arr := sam.surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			shard_tris = floori(float(verts.size()) / 3.0)
+			var bad_sn := 0
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_sn += 1
+			check_eq(bad_sn, 0, "BarrelShards sculpted normals are all finite unit vectors")
+			check(shard_tris >= 36, "BarrelShards sculpted stave + hoop has rich faceted geometry (%d tris)" % shard_tris)
+
+	print("    Wave 22C sculpted tris: AquaRim=%d, AmberIris=%d, SlitPupil=%d, BarrelShards=%d" % [
+		rim_tris, iris_tris, pupil_tris, shard_tris])
+
+	# 3. Clean teardown releases ALL static caches to null with zero leaks!
+	root.queue_free()
+	await physics_frames(2)
+	check_eq(Leviathan._active_leviathans, 0, "all Leviathans exited tree")
+	check(Leviathan._eye_rim_mesh == null and Leviathan._eye_iris_mesh == null and Leviathan._eye_pupil_mesh == null,
+		"Leviathan releases static sculpted eye mesh caches cleanly to null")
+	check_eq(EnemyBrain._active_brains, 0, "all EnemyBrains exited tree")
+	check(EnemyBrain._barrel_shard_mesh == null and EnemyBrain._barrel_shard_mat == null,
+		"EnemyBrain releases static barrel-stave shard mesh & material caches cleanly to null")
+

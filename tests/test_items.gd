@@ -1315,6 +1315,112 @@ func test_spyglass_whale_manta_and_helm_sailing_telemetry_pill() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 12. Wave 22D: 3D Tool Variants, Lantern Beacon Flare/Signal & Sculpted Dirt VFX
+# ---------------------------------------------------------------------------
+
+func test_tool_variant_3d_visuals_lantern_signal_and_zero_primitive_shovel() -> void:
+	_begin()
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var inv: Inventory = rig["inv"]
+
+	# 1. Zero-primitive sculpted earth-clod shovel VFX (zero SphereMesh in Inventory!).
+	var inv_src := FileAccess.get_file_as_string("res://src/items/inventory.gd")
+	check(not inv_src.contains("SphereMesh.new"), "src/items/inventory.gd contains zero raw SphereMesh.new() placeholders")
+	var dirt_vfx := inv.spawn_shovel_dirt_vfx(Vector3(0.0, 1.0, -1.0))
+	check(dirt_vfx != null and dirt_vfx.mesh is ArrayMesh and not (dirt_vfx.mesh is PrimitiveMesh),
+		"shovel dirt VFX uses sculpted flat-faceted ArrayMesh (zero SphereMesh)")
+	if dirt_vfx != null and dirt_vfx.mesh is ArrayMesh:
+		var cmat := (dirt_vfx.mesh as ArrayMesh).surface_get_material(0) as StandardMaterial3D
+		check(cmat != null and cmat.vertex_color_use_as_albedo and cmat.vertex_color_is_srgb,
+			"shovel clod material enables vertex_color_use_as_albedo and vertex_color_is_srgb")
+	if dirt_vfx != null:
+		dirt_vfx.queue_free()
+
+	# 2. Interactive Lantern RMB Beacon Flare & LMB Mariner's Signal Flash!
+	inv.equip(&"lantern", true)
+	inv.lantern_lit = true
+	await get_tree().process_frame
+	var light := inv.fp_tool_node.get_node_or_null(^"LanternLight") as OmniLight3D
+	check(light != null, "equipped Lantern exposes LanternLight OmniLight3D")
+	inv._tick_lantern_flicker(0.1)
+	var rest_energy := light.light_energy if light != null else 0.0
+	var rest_range := light.omni_range if light != null else 0.0
+	check(not inv.is_lantern_beacon_flared(), "lantern starts un-flared while lowered")
+
+	# Raise lantern with RMB -> flares energy (~2.4 -> ~4.3) and range (12 -> 22 m)!
+	inv.set_secondary_held(true)
+	check(inv.is_lantern_beacon_flared(), "holding RMB activates is_lantern_beacon_flared()")
+	for _i in 20:
+		inv._tick_lantern_flicker(0.05)
+	check(light != null and light.light_energy > rest_energy + 1.1 and light.omni_range > rest_range + 7.5,
+		"RMB beacon flare boosts lantern light energy (%.2f -> %.2f) and range (%.1f -> %.1f)" % [
+			rest_energy, light.light_energy, rest_range, light.omni_range])
+
+	# LMB while raising triggers Mariner's Signal Flash (energy ~6.5, emits lantern_signaled, respects 2.5 s cooldown)!
+	var signal_positions: Array[Vector3] = []
+	inv.lantern_signaled.connect(func(wp: Vector3) -> void: signal_positions.append(wp))
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	var ok_sig: Variant = inv.use_primary()
+	check_eq(bool(ok_sig), true, "LMB while raising lit Lantern triggers Mariner's Signal Flash")
+	check_eq(signal_positions.size(), 1, "lantern_signaled emits once")
+	check(notices.has("Lantern signal flashed across the water!"), "signal flash posts water signal notice")
+	check(light != null and light.light_energy >= 6.0,
+		"momentary signal flash boosts lantern energy to ~6.5 (got %.2f)" % (light.light_energy if light != null else 0.0))
+	check(inv.lantern_lit, "LMB signal flash keeps raised lantern lit instead of turning it off")
+	check_eq(bool(inv.trigger_lantern_signal()), false, "signal flash obeys 2.5 s anti-spam cooldown")
+	inv.set_secondary_held(false)
+	Game.notice.disconnect(notice_cb)
+
+	# 3. Visible 3D first-person tool_variant visuals & clean reset on &"".
+	# 3a. Far-Spyglass: elongated DrawTubes + sculpted azure-sapphire VariantAccentRing.
+	inv.equip(&"spyglass", true)
+	inv.apply_tool_modifiers({"tool_variant_id": &"tool_far_spyglass", "spyglass_zoom_scale": 0.72})
+	var tubes := inv.fp_tool_node.get_node_or_null(^"DrawTubes") as Node3D
+	var ring := tubes.get_node_or_null(^"VariantAccentRing") as MeshInstance3D if tubes != null else null
+	check(tubes != null and is_equal_approx(tubes.scale.z, 1.22), "tool_far_spyglass elongates DrawTubes.scale.z to 1.22")
+	check(ring != null and ring.visible and ring.mesh is ArrayMesh and not (ring.mesh is PrimitiveMesh),
+		"tool_far_spyglass attaches visible sculpted ArrayMesh VariantAccentRing")
+	inv.apply_tool_modifiers({"tool_variant_id": &""})
+	check(tubes != null and tubes.scale.is_equal_approx(Vector3.ONE) and ring != null and not ring.visible,
+		"clearing tool_variant resets Spyglass draw-tubes & hides VariantAccentRing")
+
+	# 3b. Relic Shovel: antique gold-bronze SpadeBlade + luminous jade-turquoise VariantRunicBand.
+	inv.equip(&"shovel", true)
+	inv.apply_tool_modifiers({"tool_variant_id": &"tool_relic_shovel", "dig_power": 2.0})
+	var blade := inv.fp_tool_node.get_node_or_null(^"SpadeBlade") as MeshInstance3D
+	var band := inv.fp_tool_node.get_node_or_null(^"VariantRunicBand") as MeshInstance3D
+	check(blade != null and (blade.material_override as StandardMaterial3D).albedo_color.r > 0.75,
+		"tool_relic_shovel accents SpadeBlade to burnished antique gold-bronze")
+	check(band != null and band.visible and band.mesh is ArrayMesh and not (band.mesh is PrimitiveMesh),
+		"tool_relic_shovel attaches luminous sculpted jade-turquoise VariantRunicBand")
+	inv.apply_tool_modifiers({"tool_variant_id": &""})
+	check(band != null and not band.visible and (blade.material_override as StandardMaterial3D).albedo_color.r < 0.35,
+		"clearing tool_variant restores standard iron SpadeBlade & hides VariantRunicBand")
+
+	# 3c. Heavy Bailer: widened OakStaves & reinforced gleaming IronBands.
+	inv.equip(&"bucket", true)
+	inv.apply_tool_modifiers({"tool_variant_id": &"tool_heavy_bailer", "bail_power_scale": 1.40})
+	var staves := inv.fp_tool_node.get_node_or_null(^"OakStaves") as Node3D
+	var bands := inv.fp_tool_node.get_node_or_null(^"IronBands") as MeshInstance3D
+	check(staves != null and staves.scale.is_equal_approx(Vector3(1.16, 1.06, 1.16)),
+		"tool_heavy_bailer widens bucket geometry to (1.16, 1.06, 1.16)")
+	check(bands != null and (bands.material_override as StandardMaterial3D).metallic >= 0.90,
+		"tool_heavy_bailer enhances IronBands forged-iron gleam")
+	inv.apply_tool_modifiers({"tool_variant_id": &""})
+	check(staves != null and staves.scale.is_equal_approx(Vector3.ONE),
+		"clearing tool_variant restores standard bucket scale")
+
+	# 4. Zero-leak teardown releases static sculpted clod/splash caches cleanly.
+	await _end()
+	check(Inventory._clod_mesh == null and Inventory._splash_drop_mesh == null,
+		"Inventory releases static sculpted particle mesh caches cleanly when last inventory exits tree")
+
+
+
 
 
 

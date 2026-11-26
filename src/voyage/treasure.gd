@@ -342,6 +342,12 @@ static func create_treasure_carryable(treasure_id: StringName,
 	visual.name = "Visual"
 	item.add_child(visual)
 
+	# Cursed flooding chests weep luminous turquoise-emerald sculpted droplets!
+	if bool(entry.get("cursed", false)) and float(entry.get("curse_flood_rate", 0.0)) > 0.0:
+		var drips := _build_weeping_drips_particles()
+		visual.add_child(drips)
+		item.tree_exiting.connect(_cleanup_hazard_particles.bind(drips), CONNECT_ONE_SHOT)
+
 	# Explicit Interactable so prompts are ready even before _ready() runs.
 	var handle := Interactable.create("Pick up %s" % entry["name"], 0.6)
 	handle.name = "Interactable"
@@ -394,11 +400,48 @@ static func damage_fragile_carryable(item: Node, damage: float) -> Dictionary:
 	var new_gold: int = compute_effective_value(base_gold, next_integrity, true)
 	item.set_meta(&"integrity", next_integrity)
 	item.set_meta(&"gold_value", new_gold)
+	sync_fragile_visual(item)
 	return {
 		"damaged": next_integrity < prev_integrity,
 		"integrity": next_integrity,
 		"gold_value": new_gold,
 	}
+
+
+## Alias for `damage_fragile_carryable()` applying fragile cargo wear and syncing visuals.
+static func apply_fragile_damage(item: Node, damage: float) -> Dictionary:
+	return damage_fragile_carryable(item, damage)
+
+
+## Sync visual distress indicator on fragile cargo when integrity drops below 0.85
+## (attaches a WeakRef-cached sculpted amber warning mote GPUParticles3D named `FragileDistress`).
+static func sync_fragile_visual(item: Node) -> void:
+	if item == null or not is_instance_valid(item):
+		return
+	if not bool(item.get_meta(&"fragile", false)):
+		return
+	var visual := item.get_node_or_null(^"Visual") as Node3D
+	if visual == null:
+		return
+	var integrity := clampf(float(item.get_meta(&"integrity", 1.0)), 0.0, 1.0)
+	var existing := visual.get_node_or_null(^"FragileDistress") as GPUParticles3D
+	if integrity >= 0.85:
+		item.set_meta(&"distress_active", false)
+		if existing != null:
+			existing.emitting = false
+			existing.visible = false
+		return
+
+	var severity := clampf((0.85 - integrity) / 0.85, 0.0, 1.0)
+	if existing == null:
+		existing = _build_fragile_distress_particles()
+		visual.add_child(existing)
+		item.tree_exiting.connect(_cleanup_hazard_particles.bind(existing), CONNECT_ONE_SHOT)
+	existing.amount_ratio = clampf(lerpf(0.35, 1.0, severity), 0.1, 1.0)
+	existing.visible = true
+	existing.emitting = true
+	item.set_meta(&"distress_active", true)
+	item.set_meta(&"distress_severity", severity)
 
 
 ## Apply impact damage when a fragile cargo item is dropped hard.
@@ -444,6 +487,7 @@ static func step_aboard_hazards(items: Array, ship: Node, delta: float) -> Dicti
 				var dmg := damage_fragile_carryable(node, FRAGILE_SUBMERGE_DECAY * delta)
 				if bool(dmg.get("damaged", false)):
 					result["damaged_count"] = int(result["damaged_count"]) + 1
+			sync_fragile_visual(node)
 
 		result["total_cargo_value"] = int(result["total_cargo_value"]) + int(node.get_meta(&"gold_value", 0))
 
@@ -460,6 +504,11 @@ static func step_aboard_hazards(items: Array, ship: Node, delta: float) -> Dicti
 		result["flood_added"] = flood_total
 
 	return result
+
+
+## Alias for `step_aboard_hazards()` ticking cursed bilge flooding and fragile cargo distress.
+static func tick_aboard_hazards(items: Array, ship: Node, delta: float) -> Dictionary:
+	return step_aboard_hazards(items, ship, delta)
 
 
 ## Release cached WeakRef entries for sculpted procedural treasure meshes & materials.
@@ -567,6 +616,155 @@ static func _commit_surface(mesh: ArrayMesh, st: SurfaceTool, mat: StandardMater
 	st.commit(mesh)
 	if mesh.get_surface_count() > surf_idx:
 		mesh.surface_set_material(surf_idx, mat)
+
+
+# ==============================================================================
+# Live Cargo Hazard VFX (Sculpted Teardrop Beads & Amber Distress Motes)
+# ==============================================================================
+
+static func _cleanup_hazard_particles(p: GPUParticles3D) -> void:
+	if p != null and is_instance_valid(p):
+		p.emitting = false
+		p.visible = false
+		p.draw_pass_1 = null
+		p.process_material = null
+
+
+static func _build_weeping_drips_particles() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "WeepingDrips"
+	p.amount = 10
+	p.lifetime = 0.85
+	p.emitting = true
+	p.local_coords = true
+	p.position = Vector3(0.0, 0.30, 0.0)
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-0.75, -0.55, -0.75), Vector3(1.50, 1.15, 1.50))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	proc.emission_box_extents = Vector3(0.32, 0.05, 0.22)
+	proc.direction = Vector3(0.0, -0.25, 0.0)
+	proc.spread = 85.0
+	proc.initial_velocity_min = 0.14
+	proc.initial_velocity_max = 0.34
+	proc.gravity = Vector3(0.0, -2.4, 0.0)
+	proc.scale_min = 0.72
+	proc.scale_max = 1.22
+	p.process_material = proc
+	p.draw_pass_1 = _get_weeping_droplet_mesh()
+	return p
+
+
+static func _build_fragile_distress_particles() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "FragileDistress"
+	p.amount = 8
+	p.lifetime = 0.90
+	p.emitting = false
+	p.visible = false
+	p.local_coords = true
+	p.position = Vector3(0.0, 0.42, 0.0)
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-0.60, -0.20, -0.60), Vector3(1.20, 1.10, 1.20))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	proc.emission_box_extents = Vector3(0.24, 0.08, 0.24)
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 38.0
+	proc.initial_velocity_min = 0.25
+	proc.initial_velocity_max = 0.52
+	proc.gravity = Vector3(0.0, 0.15, 0.0)
+	proc.scale_min = 0.70
+	proc.scale_max = 1.20
+	p.process_material = proc
+	p.draw_pass_1 = _get_distress_mote_mesh()
+	return p
+
+
+static func _get_weeping_droplet_mesh() -> ArrayMesh:
+	const KEY := "fx|weeping_droplet"
+	var cached := _get_cached_mesh(KEY)
+	if cached != null:
+		return cached
+
+	var mat := _get_fx_additive_mat(Color(0.24, 0.96, 0.86, 0.92), Color(0.24, 0.96, 0.86), 1.6)
+	var mesh := ArrayMesh.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Sculpted 6-sided faceted teardrop water bead (~0.048 m tall, pointed top & plump glowing drop base).
+	var c_tip := Color(0.74, 1.00, 0.96)
+	var c_mid := Color(0.28, 0.96, 0.86)
+	var c_bot := Color(0.10, 0.72, 0.68)
+	var stations: Array[Array] = [
+		[-0.020, 0.000, c_bot],
+		[-0.017, 0.014, c_bot],
+		[-0.006, 0.020, c_mid],
+		[0.009, 0.013, c_mid],
+		[0.026, 0.004, c_tip],
+		[0.032, 0.000, c_tip],
+	]
+	_add_lathe_y(st, stations, 6)
+	_commit_surface(mesh, st, mat)
+	_mesh_cache[KEY] = weakref(mesh)
+	return mesh
+
+
+static func _get_distress_mote_mesh() -> ArrayMesh:
+	const KEY := "fx|fragile_distress_mote"
+	var cached := _get_cached_mesh(KEY)
+	if cached != null:
+		return cached
+
+	var mat := _get_fx_additive_mat(Color(1.00, 0.64, 0.16, 0.94), Color(1.00, 0.56, 0.12), 1.55)
+	var mesh := ArrayMesh.new()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Sculpted 4-point faceted amber warning diamond mote (~0.056 m tall).
+	var c_core := Color(1.00, 0.94, 0.62)
+	var c_edge := Color(1.00, 0.54, 0.12)
+	var c_bot := Color(0.88, 0.24, 0.08)
+	var top_p := Vector3(0.0, 0.030, 0.0)
+	var bot_p := Vector3(0.0, -0.026, 0.0)
+	var ring: Array[Vector3] = []
+	for k in 8:
+		var a := float(k) / 8.0 * TAU
+		var r := 0.022 if k % 2 == 0 else 0.011
+		ring.append(Vector3(cos(a) * r, 0.0, sin(a) * r))
+	for k in 8:
+		var nk := (k + 1) % 8
+		_emit_outward_tri(st, top_p, c_core, ring[k], c_edge, ring[nk], c_edge, Vector3.ZERO)
+		_emit_outward_tri(st, bot_p, c_bot, ring[nk], c_edge, ring[k], c_edge, Vector3.ZERO)
+	_commit_surface(mesh, st, mat)
+	_mesh_cache[KEY] = weakref(mesh)
+	return mesh
+
+
+static func _get_fx_additive_mat(albedo_col: Color, emissive_col: Color,
+		emissive_energy: float) -> StandardMaterial3D:
+	var key := "fx_add|%s|%s|%.2f" % [albedo_col.to_html(true), emissive_col.to_html(false), emissive_energy]
+	if _mat_cache.has(key):
+		var wr: Variant = _mat_cache[key]
+		if wr is WeakRef:
+			var obj: Variant = (wr as WeakRef).get_ref()
+			if obj is StandardMaterial3D:
+				return obj as StandardMaterial3D
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.albedo_color = albedo_col
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.emission_enabled = true
+	mat.emission = emissive_col
+	mat.emission_energy_multiplier = emissive_energy
+	_mat_cache[key] = weakref(mat)
+	return mat
 
 
 # ==============================================================================

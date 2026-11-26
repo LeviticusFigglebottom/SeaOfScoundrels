@@ -157,6 +157,8 @@ static var _smoke_puff_tex: ImageTexture = null
 static var _streak_tex: ImageTexture = null
 static var _tide_vortex_shader: Shader = null
 static var _captain_rally_shader: Shader = null
+static var _barrel_shard_mesh: ArrayMesh = null
+static var _barrel_shard_mat: StandardMaterial3D = null
 
 
 func _init() -> void:
@@ -187,6 +189,8 @@ func _exit_tree() -> void:
 
 ## Release all statically cached EnemyBrain VFX meshes, materials, textures & shaders cleanly.
 static func clear_shared_vfx_cache() -> void:
+	if _barrel_shard_mesh != null and _barrel_shard_mesh.get_surface_count() > 0:
+		_barrel_shard_mesh.surface_set_material(0, null)
 	_stagger_stars_mesh = null
 	_stagger_stars_mat = null
 	_telegraph_mesh = null
@@ -196,6 +200,8 @@ static func clear_shared_vfx_cache() -> void:
 	_streak_tex = null
 	_tide_vortex_shader = null
 	_captain_rally_shader = null
+	_barrel_shard_mesh = null
+	_barrel_shard_mat = null
 
 
 func get_stagger_stars_node() -> MeshInstance3D:
@@ -717,6 +723,7 @@ static func _release_vfx_resources(node: Node) -> void:
 	if node is GPUParticles3D:
 		var gp := node as GPUParticles3D
 		gp.emitting = false
+		gp.material_override = null
 		gp.draw_pass_1 = null
 		gp.process_material = null
 	elif node is MeshInstance3D:
@@ -1078,16 +1085,8 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	sh_proc.scale_curve = _make_scale_curve([Vector2(0.0, 1.0), Vector2(0.72, 0.92), Vector2(1.0, 0.0)])
 	shards.process_material = sh_proc
 
-	var sh_box := BoxMesh.new()
-	sh_box.size = Vector3(0.08, 0.032, 0.42)
-	var sh_mat := StandardMaterial3D.new()
-	sh_mat.albedo_color = Color(0.26, 0.15, 0.08)
-	sh_mat.roughness = 0.88
-	sh_mat.emission_enabled = true
-	sh_mat.emission = Color(1.0, 0.36, 0.06)
-	sh_mat.emission_energy_multiplier = 0.75
-	sh_box.material = sh_mat
-	shards.draw_pass_1 = sh_box
+	shards.draw_pass_1 = _get_barrel_shard_mesh()
+	shards.material_override = _get_barrel_shard_material()
 	fx_root.add_child(shards)
 
 	host.add_child(fx_root)
@@ -1103,6 +1102,129 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 
 	_bind_vfx_lifecycle(fx_root, 1.60)
 	_track_vfx(fx_root)
+
+
+static func _get_barrel_shard_material() -> StandardMaterial3D:
+	if _barrel_shard_mat == null:
+		_barrel_shard_mat = StandardMaterial3D.new()
+		_barrel_shard_mat.albedo_color = Color.WHITE
+		_barrel_shard_mat.vertex_color_use_as_albedo = true
+		_barrel_shard_mat.vertex_color_is_srgb = true
+		_barrel_shard_mat.roughness = 0.84
+		_barrel_shard_mat.metallic = 0.18
+		_barrel_shard_mat.emission_enabled = true
+		_barrel_shard_mat.emission = Color(1.0, 0.34, 0.05)
+		_barrel_shard_mat.emission_energy_multiplier = 0.32
+	return _barrel_shard_mat
+
+
+static func _get_barrel_shard_mesh() -> ArrayMesh:
+	if _barrel_shard_mesh != null:
+		return _barrel_shard_mesh
+	# Sculpted flat-faceted Jagged Charred Barrel-Stave Shrapnel: curved broken oak stave
+	# with splintered ember tips and a ripped wrought-iron barrel hoop fragment!
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_oak := Color(0.36, 0.21, 0.10)
+	var col_char := Color(0.08, 0.06, 0.05)
+	var col_ember := Color(0.95, 0.34, 0.05)
+	var col_iron := Color(0.13, 0.13, 0.15)
+	var col_iron_hi := Color(0.22, 0.21, 0.23)
+
+	# 1. Curved tapered barrel stave body (5 stations along Z: -0.22 charred ember tip -> +0.22 splintered oak tip).
+	# [z, x_left, x_right, y_arch, half_thick, col]
+	var stave_rows: Array[Array] = [
+		[-0.22, -0.012, 0.022, -0.008, 0.007, col_ember],
+		[-0.12, -0.044, 0.046, 0.005, 0.014, col_char],
+		[0.00, -0.050, 0.050, 0.012, 0.016, col_oak],
+		[0.12, -0.042, 0.046, 0.004, 0.014, col_oak.darkened(0.18)],
+		[0.22, -0.026, 0.014, -0.008, 0.006, col_char],
+	]
+	var s_rings: Array[Array] = []
+	var s_cols: Array[Color] = []
+	for row in stave_rows:
+		var z := float(row[0])
+		var xl := float(row[1])
+		var xr := float(row[2])
+		var ya := float(row[3])
+		var ht := float(row[4])
+		s_rings.append([
+			Vector3(xl, ya + ht, z),
+			Vector3(xr, ya + ht, z),
+			Vector3(xr, ya - ht, z),
+			Vector3(xl, ya - ht, z),
+		])
+		s_cols.append(row[5] as Color)
+
+	for i in range(s_rings.size() - 1):
+		var r0: Array = s_rings[i]
+		var r1: Array = s_rings[i + 1]
+		var c0 := s_cols[i]
+		var c1 := s_cols[i + 1]
+		var ctr: Vector3 = ((r0[0] as Vector3) + (r0[2] as Vector3) + (r1[0] as Vector3) + (r1[2] as Vector3)) * 0.25
+		for k in 4:
+			var nk := (k + 1) % 4
+			_emit_shard_quad(st, r0[k] as Vector3, r1[k] as Vector3, r1[nk] as Vector3, r0[nk] as Vector3, ctr, c0, c1, c1, c0)
+
+	# Cap jagged splinter ends cleanly with pointed triangular tips!
+	var tip_front := Vector3(0.004, -0.010, -0.258)
+	var tip_back := Vector3(-0.008, -0.010, 0.255)
+	var rf: Array = s_rings[0]
+	var rb: Array = s_rings[s_rings.size() - 1]
+	for k in 4:
+		var nk := (k + 1) % 4
+		_emit_shard_tri(st, tip_front, rf[nk] as Vector3, rf[k] as Vector3, Vector3(0.0, 0.0, -0.12), col_ember, col_ember, col_ember)
+		_emit_shard_tri(st, tip_back, rb[k] as Vector3, rb[nk] as Vector3, Vector3(0.0, 0.0, 0.12), col_char, col_char, col_char)
+
+	# 2. Ripped bent wrought-iron barrel hoop strap clasping the stave mid-section!
+	var hz0 := -0.036
+	var hz1 := 0.028
+	var h_pts: Array[Vector3] = [
+		Vector3(-0.056, 0.032, hz0), Vector3(0.064, 0.036, hz0), Vector3(0.064, 0.022, hz0), Vector3(-0.056, 0.018, hz0),
+		Vector3(-0.056, 0.032, hz1), Vector3(0.064, 0.036, hz1), Vector3(0.064, 0.022, hz1), Vector3(-0.056, 0.018, hz1),
+	]
+	var h_ctr := Vector3(0.004, 0.027, -0.004)
+	_emit_shard_quad(st, h_pts[0], h_pts[1], h_pts[5], h_pts[4], h_ctr, col_iron_hi, col_iron_hi, col_iron_hi, col_iron_hi)
+	_emit_shard_quad(st, h_pts[3], h_pts[7], h_pts[6], h_pts[2], h_ctr, col_iron, col_iron, col_iron, col_iron)
+	_emit_shard_quad(st, h_pts[0], h_pts[4], h_pts[7], h_pts[3], h_ctr, col_iron, col_iron, col_iron, col_iron)
+	_emit_shard_quad(st, h_pts[1], h_pts[2], h_pts[6], h_pts[5], h_ctr, col_iron_hi, col_iron, col_iron, col_iron_hi)
+	_emit_shard_quad(st, h_pts[0], h_pts[3], h_pts[2], h_pts[1], h_ctr, col_iron, col_iron, col_iron, col_iron)
+	_emit_shard_quad(st, h_pts[4], h_pts[5], h_pts[6], h_pts[7], h_ctr, col_iron, col_iron, col_iron, col_iron)
+
+	st.generate_normals()
+	_barrel_shard_mesh = st.commit()
+	return _barrel_shard_mesh
+
+
+static func _emit_shard_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_emit_shard_tri(st, a, b, c, ref_center, ca, cb, cc)
+	_emit_shard_tri(st, a, c, d, ref_center, ca, cc, cd)
+
+
+static func _emit_shard_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)
 
 
 static func _on_tide_hazard_detonate(

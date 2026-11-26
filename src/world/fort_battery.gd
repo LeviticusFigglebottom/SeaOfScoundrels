@@ -75,6 +75,7 @@ var _fuse_mat: StandardMaterial3D = null
 var _fuse_light: OmniLight3D = null
 var _fuse_particles: GPUParticles3D = null
 var _smolder_particles: GPUParticles3D = null
+var _shot_meshes: Array[MeshInstance3D] = []
 var _spawned_vfx: Array[Node] = []
 
 var _aim_yaw: float = 0.0
@@ -86,9 +87,23 @@ var _damage_flash: float = 0.0
 var _clock: float = 0.0
 var _tracked_ship: Ship = null
 
+static var _active_batteries: int = 0
+static var _fuse_spark_mesh: ArrayMesh = null
+static var _coastal_shot_mesh: ArrayMesh = null
+static var _coastal_shot_mat: StandardMaterial3D = null
 static var _smoke_puff_tex: ImageTexture = null
 static var _spark_streak_tex: ImageTexture = null
 static var _flash_radial_tex: GradientTexture2D = null
+
+
+## Release all statically cached FortBattery sculpted meshes, materials, and VFX textures.
+static func clear_shared_cache() -> void:
+	_fuse_spark_mesh = null
+	_coastal_shot_mesh = null
+	_coastal_shot_mat = null
+	_smoke_puff_tex = null
+	_spark_streak_tex = null
+	_flash_radial_tex = null
 
 
 ## Physics hitbox proxy on layers 1 (world static) & 2 so ship cannonballs,
@@ -107,6 +122,7 @@ class BatteryHitbox:
 
 
 func _enter_tree() -> void:
+	_active_batteries += 1
 	add_to_group(GROUP)
 	add_to_group(&"combatants")
 
@@ -114,12 +130,37 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	if _fuse_particles != null and is_instance_valid(_fuse_particles):
 		_fuse_particles.emitting = false
+		_fuse_particles.draw_pass_1 = null
+		_fuse_particles.process_material = null
 	if _smolder_particles != null and is_instance_valid(_smolder_particles):
 		_smolder_particles.emitting = false
+		_smolder_particles.draw_pass_1 = null
+		_smolder_particles.process_material = null
+	if _fuse_orb != null and is_instance_valid(_fuse_orb):
+		_fuse_orb.material_override = null
+		_fuse_orb.mesh = null
+	_fuse_orb = null
+	for sm in _shot_meshes:
+		if sm != null and is_instance_valid(sm):
+			sm.material_override = null
+			sm.mesh = null
+	_shot_meshes.clear()
 	for fx in _spawned_vfx:
 		if fx != null and is_instance_valid(fx):
+			for child in fx.find_children("*", "GPUParticles3D", true, false):
+				var gp := child as GPUParticles3D
+				if gp != null:
+					gp.emitting = false
+					gp.draw_pass_1 = null
+					gp.process_material = null
 			fx.queue_free()
 	_spawned_vfx.clear()
+	_oak_mat = null
+	_iron_mat = null
+	_fuse_mat = null
+	_active_batteries = maxi(0, _active_batteries - 1)
+	if _active_batteries == 0:
+		clear_shared_cache()
 
 
 func _ready() -> void:
@@ -583,19 +624,16 @@ func _build_emplacement() -> void:
 func _build_telegraph_and_smolder_vfx() -> void:
 	_fuse_mat = StandardMaterial3D.new()
 	_fuse_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_fuse_mat.albedo_color = Color(1.0, 0.84, 0.34)
+	_fuse_mat.vertex_color_use_as_albedo = true
+	_fuse_mat.vertex_color_is_srgb = true
+	_fuse_mat.albedo_color = Color(1.0, 0.90, 0.52)
 	_fuse_mat.emission_enabled = true
 	_fuse_mat.emission = Color(1.0, 0.56, 0.12)
 	_fuse_mat.emission_energy_multiplier = 4.5
 
 	_fuse_orb = MeshInstance3D.new()
 	_fuse_orb.name = "PrimingFuseSpark"
-	var sph := SphereMesh.new()
-	sph.radius = 0.115
-	sph.height = 0.23
-	sph.radial_segments = 10
-	sph.rings = 5
-	_fuse_orb.mesh = sph
+	_fuse_orb.mesh = _get_fuse_spark_mesh()
 	_fuse_orb.material_override = _fuse_mat
 	_fuse_orb.position = BREECH_VENT_LOCAL + Vector3(0.0, 0.07, 0.0)
 	_fuse_orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -961,22 +999,17 @@ func _build_cannonball_stack() -> Node3D:
 		Vector3(cos(TAU * 2.0 / 3.0) * base_ring, ball_r, sin(TAU * 2.0 / 3.0) * base_ring),
 		Vector3(0.0, top_y, 0.0),
 	]
-	var sph := SphereMesh.new()
-	sph.radius = ball_r
-	sph.height = ball_r * 2.0
-	sph.radial_segments = 10
-	sph.rings = 6
-	var ball_mat := StandardMaterial3D.new()
-	ball_mat.albedo_color = Color(0.12, 0.125, 0.14)
-	ball_mat.metallic = 0.78
-	ball_mat.roughness = 0.38
+	var shot_mesh := _get_coastal_shot_mesh()
+	var ball_mat := _get_coastal_shot_mat()
 	for bi in ball_positions.size():
 		var bm := MeshInstance3D.new()
 		bm.name = "IronShot_%d" % bi
-		bm.mesh = sph
+		bm.mesh = shot_mesh
 		bm.material_override = ball_mat
 		bm.position = ball_positions[bi]
+		bm.rotation = Vector3(float(bi) * 0.45, float(bi) * 1.15, float(bi) * 0.25)
 		root.add_child(bm)
+		_shot_meshes.append(bm)
 
 	return root
 
@@ -1375,3 +1408,169 @@ static func _add_tube_segment(st: SurfaceTool, a: Vector3, b: Vector3, radius: f
 		_st_quad(st, a + off0, b + off0, b + off1, a + off1, c0, c0, c1, c1)
 		_st_tri(st, a, a + off0, a + off1, col_lo, c0, c1)
 		_st_tri(st, b, b + off1, b + off0, col_hi, c1, c0)
+
+
+# ============================================================ sculpted fuse spark & coastal iron shot caches
+
+static func _get_fuse_spark_mesh() -> ArrayMesh:
+	if _fuse_spark_mesh != null:
+		return _fuse_spark_mesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 6-facet blazing diamond fuse-ember crystal + 3 flaring cross-spark fins.
+	var sides := 6
+	var r_waist := 0.095
+	var y_top := 0.155
+	var y_bot := -0.095
+	var col_core := Color(1.0, 0.98, 0.84)
+	var col_gold := Color(1.0, 0.78, 0.28)
+	var col_ember := Color(0.96, 0.42, 0.10)
+
+	var top_p := Vector3(0.0, y_top, 0.0)
+	var bot_p := Vector3(0.0, y_bot, 0.0)
+	var waist: Array[Vector3] = []
+	for i in sides:
+		var ang := TAU * float(i) / float(sides)
+		var r_i := r_waist * (1.14 if i % 2 == 0 else 0.88)
+		waist.append(Vector3(cos(ang) * r_i, 0.012 if i % 2 == 0 else -0.008, sin(ang) * r_i))
+
+	for i in sides:
+		var i1 := (i + 1) % sides
+		_st_outward_tri(st, waist[i], waist[i1], top_p, Vector3.ZERO, col_gold, col_gold, col_core)
+		_st_outward_tri(st, waist[i1], waist[i], bot_p, Vector3.ZERO, col_gold, col_gold, col_ember)
+
+	# 3 slender flaring ember spark shards bursting around the diamond waist.
+	for k in 3:
+		var ang := TAU * float(k) / 3.0 + PI / 6.0
+		var dir := Vector3(cos(ang), 0.32, sin(ang)).normalized()
+		var side_v := dir.cross(Vector3.UP).normalized()
+		var up_v := side_v.cross(dir).normalized()
+		var b_ctr := dir * (r_waist * 0.55)
+		var tip := dir * (r_waist * 1.62)
+		var p0 := b_ctr + side_v * 0.024
+		var p1 := b_ctr + up_v * 0.024
+		var p2 := b_ctr - side_v * 0.024
+		var p3 := b_ctr - up_v * 0.024
+		_st_outward_tri(st, p0, p1, tip, Vector3.ZERO, col_gold, col_core, col_core)
+		_st_outward_tri(st, p1, p2, tip, Vector3.ZERO, col_core, col_gold, col_core)
+		_st_outward_tri(st, p2, p3, tip, Vector3.ZERO, col_gold, col_ember, col_core)
+		_st_outward_tri(st, p3, p0, tip, Vector3.ZERO, col_ember, col_gold, col_core)
+
+	st.generate_normals()
+	_fuse_spark_mesh = st.commit()
+	return _fuse_spark_mesh
+
+
+static func _get_coastal_shot_mat() -> StandardMaterial3D:
+	if _coastal_shot_mat != null:
+		return _coastal_shot_mat
+	_coastal_shot_mat = StandardMaterial3D.new()
+	_coastal_shot_mat.vertex_color_use_as_albedo = true
+	_coastal_shot_mat.vertex_color_is_srgb = true
+	_coastal_shot_mat.metallic = 0.78
+	_coastal_shot_mat.roughness = 0.38
+	return _coastal_shot_mat
+
+
+static func _get_coastal_shot_mesh() -> ArrayMesh:
+	if _coastal_shot_mesh != null:
+		return _coastal_shot_mesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Hammered flat-faceted coastal iron shot ball (r = 0.125 m) with raised equatorial casting seam.
+	var radius := 0.125
+	var segs := 12
+	var rings := 6
+	var col_hi := Color(0.28, 0.29, 0.33)
+	var col_mid := Color(0.15, 0.16, 0.19)
+	var col_lo := Color(0.08, 0.085, 0.105)
+	var col_seam := Color(0.32, 0.31, 0.32)
+
+	var grid: Array[Array] = []
+	for ri in range(rings + 1):
+		var phi := (float(ri) / float(rings)) * PI
+		var sy := cos(phi)
+		var sr := sin(phi)
+		var row: Array[Vector3] = []
+		for si in segs:
+			var theta := TAU * float(si) / float(segs)
+			var dir := Vector3(cos(theta) * sr, sy, sin(theta) * sr)
+			var dent := 1.0 + 0.032 * sin(theta * 3.0 + phi * 4.0 + 1.4) * cos(theta * 2.0 - phi * 3.0) * sr
+			row.append(dir * (radius * dent))
+		grid.append(row)
+
+	for ri in rings:
+		for si in segs:
+			var si1 := (si + 1) % segs
+			var p00: Vector3 = grid[ri][si] as Vector3
+			var p01: Vector3 = grid[ri][si1] as Vector3
+			var p10: Vector3 = grid[ri + 1][si] as Vector3
+			var p11: Vector3 = grid[ri + 1][si1] as Vector3
+			var avg_y := (p00.y + p01.y + p10.y + p11.y) * 0.25 / radius
+			var shade := clampf(0.5 + 0.5 * avg_y + 0.07 * sin(float(ri * 5 + si * 11)), 0.0, 1.0)
+			var fc := col_lo.lerp(col_mid, clampf(shade * 2.0, 0.0, 1.0)) if shade < 0.5 \
+				else col_mid.lerp(col_hi, clampf((shade - 0.5) * 2.0, 0.0, 1.0))
+			if ri == 0:
+				_st_outward_tri(st, p00, p11, p10, Vector3.ZERO, col_hi, fc, fc)
+			elif ri == rings - 1:
+				_st_outward_tri(st, p00, p01, p10, Vector3.ZERO, fc, fc, col_lo)
+			else:
+				_st_outward_quad(st, p00, p01, p11, p10, Vector3.ZERO, fc, fc, fc, fc)
+
+	# Raised beveled equatorial casting seam ridge around the coastal shot.
+	var r_in := radius * 0.99
+	var r_out := radius + 0.0085
+	var hh := 0.014
+	var hb := 0.008
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		var u0 := Vector3(cos(a0), 0.0, sin(a0))
+		var u1 := Vector3(cos(a1), 0.0, sin(a1))
+		var b0 := u0 * r_in + Vector3(0.0, -hh, 0.0)
+		var b1 := u1 * r_in + Vector3(0.0, -hh, 0.0)
+		var lo0 := u0 * r_out + Vector3(0.0, -hb, 0.0)
+		var lo1 := u1 * r_out + Vector3(0.0, -hb, 0.0)
+		var hi0 := u0 * r_out + Vector3(0.0, hb, 0.0)
+		var hi1 := u1 * r_out + Vector3(0.0, hb, 0.0)
+		var t0 := u0 * r_in + Vector3(0.0, hh, 0.0)
+		var t1 := u1 * r_in + Vector3(0.0, hh, 0.0)
+		_st_outward_quad(st, b0, b1, lo1, lo0, Vector3.ZERO, col_lo, col_lo, col_mid, col_mid)
+		_st_outward_quad(st, lo0, lo1, hi1, hi0, Vector3.ZERO, col_mid, col_mid, col_seam, col_seam)
+		_st_outward_quad(st, hi0, hi1, t1, t0, Vector3.ZERO, col_seam, col_seam, col_mid, col_mid)
+
+	st.generate_normals()
+	_coastal_shot_mesh = st.commit()
+	return _coastal_shot_mesh
+
+
+static func _st_outward_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_st_outward_tri(st, a, b, c, ref_center, ca, cb, cc)
+	_st_outward_tri(st, a, c, d, ref_center, ca, cc, cd)
+
+
+static func _st_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)

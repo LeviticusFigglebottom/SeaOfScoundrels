@@ -9,6 +9,7 @@ extends Node
 signal item_equipped(item_id: StringName)
 signal spyglass_zoom_changed(amount: float)
 signal lantern_toggled(on: bool)
+signal lantern_signaled(world_pos: Vector3)
 signal tipsy_changed(amount: float)
 signal sighting_updated(label: String, distance_m: float)
 signal spyglass_callout_made(label: String, distance_m: float, bearing: String, target_pos: Vector3)
@@ -50,6 +51,7 @@ const PLANK_REACH := 3.2
 const BAIL_AMOUNT := 0.16
 const GROG_HEAL := 15.0
 const SPYGLASS_CALLOUT_COOLDOWN := 2.5
+const LANTERN_SIGNAL_COOLDOWN := 2.5
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -114,6 +116,7 @@ var playing_shanty: bool = false
 var shanty_instrument: StringName = &"concertina"
 
 ## Tool Variant sidegrade modifiers synced from Economy via `apply_tool_modifiers()`.
+var tool_variant_id: StringName = &""
 var spyglass_zoom_scale: float = 1.0
 var sighting_range_scale: float = 1.0
 var dig_power: int = 1
@@ -147,6 +150,9 @@ var _sighting_timer: float = 0.0
 var _spyglass_callout_cd: float = 0.0
 var _spyglass_target_pos: Vector3 = Vector3.ZERO
 var _was_zooming_spyglass: bool = false
+var _lantern_flare_blend: float = 0.0
+var _lantern_signal_flash: float = 0.0
+var _lantern_signal_cd: float = 0.0
 var _started_shanty: bool = false
 var _shanty_phase: float = 0.0
 var _last_shanty_audio_beat: float = -1.0
@@ -154,10 +160,21 @@ var _whistle_rot_deg: Vector3 = Vector3.ZERO
 var _shanty_motes: GPUParticles3D = null
 var _rng := RandomNumberGenerator.new()
 
+# Statically cached zero-primitive sculpted particle ArrayMeshes (released when _active_inventories hits 0).
+static var _active_inventories: int = 0
+static var _clod_mesh: ArrayMesh = null
+static var _clod_mat: StandardMaterial3D = null
+static var _splash_drop_mesh: ArrayMesh = null
+static var _splash_drop_mat: StandardMaterial3D = null
+
 
 func _init() -> void:
 	# Run after PlayerController._process (0) so camera FOV and subtle tipsy sway layer cleanly.
 	process_priority = 10
+
+
+func _enter_tree() -> void:
+	_active_inventories += 1
 
 
 func _ready() -> void:
@@ -188,6 +205,18 @@ func apply_tool_modifiers(mods: Dictionary) -> void:
 	sighting_range_scale = clampf(float(mods.get("sighting_range_scale", 1.0)), 0.5, 2.5)
 	dig_power = clampi(roundi(float(mods.get("dig_power", 1.0))), 1, 3)
 	bail_power_scale = clampf(float(mods.get("bail_power_scale", 1.0)), 0.5, 2.5)
+	if mods.has("tool_variant_id"):
+		tool_variant_id = StringName(String(mods.get("tool_variant_id", &"")))
+	elif spyglass_zoom_scale < 0.90 or sighting_range_scale > 1.10:
+		tool_variant_id = &"tool_far_spyglass"
+	elif dig_power >= 2:
+		tool_variant_id = &"tool_relic_shovel"
+	elif bail_power_scale > 1.15:
+		tool_variant_id = &"tool_heavy_bailer"
+	else:
+		tool_variant_id = &""
+	_sync_tool_visual_state(fp_tool_node)
+	_sync_tool_visual_state(tp_tool_node)
 
 
 func _exit_tree() -> void:
@@ -195,6 +224,12 @@ func _exit_tree() -> void:
 	if playing_shanty:
 		set_playing_shanty(false)
 	treasure_map_texture = null
+	_active_inventories = maxi(0, _active_inventories - 1)
+	if _active_inventories == 0:
+		_clod_mesh = null
+		_clod_mat = null
+		_splash_drop_mesh = null
+		_splash_drop_mat = null
 
 
 ## Explicitly bind references if constructing dynamically before tree entry.
@@ -447,6 +482,7 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 			var needle := node.get_node_or_null(^"Needle") as Node3D
 			if needle != null:
 				needle.rotation.y = _needle_angle
+	ToolMeshes.apply_tool_variant_visual(active_item, node, tool_variant_id)
 
 
 # ==============================================================================
@@ -535,6 +571,8 @@ func use_primary() -> Variant:
 			_start_swing(&"slash", 0.34)
 			return true
 		&"lantern":
+			if lantern_lit and _secondary_held:
+				return trigger_lantern_signal()
 			return toggle_lantern()
 		&"shovel":
 			return use_shovel()
@@ -601,10 +639,51 @@ func use_heavy() -> bool:
 	return false
 
 
+## True while the held oil lantern is lit and raised/flared into bright beacon mode (RMB).
+func is_lantern_beacon_flared() -> bool:
+	return active_item == &"lantern" and lantern_lit and (_secondary_held or _lantern_flare_blend > 0.35)
+
+
+## Flash a bright Mariner's Signal beacon across the water (LMB while raising lit Lantern, 2.5 s cooldown).
+func trigger_lantern_signal() -> bool:
+	if active_item != &"lantern" or not lantern_lit:
+		return false
+	if _lantern_signal_cd > 0.0:
+		return false
+	_lantern_signal_cd = LANTERN_SIGNAL_COOLDOWN
+	_lantern_signal_flash = 1.0
+	_use_cooldown = 0.25
+	var world_pos := pawn.eye_position() if pawn != null else Vector3.ZERO
+	Audio.play_sfx(&"lantern_click", world_pos, -1.5)
+	_start_swing(&"click", 0.24)
+	_tick_lantern_flicker(0.0)
+	if Game != null:
+		Game.post_notice("Lantern signal flashed across the water!")
+	lantern_signaled.emit(world_pos)
+	if is_inside_tree():
+		var nearest_brain: CrewBrain = null
+		var best_d := INF
+		var my_pos := pawn.global_position if pawn != null else Vector3.ZERO
+		for node in get_tree().get_nodes_in_group(&"crew_brains"):
+			var br := node as CrewBrain
+			if br == null or not is_instance_valid(br) or br.pawn == null or br.pawn.dead:
+				continue
+			var d := my_pos.distance_to(br.pawn.global_position)
+			if d < best_d:
+				best_d = d
+				nearest_brain = br
+		if nearest_brain != null and nearest_brain.current_task == &"idle":
+			nearest_brain._speak(&"banter", {}, "lantern_signal", 6.0)
+	return true
+
+
 ## Toggle oil lantern flame & OmniLight3D on or off.
 func toggle_lantern() -> bool:
 	lantern_lit = not lantern_lit
 	_use_cooldown = 0.20
+	if not lantern_lit:
+		_lantern_flare_blend = 0.0
+		_lantern_signal_flash = 0.0
 	if active_item == &"lantern":
 		_sync_tool_visual_state(fp_tool_node)
 		_sync_tool_visual_state(tp_tool_node)
@@ -649,6 +728,7 @@ func use_shovel() -> Dictionary:
 		if flat.length() > 0.01:
 			var clamped := flat.limit_length(2.0)
 			strike_pos = Vector3(best_site.global_position.x + clamped.x, best_site.global_position.y, best_site.global_position.z + clamped.y)
+		spawn_shovel_dirt_vfx(strike_pos)
 		var strikes := maxi(1, dig_power)
 		var last_res: Dictionary = {}
 		for _si in strikes:
@@ -662,6 +742,7 @@ func use_shovel() -> Dictionary:
 			Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
 		return last_res
 
+	spawn_shovel_dirt_vfx(dig_origin)
 	Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
 	return {"hit": false, "reason": "no_dig_site"}
 
@@ -903,7 +984,7 @@ func _process(delta: float) -> void:
 	_tick_spyglass(delta)
 	_tick_compass(delta)
 	_tick_concertina(delta)
-	_tick_lantern_flicker()
+	_tick_lantern_flicker(delta)
 	_tick_viewmodel_pose(delta)
 	_sync_visibility()
 
@@ -1301,17 +1382,30 @@ func _tick_concertina(delta: float) -> void:
 				tp_tool_node.rotation_degrees = _whistle_rot_deg
 
 
-func _tick_lantern_flicker() -> void:
+func _tick_lantern_flicker(delta: float = 0.0) -> void:
+	_lantern_signal_cd = maxf(0.0, _lantern_signal_cd - delta)
+	_lantern_signal_flash = move_toward(_lantern_signal_flash, 0.0, delta / 0.35)
+	var want_flare := (active_item == &"lantern") and lantern_lit and _secondary_held
+	if delta > 0.0:
+		_lantern_flare_blend = lerpf(_lantern_flare_blend, 1.0 if want_flare else 0.0, 1.0 - exp(-8.5 * delta))
+	elif not want_flare:
+		_lantern_flare_blend = 0.0
 	if active_item != &"lantern" or not lantern_lit:
 		return
 	var flick := 0.93 + 0.07 * sin(_clock * 11.4) * cos(_clock * 7.3)
-	if fp_tool_node != null and is_instance_valid(fp_tool_node):
-		var light := fp_tool_node.get_node_or_null(^"LanternLight") as OmniLight3D
+	var base_energy := lerpf(2.4, 4.3, _lantern_flare_blend) * flick
+	var final_energy := lerpf(base_energy, 6.5, _lantern_signal_flash)
+	var final_range := lerpf(12.0, 22.0, maxf(_lantern_flare_blend, _lantern_signal_flash))
+	var flame_boost := 1.0 + _lantern_flare_blend * 0.24 + _lantern_signal_flash * 0.55
+	var target_node: Node3D = fp_tool_node if (fp_tool_node != null and is_instance_valid(fp_tool_node)) else tp_tool_node
+	if target_node != null and is_instance_valid(target_node):
+		var light := target_node.get_node_or_null(^"LanternLight") as OmniLight3D
 		if light != null:
-			light.light_energy = 2.4 * flick
-		var flame := fp_tool_node.get_node_or_null(^"Flame") as Node3D
+			light.light_energy = final_energy
+			light.omni_range = final_range
+		var flame := target_node.get_node_or_null(^"Flame") as Node3D
 		if flame != null:
-			flame.scale = Vector3(1.0, 0.92 + 0.14 * sin(_clock * 15.0), 1.0)
+			flame.scale = Vector3(flame_boost, (0.92 + 0.14 * sin(_clock * 15.0)) * flame_boost, flame_boost)
 
 
 func _tick_viewmodel_pose(delta: float) -> void:
@@ -1450,10 +1544,38 @@ func _find_nearby_ship(max_dist: float) -> Ship:
 	return best
 
 
+## Spawn a sculpted zero-primitive flat-faceted earth clod burst when swinging the shovel.
+func spawn_shovel_dirt_vfx(pos: Vector3) -> CPUParticles3D:
+	var host := pawn.get_parent() if pawn != null else null
+	if host == null:
+		return null
+	_ensure_particle_meshes()
+	var p := CPUParticles3D.new()
+	p.name = "ShovelDirtBurst"
+	p.one_shot = true
+	p.explosiveness = 0.90
+	p.amount = 14
+	p.lifetime = 0.52
+	p.direction = Vector3(0.0, 1.0, 0.0)
+	p.spread = 42.0
+	p.initial_velocity_min = 2.2
+	p.initial_velocity_max = 4.6
+	p.gravity = Vector3(0.0, -11.5, 0.0)
+	p.scale_amount_min = 0.06
+	p.scale_amount_max = 0.13
+	p.mesh = _clod_mesh
+	host.add_child(p)
+	p.global_position = pos + Vector3(0.0, 0.12, 0.0)
+	p.emitting = true
+	p.finished.connect(p.queue_free)
+	return p
+
+
 func _spawn_water_splash_puff(pos: Vector3, dir: Vector3) -> void:
 	var host := pawn.get_parent() if pawn != null else null
 	if host == null:
 		return
+	_ensure_particle_meshes()
 	var p := CPUParticles3D.new()
 	p.name = "BucketSplashPuff"
 	p.one_shot = true
@@ -1467,18 +1589,71 @@ func _spawn_water_splash_puff(pos: Vector3, dir: Vector3) -> void:
 	p.gravity = Vector3(0.0, -11.0, 0.0)
 	p.scale_amount_min = 0.07
 	p.scale_amount_max = 0.16
-	var sp := SphereMesh.new()
-	sp.radius = 0.45
-	sp.height = 0.9
-	sp.radial_segments = 6
-	sp.rings = 3
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.68, 0.92, 0.95, 0.80)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sp.material = mat
-	p.mesh = sp
+	p.mesh = _splash_drop_mesh
 	host.add_child(p)
 	p.global_position = pos
 	p.emitting = true
 	p.finished.connect(p.queue_free)
+
+
+static func _ensure_particle_meshes() -> void:
+	if _clod_mat == null:
+		_clod_mat = StandardMaterial3D.new()
+		_clod_mat.vertex_color_use_as_albedo = true
+		_clod_mat.vertex_color_is_srgb = true
+		_clod_mat.roughness = 0.92
+		_clod_mat.metallic = 0.0
+	if _clod_mesh == null:
+		_clod_mesh = _build_faceted_clod_mesh(
+			Color(0.76, 0.62, 0.38), Color(0.56, 0.42, 0.24), Color(0.36, 0.26, 0.14),
+			_clod_mat, Vector3(0.52, 0.42, 0.46)
+		)
+	if _splash_drop_mat == null:
+		_splash_drop_mat = StandardMaterial3D.new()
+		_splash_drop_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_splash_drop_mat.vertex_color_use_as_albedo = true
+		_splash_drop_mat.vertex_color_is_srgb = true
+		_splash_drop_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	if _splash_drop_mesh == null:
+		_splash_drop_mesh = _build_faceted_clod_mesh(
+			Color(0.82, 0.96, 0.98, 0.84), Color(0.62, 0.90, 0.94, 0.78), Color(0.42, 0.80, 0.86, 0.72),
+			_splash_drop_mat, Vector3(0.45, 0.50, 0.45)
+		)
+
+
+static func _build_faceted_clod_mesh(
+	col_top: Color,
+	col_mid: Color,
+	col_bot: Color,
+	mat: StandardMaterial3D,
+	radii: Vector3
+) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	var top := Vector3(0.0, radii.y, 0.0)
+	var bot := Vector3(0.0, -radii.y * 0.92, 0.0)
+	var ring: Array[Vector3] = []
+	var segs := 6
+	for i in segs:
+		var a := float(i) / float(segs) * TAU
+		var j := 1.0 + 0.16 * sin(float(i) * 2.3 + 0.5)
+		ring.append(Vector3(cos(a) * radii.x * j, sin(float(i) * 1.9) * radii.y * 0.18, sin(a) * radii.z * j))
+	for i in segs:
+		var v0 := ring[i]
+		var v1 := ring[(i + 1) % segs]
+		var c_up := col_top.lerp(col_mid, float(i % 2) * 0.45)
+		var c_dn := col_mid.lerp(col_bot, 0.55 + float(i % 2) * 0.30)
+		var nu := (v1 - top).cross(v0 - top).normalized()
+		for v: Vector3 in [top, v0, v1]:
+			st.set_normal(nu)
+			st.set_color(c_up)
+			st.add_vertex(v)
+		var nd := (v0 - bot).cross(v1 - bot).normalized()
+		for v: Vector3 in [bot, v1, v0]:
+			st.set_normal(nd)
+			st.set_color(c_dn)
+			st.add_vertex(v)
+	var am := st.commit()
+	am.surface_set_material(0, mat)
+	return am
