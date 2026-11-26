@@ -770,6 +770,8 @@ func host_interact(target: Interactable) -> void:
 	target.interact(self)
 	var st := station_of(target)
 	if st != null and station == null and is_instance_valid(st):
+		if st.has_method(&"try_quick_use") and bool(st.call(&"try_quick_use", self)):
+			return
 		enter_station(st)
 
 func _container_of(it: Interactable) -> Node:

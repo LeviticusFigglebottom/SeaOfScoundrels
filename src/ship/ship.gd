@@ -20,6 +20,7 @@ signal ship_bell_rung(by_pawn: Node)
 signal supplies_taken(pawn: Node)
 signal wind_caught(efficiency: float)
 signal anchor_turn_triggered(speed: float, yaw_dir: float)
+signal anchor_raised()
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -33,6 +34,9 @@ const HULL_CREST_PATH := "res://src/ship/hull_crest.gd"
 ## CharacterBody3D pawns never shove the hull (docs/ARCHITECTURE.md).
 const LAYER_SHIP := 1 << 1
 const MASK_SHIP := 1 | (1 << 1)
+
+## Spacious deck scale (+54% walkable deck area while preserving unit-scale sloop.glb assets).
+const DEFAULT_HULL_SCALE := 1.24
 
 const BASE_MASS := 9000.0
 const FLOOD_EXTRA_MASS := 5400.0
@@ -108,6 +112,8 @@ var cannon_radius_modifier: float = 1.0
 
 ## Ship class: &"sloop" (1 mast, 2 cannons) or &"brigantine" (2 masts, 4 cannons, higher top speed).
 @export var ship_class: StringName = &"sloop"
+## Uniform scale applied to hull models, collision points, buoyancy probes, and ship props.
+@export var hull_scale: float = DEFAULT_HULL_SCALE
 ## Optional faction tag (&"player", &"drowned", &"ghost", &"corsair").
 @export var faction: StringName = &"player"
 ## Optional starting anchor state.
@@ -119,7 +125,7 @@ var cannon_radius_modifier: float = 1.0
 
 var _hull_mass: float = BASE_MASS
 var _probe_scale: Vector3 = Vector3.ONE
-var _class_thrust_mult: float = 1.0
+var _class_thrust_mult: float = 1.24
 
 var _model: Node3D = null
 var _lod_model: Node3D = null
@@ -169,6 +175,12 @@ var _last_submerged_frac: float = 0.0
 var _anchor_swing_dir: float = 0.0
 var _anchor_swing_timer: float = 0.0
 
+# Sea-of-Thieves tactile capstan heave & helm center-detent state
+var _manual_capstan_heave: bool = false
+var _capstan_heaving_this_tick: bool = false
+var _capstan_assist_hands: int = 0
+var _helm_detent_timer: float = 0.0
+
 # Audio pacing timers
 var _creak_cooldown: float = 0.0
 var _flap_cooldown: float = 0.0
@@ -204,6 +216,7 @@ var _active_muzzle_vfx: Array[Node] = []
 var cabin_furnishings: CaptainCabinFurnishings = null
 var ship_nameplate: Node3D = null
 var hull_crest: Node3D = null
+var wind_ribbons: WindRibbons = null
 var crows_nest_ladder: Ladder = null
 var _crows_nest_rungs_mi: MeshInstance3D = null
 var ship_name: String = "The Gilded Scoundrel"
@@ -233,6 +246,11 @@ static var _crows_nest_rungs_brig: ArrayMesh = null
 static var _crows_nest_rungs_mat: StandardMaterial3D = null
 
 
+## Convert an unscaled GLB ship-local coordinate into this ship's scaled local space.
+func ship_point(unscaled_local: Vector3) -> Vector3:
+	return unscaled_local * hull_scale
+
+
 func _init() -> void:
 	mass = BASE_MASS
 	gravity_scale = 1.0
@@ -257,14 +275,14 @@ func _ready() -> void:
 	collision_mask = MASK_SHIP
 	if ship_class == &"brigantine":
 		_hull_mass = 13500.0
-		_probe_scale = Vector3(1.22, 1.05, 1.32)
-		_class_thrust_mult = 1.68
+		_probe_scale = Vector3(1.22, 1.05, 1.32) * hull_scale
+		_class_thrust_mult = 2.28
 		mass = _hull_mass
 		inertia = Vector3(245000.0, 315000.0, 74000.0)
 	else:
 		_hull_mass = BASE_MASS
-		_probe_scale = Vector3.ONE
-		_class_thrust_mult = 1.0
+		_probe_scale = Vector3.ONE * hull_scale
+		_class_thrust_mult = 1.24
 	if start_anchored:
 		anchor_down = true
 		anchor_progress = 1.0
@@ -284,6 +302,8 @@ func _ready() -> void:
 	if enable_effects:
 		_build_bow_spray()
 		_setup_lookout_glint()
+		if faction == &"player":
+			_setup_wind_ribbons()
 	_setup_sail_shaders()
 	_setup_lights_and_glass()
 	_apply_current_livery()
@@ -301,6 +321,14 @@ func _exit_tree() -> void:
 			spray.visible = false
 			spray.draw_pass_1 = null
 			spray.process_material = null
+	_bow_spray_port = null
+	_bow_spray_starboard = null
+	_spray_tex = null
+	if _hold_water_mesh != null and is_instance_valid(_hold_water_mesh):
+		_hold_water_mesh.material_override = null
+		_hold_water_mesh.mesh = null
+	_hold_water_mesh = null
+	_hold_water_mat = null
 	for h in holes:
 		var jet := h.get("jet") as GPUParticles3D
 		if jet != null and is_instance_valid(jet):
@@ -352,6 +380,7 @@ func _exit_tree() -> void:
 	ship_bell_node = null
 	ship_nameplate = null
 	hull_crest = null
+	wind_ribbons = null
 	cabin_furnishings = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
@@ -384,10 +413,12 @@ func _build_models() -> void:
 
 	_model = model_scene.instantiate() as Node3D
 	_model.name = "BrigantineModel" if ship_class == &"brigantine" else "SloopModel"
+	_model.scale = Vector3.ONE * hull_scale
 	add_child(_model)
 
 	_lod_model = lod_scene.instantiate() as Node3D
 	_lod_model.name = "BrigantineLOD" if ship_class == &"brigantine" else "SloopLOD"
+	_lod_model.scale = Vector3.ONE * hull_scale
 	_lod_model.visible = false
 	add_child(_lod_model)
 
@@ -458,35 +489,42 @@ func _build_collision() -> void:
 		var faces := mi.mesh.get_faces()
 		if faces.size() < 3:
 			continue
+		var xf := _local_to_ship(mi)
+		var scl := xf.basis.get_scale()
+		var pts := PackedVector3Array()
+		pts.resize(faces.size())
+		for fi in faces.size():
+			pts[fi] = faces[fi] * scl
 		var shape := ConvexPolygonShape3D.new()
-		shape.points = faces
+		shape.points = pts
 		var cs := CollisionShape3D.new()
 		cs.name = "Col_" + String(mi.name)
 		cs.shape = shape
-		cs.transform = _local_to_ship(mi)
+		cs.transform = Transform3D(xf.basis.orthonormalized(), xf.origin)
 		add_child(cs)
 
 
 func _build_stations() -> void:
 	var specs: Array[Array] = [
-		["Station_Helm", &"helm", "Take the helm", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.72)), Vector3(0.0, 0.95, 0.0), 0.65, &""],
-		["Station_SailLength", &"sail_length", "Raise / lower sail", Transform3D(Basis(Vector3.UP, PI * 0.5), Vector3(0.58, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
-		["Station_SailAngle", &"sail_angle", "Trim sail angle", Transform3D(Basis(Vector3.UP, -PI * 0.5), Vector3(-0.58, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
-		["Station_Anchor", &"anchor", "Use capstan (anchor)", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.95)), Vector3(0.0, 0.85, 0.0), 0.7, &""],
-		["Station_CannonPort", &"cannon", "Man port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"port"],
-		["Station_CannonStarboard", &"cannon", "Man starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard"],
-		["Station_CannonPortAft", &"cannon", "Man aft port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"port_aft"],
-		["Station_CannonStarboardAft", &"cannon", "Man aft starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard_aft"],
-		["Station_MapTable", &"map_table", "Inspect map table", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.82)), Vector3(0.0, 0.9, 0.0), 0.7, &""],
+		["Station_Helm", &"helm", "Take the helm", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.78)), Vector3(0.0, 0.95, 0.0), 0.65, &""],
+		["Station_SailLength", &"sail_length", "Raise / lower sail", Transform3D(Basis(Vector3.UP, PI * 0.5), Vector3(0.62, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
+		["Station_SailAngle", &"sail_angle", "Trim sail angle", Transform3D(Basis(Vector3.UP, -PI * 0.5), Vector3(-0.62, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
+		["Station_Anchor", &"anchor", "Use capstan (anchor)", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.08)), Vector3(0.0, 0.85, 0.0), 0.7, &""],
+		["Station_CannonPort", &"cannon", "Man port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.12)), Vector3(0.0, 0.85, 0.2), 0.7, &"port"],
+		["Station_CannonStarboard", &"cannon", "Man starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.12)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard"],
+		["Station_CannonPortAft", &"cannon", "Man aft port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.12)), Vector3(0.0, 0.85, 0.2), 0.7, &"port_aft"],
+		["Station_CannonStarboardAft", &"cannon", "Man aft starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.12)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard_aft"],
+		["Station_MapTable", &"map_table", "Inspect map table", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.90)), Vector3(0.0, 0.9, 0.0), 0.7, &""],
 		["Station_Bilge", &"bilge", "Bail bilge water", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.35)), Vector3(0.0, 0.75, 0.0), 0.7, &""],
 	]
 	for spec in specs:
 		var marker := _n(String(spec[0]))
 		if marker == null:
 			continue
+		var xf := _local_to_ship(marker)
 		var st := Station.new()
 		st.name = String(spec[0]) + "_Node"
-		st.transform = _local_to_ship(marker)
+		st.transform = Transform3D(xf.basis.orthonormalized(), xf.origin)
 		st.configure(self, spec[1], spec[2], spec[3], spec[4], spec[5], spec[6])
 		add_child(st)
 		_stations.append(st)
@@ -535,13 +573,13 @@ func _build_ladders() -> void:
 		var lp := _local_to_ship(marker).origin
 		var lad := Ladder.new()
 		lad.name = String(spec[1])
-		lad.height = 2.75
+		lad.height = 2.75 * hull_scale
 		lad.width = 0.85
 		lad.standoff = 0.42
-		lad.reach_below = 1.6
-		lad.exit_offset = Vector3(0.0, 0.1, -0.82)
-		# Place foot 1.6 m below the waterline marker so the top aligns with the main deck (y ~= 1.15).
-		lad.transform = Transform3D(Basis(Vector3.UP, float(spec[2])), Vector3(lp.x, lp.y - 1.6, lp.z))
+		lad.reach_below = 1.6 * hull_scale
+		lad.exit_offset = Vector3(0.0, 0.1, -0.92)
+		# Place foot below the waterline marker so the top aligns with the scaled main deck.
+		lad.transform = Transform3D(Basis(Vector3.UP, float(spec[2])), Vector3(lp.x, lp.y - 1.6 * hull_scale, lp.z))
 		add_child(lad)
 
 	_build_crows_nest_ladder()
@@ -552,10 +590,10 @@ func _build_crows_nest_ladder() -> void:
 	# clears the swinging yard/sail forward, Lantern_Mast aft, and Sloop's open hold hatch so
 	# bottom dismount always lands on solid main deck and top exit steps safely onto col_mast_top!
 	var is_brig := ship_class == &"brigantine"
-	var mast_z := 0.50 if is_brig else -1.00
-	var deck_y := 1.25 if is_brig else 1.10
-	var nest_top_y := 13.17 if is_brig else 11.52
-	var mast_r := 0.37 if is_brig else 0.33
+	var mast_z := (0.50 if is_brig else -1.00) * hull_scale
+	var deck_y := (1.25 if is_brig else 1.10) * hull_scale
+	var nest_top_y := (13.17 if is_brig else 11.52) * hull_scale
+	var mast_r := (0.37 if is_brig else 0.33) * hull_scale
 	var yaw_rad := deg_to_rad(32.0) if is_brig else deg_to_rad(80.0)
 	var lad_h := nest_top_y - deck_y
 	var out_dir := Vector3(sin(yaw_rad), 0.0, cos(yaw_rad))
@@ -570,8 +608,8 @@ func _build_crows_nest_ladder() -> void:
 	cn.reach_below = 0.15
 	cn.require_direct_approach = true
 	cn.allow_ai_grab = false
-	# Step inward across the topmast onto the solid circular col_mast_top platform (r = 0.95 / 1.04 m).
-	cn.exit_offset = Vector3(0.0, 0.10, -0.88 if is_brig else -0.80)
+	# Step inward across the topmast onto the solid circular col_mast_top platform.
+	cn.exit_offset = Vector3(0.0, 0.10, (-0.88 if is_brig else -0.80) * hull_scale)
 	cn.transform = lad_xf
 	add_child(cn)
 	crows_nest_ladder = cn
@@ -583,6 +621,7 @@ func _build_crows_nest_ladder() -> void:
 	rungs_mi.material_override = _crows_nest_rungs_mat
 	rungs_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	rungs_mi.transform = lad_xf
+	rungs_mi.scale = Vector3.ONE * hull_scale
 	add_child(rungs_mi)
 	_crows_nest_rungs_mi = rungs_mi
 
@@ -751,19 +790,19 @@ func _build_shelters() -> void:
 	add_child(shelter_area)
 
 	var hold_box := BoxShape3D.new()
-	hold_box.size = Vector3(3.7, 2.05, 8.6)
+	hold_box.size = Vector3(3.7, 2.05, 8.6) * hull_scale
 	var cs_hold := CollisionShape3D.new()
 	cs_hold.name = "HoldBox"
 	cs_hold.shape = hold_box
-	cs_hold.position = Vector3(0.0, 0.12, 0.2)
+	cs_hold.position = Vector3(0.0, 0.12, 0.2) * hull_scale
 	shelter_area.add_child(cs_hold)
 
 	var cabin_box := BoxShape3D.new()
-	cabin_box.size = Vector3(3.4, 2.8, 3.3)
+	cabin_box.size = Vector3(3.4, 2.8, 3.3) * hull_scale
 	var cs_cabin := CollisionShape3D.new()
 	cs_cabin.name = "SternCabinBox"
 	cs_cabin.shape = cabin_box
-	cs_cabin.position = Vector3(0.0, 0.55, 4.6)
+	cs_cabin.position = Vector3(0.0, 0.55, 4.6) * hull_scale
 	shelter_area.add_child(cs_cabin)
 
 
@@ -779,11 +818,11 @@ func _build_damage_slots() -> void:
 		if hole != null:
 			var xf := _local_to_ship(hole)
 			local_pos = xf.origin
-			hole_basis = xf.basis
+			hole_basis = xf.basis.orthonormalized()
 		elif panel != null:
 			var xf2 := _local_to_ship(panel)
 			local_pos = xf2.origin
-			hole_basis = xf2.basis
+			hole_basis = xf2.basis.orthonormalized()
 
 		if panel != null:
 			panel.visible = true
@@ -938,9 +977,9 @@ func _make_leak_jet(local_pos: Vector3, hole_basis: Basis) -> GPUParticles3D:
 
 func _build_bow_spray() -> void:
 	var is_brig := ship_class == &"brigantine"
-	var x_off := 1.75 if is_brig else 1.35
-	var y_off := 0.45 if is_brig else 0.35
-	var z_off := -7.6 if is_brig else -5.4
+	var x_off := (1.75 if is_brig else 1.35) * hull_scale
+	var y_off := (0.45 if is_brig else 0.35) * hull_scale
+	var z_off := (-7.6 if is_brig else -5.4) * hull_scale
 	_bow_spray_port = _make_bow_cheek_spray("BowSprayPort", Vector3(-x_off, y_off, z_off), -1.0)
 	_bow_spray_starboard = _make_bow_cheek_spray("BowSprayStarboard", Vector3(x_off, y_off, z_off), 1.0)
 	add_child(_bow_spray_port)
@@ -1010,7 +1049,8 @@ func _build_hold_water() -> void:
 	_hold_water_mesh.name = "HoldWater"
 	_hold_water_mesh.mesh = pm
 	_hold_water_mesh.material_override = _hold_water_mat
-	_hold_water_mesh.position = Vector3(0.0, 0.0, 0.75)
+	_hold_water_mesh.scale = Vector3.ONE * hull_scale
+	_hold_water_mesh.position = Vector3(0.0, 0.0, 0.75 * hull_scale)
 	_hold_water_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_hold_water_mesh.visible = false
 	add_child(_hold_water_mesh)
@@ -1028,7 +1068,7 @@ func _build_deck_extras() -> void:
 		add_child(bell_it)
 
 	# One-press supply refill barrel interactable on deck (DESIGN.md: "Tedium cuts").
-	var supply_pos := Vector3(1.15, 1.55, -2.55)
+	var supply_pos := Vector3(1.15, 1.55, -2.55) * hull_scale
 	var plank_node := _n("PlankStack")
 	if plank_node != null:
 		supply_pos = _local_to_ship(plank_node).origin + Vector3(0.0, 0.45, 0.0)
@@ -1291,7 +1331,8 @@ func _setup_ship_bell() -> void:
 
 	var root := Node3D.new()
 	root.name = "ShipBell"
-	root.position = Vector3(0.0, 3.08, 3.98) if ship_class == &"brigantine" else Vector3(0.0, 2.86, 2.98)
+	root.position = (Vector3(0.0, 3.08, 3.98) if ship_class == &"brigantine" else Vector3(0.0, 2.86, 2.98)) * hull_scale
+	root.scale = Vector3.ONE * hull_scale
 	add_child(root)
 	ship_bell_node = root
 
@@ -1595,6 +1636,7 @@ func _setup_cabin_furnishings() -> void:
 	var furn := CaptainCabinFurnishings.new()
 	furn.name = "CaptainCabinFurnishings"
 	furn.ship_class = ship_class
+	furn.scale = Vector3.ONE * hull_scale
 	add_child(furn)
 	cabin_furnishings = furn
 	sync_cabin_renown(Game.profile if Game != null else null, false)
@@ -1606,6 +1648,15 @@ func sync_cabin_renown(profile: Profile = null, force_all: bool = false) -> void
 		return
 	var prof: Profile = profile if profile != null else (Game.profile if Game != null else null)
 	cabin_furnishings.sync_renown(prof, force_all)
+
+
+func _setup_wind_ribbons() -> void:
+	if faction != &"player":
+		return
+	var wr := WindRibbons.new()
+	wr.name = "WindRibbons"
+	add_child(wr)
+	wind_ribbons = wr
 
 
 func _setup_lookout_glint() -> void:
@@ -1625,7 +1676,7 @@ func _setup_lookout_glint() -> void:
 	_lookout_glint.name = "LookoutGlint"
 	_lookout_glint.mesh = _lookout_glint_mesh
 	_lookout_glint.material_override = _lookout_glint_mat
-	_lookout_glint.position = Vector3(0.0, 12.2, 0.4) if ship_class == &"brigantine" else Vector3(0.0, 9.6, -0.35)
+	_lookout_glint.position = (Vector3(0.0, 12.2, 0.4) if ship_class == &"brigantine" else Vector3(0.0, 9.6, -0.35)) * hull_scale
 	_lookout_glint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_lookout_glint.visible = false
 	add_child(_lookout_glint)
@@ -1726,7 +1777,7 @@ func _setup_lights_and_glass() -> void:
 		l.light_color = Color(1.0, 0.74, 0.42)
 		var is_hold := nm.contains("Hold")
 		l.light_energy = 1.45 if is_hold else 0.75
-		l.omni_range = 7.5 if is_hold else 6.0
+		l.omni_range = (7.5 if is_hold else 6.0) * hull_scale
 		l.omni_attenuation = 1.4
 		l.shadow_enabled = false
 		child.add_child(l)
@@ -1809,7 +1860,13 @@ func set_trim_target(v: float) -> void:
 func set_anchor(down: bool) -> void:
 	if not Net.is_host():
 		return
+	var was_manual := _manual_capstan_heave
+	_manual_capstan_heave = false
+	_capstan_heaving_this_tick = false
+	_capstan_assist_hands = 0
 	if anchor_down == down:
+		if down and was_manual and anchor_progress < 0.90:
+			Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
 		return
 	anchor_down = down
 	if down:
@@ -1832,9 +1889,10 @@ func speed_knots() -> float:
 
 
 ## Horizontal apparent wind experienced by the ship in world space (m/s).
+## Blends true wind with a light velocity shift so fast downwind vessels keep full sail billow.
 func apparent_wind() -> Vector3:
 	var w := Weather.wind_vector()
-	return Vector3(w.x - linear_velocity.x, 0.0, w.z - linear_velocity.z)
+	return Vector3(w.x - linear_velocity.x * 0.25, 0.0, w.z - linear_velocity.z * 0.25)
 
 
 ## 0..1 measure of how cleanly the mainsail catches the current apparent wind.
@@ -2379,7 +2437,7 @@ func bail(amount: float = 0.14) -> float:
 			var bilge_local := to_local(bilge.global_position) + Vector3(0.0, 0.55, 0.0) if bilge != null else Vector3(0.0, -0.35, -2.1)
 			_spawn_bail_splash(bilge_local)
 		if Ocean.current != null:
-			Ocean.current.add_foam(global_transform * Vector3(2.8, 0.0, 1.0), 1.35, 0.55)
+			Ocean.current.add_foam(global_transform * (Vector3(2.8, 0.0, 1.0) * hull_scale), 1.35 * hull_scale, 0.55)
 		Audio.play_sfx(&"bucket_splash", pos)
 		bailed.emit(removed)
 	return removed
@@ -2436,6 +2494,14 @@ func aim_cannon(side: StringName, yaw_rad: float, pitch_rad: float) -> void:
 		barrel.rotation.x = float(c["base_barrel_rot_x"]) + float(c["pitch"])
 
 
+## Host only. Incrementally aim cannon by (dyaw, dpitch) radians (for mouse-aim & fine adjustment).
+func aim_cannon_delta(side: StringName, dyaw: float, dpitch: float) -> void:
+	if not Net.is_host() or not _cannons.has(side):
+		return
+	var c: Dictionary = _cannons[side]
+	aim_cannon(side, float(c["yaw"]) + dyaw, float(c["pitch"]) + dpitch)
+
+
 ## Host only. Fire the port or starboard cannon. Returns the spawned Cannonball, or null.
 func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	if not Net.is_host() or is_sinking or not _cannons.has(side):
@@ -2454,7 +2520,7 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	# Muzzle world position and aim direction (-Z of barrel/carriage).
 	var aim_node := barrel if barrel != null else carriage
 	var muzzle_dir := (-aim_node.global_basis.z).normalized()
-	var muzzle_pos := aim_node.global_position + muzzle_dir * 1.15
+	var muzzle_pos := aim_node.global_position + muzzle_dir * (1.15 * hull_scale)
 
 	var ball := Cannonball.new()
 	ball.name = "Cannonball"
@@ -2952,38 +3018,201 @@ func _spawn_muzzle_flash(pos: Vector3, dir: Vector3) -> void:
 
 # ------------------------------------------------------------------ station driving
 
+## Host only. Instant one-tap quick-use for ship stations (e.g. dropping a raised anchor
+## without locking into the capstan). Returns true if consumed.
+func try_station_quick_use(st: Station, _pawn: Node) -> bool:
+	if not Net.is_host() or st == null:
+		return false
+	if st.kind == &"anchor" and not anchor_down and anchor_progress <= 0.06:
+		_manual_capstan_heave = false
+		_capstan_heaving_this_tick = false
+		_capstan_assist_hands = 0
+		set_anchor(true)
+		Audio.play_sfx(&"capstan_clank", st.global_position, -1.0)
+		return true
+	return false
+
+
+## Contextual focus prompt shown when looking at a station handle on this ship (strict ASCII).
+func get_station_focus_prompt(st: Station) -> String:
+	if st == null:
+		return ""
+	match st.kind:
+		&"anchor":
+			if not anchor_down and anchor_progress <= 0.06:
+				return "Drop anchor"
+			return "Heave anchor (%d%%)" % int(roundf(anchor_progress * 100.0))
+		&"sail_length":
+			if sail_set < 0.08:
+				return "Lower sails"
+			return "Raise / lower sails (%d%%)" % int(roundf(sail_set * 100.0))
+		&"sail_angle":
+			if _last_wind_catch >= 0.85 and sail_set >= 0.15:
+				return "Trim sails (FULL WIND)"
+			return "Angle sails"
+	return st.prompt
+
+
+## Contextual live control-hint prompt shown while crewing a station (strict ASCII, starts with '[').
+func get_station_active_prompt(st: Station) -> String:
+	if st == null:
+		return ""
+	match st.kind:
+		&"helm":
+			var helm_txt := "CENTER"
+			if helm < -0.06:
+				helm_txt = "PORT"
+			elif helm > 0.06:
+				helm_txt = "STBD"
+			return "[A/D] Steer (%s) | [S/RMB] Center | [F] Step Off" % helm_txt
+		&"anchor":
+			return "[Hold W] Heave Anchor (%d%%) | [S] Drop | [F] Let Go" % int(roundf((1.0 - anchor_progress) * 100.0))
+		&"sail_length":
+			return "[S] Lower / [W] Raise Sail (%d%%) | [F] Let Go" % int(roundf(sail_set * 100.0))
+		&"sail_angle":
+			var wind_txt := "FULL WIND" if (_last_wind_catch >= 0.85 and sail_set >= 0.15) else (
+				"GOOD" if _last_wind_catch >= 0.55 else (
+					"SQUARE" if absf(sail_trim) < 0.12 else "LUFFING"
+				)
+			)
+			return "[A/D] Angle Sail (%s) | [RMB] Square | [F] Let Go" % wind_txt
+		&"cannon":
+			return "[WASD/Mouse] Aim | [LMB] Fire (%d) | [F] Step Off" % cannonballs_remaining
+		&"map_table":
+			return "[WASD] Pan | [LMB/RMB] Zoom | [Space] Pin | [F] Step Off"
+		&"bilge":
+			return "[Hold LMB/W] Bail Bilge | [F] Step Off"
+	return "[F] Step Off"
+
+
+func _count_capstan_assist_hands(st: Station) -> int:
+	if st == null or not is_inside_tree():
+		return 0
+	var cap_pos := st.global_position
+	var max_dist_sq := 2.6 * 2.6
+	var seen: Dictionary = {}
+	var extra := 0
+	var candidates: Array[Pawn] = []
+	var parent_node := get_parent()
+	if parent_node != null:
+		for ch in parent_node.get_children():
+			if ch is Pawn:
+				candidates.append(ch as Pawn)
+	var tree := get_tree()
+	if tree != null:
+		for cb in tree.get_nodes_in_group(&"crew_brains"):
+			var p := cb.get_parent() as Pawn
+			if p != null:
+				candidates.append(p)
+		for cc in tree.get_nodes_in_group(&"combatants"):
+			var p2 := cc.get_parent() as Pawn
+			if p2 != null:
+				candidates.append(p2)
+	for p in candidates:
+		if p == null or not is_instance_valid(p) or p == st.occupant or p.dead:
+			continue
+		var iid := p.get_instance_id()
+		if seen.has(iid):
+			continue
+		seen[iid] = true
+		if p.platform != self:
+			continue
+		if p.station != null and p.station != st:
+			continue
+		if p.global_position.distance_squared_to(cap_pos) <= max_dist_sq:
+			extra += 1
+			if extra >= 3:
+				break
+	return extra
+
+
 func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, delta: float) -> void:
 	match st.kind:
 		&"helm":
 			if absf(axis.x) > 0.05:
-				set_helm_target(helm_target + axis.x * 1.15 * delta)
-			elif secondary:
-				# Secondary gently centres the wheel.
-				set_helm_target(move_toward(helm_target, 0.0, 1.5 * delta))
+				if _helm_detent_timer > 0.0:
+					_helm_detent_timer = maxf(0.0, _helm_detent_timer - delta)
+				else:
+					var rate := 1.25 if ship_class == &"brigantine" else 1.55
+					var prev_t := helm_target
+					var next_t := clampf(helm_target + axis.x * rate * delta, -1.0, 1.0)
+					# Subtle golden center-spoke detent pause when turning across 0.0.
+					if (prev_t < -0.02 and next_t >= 0.0) or (prev_t > 0.02 and next_t <= 0.0):
+						next_t = 0.0
+						_helm_detent_timer = 0.07
+					set_helm_target(next_t)
+			elif axis.y < -0.35 or secondary:
+				_helm_detent_timer = 0.0
+				set_helm_target(move_toward(helm_target, 0.0, 2.4 * delta))
+			else:
+				_helm_detent_timer = 0.0
 		&"sail_length":
-			var change := axis.y
-			if primary and absf(change) < 0.05:
-				change = 1.0
-			elif secondary and absf(change) < 0.05:
-				change = -1.0
-			if absf(change) > 0.05:
-				set_sail_target(sail_target + change * 0.48 * delta)
-				_rope_sfx_accum += absf(change) * delta
-				if _rope_sfx_accum > 0.55:
+			# Sea of Thieves standard polarity: [S] lowers/unfurls sail (faster), [W] raises/furls sail (slower).
+			var lower_delta := 0.0
+			if axis.y < -0.05:
+				lower_delta = absf(axis.y)
+			elif axis.y > 0.05:
+				lower_delta = -absf(axis.y)
+			elif primary:
+				lower_delta = 1.0
+			elif secondary:
+				lower_delta = -1.0
+			if absf(lower_delta) > 0.05:
+				set_sail_target(sail_target + lower_delta * 0.65 * delta)
+				_rope_sfx_accum += absf(lower_delta) * delta
+				if _rope_sfx_accum > 0.42:
 					_rope_sfx_accum = 0.0
 					Audio.play_sfx(&"rope_creak", st.global_position, -3.0)
 		&"sail_angle":
 			if absf(axis.x) > 0.05:
-				set_trim_target(trim_target + axis.x * 0.95 * delta)
+				set_trim_target(trim_target + axis.x * 1.38 * delta)
 				_rope_sfx_accum += absf(axis.x) * delta
-				if _rope_sfx_accum > 0.55:
+				if _rope_sfx_accum > 0.45:
 					_rope_sfx_accum = 0.0
 					Audio.play_sfx(&"rope_creak", st.global_position, -3.0)
+			elif secondary:
+				# Smoothly square sails flat forward for Sea-of-Thieves headwind dummy sails.
+				var before_trim := trim_target
+				set_trim_target(move_toward(trim_target, 0.0, 2.2 * delta))
+				if absf(trim_target - before_trim) > 0.001:
+					_rope_sfx_accum += delta
+					if _rope_sfx_accum > 0.45:
+						_rope_sfx_accum = 0.0
+						Audio.play_sfx(&"rope_creak", st.global_position, -3.0)
 		&"anchor":
-			if primary or axis.y < -0.3:
+			_manual_capstan_heave = true
+			if axis.y < -0.35 or (secondary and axis.y <= 0.15):
+				# Release pawl -> drop anchor and step off capstan.
+				_manual_capstan_heave = false
+				_capstan_heaving_this_tick = false
+				_capstan_assist_hands = 0
 				set_anchor(true)
-			elif secondary or axis.y > 0.3:
-				set_anchor(false)
+				st.release()
+			elif axis.y > 0.15 or primary:
+				# Physical capstan heave-up (faster with nearby crew/co-op hands!).
+				_capstan_heaving_this_tick = true
+				var extra_hands := _count_capstan_assist_hands(st)
+				_capstan_assist_hands = extra_hands
+				var heave_rate := 0.25 * (1.0 + 0.72 * float(extra_hands))
+				var prev_p := anchor_progress
+				anchor_progress = maxf(0.0, anchor_progress - heave_rate * delta)
+				if absf(anchor_progress - prev_p) > 0.0005:
+					_capstan_sfx_accum += absf(anchor_progress - prev_p)
+					if _capstan_sfx_accum > 0.14:
+						_capstan_sfx_accum = 0.0
+						Audio.play_sfx(&"capstan_clank", st.global_position, -2.5)
+				if anchor_progress <= 0.005:
+					anchor_progress = 0.0
+					anchor_down = false
+					_manual_capstan_heave = false
+					_capstan_heaving_this_tick = false
+					_capstan_assist_hands = 0
+					_anchor_swing_timer = 0.0
+					_anchor_swing_dir = 0.0
+					Audio.play_sfx(&"capstan_clank", st.global_position, 0.5)
+					Audio.play_sfx(&"parry_ring", st.global_position, -5.0)
+					anchor_raised.emit()
+					st.release()
 		&"cannon":
 			var side := st.meta_id
 			if _cannons.has(side):
@@ -3014,28 +3243,62 @@ func _physics_process(delta: float) -> void:
 
 func _tick_controls(delta: float) -> void:
 	var prev_helm := helm
-	helm = move_toward(helm, helm_target, 0.95 * delta)
+	helm = move_toward(helm, helm_target, 2.4 * delta)
 	if absf(helm - prev_helm) > 0.0005:
 		_wheel_sfx_accum += absf(helm - prev_helm)
-		if _wheel_sfx_accum > 0.32:
+		var hst := get_station(&"helm")
+		var hpos := hst.global_position if hst != null else global_position
+		if absf(prev_helm) >= 0.04 and absf(helm) < 0.04:
+			# Golden center-spoke CLUNK detent cue.
+			var detent_sfx := &"wood_clunk" if Audio.has_sound(&"wood_clunk") else &"wheel_creak"
+			var snd := Audio.play_sfx(detent_sfx, hpos, -1.5, 0.02)
+			if detent_sfx == &"wheel_creak" and snd is AudioStreamPlayer3D:
+				(snd as AudioStreamPlayer3D).pitch_scale *= 1.24
 			_wheel_sfx_accum = 0.0
-			var st := get_station(&"helm")
-			Audio.play_sfx(&"wheel_creak", st.global_position if st != null else global_position, -4.0)
+		elif absf(prev_helm) < 0.985 and absf(helm) >= 0.985:
+			# Solid hard-over end-stop thud.
+			Audio.play_sfx(&"hull_creak", hpos, -6.0)
+			_wheel_sfx_accum = 0.0
+		elif _wheel_sfx_accum > 0.30:
+			_wheel_sfx_accum = 0.0
+			Audio.play_sfx(&"wheel_creak", hpos, -4.0)
 
 	var prev_sail := sail_set
-	sail_set = move_toward(sail_set, sail_target, 0.45 * delta)
-	sail_trim = move_toward(sail_trim, trim_target, 0.85 * delta)
+	sail_set = move_toward(sail_set, sail_target, 1.85 * delta)
+	var prev_trim := sail_trim
+	sail_trim = move_toward(sail_trim, trim_target, 2.8 * delta)
+	if (prev_trim * sail_trim < 0.0) or (absf(prev_trim) >= 0.04 and absf(sail_trim) < 0.04):
+		var st_angle := get_station(&"sail_angle")
+		Audio.play_sfx(&"rope_creak", st_angle.global_position if st_angle != null else global_position, -5.0)
 
-	var target_anc := 1.0 if anchor_down else 0.0
-	var anc_rate := 0.72 if anchor_down else 0.30
 	var prev_anc := anchor_progress
-	anchor_progress = move_toward(anchor_progress, target_anc, anc_rate * delta)
-	if absf(anchor_progress - prev_anc) > 0.0005:
-		_capstan_sfx_accum += absf(anchor_progress - prev_anc)
-		if _capstan_sfx_accum > 0.16:
-			_capstan_sfx_accum = 0.0
-			var ast := get_station(&"anchor")
-			Audio.play_sfx(&"capstan_clank", ast.global_position if ast != null else global_position, -3.0)
+	if _manual_capstan_heave:
+		if not _capstan_heaving_this_tick:
+			# Gravity slip-back if the pirate stops heaving before locking the capstan at top!
+			if anchor_progress < 1.0:
+				anchor_down = true
+				anchor_progress = minf(1.0, anchor_progress + 0.44 * delta)
+				if absf(anchor_progress - prev_anc) > 0.0005:
+					_capstan_sfx_accum += absf(anchor_progress - prev_anc)
+					if _capstan_sfx_accum > 0.14:
+						_capstan_sfx_accum = 0.0
+						var ast_slip := get_station(&"anchor")
+						Audio.play_sfx(&"capstan_clank", ast_slip.global_position if ast_slip != null else global_position, -2.5)
+			else:
+				var ast_done := get_station(&"anchor")
+				if ast_done == null or not ast_done.is_occupied():
+					_manual_capstan_heave = false
+		_capstan_heaving_this_tick = false
+	else:
+		var target_anc := 1.0 if anchor_down else 0.0
+		var anc_rate := 0.88 if anchor_down else 0.42
+		anchor_progress = move_toward(anchor_progress, target_anc, anc_rate * delta)
+		if absf(anchor_progress - prev_anc) > 0.0005:
+			_capstan_sfx_accum += absf(anchor_progress - prev_anc)
+			if _capstan_sfx_accum > 0.16:
+				_capstan_sfx_accum = 0.0
+				var ast := get_station(&"anchor")
+				Audio.play_sfx(&"capstan_clank", ast.global_position if ast != null else global_position, -3.0)
 	var anc_sub := anchor_progress > 0.55
 	if anc_sub and not _was_anchor_submerged:
 		Audio.play_sfx(&"anchor_splash", _anchor_world_pos())
@@ -3064,7 +3327,7 @@ func _tick_controls(delta: float) -> void:
 	if _anchor_swing_timer > 0.0:
 		_anchor_swing_timer = maxf(0.0, _anchor_swing_timer - delta)
 
-	# Sail fill cue when catching wind strongly after raising sail.
+	# Sail fill cue when catching wind strongly after lowering sail.
 	_last_wind_catch = wind_catch()
 	var drawing := sail_set > 0.35 and _last_wind_catch > 0.65
 	var played_fill := drawing and not _was_drawing_wind and prev_sail <= sail_set
@@ -3103,7 +3366,7 @@ func _tick_flooding(delta: float) -> void:
 			jet.emitting = active_leak
 		if active_leak:
 			var sev: float = h["severity"]
-			# One deep hole floods the sloop in roughly ~45–55 s; three holes in ~15–20 s.
+			# One deep hole floods the sloop in roughly ~45-55 s; three holes in ~15-20 s.
 			inflow += (0.010 + 0.014 * minf(head, 1.5)) * sev
 
 	if inflow > 0.0 and not is_sinking:
@@ -3154,7 +3417,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		sink_buoy = lerpf(1.0, 0.76, water_level)
 
 	# 1. Multi-point buoyancy & per-probe damping (cross-version Godot 4.7+/4.8+ rigid-body point velocity).
-	const PROBE_SPAN := 1.15
+	var probe_span := 1.15 * hull_scale
 	const BUOY_GAIN := 1.98
 	var com_world := xf * center_of_mass
 	for entry in BUOYANCY_PROBES:
@@ -3165,7 +3428,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var sub := sea_y - world_p.y
 		if sub <= 0.0:
 			continue
-		var frac := clampf(sub / PROBE_SPAN, 0.0, 1.85)
+		var frac := clampf(sub / probe_span, 0.0, 1.85)
 		var damp_frac := minf(frac, 1.0)
 		sub_accum += w * damp_frac
 
@@ -3198,33 +3461,45 @@ func _tick_hydrodynamics(delta: float) -> void:
 	apply_torque(b * ang_damp_local)
 
 	# 3. Anisotropic hull hydrodynamic drag (low forward resistance, strong keel resistance).
+	# Longer sleeker Brigantine waterline carries lower wave-making Froude drag per tonne than Sloop.
 	if _last_submerged_frac > 0.04:
 		var wet := lerpf(0.3, 1.0, _last_submerged_frac)
 		var v_loc := b.inverse() * linear_velocity
 		var flood_drag := 1.0 + water_level * 0.55
-		var f_z := -(v_loc.z * 260.0 + v_loc.z * absf(v_loc.z) * 162.0) * flood_drag * mass_ratio
+		var hull_drag_mult := 0.78 if ship_class == &"brigantine" else 1.0
+		var f_z := -(v_loc.z * 460.0 + v_loc.z * absf(v_loc.z) * 415.0) * hull_drag_mult * flood_drag * mass_ratio
 		var f_x := -(v_loc.x * 6800.0 + v_loc.x * absf(v_loc.x) * 2900.0) * mass_ratio
 		var f_y := -v_loc.y * 5200.0 * mass_ratio
 		apply_central_force((b * Vector3(f_x, f_y, f_z)) * wet)
 
-	# 4. Sail aerodynamics & gust heel (disabled once sinking).
+	# 4. Sail aerodynamics, Sea-of-Thieves wind curve & gust heel (disabled once sinking).
 	if not is_sinking and sail_set > 0.01:
 		var aw := apparent_wind()
+		var aw_local := b.inverse() * aw
 		var wind_spd := lerpf(Weather.wind_vector().length(), aw.length(), 0.25)
 		var wind_factor := clampf(wind_spd / 8.0, 0.55, 1.75)
 		var catch := _last_wind_catch
-		# Believable, not realistic: full trim screams; head-to-wind still creeps slowly.
-		var min_headway := 0.16 * close_hauled_modifier
+		var min_headway: float
+		if aw_local.z > 0.15:
+			# Headwind (blowing aft toward +Z in ship local space): Sea-of-Thieves dummy sails squared forward.
+			var square_fac := clampf(1.0 - absf(sail_trim) / 0.95, 0.0, 1.0)
+			if ship_class == &"brigantine":
+				min_headway = lerpf(0.14, 0.23, square_fac) * close_hauled_modifier
+			else:
+				min_headway = lerpf(0.24, 0.44, square_fac) * close_hauled_modifier
+		else:
+			# Crosswind / tailwind: poor trim noticeably loses speed vs full billow.
+			min_headway = 0.18 * close_hauled_modifier
 		var drive_coeff := lerpf(min_headway, 1.0, catch)
+		var billow_surge := 1.12 if (catch >= 0.85 and sail_set >= 0.35) else 1.0
 		var flood_slow := lerpf(1.0, 0.65, water_level)
 		var anchor_hold := 1.0 - clampf((anchor_progress - 0.92) / 0.08, 0.0, 0.94)
-		var thrust := sail_set * wind_factor * drive_coeff * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold
+		var thrust := sail_set * wind_factor * drive_coeff * billow_surge * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold
 		var fwd_horiz := Vector3(-b.z.x, 0.0, -b.z.z)
 		if fwd_horiz.length_squared() > 0.001:
 			apply_central_force(fwd_horiz.normalized() * thrust)
 
 		# Beam-wind heel torque about ship Z axis.
-		var aw_local := b.inverse() * aw
 		var side_wind := clampf(aw_local.x / 12.0, -1.6, 1.6)
 		apply_torque(b.z * (-side_wind * sail_set * 16500.0 * mass_ratio))
 
@@ -3233,8 +3508,10 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var fwd := forward_speed()
 		var dir_sign := 1.0 if fwd >= -0.35 else -1.0
 		var speed_auth := clampf(absf(fwd) / 4.2, 0.0, 1.45)
-		var low_speed_auth := 0.30 * (1.0 - anchor_progress)
-		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * 38000.0 * (1.18 if ship_class == &"brigantine" else 1.0) * speed_modifier
+		var base_low := 0.85 if (sail_set < 0.08 and anchor_progress < 0.5) else 0.30
+		var low_speed_auth := base_low * (1.0 - anchor_progress)
+		var half_sail_agility := lerpf(1.36, 1.0, smoothstep(0.42, 0.95, sail_set))
+		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * half_sail_agility * 38000.0 * (1.18 if ship_class == &"brigantine" else 1.0) * speed_modifier
 		apply_torque(Vector3.UP * turn_torque)
 
 	# 6. Anchor drag and swinging stop.
@@ -3329,7 +3606,8 @@ func _update_visuals(delta: float) -> void:
 
 	# Wheel & rudder.
 	if _wheel != null:
-		_wheel.rotation.z = -helm * TAU * 1.75
+		var turns := 1.5 if ship_class == &"brigantine" else 1.0
+		_wheel.rotation.z = -helm * TAU * turns
 	if _rudder != null:
 		_rudder.rotation.y = helm * deg_to_rad(32.0)
 
@@ -3499,8 +3777,8 @@ func _update_wake(delta: float) -> void:
 	if Ocean.current == null or not phased_present:
 		return
 	var is_brig := (ship_class == &"brigantine")
-	var len_sc := 1.32 if is_brig else 1.0
-	var beam_sc := 1.24 if is_brig else 1.0
+	var len_sc := (1.32 if is_brig else 1.0) * hull_scale
+	var beam_sc := (1.24 if is_brig else 1.0) * hull_scale
 	if is_sinking:
 		if enable_effects and global_position.y > -5.5:
 			_sink_foam_accum += delta
@@ -3536,8 +3814,8 @@ func _stamp_anchor_turn_foam(strength: float) -> void:
 	if Ocean.current == null or strength <= 0.01:
 		return
 	var is_brig := (ship_class == &"brigantine")
-	var len_sc := 1.32 if is_brig else 1.0
-	var beam_sc := 1.24 if is_brig else 1.0
+	var len_sc := (1.32 if is_brig else 1.0) * hull_scale
+	var beam_sc := (1.24 if is_brig else 1.0) * hull_scale
 	var xf := global_transform
 	# Outward drifting flank sweeps a broad curved arc of churning white foam!
 	var out_side := -_anchor_swing_dir if absf(_anchor_swing_dir) > 0.1 else 1.0
@@ -3550,7 +3828,7 @@ func _stamp_anchor_turn_foam(strength: float) -> void:
 func _anchor_world_pos() -> Vector3:
 	if _anchor_node != null:
 		return _anchor_node.global_position
-	return global_transform * Vector3(1.6, 0.0, -5.1)
+	return global_transform * (Vector3(1.6, 0.0, -5.1) * hull_scale)
 
 
 # ------------------------------------------------------------------ replication

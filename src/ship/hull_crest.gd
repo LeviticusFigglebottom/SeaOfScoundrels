@@ -61,6 +61,9 @@ static func mount_to_ship(ship: Node3D) -> HullCrest:
 	crest.name = "HullCrest"
 	var cls_v: Variant = ship.get(&"ship_class")
 	crest.ship_class = cls_v as StringName if cls_v is StringName else &"sloop"
+	var hs_v: Variant = ship.get(&"hull_scale")
+	var hs := float(hs_v) if hs_v != null else 1.0
+	crest.scale = Vector3.ONE * hs
 	ship.add_child(crest)
 	return crest
 

@@ -224,6 +224,8 @@ func _connect_signals() -> void:
 			inventory.bucket_changed.connect(_on_tool_state_changed)
 		if not inventory.shanty_playing_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_playing_changed.connect(_on_tool_state_changed)
+		if not inventory.shanty_instrument_changed.is_connected(_on_tool_state_changed):
+			inventory.shanty_instrument_changed.connect(_on_tool_state_changed)
 	if combat != null:
 		if not combat.hit_landed.is_connected(_on_combat_hit_landed):
 			combat.hit_landed.connect(_on_combat_hit_landed)
@@ -231,8 +233,11 @@ func _connect_signals() -> void:
 			combat.target_hit.connect(_on_combat_target_hit)
 		if not combat.parried.is_connected(_on_combat_parried):
 			combat.parried.connect(_on_combat_parried)
-	if pawn != null and not pawn.damaged.is_connected(_on_pawn_damaged):
-		pawn.damaged.connect(_on_pawn_damaged)
+	if pawn != null:
+		if not pawn.damaged.is_connected(_on_pawn_damaged):
+			pawn.damaged.connect(_on_pawn_damaged)
+		if not pawn.station_changed.is_connected(_on_pawn_station_changed):
+			pawn.station_changed.connect(_on_pawn_station_changed)
 	if voyage_manager != null:
 		if not voyage_manager.voyage_started.is_connected(_on_voyage_started):
 			voyage_manager.voyage_started.connect(_on_voyage_started)
@@ -254,6 +259,8 @@ func _disconnect_signals() -> void:
 			inventory.bucket_changed.disconnect(_on_tool_state_changed)
 		if inventory.shanty_playing_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_playing_changed.disconnect(_on_tool_state_changed)
+		if inventory.shanty_instrument_changed.is_connected(_on_tool_state_changed):
+			inventory.shanty_instrument_changed.disconnect(_on_tool_state_changed)
 	if combat != null and is_instance_valid(combat):
 		if combat.hit_landed.is_connected(_on_combat_hit_landed):
 			combat.hit_landed.disconnect(_on_combat_hit_landed)
@@ -264,6 +271,8 @@ func _disconnect_signals() -> void:
 	if pawn != null and is_instance_valid(pawn):
 		if pawn.damaged.is_connected(_on_pawn_damaged):
 			pawn.damaged.disconnect(_on_pawn_damaged)
+		if pawn.station_changed.is_connected(_on_pawn_station_changed):
+			pawn.station_changed.disconnect(_on_pawn_station_changed)
 	if voyage_manager != null and is_instance_valid(voyage_manager):
 		if voyage_manager.voyage_started.is_connected(_on_voyage_started):
 			voyage_manager.voyage_started.disconnect(_on_voyage_started)
@@ -545,9 +554,19 @@ func is_damage_vignette_visible() -> bool:
 	return _damage_vignette != null and _damage_vignette.visible
 
 
+## Current bottom-right active tool / supplies chip title text.
+func get_tool_title_text() -> String:
+	return _tool_title_label.text if _tool_title_label != null else ""
+
+
 ## Current bottom-right active tool / supplies chip subtitle text.
 func get_tool_meta_text() -> String:
 	return _tool_meta_label.text if _tool_meta_label != null else ""
+
+
+## Current bottom-center context prompt text.
+func get_context_prompt_text() -> String:
+	return _prompt_label.text if _prompt_label != null else ""
 
 
 ## True while the active ship has open hull breaches or critical flooding.
@@ -1115,7 +1134,7 @@ func _build_pause_overlay() -> void:
 	root_v.add_child(controls_box)
 
 	var ctrl_lines: Array[String] = [
-		"[WASD] Move  [Space] Jump  [Shift] Sprint  [F] Interact  [X] Leave Station",
+		"[WASD] Move  [Space] Jump  [Shift] Sprint  [F] Use / Leave  [X] Step Off",
 		"[Tab] Tools  [Q] Crew Orders  [B] Shipwright  [LMB/RMB] Use & Aim  [Esc] Pause",
 	]
 	for line_txt in ctrl_lines:
@@ -1383,8 +1402,6 @@ func _tick_context_prompt(delta: float) -> void:
 		if raw != "":
 			if raw.begins_with("["):
 				txt = raw
-			elif pawn != null and pawn.station != null:
-				txt = "[X] %s" % raw
 			else:
 				txt = "[F] %s" % raw
 	var want_a := 1.0 if txt != "" else 0.0
@@ -1423,41 +1440,75 @@ func _refresh_tool_chip() -> void:
 
 	if pawn != null and pawn.station != null:
 		var sk := StringName(pawn.station.get(&"kind"))
-		if sk == &"cannon" and active_ship != null:
-			title = "Ship Cannon"
-			meta = "Shot: %d | [LMB] Fire" % active_ship.cannonballs_remaining
-		elif sk == &"helm":
-			title = "Ship's Wheel"
-			meta = "A/D Steer | RMB Center"
-		elif sk == &"map_table":
-			title = "Map Table"
-			meta = "WASD Pan | LMB/RMB Zoom"
+		match sk:
+			&"helm":
+				title = "Ship's Wheel"
+				meta = "[A/D] Steer | [S/RMB] Center | [F] Leave"
+			&"anchor":
+				title = "Anchor Capstan"
+				if active_ship != null:
+					var raised_pct := int(roundf((1.0 - active_ship.anchor_progress) * 100.0))
+					meta = "[Hold W] Heave (%d%%) | [S] Drop | [F] Leave" % raised_pct
+				else:
+					meta = "[Hold W] Heave | [S] Drop | [F] Leave"
+			&"sail_length":
+				title = "Sail Hoist"
+				if active_ship != null:
+					meta = "[S] Lower / [W] Raise (%d%%) | [F] Leave" % int(roundf(active_ship.sail_set * 100.0))
+				else:
+					meta = "[S] Lower / [W] Raise | [F] Leave"
+			&"sail_angle":
+				title = "Sail Braces"
+				meta = "[A/D] Angle | [RMB] Square | [F] Leave"
+			&"cannon":
+				title = "Ship Cannon"
+				if active_ship != null:
+					meta = "Shot: %d | [WASD/Mouse] Aim | [LMB] Fire" % active_ship.cannonballs_remaining
+				else:
+					meta = "[WASD/Mouse] Aim | [LMB] Fire"
+			&"map_table":
+				title = "Map Table"
+				meta = "[WASD] Pan | [Space] Pin | [F] Leave"
+			&"bilge":
+				title = "Ship's Bilge"
+				meta = "[Hold LMB] Bail Water | [F] Leave"
 	elif inventory != null:
 		match item_id:
 			&"cutlass":
 				if resolved_id == &"boarding_axe":
 					meta = "Heavy Cleave | [RMB] Guard"
+				else:
+					meta = "[LMB] Slash / Hold Lunge | [RMB] Block"
 			&"pistol":
 				if combat != null:
 					var cap := 4 if resolved_id == &"blunderbuss" else 6
-					meta = "Shot: %d / %d | [RMB] Aim" % [combat.ammo, cap]
-			&"lantern":
-				meta = "Lit | [LMB] Snuff" if inventory.lantern_lit else "Unlit | [LMB] Light"
+					meta = "Shot: %d / %d | [LMB] Fire | [RMB] Aim" % [combat.ammo, cap]
+				else:
+					meta = "[LMB] Fire | [RMB] Aim"
 			&"bucket":
-				meta = "Full | [LMB] Splash" if inventory.bucket_full else "Empty | [LMB] Bail"
+				meta = "Full | [LMB] Throw Water" if inventory.bucket_full else "Empty | [LMB] Scoop / Bail"
 			&"planks":
 				if active_ship != null:
-					meta = "Planks: %d | [LMB] Patch" % active_ship.planks_remaining
+					meta = "Planks: %d | [LMB] Patch Breach" % active_ship.planks_remaining
 				else:
-					meta = "[LMB] Patch breach"
-			&"instrument":
-				meta = "Playing Shanty | [LMB] Stop" if inventory.playing_shanty else "[LMB] Play Shanty"
-			&"map":
-				meta = "%s | [RMB] Read" % inventory.map_island_name
+					meta = "[LMB] Patch Breach"
+			&"shovel":
+				meta = "[LMB] Dig Treasure"
 			&"compass":
-				meta = "True North | [RMB] Raise"
+				meta = "True North | [RMB] Hold Up"
 			&"spyglass":
-				meta = "[RMB] Peer Through"
+				meta = "[RMB] Zoom | [LMB] Call Out Sighting"
+			&"lantern":
+				meta = "Lit | [LMB] Flash / [RMB] Raise" if inventory.lantern_lit else "Unlit | [LMB] Light"
+			&"map":
+				meta = "%s | [RMB] Inspect" % inventory.map_island_name
+			&"tankard":
+				meta = "[LMB] Drink Grog (+HP)"
+			&"instrument":
+				var inst_disp := String(Inventory.SHANTY_INSTRUMENT_NAMES.get(
+					inventory.shanty_instrument, String(inventory.shanty_instrument).capitalize()))
+				meta = ("Playing %s | [LMB] Stop | [RMB] Swap" % inst_disp) if inventory.playing_shanty \
+					else "[LMB] Play | [RMB] Swap Instrument"
 
 	# Surface urgent ship flooding / open hull breach warnings right on the supplies chip.
 	var hull_warn := ""
@@ -1605,6 +1656,12 @@ func _on_pawn_damaged(amount: float, _from: Node) -> void:
 		if pawn != null and is_instance_valid(pawn):
 			_last_hp = pawn.health
 		_sync_damage_vignette(0.0)
+
+
+func _on_pawn_station_changed(_st: Node3D) -> void:
+	_tool_flash_timer = 2.6
+	_refresh_tool_chip()
+	_tick_sailing_telemetry()
 
 
 func _on_combat_hit_landed(_target: Pawn, _damage: float, was_heavy: bool) -> void:

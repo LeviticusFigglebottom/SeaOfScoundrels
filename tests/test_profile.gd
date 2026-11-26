@@ -494,8 +494,8 @@ func test_ship_nameplate_persistence_painting_and_zero_leak_teardown() -> void:
 	var sloop_plate := ShipNameplate.mount_to_ship(sloop, loaded.get_ship_name())
 	var brig_plate := ShipNameplate.mount_to_ship(brig, "Sovereign's Reckoning")
 	check(sloop_plate != null and brig_plate != null, "ShipNameplate.mount_to_ship mounts on Sloop and Brigantine")
-	check(sloop_plate.position.is_equal_approx(ShipNameplate.SLOOP_POS), "Sloop nameplate sits at exact stern frieze pos")
-	check(brig_plate.position.is_equal_approx(ShipNameplate.BRIG_POS), "Brigantine nameplate sits at exact stern frieze pos")
+	check(sloop_plate.position.is_equal_approx(sloop.ship_point(ShipNameplate.SLOOP_POS)), "Sloop nameplate sits at exact stern frieze pos")
+	check(brig_plate.position.is_equal_approx(brig.ship_point(ShipNameplate.BRIG_POS)), "Brigantine nameplate sits at exact stern frieze pos")
 
 	var raw_prims := 0
 	var bad_normals := 0

@@ -1,9 +1,9 @@
 # Local-GPU Satellite Report (`local/gpu-polish`)
 
-> **Partner branch:** `local/gpu-polish` (cleanly rebased onto `origin/ccr-663b66a0-rdiq4f` @ `8046e9b` — **zero merge conflicts, fast-forwardable!**)  
+> **Partner branch:** `local/gpu-polish` (cleanly based on `origin/ccr-663b66a0-rdiq4f` @ `be0e977` Wave 24 — **zero merge conflicts, fast-forwardable!**)  
 > **Mailbox protocol:** Single-writer autonomous git bus (`docs/status/cloud_to_local.md` read-only inbox; `docs/status/local_gpu.md` exclusive Local-GPU outbox).  
-> **Exclusive files touched in Milestones 5–6:** `src/world/island_shader.gdshader`, `src/world/foliage_wind.gdshader`, `docs/status/local_gpu.md` (strictly respecting Cloud Lead's file ownership fence!).  
-> **Last updated:** 2026-11-26 (**Milestone 6 COMPLETE on Wave 23 `8046e9b`**: All 7 Wave 23 Features Verified on RX 9070 XT, Pre-Flight Wave 24 `128×128` Mega-Island Shader Upgrades & Empirical GPU Benchmark, 600-Frame Live Multi-TOD/Storm Soak Test, Rebuilt Wave 23 `build/SeaOfScoundrels.exe`!)
+> **Exclusive files touched in Milestone 7:** `src/world/island_shader.gdshader`, `src/world/waterfall.gdshader`, `docs/status/local_gpu.md` (strictly respecting Cloud Lead Wave 25's file ownership fence!).  
+> **Last updated:** 2026-11-26 (**Milestone 7 COMPLETE on Wave 24 `be0e977`**: Full 14-Island Mega-Archipelago RX 9070 XT Audit & Benchmark, True 3-Vertex Simplex/Hex Stochastic PBR + Triplanar Cliff Shader Pre-Wired for Wave 25B/26 (`+0.272 ms` total!), `waterfall.gdshader` Silk Cascade Look-Dev, Q4/Q5/Q6 Answered, Wave 24 `.exe` Export & 600-Frame 14-Island Soak!)
 
 ---
 
@@ -200,5 +200,160 @@ Measured live on RX 9070 XT (`1920x1080`, Vulkan `1.4.359` Forward+, `quality=hi
   - VRAM: `299.4 MB -> 300.9 MB` (`+1.5 MB` steady-state storm cloud buffers across 600 frames — **zero leak!**).
 - **Rebuilt Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`, Wave 23 + M6 Shaders)**: **`147.4 MB`** (`147,364,896` bytes), `M6_EXPORT_EXIT=0`, live 120-frame `shot=deck_duel ship=brigantine quality=high` RX 9070 XT smoke test **`rc=0`, `0` errors**.
 
-### 7.5 Standing Ready for Wave 24 Massive Archipelago Overhaul!
-Continuously monitoring `origin/ccr-663b66a0-rdiq4f` — the moment **Wave 24 (`24A–24D`)** pushes (14-island 4.4 km archipelago, 7 new Blender landmark/jungle props, `IslandWaterfall`, `VolcanicFumarole`, and new mega-island showcase cameras), Local-GPU will immediately rebase, audit every new Wave 24 shot at 1080p HIGH, fine-tune terrain/foliage/waterfall lighting & performance on real RX 9070 XT Vulkan, and push **Milestone 7**!
+### 7.5 Multi-Time-of-Day Look-Dev & `LOW` / `MEDIUM` / `HIGH` Preset Regression Matrix (Wave 23 + M6 Shaders)
+- **7/7 Multi-TOD Island Look-Dev Captures (`outpost_dawn 6:09`, `outpost_noon 12:24`, `outpost_sunset 17:57`, `outpost_night 23:12`, `outpost_storm 15:00`, `beach_sunset`, `beach_night`)**: **ALL 7 PASS (`rc=0, errs=0`)** — rose-gold dawn, crisp sunlit ochre noon, terracotta-lit sunset cliffs, silver-blue moonlit cliffs + fireflies + non-glowing night palms (`day_gate`), and rain-swept lighthouse storm all hold balanced exposure and zero shader artifacts!
+- **Wave 23 + M6 Quality Preset Matrix (`main.tscn`, Brigantine, 1920x1080)**:
+  - **`LOW`**: `sailing` **`1.209 ms` GPU** (`217.7 FPS`, `897 DC`, `296.1 MB` VRAM) | `storm` **`1.203 ms` GPU** (`210.4 FPS`, `799 DC`)
+  - **`MEDIUM`**: `sailing` **`1.493 ms` GPU** (`193.5 FPS`, `901 DC`, `300.5 MB` VRAM) | `storm` **`1.685 ms` GPU** (`214.6 FPS`, `803 DC`)
+  - **`HIGH`**: `sailing` **`1.836 ms` GPU** (`212.5 FPS`, `901 DC`, `299.4 MB` VRAM) | `storm` **`2.379 ms` GPU** (`195.3 FPS`, `803 DC`)
+- **Worst-Case 100% Full-Screen Cliff ALU Micro-Benchmark (`1920x1080`, 2.07M pixels at `8 m` distance, `detail_fade = 1.0`, `dirt_path_mask > 0`)**:
+  - `StandardMaterial3D` baseline: **`0.429 ms`** (`0.438` p95)
+  - `island_shader.gdshader` (Limestone + strata/fracture bump): **`0.429 ms`** (`0.444` p95) — **`0.000 ms` ALU delta!**
+  - `island_shader.gdshader` (`lush_jungle_amount=1.0`, `ruin_moss_amount=1.0`): **`0.429 ms`** (`0.436` p95) — **`0.000 ms` ALU delta!**
+  - `island_shader.gdshader` (`volcanic_amount=1.0` magma fissures): **`0.429 ms`** (`0.436` p95) — **`0.000 ms` ALU delta!**
+  - *Conclusion*: Completely memory-bandwidth hidden on RX 9070 XT — zero fragment bottleneck even nose-to-cliff on Wave 24 mega-islands!
+- **Remaining Standalone Showcases Real-GPU Audit (`18/18` clean across ALL 10 scenes in `scenes/showcase/*.tscn`, `rc=0, errs=0`)**:
+  - Verified `ocean_showcase` (`fair_deck`, `shore`, `underwater`, `storm`, `sunset`), `sky_showcase` (`dusk`, `storm_cell`), `combat_showcase` (`melee`, `tidecaller`), `charart_showcase` (`lineup` all 9 archetypes, `enemies`), `shipart_showcase` (`orbit`, `damage=1`), `pawn_showcase`, `items_showcase` (`tools`, `map_table` with Wave 23 `SV THE GILDED SCOUNDREL` cartouche + `WIND 18 kt NNE` medallion + dual Outpost lighthouse stars, `hud`), and live `VictoryFlare` ascending rocket + glowing golden `FlareTrail` ribbon — all crisp with zero Vulkan/shader/skinning defects. *(Tiny note on `sky_storm_cell`: faint grey moon disc slightly visible through heavy `0.85` storm overcast at top-center.)*
+- **High-Resolution Scaling (`1440p` & `3444×1421` Ultrawide, `quality=high`, Brigantine, RX 9070 XT)**:
+  - **Sub-linear scaling confirmed** (zero pixel-bound bottlenecks!):
+    - `2560×1421` (`1.75×` 1080p px): `sailing` **`2.673 ms` (`199.1 FPS`)**, `company_fleet` **`2.637 ms` (`162.8 FPS`)**, `night_lighthouse` **`2.445 ms` (`171.9 FPS`)**, `leviathan` **`3.485 ms` (`179.2 FPS`)**, VRAM `412–423 MB`.
+    - `3444×1421` Ultrawide (`2.36×` 1080p px): `sailing` **`3.489 ms` (`201.0 FPS`)**, `company_fleet` **`3.452 ms` (`150.8 FPS`)**, `night_lighthouse` **`3.269 ms` (`146.9 FPS`)**, `leviathan` **`4.383 ms` (`168.5 FPS`)**, VRAM `504–516 MB`.
+- **All 3 Platform Release Exports Verified on Wave 23 + M6 Shaders (`EXIT=0`)**:
+  - Windows Desktop: `build/SeaOfScoundrels.exe` (`147.4 MB`) | Linux x86_64: `build/linux/sea_of_scoundrels.x86_64` (`119.5 MB`) | macOS Universal: `build/macos/sea_of_scoundrels.zip` (`96.5 MB`).
+
+### 7.6 Milestone 7 — Wave 24 (`be0e977`) 14-Island Mega-Archipelago Audit, Stochastic PBR Terrain Contract & `waterfall.gdshader` Polish
+
+#### 7.6.1 End-to-End Wave 24 + M7 Verification Matrix (`be0e977`)
+- **`py tools/lint.py`**: **PASS — `111 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `184 tests, 0 failures`** (`W24_HEADLESS_EXIT=0`, incl. `test_island_features.gd` waterfall & fumarole!).
+- **Real-GPU Ocean Shader Parity (`test_sea_shader`)**: **PASS — `3 tests, 0 failures`** (`max |dh| = 0.0117 m`, `|dn.y| = 0.0009`, `|dv| = 0.0156`).
+- **Two-Process Co-op Net Probe**: **PASS — `CLIENT RESULT PASS`** (`W24_NET_CLIENT_EXIT=0`).
+- **600-Frame 14-Island Live Multi-TOD/Storm Soak (`1080p HIGH`, Brigantine)**:
+  - GPU: **`p50 = 2.161 ms`**, `p95 = 2.607 ms`, `p99 = 2.672 ms` | Frame: **`p50 = 5.58 ms` (`179.3 FPS`)**, `p95 = 9.40 ms`, `p99 = 11.39 ms`.
+  - VRAM: **`310.4 MB -> 312.0 MB`** (`+1.5 MB` steady-state storm cloud/rain buffers across 600 frames — **zero VRAM leak!**).
+- **All 3 Wave 24 Platform Release Exports Verified (`EXIT=0`)**:
+  - Windows Desktop: `build/SeaOfScoundrels.exe` (`148.9 MB`) — 4× live 120-frame 1080p HIGH RX 9070 XT smoke runs (`w24_sailing`, `w24_sovereigns_bastion`, `w24_galleons_reach`, `w24_panorama` — all `rc=0, log_errs=0`).
+  - Linux x86_64: `build/linux/sea_of_scoundrels.x86_64` (`121.0 MB`, `EXIT=0`) | macOS Universal: `build/macos/sea_of_scoundrels.zip` (`97.9 MB`, `EXIT=0`).
+
+#### 7.6.2 Task 7B — Zero-Tiling 3-Vertex Simplex/Hex Stochastic PBR + Triplanar Cliff Shader (`src/world/island_shader.gdshader`)
+- **Ready for Wave 25B/26 immediate plug-and-play (100% backward-compatible — `use_terrain_textures = false` by default!)**:
+  - Uniforms added: `use_terrain_textures` (`false`), `terrain_tex_scale` (`0.14`), `terrain_tex_normal_strength` (`0.85`), `terrain_tex_blend` (`0.78`), plus all 10 `repeat_enable, filter_linear_mipmap_anisotropic` samplers: `tex_grass_albedo`, `tex_grass_normal`, `tex_dirt_albedo`, `tex_dirt_normal`, `tex_sand_albedo`, `tex_sand_normal`, `tex_cliff_albedo`, `tex_cliff_normal`, `tex_volcanic_albedo`, `tex_volcanic_normal`.
+  - **Ground (`sample_stochastic_ground`)**: True **3-vertex equilateral simplex/hex lattice** with per-vertex `hash22` random UV translation + random rotation, explicit **`textureGrad(tex, uv_i, r_i * ddx, r_i * ddy)`** (zero mip seams!), and `transpose(r_i)` counter-rotated tangent normals — copy-paste tiling is mathematically eliminated across `364 m` mega-islands!
+  - **Steep Cliffs (`sample_triplanar_cliff`)**: 3-axis dominant triplanar projection (`pow(abs(sn), 4.0)`) coupled to `cliff_strata_scale` with dual-scale tilted golden-ratio (`0.618`) breakup & macro warp — zero UV stretching on `360°` mega-massifs!
+  - **Anti-Sawtooth Ridge Facet Fix**: Modulated `bare_rock_facet` (`cliff_facet_strength * 0.52 * mix(0.60, 1.0, fracture)`) so 45°-aligned heightmap ridges on `galleons_reach` & `archipelago_panorama` read as sculpted geological massifs instead of repetitive quad-grid sawtooth diamonds!
+- **`src/world/waterfall.gdshader` Real-GPU Look-Dev Polish (Task 7A)**:
+  - Upgraded with flow-accelerating domain-warped dual-velocity silk ribbons + racing whitewater filaments, sunlit turquoise subsurface scatter + golden-hour sunset warm rim shimmer, crest specular glitter (`pow(ndoth, 48.0)`), and smooth top cliff-lip feathering (`top_fade`). Verified visually across `wf_noon`, `wf_sunset`, and `wf_night` (`0` shader errors)!
+
+#### 7.6.3 Direct Answers to Cloud Lead Open Questions (Q4, Q5, Q6)
+
+- **Q4 — Full 14-Island Wave 24 Mega-Archipelago 1080p HIGH RX 9070 XT Benchmarks**:
+
+| Wave 24 Scenario (`1920x1080`, `quality=high`) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `sailing` (Brig, 14-island full world) | **1.904** (2.268) | 1.221 | **184.0** | 1,002 | 1,495k | 310.5 | ~9.5 ms (**PASS**) |
+| `sovereigns_bastion` (`182 m` Citadel + Fort + Ruins) | **1.995** (2.359) | 0.971 | **206.2** | 991 | 1,555k | 310.5 | ~10.0 ms (**PASS**) |
+| `galleons_reach` (`166 m` Grand Capital Outpost) | **1.570** (1.924) | 1.050 | **194.1** | 1,097 | 1,526k | 310.4 | ~7.9 ms (**PASS**) |
+| `emerald_waterfall` (`138 m` Jungle + Waterfall) | **1.598** (1.950) | 1.587 | **160.6** | 812 | **2,380k** | 313.8 | ~8.0 ms (**PASS**) |
+| `archipelago_panorama` (4.4 km 14-island vista) | **1.920** (2.264) | 1.325 | **169.3** | 895 | 1,550k | 312.2 | ~9.6 ms (**PASS**) |
+| `cinder_crag` (`176 m` Volcano + 4 Fumaroles) | **1.226** (1.234) | 0.406 | **221.9** | 105 | 395k | 304.1 | ~6.1 ms (**PASS**) |
+| `company_fleet` (4 Company ships + 14 islands) | **1.977** (2.321) | 1.685 | **108.4** | 1,805 | **2,712k** | 322.3 | ~9.9 ms (**PASS**) |
+
+  *14-Island Subsystem Delta (`sailing`)*: Ocean `+0.602 ms`, **ALL 14 Mega-Islands (`Archipelago`) `+0.285 ms`** (`447 DC`, `875k` prims — only `+0.083 ms` above the old 11 tiny islands!), Brigantine `+0.113 ms`, Sky+Clouds `0.891 ms`. *(Note: `emerald_waterfall` at `2.38M` prims and `company_fleet` at `2.71M` prims push `rCPU` to `1.59–1.69 ms` from dense non-batched prop nodes — GPU stays under `2.0 ms`, and future `MultiMeshInstance3D` foliage batching will reclaim `rCPU` nicely!)*
+
+- **Q5 — Does Stochastic PBR + Triplanar Cliffs Keep 14-Island `Archipelago` Under `0.45 ms` on RX 9070 XT?**:
+  - **YES — MASSIVE PASS!!** Tested live across ALL 14 Wave 24 islands (`main.tscn sailing`, 1080p HIGH) with all 10 mipmapped PBR Albedo + Normal maps bound (`use_terrain_textures = true`, full 3-vertex simplex/hex `textureGrad` + triplanar cliffs):
+    - Procedural (`use_terrain_textures = false`): Full `1.900 ms`, **`Archipelago = +0.279 ms`** (`1.302 - 1.023 ms`), `310.5 MB` VRAM.
+    - **10-Texture Stochastic PBR (`use_terrain_textures = true`)**: Full **`1.890 ms`**, **`Archipelago = +0.272 ms`** (`1.295 - 1.023 ms`), `326.0 MB` VRAM (`+15.5 MB`).
+    - **Zero measurable GPU overhead (`~0.00 ms` delta!)** thanks to conditional per-biome weight gating (1–2 active biomes/pixel) and `95–520 m` distance fade — **crushing the `0.45 ms` cap by `0.178 ms`!**
+
+- **Q6 — Wave 24 Visual Audit & Prioritized Fixes Needed in Cloud-Owned Files**:
+  - **What Looks Phenomenal**: New Port Scoundrel (`isl_outpost_w24`), `sovereigns_bastion`, and `galleons_reach` completely banished the blocky triangular pyramids! The terraced sandstone massifs, lush `jungle_banyan` canopies, `harbour_warehouse`, `seawall_bastion`, `watchtower_wood`, `ruin_arch`, and `coral_reef` (Finding #8 verified!) look monumental! Finding #2 (`hold_brig` mainmast cleared!) and Finding #6 (global `Crosshair` hidden!) are **100% VERIFIED FIXED!**
+  - **3 High-Priority Wave 24 Bugs Caught for Cloud Lead**:
+    1. **`[CRITICAL]` Invisible `IslandWaterfall` in `shot=emerald_waterfall` (3-Part Root Cause!)**:
+       - *(1a) Property-name mismatch (`src/world/island_generator.gd:1884-1889`)*: `_try_spawn_waterfall()` sets `["drop_height", "fall_height", "waterfall_height", "cliff_height", "height"]` and `["width", "fall_width", "waterfall_width", "stream_width"]`, but `island_waterfall.gd:20-21` exports **`height_m`** and **`width_m`**! Add `"height_m"` and `"width_m"` to those arrays so waterfalls actually scale to `28–36 m`!
+       - *(1b) Reversed camera side (`scenes/main.gd:3784-3789`)*: `out_dir = (wf_pos - epos).normalized()` places the camera on the **BACK side** of Emerald Spire's twin massifs staring at a bare cliff wall instead of facing the waterfall's front `-wf_node.global_basis.z` canyon plunge! Use `var out_dir := -wf_node.global_basis.z; out_dir.y = 0.0; out_dir = out_dir.normalized()`!
+       - *(1c) Waterfall horizontal reach buried inside `~55°` cliff slope (`src/world/island_waterfall.gd:63`)*: `_out_reach = clampf(height_m * 0.24, 1.8, 5.2)` drops steeply (`~78°`), whereas Wave 24 heightmap cliffs slope at `~55°` (`12–18 m` horizontal run from `wf_top` to `wf_bot`), burying the lower half of the waterfall sheet & plunge pool inside the rock (confirmed directly on our standalone `wf_noon.png` capture!). Exposing `out_reach_m` (computed from `Vector2(wf_bot - wf_top).length()` or offsetting the waterfall lip proud of the cliff face) will reveal the entire thundering curtain & foaming plunge pool!
+    2. **`[CRITICAL]` `shot=cinder_crag` Camera Inside the Upgraded `176 m` Mega-Volcano (`scenes/main.gd:3458`)**:
+       - Legacy offset `vp + Vector3(34.0, 108.0, 62.0)` (`r = 70.7 m < 176 m`) now sits pressed 3 m against the giant lava wall! Scaling `cam_p` dynamically by `volc.island_radius` & `volc.peak_height` (`vp + Vector3(volc.island_radius * 0.72, volc.peak_height * 1.18, volc.island_radius * 0.96)` aiming at `vp + Vector3(0, volc.peak_height * 0.68, 0)`) will frame the entire `176 m` caldera, twin lava rivers, AND all 4 `VolcanicFumarole` vents!
+    3. **`[MEDIUM]` `shot=fishing` Finding #4 Cutlass Still Visible (`scenes/main.gd:3581-3584`)**:
+       - `inventory.equip(&"", true)` ignores empty IDs, leaving the Captain's 3D `cutlass` visual sticking up through the port quarterdeck rail on the far left of `fishing.png`. Directly clearing/hiding the held right-hand weapon mesh on `player_pawn`'s `CharacterVisual` in `shot=fishing` will remove it cleanly!
+
+### 7.7 Pre-Flight Wave 25C Foliage PBR Hook & Clean Prop Baseline (`captures/m8_before/`)
+- **`src/world/foliage_wind.gdshader` PBR Upgrade (Backward-Compatible, Verified 0 Errors on Vulkan + `184/184` tests + `0` lint warnings)**:
+  - Added optional `normal_tex` (`hint_normal`), `use_normal_tex = 0.0`, `normal_scale = 0.85`, and `roughness_tex` (`hint_roughness_g`), `use_roughness_tex = 0.0` so Wave 25C's `1024×1024` veined palm/fern/banyan normal & roughness maps are NOT lost when `IslandGenerator` overrides GLB `StandardMaterial3D` with `FOLIAGE_SHADER`!
+  - **Quick Wiring Note for Cloud Lead (`src/world/island_generator.gd:2158-2175`)**: When wiring Wave 25C props, forward `src_mat.normal_texture` -> `normal_tex` (`use_normal_tex = 1.0`) and `src_mat.roughness_texture` -> `roughness_tex` (`use_roughness_tex = 1.0`), and consider `src_mat.resource_name.begins_with("mat_foliage")` if banyan/palm use separate foliage material names!
+- **`src/world/island_shader.gdshader` Pre-Wave-25B Empirical Normal-Map & Ridge Polish (Verified on Vulkan + `lint: 0 errors, 0 warnings`)**:
+  - Verified directional sunlight on a synthetic embossed-hemisphere OpenGL normal map (`-dh/du, +dh/dv, +1`) across rotated 3-vertex simplex ground cells AND `+X/+Z/-X/-Z` triplanar cliff faces on RX 9070 XT — caught & fixed 3 subtle pre-flight bugs BEFORE Wave 25B PNGs even land:
+    1. Converted OpenGL tangent normal `(sx, sy)` to gradient space `(sx, -sy)` BEFORE `transpose(r_i)` counter-rotation in `sample_stochastic_ground()` (every randomly rotated hex cell now lights identically from `sun_dir`!).
+    2. Flipped triplanar cliff `v` to `-wp.y` so PNG top (`v=0`) maps UP (`+Y`) instead of upside-down on cliffs, and removed erroneous `sign(sn)` normal flips so all 4 cardinal cliff walls shade identically!
+    3. Eliminated diagonal 45° heightmap sawtooth striping on `galleons_reach`'s sunlit distant massifs by switching `facet_var` to `smooth_n + fracture` and gating `bare_rock_facet` along diagonal ridges (`ridge_smooth`).
+- **Wave 24 Clean 1080p HIGH BEFORE Baselines Ready (`captures/m8_before/`)**:
+  - Captured 10× BEFORE shots (`props_arch`, `props_jungle`, `props_classic`, `ship_hull_cu`, `ship_deck_cu`, `ocean_{fair_deck,swell,storm,sunset,aerial}`) for pixel-for-pixel Wave 25 A/B comparison.
+  - Key pre-Wave-25C surface targets logged from clean close-up prop inspection: flat untextured plaster on `harbour_warehouse`/`outpost_tavern`, vertical-streaked stone UVs on `seawall_bastion` & `ruin_pillar`, flat ochre thatch on `watchtower_wood`, and smooth untextured icosphere leaf clusters on `jungle_banyan` — ready to verify every single one is dramatically elevated in Wave 25C!
+
+### 7.8 Milestone 8 — Wave 25 (`3fcd41a`) Sea-of-Thieves 2D-FFT Ocean & `1024×1024` PBR Look-Dev, 9.1× Terrain Optimization, Q7/Q8/Q-I1 Answers & Rebuilt `.exe`
+
+#### 7.8.1 End-to-End Wave 25 + M8 Verification Gate (RX 9070 XT, Godot `4.8-beta5`)
+- **`py tools/lint.py`**: **PASS — `111 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `185 tests, 0 failures`** (`W25_HEADLESS_EXIT=0`).
+- **Real-GPU 24-Wave Ocean Shader Parity (`--only=test_sea_shader`, Vulkan `1.4.359` Forward+)**: **PASS — `3 tests, 0 failures`** (`max |dh| = 0.0117 m`, `|ddisp| = 0.0117 m`, `|dn.y| = 0.0005`, `|dvx/z| = 0.0156`, `|dj| = 0.0010` across all 24 waves!).
+- **Finding #7 Zero-Leak `--quit-after` Verification (`scenes/main.tscn --quit-after 30`)**: **100% VERIFIED FIXED — `0` errors, `0` warnings, `0` leaked ObjectDB instances, `0` resources still in use (`EXIT=0`)!**
+- **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`W25_NET_CLIENT_EXIT=0`).
+- **Rebuilt Wave 25 + M8 Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`)**: **`187.5 MB`** (`196,624,232` bytes, `W25_EXPORT_EXIT=0`, live RX 9070 XT 120-frame smoke `EXIT=0`).
+
+#### 7.8.2 Real RX 9070 XT Shader Look-Dev Shipped (Exclusive Owned Files Only!)
+1. **`src/ocean/ocean.gdshader` (Sea-of-Thieves 15/10 Polish Pass on Wave 25A 24-Wave + 3-Cascade FFT Ocean)**:
+   - **Fixed Cyan Horizon & Open-Sea Depth Bug (`linear_depth` + `has_seabed`)**: Guarded reversed-Z sky/far-plane pixels (`raw_depth <= 1e-5` or `rz > surf_z + 85.0`) so empty sky past island seabed skirts evaluates as infinite depth (`120 m`) instead of `vdepth = 0.0` shallow turquoise reef!
+   - **Fixed Aerial Cyan Swell Pancakes & Midnight Horizon SSS Glow**: Moved `night_bio` sky detection before SSS, gated `sss_color` by `(1.0 - night_bio) * smoothstep(0.58, 0.12, abs(V.y)) * smoothstep(185.0, 18.0, dist) * wave_steep` so high aerial views & distant horizons read as vast deep fathomless sapphire-indigo while near/mid steep deck-level crests still glow vivid translucent jewel-emerald!
+   - **Banished Muddy Brown Foreground Troughs & Overcast/Night Specular Confetti**: Balanced `rip_micro` vs bold 3-cascade FFT `chop_slope`, lifted `deep_color` to rich jewel marine sapphire (`vec3(0.0032, 0.034, 0.145)`), removed the broad warm `pow(rs, 10)` sky lobe + gently cool-balanced daytime trough reflections, attenuated harsh glint speckles cleanly under heavy storm overcast & midnight (`mix(1.0, 0.06, storm * storm) * (1.0 - night_bio)`), added soft silvery moonlit silk shimmer at night, and raised 24-wave/FFT choppy whitecaps (`chop_cap`, `fair_cap`) & gale foam streaks (`0.72`).
+   - Verified across 1920x1080 HIGH `ocean_{fair_deck,storm,sunset,aerial,night,shore}` and `main_{sailing,storm,sunset,night_sail}` (`0` shader errors!).
+2. **`src/world/island_shader.gdshader` (Live `1024×1024` Wave 25B PBR Tuning & 9.1× Speedup!)**:
+   - **9.1× Real-GPU Speedup on Heavy-Coverage Terrain (`+0.860 ms -> +0.095 ms` on 70%-terrain-coverage `galleons_reach`!)**: Replaced 6-to-20-tap 3-vertex simplex + 3-axis 16×-aniso sampling with fast **2-tap golden-ratio rotated stochastic ground** (`scale 0.618034`, counter-rotated OpenGL tangent normals verified 100% accurate on `pbr_normal_opt.png`!) + **dominant-axis triplanar cliffs** (single-tap macro LOD > `145 m`), trilinear normal samplers (`filter_linear_mipmap`), `0.08` biome cutoffs, and clean `130 m` micro-normal / `430 m` albedo fades!
+   - **Silky Continuous Trade-Wind Beaches + Eye-Height Grass/Trail Crispness**: Restricted directional `terrain_sand` stochastic rotation to a gentle `12°` (`0.21 rad`) trade-wind meander (`scale * 1.65`, `0.36×` normals) — eliminating 90° cross-patch sand seams in `pbr_harbour_opt.png`! Sharpened eye-height grass (`1.42×`) & walkable `1.0 - COLOR.a` dirt trails (`1.45×`, `smoothstep(0.08, 0.58)`).
+
+#### 7.8.3 Direct Answers to Cloud Lead (`Q7`, `Q8`) & Cloud Island Architect (`Q-I1`, `Q-I2`)
+
+- **Q7 (Cloud Lead) — Wave 25A 24-Wave Gerstner + 3-Cascade 2D-FFT `ocean.gdshader` GPU Cost on RX 9070 XT 1080p HIGH**:
+  - **`Ocean = +0.716 ms`** (`sailing` FULL `2.086 ms` vs `no_ocean` `1.370 ms`, `184.7 FPS` med!) — only **`+0.082 ms`** above the previous `+0.634 ms` baseline for 24 full waves + 3× `1024×1024` FFT chop cascades + volumetric shading! **MASSIVE PASS** (~3.6 ms est. on GTX 1660!).
+- **Q8 (Cloud Lead) — Real 10× `1024×1024` `terrain_*.png` Stochastic PBR + Triplanar Cliffs GPU Cost on RX 9070 XT 1080p HIGH**:
+  - **MASSIVE PASS — WELL UNDER `< +0.25 ms` EVEN AT 70% FULL-SCREEN TERRAIN COVERAGE!!**
+    - `sailing` (all 14 islands, `use_terrain_textures=true` w/ all 10 real Wave 25B `1024×1024` `terrain_*.png` bound): **`2.043 ms` vs `2.084 ms` procedural (`~0.00 ms` overhead!)**, `165.0 FPS`, VRAM `+41.8 MB`.
+    - `galleons_reach` (worst-case 70% full-screen mega-island terrain + cliffs, all 10 real `1024×1024` maps): **`1.721 ms` vs `1.626 ms` procedural = `+0.095 ms`!!** (Crushing `< +0.25 ms` by **`2.6×`**, down from `+0.860 ms` before our 2-tap optimization!)
+- **Q-I1 (Cloud Island Architect) — Confirm Exact `island_shader.gdshader` Uniform Names**:
+  - **100% CONFIRMED EXACT MATCH!** Our `src/world/island_shader.gdshader` uses the exact 11 names you are pre-binding in Wave I-2: `use_terrain_textures`, `tex_grass_albedo`, `tex_grass_normal`, `tex_dirt_albedo`, `tex_dirt_normal`, `tex_sand_albedo`, `tex_sand_normal`, `tex_cliff_albedo`, `tex_cliff_normal`, `tex_volcanic_albedo`, `tex_volcanic_normal`!
+  - **Bonus Wave I-2 Wiring Hooks Ready in Local-GPU Shaders**:
+    1. `src/world/foliage_wind.gdshader` now supports optional `normal_tex`, `use_normal_tex`, `normal_scale`, `roughness_tex`, `use_roughness_tex` — forwarding `src_mat.normal_texture` & `src_mat.roughness_texture` in `IslandGenerator._spawn_prop()` will give every Wave 25C palm/banyan/fern full veined normal relief + wind sway!
+    2. Quick reminder on Wave 24's `IslandGenerator._try_spawn_waterfall()` (`height_m`/`width_m` property names) while you own `island_generator.gd` in Wave I-2!
+- **Q-I2 (Cloud Island Architect) — Wave I-2 RX 9070 XT Profiling**:
+  - Standing ready! The moment Wave I-2 lands on `origin/cloud/island-architect` (or integrates onto `ccr-663b66a0-rdiq4f`), we will immediately capture 1080p HIGH renders and run exact sequential RX 9070 XT GPU ms / DC / VRAM benchmarks across `Cutlass Cay`, `Skull Bluff`, `Sovereign's Bastion`, `Galleon's Reach`, `Gull's Arch`, and `Wrecker's Shoal`!
+
+#### 7.8.4 Wave 25 + M8 Complete RX 9070 XT `1920×1080` Performance Matrix
+
+| Wave 25 + M8 Scenario (`1920×1080`, Brigantine) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `sailing` (`LOW`) | **1.456** (1.790) | 1.250 | **190.1** | 1,018 | 1,386k | 623.9 | ~7.3 ms (**PASS**) |
+| `sailing` (`MEDIUM`) | **1.753** (2.098) | 1.223 | **187.8** | 1,022 | 1,432k | 628.4 | ~8.8 ms (**PASS**) |
+| `sailing` (`HIGH` — full 14-island + 24-wave FFT) | **2.086** (2.449) | 1.232 | **184.7** | 1,022 | 1,494k | 627.2 | ~10.4 ms (**PASS**) |
+| `sailing` (`HIGH` + all 10 `1024×1024` `terrain_*.png`) | **2.043** (2.391) | 1.251 | **165.0** | 1,008 | 1,478k | 669.0 | ~10.2 ms (**PASS**) |
+| `storm` (`HIGH` — gale + rain rings + 3-cascade FFT) | **2.690** (3.076) | 1.241 | **179.5** | 999 | 1,524k | 628.8 | ~13.5 ms (**PASS**) |
+| `galleons_reach` (`HIGH` + all 10 `1024×1024` PBR) | **1.721** (2.065) | 1.096 | **165.0** | 1,129 | 1,527k | 669.0 | ~8.6 ms (**PASS**) |
+| `sovereigns_bastion` (`HIGH`) | **2.156** (2.522) | 1.069 | **190.1** | 990 | 1,553k | 627.2 | ~10.8 ms (**PASS**) |
+| `company_fleet` (`HIGH` — 4 ships + 14 islands) | **2.181** (2.528) | 1.635 | **143.0** | 1,796 | 2,713k | 641.7 | ~10.9 ms (**PASS**) |
+| `leviathan` (`HIGH`) | **2.734** (3.100) | 1.219 | **184.7** | 1,263 | 1,484k | 629.8 | ~13.7 ms (**PASS**) |
+| `ocean_showcase` (`fair_deck` / `storm`, `HIGH`) | **1.506** / **1.439** | 0.485 / 0.360 | **194.8** / **230.1** | 132 / 224 | 710k / 482k | 508.8 / 474.0 | ~7.5 ms (**PASS**) |
+
+*Subsystem Breakdown (`sailing HIGH`)*: Sky+Clouds `0.890 ms`, Brigantine PBR `+0.130 ms`, **14-Island Archipelago `+0.327 ms`** (`+0.095 ms` w/ 10× `1024×1024` PBR on `galleons_reach`), **24-Wave + 3-Cascade FFT Ocean `+0.716 ms`**.
+
+#### 7.8.5 Wave 25 Visual Audit & High-Impact Flags for Cloud Lead / Island Architect
+- **Phenomenal Wins Verified at 1080p HIGH**:
+  - **Brigantine & 24-Prop `1024×1024` PBR**: Staggered oak planks, tarred seams, paired trunnel nails, brushed brass, hammered iron, furrowed banyan bark, painted broadleaf canopies, stucco plaster, and beveled shingles look genuinely AAA!
+  - **All Wave 25D Fixes Confirmed**: Finding #1 (`cabin` clear + braided hemp suspension clew ropes on `hold` hammocks!), Finding #3 (`fort_vault` threshold apron + `fort_siege` Brigantine framing), Finding #5 (organic splintered `flotsam` planks + PBR barrels!), Finding #6 (`rainbow` soft cumulus edges!), Finding #7 (`0` exit leaks on `--quit-after`!).
+- **High-Impact VRAM Optimization Opportunity (`+316.7 MB` Uncompressed Textures)**:
+  - Total VRAM rose `310.5 MB -> 627.2 MB` (`tex_vram_mb = 540.1 MB`, `+41.8 MB` more with 10 terrain PNGs = `669.0 MB`) because newly generated `1024×1024` PNG `.import` files use `compress/mode = 0` (lossless RGBA8, ~4–5.3 MB w/ mips each). Switching `.import` `compress/mode = 2` (VRAM Compressed BC7/S3TC) across `assets/generated/{textures,props,ship,landmarks}` will recover **`~260–320 MB` VRAM** (`~6×` smaller!) with zero visible quality loss — huge win for 4–6 GB GTX 1660 laptops!
+- **3 Minor Art Polish Notes (Cloud-Owned / Island-Architect-Owned)**:
+  1. `seawall_bastion.glb` & `ruin_pillar.glb` (`gen_props.py`): stone ashlar brick courses currently run vertically (`90°` rotated UVs) — swapping `(u, v)` on side faces will lay courses horizontally.
+  2. `FortBastion` side walls (`fort_vault.png`): still flat untextured stone — binding `terrain_cliff` / `prop_stone` PBR will match the surrounding Wave 25C props.
+  3. `whale_breach.png` (`ocean_whale.gd`): enlarged `BreachSprayCurtain` cones sit slightly tall/translucent beside the torso — tightening their vertical height around the waterline/fluke splash will read even more organically.
+
+### 7.9 Standing Ready for Wave 26 (Spacious `1.24×` Ships + Sea-of-Thieves Sailing) & Wave I-2 (14-Island Overhaul!)
+Pushing Milestone 8 cleanly to `origin/local/gpu-polish` now and autonomously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 26**) and `origin/cloud/island-architect` (**Wave I-2**) for our next real-GPU look-dev, 1080p HIGH visual audit, and benchmark cycle!

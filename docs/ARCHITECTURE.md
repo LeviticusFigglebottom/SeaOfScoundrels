@@ -44,26 +44,27 @@ Read this before touching code. These contracts let workstreams land independent
 - **Showcase.** `tools/capture.sh res://scenes/showcase/ocean_showcase.tscn <name> 3 5 -- shot=calm|storm|sunset|night|shore|underwater|waterline|wake|swell|aerial [quality=low|medium|high] [amp=] [t=] [rain=] [scale=] [wire=1]`.
 
 ## Ship (`src/ship/`)
-`Ship extends RigidBody3D` (`class_name Ship`). Origin at the waterline, midship, on the centreline.
+`Ship extends RigidBody3D` (`class_name Ship`). Origin at the waterline, midship, on the centreline. Uniform runtime `hull_scale = 1.24` (+54% deck area on both Sloop and Brigantine) scales visual models, unit-basis baked collision shapes, buoyancy probes, waterline cutout, wake, and attachments while keeping Pawns and Stations at exact `1.0x` human scale (`ship.ship_point(unscaled_local)` converts legacy model coords).
 
-Control state (host-owned, replicated later):
-- `helm: float` in -1..1, the wheel position (positive turns to starboard). Set through `set_helm_target(v)`; the wheel has inertia.
-- `sail_set: float` in 0..1 (0 furled, 1 full). `set_sail_target(v)`.
-- `sail_trim: float` radians, yard angle relative to the hull, about -1.2..1.2. `set_trim_target(v)`.
-- `anchor_down: bool`. `set_anchor(down)`.
+Control state (host-owned, replicated):
+- `helm: float` in -1..1, the wheel position (positive turns to starboard, 1.0 turns Sloop / 1.5 turns Brigantine, golden center-spoke clunk detent, `[S/RMB]` smooth center, zero-sail in-place pivot, half-sail tight turn agility). Set through `set_helm_target(v)`; the wheel has inertia.
+- `sail_set: float` in 0..1 (0 furled, 1 full). `set_sail_target(v)`. On `Station_SailLength`, Sea-of-Thieves polarity applies: `[S]` (`axis.y < 0`) lowers/unfurls sails (faster), `[W]` (`axis.y > 0`) raises/furls sails (slower).
+- `sail_trim: float` radians, yard angle relative to the hull, about -1.2..1.2. `set_trim_target(v)`. `[A/D]` trims yard, `[RMB]` squares forward for headwind dummy-sails. Class roles: Brigantine is fastest crosswind/downwind (`~20 kt` vs Sloop `~16 kt`), Sloop is fastest directly into headwinds (`~9 kt` vs Brigantine `~7 kt`).
+- `anchor_down: bool`, `anchor_progress: float` (0 stowed -> 1 seabed), `signal anchor_raised`. Tapping `[F]` on a stowed capstan triggers instant one-tap drop (`try_quick_use`, no station lock); grabbing a dropped capstan requires holding `[W]`/`[LMB]` to physically heave up (boosted by nearby crew/co-op hands, slips back down under gravity if released early, locks with metallic clang & auto-releases at `0.0`).
+- Airborne 3D wind stream ribbons (`WindRibbons`, `src/ship/wind_ribbons.gd`): 1-draw-call `MultiMeshInstance3D` of 14 sculpted translucent ribbons gliding along `Weather.wind_vector()` above player ships so wind direction reads diegetically from anywhere on deck.
 Read-only: `speed_knots()`, `forward_speed()`, `water_level` (0..1 hold flooding), `holes: Array`, `is_sinking`, `apparent_wind()`.
 Damage: `apply_hull_damage(world_pos: Vector3, radius: float)` creates a hole; `patch_hole(index)`; `bail(amount)`.
 
-### Sloop dimensions (shared by physics and art)
-- Length on deck 13 m (bow at z = -6.5, stern at z = +6.5), beam 4.4 m, draught 1.2 m, main deck at y = +1.1, quarterdeck (aft of z = +3) at y = +2.0, hold floor at y = -0.85 (1.85 m headroom).
+### Sloop base model dimensions (scaled uniformly by `hull_scale = 1.24` at runtime)
+- Base model length on deck 13 m (bow at z = -6.5, stern at z = +6.5), beam 4.4 m, draught 1.2 m, main deck at y = +1.1, quarterdeck (aft of z = +3) at y = +2.0, hold floor at y = -0.85 (1.85 m base / 2.29 m scaled headroom).
 - One mast at z = -1.0, 14 m tall above deck, one square mainsail (yard 6.5 m wide at y = +9), bowsprit.
-- Mass about 9000 kg.
+- Mass about 9000 kg (Brigantine 13500 kg).
 - Station markers (Node3D or glTF empties, names exact): `Station_Helm` (0, 2.0, 5.2), `Station_SailLength` (-1.9, 1.1, 0.5), `Station_SailAngle` (1.9, 1.1, 0.5), `Station_Anchor` (0, 1.1, -4.6), `Station_CannonPort` (-2.0, 1.1, -1.5) facing -X, `Station_CannonStarboard` (2.0, 1.1, -1.5) facing +X, `Station_MapTable` (0, -0.85, 2.5), `Station_Bilge` (0, -0.85, -2.1), `Station_Ladder_Port` (-2.3, 0, 2.0), `Station_Ladder_Starboard` (2.3, 0, 2.0).
-- Code must read station positions, pivots and collision from the model's markers and `col_*` meshes, never from these numbers. Full node, material, damage (`HullPanel_NN`/`Hole_NN`/`HolePatch_NN`) and rope conventions: `docs/SHIP_ART.md`.
-- Model file: `assets/generated/ship/sloop.glb`. Meshes named `col_*` are collision-only convex pieces (hidden at runtime). The sail, yard, wheel, rudder, capstan and anchor are separate objects named `Sail`, `Yard`, `Wheel`, `Rudder`, `Capstan`, `Anchor` with origins at their pivots.
+- Code must read station positions, pivots and collision from the model's markers and `col_*` meshes (or use `ship.ship_point()`), never raw unscaled constants. Full node, material, damage (`HullPanel_NN`/`Hole_NN`/`HolePatch_NN`) and rope conventions: `docs/SHIP_ART.md`.
+- Model file: `assets/generated/ship/sloop.glb` (and `brigantine.glb`). Meshes named `col_*` are collision-only convex pieces (hidden at runtime). The sail, yard, wheel, rudder, capstan and anchor are separate objects named `Sail`, `Yard`, `Wheel`, `Rudder`, `Capstan`, `Anchor` with origins at their pivots.
 
 ## Stations (`src/ship/station.gd`)
-`Station extends Node3D` (`class_name Station`): `kind: StringName` (`&"helm"`, `&"sail_length"`, `&"sail_angle"`, `&"anchor"`, `&"cannon"`, `&"map_table"`, `&"bilge"`, ...), `occupant: Node`, `can_occupy(pawn)`, `occupy(pawn)`, `release()`, and `drive(axis: Vector2, primary: bool, secondary: bool, delta: float)`, which the occupant's controller calls every physics tick. The player controller and the AI call the same `drive()`. Stations expose `stand_point: Transform3D` (where the occupant stands) and `prompt: String`.
+`Station extends Node3D` (`class_name Station`): `kind: StringName` (`&"helm"`, `&"sail_length"`, `&"sail_angle"`, `&"anchor"`, `&"cannon"`, `&"map_table"`, `&"bilge"`, ...), `occupant: Node`, `can_occupy(pawn)`, `occupy(pawn)`, `release()`, `drive(axis: Vector2, primary: bool, secondary: bool, delta: float)`, plus optional hooks `try_quick_use(pawn) -> bool`, `get_focus_prompt() -> String`, and `get_active_prompt() -> String`. Pressing `[F]` (`interact`) both enters and exits stations cleanly (alongside `[X]` `leave_station`). The player controller and the AI call the same `drive()`. Stations expose `stand_point: Transform3D` (where the occupant stands) and `prompt: String`.
 
 ## Characters (`src/characters/`)
 `Pawn extends CharacterBody3D` (`class_name Pawn`): a body with no brain. A controller child sets intent each tick:

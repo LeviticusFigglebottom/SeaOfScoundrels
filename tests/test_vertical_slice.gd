@@ -193,6 +193,8 @@ func test_there_and_back_full_voyage_loop() -> void:
 	check(not ship.anchor_down and sailed_dist > 15.0 and ship.speed_knots() > 5.0, "sloop weighs anchor and sails under wind")
 
 	# 2. Arrive at Cutlass Cay -> discovery + stage advances from sail_to -> dig_treasure!
+	var hs_v: Variant = ship.get(&"hull_scale")
+	var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
 	var cay := arch.get_island_by_id("cutlass_cay")
 	var cay_moor := cay.get_world_mooring_transform()
 	cay_moor.origin.y = Sea.height(cay_moor.origin.x, cay_moor.origin.z)
@@ -200,10 +202,10 @@ func test_there_and_back_full_voyage_loop() -> void:
 	ship.linear_velocity = Vector3.ZERO
 	ship.set_sail_target(0.0)
 	ship.set_anchor(true)
-	player.board(ship, Vector3(0.0, 2.02, 4.15))
+	player.board(ship, Vector3(0.0, 2.02, 4.15) * hs)
 	for i in brains.size():
 		var cp: Pawn = (m.get(&"crew_pawns") as Array)[i]
-		cp.board(ship, Vector3(-0.8 + float(i) * 0.8, 1.12, 0.2))
+		cp.board(ship, Vector3(-0.8 + float(i) * 0.8, 1.12, 0.2) * hs)
 	await physics_frames(50)
 
 	check(Game.profile.data["discoveries"].has("cutlass_cay"), "Cutlass Cay discovered in profile")
@@ -241,10 +243,10 @@ func test_there_and_back_full_voyage_loop() -> void:
 
 	# 5. Carry physical Ledger Coffer aboard the sloop and set it on deck!
 	check(player.pick_up(chest), "captain picked up physical Ledger Coffer")
-	player.board(ship, Vector3(0.0, 1.15, 0.2))
+	player.board(ship, Vector3(0.0, 1.15, 0.2) * hs)
 	await physics_frames(4)
 	player.drop_carried(0.05)
-	chest.global_position = ship.global_transform * Vector3(0.35, 1.32, 0.2)
+	chest.global_position = ship.global_transform * (Vector3(0.35, 1.32, 0.2) * hs)
 	chest.linear_velocity = Vector3.ZERO
 	await physics_frames(45)
 
@@ -256,12 +258,12 @@ func test_there_and_back_full_voyage_loop() -> void:
 	ship.global_transform = mid_xf
 	ship.set_anchor(false)
 	ship.anchor_progress = 0.0
-	chest.global_position = ship.global_transform * Vector3(0.35, 1.32, 0.2)
+	chest.global_position = ship.global_transform * (Vector3(0.35, 1.32, 0.2) * hs)
 	chest.linear_velocity = Vector3.ZERO
-	player.board(ship, Vector3(0.0, 2.02, 4.15))
+	player.board(ship, Vector3(0.0, 2.02, 4.15) * hs)
 	for i in brains.size():
 		var cp: Pawn = (m.get(&"crew_pawns") as Array)[i]
-		cp.board(ship, Vector3(-0.7 + float(i) * 0.7, 1.12, 0.4))
+		cp.board(ship, Vector3(-0.7 + float(i) * 0.7, 1.12, 0.4) * hs)
 		(brains[i] as CrewBrain).give_order(&"auto")
 
 	wd.trigger_event(&"drowned_sloop", {
@@ -274,7 +276,7 @@ func test_there_and_back_full_voyage_loop() -> void:
 	check(enemy_ships.size() >= 1, "Drowned Sloop interceptor spawned on return crossing")
 
 	# Take a real hull breach & flood water; verify AI crew patches and bails!
-	ship.apply_hull_damage(ship.global_transform * Vector3(2.0, -0.45, 0.4), 0.5)
+	ship.apply_hull_damage(ship.global_transform * (Vector3(2.0, -0.45, 0.4) * hs), 0.5)
 	ship.water_level = 0.28
 	check_eq(ship.open_hole_count(), 1, "hull breach opened by engagement")
 
@@ -387,15 +389,17 @@ func test_shipwright_menu_and_world_director_wreck_salvage() -> void:
 	var wreck_spot := Vector3(140.0, 0.0, -240.0)
 	ship.global_transform = Transform3D(Basis.IDENTITY, wreck_spot)
 	ship.set_anchor(false)
-	var deck_pos := Vector3(0.0, 2.25, 5.65) if ship.ship_class == &"brigantine" else Vector3(0.0, 2.00, 4.15)
+	var hs_w_v: Variant = ship.get(&"hull_scale")
+	var hs_w := float(hs_w_v) if (hs_w_v != null and float(hs_w_v) > 0.01) else 1.0
+	var deck_pos := (Vector3(0.0, 2.25, 5.65) if ship.ship_class == &"brigantine" else Vector3(0.0, 2.02, 4.15)) * hs_w
 	player.board(ship, deck_pos)
 
 	var cargo_ids: Array[StringName] = [&"corsair_chest", &"wayfarer_chest", &"drowned_skull"]
 	for i in cargo_ids.size():
-		var item := TreasureCatalog.create_treasure_carryable(
-			cargo_ids[i], ship.global_transform * Vector3(-0.6 + float(i) * 0.6, 1.3, 0.0))
+		var item_w := ship.global_transform * (Vector3(-0.6 + float(i) * 0.6, 1.3, 0.0) * hs_w)
+		var item := TreasureCatalog.create_treasure_carryable(cargo_ids[i], item_w)
 		m.add_child(item)
-		item.global_position = ship.global_transform * Vector3(-0.6 + float(i) * 0.6, 1.3, 0.0)
+		item.global_position = item_w
 	await physics_frames(4)
 
 	# Flood ship to trigger `sunk` signal -> WorldDirector records wreck + Main restores ship at Port Scoundrel!

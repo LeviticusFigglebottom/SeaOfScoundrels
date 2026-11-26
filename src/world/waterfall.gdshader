@@ -1,8 +1,9 @@
 shader_type spatial;
-// Stylized painterly animated cliffside waterfall curtain shader.
+// Stylized painterly animated cliffside waterfall curtain shader (RX 9070 XT look-dev).
 // Zero external texture taps; dynamically lit by SkyRig globals (sun_dir, sun_color,
-// ambient_color, sky_horizon_color) so cascades glow warm at sunset and stay readable
-// blue-silver under moonlight.
+// ambient_color, sky_horizon_color) with dual-velocity domain-warped silk cascades,
+// translucent sunlit turquoise subsurface scatter, crest specular sparkle, and crisp
+// readability across noon, golden sunset, storm, and moonlit night.
 render_mode blend_mix, depth_draw_opaque, cull_disabled, unshaded, shadows_disabled;
 
 global uniform vec3 sun_dir;
@@ -52,45 +53,60 @@ void vertex() {
 void fragment() {
 	float t = TIME * flow_speed;
 
-	// Multi-band scrolling downward aerated foam streaks (UV.y increases top -> bottom).
-	float n_broad = vnoise2(vec2(UV.x * 7.5, UV.y * 3.8 - t * 1.12));
-	float n_mid = vnoise2(vec2(UV.x * 16.0 + 3.1, UV.y * 6.4 - t * 1.55 + n_broad * 0.45));
-	float n_fine = vnoise2(vec2(UV.x * 31.0 - 1.7, UV.y * 11.0 - t * 2.05));
-	float streak = clamp(n_broad * 0.45 + n_mid * 0.35 + n_fine * 0.20, 0.0, 1.0);
+	// Domain-warped dual-velocity silk water ribbons + racing whitewater foam filaments.
+	float flow_accel = 1.0 + UV.y * 0.45;
+	float warp_x = (vnoise2(vec2(UV.x * 5.2, UV.y * 2.4 - t * 0.65)) - 0.5) * 0.32;
+	float n_broad = vnoise2(vec2((UV.x + warp_x) * 7.8, UV.y * 3.6 - t * 1.05 * flow_accel));
+	float n_mid = vnoise2(vec2((UV.x - warp_x * 0.7) * 16.5 + 3.1, UV.y * 6.8 - t * 1.62 * flow_accel + n_broad * 0.48));
+	float n_fine = vnoise2(vec2(UV.x * 34.0 - 1.7 + n_mid * 0.5, UV.y * 12.5 - t * 2.25 * flow_accel));
+	float ribbon = smoothstep(0.36, 0.78, n_broad * 0.55 + n_mid * 0.45);
+	float filament = smoothstep(0.56, 0.86, n_mid * 0.45 + n_fine * 0.55);
 
-	// Foaming turbulent whitewater at upper cliff lip (UV.y < 0.14) and plunge base (UV.y > 0.78).
-	float lip_foam = smoothstep(0.16, 0.02, UV.y) * (0.65 + 0.35 * n_mid);
-	float plunge_foam = smoothstep(0.74, 0.96, UV.y) * (0.70 + 0.30 * n_broad);
-	float mid_streaks = smoothstep(0.48, 0.78, streak) * (0.62 + 0.38 * v_wave_crest);
+	// Turbulent foaming whitewater at upper cliff crest (UV.y < 0.16) and billowing plunge base (UV.y > 0.72).
+	float lip_foam = smoothstep(0.18, 0.03, UV.y) * (0.68 + 0.32 * n_mid);
+	float plunge_foam = smoothstep(0.70, 0.96, UV.y) * (0.72 + 0.28 * n_broad);
+	float mid_streaks = clamp(ribbon * 0.52 + filament * 0.78, 0.0, 1.0) * (0.58 + 0.42 * v_wave_crest);
 	float foam_mask = clamp(max(max(lip_foam, plunge_foam), mid_streaks), 0.0, 1.0);
 
 	// Translucent tropical turquoise-aqua water core grading deeper in the curtain center.
 	float center_depth = 1.0 - abs(UV.x * 2.0 - 1.0);
-	vec3 water_core = mix(water_color, deep_water_color, clamp(center_depth * 0.55 * (1.0 - n_broad * 0.4), 0.0, 1.0));
+	vec3 water_core = mix(water_color, deep_water_color, clamp(center_depth * 0.62 * (1.0 - n_broad * 0.42), 0.0, 1.0));
 
-	// Dynamic lighting from SkyRig globals (golden sunset, bright noon, moody night).
+	// Dynamic lighting from SkyRig globals (sunlit turquoise translucency + crest sparkle + moonlight readability).
 	vec3 n_w = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);
+	// Perturb normal slightly along ribbon crests for lively specular glitter!
+	vec3 side_t = normalize(cross(vec3(0.0, 1.0, 0.0), n_w) + vec3(0.001, 0.0, 0.001));
+	vec3 n_lit = normalize(n_w + side_t * ((n_mid - 0.5) * 0.36) + vec3(0.0, (n_fine - 0.5) * 0.22, 0.0));
 	vec3 L = normalize(sun_dir);
 	vec3 V = normalize(CAMERA_POSITION_WORLD - v_world_pos);
-	float ndotl = clamp(dot(n_w, L) * 0.5 + 0.5, 0.0, 1.0);
-	float ndotv = clamp(abs(dot(n_w, V)), 0.0, 1.0);
-	float rim = pow(clamp(1.0 - ndotv, 0.0, 1.0), 2.4);
+	float day_gate = smoothstep(0.01, 0.16, L.y);
+	float ndotl = clamp(dot(n_lit, L) * 0.5 + 0.5, 0.0, 1.0);
+	float ndotv = clamp(abs(dot(n_lit, V)), 0.0, 1.0);
+	float rim = pow(clamp(1.0 - ndotv, 0.0, 1.0), 2.3);
+	float back_scatter = pow(clamp(dot(-V, L) * 0.5 + 0.5, 0.0, 1.0), 3.0) * (1.0 - foam_mask * 0.55) * day_gate;
+	vec3 H = normalize(L + V);
+	float sparkle = pow(clamp(dot(n_lit, H), 0.0, 1.0), 48.0) * (0.45 + 0.55 * n_fine) * day_gate;
 
-	vec3 light_term = max(ambient_color * 0.88 + sun_color * (0.28 + 0.72 * ndotl), vec3(0.08, 0.11, 0.18));
-	vec3 lit_water = water_core * light_term * (1.0 + rim * 0.32);
-	vec3 lit_foam = foam_color * (light_term * 1.06 + sun_color * (rim * 0.38));
-	vec3 col = mix(lit_water, lit_foam, foam_mask);
+	vec3 light_term = max(ambient_color * 0.88 + sun_color * (0.34 + 0.74 * ndotl), vec3(0.09, 0.14, 0.22));
+	// Warm golden-hour rim shimmer vs vivid midday turquoise subsurface scatter.
+	float sunset_warm = clamp((sun_color.r - sun_color.b) * 1.8, 0.0, 1.0) * day_gate;
+	vec3 sss_tint = mix(vec3(0.14, 0.86, 0.84), vec3(1.00, 0.72, 0.44), sunset_warm * 0.55);
+	vec3 sss_glow = sss_tint * sun_color * (back_scatter * 0.48 + 0.14 * day_gate);
+	vec3 lit_water = water_core * light_term * (1.0 + rim * 0.36) + sss_glow;
+	vec3 lit_foam = foam_color * (light_term * 1.12 + sun_color * (rim * 0.46 + sunset_warm * 0.18));
+	vec3 col = mix(lit_water, lit_foam, foam_mask) + sun_color * (sparkle * 0.78);
 
 	// Gentle aerial horizon blend so distant cliff cascades sit harmoniously in coastal haze.
 	float dist = length(CAMERA_POSITION_WORLD - v_world_pos);
 	float haze = smoothstep(140.0, 560.0, dist) * 0.42;
 	col = mix(col, sky_horizon_color, haze);
 
-	// Feathered left/right edges broken organically by falling foam noise, plus soft bottom blend.
-	float edge_noise = (n_mid - 0.5) * 0.10;
+	// Organic foam-feathered left/right edges + clean lip/plunge transitions.
+	float edge_noise = (n_mid - 0.5) * 0.12 + warp_x * 0.18;
 	float side_fade = smoothstep(0.02, 0.18, UV.x + edge_noise) * smoothstep(0.98, 0.82, UV.x - edge_noise);
-	float bottom_fade = smoothstep(1.0, 0.92, UV.y);
-	float alpha = clamp(side_fade * bottom_fade * mix(opacity * 0.76, min(opacity + 0.10, 0.97), foam_mask), 0.0, 1.0);
+	float top_fade = smoothstep(0.0, 0.035, UV.y);
+	float bottom_fade = smoothstep(1.0, 0.90, UV.y);
+	float alpha = clamp(side_fade * top_fade * bottom_fade * mix(opacity * 0.74, min(opacity + 0.11, 0.97), foam_mask), 0.0, 1.0);
 
 	ALBEDO = col;
 	ALPHA = alpha;

@@ -100,6 +100,17 @@ func _process(delta: float) -> void:
 	_update_camera()
 
 
+func _exit_tree() -> void:
+	IslandWaterfall.clear_shared_cache()
+	VolcanicFumarole.clear_shared_cache()
+	FortVault.clear_shared_cache()
+	MessageBottle.clear_shared_cache()
+	SupplyBarrel.clear_shared_cache()
+	CoralReef.clear_shared_cache()
+	ReefFishSchool.clear_shared_cache()
+	MantaRay.clear_shared_cache()
+
+
 func _update_camera() -> void:
 	if _cam == null or _outpost == null or _cutlass == null:
 		return

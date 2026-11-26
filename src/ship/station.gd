@@ -134,3 +134,27 @@ func drive(axis: Vector2, primary: bool, secondary: bool, delta: float) -> void:
 		drive_callback.call(self, axis, primary, secondary, delta)
 	elif ship != null and is_instance_valid(ship) and ship.has_method(&"_drive_station"):
 		ship.call(&"_drive_station", self, axis, primary, secondary, delta)
+
+
+## Contextual focus prompt shown when a pawn aims at this station's handle.
+func get_focus_prompt() -> String:
+	if ship != null and is_instance_valid(ship) and ship.has_method(&"get_station_focus_prompt"):
+		return String(ship.call(&"get_station_focus_prompt", self))
+	return prompt
+
+
+## Host only. Optional instant one-tap action (returns true if consumed without locking station).
+func try_quick_use(pawn: Node) -> bool:
+	if not Net.is_host():
+		return false
+	if ship != null and is_instance_valid(ship) and ship.has_method(&"try_station_quick_use"):
+		return bool(ship.call(&"try_station_quick_use", self, pawn))
+	return false
+
+
+## Contextual live control-hint prompt displayed while occupying this station.
+func get_active_prompt() -> String:
+	if ship != null and is_instance_valid(ship) and ship.has_method(&"get_station_active_prompt"):
+		return String(ship.call(&"get_station_active_prompt", self))
+	return ""
+

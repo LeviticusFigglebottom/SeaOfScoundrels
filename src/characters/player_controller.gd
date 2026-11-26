@@ -95,6 +95,14 @@ func _unhandled_input(event: InputEvent) -> void:
 func add_look(relative: Vector2) -> void:
 	pawn.look_yaw = wrapf(pawn.look_yaw - relative.x * mouse_sensitivity, -PI, PI)
 	pawn.look_pitch = clampf(pawn.look_pitch - relative.y * mouse_sensitivity, -PITCH_LIMIT, PITCH_LIMIT)
+	if pawn.station != null and is_instance_valid(pawn.station):
+		var sk_v: Variant = pawn.station.get(&"kind")
+		if sk_v != null and StringName(sk_v) == &"cannon":
+			var st_ship: Variant = pawn.station.get(&"ship")
+			if st_ship is Node and is_instance_valid(st_ship) and (st_ship as Node).has_method(&"aim_cannon_delta"):
+				var mid_v: Variant = pawn.station.get(&"meta_id")
+				var side: StringName = StringName(mid_v) if mid_v != null else &""
+				(st_ship as Node).call(&"aim_cannon_delta", side, -relative.x * 0.0018, -relative.y * 0.0016)
 
 func _physics_process(delta: float) -> void:
 	_update_focus()
@@ -116,7 +124,7 @@ func _physics_process(delta: float) -> void:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
 		pawn.wish_jump = false
-		if Input.is_action_just_pressed(&"leave_station"):
+		if Input.is_action_just_pressed(&"leave_station") or Input.is_action_just_pressed(&"interact"):
 			pawn.leave_station()
 		else:
 			pawn.drive_station(axis, primary, secondary, delta)
@@ -138,12 +146,20 @@ func _update_focus() -> void:
 		found = _find_focus()
 	pawn.focus = found
 	if pawn.station != null:
-		focus_prompt = "Step away"
+		var ap := ""
+		if pawn.station.has_method(&"get_active_prompt"):
+			ap = String(pawn.station.call(&"get_active_prompt"))
+		focus_prompt = ap if ap != "" else "Step away"
 	elif pawn.carried != null:
 		var cont := pawn._container_of(found)
 		focus_prompt = found.prompt if cont != null else "Drop"
 	elif found != null:
-		focus_prompt = found.prompt
+		var st := Pawn.station_of(found)
+		if st != null and st.has_method(&"get_focus_prompt"):
+			var fp := String(st.call(&"get_focus_prompt"))
+			focus_prompt = fp if fp != "" else found.prompt
+		else:
+			focus_prompt = found.prompt
 	else:
 		focus_prompt = ""
 

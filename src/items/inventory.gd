@@ -47,7 +47,7 @@ const PISTOL_ADS_FOV := 62.0
 const BLUNDERBUSS_ADS_FOV := 68.0
 const HEAVY_HOLD_TIME := 0.30
 const SHOVEL_REACH := 2.6
-const PLANK_REACH := 3.2
+const PLANK_REACH := 3.8
 const BAIL_AMOUNT := 0.16
 const GROG_HEAL := 15.0
 const SPYGLASS_CALLOUT_COOLDOWN := 2.5
@@ -740,6 +740,8 @@ func use_shovel() -> Dictionary:
 				break
 		if not bool(last_res.get("hit", false)):
 			Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
+		elif not bool(last_res.get("unearthed", false)):
+			Audio.play_sfx(&"chest_thump", strike_pos, -2.5)
 		return last_res
 
 	spawn_shovel_dirt_vfx(dig_origin)
@@ -747,9 +749,9 @@ func use_shovel() -> Dictionary:
 	return {"hit": false, "reason": "no_dig_site"}
 
 
-## Scoop water from a flooded `Ship` (or shallow sea), or splash carried water out!
+## Scoop water from a flooded `Ship` (or shallow sea / deck rail), or splash carried water out!
 func use_bucket() -> Dictionary:
-	_use_cooldown = 0.45
+	_use_cooldown = 0.38
 	_play_anim(&"bail", 0.55)
 	if pawn == null:
 		return {"action": &"none", "full": bucket_full}
@@ -761,14 +763,38 @@ func use_bucket() -> Dictionary:
 		if active_item == &"bucket":
 			ToolMeshes.set_bucket_full(fp_tool_node, false)
 			ToolMeshes.set_bucket_full(tp_tool_node, false)
-		var splash_pos := pawn.eye_position() + pawn.view_dir() * 0.9
+		var view := pawn.view_dir()
+		var splash_pos := pawn.eye_position() + view * 0.9
 		Audio.play_sfx(&"bucket_splash", splash_pos, -1.0)
-		_spawn_water_splash_puff(splash_pos, pawn.view_dir())
+		_spawn_water_splash_puff(splash_pos, view)
+		var throw_overboard := false
+		if pawn.platform is Ship:
+			var s_plat := pawn.platform as Ship
+			var hs_v: Variant = s_plat.get(&"hull_scale")
+			var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+			var loc := pawn.platform_local_position()
+			var in_hold := (loc.y / hs) < 0.25
+			var horiz_v := Vector3(view.x, 0.0, view.z)
+			var hdir := horiz_v.normalized() if horiz_v.length_squared() > 0.01 else pawn.facing()
+			var proj_w := pawn.eye_position() + hdir * (3.6 * hs)
+			var proj_l := s_plat.global_transform.affine_inverse() * proj_w
+			var beam_half := (2.25 if s_plat.ship_class == &"brigantine" else 1.85) * hs
+			var len_half := (7.8 if s_plat.ship_class == &"brigantine" else 5.6) * hs
+			var outside_hull := absf(proj_l.x) > beam_half or absf(proj_l.z) > len_half
+			throw_overboard = (not in_hold) and (outside_hull or view.y > -0.35)
+		elif pawn.is_swimming() or Sea.depth(pawn.global_position) > -0.6:
+			throw_overboard = true
+		if throw_overboard and Ocean.current != null:
+			var horiz_f := Vector3(view.x, 0.0, view.z)
+			var fdir := horiz_f.normalized() if horiz_f.length_squared() > 0.01 else pawn.facing()
+			var foam_pt := pawn.global_position + fdir * 3.6
+			foam_pt.y = Sea.height(foam_pt.x, foam_pt.z)
+			Ocean.current.add_foam(foam_pt, 1.35, 0.68)
 		bucket_changed.emit(false)
-		return {"action": &"splash", "full": false}
+		return {"action": &"splash", "full": false, "overboard": throw_overboard}
 
 	# Attempt to bail from current or adjacent flooded Ship.
-	var ship := _find_nearby_ship(4.5)
+	var ship := _find_nearby_ship(5.5)
 	if ship != null and ship.water_level > 0.005:
 		var removed := ship.bail(BAIL_AMOUNT * bail_power_scale)
 		if removed > 0.0005:
@@ -781,14 +807,29 @@ func use_bucket() -> Dictionary:
 			bucket_changed.emit(true)
 			return {"action": &"bail", "removed": removed, "full": true}
 
-	# Otherwise scoop seawater if wading or swimming!
-	if pawn.is_swimming() or Sea.depth(pawn.global_position) > 0.05:
+	# Otherwise scoop seawater if wading, swimming, or leaning over a ship's deck rail near the sea!
+	var near_rail_water := false
+	if pawn.platform is Ship:
+		var s_rail := pawn.platform as Ship
+		var hs_v: Variant = s_rail.get(&"hull_scale")
+		var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
+		var loc := pawn.platform_local_position()
+		var beam_edge := (1.55 if s_rail.ship_class == &"brigantine" else 1.25) * hs
+		var on_upper_deck := (loc.y / hs) >= 0.45
+		var sea_y := Sea.height(pawn.global_position.x, pawn.global_position.z)
+		if on_upper_deck and absf(loc.x) >= beam_edge and (pawn.global_position.y - sea_y) <= 3.6:
+			near_rail_water = true
+	if pawn.is_swimming() or Sea.depth(pawn.global_position) > 0.05 or near_rail_water:
 		bucket_full = true
 		_start_swing(&"scoop", 0.42)
 		if active_item == &"bucket":
 			ToolMeshes.set_bucket_full(fp_tool_node, true)
 			ToolMeshes.set_bucket_full(tp_tool_node, true)
 		Audio.play_sfx(&"splash_small", pawn.global_position, -2.0)
+		if near_rail_water and Ocean.current != null:
+			var rail_foam := pawn.global_position + pawn.facing() * 1.6
+			rail_foam.y = Sea.height(rail_foam.x, rail_foam.z)
+			Ocean.current.add_foam(rail_foam, 0.95, 0.45)
 		bucket_changed.emit(true)
 		return {"action": &"scoop_sea", "full": true}
 
@@ -796,14 +837,14 @@ func use_bucket() -> Dictionary:
 	return {"action": &"empty_swing", "full": false}
 
 
-## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.2 m).
+## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.8 m).
 func use_planks() -> bool:
 	_use_cooldown = 0.55
 	_start_swing(&"hammer", 0.48)
 	_play_anim(&"hammer", 0.50)
 	if pawn == null:
 		return false
-	var ship := _find_nearby_ship(5.0)
+	var ship := _find_nearby_ship(6.5)
 	if ship == null:
 		return false
 	var open_holes := ship.get_open_holes()

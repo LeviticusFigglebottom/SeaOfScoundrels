@@ -19,6 +19,7 @@ static var _mist_card_mesh: ArrayMesh = null
 
 @export var height_m: float = 16.0
 @export var width_m: float = 4.2
+@export var out_reach_m: float = 0.0
 @export var enable_effects: bool = true
 
 var waterfall_sheet: MeshInstance3D = null
@@ -60,7 +61,7 @@ func _enter_tree() -> void:
 
 func _ready() -> void:
 	_ensure_shared_assets()
-	_out_reach = clampf(height_m * 0.24, 1.8, 5.2)
+	_out_reach = clampf(out_reach_m, 2.2, 22.0) if out_reach_m > 0.1 else clampf(height_m * 0.24, 1.8, 5.2)
 
 	# 1. Parabolic cascading water curtain (10x18 subdivided sculpted ArrayMesh).
 	_sheet_mesh = _build_waterfall_sheet_mesh(height_m, width_m, _out_reach)

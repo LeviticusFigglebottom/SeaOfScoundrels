@@ -11,6 +11,17 @@ extends RefCounted
 const ISLAND_SHADER: Shader = preload("res://src/world/island_shader.gdshader")
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
 
+const TEX_GRASS_ALB: Texture2D = preload("res://assets/generated/textures/terrain_grass_albedo.png")
+const TEX_GRASS_NRM: Texture2D = preload("res://assets/generated/textures/terrain_grass_normal.png")
+const TEX_DIRT_ALB: Texture2D = preload("res://assets/generated/textures/terrain_dirt_albedo.png")
+const TEX_DIRT_NRM: Texture2D = preload("res://assets/generated/textures/terrain_dirt_normal.png")
+const TEX_SAND_ALB: Texture2D = preload("res://assets/generated/textures/terrain_sand_albedo.png")
+const TEX_SAND_NRM: Texture2D = preload("res://assets/generated/textures/terrain_sand_normal.png")
+const TEX_CLIFF_ALB: Texture2D = preload("res://assets/generated/textures/terrain_cliff_albedo.png")
+const TEX_CLIFF_NRM: Texture2D = preload("res://assets/generated/textures/terrain_cliff_normal.png")
+const TEX_VOLCANIC_ALB: Texture2D = preload("res://assets/generated/textures/terrain_volcanic_albedo.png")
+const TEX_VOLCANIC_NRM: Texture2D = preload("res://assets/generated/textures/terrain_volcanic_normal.png")
+
 const PALM_TALL_SCENE: PackedScene = preload("res://assets/generated/props/palm_tall.glb")
 const PALM_CURVED_SCENE: PackedScene = preload("res://assets/generated/props/palm_curved.glb")
 const BUSH_FERN_SCENE: PackedScene = preload("res://assets/generated/props/bush_fern.glb")
@@ -1018,6 +1029,17 @@ static func _stepped_mesa(u: float, v: float, cx: float, cz: float, rx: float, r
 static func _create_terrain_material(arch: StringName) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = ISLAND_SHADER
+	mat.set_shader_parameter(&"use_terrain_textures", true)
+	mat.set_shader_parameter(&"tex_grass_albedo", TEX_GRASS_ALB)
+	mat.set_shader_parameter(&"tex_grass_normal", TEX_GRASS_NRM)
+	mat.set_shader_parameter(&"tex_dirt_albedo", TEX_DIRT_ALB)
+	mat.set_shader_parameter(&"tex_dirt_normal", TEX_DIRT_NRM)
+	mat.set_shader_parameter(&"tex_sand_albedo", TEX_SAND_ALB)
+	mat.set_shader_parameter(&"tex_sand_normal", TEX_SAND_NRM)
+	mat.set_shader_parameter(&"tex_cliff_albedo", TEX_CLIFF_ALB)
+	mat.set_shader_parameter(&"tex_cliff_normal", TEX_CLIFF_NRM)
+	mat.set_shader_parameter(&"tex_volcanic_albedo", TEX_VOLCANIC_ALB)
+	mat.set_shader_parameter(&"tex_volcanic_normal", TEX_VOLCANIC_NRM)
 	match arch:
 		&"volcano_crag":
 			mat.set_shader_parameter(&"cliff_tint", Color(0.45, 0.43, 0.48))
@@ -1133,16 +1155,32 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 				if y > -1.5 and y < 4.0 and n.y < 0.72:
 					c_vert *= Color(0.84, 0.87, 0.86)
 
-			# Warm sunlit coastal trail tint along walkable harbour/bastion/grotto approach lanes.
-			var on_trail := false
-			if (arch == &"outpost" or arch == &"grand_outpost") and absf(u + 1.5) < 15.0 and v > -26.0 and v < -2.0:
-				on_trail = true
-			elif (arch == &"fort_rock" or arch == &"grand_citadel") and absf(u) < 9.5 and v < 8.0 and v > -78.0 and n.y > 0.84 and y > 1.3:
-				on_trail = true
-			elif arch == &"smuggler_cove" and absf(u) < 7.5 and v < 12.0 and v > -18.0 and n.y > 0.88 and y > 1.2:
-				on_trail = true
-			if on_trail:
-				c_vert = c_vert.lerp(Color(1.06, 1.02, 0.92), 0.38)
+			# Warm sunlit pebbled dirt footpaths along walkable harbour, bastion, canyon & grotto lanes.
+			# Drives island_shader.gdshader's `dirt_path_mask = 1.0 - COLOR.a` (1024x1024 pebbled dirt PBR).
+			var trail_w := 0.0
+			var wobble := sin(v * 0.14 + u * 0.09) * 2.4 + cos(v * 0.27 - u * 0.13) * 1.1
+			if (arch == &"outpost" or arch == &"grand_outpost") and n.y > 0.78 and y > 1.0:
+				# Harbour plaza & pier-to-tavern lane + curved path up to the lighthouse & village terrace.
+				var plaza_d := Vector2((u + 1.5) * 0.78, v + 14.0).length()
+				var plaza_t := 1.0 - _smoothstep(8.0, 17.5, plaza_d + wobble * 0.5)
+				var lane_u := absf(u + 1.5 + wobble * 0.55)
+				var lane_t := (1.0 - _smoothstep(2.4, 5.8, lane_u)) * _smoothstep(-32.0, -24.0, v) * (1.0 - _smoothstep(-4.0, 4.0, v))
+				var lh_u := absf(u + 14.5 - (v + 12.0) * 0.35 + wobble * 0.4)
+				var lh_t := (1.0 - _smoothstep(1.8, 4.4, lh_u)) * _smoothstep(-16.0, -8.0, v) * (1.0 - _smoothstep(14.0, 22.0, v))
+				trail_w = maxf(plaza_t * 0.88, maxf(lane_t, lh_t * 0.85))
+			elif (arch == &"fort_rock" or arch == &"grand_citadel") and n.y > 0.78 and y > 1.2:
+				var f_u := absf(u + wobble * 0.65)
+				trail_w = (1.0 - _smoothstep(3.0, 7.2, f_u)) * _smoothstep(-82.0, -68.0, v) * (1.0 - _smoothstep(6.0, 16.0, v))
+			elif arch == &"smuggler_cove" and n.y > 0.80 and y > 1.1:
+				var s_u := absf(u + wobble * 0.55)
+				trail_w = (1.0 - _smoothstep(2.4, 5.8, s_u)) * _smoothstep(-22.0, -14.0, v) * (1.0 - _smoothstep(10.0, 18.0, v))
+			elif (arch == &"twin_spires" or arch == &"treasure_peak" or arch == &"skull_bluff") and n.y > 0.78 and y > 1.6 and y < 26.0:
+				var p_u := absf(u + wobble * 0.9)
+				trail_w = (1.0 - _smoothstep(2.0, 5.2, p_u)) * _smoothstep(-island.island_radius * 0.72, -island.island_radius * 0.55, v) \
+					* (1.0 - _smoothstep(island.island_radius * 0.16, island.island_radius * 0.34, v)) * 0.82
+			if trail_w > 0.01:
+				c_vert = c_vert.lerp(Color(1.04, 1.01, 0.95), trail_w * 0.25)
+				c_vert.a = lerpf(1.0, 0.06, clampf(trail_w, 0.0, 1.0))
 			colors[idx] = c_vert
 
 	# Triangulate active cells (skip flat outer abyss beyond seabed_radius).
@@ -1787,8 +1825,11 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 			var top_y := island.surface_height(wf_top.x, wf_top.z)
 			var bot_y := maxf(0.2, island.surface_height(wf_bot.x, wf_bot.z))
 			var drop_h := clampf(top_y - bot_y, 12.0, 34.0)
-			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_y - 0.6, wf_top.z),
-				landing_yaw - 0.42, drop_h, 5.2)
+			var run_c := Vector2(wf_bot.x - wf_top.x, wf_bot.z - wf_top.z)
+			var yaw_c := atan2(-run_c.x, -run_c.y) if run_c.length_squared() > 0.01 else (landing_yaw - 0.42)
+			var reach_c := clampf(run_c.length() * 0.72, 4.8, 16.5)
+			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_y - 0.35, wf_top.z),
+				yaw_c, drop_h, 5.4, reach_c)
 
 	# C. Lush Canyon (`twin_spires`), Highland Ruins (`skull_bluff`, `smuggler_cove`).
 	if arch == &"twin_spires":
@@ -1815,9 +1856,12 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 		var wf_bot := basis * Vector3(0.0, 0.0, 8.0 * s_r)
 		var top_y := island.surface_height(wf_top.x, wf_top.z)
 		var bot_y := maxf(1.5, island.surface_height(wf_bot.x, wf_bot.z))
-		var drop_h := clampf(top_y - bot_y, 12.0, 36.0)
-		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_y - 0.6, wf_top.z),
-			landing_yaw, drop_h, 4.8)
+		var drop_h := clampf(top_y - bot_y, 14.0, 38.0)
+		var run_e := Vector2(wf_bot.x - wf_top.x, wf_bot.z - wf_top.z)
+		var yaw_e := atan2(-run_e.x, -run_e.y) if run_e.length_squared() > 0.01 else landing_yaw
+		var reach_e := clampf(run_e.length() * 0.74, 5.2, 18.0)
+		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_y - 0.35, wf_top.z),
+			yaw_e, drop_h, 5.2, reach_e)
 	elif arch == &"skull_bluff" or arch == &"smuggler_cove":
 		var s_r := island.island_radius / 60.0
 		_spawn_optional_at(island, "ruin_arch.glb", "HighlandRuinArch",
@@ -1868,7 +1912,7 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 
 
 static func _try_spawn_waterfall(island: Island, node_name: String, top_pos: Vector3,
-		yaw: float, drop_height: float, width: float) -> Node3D:
+		yaw: float, drop_height: float, width: float, out_reach: float = 0.0) -> Node3D:
 	const WF_PATH := "res://src/world/island_waterfall.gd"
 	if not ResourceLoader.exists(WF_PATH):
 		return null
@@ -1881,12 +1925,14 @@ static func _try_spawn_waterfall(island: Island, node_name: String, top_pos: Vec
 	wf.name = node_name
 	wf.position = top_pos
 	wf.rotation = Vector3(0.0, yaw, 0.0)
-	for h_key: String in ["drop_height", "fall_height", "waterfall_height", "cliff_height", "height"]:
+	for h_key: String in ["height_m", "drop_height", "fall_height", "waterfall_height", "cliff_height", "height"]:
 		if h_key in wf:
 			wf.set(StringName(h_key), drop_height)
-	for w_key: String in ["width", "fall_width", "waterfall_width", "stream_width"]:
+	for w_key: String in ["width_m", "width", "fall_width", "waterfall_width", "stream_width"]:
 		if w_key in wf:
 			wf.set(StringName(w_key), width)
+	if out_reach > 0.1 and "out_reach_m" in wf:
+		wf.set(&"out_reach_m", out_reach)
 	island.add_child(wf)
 	return wf
 
@@ -2155,11 +2201,17 @@ static func _spawn_prop(island: Island, scene: PackedScene, node_name: String,
 			var src_mat := mesh.surface_get_material(surf_i)
 			if src_mat == null:
 				continue
-			if src_mat.resource_name == "mat_foliage":
+			if src_mat.resource_name.begins_with("mat_foliage"):
 				var tex: Texture2D = null
+				var nrm_tex: Texture2D = null
+				var rgh_tex: Texture2D = null
 				if src_mat is StandardMaterial3D:
-					tex = (src_mat as StandardMaterial3D).albedo_texture
-				var cache_key := tex.resource_path if tex != null else "default_foliage"
+					var sm := src_mat as StandardMaterial3D
+					tex = sm.albedo_texture
+					nrm_tex = sm.normal_texture
+					rgh_tex = sm.roughness_texture
+				var cache_key := (tex.resource_path if tex != null else "default_foliage") \
+					+ "|" + (nrm_tex.resource_path if nrm_tex != null else "")
 				var wind_mat: ShaderMaterial = foliage_cache.get(cache_key)
 				if wind_mat == null:
 					wind_mat = ShaderMaterial.new()
@@ -2169,6 +2221,16 @@ static func _spawn_prop(island: Island, scene: PackedScene, node_name: String,
 						wind_mat.set_shader_parameter(&"use_albedo_tex", 1.0)
 					else:
 						wind_mat.set_shader_parameter(&"use_albedo_tex", 0.0)
+					if nrm_tex != null:
+						wind_mat.set_shader_parameter(&"normal_tex", nrm_tex)
+						wind_mat.set_shader_parameter(&"use_normal_tex", 1.0)
+					else:
+						wind_mat.set_shader_parameter(&"use_normal_tex", 0.0)
+					if rgh_tex != null:
+						wind_mat.set_shader_parameter(&"roughness_tex", rgh_tex)
+						wind_mat.set_shader_parameter(&"use_roughness_tex", 1.0)
+					else:
+						wind_mat.set_shader_parameter(&"use_roughness_tex", 0.0)
 					wind_mat.set_shader_parameter(&"use_uv2_weight", 1.0)
 					foliage_cache[cache_key] = wind_mat
 					island.register_foliage_material(wind_mat)

@@ -26,9 +26,10 @@ const LIGHTHOUSE_BEAM_SHADER: Shader = preload("res://src/world/lighthouse_beam.
 ## Pier local geometry constants (must match tools/blender/gen_props.py).
 const PIER_LENGTH := 16.0
 const PIER_HALF_WIDTH := 1.80
-## Distance abeam of pier centerline to moored sloop centerline (half-pier 1.80 +
-## half-beam 2.20 = 4.00 m, leaving ~0.45 m clean water clearance).
-const MOORING_ABEAM_OFFSET := 4.45
+## Distance abeam of pier centerline to moored ship centerline (half-pier 1.80 +
+## 1.24x Sloop half-beam 2.73 m = 4.53 m, 1.24x Brigantine half-beam 3.35 m = 5.15 m,
+## leaving clean water clearance with zero piling clipping for both ship classes).
+const MOORING_ABEAM_OFFSET := 5.45
 const MOORING_ALONG_PIER := -11.5
 
 const BUNTING_WIND_CULL_DIST := 160.0

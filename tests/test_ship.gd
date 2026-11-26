@@ -106,8 +106,8 @@ func test_floats_in_calm_and_storm_and_rides_swell() -> void:
 	for _i in 30:
 		await physics_frames(12)
 		min_up = minf(min_up, s.global_basis.y.y)
-		var bow_w := s.global_transform * Vector3(0.0, 0.0, -5.5)
-		var stern_w := s.global_transform * Vector3(0.0, 0.0, 5.5)
+		var bow_w := s.global_transform * s.ship_point(Vector3(0.0, 0.0, -5.5))
+		var stern_w := s.global_transform * s.ship_point(Vector3(0.0, 0.0, 5.5))
 		var wave_slope := Sea.height(bow_w.x, bow_w.z) - Sea.height(stern_w.x, stern_w.z)
 		var hull_slope := bow_w.y - stern_w.y
 		max_bow_diff = maxf(max_bow_diff, absf(hull_slope))
@@ -180,7 +180,7 @@ func test_hull_damage_flood_bail_patch_and_sink() -> void:
 	await physics_frames(30)
 
 	# Breach one below-waterline panel on starboard side.
-	var breach_idx := s.apply_hull_damage(s.global_transform * Vector3(2.0, -0.45, 0.2), 0.5)
+	var breach_idx := s.apply_hull_damage(s.global_transform * s.ship_point(Vector3(2.0, -0.45, 0.2)), 0.5)
 	check(breach_idx >= 0, "apply_hull_damage must breach a slot")
 	check_eq(s.open_hole_count(), 1, "one open hole")
 	var slot: Dictionary = s.holes[breach_idx]
@@ -212,8 +212,8 @@ func test_hull_damage_flood_bail_patch_and_sink() -> void:
 	var sunk_emitted := [false]
 	s.sunk.connect(func() -> void: sunk_emitted[0] = true)
 	for z_pos: float in [-3.2, -1.6, 0.2, 1.8, 3.2]:
-		s.apply_hull_damage(s.global_transform * Vector3(2.0, -0.5, z_pos), 0.65)
-		s.apply_hull_damage(s.global_transform * Vector3(-2.0, -0.5, z_pos), 0.65)
+		s.apply_hull_damage(s.global_transform * s.ship_point(Vector3(2.0, -0.5, z_pos)), 0.65)
+		s.apply_hull_damage(s.global_transform * s.ship_point(Vector3(-2.0, -0.5, z_pos)), 0.65)
 	s.water_level = 0.85
 	await physics_frames(320)
 	print("    after heavy flooding: is_sinking=%s y=%.2f" % [str(s.is_sinking), s.global_position.y])
@@ -260,7 +260,7 @@ func test_pawn_walks_sailing_sloop_in_waves() -> void:
 
 	var pawn := PAWN_SCENE.instantiate() as Pawn
 	_root.add_child(pawn)
-	pawn.board(s, Vector3(0.0, 2.05, 5.4))
+	pawn.board(s, s.ship_point(Vector3(0.0, 2.05, 5.4)))
 	await physics_frames(30)
 
 	# 1. Idle riding check on sailing sloop in real waves.
@@ -276,11 +276,11 @@ func test_pawn_walks_sailing_sloop_in_waves() -> void:
 
 	# 2. Walk quarterdeck -> starboard stairs -> main deck -> hold -> main deck.
 	var route: Array[Vector3] = [
-		Vector3(1.4, 2.0, 4.3),
-		Vector3(1.4, 1.1, 2.2),
-		Vector3(0.0, 1.1, 2.62),
-		Vector3(0.0, -0.85, -0.3),
-		Vector3(0.8, -0.85, 2.2),
+		s.ship_point(Vector3(1.4, 2.0, 4.3)),
+		s.ship_point(Vector3(1.4, 1.1, 2.2)),
+		s.ship_point(Vector3(0.0, 1.1, 2.62)),
+		s.ship_point(Vector3(0.0, -0.85, -0.3)),
+		s.ship_point(Vector3(0.8, -0.85, 2.2)),
 	]
 	for idx in route.size():
 		var local_goal: Vector3 = route[idx]
@@ -318,8 +318,8 @@ func test_net_state_roundtrip() -> void:
 	a.anchor_down = true
 	a.anchor_progress = 0.9
 	a.water_level = 0.42
-	var h0 := a.apply_hull_damage(a.global_transform * Vector3(2.0, -0.4, 0.5), 0.5)
-	var h1 := a.apply_hull_damage(a.global_transform * Vector3(-2.0, -0.4, -1.5), 0.5)
+	var h0 := a.apply_hull_damage(a.global_transform * a.ship_point(Vector3(2.0, -0.4, 0.5)), 0.5)
+	var h1 := a.apply_hull_damage(a.global_transform * a.ship_point(Vector3(-2.0, -0.4, -1.5)), 0.5)
 	a.patch_hole(h1)
 
 	var snap := a.get_net_state()
@@ -384,7 +384,7 @@ func test_patch_bail_vfx_and_wind_caught_signal() -> void:
 	await physics_frames(8)
 
 	# 1. patch_hole() spawns oak sawdust + hammer-spark burst VFX tracked for leak-free cleanup.
-	var h_idx := s.apply_hull_damage(s.global_transform * Vector3(1.9, -0.35, 0.4), 0.5)
+	var h_idx := s.apply_hull_damage(s.global_transform * s.ship_point(Vector3(1.9, -0.35, 0.4)), 0.5)
 	check(h_idx >= 0, "hull breach created before patch")
 	check(s.patch_hole(h_idx), "patch_hole succeeds")
 	var patch_fx := s.get_node_or_null(^"PatchBurstVFX") as Node3D
@@ -427,7 +427,7 @@ func test_patch_bail_vfx_and_wind_caught_signal() -> void:
 	check_eq(caught_events.size(), 2, "wind_caught re-arms cleanly after furling and re-catching peak wind")
 
 	# 4. Early ship teardown mid-burst frees active patch & bail VFX cleanly with zero leaks!
-	var h2 := s.apply_hull_damage(s.global_transform * Vector3(-1.9, -0.35, -0.8), 0.5)
+	var h2 := s.apply_hull_damage(s.global_transform * s.ship_point(Vector3(-1.9, -0.35, -0.8)), 0.5)
 	check(s.patch_hole(h2), "second patch_hole succeeds before teardown")
 	s.water_level = 0.25
 	check(s.bail(0.14) > 0.01, "second bail succeeds before teardown")
@@ -788,10 +788,12 @@ func test_interactive_ship_bell_swing_signal_and_zero_primitives() -> void:
 	check(brig.ship_bell_node != null and brig.ship_bell_interactable != null,
 		"player Brigantine mounts sculpted ShipBell and ShipBellInteractable")
 	check(corsair.ship_bell_node == null, "rival Corsair ship does not mount player ShipBell")
-	check(sloop.ship_bell_node.position.is_equal_approx(Vector3(0.0, 2.86, 2.98)),
+	check(sloop.ship_bell_node.position.is_equal_approx(sloop.ship_point(Vector3(0.0, 2.86, 2.98))),
 		"Sloop ShipBell mounts atop quarterdeck front balustrade rail")
-	check(brig.ship_bell_node.position.is_equal_approx(Vector3(0.0, 3.08, 3.98)),
+	check(brig.ship_bell_node.position.is_equal_approx(brig.ship_point(Vector3(0.0, 3.08, 3.98))),
 		"Brigantine ShipBell mounts atop quarterdeck front balustrade rail")
+	check(sloop.ship_bell_node.scale.is_equal_approx(Vector3.ONE * sloop.hull_scale),
+		"Sloop ShipBell scales cleanly with hull_scale")
 	check_eq(sloop.ship_bell_interactable.prompt, "Ring ship's bell", "ShipBell interactable prompt matches")
 	check_near(sloop.ship_bell_interactable.reach, 1.65, 0.01, "ShipBell interactable reach is 1.65 m")
 	check(Audio.has_sound(&"ship_bell"), "Audio catalogue registers synthesized maritime ship_bell SFX")
@@ -1173,7 +1175,7 @@ func test_crows_nest_ladder_rungs_and_ship_name_net_replication() -> void:
 	# 1. Verify Ladder_CrowsNest & sculpted 1-draw-call CrowsNestRungs on BOTH Sloop & Brigantine!
 	var sloop_rung_tris := 0
 	var brig_rung_tris := 0
-	for spec: Array in [[sloop, "sloop", 10.0], [brig, "brigantine", 11.5]]:
+	for spec: Array in [[sloop, "sloop", 10.0 * sloop.hull_scale], [brig, "brigantine", 11.5 * brig.hull_scale]]:
 		var sh := spec[0] as Ship
 		var lbl := String(spec[1])
 		var min_h := float(spec[2])
@@ -1221,7 +1223,7 @@ func test_crows_nest_ladder_rungs_and_ship_name_net_replication() -> void:
 
 	var entered_ladder := false
 	var reached_top := false
-	for _tick in 480:
+	for _tick in 560:
 		var into := lad.into_dir()
 		pawn.wish_dir = into
 		await physics_frames(1)
@@ -1239,7 +1241,7 @@ func test_crows_nest_ladder_rungs_and_ship_name_net_replication() -> void:
 	var nest_local := pawn.platform_local_position()
 	print("    Pawn atop Sloop Crow's Nest: local=%s platform=%s" % [nest_local, pawn.platform])
 	check(pawn.platform == sloop, "Pawn remains anchored to Sloop while perched in Crow's Nest")
-	check(nest_local.y >= 11.2 and nest_local.y <= 12.2,
+	check(nest_local.y >= 11.2 * sloop.hull_scale and nest_local.y <= 12.2 * sloop.hull_scale,
 		"Pawn lands safely on Sloop Crow's Nest deck (local y=%.2f)" % nest_local.y)
 
 	# 3. Verify co-op custom ship_name replication via get_net_state() -> apply_net_state() with dirty-check!
@@ -1278,6 +1280,232 @@ func test_crows_nest_ladder_rungs_and_ship_name_net_replication() -> void:
 	check(Ship._crows_nest_rungs_sloop == null and Ship._crows_nest_rungs_brig == null \
 		and Ship._crows_nest_rungs_mat == null,
 		"Ship releases static CrowsNestRungs mesh & material caches cleanly on teardown")
+
+
+func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 10.0, 0.0)  # Steady wind blowing toward -Z (downwind for heading 0)
+
+	var sloop := SLOOP_SCENE.instantiate() as Ship
+	sloop.enable_effects = true
+	_root.add_child(sloop)
+	sloop.global_position = Vector3(-28.0, 0.0, 0.0)
+
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(28.0, 0.0, 0.0)
+
+	var corsair := SLOOP_SCENE.instantiate() as Ship
+	corsair.faction = &"corsair"
+	corsair.enable_effects = true
+	_root.add_child(corsair)
+	corsair.global_position = Vector3(0.0, 0.0, -90.0)
+	await physics_frames(60)
+
+	# 1. Spacious 1.24x hull scale, unit-basis collision & stations, waterline equilibrium, & scaled attachments.
+	check_near(sloop.hull_scale, 1.24, 0.001, "Sloop defaults to 1.24x spacious hull_scale")
+	check_near(brig.hull_scale, 1.24, 0.001, "Brigantine defaults to 1.24x spacious hull_scale")
+	check_near(sloop.global_position.y, 0.0, 0.35, "1.24x Sloop floats near waterline y ~= 0.0 m (y=%.2f)" % sloop.global_position.y)
+	check_near(brig.global_position.y, 0.0, 0.35, "1.24x Brigantine floats near waterline y ~= 0.0 m (y=%.2f)" % brig.global_position.y)
+	check(sloop.ship_nameplate != null and sloop.ship_nameplate.scale.is_equal_approx(Vector3.ONE * 1.24),
+		"ShipNameplate scales cleanly by hull_scale")
+	check(sloop.hull_crest != null and sloop.hull_crest.scale.is_equal_approx(Vector3.ONE * 1.24),
+		"HullCrest scales cleanly by hull_scale")
+	check(sloop.cabin_furnishings != null and sloop.cabin_furnishings.scale.is_equal_approx(Vector3.ONE * 1.24),
+		"CaptainCabinFurnishings scales cleanly by hull_scale")
+
+	var non_unit_cols := 0
+	var col_count := 0
+	for ch in sloop.get_children():
+		if ch is CollisionShape3D:
+			col_count += 1
+			var sc := (ch as CollisionShape3D).transform.basis.get_scale()
+			if not sc.is_equal_approx(Vector3.ONE):
+				non_unit_cols += 1
+	check(col_count > 40 and non_unit_cols == 0,
+		"all %d CollisionShape3D pieces have orthonormal unit basis (bad=%d)" % [col_count, non_unit_cols])
+
+	var non_unit_sts := 0
+	for kind: StringName in [&"helm", &"sail_length", &"sail_angle", &"anchor", &"cannon", &"map_table", &"bilge"]:
+		for st: Station in sloop.get_stations(kind):
+			var sc := st.transform.basis.get_scale()
+			if not sc.is_equal_approx(Vector3.ONE):
+				non_unit_sts += 1
+			var fp := st.get_focus_prompt()
+			var ap := st.get_active_prompt()
+			check(fp.length() > 0, "station %s returns non-empty focus prompt" % String(kind))
+			check(ap.begins_with("["), "station %s active prompt starts with '[' (got '%s')" % [String(kind), ap])
+			for ci in fp.length():
+				check(fp.unicode_at(ci) < 128, "focus prompt is strict ASCII: '%s'" % fp)
+			for ci in ap.length():
+				check(ap.unicode_at(ci) < 128, "active prompt is strict ASCII: '%s'" % ap)
+	check_eq(non_unit_sts, 0, "all Station nodes keep orthonormal unit basis so Pawns stay 1.0x human size")
+
+	# 2. Sea-of-Thieves Wind Speed Roles: Brigantine wins downwind, Sloop wins headwind (dummy sails)!
+	for sh: Ship in [sloop, brig]:
+		sh.set_sail_target(1.0)
+		sh.sail_set = 1.0
+		sh.set_trim_target(0.0)
+		sh.sail_trim = 0.0
+	await physics_frames(480)
+	var sloop_down := sloop.forward_speed()
+	var brig_down := brig.forward_speed()
+	print("    Wave 26 downwind (10 m/s): Sloop=%.2f m/s (%.1f kt), Brigantine=%.2f m/s (%.1f kt)" % [
+		sloop_down, sloop.speed_knots(), brig_down, brig.speed_knots()])
+	check(sloop_down > 7.5, "Sloop downwind speed > 7.5 m/s (got %.2f m/s)" % sloop_down)
+	check(brig_down > 8.5 and brig_down > sloop_down + 0.5,
+		"Brigantine downwind speed (%.2f m/s) beats Sloop (%.2f m/s) and exceeds 8.5 m/s" % [brig_down, sloop_down])
+
+	# Reverse wind to pure headwind (blowing toward +Z, heading = PI), keep sails squared flat forward (0 rad)!
+	Weather.set_weather(0.0, 10.0, PI)
+	sloop.linear_velocity = Vector3.ZERO
+	brig.linear_velocity = Vector3.ZERO
+	sloop.set_trim_target(0.0)
+	sloop.sail_trim = 0.0
+	brig.set_trim_target(0.0)
+	brig.sail_trim = 0.0
+	await physics_frames(480)
+	var sloop_head := sloop.forward_speed()
+	var brig_head := brig.forward_speed()
+	print("    Wave 26 headwind dummy-sails (10 m/s): Sloop=%.2f m/s (%.1f kt), Brigantine=%.2f m/s (%.1f kt)" % [
+		sloop_head, sloop.speed_knots(), brig_head, brig.speed_knots()])
+	check(sloop_head > 3.5, "Sloop headwind dummy-sails makes crisp headway > 3.5 m/s (got %.2f m/s)" % sloop_head)
+	check(brig_head > 2.5, "Brigantine headwind avoids dead-zone > 2.5 m/s (got %.2f m/s)" % brig_head)
+	check(sloop_head > brig_head + 0.25,
+		"Sloop is Headwind King: %.2f m/s > Brigantine %.2f m/s" % [sloop_head, brig_head])
+
+	# 3. In-place zero-sail pivot turning (sails raised, anchor up, hard helm -> bow pivots smoothly!).
+	sloop.set_sail_target(0.0)
+	sloop.sail_set = 0.0
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+	sloop.anchor_down = false
+	sloop.anchor_progress = 0.0
+	var pivot_yaw0 := sloop.rotation.y
+	sloop.set_helm_target(1.0)
+	sloop.helm = 1.0
+	await physics_frames(120)
+	var pivot_dyaw := angle_difference(pivot_yaw0, sloop.rotation.y)
+	print("    Wave 26 zero-sail in-place pivot dyaw: %.2f rad (fwd=%.2f m/s)" % [pivot_dyaw, sloop.forward_speed()])
+	check(pivot_dyaw < -0.35, "zero-sail hard starboard helm pivots bow smoothly in place (dyaw=%.2f rad)" % pivot_dyaw)
+	sloop.set_helm_target(0.0)
+	sloop.helm = 0.0
+
+	# 4. Sail Length polarity ([S] lowers sail, [W] raises sail) & aim_cannon_delta helper!
+	var sail_st := sloop.get_station(&"sail_length")
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pawn)
+	pawn.board(sloop, sloop.ship_point(Vector3(-1.2, 1.12, 0.5)))
+	sloop.sail_set = 0.0
+	sloop.sail_target = 0.0
+	check(pawn.enter_station(sail_st), "Pawn enters Station_SailLength")
+	for _i in 30:
+		sail_st.drive(Vector2(0.0, -1.0), false, false, 1.0 / 60.0)
+		await physics_frames(1)
+	var after_s := sloop.sail_set
+	check(after_s > 0.20, "holding [S] (axis.y=-1) LOWERS sail (sail_set=%.2f)" % after_s)
+	for _i in 30:
+		sail_st.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		await physics_frames(1)
+	var after_w := sloop.sail_set
+	check(after_w < after_s - 0.15, "holding [W] (axis.y=+1) RAISES sail (%.2f -> %.2f)" % [after_s, after_w])
+	pawn.leave_station()
+
+	sloop.aim_cannon(&"port", 0.0, 0.05)
+	sloop.aim_cannon_delta(&"port", 0.15, 0.10)
+	var port_c: Dictionary = sloop._cannons[&"port"]
+	check_near(float(port_c["yaw"]), 0.15, 0.005, "aim_cannon_delta adjusts yaw cleanly")
+	check_near(float(port_c["pitch"]), 0.15, 0.005, "aim_cannon_delta adjusts pitch cleanly")
+
+	# 5. Capstan one-tap quick-drop + physical [Hold W] heaving + gravity slip-back + lock & auto-release!
+	var cap_st := sloop.get_station(&"anchor")
+	sloop.anchor_down = false
+	sloop.anchor_progress = 0.0
+	check_eq(cap_st.get_focus_prompt(), "Drop anchor", "raised capstan focus prompt says 'Drop anchor'")
+	var quick_ok := cap_st.try_quick_use(pawn)
+	check(quick_ok, "try_quick_use() consumes one-tap anchor drop when stowed")
+	check(sloop.anchor_down, "quick-drop commands anchor_down = true")
+	check(not cap_st.is_occupied() and pawn.station == null, "quick-drop does NOT lock pawn into capstan station")
+	await physics_frames(100)
+	check(sloop.anchor_progress >= 0.98, "quick-dropped anchor free-falls briskly to seabed (progress=%.2f)" % sloop.anchor_progress)
+
+	# Second interact when anchor is down -> try_quick_use returns false, pawn enters capstan to heave!
+	check(not cap_st.try_quick_use(pawn), "try_quick_use() returns false when anchor is already down")
+	check(cap_st.get_focus_prompt().begins_with("Heave anchor"), "dropped capstan prompt invites heaving")
+	check(pawn.enter_station(cap_st), "Pawn occupies capstan to heave anchor up")
+
+	# Heave halfway up with [Hold W].
+	var raised_count := [0]
+	sloop.anchor_raised.connect(func() -> void: raised_count[0] += 1)
+	for _i in 105:
+		cap_st.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		await physics_frames(1)
+	var mid_prog := sloop.anchor_progress
+	check(mid_prog < 0.72 and mid_prog > 0.25, "holding [W] physically heaves anchor partway (progress=%.2f)" % mid_prog)
+
+	# Release [W] early -> gravity slip-back drops anchor back toward 1.0!
+	for _i in 45:
+		cap_st.drive(Vector2.ZERO, false, false, 1.0 / 60.0)
+		await physics_frames(1)
+	var slipped_prog := sloop.anchor_progress
+	check(slipped_prog > mid_prog + 0.18, "releasing [W] early lets anchor slip back under gravity (%.2f -> %.2f)" % [mid_prog, slipped_prog])
+
+	# Now hold [W] all the way to top -> locks anchor_down = false, emits anchor_raised, auto-releases occupant!
+	for _i in 320:
+		if not cap_st.is_occupied():
+			break
+		cap_st.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		await physics_frames(1)
+	check_near(sloop.anchor_progress, 0.0, 0.01, "full [Hold W] heave locks anchor_progress to 0.0")
+	check(not sloop.anchor_down, "full heave clears anchor_down = false")
+	check_eq(raised_count[0], 1, "full heave emits anchor_raised exactly once")
+	check(not cap_st.is_occupied(), "full heave auto-releases capstan occupant on lock clang")
+
+	# 6. 3D Airborne WindRibbons: 1 draw call, 0 primitives, tracks wind direction, 0-leak teardown!
+	check(sloop.wind_ribbons != null and sloop.get_node_or_null(^"WindRibbons") == sloop.wind_ribbons,
+		"player Ship mounts WindRibbons when enable_effects=true")
+	check(corsair.wind_ribbons == null, "rival Corsair ship does NOT mount player WindRibbons")
+	var wr := sloop.wind_ribbons
+	var mmi := wr.get_multimesh_instance()
+	check(mmi != null and mmi.multimesh != null, "WindRibbons builds MultiMeshInstance3D")
+	check_eq(wr.find_children("*", "MeshInstance3D", true, false).size(), 0,
+		"WindRibbons uses single MultiMeshInstance3D draw call (no extra MeshInstance3D nodes)")
+	check_eq(wr.find_children("*", "MultiMeshInstance3D", true, false).size(), 1,
+		"WindRibbons renders strictly 1 MultiMeshInstance3D draw call")
+	check_eq(wr.get_ribbon_count(), 14, "WindRibbons renders 14 airborne ribbons")
+	check_eq(mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "WindRibbons disables shadows")
+	var wr_mesh := mmi.multimesh.mesh
+	check(wr_mesh is ArrayMesh and not (wr_mesh is PrimitiveMesh), "WindRibbons uses sculpted ArrayMesh (zero primitives)")
+	if wr_mesh is ArrayMesh:
+		var arr := (wr_mesh as ArrayMesh).surface_get_arrays(0)
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var bad_n := 0
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				bad_n += 1
+		check_eq(bad_n, 0, "WindRibbons ArrayMesh has all finite unit normals")
+
+	# Rotate wind to +X (east, heading = PI * 0.5) and step process frames -> ribbons align with live wind!
+	Weather.set_weather(0.0, 14.0, PI * 0.5)
+	wr._step_ribbons(0.1)
+	var exp_wdir := Weather.wind_vector()
+	exp_wdir.y = 0.0
+	exp_wdir = exp_wdir.normalized()
+	var rib_fwd := wr.get_ribbon_forward_world(0)
+	check(rib_fwd.dot(exp_wdir) > 0.92,
+		"WindRibbons align strictly along live Weather.wind_vector() (dot=%.3f)" % rib_fwd.dot(exp_wdir))
+
+	# Clean 0-leak teardown releases all static WindRibbons caches!
+	wr_mesh = null
+	await _end()
+	check_eq(WindRibbons._active_instances, 0, "WindRibbons _active_instances drops to 0 on teardown")
+	check(WindRibbons._ribbon_mesh == null and WindRibbons._ribbon_shader == null,
+		"WindRibbons releases static mesh & shader caches cleanly on teardown (0 leaks)")
+
 
 
 

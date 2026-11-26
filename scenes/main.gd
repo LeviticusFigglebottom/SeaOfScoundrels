@@ -27,15 +27,15 @@ const OCEAN_WHALE_PATH := "res://src/world/ocean_whale.gd"
 const VICTORY_FLARE_PATH := "res://src/world/victory_flare.gd"
 
 const CREW_SPECS: Array[Dictionary] = [
-	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
-	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.10, -3.20)},
-	{"persona": &"carpenter", "local_pos": Vector3(1.05, 1.10, -0.35)},
+	{"persona": &"helmsman", "local_pos": Vector3(-1.55, 1.12, 1.35)},
+	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.12, -3.75)},
+	{"persona": &"carpenter", "local_pos": Vector3(1.55, 1.12, -0.95)},
 ]
 
 const BRIGANTINE_CREW_SPECS: Array[Dictionary] = [
-	{"persona": &"helmsman", "local_pos": Vector3(-1.15, 2.25, 6.20)},
-	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.25, -5.60)},
-	{"persona": &"carpenter", "local_pos": Vector3(1.35, 1.25, -0.60)},
+	{"persona": &"helmsman", "local_pos": Vector3(-1.85, 1.25, 2.25)},
+	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.25, -6.10)},
+	{"persona": &"carpenter", "local_pos": Vector3(1.85, 1.25, -1.10)},
 ]
 
 const PEER_TINTS: Array[Array] = [
@@ -201,6 +201,7 @@ static func _drain_static_visual_caches() -> void:
 	ShipNameplate.clear_shared_cache()
 	HullCrest.clear_shared_cache()
 	CaptainCabinFurnishings.clear_shared_cache()
+	WindRibbons.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
 	Leviathan.clear_shared_cache()
@@ -212,6 +213,7 @@ static func _drain_static_visual_caches() -> void:
 	OceanWhale.clear_shared_cache()
 	FlotsamCluster.clear_shared_cache()
 	FortBattery.clear_shared_cache()
+	IslandDetails.clear_shared_cache()
 	FortVault.clear_shared_cache()
 	VictoryFlare.clear_shared_cache()
 	IslandWaterfall.clear_shared_cache()
@@ -562,10 +564,19 @@ func _resolve_ship_scene(cls: StringName) -> PackedScene:
 	return SLOOP_SCENE
 
 
+static func _ship_scale_of(target_ship: Ship) -> float:
+	if target_ship != null and is_instance_valid(target_ship):
+		var hs: Variant = target_ship.get(&"hull_scale")
+		if hs != null and float(hs) > 0.01:
+			return float(hs)
+	return 1.0
+
+
 func _captain_deck_pos(target_ship: Ship) -> Vector3:
+	var hs := _ship_scale_of(target_ship)
 	if target_ship != null and target_ship.ship_class == &"brigantine":
-		return Vector3(0.0, 2.25, 5.65)
-	return Vector3(0.0, 2.00, 4.15)
+		return Vector3(0.0, 2.25, 5.65) * hs
+	return Vector3(0.0, 2.02, 4.15) * hs
 
 
 func _crew_specs_for(target_ship: Ship) -> Array[Dictionary]:
@@ -574,14 +585,21 @@ func _crew_specs_for(target_ship: Ship) -> Array[Dictionary]:
 	return CREW_SPECS
 
 
+func _crew_local_pos(target_ship: Ship, idx: int) -> Vector3:
+	var specs := _crew_specs_for(target_ship)
+	var base := specs[idx % specs.size()]["local_pos"] as Vector3
+	return base * _ship_scale_of(target_ship)
+
+
 func _mount_cooking_stove(target_ship: Ship) -> void:
 	cooking_stove = CookingStove.new()
 	cooking_stove.name = "CookingStove"
 	cooking_stove.build_hearth = true
+	var hs := _ship_scale_of(target_ship)
 	if target_ship.ship_class == &"brigantine":
-		cooking_stove.position = Vector3(1.65, -0.95, 1.85)
+		cooking_stove.position = Vector3(1.65, -0.95, 1.85) * hs
 	else:
-		cooking_stove.position = Vector3(1.25, -0.85, 0.85)
+		cooking_stove.position = Vector3(1.25, -0.85, 0.85) * hs
 	target_ship.add_child(cooking_stove)
 
 	# Intercept stove interaction when player holds freshly caught fish from FishingLine.
@@ -593,10 +611,11 @@ func _mount_cooking_stove(target_ship: Ship) -> void:
 func _mount_fishing_station(target_ship: Ship) -> void:
 	fishing_line = FishingLine.new()
 	fishing_line.name = "FishingLine"
+	var hs := _ship_scale_of(target_ship)
 	if target_ship.ship_class == &"brigantine":
-		fishing_line.position = Vector3(-1.75, 2.25, 7.65)
+		fishing_line.position = Vector3(-1.75, 2.25, 7.65) * hs
 	else:
-		fishing_line.position = Vector3(-1.48, 2.0, 5.72)
+		fishing_line.position = Vector3(-1.48, 2.0, 5.72) * hs
 	target_ship.add_child(fishing_line)
 
 	# Sculpted carved oak & brass rail holder cleat + stowed 3-joint bamboo fishing rod.
@@ -952,9 +971,11 @@ func _build_player_and_crew() -> void:
 	# 2. Three AI Crewmates: Barnaby (helmsman), Maren (lookout), Pip (carpenter).
 	crew_pawns.clear()
 	crew_brains.clear()
-	for spec in _crew_specs_for(player_ship):
+	var specs := _crew_specs_for(player_ship)
+	for i in specs.size():
+		var spec := specs[i]
 		var persona: StringName = spec["persona"]
-		var local_pos: Vector3 = spec["local_pos"]
+		var local_pos := _crew_local_pos(player_ship, i)
 		var cp := PAWN_SCENE.instantiate() as Pawn
 		cp.name = "Crew_" + String(persona).capitalize()
 		add_child(cp)
@@ -2414,19 +2435,20 @@ func _restore_player_ship_at_outpost(outpost_id: StringName) -> void:
 	if player_pawn != null and is_instance_valid(player_pawn):
 		if player_pawn.station != null:
 			player_pawn.leave_station()
-		var cap_spawn := player_ship.global_transform * Vector3(0.0, 2.02, 4.15)
+		var cap_local := _captain_deck_pos(player_ship)
+		var cap_spawn := player_ship.global_transform * cap_local
 		if player_pawn.dead:
 			player_pawn.revive(cap_spawn)
 		else:
 			player_pawn.heal(player_pawn.max_health)
-		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+		player_pawn.board(player_ship, cap_local)
 
 	for i in crew_pawns.size():
 		var cp := crew_pawns[i]
 		if cp != null and is_instance_valid(cp) and cp.visible:
 			if cp.station != null:
 				cp.leave_station()
-			var c_local := CREW_SPECS[i]["local_pos"] as Vector3
+			var c_local := _crew_local_pos(player_ship, i)
 			if cp.dead:
 				cp.revive(player_ship.global_transform * c_local)
 			else:
@@ -2538,10 +2560,11 @@ func _revive_player_aboard_ship() -> void:
 	if player_pawn == null or not is_instance_valid(player_pawn):
 		return
 	var has_ship := player_ship != null and is_instance_valid(player_ship)
-	var respawn_pos := player_ship.global_transform * Vector3(0.0, 2.02, 4.15) if has_ship else player_pawn.global_position
+	var cap_local := _captain_deck_pos(player_ship) if has_ship else Vector3.ZERO
+	var respawn_pos := player_ship.global_transform * cap_local if has_ship else player_pawn.global_position
 	player_pawn.revive(respawn_pos)
 	if has_ship:
-		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+		player_pawn.board(player_ship, cap_local)
 	Game.post_notice("Back on your feet, Captain!")
 
 
@@ -2628,21 +2651,21 @@ func _swap_player_ship_class(cls: StringName) -> void:
 			player_pawn.leave_station()
 		if player_pawn.platform == old_ship:
 			player_pawn.board(player_ship, _captain_deck_pos(player_ship))
-	var specs := _crew_specs_for(player_ship)
 	for i in crew_pawns.size():
 		var cp := crew_pawns[i]
 		if cp != null and is_instance_valid(cp):
 			if cp.station != null:
 				cp.leave_station()
-			cp.board(player_ship, specs[i % specs.size()]["local_pos"] as Vector3)
+			cp.board(player_ship, _crew_local_pos(player_ship, i))
 		if i < crew_brains.size() and crew_brains[i] != null:
 			crew_brains[i].ship = player_ship
+	var swap_hs := _ship_scale_of(player_ship)
 	for pid: int in _peer_pawns.keys():
 		var pp: Pawn = _peer_pawns[pid]
 		if pp != null and is_instance_valid(pp) and pp.platform == old_ship:
 			if pp.station != null:
 				pp.leave_station()
-			pp.board(player_ship, _captain_deck_pos(player_ship) + Vector3(0.8, 0.0, 0.0))
+			pp.board(player_ship, _captain_deck_pos(player_ship) + Vector3(0.8 * swap_hs, 0.0, 0.0))
 
 	if world_director != null:
 		world_director.player_ship = player_ship
@@ -2690,7 +2713,7 @@ func _on_net_peer_joined(peer_id: int) -> void:
 	pp.name = "Peer_%d" % peer_id
 	add_child(pp)
 	var offset_idx := _peer_pawns.size()
-	var local_spawn := Vector3(0.9 * float(offset_idx + 1) - 1.2, 1.12, 0.4)
+	var local_spawn := Vector3(0.9 * float(offset_idx + 1) - 1.2, 1.12, 0.4) * _ship_scale_of(player_ship)
 	if player_ship != null and is_instance_valid(player_ship):
 		pp.board(player_ship, local_spawn)
 
@@ -2756,7 +2779,7 @@ func _restore_ai_crewmate(peer_id: int) -> void:
 		cp.collision_layer = Pawn.LAYER_PAWN
 		cp.set_physics_process(true)
 		if player_ship != null and is_instance_valid(player_ship):
-			cp.board(player_ship, CREW_SPECS[idx]["local_pos"] as Vector3)
+			cp.board(player_ship, _crew_local_pos(player_ship, idx))
 	if brain != null and is_instance_valid(brain):
 		brain.set_physics_process(true)
 
@@ -2777,12 +2800,12 @@ func _on_net_client_intent(peer_id: int, intent: Dictionary) -> void:
 		pp.look_yaw = float(intent["look_yaw"])
 	if intent.has("look_pitch"):
 		pp.look_pitch = float(intent["look_pitch"])
-	if bool(intent.get("leave_station", false)) and pp.station != null:
+	if (bool(intent.get("leave_station", false)) or bool(intent.get("interact", false))) and pp.station != null:
 		pp.leave_station()
 	elif pp.station != null and intent.has("station_axis"):
 		var ax: Vector2 = intent["station_axis"] as Vector2 if intent["station_axis"] is Vector2 else Vector2.ZERO
 		pp.drive_station(ax, bool(intent.get("primary", false)), bool(intent.get("secondary", false)), 1.0 / 60.0)
-	if bool(intent.get("interact", false)):
+	elif bool(intent.get("interact", false)):
 		pp.interact()
 	if bool(intent.get("attack", false)):
 		var cc := pp.get_node_or_null(^"CombatComponent") as CombatComponent
@@ -2923,7 +2946,8 @@ func _apply_hero_shot(mode: String) -> void:
 	var cutlass := archipelago.get_island_by_id("cutlass_cay")
 	var port := archipelago.get_outpost(0)
 	var is_brig := (player_ship != null and player_ship.ship_class == &"brigantine")
-	var sc := 1.38 if is_brig else 1.0
+	var hs := _ship_scale_of(player_ship)
+	var sc := (1.38 if is_brig else 1.0) * hs
 	_shot_track_ship = false
 	_shot_track_world_target = null
 	_shot_track_world_blend = 0.0
@@ -2948,7 +2972,8 @@ func _apply_hero_shot(mode: String) -> void:
 			"storm", "sunset", "night", "night_sail", "night_lighthouse", "rainbow", "whale_breach", "leviathan", "fleet",
 			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam", "deck_duel",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing",
-			"sovereigns_bastion", "galleons_reach", "emerald_waterfall", "archipelago_panorama"
+			"sovereigns_bastion", "galleons_reach", "emerald_waterfall", "archipelago_panorama",
+			"skull_bluff", "cutlass_meadow", "gulls_arch", "wreckers_tooth"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -3093,8 +3118,8 @@ func _apply_hero_shot(mode: String) -> void:
 			Weather.set_weather(0.06, 10.5, -0.37, 0.0, 0.36)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
 			_place_sailing_ship(Vector3(76.0, 0.0, -195.0), -0.37, 1.0, 6.0)
-			var helm_eye := Vector3(0.0, 3.95, 7.35) if is_brig else Vector3(0.0, 3.65, 5.75)
-			var helm_look := Vector3(0.0, 2.75, -24.0) if is_brig else Vector3(0.0, 2.55, -24.0)
+			var helm_eye := (Vector3(0.0, 3.95, 7.35) if is_brig else Vector3(0.0, 3.65, 5.75)) * hs
+			var helm_look := (Vector3(0.0, 2.75, -24.0) if is_brig else Vector3(0.0, 2.55, -24.0)) * hs
 			_enable_ship_track_shot(helm_eye, helm_look, 74.0)
 
 		"map_table":
@@ -3103,11 +3128,11 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = 0.0
 			if map_table != null:
 				map_table.refresh_now()
-				var table_y := MapTableView.BRIGANTINE_TABLE_TOP_Y if is_brig else MapTableView.SHIP_TABLE_TOP_Y
+				var table_y := (MapTableView.BRIGANTINE_TABLE_TOP_Y if is_brig else MapTableView.SHIP_TABLE_TOP_Y) * hs
 				var table_local := player_ship.to_local(map_table.global_position)
-				var target_local := table_local + Vector3(0.0, table_y, -0.02)
+				var target_local := table_local + Vector3(0.0, table_y, -0.02 * hs)
 				# Stand aft of the map table (clear of the forward companionway stairs) looking down at the chart.
-				var cam_local := table_local + Vector3(0.0, table_y + 0.88, 0.72)
+				var cam_local := table_local + Vector3(0.0, table_y + 0.88 * hs, 0.72 * hs)
 				_enable_ship_track_shot(cam_local, target_local, 50.0)
 
 		"hold":
@@ -3117,8 +3142,8 @@ func _apply_hero_shot(mode: String) -> void:
 			player_ship.water_level = 0.18
 			if map_table != null:
 				map_table.refresh_now()
-			var cam_local_hold := Vector3(1.15, 0.48, 0.45) if is_brig else Vector3(1.02, 0.34, -0.82)
-			var look_local_hold := Vector3(-0.10, -0.25, 4.20) if is_brig else Vector3(-0.08, -0.22, 2.55)
+			var cam_local_hold := (Vector3(1.15, 0.48, 0.45) if is_brig else Vector3(1.02, 0.34, -0.82)) * hs
+			var look_local_hold := (Vector3(-0.10, -0.25, 4.20) if is_brig else Vector3(-0.08, -0.22, 2.55)) * hs
 			_enable_ship_track_shot(cam_local_hold, look_local_hold, 66.0)
 
 		"cabin":
@@ -3131,8 +3156,8 @@ func _apply_hero_shot(mode: String) -> void:
 			_sync_cabin_renown(true)
 			if map_table != null:
 				map_table.refresh_now()
-			var cam_local_cabin := Vector3(0.0, 0.62, 3.35) if is_brig else Vector3(-0.35, 0.58, 1.85)
-			var look_local_cabin := Vector3(0.0, -0.18, 6.25) if is_brig else Vector3(0.32, -0.18, 4.75)
+			var cam_local_cabin := (Vector3(0.0, 0.62, 3.35) if is_brig else Vector3(-0.35, 0.58, 1.85)) * hs
+			var look_local_cabin := (Vector3(0.0, -0.18, 6.25) if is_brig else Vector3(0.32, -0.18, 4.75)) * hs
 			_enable_ship_track_shot(cam_local_cabin, look_local_cabin, 66.0)
 
 		"flotsam":
@@ -3179,12 +3204,12 @@ func _apply_hero_shot(mode: String) -> void:
 				if ch_node != null:
 					ch_node.visible = false
 
-			var deck_y := 1.25 if is_brig else 1.10
+			var deck_y := (1.25 if is_brig else 1.10) * hs
 			# Completely open flat solid planked waist AFT of the mainmast (zero mast, zero hatch, zero bell occlusion!).
-			var cap_loc := Vector3(-0.68, deck_y, 1.68) if is_brig else Vector3(-0.66, deck_y, 1.15)
-			var foe1_loc := Vector3(0.68, deck_y, 1.68) if is_brig else Vector3(0.66, deck_y, 1.15)
-			var foe2_loc := Vector3(-1.45, deck_y, 0.05) if is_brig else Vector3(-1.25, deck_y, -0.35)
-			var crew_loc := Vector3(1.68, deck_y, 0.25) if is_brig else Vector3(1.38, deck_y, -0.25)
+			var cap_loc := Vector3(-0.68 * hs, deck_y, 1.68 * hs) if is_brig else Vector3(-0.66 * hs, deck_y, 1.15 * hs)
+			var foe1_loc := Vector3(0.68 * hs, deck_y, 1.68 * hs) if is_brig else Vector3(0.66 * hs, deck_y, 1.15 * hs)
+			var foe2_loc := Vector3(-1.45 * hs, deck_y, 0.05 * hs) if is_brig else Vector3(-1.25 * hs, deck_y, -0.35 * hs)
+			var crew_loc := Vector3(1.68 * hs, deck_y, 0.25 * hs) if is_brig else Vector3(1.38 * hs, deck_y, -0.25 * hs)
 			var clash_loc := Vector3(0.0, deck_y + 1.18, cap_loc.z)
 			_shot_duel_clash_local = clash_loc
 
@@ -3257,8 +3282,8 @@ func _apply_hero_shot(mode: String) -> void:
 			_shot_duel_spark_timer = 0.42
 
 			# Zero-occlusion main-deck waist camera strictly IN FRONT of quarterdeck rail balusters (cam_z < rail_z - 0.40)!
-			var cam_duel := Vector3(-0.62, deck_y + 1.56, 3.38) if is_brig else Vector3(-0.55, deck_y + 1.48, 2.55)
-			var look_duel := Vector3(0.05, deck_y + 1.24, 0.92)
+			var cam_duel := Vector3(-0.62 * hs, deck_y + 1.56, 3.38 * hs) if is_brig else Vector3(-0.55 * hs, deck_y + 1.48, 2.55 * hs)
+			var look_duel := Vector3(0.05 * hs, deck_y + 1.24, 0.92 * hs)
 			_enable_ship_track_shot(cam_duel, look_duel, 58.0)
 
 		"whale_breach":
@@ -3341,8 +3366,8 @@ func _apply_hero_shot(mode: String) -> void:
 			if f3 != null:
 				f3.rotation.y = player_ship.rotation.y + 0.45
 			_shot_combat_timer = 0.22
-			var fsc := 1.38 if is_brig else 1.24
-			_enable_ship_track_shot(Vector3(-19.5 * fsc, 10.8 * fsc, 27.5 * fsc), Vector3(0.0, 3.8, -22.0), 62.0)
+			var fsc := (1.38 if is_brig else 1.24) * hs
+			_enable_ship_track_shot(Vector3(-19.5 * fsc, 10.8 * fsc, 27.5 * fsc), Vector3(0.0, 3.8 * hs, -22.0), 62.0)
 
 		"company_fleet":
 			# 4-ship Trading Company armada parade echoing Concept Art 2 in sunlit turquoise swells near Cutlass Cay!
@@ -3518,9 +3543,11 @@ func _apply_hero_shot(mode: String) -> void:
 			var volc := archipelago.get_island_by_id("cinder_crag")
 			if volc != null:
 				var vp := volc.global_position
-				_place_sailing_ship(vp + Vector3(72.0, 0.0, 92.0), 0.55, 0.88, 4.8)
-				var cam_p := vp + Vector3(34.0, 108.0, 62.0)
-				var look_p := vp + Vector3(0.0, 64.0, 2.0)
+				var vr := volc.island_radius
+				var vpk := volc.peak_height
+				_place_sailing_ship(vp + Vector3(vr * 0.85, 0.0, vr * 1.10), 0.55, 0.88, 4.8)
+				var cam_p := vp + Vector3(vr * 0.72, vpk * 1.18, vr * 0.96)
+				var look_p := vp + Vector3(0.0, vpk * 0.68, 0.0)
 				_mount_shot_camera(cam_p, look_p, 58.0)
 
 		"coral_reef":
@@ -3595,7 +3622,7 @@ func _apply_hero_shot(mode: String) -> void:
 				})
 				cooking_stove.step(11.0)
 				var stove_local := cooking_stove.position
-				var cam_local_galley := stove_local + Vector3(-0.68, 1.00, -1.04)
+				var cam_local_galley := stove_local + Vector3(-0.68 * hs, 1.00, -1.04 * hs)
 				var look_local_galley := stove_local + Vector3(0.0, 0.66, 0.02)
 				_enable_ship_track_shot(cam_local_galley, look_local_galley, 58.0)
 
@@ -3615,11 +3642,26 @@ func _apply_hero_shot(mode: String) -> void:
 				cast_world_dir.y = 0.0
 				cast_world_dir = cast_world_dir.normalized()
 				if player_pawn != null:
-					player_pawn.board(player_ship, fishing_line.position + Vector3(0.18, 0.0, 0.10))
+					player_pawn.board(player_ship, fishing_line.position + Vector3(0.18 * hs, 0.0, 0.10 * hs))
 					player_pawn.look_yaw = atan2(-cast_world_dir.x, -cast_world_dir.z)
 					_fishing_pawn = player_pawn
-				if inventory != null and inventory.has_method(&"equip"):
-					inventory.equip(&"", true)
+				# Hide any held weapon/tool meshes on the Captain's right hand so no stray cutlass clips the rail.
+				if inventory != null:
+					inventory.set_process(false)
+					if inventory.tp_tool_node != null and is_instance_valid(inventory.tp_tool_node):
+						inventory.tp_tool_node.visible = false
+						for mi in inventory.tp_tool_node.find_children("*", "MeshInstance3D", true, false):
+							(mi as Node3D).visible = false
+					if inventory.fp_tool_node != null and is_instance_valid(inventory.fp_tool_node):
+						inventory.fp_tool_node.visible = false
+				if player_pawn != null:
+					var f_cv := _character_visual_of(player_pawn)
+					if f_cv != null and f_cv.hand_right != null:
+						for h_child in f_cv.hand_right.get_children():
+							if h_child is Node3D:
+								(h_child as Node3D).visible = false
+							for h_mi in h_child.find_children("*", "MeshInstance3D", true, false):
+								(h_mi as Node3D).visible = false
 				if player_combat != null:
 					player_combat.equipped_weapon = &""
 				fishing_line.cancel_cast()
@@ -3631,8 +3673,8 @@ func _apply_hero_shot(mode: String) -> void:
 				fishing_line.distance_out = 7.6
 				fishing_line.step(0.016, fishing_line.global_position, false)
 				# Port-outboard camera 1.8 m clear of hull, shrouds, backstay & balustrade posts!
-				var cam_local_fish := fishing_line.position + Vector3(-2.07, 1.65, -0.77)
-				var look_local_fish := fishing_line.position + Vector3(-0.75, 0.0, 4.15)
+				var cam_local_fish := fishing_line.position + Vector3(-2.07 * hs, 1.65, -0.77 * hs)
+				var look_local_fish := fishing_line.position + Vector3(-0.75 * hs, 0.0, 4.15 * hs)
 				_enable_ship_track_shot(cam_local_fish, look_local_fish, 58.0)
 
 		"treasure_shark":
@@ -3774,10 +3816,9 @@ func _apply_hero_shot(mode: String) -> void:
 				if player_pawn != null:
 					player_pawn.board(player_ship, _captain_deck_pos(player_ship))
 					player_pawn.look_yaw = player_ship.rotation.y
-				var cap_specs := _crew_specs_for(player_ship)
 				for i in crew_pawns.size():
 					if crew_pawns[i] != null:
-						crew_pawns[i].board(player_ship, cap_specs[i % cap_specs.size()]["local_pos"] as Vector3)
+						crew_pawns[i].board(player_ship, _crew_local_pos(player_ship, i))
 
 				var scale_k := clampf(capital_isl.island_radius / 62.0, 1.0, 2.6)
 				if capital_op != null:
@@ -3821,16 +3862,17 @@ func _apply_hero_shot(mode: String) -> void:
 
 				if wf_node != null:
 					var wf_pos := wf_node.global_position
-					var wf_out := Vector3(wf_pos.x - epos.x, 0.0, wf_pos.z - epos.z)
-					var out_dir := wf_out.normalized() if wf_out.length_squared() > 16.0 else sea_dir
+					var out_dir := -wf_node.global_basis.z
+					out_dir.y = 0.0
+					out_dir = out_dir.normalized() if out_dir.length_squared() > 0.001 else sea_dir
 					var side_dir := (-out_dir).cross(Vector3.UP).normalized()
-					var stand_off := maxf(46.0, er * 0.62)
-					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off + side_dir * 12.0 \
-						+ Vector3(0.0, clampf(epk * 0.16, 9.5, 18.0), 0.0)
-					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 4.5)
-					var wf_mid_y := clampf(maxf(wf_pos.y * 0.55, epk * 0.26), 10.0, 34.0)
+					var stand_off := clampf(er * 0.38, 36.0, 54.0)
+					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off - side_dir * 4.0 \
+						+ Vector3(0.0, clampf(epk * 0.22, 11.0, 22.0), 0.0)
+					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 5.0)
+					var wf_mid_y := clampf(maxf(wf_pos.y * 0.58, epk * 0.28), 10.0, 34.0)
 					var look_p := Vector3(wf_pos.x, wf_mid_y, wf_pos.z).lerp(
-						epos + Vector3(0.0, epk * 0.34, 0.0), 0.35
+						epos + Vector3(0.0, epk * 0.34, 0.0), 0.22
 					)
 					_mount_shot_camera(cam_p, look_p, 56.0)
 				else:
@@ -3854,6 +3896,126 @@ func _apply_hero_shot(mode: String) -> void:
 				cam_p.y = maxf(cam_p.y, port.world_surface_height(cam_p) + 18.0)
 			var look_p := port_pos + Vector3(240.0, 10.0, -340.0)
 			_mount_shot_camera(cam_p, look_p, 62.0)
+
+		"skull_bluff":
+			# Dramatic maritime headland vista framing Skull Bluff's sea-facing cliff skull carving,
+			# glowing cursed cavern eyes, flanking 3D cliff buttresses, and tropical meadow.
+			Weather.time_of_day = 15.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 8.5, -0.40, 0.0, 0.34)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_suppress_shot_hud_overlays()
+			var sb_isl := archipelago.get_island_by_id("skull_bluff")
+			if sb_isl != null:
+				var sb_pos := sb_isl.global_position
+				var sb_r := sb_isl.island_radius
+				var sb_pk := sb_isl.peak_height
+				var sb_m := sb_isl.mooring_transform.origin
+				var sb_sea := Vector3(sb_m.x, 0.0, sb_m.z)
+				sb_sea = sb_sea.normalized() if sb_sea.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
+				var sb_nodes := sb_isl.find_children("*skull*", "Node3D", true, false)
+				var sb_target := sb_pos + Vector3(0.0, sb_pk * 0.42, 0.0)
+				var sb_out := sb_sea
+				for sn in sb_nodes:
+					var n3 := sn as Node3D
+					if n3 != null and n3 != sb_isl:
+						sb_target = n3.global_position + Vector3(0.0, 5.5, 0.0)
+						var fwd := n3.global_basis.z
+						fwd.y = 0.0
+						if fwd.length_squared() > 0.01:
+							sb_out = fwd.normalized()
+						break
+				var sb_side := (-sb_out).cross(Vector3.UP).normalized()
+				var sb_cam := sb_target + sb_out * maxf(54.0, sb_r * 0.72) + sb_side * 16.0 + Vector3(0.0, 8.5, 0.0)
+				sb_cam.y = maxf(sb_cam.y, sb_isl.world_surface_height(sb_cam) + 5.0)
+				_mount_shot_camera(sb_cam, sb_target, 54.0)
+
+		"cutlass_meadow":
+			# Low-to-mid beach & hillside vista on Cutlass Cay showcasing stochastic PBR golden sand,
+			# winding dirt trail (1.0 - COLOR.a), 3D meadow ground cover, hibiscus shrubs & cliff buttresses.
+			Weather.time_of_day = 10.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 7.5, -0.35, 0.0, 0.25)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
+			_suppress_shot_hud_overlays()
+			var cm_isl := archipelago.get_island_by_id("cutlass_cay")
+			if cm_isl != null:
+				var cm_pos := cm_isl.global_position
+				var cm_r := cm_isl.island_radius
+				var cm_pk := cm_isl.peak_height
+				var cm_m := cm_isl.mooring_transform.origin
+				var cm_sea := Vector3(cm_m.x, 0.0, cm_m.z)
+				cm_sea = cm_sea.normalized() if cm_sea.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
+				var cm_side := (-cm_sea).cross(Vector3.UP).normalized()
+				var cm_cam := cm_pos + cm_sea * (cm_r * 0.88) + cm_side * (cm_r * 0.34)
+				cm_cam.y = maxf(cm_isl.world_surface_height(cm_cam) + 5.2, 6.2)
+				var cm_look := cm_pos - cm_sea * (cm_r * 0.08) + Vector3(0.0, clampf(cm_pk * 0.34, 6.5, 18.0), 0.0)
+				_mount_shot_camera(cm_cam, cm_look, 58.0)
+
+		"gulls_arch":
+			# Maritime sailing approach framing Gull's Arch coastal sea arch with turquoise pass-through
+			# water and craggy 3D cliff headlands.
+			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.0, 8.0, -0.38, 0.0, 0.28)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
+			_suppress_shot_hud_overlays()
+			var ga_isl := archipelago.get_island_by_id("gulls_arch")
+			if ga_isl != null:
+				var ga_pos := ga_isl.global_position
+				var ga_r := ga_isl.island_radius
+				var ga_pk := ga_isl.peak_height
+				var ga_m := ga_isl.mooring_transform.origin
+				var ga_sea := Vector3(ga_m.x, 0.0, ga_m.z)
+				ga_sea = ga_sea.normalized() if ga_sea.length_squared() > 0.01 else Vector3(-0.6, 0.0, 0.8)
+				var ga_nodes := ga_isl.find_children("*arch*", "Node3D", true, false)
+				var ga_target := ga_pos + Vector3(0.0, clampf(ga_pk * 0.28, 7.0, 16.0), 0.0)
+				var ga_out := ga_sea
+				for an in ga_nodes:
+					var n3 := an as Node3D
+					if n3 != null and n3 != ga_isl:
+						ga_target = n3.global_position + Vector3(0.0, 4.5, 0.0)
+						var fwd := n3.global_basis.z
+						fwd.y = 0.0
+						if fwd.length_squared() > 0.01:
+							ga_out = fwd.normalized()
+						break
+				var ga_side := (-ga_out).cross(Vector3.UP).normalized()
+				var ga_cam := ga_target + ga_out * maxf(44.0, ga_r * 0.72) + ga_side * 14.0 + Vector3(0.0, 7.5, 0.0)
+				ga_cam.y = maxf(ga_cam.y, ga_isl.world_surface_height(ga_cam) + 4.5)
+				_mount_shot_camera(ga_cam, ga_target, 56.0)
+
+		"wreckers_tooth":
+			# Dramatic coastal vista framing Wrecker's Shoal's impaled galleon shipwreck prow wedged
+			# high on jagged rock fangs amid foaming reef surf and tidal outcrops.
+			Weather.time_of_day = 16.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.12, 9.5, -0.45, 0.0, 0.42)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.20)
+			_suppress_shot_hud_overlays()
+			var wt_isl := archipelago.get_island_by_id("wreckers_shoal")
+			if wt_isl == null:
+				wt_isl = archipelago.get_island_by_id("sirens_tooth")
+			if wt_isl != null:
+				var wt_pos := wt_isl.global_position
+				var wt_r := wt_isl.island_radius
+				var wt_pk := wt_isl.peak_height
+				var wt_m := wt_isl.mooring_transform.origin
+				var wt_sea := Vector3(wt_m.x, 0.0, wt_m.z)
+				wt_sea = wt_sea.normalized() if wt_sea.length_squared() > 0.01 else Vector3(0.7, 0.0, 0.7)
+				var wt_nodes := wt_isl.find_children("*shipwreck*", "Node3D", true, false)
+				if wt_nodes.is_empty():
+					wt_nodes = wt_isl.find_children("*wreck*", "Node3D", true, false)
+				var wt_target := wt_pos + Vector3(0.0, clampf(wt_pk * 0.30, 6.0, 14.0), 0.0)
+				var wt_out := wt_sea
+				for wn in wt_nodes:
+					var n3 := wn as Node3D
+					if n3 != null and n3 != wt_isl:
+						wt_target = n3.global_position + Vector3(0.0, 3.8, 0.0)
+						var rel := Vector3(n3.global_position.x - wt_pos.x, 0.0, n3.global_position.z - wt_pos.z)
+						if rel.length_squared() > 1.0:
+							wt_out = rel.normalized()
+						break
+				var wt_side := (-wt_out).cross(Vector3.UP).normalized()
+				var wt_cam := wt_target + wt_out * maxf(40.0, wt_r * 0.68) + wt_side * 16.0 + Vector3(0.0, 6.5, 0.0)
+				wt_cam.y = maxf(wt_cam.y, wt_isl.world_surface_height(wt_cam) + 4.5)
+				_mount_shot_camera(wt_cam, wt_target, 55.0)
 
 
 func _suppress_shot_hud_overlays() -> void:
@@ -3970,10 +4132,9 @@ func _place_sailing_ship(pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_s
 	if player_pawn != null:
 		player_pawn.board(player_ship, _captain_deck_pos(player_ship))
 		player_pawn.look_yaw = yaw_rad
-	var specs := _crew_specs_for(player_ship)
 	for i in crew_pawns.size():
 		if crew_pawns[i] != null:
-			crew_pawns[i].board(player_ship, specs[i % specs.size()]["local_pos"] as Vector3)
+			crew_pawns[i].board(player_ship, _crew_local_pos(player_ship, i))
 
 
 func _spawn_parade_ship(cls: StringName, pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_speed: float) -> Ship:

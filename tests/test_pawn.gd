@@ -652,9 +652,11 @@ func test_ship_cannon_recoil_trauma_and_hull_impact_signal() -> void:
 	_root.add_child(ship)
 	await physics_frames(4)
 
+	var hs_v: Variant = ship.get(&"hull_scale")
+	var hs := float(hs_v) if (hs_v != null and float(hs_v) > 0.01) else 1.0
 	var p: Pawn = PAWN.instantiate()
 	_root.add_child(p)
-	p.board(ship, Vector3(-1.5, 1.12, -1.5))
+	p.board(ship, Vector3(-1.5, 1.12, -1.5) * hs)
 	var pc := PlayerController.new()
 	pc.name = "PlayerController"
 	pc.capture_mouse = false
@@ -676,7 +678,7 @@ func test_ship_cannon_recoil_trauma_and_hull_impact_signal() -> void:
 	ship.hull_impacted.connect(func(wpos: Vector3, intensity: float) -> void:
 		impacts.append({"pos": wpos, "intensity": intensity})
 	)
-	var hit_pos := ship.global_transform * Vector3(2.0, -0.35, 0.2)
+	var hit_pos := ship.global_transform * (Vector3(2.0, -0.35, 0.2) * hs)
 	var slot := ship.apply_hull_damage(hit_pos, 0.5)
 	check(slot >= 0, "apply_hull_damage opens breach slot")
 	check_eq(impacts.size(), 1, "hull_impacted emitted once on hull breach")
@@ -684,4 +686,103 @@ func test_ship_cannon_recoil_trauma_and_hull_impact_signal() -> void:
 		check((impacts[0]["pos"] as Vector3).distance_to(hit_pos) < 0.01, "hull_impacted reports world impact pos")
 		check_near(float(impacts[0]["intensity"]), 1.0, 0.01, "hull_impacted intensity scales cleanly with radius")
 	await _end()
+
+
+class _Wave26DynamicStation extends MockStation:
+	var focus_msg: String = "[F] Drop Anchor"
+	var active_msg: String = "[Hold W] Heave | [F] Step Off"
+	var quick_use_enabled: bool = false
+	var quick_uses: int = 0
+	var meta_id: StringName = &"starboard"
+	var ship: Node3D = null
+
+	func get_focus_prompt() -> String:
+		return focus_msg
+
+	func get_active_prompt() -> String:
+		return active_msg
+
+	func try_quick_use(_pawn: Node) -> bool:
+		if quick_use_enabled:
+			quick_uses += 1
+			return true
+		return false
+
+
+class _Wave26MockCannonShip extends Node3D:
+	var last_side: StringName = &""
+	var total_dyaw: float = 0.0
+	var total_dpitch: float = 0.0
+	var calls: int = 0
+
+	func aim_cannon_delta(side: StringName, dyaw: float, dpitch: float) -> void:
+		last_side = side
+		total_dyaw += dyaw
+		total_dpitch += dpitch
+		calls += 1
+
+
+func test_f_key_station_toggle_quick_use_dynamic_prompts_and_cannon_mouse_aim() -> void:
+	_begin()
+	_fast(false)
+	Net.start_single_player()
+	_ground(Vector3(0, 110, 0))
+	var p: Pawn = PAWN.instantiate()
+	_root.add_child(p)
+	p.global_position = Vector3(0, 110.05, 0)
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.make_current = false
+	p.add_child(pc)
+
+	var st := _Wave26DynamicStation.new()
+	_root.add_child(st)
+	st.global_position = Vector3(0, 110.0, -1.6)
+	p.look_pitch = -0.3
+	await physics_frames(8)
+
+	# 1. Dynamic focus prompt comes from Station.get_focus_prompt().
+	check(p.focus == st.interactable, "player focuses dynamic station handle")
+	check_eq(pc.focus_prompt, "[F] Drop Anchor", "focus_prompt reads Station.get_focus_prompt()")
+
+	# 2. One-tap quick_use runs WITHOUT locking pawn into the station!
+	st.quick_use_enabled = true
+	Input.action_press(&"interact")
+	await physics_frames(2)
+	Input.action_release(&"interact")
+	await physics_frames(2)
+	check_eq(st.quick_uses, 1, "try_quick_use invoked on [F] interact")
+	check(p.station == null and st.occupant == null, "quick-use does NOT lock pawn into station")
+
+	# 3. When quick_use returns false, [F] enters station, shows get_active_prompt(), and pressing [F] again exits!
+	st.quick_use_enabled = false
+	Input.action_press(&"interact")
+	await physics_frames(2)
+	Input.action_release(&"interact")
+	await physics_frames(2)
+	check(p.station == st and st.occupant == p, "[F] enters station when try_quick_use returns false")
+	check_eq(pc.focus_prompt, "[Hold W] Heave | [F] Step Off", "active focus_prompt reads Station.get_active_prompt()")
+
+	# Pressing [F] (interact) a second time exits the station cleanly!
+	Input.action_press(&"interact")
+	await physics_frames(2)
+	Input.action_release(&"interact")
+	await physics_frames(2)
+	check(p.station == null and st.occupant == null, "pressing [F] (interact) exits station cleanly")
+
+	# 4. Cannon mouse aim forwards relative look deltas to ship.aim_cannon_delta(side, dyaw, dpitch).
+	var mock_ship := _Wave26MockCannonShip.new()
+	_root.add_child(mock_ship)
+	st.kind = &"cannon"
+	st.meta_id = &"port"
+	st.ship = mock_ship
+	check(p.enter_station(st), "pawn occupies mock cannon station")
+	pc.add_look(Vector2(100.0, -50.0))
+	check_eq(mock_ship.calls, 1, "add_look forwards cannon mouse aim delta to ship")
+	check_eq(mock_ship.last_side, &"port", "aim_cannon_delta receives station meta_id")
+	check_near(mock_ship.total_dyaw, -100.0 * 0.0018, 0.0001, "aim_cannon_delta yaw delta matches -relative.x * 0.0018")
+	check_near(mock_ship.total_dpitch, 50.0 * 0.0016, 0.0001, "aim_cannon_delta pitch delta matches -relative.y * 0.0016")
+	p.leave_station()
+	await _end()
+
 

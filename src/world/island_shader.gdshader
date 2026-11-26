@@ -12,6 +12,11 @@ shader_type spatial;
 //   - COLOR.rgb : vertex crevice AO / biome tint (preserved)
 //   - 1.0 - COLOR.a : optional walkable dirt/stone inland trail mask (0 on legacy meshes)
 //   - volcanic_amount, lush_jungle_amount, ruin_moss_amount, cliff_strata_scale
+//
+// Wave 25B/26 Non-Repeating Stochastic PBR Terrain Texture Contract:
+//   - use_terrain_textures = false by default (100% compatible with procedural Wave 24!)
+//   - When true, samples 1024x1024 Albedo + Normal maps with 2-tap golden-ratio rotated
+//     stochastic breakup on ground/beaches/trails and triplanar projection on steep cliffs!
 render_mode diffuse_burley, specular_schlick_ggx;
 
 #include "res://src/sky/cloud_shadow.gdshaderinc"
@@ -44,6 +49,22 @@ uniform float ruin_moss_amount : hint_range(0.0, 1.0) = 0.0;
 uniform float cliff_strata_scale : hint_range(0.25, 3.0) = 1.0;
 uniform float path_warmth : hint_range(0.0, 1.0) = 0.55;
 uniform float aerial_perspective_strength : hint_range(0.0, 1.0) = 0.42;
+
+// Optional Wave 25B/26 Stochastic PBR Terrain Texture Set (disabled by default until bound).
+uniform bool use_terrain_textures = false;
+uniform float terrain_tex_scale : hint_range(0.02, 1.0) = 0.14;
+uniform float terrain_tex_normal_strength : hint_range(0.0, 2.0) = 0.85;
+uniform float terrain_tex_blend : hint_range(0.0, 1.0) = 0.78;
+uniform sampler2D tex_grass_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_grass_normal : hint_normal, repeat_enable, filter_linear_mipmap;
+uniform sampler2D tex_dirt_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_dirt_normal : hint_normal, repeat_enable, filter_linear_mipmap;
+uniform sampler2D tex_sand_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_sand_normal : hint_normal, repeat_enable, filter_linear_mipmap;
+uniform sampler2D tex_cliff_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_cliff_normal : hint_normal, repeat_enable, filter_linear_mipmap;
+uniform sampler2D tex_volcanic_albedo : source_color, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D tex_volcanic_normal : hint_normal, repeat_enable, filter_linear_mipmap;
 
 varying vec3 v_world;
 varying vec3 v_world_normal;
@@ -109,6 +130,133 @@ vec2 eval_cliff_relief(vec3 wp, float macro_n, float brush_n, float strata_sc) {
 	float v_crack = ridged2(vec2(horiz_uv.y * 1.35 - brush_n * 0.9, wp.y * 0.088 * strata_sc + 4.2));
 	float fracture = clamp(v_streak * 0.54 + v_crack * 0.46, 0.0, 1.0);
 	return vec2(strata, fracture);
+}
+
+// Fast 2D hash for hex/simplex stochastic cell offsets & rotations.
+vec2 hash22(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+// Ultra-fast zero-tiling 2-tap golden-ratio rotated stochastic PBR sampler.
+// Layer A covers crisp near/mid micro-detail; Layer B rotates by rot_angle at irrational scale
+// (0.618034) with prime translation offset and macro-noise crossfade (zero visible repetition
+// across 364 m mega-islands at 1/2 the texture bandwidth of 3-vertex simplex textureGrad!).
+// OpenGL tangent-space normals (-dh/du, +dh/dv, +1) are converted to (-dh/du, -dh/dv) BEFORE
+// counter-rotation by transpose(R) so directional sunlight stays 100% mathematically exact!
+void sample_stochastic_ground(
+	sampler2D alb_tex,
+	sampler2D nrm_tex,
+	vec2 xz,
+	float sc,
+	float macro_n,
+	float brush_n,
+	float nrm_str,
+	float rot_angle,
+	out vec3 out_alb,
+	out vec3 out_nrm_offset
+) {
+	vec2 uv0 = xz * sc + vec2(macro_n - 0.5, brush_n - 0.5) * 0.24;
+	float ca = cos(rot_angle);
+	float sa = sin(rot_angle);
+	mat2 rot_b = mat2(vec2(ca, sa), vec2(-sa, ca));
+	vec2 uv1 = rot_b * (uv0 * 0.618034) + vec2(4.73, 2.39);
+	float w = smoothstep(0.18, 0.82, macro_n * 0.62 + brush_n * 0.38);
+
+	vec3 a0 = texture(alb_tex, uv0).rgb;
+	vec3 a1 = texture(alb_tex, uv1).rgb;
+	out_alb = mix(a0, a1, w);
+
+	if (nrm_str > 0.02) {
+		vec2 s0 = texture(nrm_tex, uv0).xy * 2.0 - 1.0;
+		vec2 s1 = texture(nrm_tex, uv1).xy * 2.0 - 1.0;
+		vec2 n0 = vec2(s0.x, -s0.y);
+		vec2 n1 = transpose(rot_b) * vec2(s1.x, -s1.y);
+		vec2 nxy = mix(n0, n1, w) * nrm_str;
+		out_nrm_offset = vec3(nxy.x, 0.0, nxy.y);
+	} else {
+		out_nrm_offset = vec3(0.0);
+	}
+}
+
+// Fast zero-stretching dominant-axis triplanar PBR sampler for steep 360-deg coastal & volcanic cliffs.
+// Uses -wp.y so PNG top (v=0) maps UP (+Y) and switches cleanly to single-tap macro sampling at far
+// range so 70%-screen-coverage mega-massifs stay well under +0.25 ms GPU on RX 9070 XT!
+void sample_triplanar_cliff(
+	sampler2D alb_tex,
+	sampler2D nrm_tex,
+	vec3 wp,
+	vec3 sn,
+	float sc,
+	float strata_sc,
+	float macro_n,
+	float brush_n,
+	float nrm_str,
+	bool far_lod,
+	out vec3 out_alb,
+	out vec3 out_nrm_offset
+) {
+	vec3 blend = pow(abs(sn), vec3(5.0));
+	blend /= max(blend.x + blend.y + blend.z, 1e-4);
+
+	float y_warp = (macro_n - 0.5) * 0.65 + (brush_n - 0.5) * 0.24;
+	float h_warp = (brush_n - 0.5) * 0.35;
+	// Subtle tilt keeps geological beds aligned with natural strata while breaking horizontal tiling.
+	const mat2 TILT_B = mat2(vec2(0.978, 0.208), vec2(-0.208, 0.978));
+	const mat2 INV_TILT_B = mat2(vec2(0.978, -0.208), vec2(0.208, 0.978));
+	float w_var = smoothstep(0.22, 0.78, macro_n * 0.65 + brush_n * 0.35);
+
+	// Use -wp.y for v so PNG top (v=0) maps UP (+Y) on cliffs (strata drips & shadows stay right-side up!).
+	vec2 uv_x = vec2(wp.z * sc * 0.85 + h_warp, -(wp.y * strata_sc) * sc * 0.92 + y_warp);
+	vec2 uv_z = vec2(wp.x * sc * 0.85 + 2.37 - h_warp, -(wp.y * strata_sc) * sc * 0.92 - y_warp * 0.85);
+
+	vec3 alb = vec3(0.0);
+	vec3 n_off = vec3(0.0);
+	float w_sum = 0.0;
+
+	if (blend.x > 0.08) {
+		vec3 ax = texture(alb_tex, uv_x).rgb;
+		if (!far_lod) {
+			vec2 uv_x2 = TILT_B * (uv_x * 0.618034) + vec2(4.13, 1.91);
+			ax = mix(ax, texture(alb_tex, uv_x2).rgb, w_var);
+			if (nrm_str > 0.02) {
+				vec2 sx1 = texture(nrm_tex, uv_x).xy * 2.0 - 1.0;
+				vec2 sx2 = texture(nrm_tex, uv_x2).xy * 2.0 - 1.0;
+				vec2 gx = mix(vec2(sx1.x, -sx1.y), INV_TILT_B * vec2(sx2.x, -sx2.y), w_var);
+				n_off += vec3(0.0, -gx.y, gx.x) * (blend.x * nrm_str);
+			}
+		}
+		alb += ax * blend.x;
+		w_sum += blend.x;
+	}
+	if (blend.z > 0.08) {
+		vec3 az = texture(alb_tex, uv_z).rgb;
+		if (!far_lod) {
+			vec2 uv_z2 = TILT_B * (uv_z * 0.618034) + vec2(6.71, 3.27);
+			az = mix(az, texture(alb_tex, uv_z2).rgb, w_var);
+			if (nrm_str > 0.02) {
+				vec2 sz1 = texture(nrm_tex, uv_z).xy * 2.0 - 1.0;
+				vec2 sz2 = texture(nrm_tex, uv_z2).xy * 2.0 - 1.0;
+				vec2 gz = mix(vec2(sz1.x, -sz1.y), INV_TILT_B * vec2(sz2.x, -sz2.y), w_var);
+				n_off += vec3(gz.x, -gz.y, 0.0) * (blend.z * nrm_str);
+			}
+		}
+		alb += az * blend.z;
+		w_sum += blend.z;
+	}
+	if (blend.y > 0.16) {
+		vec2 uv_y = wp.xz * (sc * 0.78) + vec2(h_warp, y_warp * 0.5);
+		alb += texture(alb_tex, uv_y).rgb * blend.y;
+		if (nrm_str > 0.02) {
+			vec2 sy = texture(nrm_tex, uv_y).xy * 2.0 - 1.0;
+			n_off += vec3(sy.x, 0.0, -sy.y) * (blend.y * nrm_str);
+		}
+		w_sum += blend.y;
+	}
+
+	out_alb = alb / max(w_sum, 1e-4);
+	out_nrm_offset = n_off / max(w_sum, 1e-4);
 }
 
 void vertex() {
@@ -210,7 +358,7 @@ void fragment() {
 	// Optional walkable inland dirt/stone trail blending driven by vertex alpha (1.0 - COLOR.a).
 	float dirt_path_mask = clamp(1.0 - COLOR.a, 0.0, 1.0) * smoothstep(0.6, 1.8, h);
 	if (dirt_path_mask > 0.005) {
-		float path_edge = smoothstep(0.10, 0.68, dirt_path_mask + (tussock_n - 0.5) * 0.28);
+		float path_edge = smoothstep(0.08, 0.58, dirt_path_mask + (tussock_n - 0.5) * 0.24);
 		vec3 col_path = mix(path_dirt_color * 0.88, path_dirt_color * vec3(1.12, 1.06, 0.95), path_warmth * (0.4 + 0.6 * grain_n));
 		col_path = mix(col_path, cliff_pale_color * 0.82, smoothstep(0.72, 0.92, pebble_n) * 0.30);
 		ground_col = mix(ground_col, col_path, path_edge);
@@ -223,8 +371,9 @@ void fragment() {
 	float ochre_wash = fbm2(vec2(h * 0.055 * cliff_strata_scale - macro_n * 1.4, (xz.x + xz.y) * 0.038));
 	float height_warm = smoothstep(3.5, 28.0, h + (macro_n - 0.5) * 7.0);
 
-	// Directional facet tonal pop keeps sculpted planes lively without looking like bare white paper.
-	float facet_var = clamp(face_n.x * 0.34 - face_n.z * 0.28 + face_n.y * 0.42, -0.5, 0.5);
+	// Directional rock-plane tonal variation (uses smooth_n + gentle fracture modulation so
+	// 45-deg heightmap ridge triangles never show alternating diagonal sawtooth striping!).
+	float facet_var = clamp(smooth_n.x * 0.34 - smooth_n.z * 0.28 + smooth_n.y * 0.42 + (fracture - 0.5) * 0.24, -0.5, 0.5);
 	float ivory_mix = clamp(height_warm * 0.44 + strata_band * 0.42 + facet_var * 0.16, 0.0, 1.0);
 	vec3 cliff_base = mix(cliff_warm_color, cliff_pale_color, ivory_mix);
 	// Warm sunlit terracotta-ochre sedimentary streaks break up pale limestone faces.
@@ -300,10 +449,12 @@ void fragment() {
 	vec3 grass_n = normalize(smooth_n + vec3(tussock_n - 0.5, 0.0, grain_n - 0.5) * (0.14 * t_grass_in));
 	vec3 ground_n = mix(beach_n, grass_n, t_grass_in);
 
-	// Distance-fade high-frequency cliff bump beyond 180 m to prevent shimmering on distant peaks.
-	// Keep geometric faceting cleanly concentrated on steep bare rock (smooth grassy/mossy bluffs stay organic).
+	// Distance-fade high-frequency cliff bump & PBR normal maps beyond 260 m to prevent shimmer.
+	// Keep geometric quad-triangle faceting subtle & fracture-gated so giant 166-182 m massifs
+	// read as organic carved cliffs instead of diagonal heightmap sawtooth strips!
 	float detail_fade = smoothstep(260.0, 45.0, v_cam_dist);
-	float bare_rock_facet = cliff_facet_strength * smoothstep(0.25, 0.85, cliff_mask) * (1.0 - ledge_moss * 0.78);
+	float ridge_smooth = smoothstep(0.18, 0.48, abs(smooth_n.x) * abs(smooth_n.z) * 4.0);
+	float bare_rock_facet = cliff_facet_strength * mix(0.28, 0.14, ridge_smooth) * smoothstep(0.32, 0.88, cliff_mask) * (1.0 - ledge_moss * 0.80) * mix(0.55, 1.0, fracture);
 	vec3 cliff_n = normalize(mix(smooth_n, face_n, bare_rock_facet));
 	if (cliff_mask > 0.04 && detail_fade > 0.01) {
 		float eps = 0.24;
@@ -317,8 +468,81 @@ void fragment() {
 	}
 
 	vec3 final_n_world = normalize(mix(ground_n, cliff_n, cliff_mask));
+
+	// --- Optional Wave 25B/26 Non-Repeating Stochastic PBR Terrain Texture Overlay ---
+	// Conditionally samples only the 1-2 active biomes at this pixel (zero cost when disabled!).
+	// Fades micro-normal maps cleanly past 125 m and full albedo past 420 m for < +0.20 ms GPU cost!
+	if (use_terrain_textures && v_cam_dist < 440.0) {
+		float pbr_nrm_fade = smoothstep(130.0, 26.0, v_cam_dist);
+		float tex_nrm_str = terrain_tex_normal_strength * pbr_nrm_fade;
+		bool far_cliff = v_cam_dist > 145.0;
+		float path_edge_w = dirt_path_mask > 0.005
+			? smoothstep(0.08, 0.58, dirt_path_mask + (tussock_n - 0.5) * 0.24)
+			: 0.0;
+		float g_vis = 1.0 - cliff_mask;
+		float w_sand = g_vis * t_wet_in * (1.0 - t_grass_in) * (1.0 - path_edge_w);
+		float w_grass = g_vis * t_grass_in * (1.0 - path_edge_w);
+		float w_dirt = g_vis * path_edge_w;
+		float w_cliff_norm = cliff_mask * (1.0 - ledge_moss * 0.85) * (1.0 - volc * 0.86);
+		float w_cliff_volc = cliff_mask * (1.0 - ledge_moss * 0.85) * (volc * 0.86);
+		float w_moss_grass = cliff_mask * ledge_moss * 0.85;
+		w_grass += w_moss_grass;
+
+		vec3 tex_alb_acc = vec3(0.0);
+		vec3 tex_nrm_acc = vec3(0.0);
+		float tex_w_acc = 0.0;
+
+		if (w_sand > 0.08) {
+			vec3 sa; vec3 sn_o;
+			// Directional trade-wind sand ripples: gentle 12-deg meander avoids cross-patch seams!
+			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.65, macro_n, brush_n, tex_nrm_str * 0.36, 0.21, sa, sn_o);
+			tex_alb_acc += mix(col_dry, sa, 0.62) * w_sand;
+			tex_nrm_acc += sn_o * w_sand;
+			tex_w_acc += w_sand;
+		}
+		if (w_grass > 0.08) {
+			vec3 ga; vec3 gn_o;
+			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 0.82, 0.645, ga, gn_o);
+			tex_alb_acc += (ga * grass_tint) * w_grass;
+			tex_nrm_acc += gn_o * w_grass;
+			tex_w_acc += w_grass;
+		}
+		if (w_dirt > 0.08) {
+			vec3 da; vec3 dn_o;
+			sample_stochastic_ground(tex_dirt_albedo, tex_dirt_normal, xz, terrain_tex_scale * 1.45, macro_n, brush_n, tex_nrm_str * 0.92, 0.89, da, dn_o);
+			tex_alb_acc += da * w_dirt;
+			tex_nrm_acc += dn_o * w_dirt;
+			tex_w_acc += w_dirt;
+		}
+		if (w_cliff_norm > 0.08) {
+			vec3 ca; vec3 cn_o;
+			sample_triplanar_cliff(tex_cliff_albedo, tex_cliff_normal, v_world, smooth_n, terrain_tex_scale * 0.78, cliff_strata_scale, macro_n, brush_n, tex_nrm_str, far_cliff, ca, cn_o);
+			tex_alb_acc += (ca * cliff_tint) * w_cliff_norm;
+			tex_nrm_acc += cn_o * w_cliff_norm;
+			tex_w_acc += w_cliff_norm;
+		}
+		if (w_cliff_volc > 0.08) {
+			vec3 va; vec3 vn_o;
+			sample_triplanar_cliff(tex_volcanic_albedo, tex_volcanic_normal, v_world, smooth_n, terrain_tex_scale * 0.82, cliff_strata_scale, macro_n, brush_n, tex_nrm_str * 1.05, far_cliff, va, vn_o);
+			tex_alb_acc += va * w_cliff_volc;
+			tex_nrm_acc += vn_o * w_cliff_volc;
+			tex_w_acc += w_cliff_volc;
+		}
+
+		if (tex_w_acc > 0.01) {
+			vec3 pbr_alb = (tex_alb_acc / tex_w_acc) * COLOR.rgb;
+			// Harmonize painted PBR texture detail with painterly procedural biome gradients & crevice shading.
+			vec3 pbr_shaded = pbr_alb * mix(vec3(1.0), clamp(albedo * 1.55, vec3(0.42), vec3(1.32)), 0.42);
+			float tex_fade = smoothstep(430.0, 95.0, v_cam_dist) * terrain_tex_blend * clamp(tex_w_acc, 0.0, 1.0);
+			albedo = mix(albedo, pbr_shaded, tex_fade);
+			if (pbr_nrm_fade > 0.01) {
+				final_n_world = normalize(final_n_world + (tex_nrm_acc / tex_w_acc) * (0.58 * clamp(tex_w_acc, 0.0, 1.0)));
+			}
+		}
+	}
+
 	float facet_pop = clamp(dot(face_n, smooth_n), 0.72, 1.0);
-	albedo *= mix(1.0, 0.90 + 0.14 * facet_pop, cliff_mask * (1.0 - ledge_moss * 0.75));
+	albedo *= mix(1.0, 0.92 + 0.11 * facet_pop, cliff_mask * (1.0 - ledge_moss * 0.75));
 
 	// Surface roughness & specular: glistening wet sand, tactile dry sand, mossy ledges, rough cliffs.
 	float wet_mask = t_wet_in * (1.0 - t_dry_in) * (1.0 - cliff_mask * 0.85);

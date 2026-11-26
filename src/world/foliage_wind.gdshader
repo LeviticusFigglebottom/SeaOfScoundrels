@@ -15,6 +15,11 @@ global uniform vec3 sky_horizon_color;
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform float use_albedo_tex = 1.0;
+uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap_anisotropic;
+uniform float use_normal_tex = 0.0;
+uniform float normal_scale : hint_range(0.0, 2.0) = 0.85;
+uniform sampler2D roughness_tex : hint_roughness_g, filter_linear_mipmap_anisotropic;
+uniform float use_roughness_tex = 0.0;
 uniform vec3 albedo_tint : source_color = vec3(1.0);
 uniform float roughness_val : hint_range(0.0, 1.0) = 0.56;
 uniform float sss_strength : hint_range(0.0, 1.0) = 0.46;
@@ -78,7 +83,12 @@ void fragment() {
 	vec3 leaf_col = base_col * grad_tint * frond_shift;
 
 	ALBEDO = leaf_col;
-	ROUGHNESS = mix(roughness_val + 0.08, max(roughness_val - 0.12, 0.28), v_tip_weight);
+	float base_rough = use_roughness_tex > 0.5 ? texture(roughness_tex, UV).g : roughness_val;
+	ROUGHNESS = clamp(mix(base_rough + 0.08, max(base_rough - 0.12, 0.28), v_tip_weight), 0.18, 0.96);
+	if (use_normal_tex > 0.5) {
+		NORMAL_MAP = texture(normal_tex, UV).rgb;
+		NORMAL_MAP_DEPTH = normal_scale;
+	}
 	METALLIC = 0.0;
 	SPECULAR = 0.24;
 

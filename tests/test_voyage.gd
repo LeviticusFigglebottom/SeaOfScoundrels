@@ -822,7 +822,8 @@ func test_fort_siege_reef_treasures_and_shanty_showcase() -> void:
 		var cb := b_node as CrewBrain
 		check_eq(cb.current_task, &"shanty", "%s enters shanty task" % cb.crew_name())
 		var loc := cb.pawn.platform_local_position()
-		check(loc.y >= 1.0 and loc.y <= 1.35,
+		var sc: float = cb.ship.hull_scale if cb.ship != null else 1.0
+		check(loc.y >= 1.0 * sc and loc.y <= 1.35 * sc,
 			"%s stands solidly on main deck (y=%.2f)" % [cb.crew_name(), loc.y])
 		var inst := cb.get_held_shanty_instrument()
 		check(inst != null, "%s holds sculpted 3D shanty instrument" % cb.crew_name())

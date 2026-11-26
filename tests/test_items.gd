@@ -48,6 +48,14 @@ func _end() -> void:
 	Sea.amp_scale = _saved_amp
 
 
+static func _ship_scale(s: Ship) -> float:
+	if s != null and is_instance_valid(s):
+		var hs: Variant = s.get(&"hull_scale")
+		if hs != null and float(hs) > 0.01:
+			return float(hs)
+	return 1.0
+
+
 func _make_player_pawn(pos: Vector3 = Vector3.ZERO) -> Dictionary:
 	var p := PAWN_SCENE.instantiate() as Pawn
 	_root.add_child(p)
@@ -266,7 +274,8 @@ func test_tools_shovel_bucket_planks_tankard_and_instrument() -> void:
 	check(site.is_unearthed and site.spawned_chest != null, "3 shovel digs unearth a Carryable treasure chest")
 
 	# Board the real Ship and test Bucket bailing & splashing.
-	pawn.board(ship, Vector3(0.0, -0.82, 0.2))
+	var hs := _ship_scale(ship)
+	pawn.board(ship, Vector3(0.0, -0.82, 0.2) * hs)
 	await physics_frames(3)
 	ship.water_level = 0.45
 	inv.equip(&"bucket", true)
@@ -284,11 +293,11 @@ func test_tools_shovel_bucket_planks_tankard_and_instrument() -> void:
 	check_eq(splash_res.get("action"), &"splash", "second primary splashes carried water out")
 	check(not inv.bucket_full and not wf.visible, "bucket empties cleanly after splash")
 
-	# Planks patch the nearest open hull breach on the real Ship within 3.2 m.
-	var breach_slot := ship.apply_hull_damage(ship.global_transform * Vector3(1.8, -0.45, 0.4), 0.5)
+	# Planks patch the nearest open hull breach on the real Ship within PLANK_REACH (3.8 m).
+	var breach_slot := ship.apply_hull_damage(ship.global_transform * (Vector3(1.8, -0.45, 0.4) * hs), 0.5)
 	check(breach_slot >= 0 and ship.open_hole_count() == 1, "ship has 1 open hull breach")
 	var hole_local: Vector3 = ship.holes[breach_slot]["local_pos"]
-	pawn.board(ship, Vector3(hole_local.x * 0.4, -0.82, hole_local.z))
+	pawn.board(ship, Vector3(hole_local.x * 0.4, -0.82 * hs, hole_local.z))
 	await physics_frames(2)
 	inv.equip(&"planks", true)
 	inv._use_cooldown = 0.0
@@ -393,11 +402,12 @@ func test_hud_radials_crew_orders_banners_and_quality_presets() -> void:
 	var pc: PlayerController = rig["pc"]
 	var cc: CombatComponent = rig["combat"]
 	var inv: Inventory = rig["inv"]
-	captain.board(ship, Vector3(0.0, 2.02, 4.9))
+	var hs := _ship_scale(ship)
+	captain.board(ship, Vector3(0.0, 2.02, 4.9) * hs)
 
 	var mate := PAWN_SCENE.instantiate() as Pawn
 	_root.add_child(mate)
-	mate.board(ship, Vector3(0.8, 1.12, 0.5))
+	mate.board(ship, Vector3(0.8, 1.12, 0.5) * hs)
 	var brain := CrewBrain.new()
 	brain.setup(ship, captain, &"helmsman")
 	mate.add_child(brain)
@@ -526,12 +536,13 @@ func test_hud_combat_feedback_vignette_and_hull_alert() -> void:
 	_root.add_child(ship)
 	await physics_frames(4)
 
+	var hs := _ship_scale(ship)
 	var rig := _make_player_pawn(Vector3.ZERO)
 	var captain: Pawn = rig["pawn"]
 	var pc: PlayerController = rig["pc"]
 	var cc: CombatComponent = rig["combat"]
 	var inv: Inventory = rig["inv"]
-	captain.board(ship, Vector3(0.0, 1.12, 0.2))
+	captain.board(ship, Vector3(0.0, 1.12, 0.2) * hs)
 
 	var hud := GameHUD.new()
 	hud.input_enabled = false
@@ -613,7 +624,7 @@ func test_hud_combat_feedback_vignette_and_hull_alert() -> void:
 	check(not hud.get_tool_meta_text().contains("LEAKS") and not hud.get_tool_meta_text().contains("FLOODING"),
 		"dry ship supplies chip stays clean")
 
-	var slot := ship.apply_hull_damage(ship.global_transform * Vector3(1.8, -0.45, 0.4), 0.5)
+	var slot := ship.apply_hull_damage(ship.global_transform * (Vector3(1.8, -0.45, 0.4) * hs), 0.5)
 	check(slot >= 0, "breached hull slot for HUD alert test")
 	hud._process(0.05)
 	check(hud.is_hull_alert_active() and hud.get_tool_meta_text().contains("LEAKS: 1"),
@@ -695,7 +706,7 @@ func test_map_table_course_bearing_wind_pins_and_threats() -> void:
 	var captain: Pawn = rig["pawn"]
 	var pc: PlayerController = rig["pc"]
 	pc.input_enabled = true
-	captain.board(ship, Vector3(0.0, -0.82, 2.5))
+	captain.board(ship, Vector3(0.0, -0.82, 2.5) * _ship_scale(ship))
 	var map_st := ship.get_station(&"map_table")
 	check(map_st != null and captain.enter_station(map_st), "captain occupies Station_MapTable")
 	mtv.view_center = Vector2(180.0, -320.0)
@@ -1215,7 +1226,7 @@ func test_spyglass_whale_manta_and_helm_sailing_telemetry_pill() -> void:
 	var pc: PlayerController = rig["pc"]
 	var cc: CombatComponent = rig["combat"]
 	var inv: Inventory = rig["inv"]
-	captain.board(ship, Vector3(0.0, 2.02, 4.1))
+	captain.board(ship, Vector3(0.0, 2.02, 4.1) * _ship_scale(ship))
 
 	var hud := GameHUD.new()
 	hud.input_enabled = false
@@ -1509,6 +1520,127 @@ func test_map_table_ship_cartouche_wind_knots_and_outpost_markers() -> void:
 	Game.profile.set_ship_name(prev_profile_ship)
 	await _end()
 	check(not is_instance_valid(mtv), "MapTableView tears down cleanly with 0 leaks")
+
+
+# ---------------------------------------------------------------------------
+# 14. Wave 26B: Station & Held-Tool ASCII Control Hints + [F] Prompt Ribbon
+# ---------------------------------------------------------------------------
+
+func test_hud_station_and_tool_chip_ascii_control_hints() -> void:
+	_begin()
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = true
+	_root.add_child(ship)
+	await physics_frames(4)
+
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	captain.board(ship, Vector3(0.0, 2.02, 4.15) * _ship_scale(ship))
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, ship, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var check_ascii := func(label: String, text: String) -> void:
+		check(text != "", "%s is non-empty" % label)
+		for ci in text.length():
+			check(text.unicode_at(ci) < 128, "%s is strictly ASCII ('%s')" % [label, text])
+
+	# 1. Verify station ToolChip ASCII control hints across all sailing & deck stations.
+	ship.anchor_progress = 0.5
+	ship.sail_set = 0.75
+	var station_checks: Array[Array] = [
+		[&"helm", "Ship's Wheel", "[A/D] Steer"],
+		[&"anchor", "Anchor Capstan", "[Hold W] Heave (50%)"],
+		[&"sail_length", "Sail Hoist", "[S] Lower / [W] Raise (75%)"],
+		[&"sail_angle", "Sail Braces", "[A/D] Angle"],
+		[&"cannon", "Ship Cannon", "[WASD/Mouse] Aim"],
+		[&"map_table", "Map Table", "[Space] Pin"],
+		[&"bilge", "Ship's Bilge", "[Hold LMB] Bail Water"],
+	]
+	for spec: Array in station_checks:
+		var kind: StringName = spec[0]
+		var want_title: String = spec[1]
+		var want_sub: String = spec[2]
+		var st := ship.get_station(kind)
+		check(st != null and captain.enter_station(st), "captain occupies station %s" % kind)
+		hud._process(0.05)
+		var t_txt := hud.get_tool_title_text()
+		var m_txt := hud.get_tool_meta_text()
+		check_eq(t_txt, want_title, "ToolChip title for %s" % kind)
+		check(m_txt.contains(want_sub), "ToolChip meta for %s contains '%s' (got '%s')" % [kind, want_sub, m_txt])
+		check_ascii.call("ToolChip title (%s)" % kind, t_txt)
+		check_ascii.call("ToolChip meta (%s)" % kind, m_txt)
+		captain.leave_station()
+
+	# Verify context prompt uses [F] for station Step away fallback and preserves leading '[' prompts!
+	var helm_st := ship.get_station(&"helm")
+	captain.enter_station(helm_st)
+	pc.focus_prompt = "Step away"
+	hud._process(0.2)
+	check_eq(hud.get_context_prompt_text(), "[F] Step away", "station fallback prompt renders with [F]")
+	pc.focus_prompt = "[A/D] Steer | [S/RMB] Center | [F] Step Off"
+	hud._process(0.2)
+	check_eq(hud.get_context_prompt_text(), "[A/D] Steer | [S/RMB] Center | [F] Step Off",
+		"bracketed dynamic station prompt renders verbatim")
+	captain.leave_station()
+
+	# 2. Verify held-tool ASCII control hints for bucket, planks, shovel, compass, and all other slots.
+	inv.bucket_full = false
+	var tool_checks: Array[Array] = [
+		[&"bucket", "Empty | [LMB] Scoop / Bail"],
+		[&"planks", "[LMB] Patch Breach"],
+		[&"shovel", "[LMB] Dig Treasure"],
+		[&"compass", "True North | [RMB] Hold Up"],
+		[&"spyglass", "[RMB] Zoom | [LMB] Call Out Sighting"],
+		[&"lantern", "[RMB] Raise"],
+		[&"tankard", "[LMB] Drink Grog (+HP)"],
+		[&"cutlass", "[RMB] Block"],
+		[&"pistol", "[LMB] Fire | [RMB] Aim"],
+		[&"map", "[RMB] Inspect"],
+		[&"instrument", "[RMB] Swap Instrument"],
+	]
+	for tspec: Array in tool_checks:
+		var tid: StringName = tspec[0]
+		var want_hint: String = tspec[1]
+		inv.equip(tid, true)
+		hud._process(0.05)
+		var meta_txt := hud.get_tool_meta_text()
+		check(meta_txt.contains(want_hint), "ToolChip meta for %s contains '%s' (got '%s')" % [tid, want_hint, meta_txt])
+		check_ascii.call("ToolChip meta (%s)" % tid, meta_txt)
+
+	inv.equip(&"bucket", true)
+	inv.bucket_full = true
+	hud._process(0.05)
+	check(hud.get_tool_meta_text().contains("Full | [LMB] Throw Water"),
+		"full bucket shows Throw Water hint (got '%s')" % hud.get_tool_meta_text())
+
+	# 3. Verify SailingTrimPill stays 100% green alongside updated ToolChip!
+	captain.enter_station(helm_st)
+	ship.anchor_down = true
+	hud._process(0.05)
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  ANCHORED"), "SailingTrimPill ANCHORED intact")
+	ship.anchor_down = false
+	ship.sail_set = 0.0
+	hud._process(0.05)
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  SAILS FURLED"), "SailingTrimPill SAILS FURLED intact")
+	ship.sail_set = 0.9
+	ship.sail_trim = ship.ideal_sail_trim()
+	hud._process(0.05)
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  FULL WIND"), "SailingTrimPill FULL WIND intact")
+	captain.leave_station()
+
+	hud.queue_free()
+	await physics_frames(2)
+	await _end()
+
 
 
 

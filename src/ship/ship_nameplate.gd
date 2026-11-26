@@ -106,11 +106,12 @@ static func mount_to_ship(ship: Ship, initial_name: String = "The Gilded Scoundr
 	plate.ship_class = ship.ship_class
 	plate.current_name = Profile.sanitize_ship_name(initial_name)
 	if ship.ship_class == &"brigantine":
-		plate.position = BRIG_POS
+		plate.position = BRIG_POS * ship.hull_scale
 		plate.rotation.x = BRIG_RAKE_X
 	else:
-		plate.position = SLOOP_POS
+		plate.position = SLOOP_POS * ship.hull_scale
 		plate.rotation.x = SLOOP_RAKE_X
+	plate.scale = Vector3.ONE * ship.hull_scale
 	ship.add_child(plate)
 	return plate
 

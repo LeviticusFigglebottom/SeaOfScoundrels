@@ -330,6 +330,14 @@ func _physics_process(delta: float) -> void:
 			_tick_idle()
 
 
+func _ship_scale() -> float:
+	if ship != null and is_instance_valid(ship):
+		var hs: Variant = ship.get(&"hull_scale")
+		if hs != null and float(hs) > 0.01:
+			return float(hs)
+	return 1.0
+
+
 func _choose_task() -> StringName:
 	var has_ship := ship != null and is_instance_valid(ship) and not ship.is_sinking
 
@@ -350,6 +358,12 @@ func _choose_task() -> StringName:
 		&"anchor_raise":
 			if has_ship and (ship.anchor_down or ship.anchor_progress > 0.05):
 				return &"anchor_raise"
+			current_order = &"auto"
+		&"set_sails":
+			if has_ship:
+				var tgt := clampf(float(order_target), 0.0, 1.0) if (order_target is float or order_target is int) else 1.0
+				if absf(ship.sail_set - tgt) > 0.05:
+					return &"set_sails"
 			current_order = &"auto"
 		&"trim":
 			if has_ship:
@@ -386,7 +400,13 @@ func _choose_task() -> StringName:
 		if _target_enemy_ship != null and ship.cannonballs_remaining > 0:
 			return &"cannons"
 
-	# 4. Autonomous sail trim when under way and trim is significantly off (with hysteresis).
+	# 4. Autonomous capstan assist: if Captain is actively raising the anchor, pitch in at the capstan!
+	if has_ship and pawn.platform == ship and captain != null and is_instance_valid(captain) \
+			and not captain.dead and captain.station != null and is_instance_valid(captain.station):
+		if StringName(captain.station.get(&"kind")) == &"anchor" and (ship.anchor_down or ship.anchor_progress > 0.05):
+			return &"anchor_raise"
+
+	# 5. Autonomous sail trim when under way and trim is significantly off (with hysteresis).
 	if has_ship and pawn.platform == ship and ship.sail_set > 0.15:
 		var trim_err := absf(ship.sail_trim - ship.ideal_sail_trim())
 		var angle_st := ship.get_station(&"sail_angle")
@@ -394,21 +414,21 @@ func _choose_task() -> StringName:
 		if trim_err > trim_thresh and angle_st != null and (angle_st.occupant == null or angle_st.occupant == pawn):
 			return &"trim_sails"
 
-	# 5. Autonomous helm if autopilot heading/dest is set and helm is free.
+	# 6. Autonomous helm if autopilot heading/dest is set and helm is free.
 	if has_ship and pawn.platform == ship and (not is_nan(autopilot_heading) or autopilot_dest.is_finite()):
 		var helm_st := ship.get_station(&"helm")
 		if helm_st != null and (helm_st.occupant == null or helm_st.occupant == pawn):
 			return &"helm"
 
-	# 6. Autonomous treasure haul if already carrying or a loose chest is near.
+	# 7. Autonomous treasure haul if already carrying or a loose chest is near.
 	if has_ship and (pawn.carried != null or _find_fetchable_treasure(18.0) != null):
 		return &"fetch_treasure"
 
-	# 7. Join active shanty session during calm downtime!
+	# 8. Join active shanty session during calm downtime!
 	if Audio.is_shanty_playing() and has_ship and pawn.platform == ship:
 		return &"shanty"
 
-	# 8. Autonomous close-quarters defense when ashore or facing boarders on deck.
+	# 9. Autonomous close-quarters defense when ashore or facing boarders on deck.
 	if not hold_fire and _resolve_combat() != null:
 		var off_ship := not has_ship or pawn.platform != ship
 		var cap_ashore := captain != null and is_instance_valid(captain) and not captain.dead and (not has_ship or captain.platform != ship)
@@ -459,9 +479,15 @@ func _tick_patch_hole(delta: float) -> void:
 			best_d = d
 			target_hole = h
 	_patch_slot = int(target_hole["index"])
+	var hs := _ship_scale()
+	var is_brig := ship.ship_class == &"brigantine"
 	var hpos: Vector3 = target_hole["local_pos"]
-	var stand_local := Vector3(clampf(hpos.x * 0.45, -0.85, 0.85), -0.85, clampf(hpos.z, -2.8, 3.4))
-	if _navigate_ship_local(stand_local, 1.35):
+	var x_lim := (1.15 if is_brig else 0.85) * hs
+	var z_min := (-4.2 if is_brig else -2.8) * hs
+	var z_max := (4.8 if is_brig else 3.4) * hs
+	var hold_y := (-0.95 if is_brig else -0.85) * hs
+	var stand_local := Vector3(clampf(hpos.x * 0.45, -x_lim, x_lim), hold_y, clampf(hpos.z, z_min, z_max))
+	if _navigate_ship_local(stand_local, 1.35 * hs):
 		pawn.wish_dir = Vector3.ZERO
 		_face_ship_local(hpos)
 		_play_anim(&"hammer", 0.5)
@@ -499,15 +525,46 @@ func _tick_anchor(want_down: bool, delta: float) -> void:
 		return
 	if pawn.station == st:
 		pawn.wish_dir = Vector3.ZERO
-		pawn.drive_station(Vector2(0.0, -1.0 if want_down else 1.0), want_down, not want_down, delta)
-		var done := (want_down and ship.anchor_progress >= 0.95) or (not want_down and ship.anchor_progress <= 0.05)
+		# Sea-of-Thieves polarity: W (axis.y > 0) / primary heaves anchor up; S (axis.y < 0) / secondary drops anchor.
+		if want_down:
+			pawn.drive_station(Vector2(0.0, -1.0), false, true, delta)
+		else:
+			pawn.drive_station(Vector2(0.0, 1.0), true, false, delta)
+		var done := (want_down and ship.anchor_down and ship.anchor_progress >= 0.95) \
+			or (not want_down and not ship.anchor_down and ship.anchor_progress <= 0.05)
 		if done:
 			pawn.leave_station()
 			if current_order == &"anchor_drop" or current_order == &"anchor_raise":
 				current_order = &"auto"
 		return
-	if _navigate_to_station(st) and st.can_occupy(pawn):
-		pawn.enter_station(st)
+	if not want_down and st.is_occupied() and st.occupant != pawn:
+		# Captain or another crewmate is already on the capstan: stand within 2.0 m and push a bar for multi-hand boost!
+		var hs := _ship_scale()
+		var st_local := ship.global_transform.affine_inverse() * st.global_position
+		var stand_local := ship.global_transform.affine_inverse() * Pawn.station_stand_transform(st).origin
+		var angle_off := 2.1 if persona_id == &"lookout" else (-2.1 if persona_id == &"carpenter" else PI)
+		var bar_r := 0.95 * hs
+		var beam_lim := (2.0 if ship.ship_class == &"brigantine" else 1.60) * hs
+		var helper_local := Vector3(
+			clampf(st_local.x + sin(angle_off) * bar_r, -beam_lim, beam_lim),
+			stand_local.y,
+			st_local.z + cos(angle_off) * bar_r
+		)
+		var dist_to_capstan := pawn.global_position.distance_to(st.global_position)
+		if _navigate_ship_local(helper_local, 0.85 * hs) or dist_to_capstan <= 1.85:
+			pawn.wish_dir = Vector3.ZERO
+			pawn.wish_sprint = false
+			_face_ship_local(st_local)
+			_play_anim_if_idle(&"bail", 0.70)
+		return
+	if _navigate_to_station(st):
+		if want_down and not ship.anchor_down and ship.anchor_progress <= 0.06 \
+				and st.has_method(&"try_quick_use") and bool(st.call(&"try_quick_use", pawn)):
+			if current_order == &"anchor_drop":
+				current_order = &"auto"
+			return
+		if st.can_occupy(pawn):
+			pawn.enter_station(st)
 
 
 func _tick_set_sails(delta: float) -> void:
@@ -524,7 +581,8 @@ func _tick_set_sails(delta: float) -> void:
 			ship.set_sail_target(target_set)
 			pawn.leave_station()
 			return
-		var y_in := clampf(diff * 4.0, -1.0, 1.0)
+		# Sea-of-Thieves hoist polarity: S (axis.y < 0) / primary lowers sail (+sail_set); W (axis.y > 0) / secondary raises.
+		var y_in := clampf(-diff * 4.0, -1.0, 1.0)
 		pawn.drive_station(Vector2(0.0, y_in), diff > 0.0, diff < 0.0, delta)
 		return
 	if _navigate_to_station(st) and st.can_occupy(pawn):
@@ -627,9 +685,10 @@ func _tick_cannons(delta: float) -> void:
 func _tick_fetch_treasure(_delta: float) -> void:
 	if pawn.carried != null:
 		# Bring the chest aboard the ship's main deck and set it down cleanly!
-		var stow_local := Vector3(0.75, 1.12, -0.6)
+		var hs := _ship_scale()
+		var stow_local := Vector3(0.75, 1.12, -0.6) * hs
 		if pawn.platform == ship:
-			if _navigate_ship_local(stow_local, 1.0):
+			if _navigate_ship_local(stow_local, 1.0 * hs):
 				pawn.wish_dir = Vector3.ZERO
 				pawn.drop_carried(0.15)
 				_speak(&"chest_aboard", {}, "chest_aboard")
@@ -637,7 +696,7 @@ func _tick_fetch_treasure(_delta: float) -> void:
 					current_order = &"auto"
 		elif ship != null:
 			# Walk / swim towards the ship's ladder to bring the load aboard.
-			var ladder_world := ship.global_transform * Vector3(2.8, 0.0, 2.0)
+			var ladder_world := ship.global_transform * (Vector3(2.8, 0.0, 2.0) * hs)
 			_move_world_towards(ladder_world, 1.2)
 		return
 
@@ -1200,19 +1259,109 @@ static func _build_shanty_motes() -> GPUParticles3D:
 	return p
 
 
+func _idle_watch_spot() -> Vector3:
+	var hs := _ship_scale()
+	var is_brig := ship != null and ship.ship_class == &"brigantine"
+	match persona_id:
+		&"helmsman":
+			return (Vector3(-1.85, 1.25, 2.25) if is_brig else Vector3(-1.55, 1.12, 1.35)) * hs
+		&"lookout":
+			return (Vector3(0.0, 1.25, -6.10) if is_brig else Vector3(0.0, 1.12, -3.75)) * hs
+		&"carpenter":
+			return (Vector3(1.85, 1.25, -1.10) if is_brig else Vector3(1.55, 1.12, -0.95)) * hs
+	return (Vector3(-1.55, 1.25, 0.0) if is_brig else Vector3(-1.35, 1.12, 0.0)) * hs
+
+
 func _tick_idle() -> void:
-	# Stand at a natural deck lookout spot when nothing urgent needs attention.
+	# Stand at a spacious spread-out deck lookout spot and respect personal space (min_sep = 2.0 m).
 	if ship != null and pawn.platform == ship:
-		var home := Vector3(-1.0, 1.1, -2.0)
-		match persona_id:
-			&"helmsman":
-				home = Vector3(-1.1, 2.0, 4.7)
-			&"lookout":
-				home = Vector3(0.0, 1.1, -3.4)
-			&"carpenter":
-				home = Vector3(1.1, 1.1, -0.4)
-		if pawn.platform_local_position().distance_to(home) > 1.2:
-			_navigate_ship_local(home, 0.9)
+		var hs := _ship_scale()
+		var is_brig := ship.ship_class == &"brigantine"
+		var cur_local := pawn.platform_local_position()
+		var my_band := _deck_band(cur_local.y / hs)
+		var home := _idle_watch_spot()
+		var home_band := _deck_band(home.y / hs)
+
+		var peers: Array[Pawn] = []
+		if captain != null and is_instance_valid(captain) and not captain.dead:
+			peers.append(captain)
+		for cb in _sibling_crew_brains():
+			if cb.pawn != null and is_instance_valid(cb.pawn) and not cb.pawn.dead:
+				peers.append(cb.pawn)
+
+		# If we are on a different deck than our watch post (e.g., quarterdeck), walk to our watch post first.
+		var min_sep := 2.0
+		var home_blocked := false
+		for other_p in peers:
+			if other_p.platform == ship:
+				var ol := other_p.platform_local_position()
+				if _deck_band(ol.y / hs) == home_band \
+						and Vector2(ol.x - home.x, ol.z - home.z).length() < min_sep:
+					home_blocked = true
+					break
+
+		if my_band != home_band and not home_blocked:
+			_navigate_ship_local(home, 0.9 * hs)
+			return
+
+		# Personal-space separation: gently sidestep away if Captain or another Pawn is within 2.0 m on our deck band.
+		var repel_local := Vector3.ZERO
+		for other_p in peers:
+			if other_p == pawn or other_p.platform != ship:
+				continue
+			var other_local := other_p.platform_local_position()
+			if _deck_band(other_local.y / hs) != my_band:
+				continue
+			var diff := Vector3(cur_local.x - other_local.x, 0.0, cur_local.z - other_local.z)
+			var d := diff.length()
+			if d < min_sep:
+				var push_dir := diff / d if d > 0.05 else Vector3(1.0 if cur_local.x >= 0.0 else -1.0, 0.0, 0.0)
+				var weight := 1.4 if other_p == captain else 1.0
+				repel_local += push_dir * ((min_sep - d) / min_sep) * weight
+
+		if repel_local.length_squared() > 0.002:
+			var beam_lim := (1.95 if is_brig else 1.65) * hs
+			var z_min := (-6.2 if is_brig else -3.85) * hs
+			var z_max := (3.4 if is_brig else 2.25) * hs
+			if my_band == 2:
+				z_min = (4.2 if is_brig else 3.2) * hs
+				z_max = (6.8 if is_brig else 5.0) * hs
+			elif my_band == 0:
+				z_min = (-4.2 if is_brig else -2.8) * hs
+				z_max = (4.8 if is_brig else 3.4) * hs
+			var step_dir := repel_local.normalized()
+			var target_l := Vector3(
+				clampf(cur_local.x + step_dir.x * 1.35, -beam_lim, beam_lim),
+				cur_local.y,
+				clampf(cur_local.z + step_dir.z * 1.35, z_min, z_max)
+			)
+			var move_l := Vector3(target_l.x - cur_local.x, 0.0, target_l.z - cur_local.z)
+			# If pinned against a hull rail or bulkhead, slide smoothly along the open deck walkway!
+			if move_l.length() < 0.55:
+				var rail_blocked := absf(cur_local.x + step_dir.x * 0.5) > beam_lim - 0.15
+				var z_mid := 0.5 * (z_min + z_max)
+				if rail_blocked:
+					var slide_z := 1.0 if step_dir.z > 0.1 else (-1.0 if step_dir.z < -0.1 else (1.0 if cur_local.z < z_mid else -1.0))
+					var z_try := clampf(cur_local.z + slide_z * 1.45, z_min, z_max)
+					if absf(z_try - cur_local.z) < 0.45:
+						z_try = clampf(cur_local.z - slide_z * 1.45, z_min, z_max)
+					target_l = Vector3(clampf(cur_local.x - signf(cur_local.x) * 0.25, -beam_lim, beam_lim), cur_local.y, z_try)
+				else:
+					var slide_x := 1.0 if cur_local.x < 0.0 else -1.0
+					target_l = Vector3(clampf(cur_local.x + slide_x * 1.35, -beam_lim, beam_lim), cur_local.y, target_l.z)
+				move_l = Vector3(target_l.x - cur_local.x, 0.0, target_l.z - cur_local.z)
+			if move_l.length() > 0.12:
+				var world_dir := ship.global_basis * move_l
+				world_dir.y = 0.0
+				if world_dir.length_squared() > 0.0001:
+					var wd := world_dir.normalized()
+					pawn.wish_dir = wd * 0.72
+					pawn.wish_sprint = false
+					pawn.look_yaw = atan2(-wd.x, -wd.z)
+					return
+
+		if not home_blocked and cur_local.distance_to(home) > 1.2 * hs:
+			_navigate_ship_local(home, 0.9 * hs)
 		else:
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
@@ -1224,10 +1373,11 @@ func _tick_idle() -> void:
 # ------------------------------------------------------------------ navigation
 
 func _navigate_to_station(st: Station) -> bool:
+	var hs := _ship_scale()
 	var stand_world := Pawn.station_stand_transform(st).origin
 	if ship != null and pawn.platform == ship:
 		var stand_local := ship.global_transform.affine_inverse() * stand_world
-		return _navigate_ship_local(stand_local, 0.85)
+		return _navigate_ship_local(stand_local, 0.85 * hs)
 	return _move_world_towards(stand_world, 0.9)
 
 
@@ -1235,15 +1385,16 @@ func _navigate_to_station(st: Station) -> bool:
 func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> bool:
 	if ship == null:
 		return false
+	var hs := _ship_scale()
 	var cur := pawn.platform_local_position()
-	var same_level := absf(cur.y - goal_local.y) < 0.65
+	var same_level := absf(cur.y - goal_local.y) < 0.65 * hs
 	if same_level and cur.distance_to(goal_local) <= arrive_dist:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
 		_route.clear()
 		return true
 
-	if _route.is_empty() or _route[_route.size() - 1].distance_to(goal_local) > 0.75:
+	if _route.is_empty() or _route[_route.size() - 1].distance_to(goal_local) > 0.75 * hs:
 		_route = _plan_ship_route(cur, goal_local)
 		_route_is_local = true
 
@@ -1251,8 +1402,8 @@ func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> boo
 		var wp: Vector3 = _route[0]
 		var d := wp - cur
 		var flat := Vector2(d.x, d.z).length()
-		var thresh := arrive_dist if _route.size() == 1 else 0.55
-		if flat <= thresh and absf(d.y) < 0.85:
+		var thresh := arrive_dist if _route.size() == 1 else (0.55 * hs)
+		if flat <= thresh and absf(d.y) < 0.85 * hs:
 			_route.remove_at(0)
 		else:
 			var world_dir := ship.global_basis * Vector3(d.x, 0.0, d.z)
@@ -1260,7 +1411,7 @@ func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> boo
 			if world_dir.length_squared() > 0.0001:
 				var wd := world_dir.normalized()
 				pawn.wish_dir = wd
-				pawn.wish_sprint = current_task == &"patch_hole" or current_task == &"bail" or flat > 3.0
+				pawn.wish_sprint = current_task == &"patch_hole" or current_task == &"bail" or flat > 3.0 * hs
 				pawn.look_yaw = atan2(-wd.x, -wd.z)
 			else:
 				pawn.wish_dir = Vector3.ZERO
@@ -1272,43 +1423,50 @@ func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> boo
 
 
 func _plan_ship_route(from_l: Vector3, to_l: Vector3) -> Array[Vector3]:
+	var hs := _ship_scale()
 	var pts: Array[Vector3] = []
-	var from_deck := _deck_band(from_l.y)
-	var to_deck := _deck_band(to_l.y)
+	var from_deck := _deck_band(from_l.y / hs)
+	var to_deck := _deck_band(to_l.y / hs)
+	var from_z_u := from_l.z / hs
+	var to_z_u := to_l.z / hs
 
 	if from_deck == to_deck:
-		if from_deck == 0 and ((from_l.z > -0.7 and to_l.z < -1.1) or (from_l.z < -1.1 and to_l.z > -0.7)):
+		if from_deck == 0 and ((from_z_u > -0.7 and to_z_u < -1.1) or (from_z_u < -1.1 and to_z_u > -0.7)):
 			# Walk along the side aisle past the mast pillar at (0, -1.0) in the hold.
-			var side_x := 0.82 if from_l.x >= 0.0 else -0.82
-			pts.append(Vector3(side_x, -0.85, -0.35))
-			pts.append(Vector3(side_x, -0.85, -1.65))
+			var side_x := (0.82 if from_l.x >= 0.0 else -0.82) * hs
+			if from_z_u > to_z_u:
+				pts.append(Vector3(side_x, -0.85 * hs, -0.35 * hs))
+				pts.append(Vector3(side_x, -0.85 * hs, -1.65 * hs))
+			else:
+				pts.append(Vector3(side_x, -0.85 * hs, -1.65 * hs))
+				pts.append(Vector3(side_x, -0.85 * hs, -0.35 * hs))
 		pts.append(to_l)
 		return pts
 
 	# Step 1: get to main deck (band 1) first.
 	if from_deck == 2:
-		pts.append(NAV_QSTAIR_TOP_R)
-		pts.append(NAV_QSTAIR_BOT_R)
+		pts.append(NAV_QSTAIR_TOP_R * hs)
+		pts.append(NAV_QSTAIR_BOT_R * hs)
 	elif from_deck == 0:
-		if from_l.z < -1.1:
-			var sx := 0.82 if from_l.x >= 0.0 else -0.82
-			pts.append(Vector3(sx, -0.85, -1.65))
-			pts.append(Vector3(sx, -0.85, -0.35))
-		pts.append(NAV_HOLD_FOOT)
-		pts.append(NAV_HOLD_STAIR_MID)
-		pts.append(NAV_MAIN_MID)
+		if from_z_u < -1.1:
+			var sx := (0.82 if from_l.x >= 0.0 else -0.82) * hs
+			pts.append(Vector3(sx, -0.85 * hs, -1.65 * hs))
+			pts.append(Vector3(sx, -0.85 * hs, -0.35 * hs))
+		pts.append(NAV_HOLD_FOOT * hs)
+		pts.append(NAV_HOLD_STAIR_MID * hs)
+		pts.append(NAV_MAIN_MID * hs)
 
 	# Step 2: move from main deck to target deck.
 	if to_deck == 2:
-		pts.append(NAV_QSTAIR_BOT_R)
-		pts.append(NAV_QSTAIR_TOP_R)
+		pts.append(NAV_QSTAIR_BOT_R * hs)
+		pts.append(NAV_QSTAIR_TOP_R * hs)
 	elif to_deck == 0:
-		pts.append(NAV_MAIN_MID)
-		pts.append(NAV_HOLD_STAIR_MID)
-		pts.append(NAV_HOLD_FOOT)
-		if to_l.z < -1.1:
-			pts.append(Vector3(0.82, -0.85, -0.35))
-			pts.append(Vector3(0.82, -0.85, -1.65))
+		pts.append(NAV_MAIN_MID * hs)
+		pts.append(NAV_HOLD_STAIR_MID * hs)
+		pts.append(NAV_HOLD_FOOT * hs)
+		if to_z_u < -1.1:
+			pts.append(Vector3(0.82 * hs, -0.85 * hs, -0.35 * hs))
+			pts.append(Vector3(0.82 * hs, -0.85 * hs, -1.65 * hs))
 
 	pts.append(to_l)
 	return pts
@@ -1523,7 +1681,8 @@ func _find_fetchable_treasure(max_dist: float = 35.0) -> Carryable:
 			continue
 		# Skip items already neatly stowed on our ship's main deck!
 		if ship != null:
-			var loc := ship.global_transform.affine_inverse() * c.global_position
+			var hs := _ship_scale()
+			var loc := (ship.global_transform.affine_inverse() * c.global_position) / hs
 			if absf(loc.x) < 1.9 and loc.z > -5.5 and loc.z < 5.5 and loc.y > -1.0 and loc.y < 2.6:
 				continue
 		var d := pawn.global_position.distance_to(c.global_position)
@@ -1558,6 +1717,7 @@ func _play_anim_if_idle(action: StringName, duration: float) -> void:
 static func _station_kind_for_order(order: StringName) -> StringName:
 	match order:
 		&"helm": return &"helm"
+		&"set_sails": return &"sail_length"
 		&"trim": return &"sail_angle"
 		&"anchor_drop", &"anchor_raise": return &"anchor"
 		&"cannons": return &"cannon"
@@ -1568,6 +1728,7 @@ static func _station_kind_for_order(order: StringName) -> StringName:
 static func _order_label(order: StringName) -> String:
 	match order:
 		&"helm": return "taking the helm"
+		&"set_sails": return "setting the sails"
 		&"trim": return "trimming sails for speed"
 		&"anchor_drop": return "dropping the anchor"
 		&"anchor_raise": return "heaving the anchor"

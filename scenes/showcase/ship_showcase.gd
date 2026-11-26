@@ -101,9 +101,9 @@ func _ready() -> void:
 
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(bx, -0.35, 0.4), 0.55)
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(-bx, -0.35, -1.2), 0.55)
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(bx - 0.1, -0.3, -2.5), 0.5)
+		_ship.apply_hull_damage(_ship.global_transform * _ship.ship_point(Vector3(bx, -0.35, 0.4)), 0.55)
+		_ship.apply_hull_damage(_ship.global_transform * _ship.ship_point(Vector3(-bx, -0.35, -1.2)), 0.55)
+		_ship.apply_hull_damage(_ship.global_transform * _ship.ship_point(Vector3(bx - 0.1, -0.3, -2.5)), 0.5)
 		_ship.patch_hole(0)
 		_ship.water_level = 0.26
 
@@ -123,7 +123,7 @@ func _ready() -> void:
 	add_child(_pawn)
 	var helm_st := _ship.get_station(&"helm")
 	if helm_st != null:
-		var helm_pos := Vector3(0.0, 2.25, 7.2) if _is_brig else Vector3(0.0, 2.02, 5.9)
+		var helm_pos := _ship.ship_point(Vector3(0.0, 2.25, 7.2) if _is_brig else Vector3(0.0, 2.02, 5.9))
 		_pawn.board(_ship, helm_pos)
 		_pawn.enter_station(helm_st)
 
@@ -149,22 +149,23 @@ func _process(delta: float) -> void:
 func _update_camera() -> void:
 	var xf := _ship.global_transform
 	var pos := xf.origin
-	var sc := 1.32 if _is_brig else 1.0
+	var hs := _ship.hull_scale
+	var sc := (1.32 if _is_brig else 1.0) * hs
 	# Ship bow faces local -Z (xf.basis.z points aft), so atan2(z.x, z.z) aligns with ship yaw.
 	var yaw := Basis(Vector3.UP, atan2(xf.basis.z.x, xf.basis.z.z))
 	match _shot:
 		"helm":
 			# Over-the-shoulder helm framing showing Captain gripping wheel, deck, sail, and horizon.
-			var eye := xf * (Vector3(1.05, 3.95, 8.7) if _is_brig else Vector3(0.85, 3.65, 7.1))
-			var look := xf * Vector3(-0.15, 2.95, -12.0)
+			var eye := xf * _ship.ship_point(Vector3(1.05, 3.95, 8.7) if _is_brig else Vector3(0.85, 3.65, 7.1))
+			var look := xf * _ship.ship_point(Vector3(-0.15, 2.95, -12.0))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"hold":
-			var eye := xf * (Vector3(-0.45, 0.58, 6.1) if _is_brig else Vector3(-0.35, 0.68, 4.3))
-			var look := xf * Vector3(0.2, -0.3, -1.8)
+			var eye := xf * _ship.ship_point(Vector3(-0.45, 0.58, 6.1) if _is_brig else Vector3(-0.35, 0.68, 4.3))
+			var look := xf * _ship.ship_point(Vector3(0.2, -0.3, -1.8))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"damage":
-			var eye := pos + yaw * Vector3(11.0 * sc, 3.2 * sc, 2.0)
-			_cam.look_at_from_position(eye, pos + Vector3(0.0, 0.8, 0.0), Vector3.UP)
+			var eye := pos + yaw * Vector3(11.0 * sc, 3.2 * sc, 2.0 * hs)
+			_cam.look_at_from_position(eye, pos + Vector3(0.0, 0.8 * hs, 0.0), Vector3.UP)
 		"broadside":
 			var eye := pos + yaw * Vector3(-11.0 * sc, 6.5 * sc, 16.0 * sc)
 			_cam.look_at_from_position(eye, pos + Vector3(18.0, 1.5, -4.0), Vector3.UP)

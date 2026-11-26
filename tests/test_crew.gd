@@ -40,10 +40,18 @@ func _end() -> void:
 	Sea.amp_scale = _saved_amp
 
 
+static func _ship_scale(s: Ship) -> float:
+	if s != null and is_instance_valid(s):
+		var hs: Variant = s.get(&"hull_scale")
+		if hs != null and float(hs) > 0.01:
+			return float(hs)
+	return 1.0
+
+
 func _make_crew(s: Ship, captain: Pawn, persona: StringName, local_pos: Vector3) -> Array:
 	var p := PAWN_SCENE.instantiate() as Pawn
 	_root.add_child(p)
-	p.board(s, local_pos)
+	p.board(s, local_pos * _ship_scale(s))
 	var brain := CrewBrain.new()
 	brain.setup(s, captain, persona)
 	p.add_child(brain)
@@ -66,7 +74,7 @@ func test_survival_priority_patches_breach_and_bails_hold() -> void:
 	brain.give_order(&"trim")
 	await physics_frames(10)
 
-	var slot := s.apply_hull_damage(s.global_transform * Vector3(2.0, -0.45, 0.4), 0.5)
+	var slot := s.apply_hull_damage(s.global_transform * (Vector3(2.0, -0.45, 0.4) * _ship_scale(s)), 0.5)
 	s.water_level = 0.25
 	check_eq(s.open_hole_count(), 1, "breach created")
 
@@ -469,7 +477,7 @@ func test_crew_shanty_complementary_instrument_selection_and_handoff() -> void:
 	# Captain with Inventory starting a shanty solo on Concertina.
 	var captain := PAWN_SCENE.instantiate() as Pawn
 	_root.add_child(captain)
-	captain.board(s, Vector3(0.0, 2.02, 4.15))
+	captain.board(s, Vector3(0.0, 2.02, 4.15) * _ship_scale(s))
 	var cap_inv := Inventory.new()
 	cap_inv.name = "Inventory"
 	cap_inv.input_enabled = false
@@ -544,6 +552,125 @@ func test_crew_shanty_complementary_instrument_selection_and_handoff() -> void:
 	cap_inv.set_playing_shanty(false)
 	await physics_frames(4)
 	await _end()
+
+
+func test_idle_crew_watch_posts_clearance_and_personal_space() -> void:
+	_begin()
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	s.start_anchored = true
+	_root.add_child(s)
+	await physics_frames(15)
+
+	var hs := _ship_scale(s)
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(s, Vector3(0.0, 2.02, 4.15) * hs)
+
+	# Spawn all 3 crewmates (start Barnaby on quarterdeck to verify he relocates off the helm area!).
+	var barnaby_pair := _make_crew(s, captain, &"helmsman", Vector3(-0.95, 2.02, 4.65))
+	var maren_pair := _make_crew(s, captain, &"lookout", Vector3(0.0, 1.12, -3.75))
+	var pip_pair := _make_crew(s, captain, &"carpenter", Vector3(1.55, 1.12, -0.95))
+	var barnaby_p: Pawn = barnaby_pair[0]
+	var maren_p: Pawn = maren_pair[0]
+	var pip_p: Pawn = pip_pair[0]
+
+	await physics_frames(280)
+
+	# Every idle crewmate keeps >= 1.8 m horizontal clearance from the Captain at the helm!
+	var cap_pos := captain.global_position
+	for entry: Array in [["Barnaby", barnaby_p], ["Maren", maren_p], ["Pip", pip_p]]:
+		var nm: String = entry[0]
+		var cp: Pawn = entry[1]
+		var d_flat := Vector2(cp.global_position.x - cap_pos.x, cp.global_position.z - cap_pos.z).length()
+		var loc := cp.platform_local_position()
+		check(cp.platform == s, "%s stays aboard ship at idle watch post" % nm)
+		check(d_flat >= 1.8, "%s keeps >= 1.8 m clearance from Captain at helm (dist=%.2f m)" % [nm, d_flat])
+		check(absf(loc.x) <= 1.90 * hs, "%s stays safely inside hull beam (x=%.2f)" % [nm, loc.x])
+
+	# Barnaby moved off the quarterdeck onto the main deck port midships rail.
+	var b_loc := barnaby_p.platform_local_position()
+	check(CrewBrain._deck_band(b_loc.y / hs) == 1 and b_loc.x < -0.5 * hs,
+		"Barnaby leaves quarterdeck to stand port midships on main deck (local=%s)" % str(b_loc))
+
+	# Step Captain right beside Pip on the main deck and verify personal-space sidestep without going overboard!
+	var pip_before := pip_p.platform_local_position()
+	captain.board(s, Vector3(pip_before.x - 0.55, pip_before.y, pip_before.z))
+	await physics_frames(120)
+	var pip_after := pip_p.platform_local_position()
+	var cap_after := captain.platform_local_position()
+	var sep_after := Vector2(pip_after.x - cap_after.x, pip_after.z - cap_after.z).length()
+	check(pip_p.platform == s, "Pip does not step overboard when yielding personal space")
+	check(sep_after >= 1.35, "Pip sidesteps cleanly when Captain crowds personal space (sep=%.2f m)" % sep_after)
+	await _end()
+
+
+func test_crew_sea_of_thieves_sail_hoist_and_anchor_polarity() -> void:
+	_begin()
+	Weather.set_weather(0.0, 10.0, 0.0)
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	_root.add_child(s)
+	await physics_frames(15)
+
+	var hs := _ship_scale(s)
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(s, Vector3(0.0, 2.02, 4.15) * hs)
+
+	var pair := _make_crew(s, captain, &"helmsman", Vector3(-1.55, 1.12, 1.35))
+	var helper_pair := _make_crew(s, captain, &"lookout", Vector3(0.0, 1.12, -3.75))
+	var crew_p: Pawn = pair[0]
+	var brain: CrewBrain = pair[1]
+	var helper_p: Pawn = helper_pair[0]
+	var helper_brain: CrewBrain = helper_pair[1]
+
+	# 1. Verify set_sails lowers from 0.0 -> ~1.0 and raises back from 1.0 -> ~0.0 with Sea-of-Thieves polarity!
+	s.set_sail_target(0.0)
+	s.sail_set = 0.0
+	brain.give_order(&"set_sails", 1.0)
+	for _i in 450:
+		await physics_frames(1)
+		if s.sail_set > 0.85:
+			break
+	check(s.sail_set > 0.85, "AI crew lowers sails via Station_SailLength (got %.2f)" % s.sail_set)
+
+	brain.give_order(&"set_sails", 0.0)
+	for _i in 450:
+		await physics_frames(1)
+		if s.sail_set < 0.15:
+			break
+	check(s.sail_set < 0.15, "AI crew raises/furls sails via Station_SailLength (got %.2f)" % s.sail_set)
+
+	# 2. Verify anchor_drop drops anchor and multi-hand capstan assist walks within 2.0 m when Captain occupies capstan!
+	brain.give_order(&"anchor_drop")
+	for _i in 450:
+		await physics_frames(1)
+		if s.anchor_down and s.anchor_progress > 0.9:
+			break
+	check(s.anchor_down and s.anchor_progress > 0.9, "AI crew drops anchor cleanly")
+
+	var anchor_st := s.get_station(&"anchor")
+	check(anchor_st != null and captain.enter_station(anchor_st), "Captain occupies Station_Anchor")
+	helper_brain.give_order(&"anchor_raise")
+	for _i in 320:
+		await physics_frames(1)
+		if helper_p.global_position.distance_to(anchor_st.global_position) <= 2.0:
+			break
+	var helper_dist := helper_p.global_position.distance_to(anchor_st.global_position)
+	check(helper_dist <= 2.05, "AI crewmate walks within 2.0 m of capstan to assist Captain heave (dist=%.2f m)" % helper_dist)
+	captain.leave_station()
+
+	# 3. Verify AI crew occupies freed capstan and raises anchor cleanly!
+	brain.give_order(&"anchor_raise")
+	for _i in 520:
+		await physics_frames(1)
+		if not s.anchor_down and s.anchor_progress < 0.1:
+			break
+	check(not s.anchor_down and s.anchor_progress < 0.1, "AI crew heaves anchor up cleanly with Sea-of-Thieves polarity")
+	check(crew_p.platform == s, "crewmate stays cleanly aboard after capstan work")
+	await _end()
+
 
 
 

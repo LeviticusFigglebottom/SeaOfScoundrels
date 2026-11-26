@@ -1,0 +1,2321 @@
+class_name IslandDetails
+extends Node3D
+## Batched MultiMesh 3D ground cover, coastal shoreline dressing, and steep-slope
+## sculptural cliff buttresses for every island across the archipelago.
+##
+## Replaces bare flat 2D terrain slopes and smooth cliff cones with 7–8 strictly
+## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
+## radius-scaled distance culling):
+##   1. `GrassClumps`          — 10-blade arched swaying tropical grass tufts (`foliage_wind.gdshader`)
+##   2. `JungleFerns`          — 8-frond 2-tier serrated fern rosettes (`foliage_wind.gdshader`)
+##   3. `HibiscusShrubs`       — 12-leaf tropical bushes crowned with 5 vivid 5-petal blossoms (`foliage_wind.gdshader`)
+##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs aligned to coastline contours
+##   5. `ShorePebblesShells`   — 5 beveled beach cobbles + fluted spiral coastal shell along wet/dry sand
+##   6. `TidalOutcrops`        — barnacle-ringed coastal rock triads emerging from tide pools & surf
+##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
+##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
+
+const GROUP := &"island_details"
+const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
+
+const GLB_BUTTRESS_TALL := "res://assets/generated/landmarks/cliff_buttress_tall.glb"
+const GLB_BUTTRESS_WIDE := "res://assets/generated/landmarks/cliff_buttress_wide.glb"
+const GLB_VOLCANIC_SPIRE := "res://assets/generated/landmarks/volcanic_basalt_spire.glb"
+
+const DIG_KEEPOUT_RADIUS := 3.2
+const MOORING_KEEPOUT_RADIUS := 10.5
+const PIER_KEEPOUT_RADIUS := 6.0
+
+const BUTTRESS_MIN_NORMAL_Y := 0.12
+const BUTTRESS_MAX_NORMAL_Y := 0.72
+const WIDE_BUTTRESS_MIN_RADIUS := 75.0
+
+# ------------------------------------------------------------------ sRGB palettes
+# Note: `foliage_wind.gdshader` reads COLOR.rgb directly in LINEAR space, so all
+# foliage vertex/instance colors are converted via `.srgb_to_linear()` before upload.
+# Coastal & fallback rock meshes use `StandardMaterial3D` with `vertex_color_is_srgb = true`.
+
+const GRASS_TROPICAL_PALETTE: Array[Color] = [
+	Color(0.22, 0.60, 0.18, 1.0),  # Rich tropical emerald
+	Color(0.32, 0.67, 0.19, 1.0),  # Sunlit meadow green
+	Color(0.45, 0.72, 0.20, 1.0),  # Bright chartreuse lime
+	Color(0.18, 0.52, 0.21, 1.0),  # Deep shaded jade
+	Color(0.38, 0.66, 0.22, 1.0),  # Warm leaf green
+]
+
+const GRASS_VERGE_PALETTE: Array[Color] = [
+	Color(0.68, 0.64, 0.26, 1.0),  # Warm golden dry coastal sedge
+	Color(0.58, 0.64, 0.23, 1.0),  # Sun-bleached beach tussock
+	Color(0.74, 0.66, 0.30, 1.0),  # Honey-straw dune grass
+	Color(0.49, 0.62, 0.22, 1.0),  # Olive-gold verge tuft
+]
+
+const GRASS_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.46, 0.44, 0.20, 1.0),  # Hardy golden-olive ash sedge
+	Color(0.35, 0.36, 0.18, 1.0),  # Scorched olive tussock
+	Color(0.52, 0.43, 0.21, 1.0),  # Warm ochre cinder grass
+	Color(0.29, 0.31, 0.19, 1.0),  # Charred highland scrub
+]
+
+const FERN_TROPICAL_PALETTE: Array[Color] = [
+	Color(0.18, 0.58, 0.22, 1.0),  # Deep jungle fern emerald
+	Color(0.26, 0.66, 0.22, 1.0),  # Sunlit tropical frond
+	Color(0.14, 0.50, 0.24, 1.0),  # Cool shaded canopy jade
+	Color(0.36, 0.70, 0.21, 1.0),  # Bright chartreuse crown
+]
+
+const FERN_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.34, 0.40, 0.20, 1.0),  # Hardy ash-fern olive
+	Color(0.42, 0.42, 0.19, 1.0),  # Bronze-olive cinder fern
+	Color(0.28, 0.34, 0.19, 1.0),  # Deep scorched moss fern
+]
+
+# Hibiscus meshes bake rich saturated emerald leaves + vivid crimson/pink/orange/gold
+# blossoms directly into linear vertex colors; instance tints apply subtle painterly shift.
+const HIBISCUS_TROPICAL_TINTS: Array[Color] = [
+	Color(1.00, 0.99, 0.97, 1.0),  # True vibrant blossom mix
+	Color(1.04, 0.96, 0.92, 1.0),  # Warm coral-sunset lean
+	Color(0.95, 1.02, 0.95, 1.0),  # Lush cool-jade foliage lean
+	Color(1.03, 0.98, 0.88, 1.0),  # Golden sunlit tropical lean
+	Color(0.98, 0.94, 1.02, 1.0),  # Hibiscus-magenta pop lean
+]
+
+const HIBISCUS_VOLCANIC_TINTS: Array[Color] = [
+	Color(0.84, 0.68, 0.52, 1.0),  # Warm volcanic ember-scrub
+	Color(0.76, 0.64, 0.50, 1.0),  # Charred cinder-blossom
+	Color(0.88, 0.74, 0.54, 1.0),  # Golden ash-bloom scrub
+]
+
+const DRIFTWOOD_PALETTE: Array[Color] = [
+	Color(0.96, 0.93, 0.88, 1.0),  # Sun-bleached silver driftwood
+	Color(0.86, 0.79, 0.70, 1.0),  # Weathered warm oak-drift
+	Color(0.92, 0.86, 0.76, 1.0),  # Salt-washed coastal timber
+	Color(0.78, 0.71, 0.62, 1.0),  # Damp storm-washed log
+]
+
+const DRIFTWOOD_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.50, 0.46, 0.43, 1.0),  # Charred ash-washed driftwood
+	Color(0.62, 0.56, 0.50, 1.0),  # Singed coastal timber
+	Color(0.42, 0.40, 0.39, 1.0),  # Dark charcoal-grey drift
+]
+
+const PEBBLE_PALETTE: Array[Color] = [
+	Color(0.98, 0.95, 0.90, 1.0),  # Pale coral cobbles & cream shell
+	Color(0.92, 0.87, 0.80, 1.0),  # Warm sandstone beach pebbles
+	Color(0.85, 0.84, 0.80, 1.0),  # Smooth coastal limestone mix
+	Color(0.96, 0.90, 0.82, 1.0),  # Sun-warmed ochre beach stones
+]
+
+const PEBBLE_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.44, 0.42, 0.44, 1.0),  # Smooth basalt shore pebbles
+	Color(0.54, 0.50, 0.48, 1.0),  # Ash-worn volcanic cobbles
+	Color(0.36, 0.35, 0.38, 1.0),  # Dark obsidian-slate shingle
+]
+
+const TIDAL_ROCK_PALETTE: Array[Color] = [
+	Color(0.98, 0.94, 0.87, 1.0),  # Warm sunlit limestone outcrop
+	Color(0.90, 0.85, 0.78, 1.0),  # Weathered ochre reef rock
+	Color(0.84, 0.84, 0.80, 1.0),  # Sea-bleached coastal crag
+	Color(0.95, 0.87, 0.76, 1.0),  # Golden sandstone tide rock
+]
+
+const TIDAL_ROCK_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.38, 0.36, 0.40, 1.0),  # Wet charred coastal basalt
+	Color(0.46, 0.43, 0.45, 1.0),  # Ash-dusted tidal crag
+	Color(0.32, 0.31, 0.35, 1.0),  # Deep obsidian surf rock
+]
+
+const BUTTRESS_FALLBACK_LIMESTONE: Array[Color] = [
+	Color(0.94, 0.83, 0.67, 1.0),  # Warm ochre-limestone cliff
+	Color(0.98, 0.91, 0.78, 1.0),  # Sunlit pale limestone buttress
+	Color(0.87, 0.76, 0.62, 1.0),  # Terracotta-streaked coastal rock
+	Color(0.91, 0.84, 0.72, 1.0),  # Weathered honey crag
+]
+
+const BUTTRESS_FALLBACK_PALE: Array[Color] = [
+	Color(0.99, 0.95, 0.86, 1.0),  # Chalky ivory sea-arch limestone
+	Color(0.94, 0.88, 0.78, 1.0),  # Sun-bleached white-ochre bluff
+	Color(0.89, 0.83, 0.74, 1.0),  # Pale travertine crag
+]
+
+const BUTTRESS_FALLBACK_VOLCANIC: Array[Color] = [
+	Color(0.34, 0.31, 0.34, 1.0),  # Charred columnar basalt
+	Color(0.42, 0.37, 0.38, 1.0),  # Weathered ash-basalt spire
+	Color(0.28, 0.26, 0.30, 1.0),  # Deep obsidian cliff rib
+	Color(0.48, 0.36, 0.32, 1.0),  # Rust-scorched caldera crag
+]
+
+# ------------------------------------------------------------------ shared static caches
+
+static var _active_details: int = 0
+static var _grass_mesh: ArrayMesh = null
+static var _fern_mesh: ArrayMesh = null
+static var _hibiscus_mesh: ArrayMesh = null
+static var _driftwood_mesh: ArrayMesh = null
+static var _pebbles_mesh: ArrayMesh = null
+static var _tidal_rock_mesh: ArrayMesh = null
+static var _fallback_buttress_mesh: ArrayMesh = null
+static var _fallback_buttress_wide_mesh: ArrayMesh = null
+static var _foliage_material: ShaderMaterial = null
+static var _wood_stone_material: StandardMaterial3D = null
+static var _pebble_material: StandardMaterial3D = null
+static var _tidal_rock_material: StandardMaterial3D = null
+static var _buttress_fallback_material: StandardMaterial3D = null
+static var _glb_mesh_cache: Dictionary = {}  # String path -> Mesh or null
+
+# ------------------------------------------------------------------ instance state
+
+var _owned_multimeshes: Array[MultiMeshInstance3D] = []
+var _grass_mmi: MultiMeshInstance3D = null
+var _fern_mmi: MultiMeshInstance3D = null
+var _hibiscus_mmi: MultiMeshInstance3D = null
+var _driftwood_mmi: MultiMeshInstance3D = null
+var _pebbles_mmi: MultiMeshInstance3D = null
+var _tidal_mmi: MultiMeshInstance3D = null
+var _buttress_mmi: MultiMeshInstance3D = null
+var _buttress_wide_mmi: MultiMeshInstance3D = null
+
+var _grass_count: int = 0
+var _fern_count: int = 0
+var _hibiscus_count: int = 0
+var _driftwood_count: int = 0
+var _pebbles_count: int = 0
+var _tidal_count: int = 0
+var _buttress_count: int = 0
+var _buttress_wide_count: int = 0
+
+var _placed_buttress_normals_y: PackedFloat32Array = PackedFloat32Array()
+var _placed_grass_positions: PackedVector3Array = PackedVector3Array()
+
+
+func _enter_tree() -> void:
+	add_to_group(GROUP)
+	_active_details += 1
+
+
+func _exit_tree() -> void:
+	for mmi in _owned_multimeshes:
+		if mmi != null and is_instance_valid(mmi):
+			mmi.material_override = null
+			mmi.multimesh = null
+	_owned_multimeshes.clear()
+	_grass_mmi = null
+	_fern_mmi = null
+	_hibiscus_mmi = null
+	_driftwood_mmi = null
+	_pebbles_mmi = null
+	_tidal_mmi = null
+	_buttress_mmi = null
+	_buttress_wide_mmi = null
+	_placed_buttress_normals_y = PackedFloat32Array()
+	_placed_grass_positions = PackedVector3Array()
+	_active_details = maxi(0, _active_details - 1)
+	if _active_details == 0:
+		clear_shared_cache()
+
+
+## Release all statically cached procedural meshes, materials, and extracted GLB meshes cleanly.
+static func clear_shared_cache() -> void:
+	_grass_mesh = null
+	_fern_mesh = null
+	_hibiscus_mesh = null
+	_driftwood_mesh = null
+	_pebbles_mesh = null
+	_tidal_rock_mesh = null
+	_fallback_buttress_mesh = null
+	_fallback_buttress_wide_mesh = null
+	_foliage_material = null
+	_wood_stone_material = null
+	_pebble_material = null
+	_tidal_rock_material = null
+	_buttress_fallback_material = null
+	_glb_mesh_cache.clear()
+
+
+## Deterministically populate batched 3D ground cover, coastal shoreline dressing,
+## and steep-slope cliff buttresses across `island`, attaching the `IslandDetails` child.
+static func populate_for_island(island: Island, archetype: StringName = &"",
+		rng_seed: int = 0, exclusions: Array[Vector3] = []) -> IslandDetails:
+	var details := IslandDetails.new()
+	details.name = "IslandDetails"
+	if island == null:
+		return details
+
+	var arch: StringName = archetype if archetype != &"" else island.archetype
+	var rng := RandomNumberGenerator.new()
+	var seed_val := rng_seed
+	if seed_val == 0:
+		seed_val = island.island_id.hash()
+	if seed_val == 0:
+		seed_val = 0x151A4D37
+	rng.seed = seed_val
+
+	var is_volcanic := arch == &"volcano_crag"
+	var is_tiny := island.island_radius < 45.0
+	var radius := maxf(18.0, island.island_radius)
+	var radius_t := clampf((radius - 45.0) / 137.0, 0.0, 1.0)
+	var all_radius_t := clampf((radius - 38.0) / 144.0, 0.0, 1.0)
+
+	# 1. Build automatic keepout zones (outpost pier/plaza/tavern/stall/beacon, mooring,
+	#    dig points, major structures, plus caller exclusions).
+	var keepouts: Array[Vector3] = []
+	var pier_seg := _collect_keepouts(island, arch, exclusions, keepouts)
+	var has_pier := bool(pier_seg["has_pier"])
+	var pier_a: Vector2 = pier_seg["pier_a"] as Vector2
+	var pier_b: Vector2 = pier_seg["pier_b"] as Vector2
+
+	# 2. Compute radius- & archetype-scaled layer budgets.
+	var grass_target := _compute_grass_target(arch, radius, radius_t, is_volcanic, is_tiny)
+	var foliage_pair := _compute_fern_hibiscus_targets(arch, radius_t, is_volcanic, is_tiny)
+	var fern_target: int = foliage_pair.x
+	var hibiscus_target: int = foliage_pair.y
+	var driftwood_target := clampi(int(roundf(lerpf(22.0, 62.0, all_radius_t) * (0.75 if is_volcanic else 1.0))), 20, 68)
+	var pebble_target := clampi(int(roundf(lerpf(50.0, 130.0, all_radius_t) * (0.78 if is_volcanic else 1.0))), 45, 135)
+	var tidal_target := clampi(int(roundf(lerpf(26.0, 68.0, all_radius_t) * (1.06 if arch == &"sea_stack" or is_volcanic else 1.0))), 24, 72)
+	var buttress_total_target := clampi(int(roundf(lerpf(18.0, 52.0, all_radius_t) * (1.08 if arch in [&"volcano_crag", &"twin_spires", &"sea_stack", &"grand_citadel"] else 1.0))), 14, 56)
+
+	var max_grass_h := maxf(24.0, island.peak_height * 0.80)
+	var max_fern_h := maxf(22.0, island.peak_height * 0.72)
+	var max_shrub_h := maxf(20.0, island.peak_height * 0.68)
+
+	# 3. Discover organic lush meadow patch centers for natural clustering.
+	var meadow_centers := _discover_meadow_centers(island, rng, radius, max_grass_h, keepouts, has_pier, pier_a, pier_b)
+
+	# 4. Populate Layer 1: GrassClumps (linear colors for `foliage_wind.gdshader`).
+	var grass_xf: Array[Transform3D] = []
+	var grass_col: Array[Color] = []
+	var grass_pos := PackedVector3Array()
+	_place_grass_clumps(island, arch, rng, grass_target, radius, max_grass_h, is_volcanic,
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, grass_xf, grass_col, grass_pos)
+
+	# 5. Populate Layers 2 & 3: JungleFerns & HibiscusShrubs (linear colors for `foliage_wind.gdshader`).
+	var fern_xf: Array[Transform3D] = []
+	var fern_col: Array[Color] = []
+	var hibiscus_xf: Array[Transform3D] = []
+	var hibiscus_col: Array[Color] = []
+	var bush_grid: Dictionary = {}
+	_place_jungle_ferns(island, rng, fern_target, radius, max_fern_h, is_volcanic,
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, bush_grid, fern_xf, fern_col)
+	_place_hibiscus_shrubs(island, rng, hibiscus_target, radius, max_shrub_h, is_volcanic,
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, bush_grid, hibiscus_xf, hibiscus_col)
+
+	# 6. Populate Layers 4, 5, 6: CoastalDriftwood, ShorePebblesShells, TidalOutcrops (sRGB vertex colors).
+	var driftwood_xf: Array[Transform3D] = []
+	var driftwood_col: Array[Color] = []
+	var pebble_xf: Array[Transform3D] = []
+	var pebble_col: Array[Color] = []
+	var tidal_xf: Array[Transform3D] = []
+	var tidal_col: Array[Color] = []
+	_place_coastal_driftwood(island, rng, driftwood_target, radius, is_volcanic,
+		keepouts, has_pier, pier_a, pier_b, driftwood_xf, driftwood_col)
+	_place_shore_pebbles(island, rng, pebble_target, radius, is_volcanic,
+		keepouts, has_pier, pier_a, pier_b, pebble_xf, pebble_col)
+	_place_tidal_outcrops(island, rng, tidal_target, radius, is_volcanic,
+		keepouts, has_pier, pier_a, pier_b, tidal_xf, tidal_col)
+
+	# 7. Populate Layer 7 (+ optional Layer 8 `CliffButtressesWide`): Steep-Slope Cliff Buttresses.
+	var use_wide_layer := (not is_volcanic) and (island.island_radius >= WIDE_BUTTRESS_MIN_RADIUS)
+	var tall_glb_path := GLB_VOLCANIC_SPIRE if is_volcanic else GLB_BUTTRESS_TALL
+	var tall_glb_mesh := _extract_glb_visual_mesh(tall_glb_path)
+	var tall_uses_glb := tall_glb_mesh != null
+	var tall_mesh: Mesh = tall_glb_mesh if tall_uses_glb else _get_fallback_buttress_mesh()
+
+	var wide_glb_mesh: Mesh = _extract_glb_visual_mesh(GLB_BUTTRESS_WIDE) if use_wide_layer else null
+	var wide_uses_glb := wide_glb_mesh != null
+	var wide_mesh: Mesh = wide_glb_mesh if wide_uses_glb else _get_fallback_buttress_wide_mesh()
+
+	var buttress_xf: Array[Transform3D] = []
+	var buttress_col: Array[Color] = []
+	var buttress_wide_xf: Array[Transform3D] = []
+	var buttress_wide_col: Array[Color] = []
+	var buttress_normals_y := PackedFloat32Array()
+
+	_place_cliff_buttresses(island, arch, rng, buttress_total_target, radius, is_volcanic,
+		use_wide_layer, tall_mesh, tall_uses_glb, wide_mesh, wide_uses_glb,
+		keepouts, has_pier, pier_a, pier_b,
+		buttress_xf, buttress_col, buttress_wide_xf, buttress_wide_col, buttress_normals_y)
+
+	# 8. Build strictly batched MultiMeshInstance3D children & register live foliage wind!
+	var foliage_mat := _get_foliage_material()
+	island.register_foliage_material(foliage_mat)
+
+	var grass_vis := maxf(235.0, island.island_radius + 145.0)
+	var fern_vis := maxf(270.0, island.island_radius + 165.0)
+	var hibiscus_vis := maxf(255.0, island.island_radius + 155.0)
+	var driftwood_vis := maxf(210.0, island.island_radius + 125.0)
+	var pebble_vis := maxf(175.0, island.island_radius + 95.0)
+	var tidal_vis := maxf(310.0, island.island_radius + 185.0)
+	var buttress_vis := clampf(island.island_radius * 6.0 + 1200.0, 1800.0, 2400.0)
+
+	details._grass_mmi = _create_multimesh_node(
+		"GrassClumps", _get_grass_mesh(), foliage_mat, grass_xf, grass_col, 1.0, grass_vis, 20.0)
+	details._fern_mmi = _create_multimesh_node(
+		"JungleFerns", _get_fern_mesh(), foliage_mat, fern_xf, fern_col, 1.0, fern_vis, 22.0)
+	details._hibiscus_mmi = _create_multimesh_node(
+		"HibiscusShrubs", _get_hibiscus_mesh(), foliage_mat, hibiscus_xf, hibiscus_col, 1.0, hibiscus_vis, 22.0)
+	details._driftwood_mmi = _create_multimesh_node(
+		"CoastalDriftwood", _get_driftwood_mesh(), _get_wood_stone_material(), driftwood_xf, driftwood_col, 0.0, driftwood_vis, 18.0)
+	details._pebbles_mmi = _create_multimesh_node(
+		"ShorePebblesShells", _get_pebbles_mesh(), _get_pebble_material(), pebble_xf, pebble_col, 0.0, pebble_vis, 16.0)
+	details._tidal_mmi = _create_multimesh_node(
+		"TidalOutcrops", _get_tidal_rock_mesh(), _get_tidal_rock_material(), tidal_xf, tidal_col, 0.0, tidal_vis, 24.0)
+
+	var tall_mat_override: Material = null if tall_uses_glb else _get_buttress_fallback_material()
+	details._buttress_mmi = _create_multimesh_node(
+		"CliffButtresses", tall_mesh, tall_mat_override, buttress_xf, buttress_col, 0.0, buttress_vis, 45.0)
+
+	details._attach_layer(details._grass_mmi)
+	details._attach_layer(details._fern_mmi)
+	details._attach_layer(details._hibiscus_mmi)
+	details._attach_layer(details._driftwood_mmi)
+	details._attach_layer(details._pebbles_mmi)
+	details._attach_layer(details._tidal_mmi)
+	details._attach_layer(details._buttress_mmi)
+
+	if use_wide_layer and not buttress_wide_xf.is_empty():
+		var wide_mat_override: Material = null if wide_uses_glb else _get_buttress_fallback_material()
+		details._buttress_wide_mmi = _create_multimesh_node(
+			"CliffButtressesWide", wide_mesh, wide_mat_override, buttress_wide_xf, buttress_wide_col, 0.0, buttress_vis, 45.0)
+		details._attach_layer(details._buttress_wide_mmi)
+
+	details._grass_count = grass_xf.size()
+	details._fern_count = fern_xf.size()
+	details._hibiscus_count = hibiscus_xf.size()
+	details._driftwood_count = driftwood_xf.size()
+	details._pebbles_count = pebble_xf.size()
+	details._tidal_count = tidal_xf.size()
+	details._buttress_count = buttress_xf.size()
+	details._buttress_wide_count = buttress_wide_xf.size()
+	details._placed_buttress_normals_y = buttress_normals_y
+	details._placed_grass_positions = grass_pos
+
+	island.add_child(details)
+	return details
+
+
+func _attach_layer(mmi: MultiMeshInstance3D) -> void:
+	if mmi == null:
+		return
+	add_child(mmi)
+	_owned_multimeshes.append(mmi)
+
+
+# ------------------------------------------------------------------ inspection API
+
+## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (<= 7 small/volcanic, <= 8 med/large).
+func get_multimesh_count() -> int:
+	var count := 0
+	for child in get_children():
+		if child is MultiMeshInstance3D:
+			count += 1
+	return count
+
+
+## Total placed detail instances across every batched MultiMesh layer.
+func get_total_instance_count() -> int:
+	var total := 0
+	for child in get_children():
+		var mmi := child as MultiMeshInstance3D
+		if mmi != null and mmi.multimesh != null:
+			total += mmi.multimesh.instance_count
+	return total
+
+
+func get_grass_count() -> int:
+	return _grass_count
+
+
+func get_fern_count() -> int:
+	return _fern_count
+
+
+func get_hibiscus_count() -> int:
+	return _hibiscus_count
+
+
+## Combined count of `CoastalDriftwood` + `ShorePebblesShells` + `TidalOutcrops`.
+func get_coastal_detail_count() -> int:
+	return _driftwood_count + _pebbles_count + _tidal_count
+
+
+## Combined count of steep-slope `CliffButtresses` (+ optional `CliffButtressesWide`).
+func get_cliff_buttress_count() -> int:
+	return _buttress_count + _buttress_wide_count
+
+
+## Copy of terrain `normal.y` values recorded at every placed cliff buttress (reliable under `--headless`).
+func get_placed_buttress_normals_y() -> PackedFloat32Array:
+	return _placed_buttress_normals_y.duplicate()
+
+
+## Copy of local-space positions for every placed `GrassClumps` instance (reliable under `--headless`).
+func get_placed_grass_positions() -> PackedVector3Array:
+	return _placed_grass_positions.duplicate()
+
+
+# ------------------------------------------------------------------ budget & keepout helpers
+
+static func _compute_grass_target(arch: StringName, radius: float, radius_t: float,
+		is_volcanic: bool, is_tiny: bool) -> int:
+	if is_volcanic:
+		return clampi(int(roundf(lerpf(190.0, 232.0, radius_t))), 180, 240)
+	if is_tiny:
+		return clampi(int(roundf(lerpf(85.0, 140.0, clampf((radius - 28.0) / 17.0, 0.0, 1.0)))), 72, 160)
+	var lush_k := 1.0
+	match arch:
+		&"grand_citadel", &"twin_spires", &"skull_bluff":
+			lush_k = 1.08
+		&"crescent_lagoon", &"palm_atoll", &"treasure_peak", &"smuggler_cove":
+			lush_k = 1.04
+		&"outpost", &"grand_outpost", &"fort_rock":
+			lush_k = 0.96
+		&"wreck_shoal":
+			lush_k = 0.98
+	var base := lerpf(205.0, 525.0, radius_t) * lush_k
+	return clampi(int(roundf(base)), 185, 545)
+
+
+static func _compute_fern_hibiscus_targets(arch: StringName, radius_t: float,
+		is_volcanic: bool, is_tiny: bool) -> Vector2i:
+	var combined := 0
+	if is_volcanic:
+		combined = clampi(int(roundf(lerpf(48.0, 74.0, radius_t))), 36, 84)
+		var ferns_v := int(roundf(float(combined) * 0.66))
+		return Vector2i(ferns_v, maxi(10, combined - ferns_v))
+	if is_tiny:
+		combined = 44
+		return Vector2i(26, 18)
+	var lush_k := 1.0
+	match arch:
+		&"grand_citadel", &"twin_spires", &"smuggler_cove", &"skull_bluff":
+			lush_k = 1.08
+		&"crescent_lagoon", &"palm_atoll", &"treasure_peak":
+			lush_k = 1.04
+		&"outpost", &"grand_outpost":
+			lush_k = 0.95
+	combined = clampi(int(roundf(lerpf(96.0, 248.0, radius_t) * lush_k)), 84, 256)
+	var fern_n := int(roundf(float(combined) * 0.61))
+	return Vector2i(fern_n, combined - fern_n)
+
+
+static func _collect_keepouts(island: Island, arch: StringName, caller_exclusions: Array[Vector3],
+		out_keepouts: Array[Vector3]) -> Dictionary:
+	for ex in caller_exclusions:
+		out_keepouts.append(ex)
+
+	for dp in island.dig_points:
+		out_keepouts.append(Vector3(dp.x, dp.z, DIG_KEEPOUT_RADIUS))
+
+	var has_pier := false
+	var pier_a := Vector2.ZERO
+	var pier_b := Vector2.ZERO
+
+	if island is Outpost:
+		var op := island as Outpost
+		var db := Basis(Vector3.UP, op.dock_yaw)
+		var harbour_zones: Array[Array] = [
+			[0.0, -34.0, 15.0],
+			[4.5, -39.5, 11.0],
+			[0.0, -18.0, 14.5],
+			[-11.0, -7.5, 10.5],
+			[9.2, -18.5, 6.5],
+			[-6.6, -19.5, 4.5],
+			[24.0, -6.5, 9.0],
+		]
+		if arch == &"grand_outpost":
+			harbour_zones.append([0.0, -64.0, 22.0])
+			harbour_zones.append([0.0, -104.0, 26.0])
+		for hz in harbour_zones:
+			var wp := db * Vector3(float(hz[0]), 0.0, float(hz[1]))
+			out_keepouts.append(Vector3(wp.x, wp.z, float(hz[2])))
+
+		has_pier = true
+		pier_a = Vector2(op.dock_local_transform.origin.x, op.dock_local_transform.origin.z)
+		pier_b = Vector2(op.dock_pier_end_local.x, op.dock_pier_end_local.z)
+		if pier_a.distance_squared_to(pier_b) < 1.0:
+			var p_start := db * Vector3(0.0, 0.0, -28.0)
+			var p_end := db * Vector3(0.0, 0.0, -44.0)
+			pier_a = Vector2(p_start.x, p_start.z)
+			pier_b = Vector2(p_end.x, p_end.z)
+
+		# Defensive keepouts around actual instantiated outpost buildings if shifted.
+		if op.tavern_node != null and is_instance_valid(op.tavern_node):
+			out_keepouts.append(Vector3(op.tavern_node.position.x, op.tavern_node.position.z, 9.5))
+		if op.merchant_stall != null and is_instance_valid(op.merchant_stall):
+			out_keepouts.append(Vector3(op.merchant_stall.position.x, op.merchant_stall.position.z, 5.5))
+		if op.beacon_node != null and is_instance_valid(op.beacon_node):
+			out_keepouts.append(Vector3(op.beacon_node.position.x, op.beacon_node.position.z, 8.5))
+		if op.notice_board_node != null and is_instance_valid(op.notice_board_node):
+			out_keepouts.append(Vector3(op.notice_board_node.position.x, op.notice_board_node.position.z, 4.0))
+	else:
+		var m_pos := island.mooring_transform.origin
+		if Vector2(m_pos.x, m_pos.z).length_squared() > 1.0:
+			out_keepouts.append(Vector3(m_pos.x, m_pos.z, MOORING_KEEPOUT_RADIUS))
+
+	# Automatically avoid overlapping major placed structures (bastions, warehouses, campfires, grottoes, vents).
+	var props_root := island.get_node_or_null(^"Props") as Node3D
+	if props_root != null:
+		for child in props_root.get_children():
+			var n3 := child as Node3D
+			if n3 == null:
+				continue
+			var cname := n3.name
+			var keep_r := 0.0
+			if cname == "FortBastion":
+				keep_r = 18.5
+			elif cname.begins_with("SmugglerGrotto"):
+				keep_r = 10.5
+			elif cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck"):
+				keep_r = 7.5
+			elif cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall"):
+				keep_r = 7.2
+			elif cname.begins_with("HeadlandWatchtower") or cname.begins_with("FortWatchtower"):
+				keep_r = 5.8
+			elif cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") or cname.begins_with("BluffTimberBridge"):
+				keep_r = 5.8
+			elif cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire"):
+				keep_r = 4.2
+			if keep_r > 0.0:
+				out_keepouts.append(Vector3(n3.position.x, n3.position.z, keep_r))
+
+	for child in island.get_children():
+		var n3 := child as Node3D
+		if n3 == null:
+			continue
+		if n3.name.begins_with("VolcanicFumarole") or n3.name.ends_with("Waterfall"):
+			out_keepouts.append(Vector3(n3.position.x, n3.position.z, 5.0))
+
+	return {
+		"has_pier": has_pier,
+		"pier_a": pier_a,
+		"pier_b": pier_b,
+	}
+
+
+static func _is_in_keepout(pt: Vector2, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, extra_margin: float = 0.0) -> bool:
+	for ex in keepouts:
+		var r := ex.z + extra_margin
+		var dx := pt.x - ex.x
+		var dz := pt.y - ex.y
+		if dx * dx + dz * dz < r * r:
+			return true
+	if has_pier:
+		var pr := PIER_KEEPOUT_RADIUS + extra_margin
+		if _point_segment_dist_sq(pt, pier_a, pier_b) < pr * pr:
+			return true
+	return false
+
+
+static func _point_segment_dist_sq(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var len_sq := ab.length_squared()
+	if len_sq < 0.0001:
+		return p.distance_squared_to(a)
+	var t := clampf((p - a).dot(ab) / len_sq, 0.0, 1.0)
+	return p.distance_squared_to(a + ab * t)
+
+
+# ------------------------------------------------------------------ 2D spatial hash grid
+
+static func _grid_is_clear(grid: Dictionary, cell_size: float, pt: Vector2, min_dist: float) -> bool:
+	var d2 := min_dist * min_dist
+	var cx := int(floorf(pt.x / cell_size))
+	var cz := int(floorf(pt.y / cell_size))
+	var span := maxi(1, int(ceilf(min_dist / cell_size)))
+	for oz in range(-span, span + 1):
+		for ox in range(-span, span + 1):
+			var bucket: Variant = grid.get(Vector2i(cx + ox, cz + oz))
+			if bucket != null:
+				for other: Vector2 in bucket as Array:
+					if pt.distance_squared_to(other) < d2:
+						return false
+	return true
+
+
+static func _grid_insert(grid: Dictionary, cell_size: float, pt: Vector2) -> void:
+	var key := Vector2i(int(floorf(pt.x / cell_size)), int(floorf(pt.y / cell_size)))
+	var bucket: Variant = grid.get(key)
+	if bucket == null:
+		grid[key] = [pt]
+	else:
+		(bucket as Array).append(pt)
+
+
+# ------------------------------------------------------------------ placement: meadow & foliage layers
+
+static func _discover_meadow_centers(island: Island, rng: RandomNumberGenerator, radius: float,
+		max_grass_h: float, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2) -> Array[Vector2]:
+	var centers: Array[Vector2] = []
+	var desired := clampi(int(roundf(radius / 11.5)), 5, 16)
+	var min_sep := clampf(radius * 0.17, 7.5, 22.0)
+	var grid: Dictionary = {}
+	for _attempt in desired * 26:
+		if centers.size() >= desired:
+			break
+		var pt := _sample_disk_xz(rng, radius * 0.06, radius * 0.88)
+		if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+			continue
+		var h := island.surface_height(pt.x, pt.y)
+		if h < 2.2 or h > max_grass_h:
+			continue
+		if island.surface_normal(pt.x, pt.y).y < 0.74:
+			continue
+		if _grid_is_clear(grid, min_sep, pt, min_sep):
+			centers.append(pt)
+			_grid_insert(grid, min_sep, pt)
+	return centers
+
+
+static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNumberGenerator,
+		target: int, radius: float, max_grass_h: float, is_volcanic: bool,
+		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
+	var base_spacing := clampf(radius * 0.017, 0.95, 2.55)
+	var cell_size := maxf(1.5, base_spacing)
+	var grid: Dictionary = {}
+
+	# Pass 1: Lush green meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 2.25..2.8 m).
+	var passes: Array[Array] = [
+		[2.75, max_grass_h, 0.72, base_spacing, 0.56, target * 14 + 260],
+		[2.30, max_grass_h + 4.0, 0.72, base_spacing * 0.68, 0.35, target * 12 + 220],
+		[1.95, max_grass_h + 6.0, 0.66, 0.65, 0.20, target * 10 + 180],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var min_sep: float = float(cfg[3])
+		var cluster_prob: float = float(cfg[4])
+		var attempts: int = int(cfg[5])
+		var patch_max := clampf(radius * 0.18, 6.5, 22.0)
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.04, radius * 0.94,
+				cluster_prob, 1.4, patch_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if not _grid_is_clear(grid, cell_size, pt, min_sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y)
+			if n.y < n_min:
+				continue
+
+			var sx := rng.randf_range(1.12, 1.82)
+			var sz := sx * rng.randf_range(0.86, 1.15)
+			var sy := rng.randf_range(0.95, 1.52)
+			if is_volcanic:
+				sx *= 0.82
+				sz *= 0.82
+				sy *= 0.76
+			var origin := Vector3(pt.x, h - 0.06, pt.y)
+			var xf := _grounded_transform(origin, n, 0.62, rng.randf() * TAU, Vector3(sx, sy, sz))
+
+			var srgb_col: Color
+			if is_volcanic:
+				srgb_col = _pick_jittered_color(rng, GRASS_VOLCANIC_PALETTE, 0.02, 0.10)
+			elif h < 3.6:
+				var verge_t := clampf((3.6 - h) / 1.4, 0.0, 1.0)
+				var g_col := _pick_jittered_color(rng, GRASS_TROPICAL_PALETTE, 0.022, 0.10)
+				var v_col := _pick_jittered_color(rng, GRASS_VERGE_PALETTE, 0.018, 0.08)
+				srgb_col = g_col.lerp(v_col, clampf(verge_t * 0.85, 0.0, 1.0))
+			else:
+				srgb_col = _pick_jittered_color(rng, GRASS_TROPICAL_PALETTE, 0.025, 0.11)
+
+			out_xf.append(xf)
+			out_col.append(srgb_col.srgb_to_linear())
+			out_pos.append(origin)
+			_grid_insert(grid, cell_size, pt)
+
+
+static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, max_fern_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
+		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		bush_grid: Dictionary, out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
+	var min_sep := clampf(radius * 0.026, 1.45, 3.4)
+	var cell_size := 2.6
+	var passes: Array[Array] = [
+		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 180],
+		[2.35, max_fern_h + 5.0, 0.66, min_sep * 0.68, 0.30, target * 12 + 160],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var sep: float = float(cfg[3])
+		var cluster_prob: float = float(cfg[4])
+		var attempts: int = int(cfg[5])
+		var patch_max := clampf(radius * 0.20, 7.0, 24.0)
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.06, radius * 0.92,
+				cluster_prob, 1.6, patch_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if not _grid_is_clear(bush_grid, cell_size, pt, sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y)
+			if n.y < n_min:
+				continue
+
+			var sc := rng.randf_range(0.92, 1.54) * (0.76 if is_volcanic else 1.0)
+			var sy := sc * rng.randf_range(0.88, 1.16)
+			var origin := Vector3(pt.x, h - 0.07, pt.y)
+			var xf := _grounded_transform(origin, n, 0.52, rng.randf() * TAU, Vector3(sc, sy, sc))
+			var srgb_col := _pick_jittered_color(rng,
+				FERN_VOLCANIC_PALETTE if is_volcanic else FERN_TROPICAL_PALETTE, 0.022, 0.10)
+			out_xf.append(xf)
+			out_col.append(srgb_col.srgb_to_linear())
+			_grid_insert(bush_grid, cell_size, pt)
+
+
+static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, max_shrub_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
+		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		bush_grid: Dictionary, out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
+	var min_sep := clampf(radius * 0.032, 1.75, 4.0)
+	var cell_size := 2.6
+	var passes: Array[Array] = [
+		[2.95, max_shrub_h, 0.74, min_sep, 0.52, target * 18 + 160],
+		[2.55, max_shrub_h + 5.0, 0.68, min_sep * 0.68, 0.28, target * 14 + 140],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var sep: float = float(cfg[3])
+		var cluster_prob: float = float(cfg[4])
+		var attempts: int = int(cfg[5])
+		var patch_max := clampf(radius * 0.19, 6.5, 22.0)
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.08, radius * 0.90,
+				cluster_prob, 1.8, patch_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if not _grid_is_clear(bush_grid, cell_size, pt, sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y)
+			if n.y < n_min:
+				continue
+
+			var sc := rng.randf_range(0.86, 1.38) * (0.74 if is_volcanic else 1.0)
+			var sy := sc * rng.randf_range(0.90, 1.15)
+			var origin := Vector3(pt.x, h - 0.08, pt.y)
+			var xf := _grounded_transform(origin, n, 0.42, rng.randf() * TAU, Vector3(sc, sy, sc))
+			var tint_srgb := _pick_jittered_color(rng,
+				HIBISCUS_VOLCANIC_TINTS if is_volcanic else HIBISCUS_TROPICAL_TINTS, 0.015, 0.05)
+			out_xf.append(xf)
+			out_col.append(tint_srgb.srgb_to_linear())
+			_grid_insert(bush_grid, cell_size, pt)
+
+
+# ------------------------------------------------------------------ placement: coastal shoreline layers
+
+static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
+	var r_min := maxf(4.0, radius * 0.35)
+	var r_max := maxf(r_min + 8.0, island.seabed_radius * 0.88)
+	var base_sep := clampf(radius * 0.068, 2.8, 7.5)
+	var cell_size := 4.0
+	var grid: Dictionary = {}
+
+	var passes: Array[Array] = [
+		[0.30, 3.10, 0.78, base_sep, target * 36 + 320],
+		[0.20, 3.40, 0.72, base_sep * 0.62, target * 28 + 260],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var sep: float = float(cfg[3])
+		var attempts: int = int(cfg[4])
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_annulus_xz(rng, r_min, r_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if not _grid_is_clear(grid, cell_size, pt, sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y, 2.0)
+			if n.y < n_min:
+				continue
+
+			# Align driftwood log (+X local axis) tangentially to the local coastline contour!
+			var slope_xz := Vector2(n.x, n.z)
+			var tangent_xz := Vector2(-slope_xz.y, slope_xz.x)
+			if tangent_xz.length_squared() < 0.0004:
+				tangent_xz = Vector2(-pt.y, pt.x)
+			tangent_xz = tangent_xz.normalized()
+			var flip := 1.0 if rng.randf() < 0.5 else -1.0
+			var tan_dir := tangent_xz * flip
+			# Local +X under Basis(UP, yaw) is (cos(yaw), 0, -sin(yaw)) -> yaw = atan2(-tan.y, tan.x).
+			var yaw := atan2(-tan_dir.y, tan_dir.x) + rng.randf_range(-0.26, 0.26)
+
+			var sc_x := rng.randf_range(0.78, 1.32)
+			var sc_yz := sc_x * rng.randf_range(0.84, 1.14)
+			# Sample both log endpoints to seat the trunk snugly into sand without floating ends.
+			var end_dx := cos(yaw) * (1.05 * sc_x)
+			var end_dz := -sin(yaw) * (1.05 * sc_x)
+			var h_a := island.surface_height(pt.x + end_dx, pt.y + end_dz)
+			var h_b := island.surface_height(pt.x - end_dx, pt.y - end_dz)
+			var seat_y := minf(h, minf(h_a, h_b) + 0.14 * sc_yz) - 0.06 * sc_yz
+
+			var xf := _grounded_transform(Vector3(pt.x, seat_y, pt.y), n, 0.72, yaw, Vector3(sc_x, sc_yz, sc_yz))
+			out_xf.append(xf)
+			out_col.append(_pick_jittered_color(rng,
+				DRIFTWOOD_VOLCANIC_PALETTE if is_volcanic else DRIFTWOOD_PALETTE, 0.015, 0.08))
+			_grid_insert(grid, cell_size, pt)
+
+
+static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
+	var r_min := maxf(4.0, radius * 0.34)
+	var r_max := maxf(r_min + 8.0, island.seabed_radius * 0.90)
+	var base_sep := clampf(radius * 0.036, 1.5, 4.2)
+	var cell_size := 2.8
+	var grid: Dictionary = {}
+
+	var passes: Array[Array] = [
+		[-0.25, 2.60, 0.76, base_sep, target * 28 + 340],
+		[-0.40, 2.95, 0.70, base_sep * 0.62, target * 22 + 280],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var sep: float = float(cfg[3])
+		var attempts: int = int(cfg[4])
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_annulus_xz(rng, r_min, r_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if not _grid_is_clear(grid, cell_size, pt, sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y)
+			if n.y < n_min:
+				continue
+
+			var sx := rng.randf_range(0.75, 1.42)
+			var sz := sx * rng.randf_range(0.86, 1.16)
+			var sy := rng.randf_range(0.78, 1.24)
+			var xf := _grounded_transform(Vector3(pt.x, h - 0.035, pt.y), n, 0.82, rng.randf() * TAU, Vector3(sx, sy, sz))
+			out_xf.append(xf)
+			out_col.append(_pick_jittered_color(rng,
+				PEBBLE_VOLCANIC_PALETTE if is_volcanic else PEBBLE_PALETTE, 0.015, 0.08))
+			_grid_insert(grid, cell_size, pt)
+
+
+static func _place_tidal_outcrops(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
+	var r_min := maxf(4.0, radius * 0.42)
+	var r_max := maxf(r_min + 10.0, island.seabed_radius * 0.92)
+	var base_sep := clampf(radius * 0.068, 3.2, 8.2)
+	var cell_size := 4.8
+	var grid: Dictionary = {}
+
+	var passes: Array[Array] = [
+		[-1.10, 1.70, 0.50, base_sep, target * 36 + 340],
+		[-1.45, 2.15, 0.44, base_sep * 0.65, target * 28 + 260],
+	]
+
+	for cfg in passes:
+		if out_xf.size() >= target:
+			break
+		var h_min: float = float(cfg[0])
+		var h_max: float = float(cfg[1])
+		var n_min: float = float(cfg[2])
+		var sep: float = float(cfg[3])
+		var attempts: int = int(cfg[4])
+
+		for _i in attempts:
+			if out_xf.size() >= target:
+				break
+			var pt := _sample_annulus_xz(rng, r_min, r_max)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b, 1.2):
+				continue
+			if not _grid_is_clear(grid, cell_size, pt, sep):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y, 2.0)
+			if n.y < n_min:
+				continue
+
+			var sc_xz := rng.randf_range(0.76, 1.48)
+			var sc_y := sc_xz * rng.randf_range(0.78, 1.26)
+			var seat_y := h - 0.24 * sc_y
+			var xf := _grounded_transform(Vector3(pt.x, seat_y, pt.y), n, 0.36, rng.randf() * TAU, Vector3(sc_xz, sc_y, sc_xz * rng.randf_range(0.88, 1.14)))
+			out_xf.append(xf)
+			out_col.append(_pick_jittered_color(rng,
+				TIDAL_ROCK_VOLCANIC_PALETTE if is_volcanic else TIDAL_ROCK_PALETTE, 0.015, 0.08))
+			_grid_insert(grid, cell_size, pt)
+
+
+# ------------------------------------------------------------------ placement: steep-slope cliff buttresses
+
+static func _place_cliff_buttresses(island: Island, arch: StringName, rng: RandomNumberGenerator,
+		target_total: int, radius: float, is_volcanic: bool, use_wide_layer: bool,
+		tall_mesh: Mesh, tall_uses_glb: bool, wide_mesh: Mesh, wide_uses_glb: bool,
+		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		out_tall_xf: Array[Transform3D], out_tall_col: Array[Color],
+		out_wide_xf: Array[Transform3D], out_wide_col: Array[Color],
+		out_normals_y: PackedFloat32Array) -> void:
+	# 1. Systematically scan radial & elevation rings across lower-to-mid cliff skirts & mountain shoulders
+	#    (keeps monumental rocky buttresses rooted solidly at cliff bases instead of floating high mid-wall!).
+	var max_h := maxf(8.0, island.peak_height * 0.68) if (is_volcanic or arch == &"sea_stack") else clampf(island.peak_height * 0.48, 12.0, 34.0)
+	var min_h := 2.0
+	var candidates: Array[Dictionary] = []  # {pos: Vector3, normal: Vector3, ny: float, az: float}
+
+	var radial_steps := clampi(int(roundf(radius / 3.4)), 14, 38)
+	for ri in range(1, radial_steps + 1):
+		var frac := float(ri) / float(radial_steps)
+		var r := lerpf(radius * 0.08, radius * 0.96, frac)
+		var ring_samples := maxi(16, int(roundf(TAU * r / clampf(radius * 0.055, 3.2, 6.2))))
+		var phase := float(ri) * 0.417
+		for ai in ring_samples:
+			var ang := phase + float(ai) / float(ring_samples) * TAU
+			var px := cos(ang) * r
+			var pz := sin(ang) * r
+			var pt := Vector2(px, pz)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b, 2.5):
+				continue
+			var h := island.surface_height(px, pz)
+			if h <= min_h or h >= max_h:
+				continue
+			var n := island.surface_normal(px, pz)
+			if n.y >= BUTTRESS_MAX_NORMAL_Y or n.y <= BUTTRESS_MIN_NORMAL_Y:
+				continue
+			var out_xz := Vector3(n.x, 0.0, n.z)
+			if out_xz.length_squared() < 0.04:
+				continue
+			candidates.append({
+				"pos": Vector3(px, h, pz),
+				"out_xz": out_xz.normalized(),
+				"ny": n.y,
+			})
+
+	if candidates.is_empty():
+		return
+
+	# Deterministic Fisher-Yates shuffle so buttresses distribute evenly around every cliff face.
+	for i in range(candidates.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp: Dictionary = candidates[i]
+		candidates[i] = candidates[j]
+		candidates[j] = tmp
+
+	var tall_aabb := tall_mesh.get_aabb()
+	var wide_aabb := wide_mesh.get_aabb() if use_wide_layer else tall_aabb
+	var primary_spacing := clampf(radius * 0.14, 10.0, 16.5)
+	var fallback_spacing := maxf(6.2, primary_spacing * 0.56)
+	var cell_size := maxf(8.0, primary_spacing)
+	var grid: Dictionary = {}
+
+	var palette := _buttress_fallback_palette(arch, is_volcanic)
+	var size_scale := clampf(lerpf(0.84, 1.48, clampf((radius - 38.0) / 144.0, 0.0, 1.0)), 0.78, 1.55)
+
+	var pass_spacings: Array[float] = [primary_spacing, fallback_spacing]
+	for sp_idx in pass_spacings.size():
+		var min_sep: float = pass_spacings[sp_idx]
+		var pass_cap := target_total if sp_idx == 0 else mini(target_total, maxi(18, int(roundf(float(target_total) * 0.85))))
+		for cand in candidates:
+			var placed_total := out_tall_xf.size() + out_wide_xf.size()
+			if placed_total >= pass_cap:
+				break
+			var pos: Vector3 = cand["pos"] as Vector3
+			var pt := Vector2(pos.x, pos.z)
+			if not _grid_is_clear(grid, cell_size, pt, min_sep):
+				continue
+
+			var out_xz: Vector3 = cand["out_xz"] as Vector3
+			var ny: float = float(cand["ny"])
+			# Choose wide headland bluff on ~46% of spots on medium/large non-volcanic islands.
+			var pick_wide := false
+			if use_wide_layer:
+				var wide_bias := 0.54 if ny > 0.48 else 0.36
+				pick_wide = rng.randf() < wide_bias
+
+			var aabb := wide_aabb if pick_wide else tall_aabb
+			var uses_glb := wide_uses_glb if pick_wide else tall_uses_glb
+
+			# Monumental architectural scale so buttresses read as true carved mountain ribs & rocky spurs!
+			var ref_h := maxf(4.0, aabb.size.y)
+			var sc_y: float
+			var sc_xz: float
+			if pick_wide:
+				var target_h := rng.randf_range(11.0, 15.8) * clampf(size_scale, 0.85, 1.28)
+				sc_y = clampf(target_h / ref_h, 0.72, 1.38)
+				sc_xz = clampf(sc_y * rng.randf_range(0.88, 1.12), 0.72, 1.32)
+			else:
+				var target_h := rng.randf_range(16.5, 24.5) * size_scale
+				sc_y = clampf(target_h / ref_h, 0.76, 1.65)
+				sc_xz = clampf(sc_y * rng.randf_range(0.86, 1.14), 0.74, 1.55)
+
+			# Orient local -Z outward along horizontal slope direction `out_xz` (+ subtle geological jitter).
+			var yaw := atan2(-out_xz.x, -out_xz.z) + rng.randf_range(-0.24, 0.24)
+			var pitch := rng.randf_range(-0.05, 0.07)
+			var roll := rng.randf_range(-0.06, 0.06)
+			var rot_basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.FORWARD, roll)
+			var xf_basis := rot_basis.scaled(Vector3(sc_xz, sc_y, sc_xz))
+
+			# Embed rear +Z skirt solidly into the mountain while letting the sculpted -Z prow & vertical ribs jut boldly outward!
+			var back_frac := 0.25 if pick_wide else 0.22
+			var embed_back := clampf(aabb.size.z * back_frac, 1.4, 3.0) * sc_xz
+			var base_sink := clampf(aabb.size.y * 0.20, 1.6, 4.2) * sc_y
+			if aabb.position.y > -2.5:
+				base_sink += (aabb.position.y + 2.5) * sc_y
+			var right_xz := Vector3(out_xz.z, 0.0, -out_xz.x)
+			var flank_half := aabb.size.x * 0.34 * sc_xz
+			var back_px := pos.x - out_xz.x * embed_back
+			var back_pz := pos.z - out_xz.z * embed_back
+			var h_left := island.surface_height(back_px - right_xz.x * flank_half, back_pz - right_xz.z * flank_half)
+			var h_right := island.surface_height(back_px + right_xz.x * flank_half, back_pz + right_xz.z * flank_half)
+			var flank_drop := maxf(0.0, pos.y - minf(h_left, h_right))
+			base_sink += minf(flank_drop * 0.55, aabb.size.y * 0.24 * sc_y)
+			var origin := pos - out_xz * embed_back - Vector3(0.0, base_sink, 0.0)
+			var xf := Transform3D(xf_basis, origin)
+
+			var inst_col: Color
+			if uses_glb:
+				# Subtle warm-neutral variation preserves baked 512x512 GLB PBR albedo/normal/roughness!
+				var v := rng.randf_range(0.95, 1.07)
+				inst_col = Color(v * rng.randf_range(0.99, 1.04), v, v * rng.randf_range(0.95, 1.00), 1.0)
+			else:
+				inst_col = _pick_jittered_color(rng, palette, 0.016, 0.09)
+
+			if pick_wide:
+				out_wide_xf.append(xf)
+				out_wide_col.append(inst_col)
+			else:
+				out_tall_xf.append(xf)
+				out_tall_col.append(inst_col)
+
+			out_normals_y.append(ny)
+			_grid_insert(grid, cell_size, pt)
+
+
+static func _buttress_fallback_palette(arch: StringName, is_volcanic: bool) -> Array[Color]:
+	if is_volcanic:
+		return BUTTRESS_FALLBACK_VOLCANIC
+	if arch == &"sea_arch" or arch == &"skull_bluff":
+		return BUTTRESS_FALLBACK_PALE
+	return BUTTRESS_FALLBACK_LIMESTONE
+
+
+# ------------------------------------------------------------------ MultiMesh & sampling utilities
+
+static func _create_multimesh_node(node_name: String, mesh: Mesh, mat_override: Material,
+		transforms: Array[Transform3D], colors: Array[Color], cull_margin: float,
+		vis_end: float, vis_margin: float) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = mesh
+	mm.instance_count = transforms.size()
+	for i in transforms.size():
+		mm.set_instance_transform(i, transforms[i])
+		mm.set_instance_color(i, colors[i])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = node_name
+	mmi.multimesh = mm
+	if mat_override != null:
+		mmi.material_override = mat_override
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.visibility_range_end = vis_end
+	mmi.visibility_range_end_margin = vis_margin
+	mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+	if cull_margin > 0.0:
+		mmi.extra_cull_margin = cull_margin
+	return mmi
+
+
+static func _sample_disk_xz(rng: RandomNumberGenerator, r_min: float, r_max: float) -> Vector2:
+	var ang := rng.randf() * TAU
+	var r := sqrt(lerpf(r_min * r_min, r_max * r_max, rng.randf()))
+	return Vector2(cos(ang) * r, sin(ang) * r)
+
+
+static func _sample_annulus_xz(rng: RandomNumberGenerator, r_min: float, r_max: float) -> Vector2:
+	return _sample_disk_xz(rng, r_min, r_max)
+
+
+static func _sample_clustered_xz(rng: RandomNumberGenerator, centers: Array[Vector2],
+		r_min: float, r_max: float, cluster_prob: float, patch_min: float,
+		patch_max: float) -> Vector2:
+	if not centers.is_empty() and rng.randf() < cluster_prob:
+		var ctr := centers[rng.randi_range(0, centers.size() - 1)]
+		var ang := rng.randf() * TAU
+		var dist := lerpf(patch_min, patch_max, sqrt(rng.randf()))
+		var pt := ctr + Vector2(cos(ang) * dist, sin(ang) * dist)
+		var r_len := pt.length()
+		if r_len >= r_min and r_len <= r_max:
+			return pt
+	return _sample_disk_xz(rng, r_min, r_max)
+
+
+static func _grounded_transform(origin: Vector3, normal: Vector3, tilt_weight: float,
+		yaw: float, scl: Vector3) -> Transform3D:
+	var up_axis := Vector3.UP.lerp(normal.normalized(), tilt_weight).normalized()
+	var ref_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var right_axis := ref_fwd.cross(up_axis)
+	if right_axis.length_squared() < 0.0001:
+		right_axis = Vector3.RIGHT
+	else:
+		right_axis = right_axis.normalized()
+	var back_axis := right_axis.cross(up_axis).normalized()
+	var xform_basis := Basis(right_axis, up_axis, back_axis).scaled(scl)
+	return Transform3D(xform_basis, origin)
+
+
+static func _pick_jittered_color(rng: RandomNumberGenerator, palette: Array[Color],
+		hue_jit: float = 0.02, val_jit: float = 0.08) -> Color:
+	var base := palette[rng.randi_range(0, palette.size() - 1)]
+	var h := wrapf(base.h + rng.randf_range(-hue_jit, hue_jit), 0.0, 1.0)
+	var s := clampf(base.s * rng.randf_range(1.0 - val_jit, 1.0 + val_jit), 0.0, 1.0)
+	var v := clampf(base.v * rng.randf_range(1.0 - val_jit, 1.0 + val_jit), 0.0, 1.0)
+	return Color.from_hsv(h, s, v, 1.0)
+
+
+# ------------------------------------------------------------------ GLB visual mesh extraction (with col_* stripping)
+
+static func _extract_glb_visual_mesh(glb_path: String) -> Mesh:
+	if _glb_mesh_cache.has(glb_path):
+		return _glb_mesh_cache[glb_path] as Mesh
+	if not ResourceLoader.exists(glb_path):
+		_glb_mesh_cache[glb_path] = null
+		return null
+	var packed := load(glb_path) as PackedScene
+	if packed == null:
+		_glb_mesh_cache[glb_path] = null
+		return null
+	var inst := packed.instantiate()
+	if inst == null:
+		_glb_mesh_cache[glb_path] = null
+		return null
+
+	var visuals: Array[MeshInstance3D] = []
+	_collect_visual_meshes(inst, visuals)
+
+	var result: Mesh = null
+	if visuals.size() == 1:
+		var mi := visuals[0]
+		var rel_xf := _relative_transform(mi, inst)
+		if rel_xf.is_equal_approx(Transform3D.IDENTITY) and mi.mesh.get_surface_count() > 0:
+			result = mi.mesh
+		else:
+			result = _bake_visual_meshes_to_array_mesh(visuals, inst)
+	elif visuals.size() > 1:
+		result = _bake_visual_meshes_to_array_mesh(visuals, inst)
+
+	# Synchronously free the temporary GLB scene tree so ZERO nodes ever leak!
+	inst.free()
+
+	if result != null and result.get_surface_count() == 0:
+		result = null
+	_glb_mesh_cache[glb_path] = result
+	return result
+
+
+static func _collect_visual_meshes(node: Node, out_visuals: Array[MeshInstance3D]) -> void:
+	if node == null:
+		return
+	if node.name.begins_with("col_"):
+		return
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null and not (mi.mesh is PrimitiveMesh):
+			out_visuals.append(mi)
+	for child in node.get_children():
+		_collect_visual_meshes(child, out_visuals)
+
+
+static func _relative_transform(node: Node, ancestor: Node) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var cur := node
+	while cur != null and cur != ancestor:
+		if cur is Node3D:
+			xf = (cur as Node3D).transform * xf
+		cur = cur.get_parent()
+	return xf
+
+
+static func _bake_visual_meshes_to_array_mesh(visuals: Array[MeshInstance3D], root: Node) -> ArrayMesh:
+	var combined := ArrayMesh.new()
+	for mi in visuals:
+		var src_mesh := mi.mesh
+		if src_mesh == null:
+			continue
+		var rel_xf := _relative_transform(mi, root)
+		var norm_basis := rel_xf.basis.inverse().transposed()
+		var tan_basis := rel_xf.basis
+		for si in src_mesh.get_surface_count():
+			if src_mesh.surface_get_primitive_type(si) != Mesh.PRIMITIVE_TRIANGLES:
+				continue
+			var arrays := src_mesh.surface_get_arrays(si)
+			if arrays.is_empty():
+				continue
+			var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			if verts.is_empty():
+				continue
+			var xformed_verts := PackedVector3Array()
+			xformed_verts.resize(verts.size())
+			for vi in verts.size():
+				xformed_verts[vi] = rel_xf * verts[vi]
+			arrays[Mesh.ARRAY_VERTEX] = xformed_verts
+
+			if arrays[Mesh.ARRAY_NORMAL] is PackedVector3Array:
+				var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array
+				var xformed_norms := PackedVector3Array()
+				xformed_norms.resize(norms.size())
+				for ni in norms.size():
+					var n := norm_basis * norms[ni]
+					xformed_norms[ni] = n.normalized() if n.length_squared() > 1e-8 else Vector3.UP
+				arrays[Mesh.ARRAY_NORMAL] = xformed_norms
+
+			if arrays[Mesh.ARRAY_TANGENT] is PackedFloat32Array:
+				var tans: PackedFloat32Array = arrays[Mesh.ARRAY_TANGENT] as PackedFloat32Array
+				var xformed_tans := PackedFloat32Array()
+				xformed_tans.resize(tans.size())
+				var idx := 0
+				while idx + 3 < tans.size():
+					var tv := tan_basis * Vector3(tans[idx], tans[idx + 1], tans[idx + 2])
+					tv = tv.normalized() if tv.length_squared() > 1e-8 else Vector3.RIGHT
+					xformed_tans[idx] = tv.x
+					xformed_tans[idx + 1] = tv.y
+					xformed_tans[idx + 2] = tv.z
+					xformed_tans[idx + 3] = tans[idx + 3]
+					idx += 4
+				arrays[Mesh.ARRAY_TANGENT] = xformed_tans
+
+			var out_surf := combined.get_surface_count()
+			combined.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			var mat := mi.get_active_material(si)
+			if mat != null:
+				combined.surface_set_material(out_surf, mat)
+	return combined
+
+
+# ------------------------------------------------------------------ shared cached materials & meshes
+
+static func _get_foliage_material() -> ShaderMaterial:
+	if _foliage_material == null:
+		var mat := ShaderMaterial.new()
+		mat.shader = FOLIAGE_SHADER
+		mat.set_shader_parameter(&"use_albedo_tex", 0.0)
+		mat.set_shader_parameter(&"use_uv2_weight", 1.0)
+		mat.set_shader_parameter(&"sway_strength", 0.72)
+		mat.set_shader_parameter(&"roughness_val", 0.56)
+		mat.set_shader_parameter(&"sss_strength", 0.44)
+		_foliage_material = mat
+	return _foliage_material
+
+
+static func _get_wood_stone_material() -> StandardMaterial3D:
+	if _wood_stone_material == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 0.88
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.22
+		_wood_stone_material = mat
+	return _wood_stone_material
+
+
+static func _get_pebble_material() -> StandardMaterial3D:
+	if _pebble_material == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 0.72
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.34
+		_pebble_material = mat
+	return _pebble_material
+
+
+static func _get_tidal_rock_material() -> StandardMaterial3D:
+	if _tidal_rock_material == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 0.82
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.28
+		_tidal_rock_material = mat
+	return _tidal_rock_material
+
+
+static func _get_buttress_fallback_material() -> StandardMaterial3D:
+	if _buttress_fallback_material == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 0.86
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.24
+		_buttress_fallback_material = mat
+	return _buttress_fallback_material
+
+
+static func _get_grass_mesh() -> ArrayMesh:
+	if _grass_mesh == null:
+		_grass_mesh = _build_grass_mesh()
+	return _grass_mesh
+
+
+static func _get_fern_mesh() -> ArrayMesh:
+	if _fern_mesh == null:
+		_fern_mesh = _build_fern_mesh()
+	return _fern_mesh
+
+
+static func _get_hibiscus_mesh() -> ArrayMesh:
+	if _hibiscus_mesh == null:
+		_hibiscus_mesh = _build_hibiscus_mesh()
+	return _hibiscus_mesh
+
+
+static func _get_driftwood_mesh() -> ArrayMesh:
+	if _driftwood_mesh == null:
+		_driftwood_mesh = _build_driftwood_mesh()
+	return _driftwood_mesh
+
+
+static func _get_pebbles_mesh() -> ArrayMesh:
+	if _pebbles_mesh == null:
+		_pebbles_mesh = _build_pebbles_mesh()
+	return _pebbles_mesh
+
+
+static func _get_tidal_rock_mesh() -> ArrayMesh:
+	if _tidal_rock_mesh == null:
+		_tidal_rock_mesh = _build_tidal_rock_mesh()
+	return _tidal_rock_mesh
+
+
+static func _get_fallback_buttress_mesh() -> ArrayMesh:
+	if _fallback_buttress_mesh == null:
+		_fallback_buttress_mesh = _build_fallback_buttress_mesh()
+	return _fallback_buttress_mesh
+
+
+static func _get_fallback_buttress_wide_mesh() -> ArrayMesh:
+	if _fallback_buttress_wide_mesh == null:
+		_fallback_buttress_wide_mesh = _build_fallback_buttress_wide_mesh()
+	return _fallback_buttress_wide_mesh
+
+
+# ------------------------------------------------------------------ Mesh 1: Sculpted 10-Blade Tropical Grass Clump
+
+static func _build_grass_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Linear shading ramp (multiplied against linear instance emerald/gold colors in foliage_wind.gdshader).
+	var col_root := Color(0.56, 0.66, 0.54, 1.0).srgb_to_linear()
+	var col_low := Color(0.76, 0.85, 0.72, 1.0).srgb_to_linear()
+	var col_mid := Color(0.92, 0.96, 0.87, 1.0).srgb_to_linear()
+	var col_tip := Color(1.00, 1.00, 0.95, 1.0).srgb_to_linear()
+
+	# 18 organic radiating tropical grass blades clustered across 3 sub-tufts (broad lush meadow carpet!):
+	# [azimuth, root_off, height, arch_out, base_half_w, twist_rad, droop, phase_01, cx, cz]
+	var blades: Array[Array] = [
+		# Central lush tuft (8 blades)
+		[0.14, 0.06, 0.86, 0.44, 0.082,  0.18, 0.11, 0.04,  0.00,  0.00],
+		[0.92, 0.14, 0.66, 0.52, 0.074, -0.22, 0.15, 0.14,  0.00,  0.00],
+		[1.68, 0.08, 0.80, 0.46, 0.078,  0.24, 0.12, 0.25,  0.00,  0.00],
+		[2.42, 0.16, 0.56, 0.54, 0.070, -0.18, 0.17, 0.36,  0.00,  0.00],
+		[3.18, 0.09, 0.76, 0.48, 0.076,  0.16, 0.13, 0.48,  0.00,  0.00],
+		[3.96, 0.15, 0.62, 0.54, 0.072, -0.24, 0.16, 0.59,  0.00,  0.00],
+		[4.74, 0.07, 0.82, 0.45, 0.078,  0.20, 0.11, 0.71,  0.00,  0.00],
+		[5.54, 0.16, 0.58, 0.52, 0.070, -0.15, 0.16, 0.83,  0.00,  0.00],
+		# Companion offset sub-tuft A (+X, +Z) (5 blades)
+		[0.35, 0.06, 0.68, 0.42, 0.072,  0.20, 0.13, 0.19,  0.54,  0.26],
+		[1.55, 0.10, 0.56, 0.48, 0.068, -0.18, 0.15, 0.33,  0.54,  0.26],
+		[2.80, 0.08, 0.62, 0.44, 0.070,  0.16, 0.14, 0.52,  0.54,  0.26],
+		[4.05, 0.12, 0.50, 0.46, 0.066, -0.22, 0.16, 0.68,  0.54,  0.26],
+		[5.25, 0.08, 0.64, 0.43, 0.070,  0.19, 0.13, 0.88,  0.54,  0.26],
+		# Companion offset sub-tuft B (-X, -Z) (5 blades)
+		[0.65, 0.07, 0.64, 0.44, 0.070, -0.19, 0.14, 0.11, -0.48, -0.34],
+		[1.90, 0.11, 0.54, 0.48, 0.066,  0.21, 0.15, 0.29, -0.48, -0.34],
+		[3.10, 0.06, 0.70, 0.42, 0.074, -0.17, 0.12, 0.45, -0.48, -0.34],
+		[4.35, 0.12, 0.52, 0.46, 0.066,  0.22, 0.16, 0.64, -0.48, -0.34],
+		[5.65, 0.08, 0.60, 0.45, 0.068, -0.16, 0.14, 0.94, -0.48, -0.34],
+	]
+
+	var t_steps: Array[float] = [0.0, 0.30, 0.64, 0.86, 1.0]
+	var w_steps: Array[float] = [1.0, 0.92, 0.68, 0.36, 0.0]
+
+	for spec in blades:
+		var az: float = float(spec[0])
+		var roff: float = float(spec[1])
+		var h_max: float = float(spec[2])
+		var arch_out: float = float(spec[3])
+		var half_w0: float = float(spec[4])
+		var twist: float = float(spec[5])
+		var droop: float = float(spec[6])
+		var phase_01: float = float(spec[7])
+		var tuft_off := Vector3(float(spec[8]), 0.0, float(spec[9]))
+
+		var rad := Vector3(cos(az), 0.0, sin(az))
+		var side := Vector3(-sin(az), 0.0, cos(az))
+
+		var left_pts: Array[Vector3] = []
+		var right_pts: Array[Vector3] = []
+		var cols: Array[Color] = []
+
+		for si in t_steps.size():
+			var t: float = t_steps[si]
+			var y := lerpf(-0.08, h_max, sin(t * PI * 0.52)) - droop * pow(t, 2.6)
+			var r_out := roff + arch_out * pow(t, 1.55)
+			var ctr := tuft_off + rad * r_out + Vector3(0.0, y, 0.0)
+			var tw := twist * t
+			var b_side := (side * cos(tw) + rad * sin(tw)).normalized()
+			var hw := half_w0 * w_steps[si]
+			left_pts.append(ctr - b_side * hw)
+			right_pts.append(ctr + b_side * hw)
+
+			var c := col_root
+			if si == 1:
+				c = col_low
+			elif si == 2:
+				c = col_mid
+			elif si >= 3:
+				c = col_mid.lerp(col_tip, 0.55 if si == 3 else 1.0)
+			cols.append(c)
+
+		# 3 tapered curved quads + 1 sharp pointed grass tip = 7 tris/blade (70 tris total).
+		for si in range(t_steps.size() - 1):
+			var t0: float = t_steps[si]
+			var t1: float = t_steps[si + 1]
+			var uv2_0 := Vector2(t0, phase_01)
+			var uv2_1 := Vector2(t1, phase_01)
+			if si < t_steps.size() - 2:
+				_add_foliage_tri(st, left_pts[si], left_pts[si + 1], right_pts[si + 1],
+					cols[si], cols[si + 1], cols[si + 1],
+					Vector2(0.0, 1.0 - t0), Vector2(0.0, 1.0 - t1), Vector2(1.0, 1.0 - t1),
+					uv2_0, uv2_1, uv2_1)
+				_add_foliage_tri(st, left_pts[si], right_pts[si + 1], right_pts[si],
+					cols[si], cols[si + 1], cols[si],
+					Vector2(0.0, 1.0 - t0), Vector2(1.0, 1.0 - t1), Vector2(1.0, 1.0 - t0),
+					uv2_0, uv2_1, uv2_0)
+			else:
+				var tip_pt := left_pts[si + 1]
+				_add_foliage_tri(st, left_pts[si], tip_pt, right_pts[si],
+					cols[si], col_tip, cols[si],
+					Vector2(0.0, 1.0 - t0), Vector2(0.5, 0.0), Vector2(1.0, 1.0 - t0),
+					uv2_0, uv2_1, uv2_0)
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 2: 8-Frond 2-Tier Tropical Fern Rosette
+
+static func _build_fern_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Grounded fibrous central fern rosette heart (UV2.x = 0.0 -> anchored firmly to soil).
+	var crown_bot := Color(0.28, 0.34, 0.24, 1.0).srgb_to_linear()
+	var crown_top := Color(0.42, 0.56, 0.36, 1.0).srgb_to_linear()
+	_append_anchored_mound(st, Vector3.ZERO, 0.17, 0.14, 0.16, -0.06, 6, crown_bot, crown_top, Vector2(0.0, 0.0))
+
+	var col_base := Color(0.54, 0.68, 0.54, 1.0).srgb_to_linear()
+	var col_mid := Color(0.84, 0.93, 0.80, 1.0).srgb_to_linear()
+	var col_tip := Color(1.00, 1.00, 0.90, 1.0).srgb_to_linear()
+
+	# 8 arched serrated fronds in 2 tiers:
+	# [azimuth, reach, apex_y, tip_droop, max_half_w, phase_01, bend_scale]
+	var fronds: Array[Array] = [
+		# Lower broad spreading tier
+		[0.22, 1.15, 0.54, 0.24, 0.27, 0.05, 0.90],
+		[1.79, 1.08, 0.50, 0.22, 0.25, 0.28, 0.88],
+		[3.36, 1.16, 0.56, 0.25, 0.27, 0.54, 0.90],
+		[4.92, 1.06, 0.49, 0.22, 0.24, 0.77, 0.86],
+		# Upper taller arching crown tier
+		[1.02, 0.88, 0.95, 0.18, 0.22, 0.16, 0.94],
+		[2.58, 0.82, 0.88, 0.17, 0.21, 0.41, 0.92],
+		[4.16, 0.90, 0.92, 0.19, 0.22, 0.66, 0.94],
+		[5.70, 0.80, 0.84, 0.16, 0.20, 0.89, 0.90],
+	]
+
+	var segs := 5
+	for spec in fronds:
+		var az: float = float(spec[0])
+		var reach: float = float(spec[1])
+		var apex_y: float = float(spec[2])
+		var droop: float = float(spec[3])
+		var max_hw: float = float(spec[4])
+		var phase_01: float = float(spec[5])
+		var bend_sc: float = float(spec[6])
+
+		var rad := Vector3(cos(az), 0.0, sin(az))
+		var side := Vector3(-sin(az), 0.0, cos(az))
+
+		var left_pts: Array[Vector3] = []
+		var mid_pts: Array[Vector3] = []
+		var right_pts: Array[Vector3] = []
+		var t_vals: Array[float] = []
+
+		for s in range(segs + 1):
+			var t := float(s) / float(segs)
+			t_vals.append(t)
+			var r_out := 0.05 + reach * pow(t, 1.08)
+			var arch_y := 0.04 + apex_y * sin(t * PI * 0.64) - droop * pow(t, 2.3)
+			var ctr := rad * r_out + Vector3(0.0, arch_y, 0.0)
+
+			# Serrated botanical fern width envelope: narrow petiole -> broad notched lamina -> pointed tip.
+			var env := sin(pow(t, 0.65) * PI)
+			var serrate := 1.0 + 0.22 * sin(t * PI * 5.0)
+			var hw := max_hw * env * serrate * (1.0 - smoothstep(0.92, 1.0, t))
+			var v_lift := hw * 0.28
+
+			mid_pts.append(ctr - Vector3(0.0, v_lift * 0.35, 0.0))
+			left_pts.append(ctr - side * hw + Vector3(0.0, v_lift, 0.0))
+			right_pts.append(ctr + side * hw + Vector3(0.0, v_lift, 0.0))
+
+		for s in segs:
+			var t0: float = t_vals[s]
+			var t1: float = t_vals[s + 1]
+			var c0 := col_base.lerp(col_mid, smoothstep(0.0, 0.55, t0)).lerp(col_tip, smoothstep(0.55, 1.0, t0))
+			var c1 := col_base.lerp(col_mid, smoothstep(0.0, 0.55, t1)).lerp(col_tip, smoothstep(0.55, 1.0, t1))
+			var c0_m := Color(c0.r * 0.84, c0.g * 0.88, c0.b * 0.84, 1.0)
+			var c1_m := Color(c1.r * 0.84, c1.g * 0.88, c1.b * 0.84, 1.0)
+			var uv2_0 := Vector2(t0 * bend_sc, phase_01)
+			var uv2_1 := Vector2(t1 * bend_sc, phase_01)
+
+			if s < segs - 1:
+				# Left V-folded frond wing.
+				_add_foliage_tri(st, left_pts[s], left_pts[s + 1], mid_pts[s + 1],
+					c0, c1, c1_m, Vector2(0.0, t0), Vector2(0.0, t1), Vector2(0.5, t1),
+					uv2_0, uv2_1, uv2_1)
+				_add_foliage_tri(st, left_pts[s], mid_pts[s + 1], mid_pts[s],
+					c0, c1_m, c0_m, Vector2(0.0, t0), Vector2(0.5, t1), Vector2(0.5, t0),
+					uv2_0, uv2_1, uv2_0)
+				# Right V-folded frond wing.
+				_add_foliage_tri(st, mid_pts[s], mid_pts[s + 1], right_pts[s + 1],
+					c0_m, c1_m, c1, Vector2(0.5, t0), Vector2(0.5, t1), Vector2(1.0, t1),
+					uv2_0, uv2_1, uv2_1)
+				_add_foliage_tri(st, mid_pts[s], right_pts[s + 1], right_pts[s],
+					c0_m, c1, c0, Vector2(0.5, t0), Vector2(1.0, t1), Vector2(1.0, t0),
+					uv2_0, uv2_1, uv2_0)
+			else:
+				var tip_pt := mid_pts[segs]
+				_add_foliage_tri(st, left_pts[s], tip_pt, mid_pts[s],
+					c0, col_tip, c0_m, Vector2(0.0, t0), Vector2(0.5, 1.0), Vector2(0.5, t0),
+					uv2_0, uv2_1, uv2_0)
+				_add_foliage_tri(st, mid_pts[s], tip_pt, right_pts[s],
+					c0_m, col_tip, c0, Vector2(0.5, t0), Vector2(0.5, 1.0), Vector2(1.0, t0),
+					uv2_0, uv2_1, uv2_0)
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 3: Tropical Hibiscus Shrub (12 Leaves + 5 Blossoms)
+
+static func _build_hibiscus_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Sturdy forked woody coastal shrub stems (baked linear bark brown, low wind bend).
+	var bark_lo := Color(0.24, 0.16, 0.11, 1.0).srgb_to_linear()
+	var bark_hi := Color(0.36, 0.25, 0.16, 1.0).srgb_to_linear()
+	var stem_tips: Array[Vector3] = [
+		Vector3(0.04, 0.56, 0.02),
+		Vector3(0.34, 0.44, 0.18),
+		Vector3(-0.32, 0.48, 0.22),
+		Vector3(-0.12, 0.42, -0.34),
+		Vector3(0.26, 0.38, -0.26),
+	]
+	for si in stem_tips.size():
+		var tip := stem_tips[si]
+		var root_off := Vector3(tip.x * 0.18, -0.08, tip.z * 0.18)
+		_append_tapered_limb_uv2(st, root_off, tip, 0.065 if si == 0 else 0.048, 0.028, 4,
+			bark_lo, bark_hi, Vector2(0.0, float(si) * 0.19), Vector2(0.18, float(si) * 0.19))
+
+	# 2. 12 broad glossy faceted tropical bush leaves radiating organically in 2 tiers.
+	var leaf_base := Color(0.14, 0.44, 0.18, 1.0).srgb_to_linear()
+	var leaf_mid := Color(0.24, 0.65, 0.22, 1.0).srgb_to_linear()
+	var leaf_tip := Color(0.44, 0.78, 0.24, 1.0).srgb_to_linear()
+
+	# [anchor_pos, azimuth, pitch_rad, length, half_w, phase_01]
+	var leaves: Array[Array] = [
+		# Lower full skirt (7 broad leaves)
+		[Vector3(0.24, 0.30, 0.12), 0.32, 0.24, 0.66, 0.25, 0.05],
+		[Vector3(0.12, 0.28, 0.26), 1.18, 0.20, 0.62, 0.24, 0.14],
+		[Vector3(-0.20, 0.32, 0.18), 2.10, 0.22, 0.68, 0.26, 0.24],
+		[Vector3(-0.28, 0.29, -0.04), 3.04, 0.18, 0.64, 0.24, 0.35],
+		[Vector3(-0.14, 0.30, -0.24), 3.92, 0.22, 0.66, 0.25, 0.46],
+		[Vector3(0.12, 0.28, -0.24), 4.86, 0.20, 0.63, 0.24, 0.58],
+		[Vector3(0.26, 0.31, -0.08), 5.68, 0.24, 0.65, 0.25, 0.69],
+		# Upper sunlit crown (5 arching leaves)
+		[Vector3(0.14, 0.54, 0.10), 0.68, 0.54, 0.58, 0.22, 0.18],
+		[Vector3(-0.12, 0.56, 0.14), 1.94, 0.58, 0.56, 0.22, 0.39],
+		[Vector3(-0.16, 0.52, -0.10), 3.24, 0.52, 0.58, 0.22, 0.61],
+		[Vector3(0.06, 0.54, -0.16), 4.52, 0.56, 0.55, 0.21, 0.78],
+		[Vector3(0.04, 0.60, 0.02), 5.76, 0.66, 0.52, 0.20, 0.92],
+	]
+
+	for lspec in leaves:
+		var anchor: Vector3 = lspec[0] as Vector3
+		var az: float = float(lspec[1])
+		var pitch: float = float(lspec[2])
+		var length: float = float(lspec[3])
+		var hw: float = float(lspec[4])
+		var phase_01: float = float(lspec[5])
+
+		var horiz := Vector3(cos(az), 0.0, sin(az))
+		var side := Vector3(-sin(az), 0.0, cos(az))
+		var fwd := (horiz * cos(pitch) + Vector3.UP * sin(pitch)).normalized()
+		var up_n := side.cross(fwd).normalized()
+
+		var p0 := anchor
+		var p1 := anchor + fwd * (length * 0.46) + up_n * 0.04
+		var p2 := anchor + fwd * length - Vector3(0.0, length * 0.16, 0.0)
+		var l1 := p1 - side * hw + up_n * (hw * 0.22)
+		var r1 := p1 + side * hw + up_n * (hw * 0.22)
+		var c1_m := Color(leaf_mid.r * 0.85, leaf_mid.g * 0.88, leaf_mid.b * 0.85, 1.0)
+
+		var uv2_a := Vector2(0.18, phase_01)
+		var uv2_b := Vector2(0.38, phase_01)
+		var uv2_c := Vector2(0.56, phase_01)
+
+		# 4-triangle V-creased broad oval tropical leaf.
+		_add_foliage_tri(st, p0, l1, p1, leaf_base, leaf_mid, c1_m,
+			Vector2(0.5, 0.0), Vector2(0.0, 0.5), Vector2(0.5, 0.5), uv2_a, uv2_b, uv2_b)
+		_add_foliage_tri(st, p0, p1, r1, leaf_base, c1_m, leaf_mid,
+			Vector2(0.5, 0.0), Vector2(0.5, 0.5), Vector2(1.0, 0.5), uv2_a, uv2_b, uv2_b)
+		_add_foliage_tri(st, l1, p2, p1, leaf_mid, leaf_tip, c1_m,
+			Vector2(0.0, 0.5), Vector2(0.5, 1.0), Vector2(0.5, 0.5), uv2_b, uv2_c, uv2_b)
+		_add_foliage_tri(st, p1, p2, r1, c1_m, leaf_tip, leaf_mid,
+			Vector2(0.5, 0.5), Vector2(0.5, 1.0), Vector2(1.0, 0.5), uv2_b, uv2_c, uv2_b)
+
+	# 3. 5 bold sculpted 5-petal tropical Hibiscus blossoms + golden stamen buds!
+	# Slight blue lift on pink/crimson petals offsets foliage_wind.gdshader's warm golden tip tint.
+	var blossoms: Array[Array] = [
+		[Vector3(0.06, 0.96, 0.05), Vector3(0.18, 0.95, 0.22), 0.26, Color(0.72, 0.08, 0.16), Color(1.00, 0.24, 0.34), 0.12],  # Crimson-coral
+		[Vector3(0.52, 0.72, 0.28), Vector3(0.68, 0.66, 0.32), 0.24, Color(0.78, 0.12, 0.48), Color(1.00, 0.38, 0.78), 0.34],  # Hibiscus-pink
+		[Vector3(-0.48, 0.76, 0.34), Vector3(-0.62, 0.68, 0.38), 0.24, Color(0.84, 0.22, 0.05), Color(1.00, 0.52, 0.16), 0.55], # Sunset-orange
+		[Vector3(-0.24, 0.70, -0.50), Vector3(-0.34, 0.68, -0.65), 0.23, Color(0.88, 0.42, 0.06), Color(1.00, 0.84, 0.24), 0.74], # Tropical gold
+		[Vector3(0.40, 0.64, -0.40), Vector3(0.56, 0.64, -0.52), 0.23, Color(0.76, 0.12, 0.14), Color(1.00, 0.34, 0.28), 0.91], # Bright coral-red
+	]
+	var stamen_col := Color(1.00, 0.90, 0.32, 1.0).srgb_to_linear()
+
+	for bspec in blossoms:
+		var b_pos: Vector3 = bspec[0] as Vector3
+		var b_axis := (bspec[1] as Vector3).normalized()
+		var b_rad: float = float(bspec[2])
+		var col_throat := (bspec[3] as Color).srgb_to_linear()
+		var col_petal := (bspec[4] as Color).srgb_to_linear()
+		var phase_01: float = float(bspec[5])
+
+		var ref := Vector3.RIGHT if absf(b_axis.dot(Vector3.RIGHT)) < 0.88 else Vector3.FORWARD
+		var u := b_axis.cross(ref).normalized()
+		var v := b_axis.cross(u).normalized()
+		var uv2_ctr := Vector2(0.44, phase_01)
+		var uv2_rim := Vector2(0.56, phase_01)
+
+		for pi in 5:
+			var ang := float(pi) / 5.0 * TAU + phase_01 * 2.0
+			var p_dir := u * cos(ang) + v * sin(ang)
+			var p_side := -u * sin(ang) + v * cos(ang)
+			var p_mid := b_pos + p_dir * (b_rad * 0.56) + b_axis * (b_rad * 0.14)
+			var p_tip := b_pos + p_dir * b_rad + b_axis * (b_rad * 0.34)
+			var p_l := p_mid - p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.08)
+			var p_r := p_mid + p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.04)
+
+			# Broad cupped 2-triangle Hibiscus petal.
+			_add_foliage_tri(st, b_pos, p_l, p_tip, col_throat, col_petal, col_petal,
+				Vector2(0.5, 0.0), Vector2(0.0, 0.6), Vector2(0.5, 1.0), uv2_ctr, uv2_rim, uv2_rim)
+			_add_foliage_tri(st, b_pos, p_tip, p_r, col_throat, col_petal, col_petal,
+				Vector2(0.5, 0.0), Vector2(0.5, 1.0), Vector2(1.0, 0.6), uv2_ctr, uv2_rim, uv2_rim)
+
+		# Protruding golden Hibiscus stamen bud pyramid (3 tris).
+		var st_tip := b_pos + b_axis * (b_rad * 0.66)
+		var sr := b_rad * 0.16
+		var sb0 := b_pos + u * sr
+		var sb1 := b_pos + (-u * 0.5 + v * 0.866) * sr
+		var sb2 := b_pos + (-u * 0.5 - v * 0.866) * sr
+		_add_foliage_tri(st, sb0, sb1, st_tip, col_throat, col_throat, stamen_col,
+			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
+		_add_foliage_tri(st, sb1, sb2, st_tip, col_throat, col_throat, stamen_col,
+			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
+		_add_foliage_tri(st, sb2, sb0, st_tip, col_throat, col_throat, stamen_col,
+			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 4: Sculpted Gnarled Coastal Driftwood Log
+
+static func _build_driftwood_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Main weathered arched trunk (~2.4 m along local X): [x, y, z, rx_radius, shade_top]
+	var spine: Array[Array] = [
+		[-1.22, 0.04, -0.08, 0.12, 0.84],
+		[-0.74, 0.13, -0.02, 0.19, 0.90],
+		[-0.20, 0.20,  0.05, 0.21, 0.95],
+		[ 0.36, 0.17,  0.03, 0.18, 0.93],
+		[ 0.84, 0.11, -0.05, 0.14, 0.88],
+		[ 1.18, 0.05, -0.10, 0.08, 0.86],
+	]
+
+	var col_under := Color(0.36, 0.29, 0.22, 1.0)
+	var col_side := Color(0.62, 0.55, 0.46, 1.0)
+	var col_sun := Color(0.82, 0.77, 0.69, 1.0)
+	var col_splinter := Color(0.80, 0.68, 0.51, 1.0)
+
+	var sides := 6
+	var rings: Array[Array] = []
+	var ring_cols: Array[Array] = []
+	for si in spine.size():
+		var row: Array = spine[si]
+		var ctr := Vector3(float(row[0]), float(row[1]), float(row[2]))
+		var rad: float = float(row[3])
+		var shade_k: float = float(row[4])
+		var pts: Array[Vector3] = []
+		var cols: Array[Color] = []
+		for k in sides:
+			var ang := float(k) / float(sides) * TAU + float(si) * 0.14
+			var rib := 0.88 + 0.18 * sin(ang * 3.0 + float(si) * 1.1)
+			var dy := sin(ang) * rad * rib * 0.86
+			var dz := cos(ang) * rad * rib
+			pts.append(ctr + Vector3(0.0, dy, dz))
+			var up_t := clampf(sin(ang) * 0.5 + 0.5, 0.0, 1.0)
+			var c := col_under.lerp(col_side, smoothstep(0.0, 0.55, up_t)).lerp(col_sun, smoothstep(0.55, 1.0, up_t))
+			cols.append(Color(c.r * shade_k, c.g * shade_k, c.b * shade_k, 1.0))
+		rings.append(pts)
+		ring_cols.append(cols)
+
+	for si in range(spine.size() - 1):
+		var r0: Array = rings[si]
+		var r1: Array = rings[si + 1]
+		var c0: Array = ring_cols[si]
+		var c1: Array = ring_cols[si + 1]
+		var ref_ctr := (Vector3(float(spine[si][0]), float(spine[si][1]), float(spine[si][2]))
+			+ Vector3(float(spine[si + 1][0]), float(spine[si + 1][1]), float(spine[si + 1][2]))) * 0.5
+		for k in sides:
+			var nk := (k + 1) % sides
+			_add_outward_quad(st, r0[k], r1[k], r1[nk], r0[nk], ref_ctr, c0[k], c1[k], c1[nk], c0[nk])
+
+	# Splintered jagged broken ends on -X and +X showing paler exposed heartwood.
+	var cap_neg := Vector3(-1.38, 0.08, -0.10)
+	var ref_neg := Vector3(-0.90, 0.10, -0.04)
+	for k in sides:
+		var nk := (k + 1) % sides
+		_add_outward_tri(st, rings[0][k], cap_neg, rings[0][nk], ref_neg,
+			ring_cols[0][k], col_splinter, ring_cols[0][nk])
+
+	var cap_pos := Vector3(1.30, 0.07, -0.12)
+	var ref_pos := Vector3(0.88, 0.10, -0.06)
+	var last_i := rings.size() - 1
+	for k in sides:
+		var nk := (k + 1) % sides
+		_add_outward_tri(st, rings[last_i][k], cap_pos, rings[last_i][nk], ref_pos,
+			ring_cols[last_i][k], col_splinter, ring_cols[last_i][nk])
+
+	# Forked gnarled coastal branch snag jutting from mid-trunk.
+	_append_tapered_limb_solid(st, Vector3(0.18, 0.18, 0.04), Vector3(0.58, 0.34, 0.38),
+		0.115, 0.068, 5, col_side, col_sun, false, col_splinter)
+	_append_tapered_limb_solid(st, Vector3(0.58, 0.34, 0.38), Vector3(0.82, 0.44, 0.56),
+		0.068, 0.036, 5, col_sun, col_splinter, true, col_splinter)
+
+	# Stubby weathered root-knot spur on opposite side.
+	_append_tapered_limb_solid(st, Vector3(-0.56, 0.14, -0.02), Vector3(-0.78, 0.24, -0.34),
+		0.105, 0.048, 5, col_under.lerp(col_side, 0.6), col_splinter, true, col_splinter)
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 5: Shore Pebbles & Fluted Spiral Shell
+
+static func _build_pebbles_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 5 sculpted beveled beach cobbles/pebbles across ~1.2 m footprint.
+	# [center_xz, rx, ry, rz, yaw, col_bot, col_top]
+	var cobbles: Array[Array] = [
+		[Vector2(-0.34, -0.18), 0.26, 0.15, 0.21, 0.42, Color(0.54, 0.49, 0.44), Color(0.84, 0.78, 0.70)],
+		[Vector2( 0.22, -0.28), 0.22, 0.13, 0.18, 1.35, Color(0.46, 0.48, 0.50), Color(0.76, 0.78, 0.78)],
+		[Vector2(-0.08,  0.34), 0.24, 0.12, 0.19, 2.20, Color(0.62, 0.51, 0.39), Color(0.88, 0.76, 0.60)],
+		[Vector2(-0.52,  0.18), 0.16, 0.10, 0.14, 0.85, Color(0.58, 0.54, 0.48), Color(0.86, 0.82, 0.74)],
+		[Vector2( 0.46,  0.22), 0.18, 0.11, 0.15, 2.85, Color(0.48, 0.45, 0.42), Color(0.79, 0.75, 0.68)],
+	]
+
+	for cspec in cobbles:
+		var cxz: Vector2 = cspec[0] as Vector2
+		_append_beveled_cobble(st, Vector3(cxz.x, 0.0, cxz.y),
+			float(cspec[1]), float(cspec[2]), float(cspec[3]), float(cspec[4]),
+			cspec[5] as Color, cspec[6] as Color)
+
+	# 1 sculpted fluted coastal conch/scallop shell nestled prominently near cluster center.
+	_append_fluted_shell(st, Vector3(0.14, 0.03, 0.04), 0.28, 0.55)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_beveled_cobble(st: SurfaceTool, center: Vector3, rx: float, ry: float,
+		rz: float, yaw: float, col_bot: Color, col_top: Color) -> void:
+	const SIDES := 6
+	var cy := cos(yaw)
+	var sy := sin(yaw)
+	var bot_r: Array[Vector3] = []
+	var mid_r: Array[Vector3] = []
+	var top_r: Array[Vector3] = []
+
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU
+		var jit := 0.90 + 0.14 * sin(ang * 2.0 + yaw * 3.0)
+		var lx := cos(ang) * rx * jit
+		var lz := sin(ang) * rz * jit
+		var wx := lx * cy - lz * sy
+		var wz := lx * sy + lz * cy
+		bot_r.append(center + Vector3(wx * 0.94, -0.05, wz * 0.94))
+		mid_r.append(center + Vector3(wx, ry * 0.44, wz))
+		top_r.append(center + Vector3(wx * 0.64, ry * 0.92, wz * 0.64))
+
+	var crown := center + Vector3(0.0, ry, 0.0)
+	var ref := center + Vector3(0.0, ry * 0.35, 0.0)
+	var col_mid := col_bot.lerp(col_top, 0.52)
+	var col_hi := col_top.lerp(Color(1.0, 0.98, 0.94, 1.0), 0.25)
+
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_quad(st, bot_r[k], mid_r[k], mid_r[nk], bot_r[nk], ref, col_bot, col_mid, col_mid, col_bot)
+		_add_outward_quad(st, mid_r[k], top_r[k], top_r[nk], mid_r[nk], ref, col_mid, col_top, col_top, col_mid)
+		_add_outward_tri(st, top_r[k], crown, top_r[nk], ref, col_top, col_hi, col_top)
+
+
+static func _append_fluted_shell(st: SurfaceTool, origin: Vector3, length: float, yaw: float) -> void:
+	# Fluted fan-ribbed coastal scallop/conch shell (5 ribs + coiled umbo apex + warm coral-pink lip).
+	var cy := cos(yaw)
+	var sy := sin(yaw)
+	var to_world := func(p: Vector3) -> Vector3:
+		return origin + Vector3(p.x * cy - p.z * sy, p.y, p.x * sy + p.z * cy)
+
+	var col_umbo := Color(0.84, 0.75, 0.64, 1.0)
+	var col_cream := Color(0.96, 0.92, 0.83, 1.0)
+	var col_rib := Color(1.00, 0.97, 0.90, 1.0)
+	var col_lip := Color(0.92, 0.56, 0.49, 1.0)
+	var col_under := Color(0.76, 0.66, 0.58, 1.0)
+
+	var apex: Vector3 = to_world.call(Vector3(0.0, 0.04, -length * 0.48))
+	var under_hub: Vector3 = to_world.call(Vector3(0.0, -0.02, 0.02))
+	var ref_ctr: Vector3 = to_world.call(Vector3(0.0, 0.03, 0.02))
+
+	var ribs := 6
+	var mid_arc: Array[Vector3] = []
+	var rim_arc: Array[Vector3] = []
+	var rim_cols: Array[Color] = []
+	for i in range(ribs + 1):
+		var u := float(i) / float(ribs)
+		var fan_ang := lerpf(-0.98, 0.98, u)
+		var flute := 1.0 if (i % 2 == 0) else 0.78
+		var r_mid := length * 0.48
+		var r_rim := length * (0.94 + 0.06 * flute)
+		var y_arch := 0.09 * (1.0 - pow(u * 2.0 - 1.0, 2.0)) + 0.026 * flute
+		var mx := sin(fan_ang) * r_mid
+		var mz := -length * 0.42 + cos(fan_ang) * r_mid
+		var rx := sin(fan_ang) * r_rim
+		var rz := -length * 0.42 + cos(fan_ang) * r_rim
+		mid_arc.append(to_world.call(Vector3(mx, y_arch + 0.02, mz)))
+		rim_arc.append(to_world.call(Vector3(rx, 0.02 + 0.024 * flute, rz)))
+		rim_cols.append(col_rib if (i % 2 == 0) else col_lip)
+
+	for i in ribs:
+		_add_outward_tri(st, apex, mid_arc[i], mid_arc[i + 1], ref_ctr, col_umbo, col_cream, col_cream)
+		_add_outward_quad(st, mid_arc[i], rim_arc[i], rim_arc[i + 1], mid_arc[i + 1], ref_ctr,
+			col_cream, rim_cols[i], rim_cols[i + 1], col_cream)
+		_add_outward_tri(st, under_hub, rim_arc[i + 1], rim_arc[i], ref_ctr,
+			col_under, rim_cols[i + 1], rim_cols[i])
+
+	# Coiled spiral conch tail spire protruding slightly behind the apex.
+	var spire_tip: Vector3 = to_world.call(Vector3(-0.04, 0.05, -length * 0.66))
+	var sp_a: Vector3 = to_world.call(Vector3(-0.05, 0.02, -length * 0.44))
+	var sp_b: Vector3 = to_world.call(Vector3(0.05, 0.02, -length * 0.44))
+	var sp_c: Vector3 = to_world.call(Vector3(0.0, 0.08, -length * 0.44))
+	_add_outward_tri(st, sp_a, sp_b, spire_tip, ref_ctr, col_umbo, col_umbo, col_lip)
+	_add_outward_tri(st, sp_b, sp_c, spire_tip, ref_ctr, col_umbo, col_rib, col_lip)
+	_add_outward_tri(st, sp_c, sp_a, spire_tip, ref_ctr, col_rib, col_umbo, col_lip)
+
+
+# ------------------------------------------------------------------ Mesh 6: Barnacle-Ringed Tidal Outcrop Triad
+
+static func _build_tidal_rock_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 3 interlocked angular coastal rocks: dark wet sea-moss base -> pale barnacle ring -> sunlit ochre crest.
+	_append_tidal_boulder(st, Vector3(-0.06, 0.0, 0.02), 0.96, 1.24, 0.80, -0.44, 8, 0.35)
+	_append_tidal_boulder(st, Vector3( 0.88, 0.0, 0.34), 0.66, 0.78, 0.56, -0.36, 7, 1.85)
+	_append_tidal_boulder(st, Vector3(-0.84, 0.0, -0.30), 0.60, 0.50, 0.52, -0.34, 6, 3.40)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_tidal_boulder(st: SurfaceTool, center: Vector3, rx: float, height: float,
+		rz: float, bot_y: float, sides: int, phase: float) -> void:
+	var col_moss := Color(0.20, 0.27, 0.19, 1.0)
+	var col_barnacle_a := Color(0.74, 0.72, 0.64, 1.0)
+	var col_barnacle_b := Color(0.46, 0.43, 0.38, 1.0)
+	var col_mid_rock := Color(0.75, 0.62, 0.45, 1.0)
+	var col_crest := Color(0.90, 0.81, 0.66, 1.0)
+
+	# 4 stratified rings: [y_frac, rad_scale, tier_id]
+	var ring_defs: Array[Array] = [
+		[bot_y, 1.06, 0],
+		[height * 0.18, 0.98, 1],
+		[height * 0.56, 0.78, 2],
+		[height * 0.88, 0.46, 3],
+	]
+
+	var rings: Array[Array] = []
+	var cols: Array[Array] = []
+	for ri in ring_defs.size():
+		var y_val: float = float(ring_defs[ri][0])
+		var r_sc: float = float(ring_defs[ri][1])
+		var tier: int = int(ring_defs[ri][2])
+		var pts: Array[Vector3] = []
+		var rcols: Array[Color] = []
+		for k in sides:
+			var ang := float(k) / float(sides) * TAU + phase + float(ri) * 0.18
+			var crag := 0.84 + 0.22 * sin(ang * 3.0 + phase) + 0.10 * cos(ang * 5.0 - float(ri))
+			var px := center.x + cos(ang) * rx * r_sc * crag
+			var pz := center.z + sin(ang) * rz * r_sc * crag
+			var py := y_val + (0.06 * sin(ang * 2.0 + phase) if ri > 0 else 0.0)
+			pts.append(Vector3(px, py, pz))
+			var c := col_moss
+			if tier == 1:
+				c = col_barnacle_a if (k % 2 == 0) else col_barnacle_b
+			elif tier == 2:
+				c = col_mid_rock * (0.94 + 0.10 * float(k % 2))
+			elif tier == 3:
+				c = col_crest
+			rcols.append(c)
+		rings.append(pts)
+		cols.append(rcols)
+
+	var ref := center + Vector3(0.0, height * 0.28, 0.0)
+	for ri in range(rings.size() - 1):
+		var r0: Array = rings[ri]
+		var r1: Array = rings[ri + 1]
+		var c0: Array = cols[ri]
+		var c1: Array = cols[ri + 1]
+		for k in sides:
+			var nk := (k + 1) % sides
+			_add_outward_quad(st, r0[k], r1[k], r1[nk], r0[nk], ref, c0[k], c1[k], c1[nk], c0[nk])
+
+	var apex := center + Vector3(rx * 0.08 * cos(phase), height, rz * 0.08 * sin(phase))
+	var top_i := rings.size() - 1
+	for k in sides:
+		var nk := (k + 1) % sides
+		_add_outward_tri(st, rings[top_i][k], apex, rings[top_i][nk], ref,
+			cols[top_i][k], col_crest, cols[top_i][nk])
+
+
+# ------------------------------------------------------------------ Mesh 7 & 8: Sculpted Fallback Cliff Buttresses
+
+static func _build_fallback_buttress_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Tall craggy coastal cliff buttress jutting outward along -Z with deep back/bottom skirt
+	# so ZERO floating edges ever appear on steep 45..80 deg cliffs!
+	_append_crag_column(st, Vector3(0.0, 0.0, 0.20), 3.35, 3.10, -3.6, 10.6, 8, 0.28, -0.55)
+	_append_crag_column(st, Vector3(-2.15, -0.5, 0.55), 2.15, 2.25, -3.4, 6.8, 6, 1.42, -0.35)
+	_append_crag_column(st, Vector3( 2.05, -0.8, 0.35), 2.05, 2.15, -3.5, 6.1, 6, 2.75, -0.45)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fallback_buttress_wide_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Wide stepped horizontal sedimentary cliff bench (~10.4 m wide) for medium/large islands.
+	_append_crag_column(st, Vector3(0.0, 0.0, 0.35), 4.65, 3.20, -3.5, 5.9, 8, 0.62, -0.42)
+	_append_crag_column(st, Vector3(-3.35, -0.4, 0.65), 2.85, 2.55, -3.4, 4.4, 6, 1.94, -0.30)
+	_append_crag_column(st, Vector3( 3.25, -0.3, 0.55), 2.95, 2.65, -3.4, 4.7, 6, 3.18, -0.36)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_crag_column(st: SurfaceTool, center: Vector3, rx: float, rz: float,
+		bot_y: float, top_y: float, sides: int, phase: float, z_jut: float) -> void:
+	var col_crevice := Color(0.46, 0.41, 0.37, 1.0)
+	var col_strata_a := Color(0.76, 0.67, 0.56, 1.0)
+	var col_strata_b := Color(0.88, 0.80, 0.68, 1.0)
+	var col_ledge := Color(0.96, 0.90, 0.79, 1.0)
+
+	# 6 stepped geological strata rings with overhanging rock shelves & back taper into cliff (+Z).
+	var h_span := top_y - bot_y
+	var ring_defs: Array[Array] = [
+		[0.00, 1.18, 0.10, col_crevice],
+		[0.24, 1.05, 0.45, col_strata_a],
+		[0.44, 1.12, 0.85, col_strata_b],  # Jutting lower overhanging rock shelf!
+		[0.64, 0.86, 0.60, col_strata_a],
+		[0.82, 0.90, 0.45, col_strata_b],  # Upper crag cornice ledge!
+		[0.95, 0.54, 0.20, col_ledge],
+	]
+
+	var rings: Array[Array] = []
+	var rcols: Array[Array] = []
+	for ri in ring_defs.size():
+		var f_y: float = float(ring_defs[ri][0])
+		var r_sc: float = float(ring_defs[ri][1])
+		var jut_w: float = float(ring_defs[ri][2])
+		var base_c: Color = ring_defs[ri][3] as Color
+		var y_base := bot_y + h_span * f_y
+		var pts: Array[Vector3] = []
+		var cols: Array[Color] = []
+
+		for k in sides:
+			var ang := float(k) / float(sides) * TAU + phase
+			var flute := 0.82 + 0.24 * sin(ang * 3.0 + phase) + 0.12 * cos(ang * 2.0 - float(ri) * 0.9)
+			var vx := center.x + cos(ang) * rx * r_sc * flute
+			var vz := center.z + sin(ang) * rz * r_sc * flute + z_jut * jut_w
+			# Slant the crown gently backward into the mountain (+Z higher) so top integrates cleanly.
+			var slant_y := clampf(sin(ang), -1.0, 1.0) * (0.48 * f_y)
+			var vy := center.y + y_base + slant_y + 0.22 * sin(ang * 4.0 + float(ri))
+			pts.append(Vector3(vx, vy, vz))
+
+			# Crevice shading on fluted inward facets + sunlit pop on outward -Z cliff ribs.
+			var shade := clampf(0.84 + 0.22 * flute - 0.10 * sin(ang), 0.62, 1.08)
+			cols.append(Color(
+				clampf(base_c.r * shade, 0.0, 1.0),
+				clampf(base_c.g * shade, 0.0, 1.0),
+				clampf(base_c.b * shade, 0.0, 1.0),
+				1.0))
+		rings.append(pts)
+		rcols.append(cols)
+
+	var ref := center + Vector3(0.0, (bot_y + top_y) * 0.45, 0.0)
+	for ri in range(rings.size() - 1):
+		var r0: Array = rings[ri]
+		var r1: Array = rings[ri + 1]
+		var c0: Array = rcols[ri]
+		var c1: Array = rcols[ri + 1]
+		for k in sides:
+			var nk := (k + 1) % sides
+			_add_outward_quad(st, r0[k], r1[k], r1[nk], r0[nk], ref, c0[k], c1[k], c1[nk], c0[nk])
+
+	var apex := center + Vector3(rx * 0.06 * cos(phase), top_y, rz * 0.14)
+	var top_i := rings.size() - 1
+	for k in sides:
+		var nk := (k + 1) % sides
+		_add_outward_tri(st, rings[top_i][k], apex, rings[top_i][nk], ref,
+			rcols[top_i][k], col_ledge, rcols[top_i][nk])
+
+
+# ------------------------------------------------------------------ SurfaceTool geometry primitives
+
+static func _append_anchored_mound(st: SurfaceTool, center: Vector3, rx: float, ry: float,
+		rz: float, bot_y: float, segs: int, col_bot: Color, col_top: Color, uv2: Vector2) -> void:
+	var bot_ring: Array[Vector3] = []
+	for k in segs:
+		var ang := float(k) / float(segs) * TAU
+		bot_ring.append(center + Vector3(cos(ang) * rx, bot_y, sin(ang) * rz))
+	var crown := center + Vector3(0.0, ry, 0.0)
+	var ref := center + Vector3(0.0, (bot_y + ry) * 0.35, 0.0)
+	for k in segs:
+		var nk := (k + 1) % segs
+		var a := bot_ring[k]
+		var b := crown
+		var c := bot_ring[nk]
+		var n := (c - a).cross(b - a)
+		if n.length_squared() < 1e-10:
+			continue
+		var centroid := (a + b + c) / 3.0
+		if n.dot(centroid - ref) < 0.0:
+			_add_foliage_tri(st, a, c, b, col_bot, col_bot, col_top,
+				Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(0.5, 0.0), uv2, uv2, uv2)
+		else:
+			_add_foliage_tri(st, a, b, c, col_bot, col_top, col_bot,
+				Vector2(0.0, 1.0), Vector2(0.5, 0.0), Vector2(1.0, 1.0), uv2, uv2, uv2)
+
+
+static func _append_tapered_limb_uv2(st: SurfaceTool, p0: Vector3, p1: Vector3, r0: float,
+		r1: float, sides: int, col0: Color, col1: Color, uv2_0: Vector2, uv2_1: Vector2) -> void:
+	var axis := p1 - p0
+	var seg_len := axis.length()
+	if seg_len < 0.001:
+		return
+	var dir := axis / seg_len
+	var ref := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var u := dir.cross(ref).normalized()
+	var v := dir.cross(u).normalized()
+
+	var ring0: Array[Vector3] = []
+	var ring1: Array[Vector3] = []
+	for i in sides:
+		var ang := float(i) / float(sides) * TAU
+		var radial := u * cos(ang) + v * sin(ang)
+		ring0.append(p0 + radial * r0)
+		ring1.append(p1 + radial * r1)
+
+	var mid_ctr := (p0 + p1) * 0.5
+	for i in sides:
+		var ni := (i + 1) % sides
+		_add_outward_quad_uv2(st, ring0[i], ring1[i], ring1[ni], ring0[ni], mid_ctr,
+			col0, col1, col1, col0, uv2_0, uv2_1, uv2_1, uv2_0)
+
+
+static func _append_tapered_limb_solid(st: SurfaceTool, p0: Vector3, p1: Vector3, r0: float,
+		r1: float, sides: int, col0: Color, col1: Color, cap_tip: bool, cap_col: Color) -> void:
+	var axis := p1 - p0
+	var seg_len := axis.length()
+	if seg_len < 0.001:
+		return
+	var dir := axis / seg_len
+	var ref := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var u := dir.cross(ref).normalized()
+	var v := dir.cross(u).normalized()
+
+	var ring0: Array[Vector3] = []
+	var ring1: Array[Vector3] = []
+	for i in sides:
+		var ang := float(i) / float(sides) * TAU
+		var radial := u * cos(ang) + v * sin(ang)
+		ring0.append(p0 + radial * r0)
+		ring1.append(p1 + radial * r1)
+
+	var mid_ctr := (p0 + p1) * 0.5
+	for i in sides:
+		var ni := (i + 1) % sides
+		_add_outward_quad(st, ring0[i], ring1[i], ring1[ni], ring0[ni], mid_ctr, col0, col1, col1, col0)
+
+	if cap_tip:
+		var apex := p1 + dir * (r1 * 1.15)
+		var tip_ref := p1 - dir * (r1 * 0.5)
+		for i in sides:
+			var ni := (i + 1) % sides
+			_add_outward_tri(st, ring1[i], apex, ring1[ni], tip_ref, col1, cap_col, col1)
+
+
+static func _add_outward_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_add_outward_tri(st, a, b, c, ref_center, ca, cb, cc)
+	_add_outward_tri(st, a, c, d, ref_center, ca, cc, cd)
+
+
+static func _add_outward_quad_uv2(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color,
+		u2a: Vector2, u2b: Vector2, u2c: Vector2, u2d: Vector2) -> void:
+	_add_outward_tri_uv2(st, a, b, c, ref_center, ca, cb, cc, u2a, u2b, u2c)
+	_add_outward_tri_uv2(st, a, c, d, ref_center, ca, cc, cd, u2a, u2c, u2d)
+
+
+static func _add_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	_add_outward_tri_uv2(st, a, b, c, ref_center, ca, cb, cc, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+
+
+static func _add_outward_tri_uv2(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color,
+		u2a: Vector2, u2b: Vector2, u2c: Vector2) -> void:
+	# Godot front-face winding is CW -> outward normal is (c - a) x (b - a).
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-10:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tmp_v := b
+		b = c
+		c = tmp_v
+		var tmp_c := cb
+		cb = cc
+		cc = tmp_c
+		var tmp_u := u2b
+		u2b = u2c
+		u2c = tmp_u
+	_add_foliage_tri(st, a, b, c, ca, cb, cc,
+		Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 0.5), u2a, u2b, u2c)
+
+
+static func _add_foliage_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ca: Color, cb: Color, cc: Color, uva: Vector2, uvb: Vector2, uvc: Vector2,
+		uv2a: Vector2, uv2b: Vector2, uv2c: Vector2) -> void:
+	if (c - a).cross(b - a).length_squared() < 1e-10:
+		return
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.set_uv(uva)
+	st.set_uv2(uv2a)
+	st.add_vertex(a)
+
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.set_uv(uvb)
+	st.set_uv2(uv2b)
+	st.add_vertex(b)
+
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.set_uv(uvc)
+	st.set_uv2(uv2c)
+	st.add_vertex(c)
