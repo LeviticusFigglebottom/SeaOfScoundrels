@@ -1727,7 +1727,7 @@ func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
 			"relit mat_lantern_glass restores night emission")
 
 	# ------------------------------------------------------------------
-	# 3. Tactile Cannon Ordnance Cycling ([R]: Iron -> Chainshot -> Firebomb -> Flare -> Iron)
+	# 3. Tactile Cannon Ordnance Cycling ([R]: Iron -> Chainshot -> Firebomb -> Anchorball -> Ballastball -> Flare -> Iron)
 	# ------------------------------------------------------------------
 	var ord_events: Array[StringName] = []
 	sloop.cannon_ordnance_changed.connect(func(k: StringName) -> void: ord_events.append(k))
@@ -1737,10 +1737,14 @@ func test_wave28_ship_harpoon_deck_lanterns_and_cannon_ordnance() -> void:
 	check_eq(sloop.get_cannon_ordnance_label(), "Chainshot", "Chainshot label matches")
 	check_eq(sloop.cycle_cannon_ordnance(), &"firebomb", "2nd cycle -> &'firebomb'")
 	check_eq(sloop.get_cannon_ordnance_label(), "Firebomb", "Firebomb label matches")
-	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "3rd cycle -> &'flare'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"anchorball", "3rd cycle -> &'anchorball'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Anchorball", "Anchorball label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"ballastball", "4th cycle -> &'ballastball'")
+	check_eq(sloop.get_cannon_ordnance_label(), "Ballastball", "Ballastball label matches")
+	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "5th cycle -> &'flare'")
 	check_eq(sloop.get_cannon_ordnance_label(), "Flare", "Flare label matches")
-	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "4th cycle wraps cleanly -> &'iron'")
-	check_eq(ord_events.size(), 4, "cannon_ordnance_changed emitted on each swap")
+	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "6th cycle wraps cleanly -> &'iron'")
+	check_eq(ord_events.size(), 6, "cannon_ordnance_changed emitted on each swap")
 
 	# Verify PlayerController mouse-aim on harpoon + [R] station special action + HUD hints!
 	var pc := PlayerController.new()
@@ -2419,13 +2423,15 @@ func test_wave31_firebomb_ordnance_spreading_ship_fire_bucket_douse_and_crew_fir
 		"ShipFire OmniLight3D is unshadowed and hidden when active_count == 0")
 	print("    Wave 31B sculpted tris: firebomb=%d, ship_fire_cluster=%d" % [fb_tris, sf_tris])
 
-	# 2. 4-item Ordnance Cycle: iron -> chainshot -> firebomb -> flare -> iron!
+	# 2. 6-item Ordnance Cycle: iron -> chainshot -> firebomb -> anchorball -> ballastball -> flare -> iron!
 	check_eq(sloop.cannon_ordnance, &"iron", "starts on &'iron'")
 	check_eq(sloop.cycle_cannon_ordnance(), &"chainshot", "cycle 1 -> &'chainshot'")
 	check_eq(sloop.cycle_cannon_ordnance(), &"firebomb", "cycle 2 -> &'firebomb'")
 	check_eq(sloop.get_cannon_ordnance_label(), "Firebomb", "Firebomb label matches strict ASCII")
-	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "cycle 3 -> &'flare'")
-	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "cycle 4 wraps -> &'iron'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"anchorball", "cycle 3 -> &'anchorball'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"ballastball", "cycle 4 -> &'ballastball'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"flare", "cycle 5 -> &'flare'")
+	check_eq(sloop.cycle_cannon_ordnance(), &"iron", "cycle 6 wraps -> &'iron'")
 
 	# 3. Firing a &"firebomb" cannonball into target_sloop ignites deck fires (without punching a deep iron hull breach)
 	#    and fire_mask round-trips cleanly via get_net_state() / apply_net_state()!
@@ -2745,5 +2751,331 @@ func test_wave33_cannon_self_launch_and_interactive_boarding_ladders() -> void:
 	await _end()
 
 
+func test_wave36_cursed_cannonballs_anchorball_ballastball_curse_physics_vfx_and_hud() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 9.0, 0.0)
 
+	# 1. Sculpted zero-primitive Anchorball (>= 480 tris) & Ballastball (>= 480 tris) meshes + unshadowed OmniLight3D!
+	var anchor_tris := 0
+	var ballast_tris := 0
+	for c_kind: StringName in [&"anchorball", &"ballastball"]:
+		var probe := Cannonball.new()
+		probe.enable_effects = false
+		probe.ordnance_style = c_kind
+		_root.add_child(probe)
+		probe.global_position = Vector3(0.0, 42.0, 0.0)
+		await physics_frames(1)
+		check_eq(probe.get_resolved_ordnance_style(), c_kind, "Cannonball resolves %s" % String(c_kind))
+		var mi := probe.get_node_or_null(^"IronBall") as MeshInstance3D
+		check(mi != null and mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"%s uses sculpted ArrayMesh (zero PrimitiveMesh)" % String(c_kind))
+		var tri_cnt := 0
+		var bad_norms := 0
+		if mi != null and mi.mesh is ArrayMesh:
+			var am := mi.mesh as ArrayMesh
+			check_eq(am.get_surface_count(), 2, "%s has 2 sculpted surfaces (iron + spectral relief)" % String(c_kind))
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				tri_cnt += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_norms += 1
+				var ov_mat := mi.get_surface_override_material(si) as StandardMaterial3D
+				check(ov_mat != null and ov_mat.vertex_color_use_as_albedo and ov_mat.vertex_color_is_srgb,
+					"%s surface %d enables sRGB vertex color albedo" % [String(c_kind), si])
+				check(ov_mat != null and ov_mat.albedo_texture == null,
+					"%s surface %d allocates zero extra texture VRAM" % [String(c_kind), si])
+		check_eq(bad_norms, 0, "%s normals are all finite unit vectors" % String(c_kind))
+		check(tri_cnt >= 480, "%s sculpted triangle count >= 480 (got %d)" % [String(c_kind), tri_cnt])
+		check(probe.curse_light != null and not probe.curse_light.shadow_enabled and probe.curse_light.omni_range >= 12.0,
+			"%s equips unshadowed spectral OmniLight3D (range=%.1f)" % [
+				String(c_kind), probe.curse_light.omni_range if probe.curse_light != null else 0.0])
+		if c_kind == &"anchorball":
+			anchor_tris = tri_cnt
+			check(probe.curse_light != null and probe.curse_light.light_color.g > probe.curse_light.light_color.r
+				and probe.curse_light.light_color.g > probe.curse_light.light_color.b,
+				"Anchorball travel OmniLight3D glows spectral emerald")
+		else:
+			ballast_tris = tri_cnt
+			check(probe.curse_light != null and probe.curse_light.light_color.b > probe.curse_light.light_color.g
+				and probe.curse_light.light_color.r > probe.curse_light.light_color.g,
+				"Ballastball travel OmniLight3D glows spectral amethyst-violet")
+		probe.queue_free()
+	await physics_frames(2)
 
+	# 2. Ship sculpted spectral CurseRing (>= 192 tris, 0 primitives, 0 extra VRAM) & full 6-item [R] HUD cycle!
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	sloop.set_anchor(true)
+	sloop.anchor_progress = 1.0
+	await physics_frames(4)
+
+	var ring_mi := sloop.get_curse_ring_mesh_instance()
+	check(ring_mi != null and not ring_mi.visible, "Ship spectral CurseRing mounts cleanly and starts hidden")
+	check(ring_mi != null and ring_mi.mesh is ArrayMesh and not (ring_mi.mesh is PrimitiveMesh),
+		"Ship CurseRing uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	var ring_tris := 0
+	var ring_bad_norms := 0
+	if ring_mi != null and ring_mi.mesh is ArrayMesh:
+		var r_am := ring_mi.mesh as ArrayMesh
+		for si in r_am.get_surface_count():
+			var r_arr := r_am.surface_get_arrays(si)
+			var r_verts: PackedVector3Array = r_arr[Mesh.ARRAY_VERTEX]
+			var r_norms: PackedVector3Array = r_arr[Mesh.ARRAY_NORMAL]
+			ring_tris += floori(float(r_verts.size()) / 3.0)
+			for nv in r_norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					ring_bad_norms += 1
+		var r_mat := ring_mi.material_override as StandardMaterial3D
+		check(r_mat != null and r_mat.vertex_color_use_as_albedo and r_mat.vertex_color_is_srgb
+			and r_mat.albedo_texture == null,
+			"Ship CurseRing material uses sRGB vertex colors with zero extra texture VRAM")
+	check_eq(ring_bad_norms, 0, "Ship CurseRing normals are all finite unit vectors")
+	check(ring_tris >= 192, "Ship CurseRing sculpted triangle count >= 192 (got %d)" % ring_tris)
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(sloop, sloop.ship_point(Vector3(-1.0, 1.12, -1.0)))
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.input_enabled = false
+	pc.make_current = false
+	captain.add_child(pc)
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, null, null, sloop, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var cannon_st := sloop.get_station(&"cannon", &"port")
+	check(captain.enter_station(cannon_st), "Captain enters port cannon station for 6-ordnance HUD test")
+	var expected_cycle: Array[Array] = [
+		[&"iron", "Iron"],
+		[&"chainshot", "Chainshot"],
+		[&"firebomb", "Firebomb"],
+		[&"anchorball", "Anchorball"],
+		[&"ballastball", "Ballastball"],
+		[&"flare", "Flare"],
+	]
+	var seen_colors: Array[Color] = []
+	for step_i in expected_cycle.size():
+		var exp_kind: StringName = expected_cycle[step_i][0]
+		var exp_label: String = expected_cycle[step_i][1]
+		check_eq(sloop.cannon_ordnance, exp_kind, "Ordnance cycle step %d == %s" % [step_i, String(exp_kind)])
+		check_eq(sloop.get_cannon_ordnance_label(), exp_label, "Ordnance label step %d == %s" % [step_i, exp_label])
+		hud._process(0.05)
+		check_eq(hud.get_tool_title_text(), "Ship Cannon", "HUD tool title stays Ship Cannon on %s" % exp_label)
+		check(hud.is_ordnance_chip_visible(), "HUD cannon ordnance badge visible for %s" % exp_label)
+		check_eq(hud.get_ordnance_chip_text(), exp_label, "HUD ordnance badge displays %s" % exp_label)
+		check(hud.get_tool_meta_text().contains("Shot: %s" % exp_label)
+			and hud.get_tool_meta_text().contains("[R] Swap Shot"),
+			"HUD cannon meta shows Shot: %s and [R] Swap Shot (got '%s')" % [exp_label, hud.get_tool_meta_text()])
+		var active_prompt := cannon_st.get_active_prompt()
+		check(active_prompt.contains("Fire (%s)" % exp_label),
+			"Cannon active prompt shows Fire (%s)" % exp_label)
+		for txt_check: String in [exp_label, hud.get_ordnance_chip_text(), hud.get_tool_meta_text(), active_prompt]:
+			for ci in txt_check.length():
+				check(txt_check.unicode_at(ci) < 128, "HUD/Prompt ordnance string is strictly ASCII ('%s')" % txt_check)
+		var acc_col := GameHUD.get_ordnance_accent_color(exp_kind)
+		check(acc_col.is_equal_approx(hud.get_active_ordnance_accent_color()),
+			"HUD live cannon accent color matches GameHUD.get_ordnance_accent_color(%s)" % String(exp_kind))
+		for prev_col: Color in seen_colors:
+			check(not acc_col.is_equal_approx(prev_col),
+				"Ordnance accent color for %s is distinct from prior ordnance colors" % String(exp_kind))
+		seen_colors.append(acc_col)
+		pc._handle_station_special_action()
+	check_eq(sloop.cannon_ordnance, &"iron", "6th [R] press wraps cleanly back to &'iron'")
+	# Verify emerald & violet color signatures specifically.
+	var col_anc := GameHUD.get_ordnance_accent_color(&"anchorball")
+	var col_bal := GameHUD.get_ordnance_accent_color(&"ballastball")
+	check(col_anc.g > col_anc.r and col_anc.g > col_anc.b, "HUD Anchorball accent color is spectral emerald")
+	check(col_bal.b > col_bal.g and col_bal.r > col_bal.g, "HUD Ballastball accent color is spectral violet")
+	captain.leave_station()
+	hud._process(0.05)
+	check(not hud.is_ordnance_chip_visible(), "HUD cannon ordnance badge hides after leaving cannon station")
+
+	# 3. Live Anchorball shot into a sailing ship drops anchor immediately, pulses emerald capstan ring, and halts forward speed!
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	var sailing_victim := _spawn_sloop(Vector3(60.0, 0.0, 0.0))
+	sailing_victim.faction = &"player"
+	sailing_victim.set_anchor(false)
+	sailing_victim.anchor_progress = 0.0
+	sailing_victim.set_sail_target(1.0)
+	sailing_victim.sail_set = 1.0
+	sailing_victim.set_trim_target(0.0)
+	sailing_victim.sail_trim = 0.0
+	await physics_frames(150)
+	var pre_hit_speed := sailing_victim.forward_speed()
+	check(pre_hit_speed > 3.0, "Sailing victim reaches cruising speed before Anchorball hit (got %.2f m/s)" % pre_hit_speed)
+	check(not sailing_victim.anchor_down, "Sailing victim anchor starts raised")
+
+	var anchor_events: Array[Array] = []
+	sailing_victim.cursed_hit.connect(func(k: StringName, dur: float) -> void: anchor_events.append([k, dur]))
+
+	var shooter := _spawn_sloop(sailing_victim.global_position + Vector3(-20.0, 0.0, -1.8))
+	shooter.set_anchor(true)
+	shooter.anchor_progress = 1.0
+	await physics_frames(3)
+	shooter.set_cannon_ordnance(&"anchorball")
+	shooter.aim_cannon(&"starboard", 0.0, -0.02)
+	var anchor_shot := shooter.fire_cannon(&"starboard")
+	check(anchor_shot != null and anchor_shot.get_resolved_ordnance_style() == &"anchorball",
+		"Shooter fires sculpted &'anchorball' cannonball")
+	for _i in 90:
+		await physics_frames(1)
+		if sailing_victim.anchor_down:
+			break
+	check(sailing_victim.anchor_down and sailing_victim.anchor_progress >= 0.99,
+		"Anchorball impact immediately slams target ship anchor down (down=%s, prog=%.2f)" % [
+			str(sailing_victim.anchor_down), sailing_victim.anchor_progress])
+	check_eq(anchor_events.size(), 1, "Anchorball emits cursed_hit once")
+	if not anchor_events.is_empty():
+		check_eq(anchor_events[0][0], &"anchorball", "cursed_hit reports &'anchorball'")
+		check(float(anchor_events[0][1]) >= 4.0, "cursed_hit reports 4.5 s emerald capstan FX duration")
+	check(sailing_victim.anchor_curse_fx_timer > 3.0, "Anchorball activates emerald capstan FX timer")
+	var anc_ring := sailing_victim.get_curse_ring_mesh_instance()
+	sailing_victim._update_visuals(0.05)
+	check(anc_ring != null and anc_ring.visible, "Anchorball activates visible spectral emerald capstan ring")
+	var anc_mat := anc_ring.material_override as StandardMaterial3D if anc_ring != null else null
+	check(anc_mat != null and anc_mat.emission.g > anc_mat.emission.r and anc_mat.emission.g > anc_mat.emission.b,
+		"Anchorball capstan ring glows spectral emerald")
+	check(notices.has("Cursed Anchorball strike! Anchor slammed to the seabed!"),
+		"Player ship posts strict-ASCII Anchorball strike notice")
+	check_eq(sailing_victim.open_hole_count(), 1, "Anchorball punches a modest tactical breach on impact")
+
+	# Step physics frames -> slammed anchor rapidly brakes forward speed!
+	await physics_frames(150)
+	var post_anchor_speed := sailing_victim.forward_speed()
+	check(post_anchor_speed < 0.75 and post_anchor_speed < pre_hit_speed * 0.25,
+		"Anchorball halts sailing ship forward speed (%.2f -> %.2f m/s)" % [pre_hit_speed, post_anchor_speed])
+
+	# 4. Live Ballastball shot: deeper draft, >= 1.8x flooding acceleration, violet waterline ring, net replication & 12 s decay!
+	var ballast_victim := _spawn_sloop(Vector3(-55.0, 0.0, 0.0))
+	ballast_victim.faction = &"player"
+	ballast_victim.set_anchor(true)
+	ballast_victim.anchor_progress = 1.0
+	var control_ship := _spawn_sloop(Vector3(-85.0, 0.0, 0.0))
+	control_ship.faction = &"drowned"
+	control_ship.set_anchor(true)
+	control_ship.anchor_progress = 1.0
+	var ballast_shooter := _spawn_sloop(Vector3(-75.0, 0.0, -1.0))
+	ballast_shooter.set_anchor(true)
+	ballast_shooter.anchor_progress = 1.0
+	await physics_frames(90)
+
+	var y_normal := ballast_victim.global_position.y
+	var ballast_events: Array[Array] = []
+	ballast_victim.cursed_hit.connect(func(k: StringName, dur: float) -> void: ballast_events.append([k, dur]))
+
+	ballast_shooter.set_cannon_ordnance(&"ballastball")
+	ballast_shooter.aim_cannon(&"starboard", 0.0, -0.02)
+	var ballast_shot := ballast_shooter.fire_cannon(&"starboard")
+	check(ballast_shot != null and ballast_shot.get_resolved_ordnance_style() == &"ballastball",
+		"Shooter fires sculpted &'ballastball' cannonball")
+	for _i in 90:
+		await physics_frames(1)
+		if ballast_victim.is_ballast_cursed():
+			break
+	check(ballast_victim.is_ballast_cursed(), "Ballastball impact activates is_ballast_cursed() == true")
+	check_eq(ballast_events.size(), 1, "Ballastball emits cursed_hit once")
+	if not ballast_events.is_empty():
+		check_eq(ballast_events[0][0], &"ballastball", "cursed_hit reports &'ballastball'")
+		check_near(float(ballast_events[0][1]), Ship.BALLAST_CURSE_DURATION, 0.1,
+			"cursed_hit reports 12.0 s Ballastball duration")
+	check(notices.has("Cursed Ballastball strike! Hull dragging deep -- bail fast!"),
+		"Player ship posts strict-ASCII Ballastball strike notice")
+
+	var bal_ring := ballast_victim.get_curse_ring_mesh_instance()
+	ballast_victim._update_visuals(0.05)
+	check(bal_ring != null and bal_ring.visible, "Ballastball activates visible violet hull waterline ring")
+	var bal_mat := bal_ring.material_override as StandardMaterial3D if bal_ring != null else null
+	check(bal_mat != null and bal_mat.emission.b > bal_mat.emission.g and bal_mat.emission.r > bal_mat.emission.g,
+		"Ballastball hull ring glows pulsing violet-amethyst")
+
+	# 4a. Isolate pure buoyancy draft effect (patch impact breach + dry bilge) -> ship rides visibly deeper!
+	for hi in ballast_victim.holes.size():
+		ballast_victim.patch_hole(hi)
+	ballast_victim.water_level = 0.0
+	await physics_frames(110)
+	var y_cursed := ballast_victim.global_position.y
+	check(y_cursed < y_normal - 0.25,
+		"Ballastball drags cursed hull visibly deeper (y_cursed=%.2f vs y_normal=%.2f)" % [y_cursed, y_normal])
+	check(ballast_victim.global_basis.y.y > 0.90,
+		"Ballastball cursed hull stays upright without capsizing (up.y=%.3f)" % ballast_victim.global_basis.y.y)
+
+	# 4b. Open identical deepest hull breach on cursed vs uncursed ship -> cursed floods >= 1.8x faster!
+	var deepest_idx := 0
+	var deepest_y := INF
+	for h: Dictionary in ballast_victim.holes:
+		var ly := (h["local_pos"] as Vector3).y
+		if ly < deepest_y:
+			deepest_y = ly
+			deepest_idx = int(h["index"])
+	ballast_victim.ballast_curse_timer = Ship.BALLAST_CURSE_DURATION
+	ballast_victim.water_level = 0.0
+	control_ship.water_level = 0.0
+	ballast_victim.apply_hull_damage(
+		ballast_victim.global_transform * (ballast_victim.holes[deepest_idx]["local_pos"] as Vector3), 0.45)
+	control_ship.apply_hull_damage(
+		control_ship.global_transform * (control_ship.holes[deepest_idx]["local_pos"] as Vector3), 0.45)
+	await physics_frames(180)
+	var flood_cursed := ballast_victim.water_level
+	var flood_normal := control_ship.water_level
+	check(flood_normal > 0.02 and flood_cursed >= flood_normal * 1.8,
+		"Ballastball accelerates open-breach flooding >= 1.8x (cursed=%.3f vs normal=%.3f, ratio=%.2fx)" % [
+			flood_cursed, flood_normal, flood_cursed / maxf(flood_normal, 0.0001)])
+
+	# 4c. Co-op net replication round-trip & backward compatibility with old state dicts!
+	var snap := ballast_victim.get_net_state()
+	check(float(snap.get("ballast_curse_timer", 0.0)) > 5.0,
+		"Ship.get_net_state() includes ballast_curse_timer (got %.2f)" % float(snap.get("ballast_curse_timer", 0.0)))
+	control_ship.apply_net_state(snap)
+	check(control_ship.is_ballast_cursed()
+		and is_equal_approx(control_ship.ballast_curse_timer, float(snap["ballast_curse_timer"])),
+		"Ship.apply_net_state() replicates ballast_curse_timer cleanly")
+	control_ship.apply_net_state({})
+	check_near(control_ship.ballast_curse_timer, 0.0, 0.001,
+		"Ship.apply_net_state() preserves backward compatibility with dicts omitting ballast_curse_timer")
+
+	# 4d. Curse decays cleanly back to normal after 12 s!
+	for hi in ballast_victim.holes.size():
+		ballast_victim.patch_hole(hi)
+	ballast_victim.water_level = 0.0
+	ballast_victim.ballast_curse_timer = Ship.BALLAST_CURSE_DURATION
+	await physics_frames(810)
+	ballast_victim._update_visuals(0.05)
+	var y_recovered := ballast_victim.global_position.y
+	check(not ballast_victim.is_ballast_cursed() and is_zero_approx(ballast_victim.ballast_curse_timer),
+		"Ballastball curse decays to 0.0 after 12 s (remaining=%.2f)" % ballast_victim.ballast_curse_timer)
+	check(bal_ring != null and not bal_ring.visible,
+		"Ballastball spectral waterline ring hides once curse expires")
+	check(y_recovered > y_cursed + 0.35,
+		"Hull recovers buoyantly after Ballastball curse expires (y_recovered=%.2f vs y_cursed=%.2f)" % [
+			y_recovered, y_cursed])
+
+	print("    Wave 36A tris: anchorball=%d, ballastball=%d, curse_ring=%d | speed %.2f->%.2f | y %.2f->%.2f->%.2f | flood %.2fx" % [
+		anchor_tris, ballast_tris, ring_tris, pre_hit_speed, post_anchor_speed,
+		y_normal, y_cursed, y_recovered, flood_cursed / maxf(flood_normal, 0.0001)])
+
+	Game.notice.disconnect(notice_cb)
+	for n_txt: String in notices:
+		for ci in n_txt.length():
+			check(n_txt.unicode_at(ci) < 128, "Wave 36A notice is strictly ASCII ('%s')" % n_txt)
+
+	# 5. Clean zero-leak teardown!
+	await _end()
+	Cannonball.clear_shared_cache()
+	Ship.clear_curse_ring_cache()
+	check_eq(Cannonball._active_cannonballs, 0, "Cannonball._active_cannonballs returns to 0 on teardown")
+	check(Cannonball._anchorball_mesh == null and Cannonball._ballastball_mesh == null
+		and Cannonball._ball_meshes.is_empty(),
+		"Cannonball.clear_shared_cache() releases _anchorball_mesh, _ballastball_mesh, and _ball_meshes (0 leaks)")
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 on teardown")
+	check(Ship._curse_ring_mesh == null, "Ship releases static _curse_ring_mesh cache cleanly (0 leaks)")

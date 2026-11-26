@@ -20,6 +20,7 @@ signal weapon_loadout_changed(melee_id: StringName, ranged_id: StringName)
 signal compass_pace_counted(paces: int, heading_str: String)
 signal compass_mode_changed(pin_mode: bool)
 signal grog_toast_raised()
+signal speaking_trumpet_hailed(origin: Vector3, radius: float, crew_acked: int)
 
 const DEFAULT_SLOTS: Array[StringName] = [
 	&"cutlass",
@@ -57,6 +58,9 @@ const SPYGLASS_CALLOUT_COOLDOWN := 2.5
 const LANTERN_SIGNAL_COOLDOWN := 2.5
 const COMPASS_PACE_METRES := 0.95
 const GROG_TOAST_COOLDOWN := 4.0
+const SPEAKING_TRUMPET_HAIL_RADIUS := 110.0
+const SPEAKING_TRUMPET_COOLDOWN := 3.5
+const SPEAKING_TRUMPET_DISPLAY_SECONDS := 0.85
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -82,6 +86,7 @@ const FP_POSES := {
 	&"instrument": [Vector3(0.0, -0.26, -0.42), Vector3(14.0, 0.0, 0.0), Vector3(0.0, -0.16, -0.36), Vector3(6.0, 0.0, 0.0), 0.95],
 	&"hurdy_gurdy": [Vector3(0.04, -0.28, -0.46), Vector3(12.0, -14.0, 4.0), Vector3(0.02, -0.19, -0.40), Vector3(6.0, -8.0, 2.0), 0.92],
 	&"whistle": [Vector3(0.14, -0.22, -0.38), Vector3(8.0, -12.0, 6.0), Vector3(0.02, -0.11, -0.28), Vector3(-4.0, 0.0, 0.0), 0.95],
+	&"speaking_trumpet": [Vector3(0.22, -0.22, -0.38), Vector3(8.0, -10.0, 4.0), Vector3(0.0, -0.11, -0.26), Vector3(-3.0, 0.0, 0.0), 0.92],
 }
 
 ## Ordered tool/weapon slots in the player's belt.
@@ -172,6 +177,10 @@ var _shanty_phase: float = 0.0
 var _last_shanty_audio_beat: float = -1.0
 var _whistle_rot_deg: Vector3 = Vector3.ZERO
 var _shanty_motes: GPUParticles3D = null
+var _trumpet_cooldown: float = 0.0
+var _trumpet_display_timer: float = 0.0
+var _fp_trumpet_node: Node3D = null
+var _trumpet_pulses: Array[Dictionary] = []
 var _rng := RandomNumberGenerator.new()
 
 # Statically cached zero-primitive sculpted particle ArrayMeshes (released when _active_inventories hits 0).
@@ -180,6 +189,7 @@ static var _clod_mesh: ArrayMesh = null
 static var _clod_mat: StandardMaterial3D = null
 static var _splash_drop_mesh: ArrayMesh = null
 static var _splash_drop_mat: StandardMaterial3D = null
+static var _trumpet_ring_mesh: ArrayMesh = null
 
 
 func _init() -> void:
@@ -234,6 +244,7 @@ func apply_tool_modifiers(mods: Dictionary) -> void:
 
 
 func _exit_tree() -> void:
+	_clear_speaking_trumpet_fx(false)
 	_detach_captain_shanty_motes(false)
 	if playing_shanty:
 		set_playing_shanty(false)
@@ -245,6 +256,7 @@ func _exit_tree() -> void:
 		_clod_mat = null
 		_splash_drop_mesh = null
 		_splash_drop_mat = null
+		_trumpet_ring_mesh = null
 
 
 ## Explicitly bind references if constructing dynamically before tree entry.
@@ -1258,6 +1270,228 @@ func _detach_captain_shanty_motes(detach_from_parent: bool = true) -> void:
 	_shanty_motes = null
 
 
+## Hail all AI crewmates within 110 m through the sculpted brass Speaking Trumpet,
+## recalling ashore crew back to ship with a booming horn SFX and acoustic wave pulse.
+func hail_with_speaking_trumpet() -> Dictionary:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or pawn.station != null:
+		return {
+			"ok": false,
+			"reason": "unavailable",
+			"radius": SPEAKING_TRUMPET_HAIL_RADIUS,
+			"crew_acked": 0,
+		}
+	if _trumpet_cooldown > 0.0:
+		return {
+			"ok": false,
+			"reason": "cooldown",
+			"cooldown_left": _trumpet_cooldown,
+			"radius": SPEAKING_TRUMPET_HAIL_RADIUS,
+			"crew_acked": 0,
+		}
+
+	_trumpet_cooldown = SPEAKING_TRUMPET_COOLDOWN
+	var origin := pawn.global_position
+	var eye_pos := pawn.eye_position()
+	Audio.play_sfx(&"ship_bell", eye_pos, -2.0, 0.04)
+	Audio.play_sfx(&"crew_shout", eye_pos, -1.0, 0.06)
+
+	_start_swing(&"inspect", 0.55)
+	_play_anim(&"shout", 0.75)
+	_show_speaking_trumpet_briefly(SPEAKING_TRUMPET_DISPLAY_SECONDS)
+	_spawn_trumpet_pulse(eye_pos + pawn.view_dir() * 0.52, pawn.view_dir())
+
+	if Game != null:
+		Game.post_notice("Captain hails across the waves (110 m): 'All hands return to ship!'")
+
+	var target_ship := _resolve_rally_ship()
+	var crew_acked := 0
+	if is_inside_tree():
+		for node in get_tree().get_nodes_in_group(&"crew_brains"):
+			var br := node as CrewBrain
+			if br == null or not is_instance_valid(br) or br.pawn == null or not is_instance_valid(br.pawn) or br.pawn.dead:
+				continue
+			var horiz_dist := Vector2(br.pawn.global_position.x - origin.x, br.pawn.global_position.z - origin.z).length()
+			if horiz_dist <= SPEAKING_TRUMPET_HAIL_RADIUS:
+				if br.receive_trumpet_hail(origin, target_ship):
+					crew_acked += 1
+
+	speaking_trumpet_hailed.emit(origin, SPEAKING_TRUMPET_HAIL_RADIUS, crew_acked)
+	return {
+		"ok": true,
+		"radius": SPEAKING_TRUMPET_HAIL_RADIUS,
+		"crew_acked": crew_acked,
+	}
+
+
+func _resolve_rally_ship() -> Ship:
+	if pawn == null or not is_instance_valid(pawn):
+		return null
+	if pawn.platform is Ship and is_instance_valid(pawn.platform):
+		return pawn.platform as Ship
+	if not is_inside_tree():
+		return null
+	var best_player: Ship = null
+	var best_player_d := 260.0
+	var fallback: Ship = null
+	var fallback_d := 260.0
+	for node in get_tree().get_nodes_in_group(&"ship"):
+		var s := node as Ship
+		if s == null or not is_instance_valid(s) or s.is_sinking:
+			continue
+		var d := pawn.global_position.distance_to(s.global_position)
+		if s.faction == &"player" and d < best_player_d:
+			best_player_d = d
+			best_player = s
+		if d < fallback_d:
+			fallback_d = d
+			fallback = s
+	return best_player if best_player != null else fallback
+
+
+func _show_speaking_trumpet_briefly(duration: float) -> void:
+	_trumpet_display_timer = maxf(duration, 0.25)
+	_ensure_mounts()
+	if viewmodel_root == null or not is_instance_valid(viewmodel_root):
+		return
+	if _fp_trumpet_node == null or not is_instance_valid(_fp_trumpet_node):
+		_fp_trumpet_node = ToolMeshes.build_tool(&"speaking_trumpet")
+		_fp_trumpet_node.name = "BriefSpeakingTrumpet"
+		_configure_fp_node(_fp_trumpet_node)
+		viewmodel_root.add_child(_fp_trumpet_node)
+	var pose: Array = FP_POSES[&"speaking_trumpet"]
+	_fp_trumpet_node.position = pose[2] as Vector3
+	_fp_trumpet_node.rotation_degrees = pose[3] as Vector3
+	_fp_trumpet_node.scale = Vector3.ONE * float(pose[4])
+	_fp_trumpet_node.visible = true
+
+
+func _spawn_trumpet_pulse(world_pos: Vector3, dir: Vector3) -> void:
+	if pawn == null or not is_instance_valid(pawn):
+		return
+	var host := pawn.get_parent()
+	if host == null or not is_instance_valid(host):
+		return
+	if _trumpet_ring_mesh == null:
+		_trumpet_ring_mesh = _build_trumpet_ring_mesh()
+	var mi := MeshInstance3D.new()
+	mi.name = "TrumpetAcousticPulse"
+	mi.mesh = _trumpet_ring_mesh
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.uv1_world_triplanar = false
+	mat.albedo_color = Color(0.98, 0.84, 0.44, 0.65)
+	mi.material_override = mat
+	host.add_child(mi)
+	var fwd := dir.normalized() if dir.length_squared() > 0.0001 else Vector3.FORWARD
+	var up_ref := Vector3.UP if absf(fwd.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var right := up_ref.cross(-fwd).normalized()
+	var up := (-fwd).cross(right).normalized()
+	mi.global_transform = Transform3D(Basis(right, up, -fwd), world_pos)
+	mi.scale = Vector3.ONE * 0.25
+	_trumpet_pulses.append({
+		"node": mi,
+		"mat": mat,
+		"dir": fwd,
+		"elapsed": 0.0,
+		"duration": 0.62,
+	})
+
+
+func _tick_speaking_trumpet_fx(delta: float) -> void:
+	if _trumpet_display_timer > 0.0:
+		_trumpet_display_timer = maxf(0.0, _trumpet_display_timer - delta)
+		if _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node):
+			var u := 1.0 - (_trumpet_display_timer / SPEAKING_TRUMPET_DISPLAY_SECONDS)
+			var pose: Array = FP_POSES[&"speaking_trumpet"]
+			var rest_pos: Vector3 = pose[0]
+			var raise_pos: Vector3 = pose[2]
+			var rest_rot: Vector3 = pose[1]
+			var raise_rot: Vector3 = pose[3]
+			var lift := sin(clampf(u, 0.0, 1.0) * PI)
+			_fp_trumpet_node.position = rest_pos.lerp(raise_pos, clampf(lift * 1.45, 0.0, 1.0))
+			_fp_trumpet_node.rotation_degrees = rest_rot.lerp(raise_rot, clampf(lift * 1.45, 0.0, 1.0))
+		if _trumpet_display_timer <= 0.0 and _fp_trumpet_node != null:
+			if is_instance_valid(_fp_trumpet_node):
+				if _fp_trumpet_node.get_parent() != null:
+					_fp_trumpet_node.get_parent().remove_child(_fp_trumpet_node)
+				_fp_trumpet_node.queue_free()
+			_fp_trumpet_node = null
+
+	var i := _trumpet_pulses.size() - 1
+	while i >= 0:
+		var entry: Dictionary = _trumpet_pulses[i]
+		var mi := entry["node"] as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			_trumpet_pulses.remove_at(i)
+			i -= 1
+			continue
+		var el: float = float(entry["elapsed"]) + delta
+		var dur: float = float(entry["duration"])
+		entry["elapsed"] = el
+		if el >= dur:
+			if mi.get_parent() != null:
+				mi.get_parent().remove_child(mi)
+			mi.queue_free()
+			_trumpet_pulses.remove_at(i)
+		else:
+			var t := clampf(el / dur, 0.0, 1.0)
+			var sc := lerpf(0.28, 3.8, 1.0 - pow(1.0 - t, 2.0))
+			mi.scale = Vector3(sc, sc, 1.0)
+			var dir_v: Vector3 = entry["dir"]
+			mi.global_position += dir_v * delta * 5.2
+			var mat := entry["mat"] as StandardMaterial3D
+			if mat != null:
+				mat.albedo_color.a = 0.65 * (1.0 - t) * (1.0 - t)
+		i -= 1
+
+
+func _clear_speaking_trumpet_fx(detach_from_parent: bool = true) -> void:
+	_trumpet_display_timer = 0.0
+	if _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node):
+		if detach_from_parent and _fp_trumpet_node.get_parent() != null:
+			_fp_trumpet_node.get_parent().remove_child(_fp_trumpet_node)
+		_fp_trumpet_node.queue_free()
+	_fp_trumpet_node = null
+	for entry: Dictionary in _trumpet_pulses:
+		var mi := entry.get("node") as MeshInstance3D
+		if mi != null and is_instance_valid(mi):
+			if detach_from_parent and mi.get_parent() != null:
+				mi.get_parent().remove_child(mi)
+			mi.queue_free()
+	_trumpet_pulses.clear()
+
+
+static func _build_trumpet_ring_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var segs := 24
+	var r_in := 0.86
+	var r_out := 1.0
+	var col_in := Color(1.0, 0.90, 0.52, 0.95)
+	var col_out := Color(0.92, 0.72, 0.28, 0.20)
+	for i in segs:
+		var a0 := float(i) / float(segs) * TAU
+		var a1 := float(i + 1) / float(segs) * TAU
+		var p0_in := Vector3(cos(a0) * r_in, sin(a0) * r_in, 0.0)
+		var p1_in := Vector3(cos(a1) * r_in, sin(a1) * r_in, 0.0)
+		var p0_out := Vector3(cos(a0) * r_out, sin(a0) * r_out, 0.0)
+		var p1_out := Vector3(cos(a1) * r_out, sin(a1) * r_out, 0.0)
+		st.set_color(col_in); st.add_vertex(p0_in)
+		st.set_color(col_out); st.add_vertex(p0_out)
+		st.set_color(col_out); st.add_vertex(p1_out)
+		st.set_color(col_in); st.add_vertex(p0_in)
+		st.set_color(col_out); st.add_vertex(p1_out)
+		st.set_color(col_in); st.add_vertex(p1_in)
+	st.generate_normals()
+	return st.commit()
+
+
 # ==============================================================================
 # Frame updates & input routing
 # ==============================================================================
@@ -1265,6 +1499,16 @@ func _detach_captain_shanty_motes(detach_from_parent: bool = true) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _can_read_player_input():
 		return
+	if event is InputEventKey:
+		var kev := event as InputEventKey
+		if kev.pressed and not kev.echo and (kev.physical_keycode == KEY_T or kev.keycode == KEY_T):
+			var vp := get_viewport()
+			var focus_owner: Control = vp.gui_get_focus_owner() if vp != null else null
+			if not (focus_owner is LineEdit or focus_owner is TextEdit):
+				hail_with_speaking_trumpet()
+				if vp != null:
+					vp.set_input_as_handled()
+				return
 	if event.is_action_pressed(&"item_next"):
 		next_item()
 		get_viewport().set_input_as_handled()
@@ -1281,6 +1525,7 @@ func _process(delta: float) -> void:
 	_use_cooldown = maxf(0.0, _use_cooldown - delta)
 	_spyglass_callout_cd = maxf(0.0, _spyglass_callout_cd - delta)
 	_grog_toast_cd = maxf(0.0, _grog_toast_cd - delta)
+	_trumpet_cooldown = maxf(0.0, _trumpet_cooldown - delta)
 	if _burp_timer > 0.0:
 		_burp_timer -= delta
 		if _burp_timer <= 0.0:
@@ -1297,6 +1542,7 @@ func _process(delta: float) -> void:
 	_tick_compass(delta)
 	_tick_concertina(delta)
 	_tick_lantern_flicker(delta)
+	_tick_speaking_trumpet_fx(delta)
 	_tick_viewmodel_pose(delta)
 	_sync_visibility()
 
@@ -1944,9 +2190,13 @@ func _tick_viewmodel_pose(delta: float) -> void:
 
 func _sync_visibility() -> void:
 	var hide_tools := pawn != null and (pawn.dead or pawn.station != null or pawn.carried != null)
+	var showing_trumpet := _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node) and _trumpet_display_timer > 0.0
+	if _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node):
+		var hide_trumpet := pawn != null and (pawn.dead or pawn.station != null)
+		_fp_trumpet_node.visible = showing_trumpet and (not hide_trumpet)
 	if fp_tool_node != null and is_instance_valid(fp_tool_node):
 		var hide_for_lens := (active_item == &"spyglass" and spyglass_zoom > 0.62)
-		fp_tool_node.visible = (not hide_tools) and (not hide_for_lens)
+		fp_tool_node.visible = (not hide_tools) and (not hide_for_lens) and (not showing_trumpet)
 	if tp_tool_node != null and is_instance_valid(tp_tool_node):
 		var fp_hidden := visual != null and visual.first_person_hidden
 		tp_tool_node.visible = (not hide_tools) and (not fp_hidden)

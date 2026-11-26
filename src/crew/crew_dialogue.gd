@@ -157,6 +157,10 @@ const LINES := {
 			"Fin off the {bearing}! {target} is circling the stern - man the cannons!",
 			"Steady on the helm! {target} rising off the {bearing} - brace for a jaw-strike, Cap'n!",
 		],
+		&"trumpet_hail_ack": [
+			"Heard ye loud and clear through the trumpet, Cap'n! Heading back aboard!",
+			"Aye, Captain! Your brass horn carries over the surf -- returning to the ship!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -279,6 +283,10 @@ const LINES := {
 			"Colossal fin off the {bearing}, Cap'n! {target} is hunting our hull - load the guns!",
 			"Eyes sharp to the {bearing}! {target} breaking the swells - ready the broadside!",
 		],
+		&"trumpet_hail_ack": [
+			"Loud and clear across the cove, Cap'n! Sprinting back to the deck!",
+			"Heard the speaking trumpet, Captain! Rallying back aboard right now!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -400,6 +408,10 @@ const LINES := {
 		&"megalodon_sighted": [
 			"Blimey! {target} off the {bearing} - bigger than our whole sloop! Stack the planks, Cap'n!",
 			"Teeth the size of oars off the {bearing}! {target} is circling us - hold fast, Captain!",
+		],
+		&"trumpet_hail_ack": [
+			"Whoa, that brass trumpet rings clear to the hilltop! Coming back aboard, Cap'n!",
+			"Heard ye loud and clear, Captain! Returning to the ship on the double!",
 		],
 	},
 }

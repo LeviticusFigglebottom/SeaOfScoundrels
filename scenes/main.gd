@@ -64,8 +64,10 @@ var crew_pawns: Array[Pawn] = []
 var crew_brains: Array[CrewBrain] = []
 
 var hud: GameHUD = null
+var location_banner: LocationBanner = null
 var shipwright_menu: ShipwrightMenu = null
 var title_menu: TitleMenu = null
+var _last_banner_island_id: StringName = &""
 var voyage_manager: VoyageManager = null
 var world_director: WorldDirector = null
 var tutorial_director: TutorialDirector = null
@@ -235,6 +237,7 @@ static func _drain_static_visual_caches() -> void:
 	ShipDamageVisuals.clear_shared_cache()
 	ShipEmissaryFlag.clear_shared_cache()
 	ShipFire.clear_shared_cache()
+	Ship.clear_curse_ring_cache()
 	WorldEventCloud.clear_shared_cache()
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
@@ -1150,6 +1153,10 @@ func _build_ui() -> void:
 	hud.return_to_title_requested.connect(_on_hud_return_to_title)
 	hud.mode_skip_requested.connect(_on_hud_mode_skip)
 
+	location_banner = LocationBanner.new()
+	location_banner.name = "LocationBanner"
+	add_child(location_banner)
+
 	shipwright_menu = ShipwrightMenu.new()
 	shipwright_menu.name = "ShipwrightMenu"
 	add_child(shipwright_menu)
@@ -1570,6 +1577,18 @@ func _tick_discovery_and_arrivals() -> void:
 			player_ship.global_position.x - near_isl.global_position.x,
 			player_ship.global_position.z - near_isl.global_position.z
 		).length()
+		if d <= near_isl.island_radius + 95.0:
+			var isl_key := StringName(near_isl.island_id)
+			if not _title_mode_active and active_shot_mode == "" and location_banner != null \
+					and isl_key != _last_banner_island_id:
+				_last_banner_island_id = isl_key
+				location_banner.show_location(
+					near_isl.island_name,
+					LocationBanner.format_island_subtitle(near_isl),
+					LocationBanner.style_for_island(near_isl)
+				)
+		elif d > near_isl.island_radius + 165.0 and _last_banner_island_id == StringName(near_isl.island_id):
+			_last_banner_island_id = &""
 		if d <= near_isl.island_radius + 75.0:
 			if near_isl is Outpost:
 				world_director.set_last_outpost(StringName(near_isl.island_id), near_isl.global_position)
@@ -1955,6 +1974,8 @@ func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
 		_launch_victory_flare(Vector3(pos.x, Sea.height(pos.x, pos.z) + 2.5, pos.z), Color(0.24, 0.94, 0.88))
 	)
 	active_leviathans.append(lev)
+	if not _title_mode_active and active_shot_mode == "" and location_banner != null:
+		location_banner.show_location("ABYSSAL LEVIATHAN", "World Boss -- Ink-Black Maelstrom", &"threat")
 
 
 func _on_director_spawn_megalodon(center: Vector3, target: Node) -> void:
@@ -1968,6 +1989,8 @@ func _on_director_spawn_megalodon(center: Vector3, target: Node) -> void:
 			Game.post_notice("Ancient Megalodon slain! Four treasures rise to the surface!")
 		)
 		active_megalodons.append(mega)
+		if not _title_mode_active and active_shot_mode == "" and location_banner != null:
+			location_banner.show_location("ANCIENT MEGALODON", "Open-Sea Apex Predator", &"threat")
 
 
 func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:

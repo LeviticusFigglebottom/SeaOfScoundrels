@@ -38,6 +38,7 @@ const DISPLAY_NAMES := {
 	&"instrument": "Concertina",
 	&"hurdy_gurdy": "Hurdy-Gurdy",
 	&"whistle": "Bosun's Whistle",
+	&"speaking_trumpet": "Speaking Trumpet",
 }
 
 # Curated warm painterly pirate palette (matching sloop.glb & concept art).
@@ -99,6 +100,12 @@ const _PBR_FAMILY_SPECS := {
 		"rough": "",
 		"scale": Vector3(3.0, 3.0, 3.0),
 		"normal_scale": 0.48,
+	},
+	&"leather": {
+		"normal": "res://assets/generated/textures/ship_oak_normal.png",
+		"rough": "res://assets/generated/textures/ship_oak_rough.png",
+		"scale": Vector3(3.4, 3.4, 3.4),
+		"normal_scale": 0.44,
 	},
 }
 
@@ -173,6 +180,8 @@ static func build_tool(tool_id: StringName) -> Node3D:
 			return _build_hurdy_gurdy()
 		&"whistle":
 			return _build_whistle()
+		&"speaking_trumpet":
+			return _build_speaking_trumpet()
 		_:
 			push_warning("ToolMeshes: unknown tool '%s', falling back to cutlass." % String(tool_id))
 			return _build_cutlass()
@@ -1808,6 +1817,205 @@ static func _build_whistle() -> Node3D:
 	], 10, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.088, -0.138)))
 	root.add_child(_make_mesh_node("LanyardKnot", knot_mesh, _make_mat(COL_CRIMSON, 0.78, 0.04)))
 	return root
+
+
+## 14. Speaking Trumpet: sculpted maritime brass megaphone with 16-sided flared bell,
+## rolled gold lip ring, 3 turned reinforcement collars with square rivets, tapered
+## mouthpiece rim, riveted dark-leather carry handle loop, and braided hemp wrist strap.
+static func _build_speaking_trumpet() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_SpeakingTrumpet"
+
+	# Lathe +Y axis projects straight forward (-Z) from mouthpiece (+0.088) to flared bell (-0.380).
+	var horn_xf := Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, 0.054, 0.088))
+
+	# 1. Main flared conical brass horn, 3 turned reinforcement collars with square rivets,
+	#    carry-handle mounting brackets, and rear lanyard eyelet ring.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var horn_profile: Array[Vector2] = [
+		Vector2(0.020, 0.014),
+		Vector2(0.022, 0.048),
+		Vector2(0.026, 0.105),
+		Vector2(0.034, 0.175),
+		Vector2(0.044, 0.245),
+		Vector2(0.056, 0.312),
+		Vector2(0.074, 0.368),
+		Vector2(0.098, 0.414),
+		Vector2(0.122, 0.448),
+		Vector2(0.132, 0.462),
+	]
+	_append_lathe(st_brass, horn_profile, 16, horn_xf)
+
+	# Three turned brass reinforcement collars seated along the conical horn with square rivets.
+	var collar_specs := [
+		[0.105, 0.0265, 0.0315, 0.018, 6],
+		[0.238, 0.0435, 0.0495, 0.022, 8],
+		[0.358, 0.0705, 0.0775, 0.024, 8],
+	]
+	for spec: Array in collar_specs:
+		var cy: float = float(spec[0])
+		var r_base: float = float(spec[1])
+		var r_out: float = float(spec[2])
+		var half_len: float = float(spec[3]) * 0.5
+		var rivet_count: int = int(spec[4])
+		_append_lathe(st_brass, [
+			Vector2(r_base, cy - half_len - 0.003),
+			Vector2(r_out, cy - half_len),
+			Vector2(r_out + 0.002, cy),
+			Vector2(r_out, cy + half_len),
+			Vector2(r_base, cy + half_len + 0.003),
+		], 16, horn_xf)
+		for ri in rivet_count:
+			var ang := (float(ri) + 0.5) / float(rivet_count) * TAU
+			var radial := Vector3(cos(ang), 0.0, sin(ang))
+			var tang := Vector3(-sin(ang), 0.0, cos(ang))
+			var r_basis := Basis(tang, radial, Vector3.UP)
+			var r_local := Transform3D(r_basis, Vector3(radial.x * (r_out + 0.0012), cy, radial.z * (r_out + 0.0012)))
+			_append_square_rivet(st_brass, 0.0046, 0.0032, horn_xf * r_local)
+
+	# Riveted brass carry-handle mounting lugs anchoring the dark-leather handle beneath the horn.
+	_append_beveled_box(st_brass, Vector3(0.024, 0.020, 0.026), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.022, 0.046)))
+	_append_beveled_box(st_brass, Vector3(0.024, 0.022, 0.028), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.018, -0.072)))
+
+	# Rear brass lanyard eyelet shackle ring under the rear collar.
+	var eye_pts: Array[Vector3] = []
+	for i in 11:
+		var a := float(i) / 10.0 * TAU
+		eye_pts.append(Vector3(0.0, 0.010 + sin(a) * 0.011, 0.068 + cos(a) * 0.011))
+	_append_tube(st_brass, eye_pts, 0.0032, 6, false)
+	st_brass.generate_normals()
+	var mat_brass := _make_mat(COL_BRASS, 0.24, 0.88, Color.BLACK, 0.0, false, &"brass")
+	mat_brass.vertex_color_is_srgb = true
+	mat_brass.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("BrassHorn", st_brass.commit(), mat_brass))
+
+	# 2. Rolled gilded bell lip ring & tapered comfort mouthpiece rim.
+	var st_gold := SurfaceTool.new()
+	st_gold.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_gold, [
+		Vector2(0.129, 0.456),
+		Vector2(0.139, 0.464),
+		Vector2(0.143, 0.473),
+		Vector2(0.138, 0.481),
+		Vector2(0.128, 0.482),
+		Vector2(0.121, 0.475),
+		Vector2(0.123, 0.466),
+	], 16, horn_xf)
+	_append_lathe(st_gold, [
+		Vector2(0.014, -0.014),
+		Vector2(0.025, -0.018),
+		Vector2(0.032, -0.012),
+		Vector2(0.031, -0.003),
+		Vector2(0.023, 0.008),
+		Vector2(0.021, 0.020),
+	], 14, horn_xf)
+	st_gold.generate_normals()
+	var mat_gold := _make_mat(COL_GOLD_BRIGHT, 0.18, 0.94, Color.BLACK, 0.0, false, &"brass")
+	mat_gold.vertex_color_is_srgb = true
+	mat_gold.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("GoldTrim", st_gold.commit(), mat_gold))
+
+	# 3. Dark patinated inner bell funnel bore (wound downward along -Y so normals face out the bell).
+	var st_bore := SurfaceTool.new()
+	st_bore.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_bore, [
+		Vector2(0.122, 0.472),
+		Vector2(0.094, 0.415),
+		Vector2(0.064, 0.345),
+		Vector2(0.042, 0.255),
+		Vector2(0.024, 0.140),
+		Vector2(0.014, 0.045),
+		Vector2(0.0, 0.032),
+	], 16, horn_xf)
+	st_bore.generate_normals()
+	var mat_bore := _make_mat(Color(0.15, 0.10, 0.05), 0.56, 0.68, Color.BLACK, 0.0, false, &"brass")
+	mat_bore.vertex_color_is_srgb = true
+	mat_bore.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("InnerBellBore", st_bore.commit(), mat_bore))
+
+	# 4. Curved riveted dark-leather side/lower carry handle loop seated cleanly at grip origin (0, 0, 0).
+	var st_leather := SurfaceTool.new()
+	st_leather.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var handle_pts: Array[Vector3] = [
+		Vector3(0.0, 0.022, 0.046),
+		Vector3(0.0, 0.004, 0.052),
+		Vector3(0.0, -0.014, 0.038),
+		Vector3(0.0, -0.019, 0.012),
+		Vector3(0.0, -0.019, -0.018),
+		Vector3(0.0, -0.014, -0.048),
+		Vector3(0.0, 0.000, -0.068),
+		Vector3(0.0, 0.018, -0.072),
+	]
+	_append_tube(st_leather, handle_pts, 0.014, 10, true)
+	# Ribbed stitched leather grip collars along the palm bar.
+	var grip_rot := Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, -0.019, 0.026))
+	_append_lathe(st_leather, [
+		Vector2(0.014, 0.000),
+		Vector2(0.0175, 0.008),
+		Vector2(0.0155, 0.018),
+		Vector2(0.0180, 0.028),
+		Vector2(0.0155, 0.038),
+		Vector2(0.0175, 0.048),
+		Vector2(0.014, 0.056),
+	], 10, grip_rot)
+	st_leather.generate_normals()
+	var mat_leather := _make_mat(COL_LEATHER, 0.72, 0.06, Color.BLACK, 0.0, false, &"leather")
+	mat_leather.vertex_color_is_srgb = true
+	mat_leather.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("LeatherHandle", st_leather.commit(), mat_leather))
+
+	# 5. Subtle twin-strand braided hemp lanyard wrist strap + crimson whipping knot.
+	var st_rope := SurfaceTool.new()
+	st_rope.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for strand: float in [-1.0, 1.0]:
+		var strap_pts: Array[Vector3] = []
+		for i in 15:
+			var u := float(i) / 14.0
+			var a := u * TAU
+			var twist := sin(u * TAU * 3.5) * 0.0032 * strand
+			var lx := twist + sin(a) * 0.012 * strand
+			var ly := 0.002 - (1.0 - cos(a)) * 0.052
+			var lz := 0.074 + sin(a) * 0.036
+			strap_pts.append(Vector3(lx, ly, lz))
+		_append_tube(st_rope, strap_pts, 0.0034, 6, false)
+	st_rope.generate_normals()
+	var mat_rope := _make_mat(COL_ROPE, 0.86, 0.0, Color.BLACK, 0.0, false, &"rope")
+	mat_rope.vertex_color_is_srgb = true
+	mat_rope.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("BraidedLanyard", st_rope.commit(), mat_rope))
+
+	var knot_mesh := _lathe_mesh([
+		Vector2(0.0055, -0.008),
+		Vector2(0.0095, -0.004),
+		Vector2(0.0095, 0.004),
+		Vector2(0.0055, 0.008),
+	], 8, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.008, 0.072)))
+	var mat_knot := _make_mat(COL_CRIMSON, 0.78, 0.04, Color.BLACK, 0.0, false, &"cloth")
+	mat_knot.vertex_color_is_srgb = true
+	mat_knot.uv1_world_triplanar = false
+	root.add_child(_make_mesh_node("LanyardKnot", knot_mesh, mat_knot))
+	return root
+
+
+static func _append_square_rivet(st: SurfaceTool, width: float, height: float, xform: Transform3D) -> void:
+	var hw := width * 0.5
+	var tw := hw * 0.62
+	var b0 := xform * Vector3(-hw, 0.0, -hw)
+	var b1 := xform * Vector3(hw, 0.0, -hw)
+	var b2 := xform * Vector3(hw, 0.0, hw)
+	var b3 := xform * Vector3(-hw, 0.0, hw)
+	var t0 := xform * Vector3(-tw, height, -tw)
+	var t1 := xform * Vector3(tw, height, -tw)
+	var t2 := xform * Vector3(tw, height, tw)
+	var t3 := xform * Vector3(-tw, height, tw)
+	_add_quad(st, t1, t0, b0, b1)
+	_add_quad(st, t2, t1, b1, b2)
+	_add_quad(st, t3, t2, b2, b3)
+	_add_quad(st, t0, t3, b3, b0)
+	_add_quad(st, t0, t1, t2, t3)
 
 
 # ==============================================================================

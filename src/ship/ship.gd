@@ -27,6 +27,7 @@ signal lanterns_toggled(lit: bool)
 signal cannon_ordnance_changed(ordnance: StringName)
 signal sail_damaged(duration: float)
 signal sail_repaired()
+signal cursed_hit(curse_kind: StringName, duration: float)
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -54,11 +55,17 @@ const CANNON_MUZZLE_SPEED := 58.0
 const CANNON_RELOAD_TIME := 2.6
 const MAX_CANNONBALLS := 40
 const MAX_PLANKS := 24
-const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"firebomb", &"flare"]
+const BALLAST_CURSE_DURATION := 12.0
+const BALLAST_DRAFT_OFFSET := -0.78
+const BALLAST_FLOOD_MULT := 2.25
+const ANCHOR_CURSE_FX_DURATION := 4.5
+const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"firebomb", &"anchorball", &"ballastball", &"flare"]
 const CANNON_ORDNANCE_LABELS := {
 	&"iron": "Iron",
 	&"chainshot": "Chainshot",
 	&"firebomb": "Firebomb",
+	&"anchorball": "Anchorball",
+	&"ballastball": "Ballastball",
 	&"flare": "Flare",
 }
 
@@ -104,10 +111,14 @@ var anchor_down: bool = false
 var anchor_progress: float = 0.0
 ## Whether ship deck and cabin lanterns are currently lit (false = running dark under moonlight).
 var lanterns_lit: bool = true
-## Active cannon ordnance type (&"iron", &"chainshot", &"firebomb", or &"flare").
+## Active cannon ordnance type (&"iron", &"chainshot", &"firebomb", &"anchorball", &"ballastball", or &"flare").
 var cannon_ordnance: StringName = &"iron"
 ## Remaining seconds of sail rigging damage from chainshot (reduces sail thrust to 0.35x).
 var sail_damage_timer: float = 0.0
+## Remaining seconds of cursed Ballastball heavy-draft & rapid-flooding hex.
+var ballast_curse_timer: float = 0.0
+## Remaining seconds of spectral emerald Anchorball capstan chain-ring VFX pulse.
+var anchor_curse_fx_timer: float = 0.0
 
 # ------------------------------------------------------------------ status & supplies
 
@@ -191,6 +202,10 @@ var _harpoon_primary_was: Dictionary = {}  # StringName -> bool
 var _supply_barrels: ShipSupplyBarrels = null
 var _damage_visuals: ShipDamageVisuals = null
 var _ship_fire: ShipFire = null
+var _ballast_draft_blend: float = 0.0
+var _curse_ring_time: float = 0.0
+var _curse_ring_mi: MeshInstance3D = null
+var _curse_ring_mat: StandardMaterial3D = null
 var _yard_damage_tilt: float = 0.0
 var _yard_damage_pitch: float = 0.0
 var _repair_sfx_accum: float = 0.0
@@ -275,6 +290,7 @@ static var _bell_bronze_mat: StandardMaterial3D = null
 static var _crows_nest_rungs_sloop: ArrayMesh = null
 static var _crows_nest_rungs_brig: ArrayMesh = null
 static var _crows_nest_rungs_mat: StandardMaterial3D = null
+static var _curse_ring_mesh: ArrayMesh = null
 
 
 ## True when this vessel is a two-masted Brigantine.
@@ -411,6 +427,11 @@ func _exit_tree() -> void:
 		_crows_nest_rungs_mi.material_override = null
 		_crows_nest_rungs_mi.mesh = null
 	_crows_nest_rungs_mi = null
+	if _curse_ring_mi != null and is_instance_valid(_curse_ring_mi):
+		_curse_ring_mi.material_override = null
+		_curse_ring_mi.mesh = null
+	_curse_ring_mi = null
+	_curse_ring_mat = null
 	crows_nest_ladder = null
 	ship_bell_interactable = null
 	ship_bell_node = null
@@ -446,6 +467,7 @@ func _exit_tree() -> void:
 		_crows_nest_rungs_sloop = null
 		_crows_nest_rungs_brig = null
 		_crows_nest_rungs_mat = null
+		_curse_ring_mesh = null
 
 
 # ------------------------------------------------------------------ construction
@@ -1275,6 +1297,7 @@ func _build_deck_extras() -> void:
 	_build_supply_barrels()
 	_build_damage_visuals()
 	_build_ship_fire()
+	_build_curse_ring()
 
 
 func _build_supply_barrels() -> void:
@@ -1304,6 +1327,210 @@ func _build_ship_fire() -> void:
 	sf.visual_scale = hull_scale
 	add_child(sf)
 	_ship_fire = sf
+
+
+func _build_curse_ring() -> void:
+	_curse_ring_mat = StandardMaterial3D.new()
+	_curse_ring_mat.vertex_color_use_as_albedo = true
+	_curse_ring_mat.vertex_color_is_srgb = true
+	_curse_ring_mat.roughness = 0.22
+	_curse_ring_mat.metallic = 0.15
+	_curse_ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_curse_ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_curse_ring_mat.emission_enabled = true
+	_curse_ring_mat.emission = Color(0.14, 0.98, 0.52)
+	_curse_ring_mat.emission_energy_multiplier = 2.6
+
+	_curse_ring_mi = MeshInstance3D.new()
+	_curse_ring_mi.name = "CurseRing"
+	_curse_ring_mi.mesh = _get_curse_ring_mesh()
+	_curse_ring_mi.material_override = _curse_ring_mat
+	_curse_ring_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_curse_ring_mi.visible = false
+	add_child(_curse_ring_mi)
+
+
+## Return the sculpted zero-primitive spectral curse ring MeshInstance3D, or null.
+func get_curse_ring_mesh_instance() -> MeshInstance3D:
+	if _curse_ring_mi != null and is_instance_valid(_curse_ring_mi):
+		return _curse_ring_mi
+	return null
+
+
+## Release the statically cached sculpted spectral curse ring ArrayMesh.
+static func clear_curse_ring_cache() -> void:
+	_curse_ring_mesh = null
+
+
+static func _get_curse_ring_mesh() -> ArrayMesh:
+	if _curse_ring_mesh != null:
+		return _curse_ring_mesh
+	_curse_ring_mesh = _build_curse_ring_mesh()
+	return _curse_ring_mesh
+
+
+static func _build_curse_ring_mesh() -> ArrayMesh:
+	# 100% zero-primitive sculpted faceted spectral torus + counter-tilted inner rune halo + 8 arcane chevron crests (416 tris).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_hi := Color(1.0, 1.0, 1.0)
+	var col_mid := Color(0.76, 0.80, 0.86)
+	var col_lo := Color(0.52, 0.56, 0.64)
+
+	# 1. Outer 16-segment 6-sided faceted spectral rune torus (192 tris).
+	const MAJ_SEGS := 16
+	const MIN_SEGS := 6
+	const R_MAJ := 1.0
+	const R_MIN := 0.088
+	for i in MAJ_SEGS:
+		var a0 := TAU * float(i) / float(MAJ_SEGS)
+		var a1 := TAU * float(i + 1) / float(MAJ_SEGS)
+		var a_mid := (a0 + a1) * 0.5
+		var rad0 := Vector3(cos(a0), 0.0, sin(a0))
+		var rad1 := Vector3(cos(a1), 0.0, sin(a1))
+		var ref_c := Vector3(cos(a_mid) * R_MAJ, 0.0, sin(a_mid) * R_MAJ)
+		for j in MIN_SEGS:
+			var b0 := TAU * float(j) / float(MIN_SEGS)
+			var b1 := TAU * float(j + 1) / float(MIN_SEGS)
+			var p00 := rad0 * (R_MAJ + R_MIN * cos(b0)) + Vector3(0.0, R_MIN * sin(b0), 0.0)
+			var p10 := rad1 * (R_MAJ + R_MIN * cos(b0)) + Vector3(0.0, R_MIN * sin(b0), 0.0)
+			var p11 := rad1 * (R_MAJ + R_MIN * cos(b1)) + Vector3(0.0, R_MIN * sin(b1), 0.0)
+			var p01 := rad0 * (R_MAJ + R_MIN * cos(b1)) + Vector3(0.0, R_MIN * sin(b1), 0.0)
+			var c0 := col_hi if sin(b0) > 0.25 else (col_lo if sin(b0) < -0.25 else col_mid)
+			var c1 := col_hi if sin(b1) > 0.25 else (col_lo if sin(b1) < -0.25 else col_mid)
+			_curse_ring_add_outward_tri(st, p00, p10, p11, ref_c, c0, c0, c1)
+			_curse_ring_add_outward_tri(st, p00, p11, p01, ref_c, c0, c1, c1)
+
+	# 2. Inner counter-tilted thin chain-rune halo ring (16x4 = 128 tris).
+	var tilt := Basis(Vector3.RIGHT, 0.18) * Basis(Vector3.FORWARD, -0.10)
+	const R_MAJ2 := 0.86
+	const R_MIN2 := 0.042
+	for i in MAJ_SEGS:
+		var a0 := TAU * float(i) / float(MAJ_SEGS)
+		var a1 := TAU * float(i + 1) / float(MAJ_SEGS)
+		var a_mid := (a0 + a1) * 0.5
+		var rad0 := Vector3(cos(a0), 0.0, sin(a0))
+		var rad1 := Vector3(cos(a1), 0.0, sin(a1))
+		var ref_c := tilt * Vector3(cos(a_mid) * R_MAJ2, 0.0, sin(a_mid) * R_MAJ2)
+		for j in 4:
+			var b0 := TAU * float(j) / 4.0 + PI * 0.25
+			var b1 := TAU * float(j + 1) / 4.0 + PI * 0.25
+			var p00 := tilt * (rad0 * (R_MAJ2 + R_MIN2 * cos(b0)) + Vector3(0.0, R_MIN2 * sin(b0), 0.0))
+			var p10 := tilt * (rad1 * (R_MAJ2 + R_MIN2 * cos(b0)) + Vector3(0.0, R_MIN2 * sin(b0), 0.0))
+			var p11 := tilt * (rad1 * (R_MAJ2 + R_MIN2 * cos(b1)) + Vector3(0.0, R_MIN2 * sin(b1), 0.0))
+			var p01 := tilt * (rad0 * (R_MAJ2 + R_MIN2 * cos(b1)) + Vector3(0.0, R_MIN2 * sin(b1), 0.0))
+			var c_band := col_hi if (j % 2 == 0) else col_mid
+			_curse_ring_add_outward_tri(st, p00, p10, p11, ref_c, c_band, c_band, col_lo)
+			_curse_ring_add_outward_tri(st, p00, p11, p01, ref_c, c_band, col_lo, col_lo)
+
+	# 3. Eight raised faceted spectral arcane chevron crests + spire tips around the ring (96 tris).
+	for k in 8:
+		var ang := TAU * float(k) / 8.0
+		var rad := Vector3(cos(ang), 0.0, sin(ang))
+		var tan_v := Vector3(-sin(ang), 0.0, cos(ang))
+		var ctr := rad * (R_MAJ + 0.03)
+		var out_tip := rad * (R_MAJ + 0.22)
+		var in_pt := rad * (R_MAJ - 0.05)
+		var top_pt := ctr + Vector3(0.0, 0.145, 0.0)
+		var bot_pt := ctr + Vector3(0.0, -0.115, 0.0)
+		var l_pt := ctr - tan_v * 0.082
+		var r_pt := ctr + tan_v * 0.082
+		# Outer 4 diamond faces
+		_curse_ring_add_outward_tri(st, out_tip, top_pt, r_pt, ctr, col_hi, col_hi, col_mid)
+		_curse_ring_add_outward_tri(st, out_tip, r_pt, bot_pt, ctr, col_hi, col_mid, col_lo)
+		_curse_ring_add_outward_tri(st, out_tip, bot_pt, l_pt, ctr, col_hi, col_lo, col_mid)
+		_curse_ring_add_outward_tri(st, out_tip, l_pt, top_pt, ctr, col_hi, col_mid, col_hi)
+		# Inner 4 diamond faces
+		_curse_ring_add_outward_tri(st, in_pt, r_pt, top_pt, ctr, col_lo, col_mid, col_hi)
+		_curse_ring_add_outward_tri(st, in_pt, bot_pt, r_pt, ctr, col_lo, col_lo, col_mid)
+		_curse_ring_add_outward_tri(st, in_pt, l_pt, bot_pt, ctr, col_lo, col_mid, col_lo)
+		_curse_ring_add_outward_tri(st, in_pt, top_pt, l_pt, ctr, col_lo, col_hi, col_mid)
+		# Rising arcane spire fin atop each crest (4 faces)
+		var spire_base := top_pt - Vector3(0.0, 0.025, 0.0)
+		var spire_tip := top_pt + Vector3(0.0, 0.165, 0.0)
+		var sb0 := spire_base + rad * 0.045
+		var sb1 := spire_base + tan_v * 0.042
+		var sb2 := spire_base - rad * 0.045
+		var sb3 := spire_base - tan_v * 0.042
+		var s_ref := (spire_base + spire_tip) * 0.5
+		_curse_ring_add_outward_tri(st, sb0, sb1, spire_tip, s_ref, col_mid, col_mid, col_hi)
+		_curse_ring_add_outward_tri(st, sb1, sb2, spire_tip, s_ref, col_mid, col_lo, col_hi)
+		_curse_ring_add_outward_tri(st, sb2, sb3, spire_tip, s_ref, col_lo, col_mid, col_hi)
+		_curse_ring_add_outward_tri(st, sb3, sb0, spire_tip, s_ref, col_mid, col_mid, col_hi)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _curse_ring_add_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)
+
+
+func _update_curse_ring_visuals(delta: float) -> void:
+	if _curse_ring_mi == null or not is_instance_valid(_curse_ring_mi) or _curse_ring_mat == null:
+		return
+	_curse_ring_time += maxf(delta, 0.0)
+	if is_sinking:
+		_curse_ring_mi.visible = false
+		return
+	if anchor_curse_fx_timer > 0.0:
+		# Glowing emerald spectral chain-rune ring pulsing & spinning around the ship's capstan.
+		_curse_ring_mi.visible = true
+		var cap_pos := _local_to_ship(_capstan).origin if (_capstan != null and is_instance_valid(_capstan)) \
+			else ship_point(Vector3(0.0, 1.55, 2.2))
+		var bob := (0.42 + 0.16 * sin(_curse_ring_time * 4.5)) * hull_scale
+		_curse_ring_mi.position = cap_pos + Vector3(0.0, bob, 0.0)
+		_curse_ring_mi.rotation = Vector3(
+			0.08 * sin(_curse_ring_time * 3.2),
+			_curse_ring_time * 2.6,
+			0.06 * cos(_curse_ring_time * 2.8)
+		)
+		var env := clampf(anchor_curse_fx_timer / 0.8, 0.0, 1.0)
+		var pulse := 0.94 + 0.08 * sin(_curse_ring_time * 8.5)
+		_curse_ring_mi.scale = Vector3.ONE * (0.98 * hull_scale * pulse)
+		_curse_ring_mat.albedo_color = Color(0.24, 0.96, 0.56, 0.86 * env)
+		_curse_ring_mat.emission = Color(0.14, 0.98, 0.52)
+		_curse_ring_mat.emission_energy_multiplier = (2.4 + 0.8 * sin(_curse_ring_time * 9.0)) * env
+	elif ballast_curse_timer > 0.0:
+		# Rising & rotating violet-amethyst weighted hex ring encircling the ship's waterline!
+		_curse_ring_mi.visible = true
+		var wave_y := (0.28 + 0.34 * sin(_curse_ring_time * 2.4)) * hull_scale
+		_curse_ring_mi.position = Vector3(0.0, wave_y, 0.25 * hull_scale)
+		_curse_ring_mi.rotation = Vector3(
+			0.04 * sin(_curse_ring_time * 2.1),
+			-_curse_ring_time * 1.15,
+			0.04 * cos(_curse_ring_time * 1.9)
+		)
+		var env := clampf(ballast_curse_timer / 1.0, 0.0, 1.0)
+		var pulse := 0.97 + 0.04 * sin(_curse_ring_time * 5.2)
+		var base_sc := (Vector3(3.15, 1.35, 7.25) if is_brigantine() else Vector3(2.45, 1.25, 5.65)) * hull_scale
+		_curse_ring_mi.scale = base_sc * pulse
+		_curse_ring_mat.albedo_color = Color(0.72, 0.36, 0.98, 0.82 * env)
+		_curse_ring_mat.emission = Color(0.64, 0.24, 1.0)
+		_curse_ring_mat.emission_energy_multiplier = (2.3 + 0.75 * sin(_curse_ring_time * 6.5)) * env
+	else:
+		_curse_ring_mi.visible = false
 
 
 ## Return the sculpted ShipFire deck-fire component, or null.
@@ -3038,7 +3265,7 @@ func get_cannon_recoil(side: StringName) -> float:
 	return float((_cannons[side] as Dictionary).get("recoil", 0.0))
 
 
-## Host only. Select active cannon ordnance (&"iron", &"chainshot", &"firebomb", or &"flare").
+## Host only. Select active cannon ordnance (&"iron", &"chainshot", &"firebomb", &"anchorball", &"ballastball", or &"flare").
 func set_cannon_ordnance(kind: StringName) -> void:
 	if not Net.is_host():
 		return
@@ -3049,7 +3276,7 @@ func set_cannon_ordnance(kind: StringName) -> void:
 	cannon_ordnance_changed.emit(cannon_ordnance)
 
 
-## Host only. Cycle active cannon ordnance: iron -> chainshot -> firebomb -> flare -> iron.
+## Host only. Cycle active cannon ordnance: iron -> chainshot -> firebomb -> anchorball -> ballastball -> flare -> iron.
 func cycle_cannon_ordnance() -> StringName:
 	if not Net.is_host():
 		return cannon_ordnance
@@ -3063,6 +3290,52 @@ func cycle_cannon_ordnance() -> StringName:
 ## Strict-ASCII display label for the currently selected cannon ordnance.
 func get_cannon_ordnance_label() -> String:
 	return String(CANNON_ORDNANCE_LABELS.get(cannon_ordnance, "Iron"))
+
+
+## Host only. Cursed Anchorball impact: immediately slams the ship's anchor to the seabed and pulses the emerald capstan ring.
+func apply_anchor_curse() -> bool:
+	if not Net.is_host() or is_sinking:
+		return false
+	var was_down := anchor_down
+	var was_submerged := _was_anchor_submerged
+	var capstan_st := get_station(&"anchor")
+	if capstan_st != null and capstan_st.is_occupied() and capstan_st.occupant != null \
+			and capstan_st.occupant.has_method(&"leave_station"):
+		capstan_st.occupant.call(&"leave_station")
+	set_anchor(true)
+	if was_down:
+		Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
+	anchor_progress = 1.0
+	if not was_submerged:
+		_was_anchor_submerged = true
+		Audio.play_sfx(&"anchor_splash", _anchor_world_pos())
+	Audio.play_sfx(&"capstan_clank", capstan_st.global_position if capstan_st != null else global_position, 0.5)
+	if Ocean.current != null:
+		Ocean.current.add_foam(_anchor_world_pos(), 2.6 * hull_scale, 0.85)
+	anchor_curse_fx_timer = ANCHOR_CURSE_FX_DURATION
+	_update_curse_ring_visuals(0.0)
+	cursed_hit.emit(&"anchorball", ANCHOR_CURSE_FX_DURATION)
+	if faction == &"player" and Game != null:
+		Game.post_notice("Cursed Anchorball strike! Anchor slammed to the seabed!")
+	return true
+
+
+## Host only. Cursed Ballastball impact: drags the hull deeper in the waves and accelerates open-breach flooding.
+func apply_ballast_curse(duration: float = BALLAST_CURSE_DURATION) -> bool:
+	if not Net.is_host() or is_sinking or duration <= 0.0:
+		return false
+	ballast_curse_timer = maxf(ballast_curse_timer, duration)
+	Audio.play_sfx(&"hull_creak", global_position, 1.0)
+	_update_curse_ring_visuals(0.0)
+	cursed_hit.emit(&"ballastball", ballast_curse_timer)
+	if faction == &"player" and Game != null:
+		Game.post_notice("Cursed Ballastball strike! Hull dragging deep -- bail fast!")
+	return true
+
+
+## True while this ship is afflicted by a cursed Ballastball hex.
+func is_ballast_cursed() -> bool:
+	return ballast_curse_timer > 0.0
 
 
 ## Host only. Apply chainshot sail rigging damage for `duration` seconds (reduces sail thrust to 0.35x).
@@ -3962,6 +4235,12 @@ func _tick_controls(delta: float) -> void:
 		sail_damage_timer = maxf(0.0, sail_damage_timer - delta)
 		if sail_damage_timer <= 0.0:
 			_complete_sail_repair()
+	if ballast_curse_timer > 0.0:
+		ballast_curse_timer = maxf(0.0, ballast_curse_timer - delta)
+	if anchor_curse_fx_timer > 0.0:
+		anchor_curse_fx_timer = maxf(0.0, anchor_curse_fx_timer - delta)
+	var target_ballast_blend := 1.0 if ballast_curse_timer > 0.0 else 0.0
+	_ballast_draft_blend = move_toward(_ballast_draft_blend, target_ballast_blend, delta / 0.8)
 	var prev_helm := helm
 	helm = move_toward(helm, helm_target, 2.4 * delta)
 	if absf(helm - prev_helm) > 0.0005:
@@ -4090,6 +4369,8 @@ func _tick_flooding(delta: float) -> void:
 			inflow += (0.010 + 0.014 * minf(head, 1.5)) * sev
 
 	if inflow > 0.0 and not is_sinking:
+		if ballast_curse_timer > 0.0:
+			inflow *= BALLAST_FLOOD_MULT
 		water_level = minf(1.0, water_level + inflow * delta)
 		if water_level >= 1.0:
 			_begin_sinking()
@@ -4153,12 +4434,13 @@ func _tick_hydrodynamics(delta: float) -> void:
 	var probe_span := 1.15 * hull_scale
 	const BUOY_GAIN := 1.98
 	var com_world := xf * center_of_mass
+	var ballast_draft := BALLAST_DRAFT_OFFSET * _ballast_draft_blend
 	for entry in BUOYANCY_PROBES:
 		var local_p: Vector3 = (entry[0] as Vector3) * _probe_scale
 		var w: float = entry[1]
 		var world_p := xf * local_p
 		var sea_y := Sea.height(world_p.x, world_p.z)
-		var sub := sea_y - world_p.y
+		var sub := sea_y - world_p.y + ballast_draft
 		if sub <= 0.0:
 			continue
 		var frac := clampf(sub / probe_span, 0.0, 1.85)
@@ -4294,6 +4576,12 @@ func _tick_audio(delta: float) -> void:
 
 
 func _tick_client_interp(delta: float) -> void:
+	if ballast_curse_timer > 0.0:
+		ballast_curse_timer = maxf(0.0, ballast_curse_timer - delta)
+	if anchor_curse_fx_timer > 0.0:
+		anchor_curse_fx_timer = maxf(0.0, anchor_curse_fx_timer - delta)
+	var target_ballast_blend := 1.0 if ballast_curse_timer > 0.0 else 0.0
+	_ballast_draft_blend = move_toward(_ballast_draft_blend, target_ballast_blend, delta / 0.8)
 	if not _net_has_state:
 		return
 	var k := clampf(delta * 10.0, 0.0, 1.0)
@@ -4513,6 +4801,9 @@ func _update_visuals(delta: float) -> void:
 	# Night cabin glass glow & lantern flicker (or full blackout when lanterns_lit == false).
 	_update_lantern_visuals()
 
+	# Spectral emerald capstan ring (Anchorball) & rising violet waterline hex ring (Ballastball).
+	_update_curse_ring_visuals(delta)
+
 	# Rising hold bilge water & ocean hull mask flood update.
 	if _hold_water_mesh != null:
 		_hold_water_mesh.visible = water_level > 0.015 and not _using_lod
@@ -4655,6 +4946,8 @@ func get_net_state() -> Dictionary:
 		"lanterns_lit": lanterns_lit,
 		"cannon_ordnance": String(cannon_ordnance),
 		"sail_damage_timer": sail_damage_timer,
+		"ballast_curse_timer": ballast_curse_timer,
+		"anchor_curse_fx_timer": anchor_curse_fx_timer,
 		"fire_mask": _ship_fire.get_fire_bitmask() if (_ship_fire != null and is_instance_valid(_ship_fire)) else 0,
 	}
 
@@ -4689,6 +4982,9 @@ func apply_net_state(state: Dictionary) -> void:
 	if cannonballs_remaining != prev_balls or planks_remaining != prev_planks:
 		_sync_supply_barrels()
 	sail_damage_timer = float(state.get("sail_damage_timer", sail_damage_timer))
+	ballast_curse_timer = maxf(0.0, float(state.get("ballast_curse_timer", 0.0)))
+	anchor_curse_fx_timer = maxf(0.0, float(state.get("anchor_curse_fx_timer", 0.0)))
+	_update_curse_ring_visuals(0.0)
 	if state.has("cannon_ordnance"):
 		var ord_sn := StringName(String(state["cannon_ordnance"]))
 		if CANNON_ORDNANCE_CYCLE.has(ord_sn) and ord_sn != cannon_ordnance:

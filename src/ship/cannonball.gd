@@ -22,6 +22,7 @@ const CHAINSHOT_BREACH_RADIUS := 0.18
 const CHAINSHOT_SAIL_DAMAGE := 14.0
 const FIREBOMB_SPLASH_DAMAGE := 12.0
 const FIREBOMB_SPLASH_RADIUS := 4.2
+const CURSED_BREACH_RADIUS := 0.22
 
 ## World-space velocity (m/s).
 var velocity: Vector3 = Vector3.ZERO
@@ -29,7 +30,7 @@ var velocity: Vector3 = Vector3.ZERO
 @export var drag: float = 0.012
 ## Breach radius passed to `Ship.apply_hull_damage()`.
 @export var hull_damage_radius: float = 0.45
-## Sculpted ordnance variant: &"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", or &"flare".
+## Sculpted ordnance variant: &"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", &"anchorball", &"ballastball", or &"flare".
 @export var ordnance_style: StringName = &"iron"
 ## Damage dealt on a direct hit to a `Pawn`.
 @export var pawn_damage: float = 55.0
@@ -48,6 +49,8 @@ var trail: Node3D = null
 var flare_light: OmniLight3D = null
 ## Warm flickering travel OmniLight3D (only active when ordnance_style resolves to &"firebomb").
 var firebomb_light: OmniLight3D = null
+## Unshadowed spectral curse travel OmniLight3D (active for &"anchorball" and &"ballastball").
+var curse_light: OmniLight3D = null
 
 var _ball_mesh: MeshInstance3D = null
 var _ball_mat: StandardMaterial3D = null
@@ -67,6 +70,8 @@ var _exclude_rids: Array[RID] = []
 static var _active_cannonballs: int = 0
 static var _ball_meshes: Dictionary = {}
 static var _firebomb_mesh: ArrayMesh = null
+static var _anchorball_mesh: ArrayMesh = null
+static var _ballastball_mesh: ArrayMesh = null
 static var _splinter_mesh: ArrayMesh = null
 static var _splinter_mat: StandardMaterial3D = null
 static var _foam_puff_tex: ImageTexture = null
@@ -80,6 +85,8 @@ static func clear_shared_cache() -> void:
 		_splinter_mesh.surface_set_material(0, null)
 	_ball_meshes.clear()
 	_firebomb_mesh = null
+	_anchorball_mesh = null
+	_ballastball_mesh = null
 	_splinter_mesh = null
 	_splinter_mat = null
 	_foam_puff_tex = null
@@ -87,7 +94,7 @@ static func clear_shared_cache() -> void:
 	_flash_tex = null
 
 
-## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", or &"flare").
+## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", &"anchorball", &"ballastball", or &"flare").
 func get_resolved_ordnance_style() -> StringName:
 	return _resolved_style
 
@@ -122,6 +129,9 @@ func _exit_tree() -> void:
 	if firebomb_light != null and is_instance_valid(firebomb_light):
 		firebomb_light.visible = false
 	firebomb_light = null
+	if curse_light != null and is_instance_valid(curse_light):
+		curse_light.visible = false
+	curse_light = null
 	if trail != null and is_instance_valid(trail):
 		trail.set(&"emitting", false)
 		trail.set(&"color_gradient", null)
@@ -150,6 +160,7 @@ func _ready() -> void:
 func _resolve_ordnance_style() -> StringName:
 	if ordnance_style == &"heavy" or ordnance_style == &"swivel" \
 			or ordnance_style == &"chainshot" or ordnance_style == &"firebomb" \
+			or ordnance_style == &"anchorball" or ordnance_style == &"ballastball" \
 			or ordnance_style == &"flare":
 		return ordnance_style
 	if ordnance_style == &"iron":
@@ -266,6 +277,76 @@ func _build_visuals() -> void:
 			trail_c0 = Color(1.0, 0.68, 0.18, 0.90)
 			trail_c1 = Color(0.96, 0.32, 0.06, 0.56)
 			trail_c2 = Color(0.28, 0.22, 0.20, 0.0)
+		&"anchorball":
+			# Faceted dark-obsidian cursed iron sphere inlaid with glowing emerald anchor sigils & arcane rune collar.
+			_ball_mat.metallic = 0.82
+			_ball_mat.roughness = 0.30
+			_ball_mat.emission = Color(0.10, 0.82, 0.44)
+			_base_muzzle_emission = 0.55
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission
+			_ball_mesh.set_surface_override_material(0, _ball_mat)
+
+			_core_glow_mat = StandardMaterial3D.new()
+			_core_glow_mat.vertex_color_use_as_albedo = true
+			_core_glow_mat.vertex_color_is_srgb = true
+			_core_glow_mat.albedo_color = Color(0.32, 1.0, 0.62)
+			_core_glow_mat.metallic = 0.14
+			_core_glow_mat.roughness = 0.22
+			_core_glow_mat.emission_enabled = true
+			_core_glow_mat.emission = Color(0.14, 0.98, 0.52)
+			_core_glow_mat.emission_energy_multiplier = 3.6
+			if _ball_mesh.mesh.get_surface_count() > 1:
+				_ball_mesh.set_surface_override_material(1, _core_glow_mat)
+
+			curse_light = OmniLight3D.new()
+			curse_light.name = "CurseLight"
+			curse_light.light_color = Color(0.18, 0.98, 0.56)
+			curse_light.light_energy = 2.4
+			curse_light.omni_range = 13.0
+			curse_light.omni_attenuation = 1.4
+			curse_light.shadow_enabled = false
+			add_child(curse_light)
+
+			trail_width = 0.30
+			trail_life = 0.64
+			trail_c0 = Color(0.26, 1.0, 0.62, 0.90)
+			trail_c1 = Color(0.10, 0.72, 0.44, 0.54)
+			trail_c2 = Color(0.04, 0.28, 0.22, 0.0)
+		&"ballastball":
+			# Heavy abyssal iron sphere wrapped in glowing amethyst-violet weighted ballast bands & sunken-crown studs.
+			_ball_mat.metallic = 0.84
+			_ball_mat.roughness = 0.32
+			_ball_mat.emission = Color(0.54, 0.20, 0.96)
+			_base_muzzle_emission = 0.55
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission
+			_ball_mesh.set_surface_override_material(0, _ball_mat)
+
+			_core_glow_mat = StandardMaterial3D.new()
+			_core_glow_mat.vertex_color_use_as_albedo = true
+			_core_glow_mat.vertex_color_is_srgb = true
+			_core_glow_mat.albedo_color = Color(0.80, 0.48, 1.0)
+			_core_glow_mat.metallic = 0.14
+			_core_glow_mat.roughness = 0.22
+			_core_glow_mat.emission_enabled = true
+			_core_glow_mat.emission = Color(0.66, 0.26, 1.0)
+			_core_glow_mat.emission_energy_multiplier = 3.6
+			if _ball_mesh.mesh.get_surface_count() > 1:
+				_ball_mesh.set_surface_override_material(1, _core_glow_mat)
+
+			curse_light = OmniLight3D.new()
+			curse_light.name = "CurseLight"
+			curse_light.light_color = Color(0.68, 0.30, 1.0)
+			curse_light.light_energy = 2.4
+			curse_light.omni_range = 13.0
+			curse_light.omni_attenuation = 1.4
+			curse_light.shadow_enabled = false
+			add_child(curse_light)
+
+			trail_width = 0.31
+			trail_life = 0.64
+			trail_c0 = Color(0.76, 0.40, 1.0, 0.90)
+			trail_c1 = Color(0.46, 0.16, 0.80, 0.54)
+			trail_c2 = Color(0.18, 0.06, 0.34, 0.0)
 		&"flare":
 			# Glowing brass & crimson-gold marine illumination signal shell with wide-range OmniLight3D.
 			_ball_mat.metallic = 0.84
@@ -363,7 +444,7 @@ func _physics_process(delta: float) -> void:
 		_finish_without_impact()
 		return
 
-	# Spin faceted ordnance mid-flight & update muzzle / flare / firebomb illumination glow.
+	# Spin faceted ordnance mid-flight & update muzzle / flare / firebomb / spectral curse illumination glow.
 	if _ball_mesh != null:
 		if _resolved_style == &"chainshot":
 			_ball_mesh.rotate_y(delta * 26.0)
@@ -371,6 +452,12 @@ func _physics_process(delta: float) -> void:
 		elif _resolved_style == &"firebomb":
 			_ball_mesh.rotate_x(delta * 10.5)
 			_ball_mesh.rotate_z(delta * 7.8)
+		elif _resolved_style == &"anchorball":
+			_ball_mesh.rotate_y(delta * 9.5)
+			_ball_mesh.rotate_x(delta * 5.2)
+		elif _resolved_style == &"ballastball":
+			_ball_mesh.rotate_x(delta * 8.4)
+			_ball_mesh.rotate_z(delta * 6.0)
 		elif _resolved_style == &"flare":
 			_ball_mesh.rotate_z(delta * 6.5)
 		else:
@@ -408,6 +495,16 @@ func _physics_process(delta: float) -> void:
 			firebomb_light.light_energy = 2.6 * flick
 		if _core_glow_mat != null:
 			_core_glow_mat.emission_energy_multiplier = 3.8 * flick
+		velocity.y -= GRAVITY * delta
+		velocity *= maxf(0.0, 1.0 - drag * delta)
+	elif _resolved_style == &"anchorball" or _resolved_style == &"ballastball":
+		var curse_pulse := 0.85 + 0.15 * sin(_age * 16.0)
+		if curse_light != null and is_instance_valid(curse_light):
+			curse_light.light_energy = 2.4 * curse_pulse
+		if _ball_mat != null:
+			_ball_mat.emission_energy_multiplier = _base_muzzle_emission * (0.88 + 0.12 * sin(_age * 11.0))
+		if _core_glow_mat != null:
+			_core_glow_mat.emission_energy_multiplier = 3.6 * curse_pulse
 		velocity.y -= GRAVITY * delta
 		velocity *= maxf(0.0, 1.0 - drag * delta)
 	else:
@@ -525,14 +622,22 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 		_mark_impacted(hit_pos, target, cleanup_delay)
 		return
 
+	var is_anchorball := _resolved_style == &"anchorball"
+	var is_ballastball := _resolved_style == &"ballastball"
+	var is_cursed := is_anchorball or is_ballastball
+
 	if ship_target != null:
 		target = ship_target
 		var is_chain := _resolved_style == &"chainshot"
 		if Net.is_host():
 			if is_chain and ship_target.has_method(&"apply_sail_damage"):
 				ship_target.call(&"apply_sail_damage", CHAINSHOT_SAIL_DAMAGE)
+			if is_anchorball and ship_target.has_method(&"apply_anchor_curse"):
+				ship_target.call(&"apply_anchor_curse")
+			elif is_ballastball and ship_target.has_method(&"apply_ballast_curse"):
+				ship_target.call(&"apply_ballast_curse", Ship.BALLAST_CURSE_DURATION)
 			if ship_target.has_method(&"apply_hull_damage"):
-				var breach_r := CHAINSHOT_BREACH_RADIUS if is_chain else hull_damage_radius
+				var breach_r := CHAINSHOT_BREACH_RADIUS if is_chain else (CURSED_BREACH_RADIUS if is_cursed else hull_damage_radius)
 				ship_target.call(&"apply_hull_damage", hit_pos, breach_r)
 			if ship_target is RigidBody3D:
 				var rb := ship_target as RigidBody3D
@@ -540,15 +645,24 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 				var rel_pos := hit_pos - rb.global_position
 				# Keep vertical lever arm modest so a hit rocks the ship cleanly without flipping it.
 				rel_pos.y = clampf(rel_pos.y, -1.5, 1.5)
-				var imp_scale := 0.55 if is_chain else 1.0
+				var imp_scale := 0.55 if is_chain else (0.65 if is_cursed else 1.0)
 				rb.apply_impulse(imp_dir * hull_impact_impulse * imp_scale, rel_pos)
 			_detonate_nearby_powder_kegs(hit_pos, 3.2)
-		if _spawn_splinter_burst(hit_pos, hit_normal):
-			cleanup_delay = 1.15
-		if is_chain:
-			Audio.play_sfx(&"sail_flap", hit_pos, 0.0)
+		if is_cursed:
+			var curse_tint := Color(0.18, 0.96, 0.54) if is_anchorball else Color(0.68, 0.28, 1.0)
+			if _spawn_dust_burst(hit_pos, hit_normal, curse_tint):
+				cleanup_delay = 0.95
+			if _spawn_splinter_burst(hit_pos, hit_normal):
+				cleanup_delay = 1.15
+			Audio.play_sfx(&"hull_impact", hit_pos, -1.0)
+			Audio.play_sfx(&"parry_ring", hit_pos, -2.5)
 		else:
-			Audio.play_sfx(&"hull_impact", hit_pos)
+			if _spawn_splinter_burst(hit_pos, hit_normal):
+				cleanup_delay = 1.15
+			if is_chain:
+				Audio.play_sfx(&"sail_flap", hit_pos, 0.0)
+			else:
+				Audio.play_sfx(&"hull_impact", hit_pos)
 	elif target != null and target.has_meta("leviathan"):
 		var lev: Variant = target.get_meta("leviathan")
 		if Net.is_host() and lev != null and is_instance_valid(lev) and (lev as Object).has_method(&"damage_tentacle"):
@@ -572,13 +686,16 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 				dmg_target.call(&"apply_damage", pawn_damage, shooter_pawn)
 				_detonate_nearby_powder_kegs(hit_pos, 3.2)
 			var burst_col := Color(0.24, 0.78, 0.82) if (dmg_target is AncientMegalodon) else Color(0.85, 0.72, 0.56)
+			if is_cursed:
+				burst_col = Color(0.18, 0.96, 0.54) if is_anchorball else Color(0.68, 0.28, 1.0)
 			if _spawn_dust_burst(hit_pos, hit_normal, burst_col):
 				cleanup_delay = 0.8
 			Audio.play_sfx(&"hit_flesh", hit_pos)
 		else:
 			if Net.is_host():
 				_detonate_nearby_powder_kegs(hit_pos, 3.2)
-			if _spawn_dust_burst(hit_pos, hit_normal, Color(0.76, 0.74, 0.68)):
+			var rock_col := (Color(0.18, 0.96, 0.54) if is_anchorball else Color(0.68, 0.28, 1.0)) if is_cursed else Color(0.76, 0.74, 0.68)
+			if _spawn_dust_burst(hit_pos, hit_normal, rock_col):
 				cleanup_delay = 0.8
 			Audio.play_sfx(&"hull_impact", hit_pos, -4.0)
 
@@ -718,6 +835,9 @@ func _mark_impacted(hit_pos: Vector3, target: Node, cleanup_delay: float = 0.5) 
 	if firebomb_light != null and is_instance_valid(firebomb_light):
 		firebomb_light.light_energy = 0.0
 		firebomb_light.visible = false
+	if curse_light != null and is_instance_valid(curse_light):
+		curse_light.light_energy = 0.0
+		curse_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 	impacted.emit(hit_pos, target)
@@ -734,6 +854,9 @@ func _finish_without_impact() -> void:
 	if firebomb_light != null and is_instance_valid(firebomb_light):
 		firebomb_light.light_energy = 0.0
 		firebomb_light.visible = false
+	if curse_light != null and is_instance_valid(curse_light):
+		curse_light.light_energy = 0.0
+		curse_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
 
@@ -1228,12 +1351,18 @@ func _spawn_dust_burst(pos: Vector3, normal: Vector3, tint: Color) -> bool:
 # Sculpted Flat-Faceted Ordnance & Jagged Oak Splinter Builders (0 Primitives)
 # ==============================================================================
 
-## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, `&"swivel"`, `&"chainshot"`, `&"firebomb"`, or `&"flare"`.
+## Return (and statically cache) the sculpted ArrayMesh for `&"iron"`, `&"heavy"`, `&"swivel"`, `&"chainshot"`, `&"firebomb"`, `&"anchorball"`, `&"ballastball"`, or `&"flare"`.
 static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
 	var key := style if (style == &"heavy" or style == &"swivel" \
-			or style == &"chainshot" or style == &"firebomb" or style == &"flare") else &"iron"
+			or style == &"chainshot" or style == &"firebomb" \
+			or style == &"anchorball" or style == &"ballastball" \
+			or style == &"flare") else &"iron"
 	if key == &"firebomb" and _firebomb_mesh != null:
 		return _firebomb_mesh
+	if key == &"anchorball" and _anchorball_mesh != null:
+		return _anchorball_mesh
+	if key == &"ballastball" and _ballastball_mesh != null:
+		return _ballastball_mesh
 	if _ball_meshes.has(key):
 		var cached := _ball_meshes[key] as ArrayMesh
 		if cached != null:
@@ -1249,6 +1378,12 @@ static func get_ball_mesh(style: StringName = &"iron") -> ArrayMesh:
 		&"firebomb":
 			built = _build_firebomb_mesh()
 			_firebomb_mesh = built
+		&"anchorball":
+			built = _build_anchorball_mesh()
+			_anchorball_mesh = built
+		&"ballastball":
+			built = _build_ballastball_mesh()
+			_ballastball_mesh = built
 		&"flare":
 			built = _build_flare_mesh()
 		_:
@@ -1518,6 +1653,159 @@ static func _build_firebomb_mesh() -> ArrayMesh:
 			col_g_hi, col_g_mid, col_g_lo)
 	_add_hammered_sphere_at(glow_st, fuse_pts[fuse_pts.size() - 1], 0.038, 8, 4, 0.18, 1.3,
 		col_g_hi, col_g_mid, col_g_lo)
+
+	body_st.generate_normals()
+	var mesh := body_st.commit()
+	glow_st.generate_normals()
+	glow_st.commit(mesh)
+	return mesh
+
+
+static func _build_anchorball_mesh() -> ArrayMesh:
+	# Faceted dark-obsidian cursed iron sphere (Surface 0) inlaid with raised glowing emerald
+	# forged anchor relief sigils on opposing hemispheres + equatorial arcane rune collar (Surface 1).
+	var body_st := SurfaceTool.new()
+	body_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_obs_hi := Color(0.20, 0.24, 0.26)
+	var col_obs_mid := Color(0.10, 0.13, 0.15)
+	var col_obs_lo := Color(0.05, 0.06, 0.08)
+
+	_add_hammered_sphere(body_st, 0.132, 14, 7, 0.028, 5.3, col_obs_hi, col_obs_mid, col_obs_lo)
+	_add_forged_band(body_st, Basis.IDENTITY, 0.130, 0.144, 0.020, 14, col_obs_hi, col_obs_mid, col_obs_lo)
+	# Twin polar dark-forged iron shackle lugs capping +Y and -Y poles.
+	for sy: float in [-1.0, 1.0]:
+		_add_ordnance_tube(body_st, Vector3(0.0, sy * 0.122, 0.0), Vector3(0.0, sy * 0.156, 0.0),
+			0.032, 0.022, 6, col_obs_hi, col_obs_lo)
+
+	var glow_st := SurfaceTool.new()
+	glow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_em_hi := Color(0.68, 1.0, 0.80)
+	var col_em_mid := Color(0.18, 0.96, 0.54)
+	var col_em_lo := Color(0.06, 0.62, 0.34)
+
+	# Equatorial arcane emerald rune collar flanking the obsidian band.
+	for y_off: float in [-0.024, 0.024]:
+		_add_offset_seam_ring(glow_st, Basis.IDENTITY, 0.131, 0.141, y_off, 0.007, 14,
+			col_em_hi, col_em_mid, col_em_lo)
+	# Eight glowing faceted emerald rune studs ringing the equatorial collar.
+	for ri in 8:
+		var ang := TAU * float(ri) / 8.0 + PI * 0.125
+		var dir := Vector3(cos(ang), 0.0, sin(ang))
+		_add_faceted_rivet(glow_st, dir * 0.140, dir, 0.015, 0.014, col_em_hi, col_em_mid, col_em_lo)
+
+	# Raised glowing spectral emerald forged anchor relief sigils embossed on opposing +Z and -Z hemispheres!
+	_add_anchor_relief_sigil(glow_st, 1.0, 0.136, col_em_hi, col_em_mid, col_em_lo)
+	_add_anchor_relief_sigil(glow_st, -1.0, 0.136, col_em_hi, col_em_mid, col_em_lo)
+
+	body_st.generate_normals()
+	var mesh := body_st.commit()
+	glow_st.generate_normals()
+	glow_st.commit(mesh)
+	return mesh
+
+
+static func _add_anchor_relief_sigil(st: SurfaceTool, hemi_sign: float, r_surf: float,
+		col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	var to_surf := func(u: float, v: float, lift: float = 0.0) -> Vector3:
+		var z_sq := maxf(0.04, 1.0 - u * u - v * v)
+		var dir := Vector3(u * hemi_sign, v, hemi_sign * sqrt(z_sq)).normalized()
+		return dir * (r_surf + lift)
+
+	# 1. Forged top ring eye (4 diamond tubes at top of anchor shank).
+	var ring_pts: Array[Vector3] = [
+		to_surf.call(0.0, 0.62, 0.005) as Vector3,
+		to_surf.call(0.12, 0.50, 0.005) as Vector3,
+		to_surf.call(0.0, 0.38, 0.005) as Vector3,
+		to_surf.call(-0.12, 0.50, 0.005) as Vector3,
+	]
+	for ri in 4:
+		_add_ordnance_tube(st, ring_pts[ri], ring_pts[(ri + 1) % 4], 0.010, 0.010, 4, col_hi, col_mid)
+
+	# 2. Vertical anchor shank curving down the hemisphere face.
+	var shank_top := to_surf.call(0.0, 0.38, 0.006) as Vector3
+	var shank_mid := to_surf.call(0.0, -0.02, 0.007) as Vector3
+	var shank_bot := to_surf.call(0.0, -0.44, 0.006) as Vector3
+	_add_ordnance_tube(st, shank_top, shank_mid, 0.013, 0.014, 6, col_hi, col_lo)
+	_add_ordnance_tube(st, shank_mid, shank_bot, 0.014, 0.016, 6, col_hi, col_lo)
+
+	# 3. Horizontal anchor stock crossbar near upper shank.
+	var stock_c := to_surf.call(0.0, 0.23, 0.007) as Vector3
+	var stock_l := to_surf.call(-0.34, 0.23, 0.005) as Vector3
+	var stock_r := to_surf.call(0.34, 0.23, 0.005) as Vector3
+	_add_ordnance_tube(st, stock_l, stock_c, 0.011, 0.013, 6, col_hi, col_mid)
+	_add_ordnance_tube(st, stock_c, stock_r, 0.013, 0.011, 6, col_hi, col_mid)
+
+	# 4. Twin curved anchor fluke arms sweeping upward from the crown + raised barbed spade bosses.
+	for sx: float in [-1.0, 1.0]:
+		var arm_mid := to_surf.call(sx * 0.24, -0.35, 0.006) as Vector3
+		var arm_tip := to_surf.call(sx * 0.42, -0.14, 0.006) as Vector3
+		_add_ordnance_tube(st, shank_bot, arm_mid, 0.014, 0.012, 5, col_mid, col_lo)
+		_add_ordnance_tube(st, arm_mid, arm_tip, 0.012, 0.010, 5, col_hi, col_mid)
+		_add_faceted_rivet(st, arm_tip, arm_tip.normalized(), 0.018, 0.015, col_hi, col_mid, col_lo)
+
+	_add_faceted_rivet(st, shank_bot, shank_bot.normalized(), 0.018, 0.014, col_hi, col_mid, col_lo)
+	_add_faceted_rivet(st, stock_c, stock_c.normalized(), 0.016, 0.013, col_hi, col_mid, col_lo)
+
+
+static func _build_ballastball_mesh() -> ArrayMesh:
+	# Heavy faceted abyssal iron sphere with 3 orthogonal forged ballast straps (Surface 0)
+	# wrapped in glowing amethyst-violet weighted ballast seam bands & raised sunken-crown studs (Surface 1).
+	var body_st := SurfaceTool.new()
+	body_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_ab_hi := Color(0.22, 0.19, 0.28)
+	var col_ab_mid := Color(0.11, 0.095, 0.16)
+	var col_ab_lo := Color(0.055, 0.045, 0.085)
+
+	_add_hammered_sphere(body_st, 0.138, 14, 7, 0.030, 7.9, col_ab_hi, col_ab_mid, col_ab_lo)
+	var band_bases: Array[Basis] = [
+		Basis.IDENTITY,
+		Basis(Vector3.RIGHT, PI * 0.5),
+		Basis(Vector3.FORWARD, PI * 0.5),
+	]
+	for bb: Basis in band_bases:
+		_add_forged_band(body_st, bb, 0.136, 0.152, 0.020, 14, col_ab_hi, col_ab_mid, col_ab_lo)
+
+	var glow_st := SurfaceTool.new()
+	glow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_am_hi := Color(0.92, 0.72, 1.0)
+	var col_am_mid := Color(0.68, 0.28, 1.0)
+	var col_am_lo := Color(0.38, 0.10, 0.74)
+
+	# Glowing amethyst-violet weighted ballast bands flanking all 3 orthogonal straps.
+	for bb: Basis in band_bases:
+		for y_off: float in [-0.024, 0.024]:
+			_add_offset_seam_ring(glow_st, bb, 0.137, 0.147, y_off, 0.007, 14,
+				col_am_hi, col_am_mid, col_am_lo)
+
+	# Six cardinal sunken-crown spikes + eight octant ballast crown studs.
+	for cdir: Vector3 in [
+		Vector3.RIGHT, Vector3.LEFT,
+		Vector3.UP, Vector3.DOWN,
+		Vector3.BACK, Vector3.FORWARD,
+	]:
+		_add_faceted_rivet(glow_st, cdir * 0.146, cdir, 0.024, 0.022, col_am_hi, col_am_mid, col_am_lo)
+	for sx: float in [-1.0, 1.0]:
+		for sy: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				var odir := Vector3(sx, sy, sz).normalized()
+				_add_faceted_rivet(glow_st, odir * 0.135, odir, 0.018, 0.018, col_am_hi, col_am_mid, col_am_lo)
+
+	# Twin glowing amethyst sunken-crown collars with 6 pointed tines around +Y and -Y poles!
+	for py: float in [-1.0, 1.0]:
+		var crown_r := 0.068
+		var crown_y := py * 0.126
+		var c_pts: Array[Vector3] = []
+		for ci in 6:
+			var ang := TAU * float(ci) / 6.0
+			c_pts.append(Vector3(cos(ang) * crown_r, crown_y, sin(ang) * crown_r))
+		for ci in 6:
+			var p0 := c_pts[ci]
+			var p1 := c_pts[(ci + 1) % 6]
+			_add_ordnance_tube(glow_st, p0, p1, 0.009, 0.009, 4, col_am_hi, col_am_lo)
+			var tine_dir := (p0.normalized() + Vector3(0.0, py * 0.65, 0.0)).normalized()
+			_add_faceted_rivet(glow_st, p0, tine_dir, 0.013, 0.020, col_am_hi, col_am_mid, col_am_lo)
 
 	body_st.generate_normals()
 	var mesh := body_st.commit()

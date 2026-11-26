@@ -52,6 +52,16 @@ const CREW_COMMAND_SLICES: Array[Dictionary] = [
 const VOYAGE_TITLE_FADE_IN := 0.45
 const VOYAGE_TITLE_FADE_OUT := 0.90
 
+## Accent color palette for all 6 cannon ordnance types (strict-ASCII live cannon chip).
+const ORDNANCE_ACCENT_COLORS := {
+	&"iron": Color(0.95, 0.92, 0.84, 1.0),
+	&"chainshot": Color(0.36, 0.64, 0.90, 1.0),
+	&"firebomb": Color(0.96, 0.44, 0.10, 1.0),
+	&"anchorball": Color(0.14, 0.84, 0.46, 1.0),
+	&"ballastball": Color(0.64, 0.30, 0.96, 1.0),
+	&"flare": Color(0.96, 0.74, 0.18, 1.0),
+}
+
 @export var input_enabled: bool = true
 @export var force_show_vitals: bool = false
 @export var force_show_whisper: bool = false
@@ -114,8 +124,14 @@ var _sailing_pill_label: Label = null
 
 # Active tool / supplies chip (bottom-right)
 var _tool_panel: PanelContainer = null
+var _tool_panel_style: StyleBoxFlat = null
 var _tool_title_label: Label = null
 var _tool_meta_label: Label = null
+var _ordnance_pill: PanelContainer = null
+var _ordnance_pill_style: StyleBoxFlat = null
+var _ordnance_swatch: ColorRect = null
+var _ordnance_label: Label = null
+var _active_ordnance_accent: Color = Color(0.95, 0.92, 0.84, 1.0)
 var _tool_flash_timer: float = 0.0
 var _hull_alert_active: bool = false
 
@@ -280,6 +296,8 @@ func _connect_signals() -> void:
 	if ship != null:
 		if not ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
 			ship.cannon_ordnance_changed.connect(_on_tool_state_changed)
+		if not ship.cursed_hit.is_connected(_on_ship_cursed_hit):
+			ship.cursed_hit.connect(_on_ship_cursed_hit)
 
 
 func _disconnect_signals() -> void:
@@ -331,6 +349,8 @@ func _disconnect_signals() -> void:
 	if ship != null and is_instance_valid(ship):
 		if ship.cannon_ordnance_changed.is_connected(_on_tool_state_changed):
 			ship.cannon_ordnance_changed.disconnect(_on_tool_state_changed)
+		if ship.cursed_hit.is_connected(_on_ship_cursed_hit):
+			ship.cursed_hit.disconnect(_on_ship_cursed_hit)
 
 
 ## Explicitly register a `CrewBrain` to receive captain orders (also auto-discovered in tree).
@@ -728,6 +748,26 @@ func get_tool_meta_text() -> String:
 ## Current bottom-center context prompt text.
 func get_context_prompt_text() -> String:
 	return _prompt_label.text if _prompt_label != null else ""
+
+
+## Return the accent Color for any of the 6 cannon ordnance types (Iron, Chainshot, Firebomb, Anchorball, Ballastball, Flare).
+static func get_ordnance_accent_color(kind: StringName) -> Color:
+	return ORDNANCE_ACCENT_COLORS.get(kind, ORDNANCE_ACCENT_COLORS[&"iron"]) as Color
+
+
+## Current live accent Color applied to the cannon ordnance badge.
+func get_active_ordnance_accent_color() -> Color:
+	return _active_ordnance_accent
+
+
+## True while the dedicated cannon ordnance accent badge is visible inside the tool chip.
+func is_ordnance_chip_visible() -> bool:
+	return _ordnance_pill != null and _ordnance_pill.visible
+
+
+## Strict-ASCII text currently displayed on the cannon ordnance accent badge.
+func get_ordnance_chip_text() -> String:
+	return _ordnance_label.text if _ordnance_label != null else ""
 
 
 ## True while the active ship has open hull breaches or critical flooding.
@@ -1192,21 +1232,57 @@ func _build_tool_chip() -> void:
 	_tool_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_tool_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_tool_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_tool_panel.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.88), HudIcons.COL_INK_SOFT, 2, 6, 14, 7))
+	_tool_panel_style = HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.88), HudIcons.COL_INK_SOFT, 2, 6, 14, 7)
+	_tool_panel.add_theme_stylebox_override("panel", _tool_panel_style)
 	_root.add_child(_tool_panel)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
+	vbox.add_theme_constant_override("separation", 3)
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tool_panel.add_child(vbox)
+
+	var header_row := HBoxContainer.new()
+	header_row.alignment = BoxContainer.ALIGNMENT_END
+	header_row.add_theme_constant_override("separation", 8)
+	header_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(header_row)
+
+	_ordnance_pill = PanelContainer.new()
+	_ordnance_pill.name = "OrdnanceAccentBadge"
+	_ordnance_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ordnance_pill_style = HudIcons.make_parchment_box(Color(0.14, 0.11, 0.08, 0.94), get_ordnance_accent_color(&"iron"), 2, 5, 8, 2)
+	_ordnance_pill_style.shadow_size = 0
+	_ordnance_pill.add_theme_stylebox_override("panel", _ordnance_pill_style)
+	_ordnance_pill.visible = false
+	header_row.add_child(_ordnance_pill)
+
+	var ord_row := HBoxContainer.new()
+	ord_row.add_theme_constant_override("separation", 5)
+	ord_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ordnance_pill.add_child(ord_row)
+
+	_ordnance_swatch = ColorRect.new()
+	_ordnance_swatch.name = "OrdnanceSwatch"
+	_ordnance_swatch.custom_minimum_size = Vector2(9.0, 9.0)
+	_ordnance_swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_ordnance_swatch.color = get_ordnance_accent_color(&"iron")
+	_ordnance_swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ord_row.add_child(_ordnance_swatch)
+
+	_ordnance_label = Label.new()
+	_ordnance_label.name = "OrdnanceLabel"
+	_ordnance_label.text = "Iron"
+	_ordnance_label.add_theme_font_size_override("font_size", 12)
+	_ordnance_label.add_theme_color_override("font_color", get_ordnance_accent_color(&"iron"))
+	_ordnance_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ord_row.add_child(_ordnance_label)
 
 	_tool_title_label = Label.new()
 	_tool_title_label.text = "Cutlass"
 	_tool_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_tool_title_label.add_theme_font_size_override("font_size", 16)
 	_tool_title_label.add_theme_color_override("font_color", HudIcons.COL_INK)
-	vbox.add_child(_tool_title_label)
+	header_row.add_child(_tool_title_label)
 
 	_tool_meta_label = Label.new()
 	_tool_meta_label.text = "[Tab] Tools | [Q] Crew"
@@ -1689,6 +1765,9 @@ func _refresh_tool_chip() -> void:
 	var title := ToolMeshes.get_display_name(resolved_id)
 	var meta := "[Tab] Tools | [Q] Crew"
 	var active_ship := _active_ship()
+	var on_cannon := false
+	var ord_kind: StringName = &"iron"
+	var ord_lbl := "Iron"
 
 	if pawn != null and pawn.station != null:
 		var sk := StringName(pawn.station.get(&"kind"))
@@ -1715,9 +1794,11 @@ func _refresh_tool_chip() -> void:
 				title = "Sail Braces"
 				meta = "[A/D] Angle | [RMB] Square | [F] Leave"
 			&"cannon":
+				on_cannon = true
 				title = "Ship Cannon"
 				if active_ship != null:
-					var ord_lbl := active_ship.get_cannon_ordnance_label()
+					ord_kind = active_ship.cannon_ordnance
+					ord_lbl = active_ship.get_cannon_ordnance_label()
 					meta = "Shot: %s (%d) | [WASD/Mouse] Aim | [LMB] Fire | [R] Swap Shot" % [ord_lbl, active_ship.cannonballs_remaining]
 				else:
 					meta = "[WASD/Mouse] Aim | [LMB] Fire (Iron) | [R] Swap Shot"
@@ -1784,6 +1865,22 @@ func _refresh_tool_chip() -> void:
 					inventory.shanty_instrument, String(inventory.shanty_instrument).capitalize()))
 				meta = ("Playing %s | [LMB] Stop | [RMB] Swap" % inst_disp) if inventory.playing_shanty \
 					else "[LMB] Play | [RMB] Swap Instrument"
+
+	# Update live cannon ordnance color-accented badge (strict ASCII across all 6 ordnance types).
+	var accent_col := get_ordnance_accent_color(ord_kind)
+	_active_ordnance_accent = accent_col
+	if _ordnance_pill != null:
+		_ordnance_pill.visible = on_cannon
+		if on_cannon:
+			if _ordnance_pill_style != null:
+				_ordnance_pill_style.border_color = accent_col
+			if _ordnance_swatch != null:
+				_ordnance_swatch.color = accent_col
+			if _ordnance_label != null:
+				_ordnance_label.text = _to_ascii(ord_lbl)
+				_ordnance_label.add_theme_color_override("font_color", accent_col)
+	if _tool_panel_style != null:
+		_tool_panel_style.border_color = accent_col if on_cannon else HudIcons.COL_INK_SOFT
 
 	# Surface urgent ship flooding / open hull breach warnings right on the supplies chip.
 	var hull_warn := ""
@@ -1918,6 +2015,11 @@ func _on_item_equipped(_item_id: StringName) -> void:
 
 func _on_tool_state_changed(_v: Variant) -> void:
 	_tool_flash_timer = 2.2
+	_refresh_tool_chip()
+
+
+func _on_ship_cursed_hit(_curse_kind: StringName, _duration: float) -> void:
+	_tool_flash_timer = 3.5
 	_refresh_tool_chip()
 
 

@@ -2050,6 +2050,318 @@ func test_wave29_compass_map_pin_bearing_toggle_and_hud_hint() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 17. Wave 36B: Cinematic LocationBanner & Sculpted Brass SpeakingTrumpet Hail
+# ---------------------------------------------------------------------------
+
+class MockLocationIsland:
+	extends Node
+	var archetype: StringName = &"treasure_peak"
+	var is_outpost: bool = false
+	var radius: float = 80.0
+
+
+func test_wave36_location_banner_and_speaking_trumpet_hail() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	var check_ascii := func(label: String, text: String) -> void:
+		check(text != "", "%s is non-empty" % label)
+		for ci in text.length():
+			check(text.unicode_at(ci) < 128, "%s is strictly ASCII ('%s')" % [label, text])
+
+	# 1. LocationBanner: non-blocking layer 14, all 3 styles, smooth fade-in/hold/fade-out,
+	#    queue + consecutive title deduplication, island subtitles/styles, strict ASCII.
+	var banner := LocationBanner.new()
+	_root.add_child(banner)
+	banner.set_process(false)
+	await get_tree().process_frame
+
+	check_eq(banner.layer, 14, "LocationBanner renders on CanvasLayer 14")
+	var banner_controls := banner.find_children("*", "Control", true, false)
+	check(banner_controls.size() >= 2, "LocationBanner builds root and _BannerArt controls")
+	for c_node in banner_controls:
+		var ctrl := c_node as Control
+		check_eq(ctrl.mouse_filter, Control.MOUSE_FILTER_IGNORE,
+			"LocationBanner control '%s' uses MOUSE_FILTER_IGNORE" % ctrl.name)
+
+	var shown_events: Array[Dictionary] = []
+	banner.banner_shown.connect(func(t: String, sub: String, st: StringName) -> void:
+		shown_events.append({"title": t, "subtitle": sub, "style": st})
+	)
+
+	# Show threat banner and step through fade-in -> hold -> fade-out!
+	check(banner.show_location("Sovereign's Bastion", "Grand Citadel -- Tier IV Sea Fortress", &"threat", 3.2),
+		"show_location displays initial threat banner")
+	check(banner.is_banner_active(), "banner is active immediately after show_location")
+	check_eq(banner.get_current_title(), "SOVEREIGN'S BASTION", "banner title renders uppercase")
+	check_eq(banner.get_current_subtitle(), "Grand Citadel -- Tier IV Sea Fortress", "banner subtitle matches")
+	check_eq(banner.get_current_style(), &"threat", "banner style matches &'threat'")
+	check_eq(shown_events.size(), 1, "banner_shown emitted once for initial banner")
+
+	# Fade-in midpoint (0.225 s of 0.45 s).
+	banner.step_banner(0.225)
+	check_eq(banner.get_banner_phase(), &"fade_in", "banner enters fade_in phase")
+	check(banner.get_current_alpha() > 0.25 and banner.get_current_alpha() < 0.80,
+		"fade_in alpha rises smoothly (got %.2f)" % banner.get_current_alpha())
+	await get_tree().process_frame  # exercise _BannerArt._draw() in &"threat" style
+
+	# Hold phase (total 0.70 s, inside 0.45..3.65 s).
+	banner.step_banner(0.475)
+	check_eq(banner.get_banner_phase(), &"hold", "banner enters crisp hold phase")
+	check_near(banner.get_current_alpha(), 1.0, 0.001, "hold alpha equals 1.0")
+
+	# Deduplication & 2-slot queue cap while active.
+	check(not banner.show_location("sovereign's bastion", "Duplicate", &"threat", 1.0),
+		"consecutive identical title is deduplicated case-insensitively")
+	check(banner.show_location("Port Scoundrel", "Outpost Harbour -- Safe Anchorage", &"outpost", 1.0),
+		"queues first pending banner (&'outpost')")
+	check_eq(banner.get_queued_count(), 1, "queued count is 1")
+	check(not banner.show_location("PORT SCOUNDREL", "Duplicate Tail", &"outpost", 1.0),
+		"deduplicates consecutive identical title against queue tail")
+	check(banner.show_location("Cutlass Cay", "Uncharted Treasure Cay", &"island", 1.0),
+		"queues second pending banner (&'island')")
+	check_eq(banner.get_queued_count(), 2, "queued count is 2")
+	check(not banner.show_location("Cinder Crag", "Active Volcanic Caldera", &"threat", 1.0),
+		"rejects 3rd pending banner when 2-slot queue is full")
+
+	# Fade-out phase (total 3.975 s, midpoint of 3.65..4.30 s).
+	banner.step_banner(3.275)
+	check_eq(banner.get_banner_phase(), &"fade_out", "banner enters graceful fade_out phase")
+	check(banner.get_current_alpha() > 0.15 and banner.get_current_alpha() < 0.85,
+		"fade_out alpha decays smoothly (got %.2f)" % banner.get_current_alpha())
+
+	# Complete first banner -> seamlessly advances to queued &'outpost' banner!
+	banner.step_banner(0.50)
+	check(banner.is_banner_active(), "banner stays active advancing to queued outpost")
+	check_eq(banner.get_current_title(), "PORT SCOUNDREL", "advances to queued Port Scoundrel")
+	check_eq(banner.get_current_style(), &"outpost", "outpost style active")
+	check_eq(banner.get_queued_count(), 1, "queue decrements to 1")
+	banner.step_banner(0.55)
+	await get_tree().process_frame  # exercise _BannerArt._draw() in &"outpost" style
+
+	# Finish outpost banner -> advances to queued &'island' banner!
+	banner.step_banner(1.75)
+	check(banner.is_banner_active(), "banner stays active advancing to queued island")
+	check_eq(banner.get_current_title(), "CUTLASS CAY", "advances to queued Cutlass Cay")
+	check_eq(banner.get_current_style(), &"island", "island style active")
+	check_eq(banner.get_queued_count(), 0, "queue is now empty")
+	banner.step_banner(0.55)
+	await get_tree().process_frame  # exercise _BannerArt._draw() in &"island" style
+
+	# Finish final banner -> cleanly returns to idle!
+	banner.step_banner(1.75)
+	check(not banner.is_banner_active(), "banner becomes inactive after final fade-out")
+	check_eq(banner.get_current_title(), "", "idle banner title is empty")
+	check_eq(shown_events.size(), 3, "banner_shown emitted once for each of the 3 banners")
+
+	# Verify strict-ASCII sanitization (< 128) on non-ASCII typography & glyphs.
+	var dirty_title := "Skull" + char(0x2014) + "Bluff " + char(0x2019) + "Tis" + char(0x2605)
+	var dirty_sub := "Cursed" + char(0x2013) + "Isle " + char(0x2026) + char(0x00E9)
+	check(banner.show_location(dirty_title, dirty_sub, &"island", 1.0), "sanitized banner shows cleanly")
+	check_ascii.call("sanitized banner title", banner.get_current_title())
+	check_ascii.call("sanitized banner subtitle", banner.get_current_subtitle())
+	banner.clear_banner()
+	check(not banner.is_banner_active() and banner.get_queued_count() == 0, "clear_banner resets cleanly")
+
+	# Verify format_island_subtitle & style_for_island across all 14 archetypes!
+	var arch_checks: Array[Array] = [
+		[&"outpost", true, 82.0, &"outpost", "Outpost"],
+		[&"grand_outpost", true, 166.0, &"outpost", "Outpost"],
+		[&"volcano_crag", false, 176.0, &"threat", "Volcanic"],
+		[&"fort_rock", false, 92.0, &"threat", "Bastion"],
+		[&"grand_citadel", false, 182.0, &"threat", "Citadel"],
+		[&"smuggler_cove", false, 96.0, &"island", "Smuggler"],
+		[&"twin_spires", false, 138.0, &"island", "Twin-Spire"],
+		[&"crescent_lagoon", false, 134.0, &"island", "Lagoon"],
+		[&"palm_atoll", false, 70.0, &"island", "Atoll"],
+		[&"wreck_shoal", false, 46.0, &"island", "Shipwreck"],
+		[&"skull_bluff", false, 124.0, &"island", "Skull"],
+		[&"sea_arch", false, 82.0, &"island", "Sea Arch"],
+		[&"sea_stack", false, 38.0, &"island", "Sea-Stack"],
+		[&"treasure_peak", false, 54.0, &"island", "Treasure"],
+	]
+	for spec: Array in arch_checks:
+		var mock_isl := MockLocationIsland.new()
+		mock_isl.archetype = spec[0]
+		mock_isl.is_outpost = bool(spec[1])
+		mock_isl.radius = float(spec[2])
+		var want_style: StringName = spec[3]
+		var want_word: String = spec[4]
+		var sub := LocationBanner.format_island_subtitle(mock_isl)
+		var st := LocationBanner.style_for_island(mock_isl)
+		check_eq(st, want_style, "style_for_island(%s) == %s" % [mock_isl.archetype, want_style])
+		check(sub.contains(want_word), "subtitle for %s contains '%s' (got '%s')" % [mock_isl.archetype, want_word, sub])
+		check_ascii.call("subtitle(%s)" % mock_isl.archetype, sub)
+		mock_isl.free()
+
+	# 2. Sculpted Brass SpeakingTrumpet mesh verification (>= 380 tris, 0 PrimitiveMeshes,
+	#    0 extra VRAM, uv1_world_triplanar == false, vertex_color_is_srgb == true).
+	check_eq(ToolMeshes.get_tool_ids().size(), 11, "canonical ALL_TOOLS count stays 11")
+	check_eq(ToolMeshes.get_display_name(&"speaking_trumpet"), "Speaking Trumpet",
+		"speaking_trumpet has proper display name")
+
+	var lantern_ref := ToolMeshes.build_tool(&"lantern")
+	var cutlass_ref := ToolMeshes.build_tool(&"cutlass")
+	var cache_keys_before := ToolMeshes._pbr_tex_cache.size()
+	var trumpet := ToolMeshes.build_tool(&"speaking_trumpet")
+	check(trumpet != null, "ToolMeshes.build_tool(&'speaking_trumpet') builds cleanly")
+
+	var trumpet_meshes := trumpet.find_children("*", "MeshInstance3D", true, false)
+	check(trumpet_meshes.size() >= 4, "SpeakingTrumpet has sculpted multi-part MeshInstance3D hierarchy")
+	var trumpet_tris := 0
+	var primitive_count := 0
+	var trumpet_brass_norm: Texture2D = null
+	var trumpet_leather_norm: Texture2D = null
+	for m_node in trumpet_meshes:
+		var mi := m_node as MeshInstance3D
+		check(mi.mesh != null, "SpeakingTrumpet mesh '%s' non-null" % mi.name)
+		if mi.mesh is PrimitiveMesh:
+			primitive_count += 1
+		check(mi.mesh is ArrayMesh, "SpeakingTrumpet mesh '%s' is sculpted ArrayMesh" % mi.name)
+		if mi.mesh != null:
+			trumpet_tris += int(roundf(float(mi.mesh.get_faces().size()) / 3.0))
+		var mat := mi.material_override as StandardMaterial3D
+		check(mat != null, "SpeakingTrumpet mesh '%s' has StandardMaterial3D" % mi.name)
+		if mat != null:
+			check(not mat.uv1_world_triplanar,
+				"SpeakingTrumpet '%s' has uv1_world_triplanar == false" % mi.name)
+			check(mat.vertex_color_is_srgb,
+				"SpeakingTrumpet '%s' has vertex_color_is_srgb == true" % mi.name)
+			if mi.name == "BrassHorn":
+				trumpet_brass_norm = mat.normal_texture
+			elif mi.name == "LeatherHandle":
+				trumpet_leather_norm = mat.normal_texture
+
+	check(trumpet_tris >= 380, "SpeakingTrumpet has >= 380 sculpted tris (got %d)" % trumpet_tris)
+	check_eq(primitive_count, 0, "SpeakingTrumpet uses 0 PrimitiveMeshes")
+	var lantern_brass_mi := lantern_ref.get_node_or_null(^"BrassCage") as MeshInstance3D
+	var cutlass_grip_mi := cutlass_ref.get_node_or_null(^"Grip") as MeshInstance3D
+	var lantern_brass_norm := (lantern_brass_mi.material_override as StandardMaterial3D).normal_texture if lantern_brass_mi != null else null
+	var cutlass_grip_norm := (cutlass_grip_mi.material_override as StandardMaterial3D).normal_texture if cutlass_grip_mi != null else null
+	check(trumpet_brass_norm != null and trumpet_brass_norm == lantern_brass_norm,
+		"SpeakingTrumpet brass shares zero-extra-VRAM cached ship_brass_normal Texture2D")
+	check(trumpet_leather_norm != null and trumpet_leather_norm == cutlass_grip_norm,
+		"SpeakingTrumpet leather shares zero-extra-VRAM cached ship_oak_normal Texture2D")
+	check(ToolMeshes._pbr_tex_cache.size() <= cache_keys_before + 3,
+		"SpeakingTrumpet reuses existing resident ship PBR textures with zero custom VRAM")
+	print("Wave 36B SpeakingTrumpet sculpted triangles: %d" % trumpet_tris)
+	trumpet.free()
+	lantern_ref.free()
+	cutlass_ref.free()
+
+	# 3. Inventory.hail_with_speaking_trumpet() + CrewBrain.receive_trumpet_hail() + CrewDialogue!
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+	ship.global_position = Vector3.ZERO
+
+	var rig := _make_player_pawn(Vector3(0.0, 1.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var inv: Inventory = rig["inv"]
+
+	# Ashore crewmate #1 (Barnaby) at 85 m (<= 110 m hail radius), currently on &"follow".
+	var barnaby_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(barnaby_pawn)
+	barnaby_pawn.global_position = Vector3(85.0, 0.0, 0.0)
+	var barnaby := CrewBrain.new()
+	barnaby.setup(ship, captain, &"helmsman")
+	barnaby_pawn.add_child(barnaby)
+
+	# Far crewmate #2 (Maren) at 145 m (> 135 m & > 110 m), currently on &"follow".
+	var maren_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(maren_pawn)
+	maren_pawn.global_position = Vector3(145.0, 0.0, 0.0)
+	var maren := CrewBrain.new()
+	maren.setup(ship, captain, &"lookout")
+	maren_pawn.add_child(maren)
+
+	# Third persona crewmate (Pip) placed far initially (160 m), then tested in range for persona coverage.
+	var pip_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pip_pawn)
+	pip_pawn.global_position = Vector3(-160.0, 0.0, 0.0)
+	var pip := CrewBrain.new()
+	pip.setup(ship, captain, &"carpenter")
+	pip_pawn.add_child(pip)
+	await physics_frames(2)
+
+	barnaby.current_order = &"follow"
+	maren.current_order = &"follow"
+	pip.current_order = &"follow"
+
+	var hail_events: Array[Dictionary] = []
+	inv.speaking_trumpet_hailed.connect(func(origin: Vector3, radius: float, acked: int) -> void:
+		hail_events.append({"origin": origin, "radius": radius, "acked": acked})
+	)
+	var ack_lines: Array[Dictionary] = []
+	for br: CrewBrain in [barnaby, maren, pip]:
+		br.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+			if cat == &"trumpet_hail_ack":
+				ack_lines.append({"speaker": sp, "text": txt})
+		)
+
+	var warned_before := Audio._warned.size()
+	var hail_res := inv.hail_with_speaking_trumpet()
+	check(bool(hail_res.get("ok", false)), "hail_with_speaking_trumpet returns ok=true")
+	check_near(float(hail_res.get("radius", 0.0)), 110.0, 0.01, "hail radius is 110 m")
+	check_eq(int(hail_res.get("crew_acked", -1)), 1, "exactly 1 crewmate within 110 m acknowledged hail")
+	check_eq(hail_events.size(), 1, "speaking_trumpet_hailed signal emitted once")
+	if hail_events.size() == 1:
+		check_near(float(hail_events[0]["radius"]), 110.0, 0.01, "signal reports 110 m hail radius")
+		check_eq(int(hail_events[0]["acked"]), 1, "signal reports 1 crewmate acknowledged")
+
+	check_eq(barnaby.current_order, &"return_ship", "ashore Barnaby at 85 m recalled to &'return_ship'")
+	check_eq(maren.current_order, &"follow", "distant Maren at 145 m ignored by 110 m hail")
+	check_eq(pip.current_order, &"follow", "distant Pip at 160 m ignored by 110 m hail")
+	check_eq(ack_lines.size(), 1, "only Barnaby spoke trumpet_hail_ack")
+	if ack_lines.size() == 1:
+		check_eq(String(ack_lines[0]["speaker"]), "Barnaby", "Barnaby acknowledged trumpet hail")
+		check_ascii.call("Barnaby trumpet_hail_ack", String(ack_lines[0]["text"]))
+
+	# Verify Audio generated zero unknown-sound warnings!
+	check_eq(Audio._warned.size(), warned_before, "SpeakingTrumpet hail causes 0 Audio unknown-sound warnings")
+
+	# Verify 3.5 s cooldown rejects immediate repeat hail!
+	var repeat_res := inv.hail_with_speaking_trumpet()
+	check(not bool(repeat_res.get("ok", true)), "immediate repeat hail blocked by 3.5 s cooldown")
+
+	# Verify out-of-range receive_trumpet_hail returns false (> 115 m), and in-range recalls Maren & Pip!
+	check(not maren.receive_trumpet_hail(captain.global_position, ship),
+		"CrewBrain.receive_trumpet_hail returns false beyond 115 m (145 m)")
+	maren_pawn.global_position = Vector3(60.0, 0.0, 0.0)
+	pip_pawn.global_position = Vector3(-45.0, 0.0, 0.0)
+	check(maren.receive_trumpet_hail(captain.global_position, ship),
+		"Maren at 60 m responds true to receive_trumpet_hail")
+	check_eq(maren.current_order, &"return_ship", "Maren switches order to &'return_ship'")
+	check(pip.receive_trumpet_hail(captain.global_position, ship),
+		"Pip at 45 m responds true to receive_trumpet_hail")
+	check_eq(pip.current_order, &"return_ship", "Pip switches order to &'return_ship'")
+	check_eq(ack_lines.size(), 3, "all 3 personas emit trumpet_hail_ack barks")
+	for entry: Dictionary in ack_lines:
+		check_ascii.call("trumpet_hail_ack (%s)" % String(entry["speaker"]), String(entry["text"]))
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var line := CrewDialogue.format_line(pid, &"trumpet_hail_ack")
+		check_ascii.call("CrewDialogue.format_line(%s, trumpet_hail_ack)" % pid, line)
+
+	# Step cooldown & temporary trumpet VFX smoothly to completion, then confirm next hail succeeds!
+	for _step in 36:
+		inv._process(0.1)
+	check(inv._fp_trumpet_node == null, "brief first-person SpeakingTrumpet mesh frees cleanly after display")
+	check(inv._trumpet_pulses.is_empty(), "acoustic brass ring pulses free cleanly after fade")
+	var second_res := inv.hail_with_speaking_trumpet()
+	check(bool(second_res.get("ok", false)), "hail succeeds again after 3.5 s cooldown expires")
+	check_eq(int(second_res.get("crew_acked", 0)), 3, "all 3 in-range crewmates ack second hail")
+
+	# Clean teardown with zero leaks!
+	banner.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(banner), "LocationBanner frees cleanly on teardown")
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes shared PBR cache clears cleanly")
+
+
 
 
 

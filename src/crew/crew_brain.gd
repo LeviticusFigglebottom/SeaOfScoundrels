@@ -109,6 +109,8 @@ const CANNON_SELF_LAUNCH_COOLDOWN := 6.0
 const SHIPWRECK_COOLDOWN := 10.0
 const MERMAID_RETURN_COOLDOWN := 6.0
 const MEGALODON_SIGHTED_COOLDOWN := 12.0
+const TRUMPET_HAIL_MAX_RANGE := 115.0
+const TRUMPET_HAIL_ACK_COOLDOWN := 4.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -391,6 +393,8 @@ func _physics_process(delta: float) -> void:
 			_tick_fetch_treasure(delta)
 		&"follow":
 			_tick_follow(delta)
+		&"return_ship":
+			_tick_return_ship(delta)
 		&"shanty":
 			_tick_shanty(delta)
 		_:
@@ -483,6 +487,10 @@ func _choose_task() -> StringName:
 			current_order = &"auto"
 		&"follow":
 			return &"follow"
+		&"return_ship":
+			if has_ship and pawn.platform != ship:
+				return &"return_ship"
+			current_order = &"auto"
 		&"fetch_treasure":
 			if _find_fetchable_treasure() != null or pawn.carried != null:
 				return &"fetch_treasure"
@@ -895,6 +903,25 @@ func _tick_follow(delta: float) -> void:
 		_navigate_ship_local(captain.platform_local_position(), 2.4)
 	else:
 		_move_world_towards(captain.global_position, 2.4, flat_d > 5.5)
+
+
+func _tick_return_ship(_delta: float) -> void:
+	if ship == null or not is_instance_valid(ship) or pawn.platform == ship:
+		if current_order == &"return_ship":
+			current_order = &"auto"
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+		return
+	var best_goal := ship.global_position
+	var best_d := INF
+	for c in ship.get_children():
+		if c is Ladder:
+			var lad := c as Ladder
+			var ld := pawn.global_position.distance_to(lad.global_position)
+			if ld < best_d:
+				best_d = ld
+				best_goal = lad.global_position + lad.global_basis.z * 0.35
+	_move_world_towards(best_goal, 0.85, true)
 
 
 func _resolve_combat() -> CombatComponent:
@@ -1982,6 +2009,34 @@ func notify_megalodon_sighted(label: String = "Ancient Megalodon", bearing: Stri
 	return true
 
 
+## Respond to a long-range Captain Speaking Trumpet hail within 115 m, recalling ashore crew back to ship.
+func receive_trumpet_hail(caller_pos: Vector3, rally_ship: Node3D = null) -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead:
+		return false
+	var horiz_dist := Vector2(pawn.global_position.x - caller_pos.x, pawn.global_position.z - caller_pos.z).length()
+	if horiz_dist > TRUMPET_HAIL_MAX_RANGE:
+		return false
+	if rally_ship is Ship and is_instance_valid(rally_ship) and (ship == null or not is_instance_valid(ship)):
+		bind_ship(rally_ship as Ship)
+	_clear_melee_combat()
+	_stop_shanty_join()
+	if pawn.station != null and pawn.platform != ship:
+		pawn.leave_station()
+	current_order = &"return_ship"
+	order_target = rally_ship if rally_ship != null else ship
+	_route.clear()
+	_work_timer = 0.0
+	var on_helm := pawn.station != null and StringName(pawn.station.get(&"kind")) == &"helm"
+	if not on_helm:
+		var look_d := caller_pos - pawn.global_position
+		look_d.y = 0.0
+		if look_d.length_squared() > 0.01:
+			pawn.look_yaw = atan2(-look_d.x, -look_d.z)
+	_speak(&"trumpet_hail_ack", {}, "trumpet_hail_ack", TRUMPET_HAIL_ACK_COOLDOWN)
+	order_changed.emit(&"return_ship")
+	return true
+
+
 func _on_ship_harpoon_loot_snagged(arg0: Variant = null, arg1: Variant = null, _arg2: Variant = null) -> void:
 	if not Net.is_host():
 		return
@@ -2167,6 +2222,7 @@ static func _order_label(order: StringName) -> String:
 		&"cannons": return "manning the cannons"
 		&"repair": return "patching and bailing"
 		&"follow": return "right behind you"
+		&"return_ship": return "returning to ship"
 		&"fetch_treasure": return "fetching the haul"
 		&"shanty": return "striking up a tune"
 		_: return "standing by"
