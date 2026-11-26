@@ -18,6 +18,8 @@ extends CanvasLayer
 signal crew_order_issued(order: StringName)
 signal pause_changed(open: bool)
 signal quality_changed(target: StringName, level: int)
+signal return_to_title_requested
+signal mode_skip_requested
 
 const ITEM_SLICE_HINTS := {
 	&"cutlass": "Light combo | Hold heavy | RMB parry",
@@ -145,6 +147,15 @@ var _bus_sliders: Dictionary = {}  # StringName -> HSlider
 var _coop_addr_edit: LineEdit = null
 var _coop_port_edit: LineEdit = null
 var _coop_status_label: Label = null
+
+# Gameplay HUD visibility & Top-Left Mode Objective Card (Tutorial / Naval Skirmish)
+var _hud_visible: bool = true
+var _mode_objective_panel: PanelContainer = null
+var _mode_obj_title_label: Label = null
+var _mode_obj_progress_label: Label = null
+var _mode_obj_body_label: Label = null
+var _mode_skip_btn: Button = null
+var _mode_objective_active: bool = false
 
 
 func _ready() -> void:
@@ -425,12 +436,105 @@ func set_pause_open(open: bool) -> void:
 		pause_overlay.visible = open
 	if open:
 		_sync_quality_button_states()
+	_sync_mode_objective_visibility()
 	_sync_look_pause()
 	pause_changed.emit(pause_open)
 
 
 func toggle_pause() -> void:
 	set_pause_open(not pause_open)
+
+
+## Cleanly hide or show the gameplay HUD (e.g. while First-Launch TitleMenu is open).
+func set_hud_visible(vis: bool) -> void:
+	_hud_visible = vis
+	visible = vis
+	if _root != null:
+		_root.visible = vis
+	if not vis:
+		dismiss_voyage_title()
+		if item_radial != null and item_radial.is_open:
+			item_radial.close_wheel(false)
+		if command_wheel != null and command_wheel.is_open:
+			command_wheel.close_wheel(false)
+	_sync_mode_objective_visibility()
+
+
+## Return true when gameplay HUD visibility is enabled.
+func is_hud_visible() -> bool:
+	return _hud_visible
+
+
+## Display or update the top-left Mode Objective Card (Tutorial / Naval Skirmish).
+func set_mode_objective(
+	title_text: String,
+	body_text: String,
+	progress_text: String = "",
+	show_skip_btn: bool = false
+) -> void:
+	var clean_title := _to_ascii(title_text.strip_edges())
+	var clean_body := _to_ascii(body_text.strip_edges())
+	var clean_prog := _to_ascii(progress_text.strip_edges())
+	if clean_title == "" and clean_body == "":
+		clear_mode_objective()
+		return
+	_mode_objective_active = true
+	if _mode_obj_title_label != null:
+		_mode_obj_title_label.text = clean_title
+		_mode_obj_title_label.visible = clean_title != ""
+	if _mode_obj_progress_label != null:
+		_mode_obj_progress_label.text = clean_prog
+		_mode_obj_progress_label.visible = clean_prog != ""
+	if _mode_obj_body_label != null:
+		_mode_obj_body_label.text = clean_body
+		_mode_obj_body_label.visible = clean_body != ""
+	if _mode_skip_btn != null:
+		_mode_skip_btn.visible = show_skip_btn
+	_sync_mode_objective_visibility()
+
+
+## Clear and hide the top-left Mode Objective Card.
+func clear_mode_objective() -> void:
+	_mode_objective_active = false
+	if _mode_obj_title_label != null:
+		_mode_obj_title_label.text = ""
+	if _mode_obj_progress_label != null:
+		_mode_obj_progress_label.text = ""
+		_mode_obj_progress_label.visible = false
+	if _mode_obj_body_label != null:
+		_mode_obj_body_label.text = ""
+	if _mode_skip_btn != null:
+		_mode_skip_btn.visible = false
+	_sync_mode_objective_visibility()
+
+
+## Emit `mode_skip_requested` (bound to the optional compact Tutorial Skip Step button).
+func skip_tutorial_step() -> void:
+	if Audio != null:
+		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+	mode_skip_requested.emit()
+
+
+## True while the top-left Mode Objective Card is active and visible on screen.
+func is_mode_objective_visible() -> bool:
+	return _mode_objective_panel != null and _mode_objective_panel.visible
+
+
+func get_mode_objective_title() -> String:
+	return _mode_obj_title_label.text if _mode_obj_title_label != null else ""
+
+
+func get_mode_objective_body() -> String:
+	return _mode_obj_body_label.text if _mode_obj_body_label != null else ""
+
+
+func get_mode_objective_progress() -> String:
+	return _mode_obj_progress_label.text if _mode_obj_progress_label != null else ""
+
+
+func _sync_mode_objective_visibility() -> void:
+	if _mode_objective_panel != null:
+		_mode_objective_panel.visible = _mode_objective_active and _hud_visible and not pause_open
 
 
 ## Apply Ocean.Quality preset (0=LOW, 1=MEDIUM, 2=HIGH).
@@ -670,8 +774,9 @@ func _build_ui() -> void:
 	_build_boss_bar()
 	_build_voyage_title_card()
 
-	# 4. Top-right Gold & Voyage Objective whisper card.
+	# 4. Top-right Gold & Voyage Objective whisper card + Top-left Mode Objective card.
 	_build_whisper_card()
+	_build_mode_objective_card()
 
 	# 5. Bottom-left faint Health & Stamina parchment pips.
 	_vitals_view = _VitalsView.new()
@@ -948,6 +1053,74 @@ func _build_whisper_card() -> void:
 	vbox.add_child(_voyage_obj_label)
 
 
+func _build_mode_objective_card() -> void:
+	_mode_objective_panel = PanelContainer.new()
+	_mode_objective_panel.name = "ModeObjectiveCard"
+	_mode_objective_panel.anchor_left = 0.0
+	_mode_objective_panel.anchor_right = 0.0
+	_mode_objective_panel.anchor_top = 0.0
+	_mode_objective_panel.anchor_bottom = 0.0
+	_mode_objective_panel.offset_left = 24.0
+	_mode_objective_panel.offset_right = 392.0
+	_mode_objective_panel.offset_top = 24.0
+	_mode_objective_panel.offset_bottom = 112.0
+	_mode_objective_panel.custom_minimum_size = Vector2(368.0, 0.0)
+	_mode_objective_panel.grow_vertical = Control.GROW_DIRECTION_END
+	_mode_objective_panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	_mode_objective_panel.add_theme_stylebox_override("panel",
+		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.71, 0.92), HudIcons.COL_BRASS, 2, 7, 15, 10))
+	_mode_objective_panel.visible = false
+	_root.add_child(_mode_objective_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 5)
+	vbox.mouse_filter = Control.MOUSE_FILTER_PASS
+	_mode_objective_panel.add_child(vbox)
+
+	var hdr := HBoxContainer.new()
+	hdr.add_theme_constant_override("separation", 8)
+	hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(hdr)
+
+	_mode_obj_title_label = Label.new()
+	_mode_obj_title_label.name = "ModeObjectiveTitle"
+	_mode_obj_title_label.text = ""
+	_mode_obj_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mode_obj_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_obj_title_label.add_theme_font_size_override("font_size", 15)
+	_mode_obj_title_label.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	hdr.add_child(_mode_obj_title_label)
+
+	_mode_obj_progress_label = Label.new()
+	_mode_obj_progress_label.name = "ModeObjectiveProgress"
+	_mode_obj_progress_label.text = ""
+	_mode_obj_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_mode_obj_progress_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_obj_progress_label.add_theme_font_size_override("font_size", 13)
+	_mode_obj_progress_label.add_theme_color_override("font_color", Color(0.56, 0.36, 0.06))
+	_mode_obj_progress_label.visible = false
+	hdr.add_child(_mode_obj_progress_label)
+
+	_mode_obj_body_label = Label.new()
+	_mode_obj_body_label.name = "ModeObjectiveBody"
+	_mode_obj_body_label.text = ""
+	_mode_obj_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mode_obj_body_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_obj_body_label.add_theme_font_size_override("font_size", 14)
+	_mode_obj_body_label.add_theme_color_override("font_color", HudIcons.COL_INK)
+	vbox.add_child(_mode_obj_body_label)
+
+	_mode_skip_btn = Button.new()
+	_mode_skip_btn.name = "ModeSkipButton"
+	_mode_skip_btn.text = "Skip Step"
+	_mode_skip_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_mode_skip_btn.custom_minimum_size = Vector2(96.0, 28.0)
+	_mode_skip_btn.add_theme_font_size_override("font_size", 12)
+	_mode_skip_btn.visible = false
+	_mode_skip_btn.pressed.connect(skip_tutorial_step)
+	vbox.add_child(_mode_skip_btn)
+
+
 func _build_context_prompt() -> void:
 	var holder := CenterContainer.new()
 	holder.name = "PromptHolder"
@@ -1102,6 +1275,17 @@ func _build_pause_overlay() -> void:
 	)
 	top_row.add_child(save_btn)
 
+	var title_btn := Button.new()
+	title_btn.name = "ReturnToTitleButton"
+	title_btn.text = "Main Menu"
+	title_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_btn.pressed.connect(func() -> void:
+		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+		set_pause_open(false)
+		return_to_title_requested.emit()
+	)
+	top_row.add_child(title_btn)
+
 	root_v.add_child(_make_section_divider("QUALITY PRESETS"))
 
 	# Ocean Quality row
@@ -1248,7 +1432,7 @@ func _make_quality_row(label_text: String, out_btns: Array[Button], on_pick: Cal
 # ==============================================================================
 
 func _input(event: InputEvent) -> void:
-	if not input_enabled:
+	if not input_enabled or not _hud_visible:
 		return
 	if event.is_action_pressed(&"pause"):
 		if item_radial != null and item_radial.is_open:
@@ -1290,6 +1474,7 @@ func _process(delta: float) -> void:
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
 	_tick_crosshair(delta)
+	_sync_mode_objective_visibility()
 
 
 func _tick_sailing_telemetry() -> void:

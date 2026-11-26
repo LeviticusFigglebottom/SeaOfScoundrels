@@ -129,6 +129,18 @@ const LINES := {
 			"Flames snuffed out! Smells like scorched oak, but she'll sail!",
 			"Deck fire's out, Cap'n! Not a spark left burning!",
 		],
+		&"tutorial_step": [
+			"Fine seamanship, Captain! Ready for the next drill!",
+			"Sharp work on deck, Cap'n! You'll have your sea legs in no time!",
+		],
+		&"skirmish_wave": [
+			"Sound the battle horn! Hostile hulls closing fast - steady on the helm!",
+			"Fresh wave on the horizon, Cap'n! Bring the broadside round and give 'em iron!",
+		],
+		&"skirmish_victory": [
+			"Every cursed keel sent to the seabed! Finest fighting ship on the archipelago, Cap'n!",
+			"The sea is ours, Captain! Not a rival flag left standing on the horizon!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -223,6 +235,18 @@ const LINES := {
 			"Fire's out! Smoke clearing off the gunwales!",
 			"Doused those flames clean! Deck's safe again, Cap'n!",
 		],
+		&"tutorial_step": [
+			"Smooth sailing, Captain! Eyes ahead for the next stage of the voyage!",
+			"Cleanly done, Cap'n! Keep that compass steady and let's press on!",
+		],
+		&"skirmish_wave": [
+			"All hands to battle stations! Fresh enemy sails dead ahead!",
+			"New wave sighted off the bow, Cap'n! Guns hot and powder dry!",
+		],
+		&"skirmish_victory": [
+			"Clear skies and empty waves, Cap'n! We swept the whole armada clean!",
+			"Victory on the high seas! Wait till the tavern hears how we sank the lot of 'em!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -316,6 +340,18 @@ const LINES := {
 		&"fire_doused": [
 			"Sizzle and steam - fire's out! Good as new, Cap'n!",
 			"All doused! Just a touch of soot on the planks!",
+		],
+		&"tutorial_step": [
+			"Splendid work, Captain! Even the timbers are cheering for you!",
+			"You're a natural on this sloop, Cap'n! Onward to the next task!",
+		],
+		&"skirmish_wave": [
+			"More trouble inbound, Captain! Planks stacked high and cannons ready to roar!",
+			"Next wave's here, Cap'n! Let's turn their hulls into driftwood!",
+		],
+		&"skirmish_victory": [
+			"Not a single hostile hull left floating! Raise a tankard, Captain!",
+			"We did it, Cap'n! Barely a scratch on my oak planks and a hold full of bounty gold!",
 		],
 	},
 }

@@ -65,9 +65,13 @@ var crew_brains: Array[CrewBrain] = []
 
 var hud: GameHUD = null
 var shipwright_menu: ShipwrightMenu = null
+var title_menu: TitleMenu = null
 var voyage_manager: VoyageManager = null
 var world_director: WorldDirector = null
+var tutorial_director: TutorialDirector = null
+var skirmish_director: SkirmishDirector = null
 var user_settings: UserSettings = null
+var active_session_config: SessionConfig = SessionConfig.new()
 
 var active_enemies: Array[Pawn] = []
 var enemy_ships: Array[Ship] = []
@@ -80,6 +84,11 @@ var active_shot_mode: String = ""
 
 var _entities_root: Node3D = null
 var _shot_camera: Camera3D = null
+var _title_camera: Camera3D = null
+var _title_orbit_time: float = 0.0
+var _title_mode_active: bool = false
+var _current_spawn_outpost_id: StringName = &"port_scoundrel"
+var _skirmish_enemies: Array[Node] = []
 var _shot_track_ship: bool = false
 var _shot_track_cam_local: Vector3 = Vector3.ZERO
 var _shot_track_look_local: Vector3 = Vector3.ZERO
@@ -122,6 +131,7 @@ var _cli_cloud: float = NAN
 var _cli_quality: String = ""
 var _cli_ship_class: StringName = &"sloop"
 var _cli_ship_explicit: bool = false
+var _cli_skip_menu: bool = false
 
 
 func _ready() -> void:
@@ -130,7 +140,7 @@ func _ready() -> void:
 
 	user_settings = UserSettings.new()
 	user_settings.load_from()
-	if not _cli_ship_explicit and active_shot_mode in ["sovereigns_bastion", "galleons_reach"]:
+	if not _cli_ship_explicit and active_shot_mode in ["sovereigns_bastion", "galleons_reach", "title_menu", "play_setup"]:
 		_cli_ship_class = &"brigantine"
 	elif _cli_ship_class == &"sloop" and not _cli_ship_explicit and Game != null and Game.profile != null:
 		var saved_cls := String(Game.profile.data.get("ship_class", "sloop"))
@@ -163,8 +173,18 @@ func _ready() -> void:
 			_prepare_active_voyage_world(voyage_manager.active_voyage)
 		_update_cargo_value()
 
+	var should_open_title := (
+		active_shot_mode == ""
+		and not _cli_host
+		and _cli_join_ip == ""
+		and not _cli_skip_menu
+		and DisplayServer.get_name() != "headless"
+	)
+
 	if active_shot_mode != "":
 		_apply_hero_shot(active_shot_mode)
+	elif should_open_title and title_menu != null:
+		_enter_title_menu(TitleMenu.Page.LANDING)
 	elif hud != null and DisplayServer.get_name() != "headless":
 		var subtitle := "Port Scoundrel - Set Sail for Cutlass Cay"
 		if voyage_manager != null and voyage_manager.has_active_voyage():
@@ -185,6 +205,8 @@ func _exit_tree() -> void:
 			bp.draw_pass_1 = null
 			bp.process_material = null
 	_reef_bubble_emitters.clear()
+	_skirmish_enemies.clear()
+	_title_camera = null
 	_active_dolphin_pod = null
 	_disconnect_autoload_signals()
 	if Net != null:
@@ -244,6 +266,8 @@ func _parse_cli_args() -> void:
 		var a := String(raw_arg).strip_edges()
 		if a == "host":
 			_cli_host = true
+		elif a == "skip_menu" or a == "--skip-menu":
+			_cli_skip_menu = true
 		elif a.begins_with("join="):
 			_cli_join_ip = a.trim_prefix("join=")
 		elif a.begins_with("port="):
@@ -1089,6 +1113,15 @@ func _build_voyage_and_director() -> void:
 		world_director.set_last_outpost(StringName(home_outpost.island_id), home_outpost.global_position)
 	add_child(world_director)
 
+	tutorial_director = TutorialDirector.new()
+	tutorial_director.name = "TutorialDirector"
+	add_child(tutorial_director)
+	tutorial_director.bind(player_ship, player_pawn, inventory, map_table, player_rowboat)
+
+	skirmish_director = SkirmishDirector.new()
+	skirmish_director.name = "SkirmishDirector"
+	add_child(skirmish_director)
+
 	# Wire MapTableView live references.
 	if map_table != null:
 		map_table.voyage_manager = voyage_manager
@@ -1108,6 +1141,8 @@ func _build_ui() -> void:
 	hud.bind(player_pawn, player_controller, inventory, player_combat, player_ship, voyage_manager, sky_rig)
 	for b in crew_brains:
 		hud.register_crew_brain(b)
+	hud.return_to_title_requested.connect(_on_hud_return_to_title)
+	hud.mode_skip_requested.connect(_on_hud_mode_skip)
 
 	shipwright_menu = ShipwrightMenu.new()
 	shipwright_menu.name = "ShipwrightMenu"
@@ -1141,6 +1176,15 @@ func _build_ui() -> void:
 			if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"set_ship_name"):
 				player_ship.call(&"set_ship_name", new_name)
 		)
+
+	title_menu = TitleMenu.new()
+	title_menu.name = "TitleMenu"
+	add_child(title_menu)
+	title_menu.bind(user_settings, Game.profile if Game != null else null, self)
+	title_menu.preview_config_changed.connect(_on_title_preview_changed)
+	title_menu.start_game_requested.connect(_on_title_start_game)
+	title_menu.settings_changed.connect(_on_settings_changed)
+	title_menu.quit_requested.connect(_on_title_quit_requested)
 
 
 func _wire_world_signals() -> void:
@@ -1177,6 +1221,20 @@ func _wire_world_signals() -> void:
 			_sync_emissary_visuals()
 		)
 	_sync_emissary_visuals()
+
+	# Maiden Voyage TutorialDirector & Naval SkirmishDirector signals.
+	if tutorial_director != null:
+		tutorial_director.step_changed.connect(_on_tutorial_step_changed)
+		tutorial_director.step_completed.connect(_on_tutorial_step_completed)
+		tutorial_director.tutorial_completed.connect(_on_tutorial_completed)
+		tutorial_director.tutorial_skipped.connect(_on_tutorial_skipped)
+	if skirmish_director != null:
+		skirmish_director.wave_started.connect(_on_skirmish_wave_started)
+		skirmish_director.spawn_ship_requested.connect(_on_skirmish_spawn_ship)
+		skirmish_director.spawn_leviathan_requested.connect(_on_skirmish_spawn_leviathan)
+		skirmish_director.restock_requested.connect(_on_skirmish_restock)
+		skirmish_director.objective_updated.connect(_on_skirmish_objective_updated)
+		skirmish_director.skirmish_victory.connect(_on_skirmish_victory)
 
 	# WorldDirector living-sea event signals.
 	world_director.spawn_rival_ship.connect(_on_director_spawn_rival_ship)
@@ -1250,6 +1308,7 @@ func _apply_cli_overrides() -> void:
 
 func _process(delta: float) -> void:
 	_tick_bobbing_props(delta)
+	_tick_title_camera(delta)
 	_tick_hero_shot_tracking(delta)
 	_tick_boss_hud()
 	_update_live_audio(false)
@@ -1766,6 +1825,8 @@ func _on_dig_site_unearthed(chest: Carryable) -> void:
 		return
 	if voyage_manager != null and voyage_manager.has_active_voyage():
 		voyage_manager.notify_treasure_unearthed(chest)
+	if tutorial_director != null and tutorial_director.active:
+		tutorial_director.notify_treasure_unearthed()
 	_update_cargo_value()
 
 
@@ -1785,6 +1846,8 @@ func _on_outpost_treasure_sold(item: Node, gold: int, renown: int) -> void:
 	}
 	if voyage_manager != null:
 		voyage_manager.notify_treasure_sold(sale_receipt)
+	if tutorial_director != null and tutorial_director.active:
+		tutorial_director.notify_treasure_sold()
 	_update_cargo_value()
 	_sync_cabin_renown(false)
 	Game.save()
@@ -2792,6 +2855,8 @@ func _swap_player_ship_class(cls: StringName) -> void:
 		sea_soundscape.bind_ship(player_ship)
 	_mount_player_rowboat(player_ship)
 	_sync_emissary_visuals()
+	if tutorial_director != null and is_instance_valid(tutorial_director):
+		tutorial_director.bind(player_ship, player_pawn, inventory, map_table, player_rowboat)
 	if inventory != null and is_instance_valid(inventory):
 		inventory.map_table = map_table
 	if shipwright_menu != null:
@@ -4225,6 +4290,38 @@ func _apply_hero_shot(mode: String) -> void:
 				var sc_look := sc_fpos + Vector3(0.0, 128.0, 0.0)
 				_mount_shot_camera(sc_cam, sc_look, 58.0)
 
+		"title_menu":
+			# Wave 32 first-launch live-3D Title Menu hero shot: left-anchored parchment Title Menu
+			# with moored Brigantine, Port Scoundrel lighthouse & shimmering ocean gleaming on the right!
+			Weather.time_of_day = 10.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 9.0, -0.35, 0.0, 0.36)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.06)
+			_suppress_shot_hud_overlays()
+			if title_menu != null:
+				title_menu.config.mode = SessionConfig.MODE_ADVENTURE
+				title_menu.config.ship_class = player_ship.ship_class if player_ship != null else &"brigantine"
+				title_menu.config.spawn_outpost_id = &"port_scoundrel"
+				title_menu.config.time_preset = &"morning"
+				title_menu.config.weather_preset = &"fair"
+				_enter_title_menu(TitleMenu.Page.LANDING)
+				_title_orbit_time = 0.0
+				_update_title_camera()
+
+		"play_setup":
+			# Wave 32 Pre-Sail Configurator hero shot: sunset harbour + Brigantine with raised Emissary Flag
+			# visible live beside the Setup configurator panel!
+			_suppress_shot_hud_overlays()
+			if title_menu != null:
+				title_menu.select_mode(SessionConfig.MODE_ADVENTURE)
+				title_menu.select_ship_class(&"brigantine")
+				title_menu.select_spawn_outpost(&"port_scoundrel")
+				title_menu.select_time_preset(&"sunset")
+				title_menu.select_weather_preset(&"fair")
+				title_menu.select_starting_emissary(&"gilded_compass")
+				_enter_title_menu(TitleMenu.Page.SETUP)
+				_title_orbit_time = 1.6
+				_update_title_camera()
+
 
 func _suppress_shot_hud_overlays() -> void:
 	if hud != null:
@@ -4462,3 +4559,411 @@ static func _character_visual_of(p: Pawn) -> CharacterVisual:
 	if not found.is_empty():
 		return found[0] as CharacterVisual
 	return null
+
+
+# ==============================================================================
+# Wave 32 — First-Launch Title Menu, Live Preview, Maiden Voyage & Naval Skirmish
+# ==============================================================================
+
+func _enter_title_menu(page: TitleMenu.Page = TitleMenu.Page.LANDING) -> void:
+	_title_mode_active = true
+	if shipwright_menu != null and shipwright_menu.is_open:
+		shipwright_menu.close_menu()
+	if hud != null:
+		hud.set_pause_open(false)
+		hud.clear_mode_objective()
+		hud.set_hud_visible(false)
+	if player_controller != null:
+		player_controller.input_enabled = false
+		player_controller.capture_mouse = false
+		player_controller.set_look_paused(true)
+	if inventory != null:
+		inventory.input_enabled = false
+	if world_director != null:
+		world_director.enabled = false
+	if _title_camera == null or not is_instance_valid(_title_camera):
+		_title_camera = Camera3D.new()
+		_title_camera.name = "TitleMenuCamera"
+		_title_camera.fov = 56.0
+		_title_camera.near = 0.1
+		_title_camera.far = 6000.0
+		add_child(_title_camera)
+	_title_camera.make_current()
+	_update_title_camera()
+	if title_menu != null:
+		title_menu.refresh_profile_summary()
+		title_menu.open_menu(page)
+
+
+func _exit_title_menu() -> void:
+	_title_mode_active = false
+	if title_menu != null and title_menu.is_open:
+		title_menu.close_menu()
+	if _title_camera != null and is_instance_valid(_title_camera):
+		_title_camera.current = false
+	if player_controller != null:
+		if player_controller.camera != null:
+			player_controller.camera.make_current()
+		player_controller.input_enabled = (active_shot_mode == "")
+		player_controller.capture_mouse = (active_shot_mode == "")
+		player_controller.set_look_paused(false)
+		if active_shot_mode == "" and DisplayServer.get_name() != "headless":
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if inventory != null:
+		inventory.input_enabled = (active_shot_mode == "")
+	if hud != null:
+		hud.set_hud_visible(true)
+		hud.input_enabled = (active_shot_mode == "")
+
+
+func _tick_title_camera(delta: float) -> void:
+	if not _title_mode_active or _title_camera == null or not is_instance_valid(_title_camera):
+		return
+	_title_orbit_time += delta
+	_update_title_camera()
+
+
+func _update_title_camera() -> void:
+	if _title_camera == null or not is_instance_valid(_title_camera):
+		return
+	if player_ship == null or not is_instance_valid(player_ship):
+		return
+	var hs := _ship_scale_of(player_ship)
+	var is_brig := (player_ship.ship_class == &"brigantine")
+	var sc := (1.24 if is_brig else 1.0) * hs
+	var ship_pos := player_ship.global_position
+	var ship_yaw := Basis(Vector3.UP, player_ship.global_rotation.y)
+	# Gentle seaward quarter-bow orbit framing the live ship cleanly on the right 55% of the screen
+	# so the left-anchored parchment TitleMenu never blocks your vessel!
+	var ang := 0.72 + sin(_title_orbit_time * 0.16) * 0.22
+	var eye := ship_pos + ship_yaw * Vector3(sin(ang) * 23.0 * sc, 5.2 * sc, -cos(ang) * 23.0 * sc)
+	eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.8)
+	var to_ship := ship_pos - eye
+	to_ship.y = 0.0
+	var cam_fwd := to_ship.normalized() if to_ship.length_squared() > 0.001 else Vector3.FORWARD
+	var cam_right := cam_fwd.cross(Vector3.UP).normalized()
+	# Shift look point slightly left of the ship so the vessel frames cleanly to the right of the menu!
+	var look := ship_pos + Vector3(0.0, 2.9 * sc, 0.0) - cam_right * (5.6 * sc)
+	_title_camera.look_at_from_position(eye, look, Vector3.UP)
+
+
+func _apply_crew_roster_count(desired_count: int) -> void:
+	var target := clampi(desired_count, 0, crew_pawns.size())
+	for idx in crew_pawns.size():
+		var cp := crew_pawns[idx]
+		var br := crew_brains[idx] if idx < crew_brains.size() else null
+		var yielded_to_peer := _peer_yielded_crew.values().has(idx)
+		var should_active := (idx < target) and not yielded_to_peer
+		if should_active:
+			if cp != null and is_instance_valid(cp):
+				cp.visible = true
+				cp.collision_layer = Pawn.LAYER_PAWN
+				cp.set_physics_process(true)
+				if player_ship != null and is_instance_valid(player_ship) and cp.platform != player_ship:
+					cp.board(player_ship, _crew_local_pos(player_ship, idx))
+			if br != null and is_instance_valid(br):
+				br.set_physics_process(true)
+		else:
+			if br != null and is_instance_valid(br):
+				br.yield_to_human_player()
+			if cp != null and is_instance_valid(cp):
+				cp.visible = false
+				cp.set_physics_process(false)
+				cp.collision_layer = 0
+
+
+func _apply_session_preview(cfg: SessionConfig, apply_emissary_preview: bool = true) -> void:
+	if cfg == null:
+		return
+	cfg.validate()
+	# 1. Ship class swap live in the harbour.
+	if Net.is_host() and player_ship != null and is_instance_valid(player_ship) and player_ship.ship_class != cfg.ship_class:
+		_swap_player_ship_class(cfg.ship_class)
+	# 2. Spawn outpost mooring relocation.
+	if Net.is_host() and cfg.spawn_outpost_id != _current_spawn_outpost_id:
+		_current_spawn_outpost_id = cfg.spawn_outpost_id
+		_restore_player_ship_at_outpost(cfg.spawn_outpost_id)
+		var op := archipelago.get_island_by_id(String(cfg.spawn_outpost_id))
+		if op != null and world_director != null:
+			world_director.set_last_outpost(cfg.spawn_outpost_id, op.global_position)
+		if Game != null and Game.profile != null:
+			Game.profile.discover(String(cfg.spawn_outpost_id))
+	# 3. Custom ship name live on stern nameplate.
+	if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"set_ship_name"):
+		player_ship.call(&"set_ship_name", cfg.ship_name)
+	# 4. Crew roster count (0..3) live on deck.
+	_apply_crew_roster_count(cfg.crew_count)
+	# 5. Live sky time of day & weather.
+	if Net.is_host():
+		Weather.time_of_day = cfg.get_time_of_day()
+		var wp := cfg.get_weather_params()
+		var st := float(wp.get("storm", 0.06))
+		Weather.set_weather(st, float(wp.get("wind", 9.0)), -0.35, 0.0, float(wp.get("cloud", 0.36)))
+		Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, st)
+	# 6. Stern Emissary flag preview.
+	if apply_emissary_preview and player_ship != null and is_instance_valid(player_ship):
+		var eflag := ShipEmissaryFlag.mount_to_ship(player_ship)
+		if eflag != null:
+			var prev_grade := 1 if cfg.starting_emissary != &"" else 0
+			eflag.set_emissary(cfg.starting_emissary, prev_grade)
+	_update_title_camera()
+
+
+func _on_title_preview_changed(cfg: SessionConfig) -> void:
+	_apply_session_preview(cfg, true)
+
+
+func _on_title_start_game(cfg: SessionConfig) -> void:
+	if cfg == null:
+		return
+	var launch := cfg.duplicate_config()
+	launch.validate()
+	active_session_config = launch
+
+	# Persist ship class & vessel name in Captain Profile.
+	if Game != null and Game.profile != null:
+		Game.profile.set_ship_name(launch.ship_name)
+		Game.profile.data["ship_class"] = String(launch.ship_class)
+		Game.save()
+
+	# Handle Co-op Host / Join networking before dropping onto deck.
+	if launch.mode == SessionConfig.MODE_COOP:
+		if launch.coop_role == &"host":
+			var herr := Net.host(launch.coop_port)
+			if herr != OK:
+				if title_menu != null:
+					title_menu.set_status_message("Failed to host on port %d (%s)." % [launch.coop_port, error_string(herr)])
+				return
+		else:
+			var jerr := Net.join(launch.coop_address, launch.coop_port)
+			if jerr != OK:
+				if title_menu != null:
+					title_menu.set_status_message("Could not join %s:%d (%s)." % [launch.coop_address, launch.coop_port, error_string(jerr)])
+				return
+	elif not Net.is_host():
+		Net.disconnect_session()
+
+	# Stop any prior special modes & clear prior skirmish vessels cleanly.
+	_stop_active_special_modes()
+	_apply_session_preview(launch, false)
+	_exit_title_menu()
+
+	if not Net.is_host():
+		if hud != null:
+			hud.show_voyage_title("CO-OP CREW", "Joining %s:%d..." % [launch.coop_address, launch.coop_port], 3.8)
+		return
+
+	# Sync real Trading Company Emissary Flag state cleanly.
+	if voyage_manager != null and voyage_manager.emissary != null:
+		if launch.starting_emissary != &"" and launch.mode != SessionConfig.MODE_TUTORIAL:
+			voyage_manager.emissary.raise_flag(launch.starting_emissary)
+		elif voyage_manager.emissary.is_active():
+			voyage_manager.emissary.active_company = &""
+			voyage_manager.emissary.grade = 0
+			voyage_manager.emissary.xp = 0.0
+	_sync_emissary_visuals()
+
+	match launch.mode:
+		SessionConfig.MODE_TUTORIAL:
+			_start_maiden_voyage_mode()
+		SessionConfig.MODE_SKIRMISH:
+			_start_naval_skirmish_mode(launch)
+		_:
+			_start_adventure_mode(launch)
+
+
+func _start_adventure_mode(cfg: SessionConfig) -> void:
+	if world_director != null:
+		world_director.enabled = true
+	if hud != null:
+		hud.clear_mode_objective()
+	var map_data := archipelago.get_map_data()
+	if voyage_manager != null:
+		voyage_manager.refresh_offers(map_data, 3, cfg.spawn_outpost_id)
+		if not voyage_manager.has_active_voyage():
+			voyage_manager.start_starter_voyage(map_data)
+		if voyage_manager.has_active_voyage():
+			_prepare_active_voyage_world(voyage_manager.active_voyage)
+	if map_table != null:
+		map_table.refresh_now()
+	var op_name := String(cfg.get_outpost_spec().get("name", "Port Scoundrel"))
+	var subtitle := "%s - Open-Seas Adventure" % op_name
+	if cfg.mode == SessionConfig.MODE_COOP:
+		subtitle = "%s - Hosting Co-op on Port %d" % [op_name, cfg.coop_port]
+	if hud != null:
+		hud.show_voyage_title("SEA OF SCOUNDRELS", subtitle, 4.4)
+
+
+func _start_maiden_voyage_mode() -> void:
+	if world_director != null:
+		world_director.enabled = false
+	_current_spawn_outpost_id = &"port_scoundrel"
+	_restore_player_ship_at_outpost(&"port_scoundrel")
+	var map_data := archipelago.get_map_data()
+	if voyage_manager != null:
+		voyage_manager.refresh_offers(map_data, 3, &"port_scoundrel")
+		if not voyage_manager.has_active_voyage():
+			voyage_manager.start_starter_voyage(map_data)
+		if voyage_manager.has_active_voyage():
+			_prepare_active_voyage_world(voyage_manager.active_voyage)
+	var cutlass := archipelago.get_island_by_id("cutlass_cay")
+	var cutlass_pos := cutlass.global_position if cutlass != null else Vector3(0.0, 0.0, -520.0)
+	if tutorial_director != null:
+		tutorial_director.bind(player_ship, player_pawn, inventory, map_table, player_rowboat)
+		tutorial_director.start_tutorial(cutlass_pos, "Cutlass Cay")
+	if hud != null:
+		hud.show_voyage_title("MAIDEN VOYAGE", "Guided Pirate Tutorial - Port Scoundrel", 4.2)
+
+
+func _start_naval_skirmish_mode(cfg: SessionConfig) -> void:
+	if world_director != null:
+		world_director.enabled = false
+	# Launch directly into wide open combat waters far from any reef or island!
+	var arena_xz := Vector3(-240.0, 0.0, -280.0)
+	_place_sailing_ship(arena_xz, 0.35, 0.65, 5.2)
+	if player_ship != null and is_instance_valid(player_ship):
+		player_ship.cannonballs_remaining = Ship.MAX_CANNONBALLS
+		player_ship.planks_remaining = Ship.MAX_PLANKS
+		player_ship.water_level = 0.0
+	var scales := cfg.get_difficulty_scales()
+	if skirmish_director != null:
+		skirmish_director.start_skirmish(
+			float(scales.get("enemy_scale", 1.0)),
+			float(scales.get("payout_scale", 1.0)),
+			1.5
+		)
+	if hud != null:
+		hud.show_voyage_title("NAVAL SKIRMISH", "All Hands to Battle Stations!", 3.8)
+
+
+func _stop_active_special_modes() -> void:
+	if tutorial_director != null and tutorial_director.active:
+		tutorial_director.stop_tutorial()
+	if skirmish_director != null and skirmish_director.state != SkirmishDirector.State.IDLE:
+		skirmish_director.stop_skirmish()
+	for foe_node in _skirmish_enemies:
+		if foe_node != null and is_instance_valid(foe_node):
+			foe_node.queue_free()
+	_skirmish_enemies.clear()
+	if hud != null:
+		hud.clear_mode_objective()
+
+
+func _on_hud_return_to_title() -> void:
+	_stop_active_special_modes()
+	if Net.is_host():
+		_restore_player_ship_at_outpost(_current_spawn_outpost_id)
+	_enter_title_menu(TitleMenu.Page.LANDING)
+
+
+func _on_hud_mode_skip() -> void:
+	if tutorial_director != null and tutorial_director.active:
+		tutorial_director.skip_current_step()
+
+
+func _on_title_quit_requested() -> void:
+	if Game != null:
+		Game.save()
+	if DisplayServer.get_name() != "headless":
+		get_tree().quit()
+
+
+func _speak_crew_mode_line(event_key: StringName) -> void:
+	for idx in crew_brains.size():
+		var br := crew_brains[idx]
+		var cp := crew_pawns[idx] if idx < crew_pawns.size() else null
+		if br != null and is_instance_valid(br) and cp != null and is_instance_valid(cp) and cp.visible:
+			var line := CrewDialogue.format_line(br.persona_id, event_key)
+			if line != "":
+				var pname := String(CrewDialogue.get_persona(br.persona_id).get("name", "Barnaby"))
+				Game.post_notice("%s: %s" % [pname, line])
+				return
+
+
+func _on_tutorial_step_changed(_idx: int, _step_id: StringName, title: String, hint: String, progress_text: String) -> void:
+	if hud != null:
+		hud.set_mode_objective(title, hint, progress_text, true)
+
+
+func _on_tutorial_step_completed(_idx: int, _step_id: StringName) -> void:
+	_speak_crew_mode_line(&"tutorial_step")
+
+
+func _on_tutorial_completed(bonus_gold: int, bonus_renown: int) -> void:
+	if world_director != null:
+		world_director.enabled = true
+	if hud != null:
+		hud.clear_mode_objective()
+		hud.show_voyage_title("MAIDEN VOYAGE COMPLETE!", "+%d Gold & +%d Renown - The Archipelago Awaits!" % [bonus_gold, bonus_renown], 5.0)
+	if player_ship != null and is_instance_valid(player_ship):
+		_launch_victory_flare(player_ship.global_position + Vector3(0.0, 3.8, 0.0), Color(1.0, 0.86, 0.28))
+	Game.save()
+
+
+func _on_tutorial_skipped() -> void:
+	if world_director != null:
+		world_director.enabled = true
+	if hud != null:
+		hud.clear_mode_objective()
+	Game.post_notice("Tutorial skipped - sailing freely in Open-Seas Adventure!")
+
+
+func _on_skirmish_wave_started(wave_num: int, wave_title: String, banner_text: String, _enemy_count: int) -> void:
+	if hud != null:
+		hud.show_voyage_title("WAVE %d - %s" % [wave_num, wave_title.to_upper()], banner_text, 4.0)
+	_speak_crew_mode_line(&"skirmish_wave")
+
+
+func _on_skirmish_spawn_ship(archetype: StringName, relative_offset: Vector3) -> void:
+	if not Net.is_host() or player_ship == null or not is_instance_valid(player_ship):
+		return
+	var spawn_pos := player_ship.global_position + relative_offset
+	spawn_pos.y = Sea.height(spawn_pos.x, spawn_pos.z)
+	var foe := _spawn_enemy_vessel(archetype, spawn_pos)
+	if foe != null:
+		_skirmish_enemies.append(foe)
+		foe.sunk.connect(func() -> void:
+			if skirmish_director != null and skirmish_director.state == SkirmishDirector.State.COMBAT:
+				skirmish_director.notify_enemy_defeated(&"ship")
+		, CONNECT_ONE_SHOT)
+
+
+func _on_skirmish_spawn_leviathan(relative_offset: Vector3) -> void:
+	if not Net.is_host() or player_ship == null or not is_instance_valid(player_ship):
+		return
+	var spawn_pos := player_ship.global_position + relative_offset
+	var lev := Leviathan.new()
+	lev.target_ship = player_ship
+	lev.position = Vector3(spawn_pos.x, 0.0, spawn_pos.z)
+	_entities_root.add_child(lev)
+	lev.global_position = Vector3(spawn_pos.x, 0.0, spawn_pos.z)
+	lev.leviathan_defeated.connect(func(pos: Vector3, _salvage: Array) -> void:
+		_launch_victory_flare(Vector3(pos.x, Sea.height(pos.x, pos.z) + 2.5, pos.z), Color(0.24, 0.94, 0.88))
+		if skirmish_director != null and skirmish_director.state == SkirmishDirector.State.COMBAT:
+			skirmish_director.notify_enemy_defeated(&"leviathan")
+	, CONNECT_ONE_SHOT)
+	active_leviathans.append(lev)
+	_skirmish_enemies.append(lev)
+
+
+func _on_skirmish_restock(cannonballs: int, planks: int) -> void:
+	if player_ship != null and is_instance_valid(player_ship):
+		SkirmishDirector.apply_ship_restock(player_ship, cannonballs, planks)
+
+
+func _on_skirmish_objective_updated(title: String, detail: String, progress: String) -> void:
+	if hud != null:
+		hud.set_mode_objective(title, detail, progress, false)
+
+
+func _on_skirmish_victory(total_gold: int, total_kills: int, total_score: int) -> void:
+	if hud != null:
+		hud.show_voyage_title(
+			"SKIRMISH VICTORY!",
+			"%d Hostiles Sunk  |  +%d Gold  |  Score %d" % [total_kills, total_gold, total_score],
+			5.5
+		)
+	_speak_crew_mode_line(&"skirmish_victory")
+	if player_ship != null and is_instance_valid(player_ship):
+		_launch_victory_flare(player_ship.global_position + Vector3(0.0, 4.0, 0.0), Color(1.0, 0.84, 0.28))
+	Game.save()
