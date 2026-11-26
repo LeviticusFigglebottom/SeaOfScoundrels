@@ -2170,3 +2170,255 @@ func test_q5a_upgraded_harbour_bastion_pier_architecture_and_rocks() -> void:
 			print("    q5a %s: %d tris, %d cols, min_y=%.2f" % [fname, vis_tris, col_count, min_vis_y])
 
 		inst.free()
+
+
+func test_q7a_remaining_outpost_ruin_wreck_and_camp_prop_craft() -> void:
+	# Verify Pass Q7A upgrades across the remaining 10 outpost, ruin, wreck, camp & bridge props:
+	# sculpted hero budgets, MikkTSpace tangents, preserved empties & colliders, warm Q5A coral-sandstone
+	# harmony (no cold grey regressions), Q2B UV2-weighted sculpted ruin foliage, and chest carry bounds.
+	var prop_specs: Array[Dictionary] = [
+		{
+			"file": "outpost_stall.glb",
+			"min_tris": 4200, "max_tris": 8500,
+			"cols": ["col_stall_counter", "col_stall_back", "col_stall_roof"],
+			"empty": "Lantern_Stall",
+			"mats": ["mat_stone", "mat_wood", "mat_awning", "mat_brass", "mat_iron", "mat_rope", "mat_paint", "mat_lantern_glass"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -1.10, "warm_mat": "mat_stone", "warm_min_y": 0.0,
+		},
+		{
+			"file": "notice_board.glb",
+			"min_tris": 2200, "max_tris": 4800,
+			"cols": ["col_notice_board"],
+			"empty": "",
+			"mats": ["mat_stone", "mat_wood", "mat_shingle", "mat_brass", "mat_iron", "mat_paint", "mat_lantern_glass"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -0.60, "warm_mat": "mat_stone", "warm_min_y": 0.0,
+		},
+		{
+			"file": "ruin_arch.glb",
+			"min_tris": 2800, "max_tris": 5800,
+			"cols": ["col_arch_l", "col_arch_r"],
+			"empty": "",
+			"mats": ["mat_stone", "mat_rock", "mat_brass", "mat_foliage"],
+			"need_foliage_uv2": true, "min_foliage_tris": 800,
+			"max_base_y": -1.10, "warm_mat": "mat_stone", "warm_min_y": 0.50,
+		},
+		{
+			"file": "ruin_pillar.glb",
+			"min_tris": 1200, "max_tris": 2800,
+			"cols": ["col_pillar"],
+			"empty": "",
+			"mats": ["mat_stone", "mat_rock", "mat_brass", "mat_foliage"],
+			"need_foliage_uv2": true, "min_foliage_tris": 350,
+			"max_base_y": -0.95, "warm_mat": "mat_stone", "warm_min_y": 0.35,
+		},
+		{
+			"file": "campfire.glb",
+			"min_tris": 1800, "max_tris": 3800,
+			"cols": [],
+			"empty": "Lantern_Fire",
+			"mats": ["mat_rock", "mat_embers", "mat_iron", "mat_brass", "mat_wood", "mat_bark_banyan", "mat_paint"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -0.10, "warm_mat": "mat_rock", "warm_min_y": 0.0,
+		},
+		{
+			"file": "shipwreck_hulk.glb",
+			"min_tris": 3600, "max_tris": 7200,
+			"cols": ["col_wreck_hull", "col_wreck_mast"],
+			"empty": "",
+			"mats": ["mat_wood", "mat_awning", "mat_iron", "mat_brass", "mat_rock", "mat_rope"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -1.00, "warm_mat": "", "warm_min_y": 0.0,
+		},
+		{
+			"file": "chest_treasure.glb",
+			"min_tris": 2000, "max_tris": 4200,
+			"cols": [],
+			"empty": "",
+			"mats": ["mat_wood", "mat_brass", "mat_iron", "mat_paint"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": 0.05, "warm_mat": "", "warm_min_y": 0.0,
+		},
+		{
+			"file": "watchtower_wood.glb",
+			"min_tris": 5800, "max_tris": 9500,
+			"cols": ["col_watch_base", "col_watch_deck"],
+			"empty": "Lantern_Watch",
+			"mats": ["mat_stone", "mat_wood", "mat_thatch", "mat_brass", "mat_iron", "mat_rope", "mat_awning", "mat_lantern_glass"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -1.70, "warm_mat": "mat_stone", "warm_min_y": 0.0,
+		},
+		{
+			"file": "timber_bridge.glb",
+			"min_tris": 5600, "max_tris": 9500,
+			"cols": ["col_bridge_deck_0", "col_bridge_deck_1", "col_bridge_deck_2"],
+			"empty": "",
+			"mats": ["mat_stone", "mat_wood", "mat_iron", "mat_rope"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -1.80, "warm_mat": "mat_stone", "warm_min_y": 0.0,
+		},
+		{
+			"file": "dig_mound.glb",
+			"min_tris": 600, "max_tris": 1400,
+			"cols": [],
+			"empty": "",
+			"mats": ["mat_paint", "mat_rock", "mat_wood", "mat_bark_banyan", "mat_rope"],
+			"need_foliage_uv2": false, "min_foliage_tris": 0,
+			"max_base_y": -0.20, "warm_mat": "mat_rock", "warm_min_y": 0.0,
+		},
+	]
+
+	for spec: Dictionary in prop_specs:
+		var fname := String(spec["file"])
+		var path := "res://assets/generated/props/" + fname
+		check(ResourceLoader.exists(path), "Q7A prop missing: " + path)
+		var packed := load(path) as PackedScene
+		check(packed != null, "Q7A prop failed to load: " + path)
+		if packed == null:
+			continue
+		var inst := packed.instantiate() as Node3D
+		check(inst != null, "Q7A prop root must be Node3D: " + fname)
+		if inst == null:
+			continue
+
+		var vis_tris := 0
+		var foliage_tris := 0
+		var col_names: Dictionary = {}
+		var found_mats: Dictionary = {}
+		var all_have_tangents := true
+		var fol_has_uv2 := false
+		var fol_max_w := 0.0
+		var bmin := Vector3(INF, INF, INF)
+		var bmax := Vector3(-INF, -INF, -INF)
+		var warm_mat := String(spec["warm_mat"])
+		var warm_min_y: float = float(spec["warm_min_y"])
+		var warm_r_sum := 0.0
+		var warm_g_sum := 0.0
+		var warm_b_sum := 0.0
+		var warm_count := 0
+
+		for node in inst.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			if mi.name.begins_with("col_"):
+				col_names[mi.name] = mi
+				continue
+			var mesh := mi.mesh
+			for si in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(si)
+				var raw_idx: Variant = arrays[Mesh.ARRAY_INDEX]
+				var s_tris := 0
+				if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+					s_tris = floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+				else:
+					var raw_v0: Variant = arrays[Mesh.ARRAY_VERTEX]
+					if raw_v0 is PackedVector3Array:
+						s_tris = floori(float((raw_v0 as PackedVector3Array).size()) / 3.0)
+				vis_tris += s_tris
+
+				var raw_tan: Variant = arrays[Mesh.ARRAY_TANGENT]
+				if not (raw_tan is PackedFloat32Array) or (raw_tan as PackedFloat32Array).is_empty():
+					all_have_tangents = false
+
+				var mat := mesh.surface_get_material(si)
+				var mname := mat.resource_name if mat != null else ""
+				if not mname.is_empty():
+					found_mats[mname] = true
+
+				var raw_verts: Variant = arrays[Mesh.ARRAY_VERTEX]
+				var raw_cols: Variant = arrays[Mesh.ARRAY_COLOR]
+				if raw_verts is PackedVector3Array:
+					var verts := raw_verts as PackedVector3Array
+					for vi in verts.size():
+						var vp := mi.transform * verts[vi]
+						bmin = Vector3(minf(bmin.x, vp.x), minf(bmin.y, vp.y), minf(bmin.z, vp.z))
+						bmax = Vector3(maxf(bmax.x, vp.x), maxf(bmax.y, vp.y), maxf(bmax.z, vp.z))
+						if not warm_mat.is_empty() and mname.begins_with(warm_mat) and vp.y >= warm_min_y:
+							if raw_cols is PackedColorArray and vi < (raw_cols as PackedColorArray).size():
+								var vc: Color = (raw_cols as PackedColorArray)[vi]
+								warm_r_sum += vc.r
+								warm_g_sum += vc.g
+								warm_b_sum += vc.b
+								warm_count += 1
+
+				if mname.begins_with("mat_foliage"):
+					foliage_tris += s_tris
+					var raw_uv2: Variant = arrays[Mesh.ARRAY_TEX_UV2]
+					if raw_uv2 is PackedVector2Array and not (raw_uv2 as PackedVector2Array).is_empty():
+						fol_has_uv2 = true
+						for uv2_pt: Vector2 in (raw_uv2 as PackedVector2Array):
+							fol_max_w = maxf(fol_max_w, uv2_pt.x)
+
+		var min_t: int = int(spec["min_tris"])
+		var max_t: int = int(spec["max_tris"])
+		var req_cols: Array = spec["cols"] as Array
+		check(vis_tris >= min_t and vis_tris <= max_t,
+			"%s visual tris %d outside Q7A budget [%d..%d]" % [fname, vis_tris, min_t, max_t])
+		check_eq(col_names.size(), req_cols.size(), "%s must preserve exactly %d col_* colliders" % [fname, req_cols.size()])
+		for req_col_v: Variant in req_cols:
+			var cname := String(req_col_v)
+			check(col_names.has(cname), "%s missing required collider '%s' (found: %s)" % [fname, cname, str(col_names.keys())])
+		check(all_have_tangents, "%s visual surfaces must all carry valid MikkTSpace tangents" % fname)
+
+		var req_empty := String(spec["empty"])
+		if not req_empty.is_empty():
+			check(inst.find_child(req_empty, true, false) != null,
+				"%s must preserve %s empty marker" % [fname, req_empty])
+
+		for req_mat_v: Variant in (spec["mats"] as Array):
+			var req_mat := String(req_mat_v)
+			var matched := false
+			for fm_key: Variant in found_mats.keys():
+				if String(fm_key).begins_with(req_mat):
+					matched = true
+					break
+			check(matched, "%s missing required material '%s' (found: %s)" % [fname, req_mat, str(found_mats.keys())])
+
+		if bool(spec["need_foliage_uv2"]):
+			var min_fol_t: int = int(spec["min_foliage_tris"])
+			check(foliage_tris >= min_fol_t,
+				"%s sculpted Q2B ruin foliage tris %d below minimum %d" % [fname, foliage_tris, min_fol_t])
+			check(fol_has_uv2, "%s mat_foliage must carry UV2 wind weights" % fname)
+			check(fol_max_w >= 0.80,
+				"%s cascading vine UV2 wind sway weights must reach tips (>= 0.80, got %.2f)" % [fname, fol_max_w])
+
+		var max_base_y: float = float(spec["max_base_y"])
+		check(bmin.y <= max_base_y,
+			"%s base must plunge cleanly <= %.2f m (got min_y=%.2f)" % [fname, max_base_y, bmin.y])
+
+		if not warm_mat.is_empty():
+			check(warm_count > 20, "%s must contain warm sunlit sandstone %s vertices" % [fname, warm_mat])
+			if warm_count > 0:
+				var mr := warm_r_sum / float(warm_count)
+				var mg := warm_g_sum / float(warm_count)
+				var mb := warm_b_sum / float(warm_count)
+				check(mr >= 0.45 and mr >= mg and mg > mb and (mr - mb) >= 0.12,
+					"%s %s must stay warm sunlit Caribbean sandstone, not cold grey (mean rgb=%.2f,%.2f,%.2f)" % [
+						fname, warm_mat, mr, mg, mb])
+				print("    q7a %s: %d tris, %d cols, min_y=%.2f, %s_rgb=(%.2f,%.2f,%.2f), fol=%d" % [
+					fname, vis_tris, col_names.size(), bmin.y, warm_mat, mr, mg, mb, foliage_tris])
+		else:
+			print("    q7a %s: %d tris, %d cols, min_y=%.2f, sz=(%.2f,%.2f,%.2f)" % [
+				fname, vis_tris, col_names.size(), bmin.y, bmax.x - bmin.x, bmax.y - bmin.y, bmax.z - bmin.z])
+
+		# Preserve exact walkable ~3.8 m arch opening between ruin_arch colliders!
+		if fname == "ruin_arch.glb":
+			var col_l := col_names.get("col_arch_l") as MeshInstance3D
+			var col_r := col_names.get("col_arch_r") as MeshInstance3D
+			if col_l != null and col_r != null:
+				var aabb_l := col_l.get_aabb()
+				var aabb_r := col_r.get_aabb()
+				var opening_w := (col_r.position.x + aabb_r.position.x) - (col_l.position.x + aabb_l.end.x)
+				check(opening_w >= 3.75,
+					"ruin_arch.glb must preserve walkable ~3.8 m opening between col_arch_l and col_arch_r (got %.2f m)" % opening_w)
+
+		# Strictly preserve ~0.66 x 0.44 x 0.44 m carry footprint on chest_treasure so FP carry hands never clip!
+		if fname == "chest_treasure.glb":
+			var sz := bmax - bmin
+			check(sz.x <= 0.76 and sz.y <= 0.48 and sz.z <= 0.54,
+				"chest_treasure.glb must preserve carry footprint <= (0.76,0.48,0.54) m (got %s)" % str(sz))
+
+		inst.free()
+

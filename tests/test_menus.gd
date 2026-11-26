@@ -391,13 +391,16 @@ func test_wave32_hud_pause_return_to_title_and_mode_objective_card() -> void:
 	check(not hud.pause_open, "pressing ReturnToTitleButton closes pause overlay")
 	check_eq(title_hits[0], 1, "pressing ReturnToTitleButton emits return_to_title_requested")
 
-	# 2. Top-Left Mode Objective Card starts hidden with exact offset/width layout.
+	# 2. Top-Left Mode Objective Card starts hidden inside TopLeftHUDStack with exact offset/width layout.
+	var stack := hud.find_child("TopLeftHUDStack", true, false) as VBoxContainer
 	var card := hud.find_child("ModeObjectiveCard", true, false) as PanelContainer
-	check(card != null, "GameHUD builds ModeObjectiveCard")
+	check(stack != null and card != null, "GameHUD builds TopLeftHUDStack containing ModeObjectiveCard")
+	check_eq(card.get_parent(), stack, "ModeObjectiveCard sits inside TopLeftHUDStack")
 	check(not hud.is_mode_objective_visible(), "ModeObjectiveCard hidden by default")
-	check_near(card.offset_left, 24.0, 0.5, "ModeObjectiveCard offset_left is 24")
-	check_near(card.offset_top, 24.0, 0.5, "ModeObjectiveCard offset_top is 24")
-	check_near(card.offset_right - card.offset_left, 368.0, 0.5, "ModeObjectiveCard width is 368")
+	check_near(stack.offset_left, 24.0, 0.5, "TopLeftHUDStack offset_left is 24")
+	check_near(stack.offset_top, 24.0, 0.5, "TopLeftHUDStack offset_top is 24")
+	check_near(stack.offset_right - stack.offset_left, 368.0, 0.5, "TopLeftHUDStack width is 368")
+	check_near(card.custom_minimum_size.x, 368.0, 0.5, "ModeObjectiveCard width is 368")
 
 	# Show Tutorial step with Skip Step button.
 	var skip_hits: Array[int] = [0]
@@ -671,5 +674,178 @@ func test_q6a_sailing_rudder_bar_and_strict_ascii_controls() -> void:
 	check(not is_instance_valid(menu) and not is_instance_valid(root), "Q6A test nodes free cleanly with 0 leaks")
 	Weather.apply_state(saved_weather)
 	Sea.amp_scale = saved_amp
+
+
+# ---------------------------------------------------------------------------
+# 6. Q7B: Live Diegetic AI Crew Roster Card & Shipwright Renown Bars / Specs
+# ---------------------------------------------------------------------------
+
+func test_q7b_hud_crew_roster_and_shipwright_specs() -> void:
+	Net.start_single_player()
+	var root := Node3D.new()
+	add_child(root)
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	root.add_child(hud)
+	await get_tree().process_frame
+
+	# 1. CrewRosterCard starts completely hidden when solo (0 AI crew).
+	var stack := hud.find_child("TopLeftHUDStack", true, false) as VBoxContainer
+	var obj_card := hud.find_child("ModeObjectiveCard", true, false) as PanelContainer
+	var roster_card := hud.find_child("CrewRosterCard", true, false) as PanelContainer
+	check(stack != null and obj_card != null and roster_card != null,
+		"GameHUD mounts TopLeftHUDStack, ModeObjectiveCard, and CrewRosterCard")
+	check_eq(obj_card.get_parent(), stack, "ModeObjectiveCard lives inside TopLeftHUDStack")
+	check_eq(roster_card.get_parent(), stack, "CrewRosterCard lives inside TopLeftHUDStack")
+	check(not hud.is_crew_roster_visible(), "CrewRosterCard hidden with 0 AI crew")
+	check_eq(hud.get_crew_roster_entries().size(), 0, "0 crew roster entries when solo")
+
+	# 2. Register 3 AI CrewBrains -> CrewRosterCard becomes visible immediately with strict-ASCII names,
+	#    task badges, and accurate HP ratios!
+	var pawn_scene := load("res://src/characters/pawn.tscn") as PackedScene
+	check(pawn_scene != null, "pawn.tscn loads for Q7B crew roster test")
+	var brains: Array[CrewBrain] = []
+	var personas: Array[StringName] = [&"helmsman", &"lookout", &"carpenter"]
+	var hp_vals: Array[float] = [100.0, 45.0, 20.0]
+	for i in personas.size():
+		var p := pawn_scene.instantiate() as Pawn
+		p.max_health = 100.0
+		p.set_physics_process(false)
+		var cb := CrewBrain.new()
+		cb.persona_id = personas[i]
+		cb.set_physics_process(false)
+		p.add_child(cb)
+		root.add_child(p)
+		p.health = hp_vals[i]
+		brains.append(cb)
+
+	brains[0].current_task = &"helm"
+	brains[0].current_order = &"helm"
+	brains[1].current_task = &"cannon"
+	brains[1].current_order = &"cannons"
+	brains[2].current_task = &"repair"
+	brains[2].current_order = &"repair"
+
+	for cb in brains:
+		hud.register_crew_brain(cb)
+
+	check(hud.is_crew_roster_visible(), "CrewRosterCard becomes visible immediately when AI crew registered")
+	var entries := hud.get_crew_roster_entries()
+	check_eq(entries.size(), 3, "CrewRosterCard tracks all 3 AI crewmates")
+	check_eq(String(entries[0]["name"]), "Barnaby", "crew row 0 name is strict-ASCII Barnaby")
+	check_eq(entries[0]["task"], &"helm", "crew row 0 task is &'helm'")
+	check_eq(String(entries[0]["task_label"]), "HELM", "crew row 0 badge maps &'helm' -> HELM")
+	check_near(float(entries[0]["hp_ratio"]), 1.0, 0.005, "crew row 0 HP ratio is 1.0")
+	check_eq(entries[0]["order"], &"helm", "crew row 0 order is &'helm'")
+
+	check_eq(String(entries[1]["name"]), "Maren", "crew row 1 name is strict-ASCII Maren")
+	check_eq(String(entries[1]["task_label"]), "GUNNER", "crew row 1 badge maps &'cannon' -> GUNNER")
+	check_near(float(entries[1]["hp_ratio"]), 0.45, 0.005, "crew row 1 HP ratio is 0.45")
+
+	check_eq(String(entries[2]["name"]), "Pip", "crew row 2 name is strict-ASCII Pip")
+	check_eq(String(entries[2]["task_label"]), "REPAIR", "crew row 2 badge maps &'repair' -> REPAIR")
+	check_near(float(entries[2]["hp_ratio"]), 0.20, 0.005, "crew row 2 HP ratio is 0.20")
+
+	# Verify dynamic live updates across throttled 0.20 s refresh ticks when tasks & HP change!
+	brains[0].current_task = &"trim_sails"
+	brains[1].current_task = &"bail"
+	brains[2].current_task = &"douse_fire"
+	brains[2].pawn.health = 75.0
+	hud._process(0.25)
+	var updated := hud.get_crew_roster_entries()
+	check_eq(String(updated[0]["task_label"]), "SAILS", "dynamic update maps &'trim_sails' -> SAILS")
+	check_eq(String(updated[1]["task_label"]), "BAIL", "dynamic update maps &'bail' -> BAIL")
+	check_eq(String(updated[2]["task_label"]), "FIRE", "dynamic update maps &'douse_fire' -> FIRE")
+	check_near(float(updated[2]["hp_ratio"]), 0.75, 0.005, "dynamic update reflects healed HP ratio 0.75")
+
+	# Verify Pause hides CrewRosterCard and closing Pause restores it cleanly.
+	hud.set_pause_open(true)
+	check(not hud.is_crew_roster_visible(), "CrewRosterCard hides automatically while Pause overlay is open")
+	hud.set_pause_open(false)
+	check(hud.is_crew_roster_visible(), "CrewRosterCard restores cleanly when Pause closes")
+
+	# Verify coexistence with ModeObjectiveCard inside TopLeftHUDStack with zero overlap!
+	hud.set_mode_objective("MAIDEN VOYAGE", "Trim sails into the wind.", "Step 3/8", false)
+	await get_tree().process_frame
+	check(hud.is_mode_objective_visible() and hud.is_crew_roster_visible(),
+		"ModeObjectiveCard and CrewRosterCard coexist visibly inside TopLeftHUDStack")
+	check(obj_card.get_index() < roster_card.get_index(),
+		"ModeObjectiveCard sits above CrewRosterCard inside TopLeftHUDStack")
+	check_eq(stack.get_theme_constant("separation"), 8,
+		"TopLeftHUDStack keeps 8 px vertical separation between cards")
+	var obj_min := obj_card.get_combined_minimum_size()
+	var roster_min := roster_card.get_combined_minimum_size()
+	var stack_min := stack.get_combined_minimum_size()
+	check(obj_min.y > 20.0 and roster_min.y > 40.0 and stack_min.y >= obj_min.y + roster_min.y + 7.5,
+		"TopLeftHUDStack reserves full non-overlapping height for both cards (obj=%.1f, roster=%.1f, stack=%.1f)" % [
+			obj_min.y, roster_min.y, stack_min.y
+		])
+	if obj_card.position.is_finite() and roster_card.position.is_finite():
+		check(roster_card.position.y >= obj_card.position.y + obj_card.size.y - 0.5,
+			"CrewRosterCard stacks cleanly below ModeObjectiveCard with zero overlap")
+	var hud_ascii_count := _check_tree_strict_ascii(hud, "Q7B_GameHUD")
+	check(hud_ascii_count >= 24, "verified strict ASCII across GameHUD & CrewRosterCard (checked %d)" % hud_ascii_count)
+
+	# 3. ShipwrightMenu: 3 brass-framed CompanyProgress_* bars ([0..1]) & ShipClassSpecsLabel!
+	var saved_profile: Profile = Game.profile
+	var test_prof := Profile.new()
+	test_prof.data["gold"] = 1200
+	test_prof.data["ship_class"] = "sloop"
+	test_prof.data["renown"] = {
+		"gilded_compass": 50,   # Rank 1 (0..100) -> 0.50
+		"iron_tide": 200,       # Rank 2 (100..300) -> 0.50
+		"sunken_archive": 25,   # Rank 1 (0..100) -> 0.25
+	}
+	Game.profile = test_prof
+
+	var sw := ShipwrightMenu.new()
+	root.add_child(sw)
+	await get_tree().process_frame
+	sw.open_menu(ShipwrightMenu.TAB_SHIPWRIGHT)
+	await get_tree().process_frame
+
+	var expected_fracs := {
+		&"gilded_compass": 0.50,
+		&"iron_tide": 0.50,
+		&"sunken_archive": 0.25,
+	}
+	for comp_id: StringName in [&"gilded_compass", &"iron_tide", &"sunken_archive"]:
+		var bar := sw.find_child("CompanyProgress_" + String(comp_id), true, false) as ProgressBar
+		check(bar != null, "ShipwrightMenu renders CompanyProgress_%s ProgressBar" % String(comp_id))
+		if bar != null:
+			check(bar.value >= 0.0 and bar.value <= 1.0,
+				"CompanyProgress_%s value is in [0..1] (got %.3f)" % [String(comp_id), bar.value])
+			check_near(bar.value, float(expected_fracs[comp_id]), 0.01,
+				"CompanyProgress_%s matches rank progress ratio (got %.3f)" % [String(comp_id), bar.value])
+			check(not bar.show_percentage, "CompanyProgress_%s hides percentage text" % String(comp_id))
+			check_near(bar.custom_minimum_size.y, 9.0, 0.5, "CompanyProgress_%s height is 9 px" % String(comp_id))
+
+	var sloop_specs := sw.find_child("ShipClassSpecsLabel", true, false) as Label
+	check(sloop_specs != null, "ShipwrightMenu renders ShipClassSpecsLabel for Sloop")
+	if sloop_specs != null:
+		check_eq(sloop_specs.text, "Specs: ~10.9 kt Top Speed | 2 Cannons | 1-2 Crew | Agile Helm & Fast Tack",
+			"Sloop ShipClassSpecsLabel shows exact Q1A Sloop specs")
+
+	sw.select_ship_class(&"brigantine")
+	await get_tree().process_frame
+	var brig_specs := sw.find_child("ShipClassSpecsLabel", true, false) as Label
+	check(brig_specs != null, "ShipwrightMenu renders ShipClassSpecsLabel after switching to Brigantine")
+	if brig_specs != null:
+		check_eq(brig_specs.text, "Specs: ~13.7 kt Top Speed | 4 Cannons | 2-4 Crew | Heavy Broadside & Momentum",
+			"Brigantine ShipClassSpecsLabel shows exact Q1A Brigantine specs")
+
+	var sw_ascii_count := _check_tree_strict_ascii(sw, "Q7B_ShipwrightMenu")
+	check(sw_ascii_count >= 35, "verified 100%% strict ASCII across entire ShipwrightMenu tree (checked %d)" % sw_ascii_count)
+
+	# 4. Clean zero-leak teardown!
+	sw.close_menu()
+	Game.profile = saved_profile
+	Game.save()
+	root.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(root) and not is_instance_valid(hud) and not is_instance_valid(sw),
+		"Q7B HUD & ShipwrightMenu test nodes free cleanly with 0 leaks")
+
 
 

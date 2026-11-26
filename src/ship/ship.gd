@@ -192,6 +192,9 @@ var _flag_mats: Array[ShaderMaterial] = []
 var _window_mats: Array[BaseMaterial3D] = []
 var _lantern_glass_mats: Array[BaseMaterial3D] = []
 var _lantern_lights: Array[OmniLight3D] = []
+var _lantern_halo_meshes: Array[MeshInstance3D] = []
+var _lantern_halo_mats: Array[ShaderMaterial] = []
+var _last_lantern_halo_energy: float = 0.0
 var _rope_pairs: Array[Array] = []  # [rope_node, point_a, point_b]
 
 var _stations: Array[Station] = []
@@ -261,6 +264,10 @@ var _wisp_time: float = 0.0
 
 var _bow_spray_port: GPUParticles3D = null
 var _bow_spray_starboard: GPUParticles3D = null
+var _bow_wake_ribbon_mi: MeshInstance3D = null
+var _bow_wake_ribbon_mat: ShaderMaterial = null
+var _bow_ribbon_opacity: float = 0.0
+var _bow_ribbon_flow_time: float = 0.0
 var _spray_tex: GradientTexture2D = null
 var _active_muzzle_vfx: Array[Node] = []
 
@@ -288,6 +295,11 @@ static var _streamer_mesh_sloop: ArrayMesh = null
 static var _streamer_mesh_brig: ArrayMesh = null
 static var _lookout_glint_mesh: ArrayMesh = null
 static var _lookout_glint_shader: Shader = null
+static var _lantern_halo_mesh: ArrayMesh = null
+static var _lantern_halo_shader: Shader = null
+static var _bow_ribbon_mesh_sloop: ArrayMesh = null
+static var _bow_ribbon_mesh_brig: ArrayMesh = null
+static var _bow_ribbon_shader: Shader = null
 static var _bell_frame_mesh: ArrayMesh = null
 static var _bell_cup_mesh: ArrayMesh = null
 static var _bell_iron_mat: StandardMaterial3D = null
@@ -351,6 +363,7 @@ func _ready() -> void:
 	_build_shelters()
 	_build_damage_slots()
 	_build_hold_water()
+	_build_bow_wake_ribbons()
 	_setup_ship_bell()
 	_build_deck_extras()
 	_setup_cabin_furnishings()
@@ -380,6 +393,12 @@ func _exit_tree() -> void:
 			spray.process_material = null
 	_bow_spray_port = null
 	_bow_spray_starboard = null
+	if _bow_wake_ribbon_mi != null and is_instance_valid(_bow_wake_ribbon_mi):
+		_bow_wake_ribbon_mi.material_override = null
+		_bow_wake_ribbon_mi.mesh = null
+	_bow_wake_ribbon_mi = null
+	_bow_wake_ribbon_mat = null
+	_bow_ribbon_opacity = 0.0
 	_spray_tex = null
 	if _hold_water_mesh != null and is_instance_valid(_hold_water_mesh):
 		_hold_water_mesh.material_override = null
@@ -452,6 +471,13 @@ func _exit_tree() -> void:
 	_supply_barrels = null
 	_damage_visuals = null
 	_ship_fire = null
+	for hmi in _lantern_halo_meshes:
+		if hmi != null and is_instance_valid(hmi):
+			hmi.material_override = null
+			hmi.mesh = null
+	_lantern_halo_meshes.clear()
+	_lantern_halo_mats.clear()
+	_last_lantern_halo_energy = 0.0
 	_lantern_glass_mats.clear()
 	_window_mats.clear()
 	_lantern_lights.clear()
@@ -465,6 +491,11 @@ func _exit_tree() -> void:
 		_streamer_mesh_brig = null
 		_lookout_glint_mesh = null
 		_lookout_glint_shader = null
+		_lantern_halo_mesh = null
+		_lantern_halo_shader = null
+		_bow_ribbon_mesh_sloop = null
+		_bow_ribbon_mesh_brig = null
+		_bow_ribbon_shader = null
 		_bell_frame_mesh = null
 		_bell_cup_mesh = null
 		_bell_iron_mat = null
@@ -1251,6 +1282,183 @@ func _make_bow_cheek_spray(node_name: String, pos: Vector3, side_sign: float) ->
 	)
 	p.draw_pass_1 = drop
 	return p
+
+
+func _build_bow_wake_ribbons() -> void:
+	_bow_wake_ribbon_mat = ShaderMaterial.new()
+	_bow_wake_ribbon_mat.shader = _get_bow_ribbon_shader()
+	_bow_wake_ribbon_mat.set_shader_parameter(&"opacity", 0.0)
+	_bow_wake_ribbon_mat.set_shader_parameter(&"flow_time", 0.0)
+
+	_bow_wake_ribbon_mi = MeshInstance3D.new()
+	_bow_wake_ribbon_mi.name = "BowWakeRibbons"
+	_bow_wake_ribbon_mi.mesh = _get_bow_ribbon_mesh(is_brigantine())
+	_bow_wake_ribbon_mi.material_override = _bow_wake_ribbon_mat
+	_bow_wake_ribbon_mi.scale = Vector3.ONE * hull_scale
+	_bow_wake_ribbon_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bow_wake_ribbon_mi.visible = false
+	add_child(_bow_wake_ribbon_mi)
+
+
+## Current dynamic waterline bow-wave foam ribbon opacity in 0..1.
+func get_bow_ribbon_opacity() -> float:
+	return _bow_ribbon_opacity
+
+
+## Triangle count of the sculpted waterline bow-wave foam ribbon ArrayMesh.
+func get_bow_ribbon_tri_count() -> int:
+	if _bow_wake_ribbon_mi == null or not is_instance_valid(_bow_wake_ribbon_mi):
+		return 0
+	var am := _bow_wake_ribbon_mi.mesh as ArrayMesh
+	if am == null or am.get_surface_count() == 0:
+		return 0
+	var total := 0
+	for si in am.get_surface_count():
+		var arr := am.surface_get_arrays(si)
+		if arr.size() > Mesh.ARRAY_INDEX and arr[Mesh.ARRAY_INDEX] is PackedInt32Array:
+			var idxs: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+			if not idxs.is_empty():
+				total += floori(float(idxs.size()) / 3.0)
+				continue
+		if arr.size() > Mesh.ARRAY_VERTEX and arr[Mesh.ARRAY_VERTEX] is PackedVector3Array:
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			total += floori(float(verts.size()) / 3.0)
+	return total
+
+
+static func _get_bow_ribbon_mesh(is_brig: bool) -> ArrayMesh:
+	if is_brig:
+		if _bow_ribbon_mesh_brig == null:
+			_bow_ribbon_mesh_brig = _build_bow_ribbon_mesh(true)
+		return _bow_ribbon_mesh_brig
+	if _bow_ribbon_mesh_sloop == null:
+		_bow_ribbon_mesh_sloop = _build_bow_ribbon_mesh(false)
+	return _bow_ribbon_mesh_sloop
+
+
+static func _build_bow_ribbon_mesh(is_brig: bool) -> ArrayMesh:
+	# Twin sculpted port & starboard bow-shoulder waterline foam ribbon strips (224 tris, zero primitives).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const LENGTH_SEGS := 14
+	const CROSS_SEGS := 4
+
+	var z_bow := -7.8 if is_brig else -5.8
+	var z_aft := -2.2 if is_brig else -1.8
+	var z_stem0 := -8.37 if is_brig else -5.85
+	var bm0 := 2.61 if is_brig else 2.135
+	var exp_t := 2.5 if is_brig else 2.4
+	var exp_b := 0.72 if is_brig else 0.70
+	var width_bow := 0.30 if is_brig else 0.24
+	var width_flare := 1.15 if is_brig else 0.92
+	var crest_min := 0.16 if is_brig else 0.14
+	var crest_max := 0.44 if is_brig else 0.38
+
+	for side: float in [-1.0, 1.0]:
+		var grid: Array[Array] = []
+		for i in range(LENGTH_SEGS + 1):
+			var u := float(i) / float(LENGTH_SEGS)
+			var z := lerpf(z_bow, z_aft, u)
+			var t_stem := clampf(z / z_stem0, 0.0, 1.0)
+			var half_beam := bm0 * pow(maxf(0.0, 1.0 - pow(t_stem, exp_t)), exp_b)
+			var x_inner := half_beam + 0.05
+			var flare_w := width_bow + width_flare * pow(u, 0.82)
+			var crest_h := lerpf(crest_min, crest_max, sin(clampf(u, 0.0, 1.0) * PI * 0.92))
+			var row: Array[Vector3] = []
+			for j in range(CROSS_SEGS + 1):
+				var v := float(j) / float(CROSS_SEGS)
+				var x_out := x_inner + flare_w * (v * 0.84 + 0.16 * v * v)
+				var y := 0.06 + (crest_h - 0.06) * sin(pow(v, 0.85) * PI * 0.88)
+				row.append(Vector3(side * x_out, y, z))
+			grid.append(row)
+
+		for i in range(LENGTH_SEGS):
+			var u0 := float(i) / float(LENGTH_SEGS)
+			var u1 := float(i + 1) / float(LENGTH_SEGS)
+			var row0: Array = grid[i]
+			var row1: Array = grid[i + 1]
+			for j in range(CROSS_SEGS):
+				var v0 := float(j) / float(CROSS_SEGS)
+				var v1 := float(j + 1) / float(CROSS_SEGS)
+				var p00: Vector3 = row0[j] as Vector3
+				var p10: Vector3 = row1[j] as Vector3
+				var p11: Vector3 = row1[j + 1] as Vector3
+				var p01: Vector3 = row0[j + 1] as Vector3
+				if side > 0.0:
+					st.set_uv(Vector2(u0, v0))
+					st.add_vertex(p00)
+					st.set_uv(Vector2(u1, v0))
+					st.add_vertex(p10)
+					st.set_uv(Vector2(u1, v1))
+					st.add_vertex(p11)
+					st.set_uv(Vector2(u0, v0))
+					st.add_vertex(p00)
+					st.set_uv(Vector2(u1, v1))
+					st.add_vertex(p11)
+					st.set_uv(Vector2(u0, v1))
+					st.add_vertex(p01)
+				else:
+					st.set_uv(Vector2(u0, v0))
+					st.add_vertex(p00)
+					st.set_uv(Vector2(u1, v1))
+					st.add_vertex(p11)
+					st.set_uv(Vector2(u1, v0))
+					st.add_vertex(p10)
+					st.set_uv(Vector2(u0, v0))
+					st.add_vertex(p00)
+					st.set_uv(Vector2(u0, v1))
+					st.add_vertex(p01)
+					st.set_uv(Vector2(u1, v1))
+					st.add_vertex(p11)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _get_bow_ribbon_shader() -> Shader:
+	if _bow_ribbon_shader != null:
+		return _bow_ribbon_shader
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_never, shadows_disabled;
+
+uniform float opacity = 0.0;
+uniform float flow_time = 0.0;
+uniform float daylight = 1.0;
+uniform vec3 crest_color : source_color = vec3(0.96, 0.96, 0.93);
+uniform vec3 base_color : source_color = vec3(0.28, 0.74, 0.78);
+
+void fragment() {
+	float u = UV.x;
+	float v = UV.y;
+	float t1 = flow_time * 2.2;
+	float t2 = flow_time * 3.7;
+	float warp = sin(v * 9.5 + u * 6.0 - t1 * 0.5) * 1.15;
+	float f1 = sin(u * 28.0 - t1 + warp);
+	float f2 = cos(u * 47.0 - t2 - cos(v * 15.0 - u * 9.0) * 1.05);
+	float streak = sin(v * 22.0 + u * 18.0 - t1 * 1.45) * 0.5 + 0.5;
+	float lace_raw = clamp(0.46 + 0.30 * f1 + 0.24 * f2, 0.0, 1.0);
+	float froth = smoothstep(0.32, 0.88, lace_raw * 0.76 + streak * 0.34);
+
+	float u_fade = smoothstep(0.0, 0.16, u) * smoothstep(1.0, 0.52, u);
+	float v_fade = smoothstep(0.0, 0.24, v) * smoothstep(1.0, 0.60, v);
+	float crest_band = exp(-pow((v - 0.44) * 3.4, 2.0)) * (0.35 + 0.65 * froth);
+	float body_alpha = clamp(froth * 0.62 + crest_band * 0.30, 0.0, 0.82) * u_fade * v_fade;
+
+	float dl = clamp(daylight, 0.0, 1.0);
+	float night = 1.0 - dl;
+	float crest_mix = clamp(crest_band * 0.68 + froth * 0.45, 0.0, 1.0);
+	vec3 day_col = mix(base_color, crest_color, crest_mix);
+	vec3 moon_col = mix(vec3(0.11, 0.24, 0.38), vec3(0.36, 0.52, 0.66), crest_mix);
+	float bio_lace = smoothstep(0.46, 0.90, froth * (0.65 + 0.35 * sin(u * 34.0 - t2)));
+	vec3 bio_glow = vec3(0.08, 0.82, 0.90) * (bio_lace * night * 0.58);
+	ALBEDO = mix(moon_col, day_col, smoothstep(0.05, 0.75, dl)) + bio_glow;
+	ALPHA = clamp(body_alpha * opacity * mix(0.68, 0.86, dl), 0.0, 0.82);
+}
+"""
+	_bow_ribbon_shader = sh
+	return _bow_ribbon_shader
 
 
 func _build_hold_water() -> void:
@@ -2262,6 +2470,9 @@ func _setup_lights_and_glass() -> void:
 	_window_mats.clear()
 	_lantern_glass_mats.clear()
 	_lantern_lights.clear()
+	_lantern_halo_meshes.clear()
+	_lantern_halo_mats.clear()
+	_last_lantern_halo_energy = 0.0
 	if _model == null:
 		return
 
@@ -2317,6 +2528,85 @@ func _setup_lights_and_glass() -> void:
 		l.visible = lanterns_lit
 		child.add_child(l)
 		_lantern_lights.append(l)
+
+		if _lantern_halo_mesh == null:
+			_lantern_halo_mesh = _build_lantern_halo_quad()
+		if _lantern_halo_shader == null:
+			_lantern_halo_shader = _build_lantern_halo_shader()
+		var hmat := ShaderMaterial.new()
+		hmat.shader = _lantern_halo_shader
+		hmat.set_shader_parameter(&"halo_intensity", 0.0)
+		hmat.set_shader_parameter(&"halo_scale", (0.72 if is_hold else 1.42) * hull_scale)
+		hmat.set_shader_parameter(&"halo_color", Color(1.0, 0.74, 0.34))
+		hmat.set_shader_parameter(&"halo_phase", float(_lantern_halo_meshes.size()) * 1.73)
+
+		var hmi := MeshInstance3D.new()
+		hmi.name = "Halo"
+		hmi.mesh = _lantern_halo_mesh
+		hmi.material_override = hmat
+		hmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		hmi.extra_cull_margin = 1.5 * hull_scale
+		hmi.visible = lanterns_lit
+		child.add_child(hmi)
+		_lantern_halo_meshes.append(hmi)
+		_lantern_halo_mats.append(hmat)
+
+
+static func _build_lantern_halo_quad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_lantern_halo_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float halo_intensity = 0.0;
+uniform float halo_scale = 1.0;
+uniform vec3 halo_color : source_color = vec3(1.0, 0.74, 0.34);
+uniform float halo_phase = 0.0;
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * halo_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge_mask = smoothstep(1.0, 0.72, r);
+	float shimmer = 0.94 + 0.06 * sin(TIME * 6.8 + halo_phase) * cos(TIME * 4.3 - halo_phase * 0.7);
+	float core = exp(-r * r * 14.0) * 0.75;
+	float bloom = exp(-r * r * 3.8) * 0.42;
+	float glow = (core + bloom) * edge_mask * shimmer;
+	vec3 col = mix(halo_color, vec3(1.0, 0.96, 0.84), clamp(core * 1.15, 0.0, 1.0));
+	ALBEDO = col * (glow * halo_intensity);
+}
+"""
+	return sh
 
 
 func _cache_ropes() -> void:
@@ -2560,6 +2850,11 @@ func set_spectral_phase(alpha: float, flare: float = 0.0) -> void:
 	for l in _lantern_lights:
 		if is_instance_valid(l):
 			l.visible = lanterns_lit and _spectral_phase > 0.02
+	for hmi in _lantern_halo_meshes:
+		if hmi != null and is_instance_valid(hmi):
+			hmi.visible = lanterns_lit and _spectral_phase > 0.02
+	if _spectral_phase <= 0.02:
+		_last_lantern_halo_energy = 0.0
 	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"set_spectral_alpha"):
 		hull_crest.call(&"set_spectral_alpha", _spectral_phase)
 	visible = _spectral_phase > 0.02
@@ -3484,6 +3779,13 @@ func _update_lantern_visuals() -> void:
 			if l != null and is_instance_valid(l):
 				l.light_energy = 0.0
 				l.visible = false
+		for hmi in _lantern_halo_meshes:
+			if hmi != null and is_instance_valid(hmi):
+				hmi.visible = false
+		for hmat in _lantern_halo_mats:
+			if hmat != null:
+				hmat.set_shader_parameter(&"halo_intensity", 0.0)
+		_last_lantern_halo_energy = 0.0
 		return
 
 	var window_em := (lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)) * _spectral_phase
@@ -3506,6 +3808,33 @@ func _update_lantern_visuals() -> void:
 			lerpf(0.95, 1.85, night) if has_curse_glow else lerpf(0.35, 1.35, night)
 		)
 		l.light_energy = base_e * flicker * phase_light_scale
+
+	var halo_vis := _spectral_phase > 0.02 and not _lantern_halo_meshes.is_empty()
+	var storm_gloom := clampf(Weather.storminess, 0.0, 1.0) if Weather != null else 0.0
+	var halo_e := lerpf(0.18, 1.15, clampf(night + storm_gloom * 0.35, 0.0, 1.0)) * flicker * phase_light_scale
+	if has_curse_glow:
+		halo_e *= 1.18
+	var halo_col := _effective_glow_accent if has_curse_glow else Color(1.0, 0.74, 0.34)
+	_last_lantern_halo_energy = halo_e if halo_vis else 0.0
+	for hidx in _lantern_halo_meshes.size():
+		var hmi := _lantern_halo_meshes[hidx]
+		if hmi != null and is_instance_valid(hmi):
+			hmi.visible = halo_vis
+		if hidx < _lantern_halo_mats.size():
+			var hmat := _lantern_halo_mats[hidx]
+			if hmat != null:
+				hmat.set_shader_parameter(&"halo_intensity", halo_e if halo_vis else 0.0)
+				hmat.set_shader_parameter(&"halo_color", halo_col)
+
+
+## Number of mounted atmospheric lantern halo billboard meshes on this vessel.
+func get_lantern_halo_count() -> int:
+	return _lantern_halo_meshes.size()
+
+
+## Current cached atmospheric lantern halo intensity (0.0 when doused or phased out).
+func get_lantern_halo_energy() -> float:
+	return _last_lantern_halo_energy
 
 
 static func _get_smoke_puff_texture() -> ImageTexture:
@@ -4881,12 +5210,32 @@ func _aim_ropes() -> void:
 func _update_wake(delta: float) -> void:
 	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
 	var phased_present := visible and _spectral_phase > 0.15
-	var spray_on := phased_present and (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
-	var spray_ratio := clampf((spd - 2.0) / 5.5, 0.15, 1.0)
+	var spray_on := phased_present and (not is_sinking) and (spd > 1.75) and (_last_submerged_frac > 0.12)
+	var spray_ratio := clampf((spd - 1.5) / 4.8, 0.15, 1.0)
 	for spray: GPUParticles3D in [_bow_spray_port, _bow_spray_starboard]:
 		if spray != null:
 			spray.emitting = spray_on
 			spray.amount_ratio = spray_ratio
+
+	_bow_ribbon_flow_time += maxf(delta, 0.0) * maxf(1.2, spd * 0.85)
+	var target_ribbon_op := 0.0
+	if phased_present and (not is_sinking) and (_last_submerged_frac > 0.10) and (spd > 1.2):
+		target_ribbon_op = clampf((spd - 1.2) / 3.8, 0.0, 1.0) * _spectral_phase
+	if delta <= 0.0:
+		_bow_ribbon_opacity = target_ribbon_op
+	else:
+		var blend_rate := 7.0 if target_ribbon_op < _bow_ribbon_opacity else 4.5
+		_bow_ribbon_opacity = lerpf(_bow_ribbon_opacity, target_ribbon_op, clampf(delta * blend_rate, 0.0, 1.0))
+		if target_ribbon_op <= 0.001 and _bow_ribbon_opacity < 0.01:
+			_bow_ribbon_opacity = 0.0
+	if _bow_wake_ribbon_mi != null and is_instance_valid(_bow_wake_ribbon_mi):
+		_bow_wake_ribbon_mi.visible = _bow_ribbon_opacity > 0.01
+		if _bow_wake_ribbon_mat != null:
+			_bow_wake_ribbon_mat.set_shader_parameter(&"opacity", _bow_ribbon_opacity)
+			_bow_wake_ribbon_mat.set_shader_parameter(&"flow_time", _bow_ribbon_flow_time)
+			var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+			_bow_wake_ribbon_mat.set_shader_parameter(&"daylight", dl)
+
 	if Ocean.current == null or not phased_present:
 		return
 	var is_brig := (ship_class == &"brigantine")

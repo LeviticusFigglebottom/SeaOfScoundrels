@@ -1092,11 +1092,11 @@ func _rebuild_shipwright_tab() -> void:
 		var card := _make_card_panel(Color(0.90, 0.83, 0.68, 0.96), HudIcons.COL_INK_SOFT)
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var cv := VBoxContainer.new()
-		cv.add_theme_constant_override("separation", 3)
+		cv.add_theme_constant_override("separation", 4)
 		card.add_child(cv)
 
 		var cname := Label.new()
-		cname.text = String(info.get("short_name", String(comp_id)))
+		cname.text = _to_ascii(String(info.get("short_name", String(comp_id))))
 		cname.add_theme_font_size_override("font_size", 16)
 		cname.add_theme_color_override("font_color", HudIcons.COL_INK)
 		cv.add_child(cname)
@@ -1107,18 +1107,53 @@ func _rebuild_shipwright_tab() -> void:
 		rank_lbl.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
 		cv.add_child(rank_lbl)
 
+		var pts := int(prog["points"])
+		var next_thr := int(prog["next_threshold"])
+		var is_max := bool(prog.get("is_max", false))
 		var pts_lbl := Label.new()
-		pts_lbl.text = "%d / %d Renown" % [int(prog["points"]), int(prog["next_threshold"])]
+		pts_lbl.text = _to_ascii("%d Renown (MAX)" % pts if is_max else "%d / %d Renown" % [pts, next_thr])
 		pts_lbl.add_theme_font_size_override("font_size", 13)
 		pts_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 		cv.add_child(pts_lbl)
+
+		var frac := clampf(float(prog.get("progress_frac", 0.0)), 0.0, 1.0)
+		var ccol: Color = info.get("color", HudIcons.COL_GOLD) as Color
+		var bar := ProgressBar.new()
+		bar.name = "CompanyProgress_" + String(comp_id)
+		bar.min_value = 0.0
+		bar.max_value = 1.0
+		bar.step = 0.001
+		bar.value = frac
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(0.0, 9.0)
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		var bg_sb := StyleBoxFlat.new()
+		bg_sb.bg_color = Color(0.79, 0.71, 0.55, 0.96)
+		bg_sb.border_color = HudIcons.COL_BRASS
+		bg_sb.set_border_width_all(1)
+		bg_sb.set_corner_radius_all(3)
+		bar.add_theme_stylebox_override("background", bg_sb)
+
+		var fill_sb := StyleBoxFlat.new()
+		fill_sb.bg_color = ccol
+		fill_sb.border_color = HudIcons.COL_INK
+		fill_sb.set_border_width_all(1)
+		fill_sb.set_corner_radius_all(2)
+		bar.add_theme_stylebox_override("fill", fill_sb)
+		cv.add_child(bar)
+
 		comp_row.add_child(card)
 
 	# 2. Ship Class Toggle (Sloop / Brigantine)
 	var cls_card := _make_card_panel(Color(0.91, 0.84, 0.70, 0.96), HudIcons.COL_BRASS)
+	var cls_v := VBoxContainer.new()
+	cls_v.add_theme_constant_override("separation", 6)
+	cls_card.add_child(cls_v)
+
 	var cls_row := HBoxContainer.new()
 	cls_row.add_theme_constant_override("separation", 12)
-	cls_card.add_child(cls_row)
+	cls_v.add_child(cls_row)
 
 	var cls_lbl := Label.new()
 	cls_lbl.text = "SHIP CLASS"
@@ -1135,6 +1170,18 @@ func _rebuild_shipwright_tab() -> void:
 		_style_highlight_button(btn, selected_ship_class == cid)
 		btn.pressed.connect(func() -> void: select_ship_class(cid))
 		cls_row.add_child(btn)
+
+	var specs_lbl := Label.new()
+	specs_lbl.name = "ShipClassSpecsLabel"
+	if selected_ship_class == &"brigantine":
+		specs_lbl.text = "Specs: ~13.7 kt Top Speed | 4 Cannons | 2-4 Crew | Heavy Broadside & Momentum"
+	else:
+		specs_lbl.text = "Specs: ~10.9 kt Top Speed | 2 Cannons | 1-2 Crew | Agile Helm & Fast Tack"
+	specs_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	specs_lbl.add_theme_font_size_override("font_size", 13)
+	specs_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	cls_v.add_child(specs_lbl)
+
 	_shipwright_box.add_child(cls_card)
 
 	# 2a. Custom Stern Ship Nameplate Row

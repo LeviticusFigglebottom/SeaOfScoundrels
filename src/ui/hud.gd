@@ -186,14 +186,23 @@ var _coop_addr_edit: LineEdit = null
 var _coop_port_edit: LineEdit = null
 var _coop_status_label: Label = null
 
-# Gameplay HUD visibility & Top-Left Mode Objective Card (Tutorial / Naval Skirmish)
+const CREW_ROSTER_REFRESH_INTERVAL := 0.20
+
+# Gameplay HUD visibility & Top-Left HUD Stack (Mode Objective Card + AI Crew Roster Card)
 var _hud_visible: bool = true
+var _top_left_stack: VBoxContainer = null
 var _mode_objective_panel: PanelContainer = null
 var _mode_obj_title_label: Label = null
 var _mode_obj_progress_label: Label = null
 var _mode_obj_body_label: Label = null
 var _mode_skip_btn: Button = null
 var _mode_objective_active: bool = false
+var _crew_roster_panel: PanelContainer = null
+var _crew_roster_count_label: Label = null
+var _crew_roster_rows_box: VBoxContainer = null
+var _crew_roster_rows: Array[Dictionary] = []
+var _crew_roster_entries: Array[Dictionary] = []
+var _crew_roster_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -206,12 +215,16 @@ func _ready() -> void:
 	if Game != null and Game.profile != null:
 		_last_gold = int(Game.profile.data.get("gold", 0))
 	_sync_quality_button_states()
+	_refresh_crew_roster()
 
 
 func _exit_tree() -> void:
 	_disconnect_signals()
 	if Game != null and Game.notice.is_connected(_on_game_notice):
 		Game.notice.disconnect(_on_game_notice)
+	_crew_brains.clear()
+	_crew_roster_rows.clear()
+	_crew_roster_entries.clear()
 
 
 ## Bind live player, ship, combat, inventory, voyage manager, and sky rig references.
@@ -270,6 +283,7 @@ func bind(
 	_refresh_tool_chip()
 	_tick_sailing_telemetry()
 	_sync_quality_button_states()
+	_refresh_crew_roster()
 
 
 func _connect_signals() -> void:
@@ -390,6 +404,8 @@ func _disconnect_signals() -> void:
 func register_crew_brain(brain: CrewBrain) -> void:
 	if brain != null and not _crew_brains.has(brain):
 		_crew_brains.append(brain)
+	_crew_roster_accum = 0.0
+	_refresh_crew_roster()
 
 
 ## Return all registered and live scene-tree `CrewBrain` instances.
@@ -472,6 +488,8 @@ func issue_crew_order(order: StringName) -> int:
 	if order == &"hold_fire":
 		crew_hold_fire = not crew_hold_fire
 		_update_hold_fire_hint()
+	_crew_roster_accum = 0.0
+	_refresh_crew_roster()
 	crew_order_issued.emit(order)
 	return count
 
@@ -589,9 +607,32 @@ func get_mode_objective_progress() -> String:
 	return _mode_obj_progress_label.text if _mode_obj_progress_label != null else ""
 
 
+## True while the top-left AI Crew Roster Status Card is visible on screen.
+func is_crew_roster_visible() -> bool:
+	return _crew_roster_panel != null and _crew_roster_panel.visible
+
+
+## Return a live snapshot of displayed AI crew roster rows:
+## `[{"name", "task", "task_label", "hp_ratio", "order"}]`.
+func get_crew_roster_entries() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for entry in _crew_roster_entries:
+		out.append(entry.duplicate())
+	return out
+
+
+func _sync_top_left_visibility() -> void:
+	if _mode_objective_panel != null:
+		_mode_objective_panel.visible = _mode_objective_active and _hud_visible and not pause_open
+	if _crew_roster_panel != null:
+		_crew_roster_panel.visible = _hud_visible and not pause_open and not _crew_roster_entries.is_empty()
+
+
 func _sync_mode_objective_visibility() -> void:
 	if _mode_objective_panel != null:
 		_mode_objective_panel.visible = _mode_objective_active and _hud_visible and not pause_open
+	_crew_roster_accum = 0.0
+	_refresh_crew_roster()
 
 
 ## Apply Ocean.Quality preset (0=LOW, 1=MEDIUM, 2=HIGH).
@@ -1246,23 +1287,31 @@ func _build_whisper_card() -> void:
 
 
 func _build_mode_objective_card() -> void:
+	_top_left_stack = VBoxContainer.new()
+	_top_left_stack.name = "TopLeftHUDStack"
+	_top_left_stack.anchor_left = 0.0
+	_top_left_stack.anchor_right = 0.0
+	_top_left_stack.anchor_top = 0.0
+	_top_left_stack.anchor_bottom = 0.0
+	_top_left_stack.offset_left = 24.0
+	_top_left_stack.offset_top = 24.0
+	_top_left_stack.offset_right = 392.0
+	_top_left_stack.offset_bottom = 240.0
+	_top_left_stack.grow_vertical = Control.GROW_DIRECTION_END
+	_top_left_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_left_stack.add_theme_constant_override("separation", 8)
+	_root.add_child(_top_left_stack)
+
 	_mode_objective_panel = PanelContainer.new()
 	_mode_objective_panel.name = "ModeObjectiveCard"
-	_mode_objective_panel.anchor_left = 0.0
-	_mode_objective_panel.anchor_right = 0.0
-	_mode_objective_panel.anchor_top = 0.0
-	_mode_objective_panel.anchor_bottom = 0.0
-	_mode_objective_panel.offset_left = 24.0
-	_mode_objective_panel.offset_right = 392.0
-	_mode_objective_panel.offset_top = 24.0
-	_mode_objective_panel.offset_bottom = 112.0
 	_mode_objective_panel.custom_minimum_size = Vector2(368.0, 0.0)
+	_mode_objective_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_mode_objective_panel.grow_vertical = Control.GROW_DIRECTION_END
 	_mode_objective_panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	_mode_objective_panel.add_theme_stylebox_override("panel",
 		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.71, 0.92), HudIcons.COL_BRASS, 2, 7, 15, 10))
 	_mode_objective_panel.visible = false
-	_root.add_child(_mode_objective_panel)
+	_top_left_stack.add_child(_mode_objective_panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 5)
@@ -1311,6 +1360,60 @@ func _build_mode_objective_card() -> void:
 	_mode_skip_btn.visible = false
 	_mode_skip_btn.pressed.connect(skip_tutorial_step)
 	vbox.add_child(_mode_skip_btn)
+
+	_build_crew_roster_card()
+
+
+func _build_crew_roster_card() -> void:
+	_crew_roster_panel = PanelContainer.new()
+	_crew_roster_panel.name = "CrewRosterCard"
+	_crew_roster_panel.custom_minimum_size = Vector2(248.0, 0.0)
+	_crew_roster_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_crew_roster_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_roster_panel.add_theme_stylebox_override("panel",
+		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.71, 0.90), HudIcons.COL_BRASS, 2, 6, 10, 7))
+	_crew_roster_panel.visible = false
+	_top_left_stack.add_child(_crew_roster_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_roster_panel.add_child(vbox)
+
+	var hdr := HBoxContainer.new()
+	hdr.add_theme_constant_override("separation", 6)
+	hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(hdr)
+
+	var title_lbl := Label.new()
+	title_lbl.name = "CrewWatchHeader"
+	title_lbl.text = "CREW WATCH"
+	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_lbl.add_theme_font_size_override("font_size", 12)
+	title_lbl.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	hdr.add_child(title_lbl)
+
+	_crew_roster_count_label = Label.new()
+	_crew_roster_count_label.name = "CrewWatchCount"
+	_crew_roster_count_label.text = "0"
+	_crew_roster_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_crew_roster_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_roster_count_label.add_theme_font_size_override("font_size", 12)
+	_crew_roster_count_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	hdr.add_child(_crew_roster_count_label)
+
+	var rule := ColorRect.new()
+	rule.custom_minimum_size = Vector2(0.0, 1.0)
+	rule.color = Color(0.56, 0.42, 0.22, 0.45)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(rule)
+
+	_crew_roster_rows_box = VBoxContainer.new()
+	_crew_roster_rows_box.name = "CrewRosterRows"
+	_crew_roster_rows_box.add_theme_constant_override("separation", 4)
+	_crew_roster_rows_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(_crew_roster_rows_box)
 
 
 func _build_context_prompt() -> void:
@@ -1796,7 +1899,193 @@ func _process(delta: float) -> void:
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
 	_tick_crosshair(delta)
-	_sync_mode_objective_visibility()
+	_sync_top_left_visibility()
+	_tick_crew_roster(delta)
+
+
+func _tick_crew_roster(delta: float) -> void:
+	_crew_roster_accum += maxf(delta, 0.0)
+	if _crew_roster_accum < CREW_ROSTER_REFRESH_INTERVAL:
+		return
+	_crew_roster_accum = 0.0
+	_refresh_crew_roster()
+
+
+func _refresh_crew_roster() -> void:
+	if _crew_roster_panel == null or _crew_roster_rows_box == null:
+		return
+	var live_reg: Array[CrewBrain] = []
+	for rb in _crew_brains:
+		if rb != null and is_instance_valid(rb):
+			live_reg.append(rb)
+	_crew_brains = live_reg
+
+	var brains := get_crew_brains()
+	_crew_roster_entries.clear()
+	if _crew_roster_count_label != null:
+		_crew_roster_count_label.text = "%d" % brains.size()
+
+	while _crew_roster_rows.size() > brains.size():
+		var popped: Dictionary = _crew_roster_rows.pop_back()
+		var rnode := popped.get("row") as Control
+		if rnode != null and is_instance_valid(rnode):
+			if rnode.get_parent() != null:
+				rnode.get_parent().remove_child(rnode)
+			rnode.queue_free()
+
+	for idx in brains.size():
+		var b := brains[idx]
+		var raw_name := b.crew_name() if b.has_method(&"crew_name") else String(b.persona_id).capitalize()
+		var short_name := _to_ascii(raw_name.strip_edges())
+		var sp := short_name.find(" ")
+		if sp > 0:
+			short_name = short_name.substr(0, sp)
+		if short_name == "":
+			short_name = "Crew"
+
+		var task_id: StringName = b.current_task
+		var badge := _crew_task_badge(task_id)
+		var task_label: String = String(badge["label"])
+		var badge_col: Color = badge["color"] as Color
+
+		var hp_ratio := 1.0
+		if b.pawn != null and is_instance_valid(b.pawn):
+			if b.pawn.dead or b.pawn.max_health <= 0.0:
+				hp_ratio = 0.0
+			else:
+				hp_ratio = clampf(b.pawn.health / b.pawn.max_health, 0.0, 1.0)
+		var hp_col := Color(0.18, 0.68, 0.34, 1.0) if hp_ratio >= 0.60 else (
+			Color(0.86, 0.66, 0.16, 1.0) if hp_ratio >= 0.30 else Color(0.82, 0.18, 0.16, 1.0)
+		)
+
+		_crew_roster_entries.append({
+			"name": short_name,
+			"task": task_id,
+			"task_label": task_label,
+			"hp_ratio": hp_ratio,
+			"order": b.current_order,
+		})
+
+		var row_rec := _ensure_crew_roster_row(idx)
+		var name_lbl := row_rec["name_lbl"] as Label
+		var badge_lbl := row_rec["badge_lbl"] as Label
+		var badge_style := row_rec["badge_style"] as StyleBoxFlat
+		var hp_bar := row_rec["hp_bar"] as ProgressBar
+		var hp_fill := row_rec["hp_fill"] as StyleBoxFlat
+		name_lbl.text = short_name
+		badge_lbl.text = task_label
+		badge_style.bg_color = badge_col
+		hp_bar.value = hp_ratio
+		hp_fill.bg_color = hp_col
+
+	_crew_roster_panel.visible = _hud_visible and not pause_open and not brains.is_empty()
+
+
+func _ensure_crew_roster_row(idx: int) -> Dictionary:
+	if idx < _crew_roster_rows.size():
+		return _crew_roster_rows[idx]
+
+	var row := HBoxContainer.new()
+	row.name = "CrewRow_%d" % idx
+	row.add_theme_constant_override("separation", 6)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crew_roster_rows_box.add_child(row)
+
+	var name_lbl := Label.new()
+	name_lbl.name = "CrewName"
+	name_lbl.text = "Crew"
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_lbl.add_theme_font_size_override("font_size", 13)
+	name_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
+	row.add_child(name_lbl)
+
+	var badge_panel := PanelContainer.new()
+	badge_panel.name = "CrewTaskBadge"
+	badge_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var badge_style := StyleBoxFlat.new()
+	badge_style.bg_color = Color(0.36, 0.30, 0.22, 1.0)
+	badge_style.set_corner_radius_all(3)
+	badge_style.content_margin_left = 5
+	badge_style.content_margin_right = 5
+	badge_style.content_margin_top = 1
+	badge_style.content_margin_bottom = 1
+	badge_panel.add_theme_stylebox_override("panel", badge_style)
+	row.add_child(badge_panel)
+
+	var badge_lbl := Label.new()
+	badge_lbl.name = "CrewTaskLabel"
+	badge_lbl.text = "READY"
+	badge_lbl.custom_minimum_size = Vector2(54.0, 0.0)
+	badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	badge_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge_lbl.add_theme_font_size_override("font_size", 11)
+	badge_lbl.add_theme_color_override("font_color", Color(0.98, 0.95, 0.88, 1.0))
+	badge_panel.add_child(badge_lbl)
+
+	var hp_bar := ProgressBar.new()
+	hp_bar.name = "CrewHpBar"
+	hp_bar.custom_minimum_size = Vector2(52.0, 7.0)
+	hp_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hp_bar.min_value = 0.0
+	hp_bar.max_value = 1.0
+	hp_bar.step = 0.01
+	hp_bar.value = 1.0
+	hp_bar.show_percentage = false
+	hp_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var hp_bg := StyleBoxFlat.new()
+	hp_bg.bg_color = Color(0.24, 0.17, 0.11, 0.88)
+	hp_bg.border_color = HudIcons.COL_INK
+	hp_bg.set_border_width_all(1)
+	hp_bg.set_corner_radius_all(2)
+	hp_bar.add_theme_stylebox_override("background", hp_bg)
+
+	var hp_fill := StyleBoxFlat.new()
+	hp_fill.bg_color = Color(0.18, 0.68, 0.34, 1.0)
+	hp_fill.set_corner_radius_all(2)
+	hp_bar.add_theme_stylebox_override("fill", hp_fill)
+	row.add_child(hp_bar)
+
+	var rec := {
+		"row": row,
+		"name_lbl": name_lbl,
+		"badge_lbl": badge_lbl,
+		"badge_style": badge_style,
+		"hp_bar": hp_bar,
+		"hp_fill": hp_fill,
+	}
+	_crew_roster_rows.append(rec)
+	return rec
+
+
+static func _crew_task_badge(task: StringName) -> Dictionary:
+	match task:
+		&"helm":
+			return {"label": "HELM", "color": Color(0.14, 0.44, 0.62, 1.0)}
+		&"trim", &"sails", &"sail_length", &"sail_angle", &"trim_sails", &"set_sails":
+			return {"label": "SAILS", "color": Color(0.18, 0.50, 0.46, 1.0)}
+		&"anchor", &"anchor_drop", &"anchor_raise":
+			return {"label": "ANCHOR", "color": Color(0.46, 0.36, 0.24, 1.0)}
+		&"cannon", &"cannons":
+			return {"label": "GUNNER", "color": Color(0.76, 0.16, 0.14, 1.0)}
+		&"repair", &"patch", &"patch_hole", &"mend_rigging":
+			return {"label": "REPAIR", "color": Color(0.72, 0.42, 0.08, 1.0)}
+		&"bail":
+			return {"label": "BAIL", "color": Color(0.16, 0.48, 0.68, 1.0)}
+		&"fire", &"extinguish", &"douse_fire":
+			return {"label": "FIRE", "color": Color(0.86, 0.28, 0.08, 1.0)}
+		&"fetch", &"fetch_treasure", &"haul":
+			return {"label": "HAUL", "color": Color(0.66, 0.46, 0.08, 1.0)}
+		&"follow", &"escort", &"combat":
+			return {"label": "ESCORT", "color": Color(0.56, 0.20, 0.48, 1.0)}
+		&"board_ladder", &"return_ship":
+			return {"label": "BOARD", "color": Color(0.24, 0.46, 0.58, 1.0)}
+		&"shanty":
+			return {"label": "SHANTY", "color": Color(0.52, 0.30, 0.64, 1.0)}
+		_:
+			return {"label": "READY", "color": Color(0.36, 0.30, 0.22, 1.0)}
 
 
 func _tick_sailing_telemetry() -> void:

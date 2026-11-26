@@ -3241,3 +3241,133 @@ func test_q5b_helm_spoke_clicks_rigging_creaks_and_shore_soundscape() -> void:
 	check(not is_instance_valid(soundscape), "SeaSoundscape frees cleanly with zero leaks")
 	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 after Q5B teardown")
 
+
+func test_q7b_ship_lantern_halos_and_waterline_bow_ribbons() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 9.5, 0.0)
+	Weather.time_of_day = 12.0
+
+	var sloop := SLOOP_SCENE.instantiate() as Ship
+	sloop.enable_effects = true
+	_root.add_child(sloop)
+	sloop.global_position = Vector3(0.0, 0.0, 0.0)
+
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn") as PackedScene
+	check(brig_scene != null, "brigantine.tscn loads cleanly for Q7B")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = true
+	_root.add_child(brig)
+	brig.global_position = Vector3(36.0, 0.0, 0.0)
+	await physics_frames(4)
+
+	# 1. Both Sloop and Brigantine build zero-primitive lantern halos (>= 2) and bow-wave ribbons (>= 48 tris).
+	for spec: Array in [[sloop, "sloop"], [brig, "brigantine"]]:
+		var sh: Ship = spec[0] as Ship
+		var lbl: String = String(spec[1])
+		check(sh.get_lantern_halo_count() >= 2,
+			"%s mounts >= 2 atmospheric lantern halos (got %d)" % [lbl, sh.get_lantern_halo_count()])
+		check_eq(sh.get_lantern_halo_count(), sh._lantern_lights.size(),
+			"%s mounts one halo billboard per Lantern_* OmniLight3D" % lbl)
+		for hmi in sh._lantern_halo_meshes:
+			check(hmi != null and hmi.name == &"Halo", "%s lantern halo named 'Halo'" % lbl)
+			check(hmi.mesh is ArrayMesh and not (hmi.mesh is PrimitiveMesh),
+				"%s lantern halo uses shared sculpted ArrayMesh (zero QuadMesh/PrimitiveMesh)" % lbl)
+			check_eq(hmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s lantern halo disables shadow casting" % lbl)
+		var tri_count := sh.get_bow_ribbon_tri_count()
+		check(tri_count >= 48,
+			"%s builds sculpted twin bow-wave foam ribbons >= 48 tris (got %d)" % [lbl, tri_count])
+		var ribbon_mi := sh.get_node_or_null(^"BowWakeRibbons") as MeshInstance3D
+		check(ribbon_mi != null and ribbon_mi.mesh is ArrayMesh and not (ribbon_mi.mesh is PrimitiveMesh),
+			"%s BowWakeRibbons uses sculpted ArrayMesh (zero PrimitiveMesh)" % lbl)
+		check_eq(ribbon_mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s BowWakeRibbons disables shadow casting" % lbl)
+
+	# 2. Lantern halo energy rises strongly from midday (12.0) to night (23.0),
+	#    drops cleanly to 0.0 when doused, and restores when relit!
+	Weather.time_of_day = 12.0
+	sloop._update_lantern_visuals()
+	var midday_halo_e := sloop.get_lantern_halo_energy()
+	check(midday_halo_e > 0.05 and midday_halo_e < 0.45,
+		"midday lantern halo energy is subtle warm glint (got %.3f)" % midday_halo_e)
+
+	Weather.time_of_day = 23.0
+	sloop._update_lantern_visuals()
+	var night_halo_e := sloop.get_lantern_halo_energy()
+	check(night_halo_e > midday_halo_e * 3.0 and night_halo_e >= 0.85,
+		"night lantern halo energy rises strongly over midday (day=%.3f, night=%.3f)" % [midday_halo_e, night_halo_e])
+
+	sloop.set_lanterns_lit(false)
+	check_near(sloop.get_lantern_halo_energy(), 0.0, 0.0001,
+		"dousing lanterns zeroes lantern halo energy")
+	for hmi in sloop._lantern_halo_meshes:
+		check(not hmi.visible, "dousing lanterns hides every Halo mesh")
+
+	sloop.set_lanterns_lit(true)
+	check(sloop.get_lantern_halo_energy() >= 0.85,
+		"relighting lanterns at night restores lantern halo energy (got %.3f)" % sloop.get_lantern_halo_energy())
+	for hmi in sloop._lantern_halo_meshes:
+		check(hmi.visible, "relighting lanterns restores Halo mesh visibility")
+
+	# Ghost Ship spectral phase-out cleanly hides lantern halos!
+	brig.set_spectral_phase(0.0, 0.0)
+	brig._update_lantern_visuals()
+	check_near(brig.get_lantern_halo_energy(), 0.0, 0.0001,
+		"phased-out ship (_spectral_phase <= 0.02) zeroes lantern halo energy")
+	for hmi in brig._lantern_halo_meshes:
+		check(not hmi.visible, "phased-out ship hides every Halo mesh")
+	brig.set_spectral_phase(1.0, 0.0)
+	brig._update_lantern_visuals()
+
+	# 3. Bow-wave foam ribbon opacity is 0.0 at rest, rises > 0.7 under full sail (spd >= 4.5 m/s),
+	#    recalibrated Q1A bow spray activates cleanly around 2.0 m/s, and ribbon drops to 0.0 when sinking!
+	sloop.linear_velocity = Vector3.ZERO
+	sloop._last_submerged_frac = 0.55
+	sloop._update_wake(0.0)
+	var sloop_ribbon := sloop.get_node(^"BowWakeRibbons") as MeshInstance3D
+	check_near(sloop.get_bow_ribbon_opacity(), 0.0, 0.0001,
+		"bow-wave ribbon opacity is 0.0 at rest")
+	check(not sloop_ribbon.visible, "BowWakeRibbons hidden at rest")
+
+	# Q1A bow cheek spray activates cleanly at 2.0 m/s (> 1.75 m/s recalibrated threshold)!
+	sloop.linear_velocity = Vector3(0.0, 0.0, -2.0)
+	sloop._last_submerged_frac = 0.55
+	sloop._update_wake(0.0)
+	check(sloop._bow_spray_port != null and sloop._bow_spray_port.emitting,
+		"recalibrated bow cheek spray activates at 2.0 m/s (> 1.75 m/s)")
+
+	# Full sail speed (>= 4.5 m/s) drives bow ribbon opacity > 0.7 and reveals BowWakeRibbons!
+	sloop.linear_velocity = Vector3(0.0, 0.0, -5.2)
+	sloop._last_submerged_frac = 0.55
+	for _i in 12:
+		sloop._update_wake(0.1)
+	check(sloop.get_bow_ribbon_opacity() > 0.7,
+		"full-sail bow-wave ribbon opacity rises > 0.7 (got %.3f)" % sloop.get_bow_ribbon_opacity())
+	check(sloop_ribbon.visible, "BowWakeRibbons visible under full sail")
+
+	# Brigantine under full sail also reaches > 0.7!
+	brig.linear_velocity = Vector3(0.0, 0.0, -6.2)
+	brig._last_submerged_frac = 0.55
+	brig._update_wake(0.0)
+	check(brig.get_bow_ribbon_opacity() > 0.7,
+		"brigantine full-sail bow-wave ribbon opacity rises > 0.7 (got %.3f)" % brig.get_bow_ribbon_opacity())
+
+	# Sinking drops bow-wave ribbon opacity cleanly to 0.0 and hides the ribbon mesh!
+	sloop.is_sinking = true
+	for _i in 15:
+		sloop._update_wake(0.1)
+	check_near(sloop.get_bow_ribbon_opacity(), 0.0, 0.0001,
+		"sinking drops bow-wave ribbon opacity cleanly to 0.0 (got %.4f)" % sloop.get_bow_ribbon_opacity())
+	check(not sloop_ribbon.visible, "sinking hides BowWakeRibbons")
+
+	# 4. Clean zero-leak teardown!
+	await _end()
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 after Q7B teardown")
+	check(Ship._lantern_halo_mesh == null and Ship._lantern_halo_shader == null,
+		"Ship releases static lantern halo mesh & shader cache cleanly (0 leaks)")
+	check(Ship._bow_ribbon_mesh_sloop == null and Ship._bow_ribbon_mesh_brig == null
+		and Ship._bow_ribbon_shader == null,
+		"Ship releases static bow-wave ribbon mesh & shader cache cleanly (0 leaks)")
+
+
