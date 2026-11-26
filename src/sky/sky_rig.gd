@@ -33,6 +33,7 @@ const SPLASH_SHADER := preload("res://src/sky/rain_splash.gdshader")
 const MIST_SHADER := preload("res://src/sky/rain_mist.gdshader")
 const CURTAIN_SHADER := preload("res://src/sky/rain_curtain.gdshader")
 const BOLT_SHADER := preload("res://src/sky/lightning_bolt.gdshader")
+const IMPACT_SHADER := preload("res://src/sky/lightning_impact.gdshader")
 const NOISE_TEX := preload("res://assets/generated/sky/cloud_noise.png")
 const CLOUD_MAP := preload("res://assets/generated/sky/cloud_map.png")
 const CLOUD_VOLUME := preload("res://assets/generated/sky/cloud_volume.png")
@@ -44,6 +45,8 @@ const MIN_LIGHT_HEIGHT := 0.10
 const SHADOW_EXTENT := 16000.0
 const SHADOW_RES := 512
 const MAX_SHELTERS := 4
+## Lifetime of the ocean impact shockwave & ionized spray crown in seconds.
+const IMPACT_DURATION := 0.95
 
 ## Cloud rendering cost: LOW marches at quarter resolution, MEDIUM at half,
 ## HIGH at full resolution with finer noise (the no-compromise look).
@@ -94,6 +97,11 @@ var _curtain: MeshInstance3D
 var _curtain_material: ShaderMaterial
 var _bolt: MeshInstance3D
 var _bolt_material: ShaderMaterial
+var _impact: MeshInstance3D
+var _impact_material: ShaderMaterial
+var _impact_age: float = -1.0
+var _impact_foot: Vector3 = Vector3.ZERO
+var _impact_intensity: float = 0.0
 var _shadow_viewport: SubViewport
 var _shadow_material: ShaderMaterial
 var _rng := RandomNumberGenerator.new()
@@ -106,8 +114,9 @@ func _ready() -> void:
 	_build_rain()
 	_build_curtain()
 	_build_bolt()
+	_build_impact()
 	Weather.lightning_struck.connect(_on_lightning_struck)
-	_update(true)
+	_update(true, 0.0)
 
 func _exit_tree() -> void:
 	if Weather != null and Weather.lightning_struck.is_connected(_on_lightning_struck):
@@ -117,9 +126,12 @@ func _exit_tree() -> void:
 		sky_material.set_shader_parameter(&"shadow_map", null)
 	if _shadow_viewport != null and is_instance_valid(_shadow_viewport):
 		_shadow_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_impact_age = -1.0
+	if _impact != null and is_instance_valid(_impact):
+		_impact.visible = false
 
-func _process(_delta: float) -> void:
-	_update(false)
+func _process(delta: float) -> void:
+	_update(false, delta)
 
 func cloud_light_at(world_pos: Vector3) -> float:
 	## Fraction of the key light (sun or moon) reaching a point near the ground
@@ -351,10 +363,27 @@ func _build_bolt() -> void:
 	_bolt.extra_cull_margin = 16000.0
 	add_child(_bolt)
 
+func _build_impact() -> void:
+	_impact_material = ShaderMaterial.new()
+	_impact_material.shader = IMPACT_SHADER
+	_impact_material.set_shader_parameter(&"noise_tex", NOISE_TEX)
+	_impact_material.set_shader_parameter(&"follow_sea", 1.0 if splashes_follow_sea else 0.0)
+	_impact_material.set_shader_parameter(&"progress", 1.0)
+	Sea.bind_material(_impact_material)
+	_impact = MeshInstance3D.new()
+	_impact.name = "LightningImpact"
+	_impact.mesh = _make_impact_mesh()
+	_impact.material_override = _impact_material
+	_impact.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_impact.visible = false
+	_impact.top_level = true
+	_impact.extra_cull_margin = 16000.0
+	add_child(_impact)
+
 
 # --- Per-frame update ---------------------------------------------------
 
-func _update(first: bool) -> void:
+func _update(first: bool, delta: float = 0.0) -> void:
 	var cam := get_viewport().get_camera_3d()
 	var cam_pos := cam.global_position if cam != null else global_position
 	if track_camera_focus and cam != null:
@@ -430,6 +459,7 @@ func _update(first: bool) -> void:
 	_bolt_material.set_shader_parameter(&"intensity", flash)
 	if _bolt.visible and flash <= 0.01:
 		_bolt.visible = false
+	_update_impact(delta, flash)
 
 func _update_sky(p: Dictionary, sun_dir: Vector3, moon_dir: Vector3,
 		sun_is_key: bool, storm: float, cover: float, rain: float, flash: float) -> void:
@@ -637,13 +667,74 @@ func _update_rain(cam: Camera3D, rain: float, flash_here: float, first: bool) ->
 		for e: GPUParticles3D in [_rain, _rain_far, _splash, _mist]:
 			e.restart()
 
-func _on_lightning_struck(direction: Vector3, distance: float, _intensity: float) -> void:
-	if not show_bolts or Weather.lightning_is_sheet:
+func _on_lightning_struck(direction: Vector3, distance: float, intensity: float) -> void:
+	if not show_bolts:
+		_bolt.visible = false
+		_impact.visible = false
+		_impact_age = -1.0
+		return
+	if Weather.lightning_is_sheet:
 		_bolt.visible = false
 		return
-	_bolt.mesh = _make_bolt_mesh(Weather.lightning_position, direction, distance, _cloud_base() + 140.0)
+	var foot: Vector3 = Weather.lightning_position
+	var impact_y: float = Sea.height(foot.x, foot.z) if splashes_follow_sea else foot.y
+	var strike_foot := Vector3(foot.x, impact_y, foot.z)
+	_bolt.mesh = _make_bolt_mesh(strike_foot, direction, distance, _cloud_base() + 140.0)
 	_bolt.global_transform = Transform3D.IDENTITY
 	_bolt.visible = true
+	_trigger_impact(strike_foot, distance, intensity)
+	if Ocean.current != null:
+		Ocean.current.add_foam(strike_foot, 7.5, 1.0)
+
+func _trigger_impact(strike_foot: Vector3, distance: float, intensity: float) -> void:
+	_impact_foot = Vector3(strike_foot.x, 0.0, strike_foot.z)
+	_impact_age = 0.0
+	_impact_intensity = clampf(intensity, 0.25, 1.0)
+	var dist_scale := clampf(1.0 + maxf(distance - 220.0, 0.0) / 950.0, 1.0, 2.2)
+	var max_radius := 26.0 * dist_scale * lerpf(0.84, 1.12, _impact_intensity)
+	var peak_height := 18.0 * dist_scale * lerpf(0.84, 1.15, _impact_intensity)
+	_impact.global_transform = Transform3D(Basis.IDENTITY, strike_foot)
+	_impact_material.set_shader_parameter(&"impact_origin", strike_foot)
+	_impact_material.set_shader_parameter(&"progress", 0.0)
+	_impact_material.set_shader_parameter(&"intensity", _impact_intensity)
+	_impact_material.set_shader_parameter(&"flash", Weather.lightning_flash)
+	_impact_material.set_shader_parameter(&"ring_radius", max_radius)
+	_impact_material.set_shader_parameter(&"plume_height", peak_height)
+	_impact_material.set_shader_parameter(&"follow_sea", 1.0 if splashes_follow_sea else 0.0)
+	_impact_material.set_shader_parameter(&"seed", _rng.randf())
+	if not palette.is_empty():
+		_impact_material.set_shader_parameter(&"spray_tint",
+				_lin(palette["horizon"]).lerp(Vector3(0.75, 0.86, 0.94), 0.35))
+		_impact_material.set_shader_parameter(&"electric_tint",
+				_lin(palette["flash_color"]).lerp(Vector3(0.32, 0.88, 1.0), 0.55))
+	_impact.visible = true
+
+func _update_impact(delta: float, flash: float) -> void:
+	if _impact == null or not _impact.visible:
+		return
+	if _impact_age < 0.0:
+		_impact.visible = false
+		return
+	_impact_age += maxf(delta, 0.0)
+	if _impact_age >= IMPACT_DURATION:
+		_impact_age = -1.0
+		_impact.visible = false
+		_impact_material.set_shader_parameter(&"progress", 1.0)
+		_impact_material.set_shader_parameter(&"flash", 0.0)
+		return
+	var progress := clampf(_impact_age / IMPACT_DURATION, 0.0, 1.0)
+	var impact_y: float = Sea.height(_impact_foot.x, _impact_foot.z) if splashes_follow_sea else 0.0
+	var origin := Vector3(_impact_foot.x, impact_y, _impact_foot.z)
+	_impact.global_position = origin
+	_impact_material.set_shader_parameter(&"impact_origin", origin)
+	_impact_material.set_shader_parameter(&"progress", progress)
+	_impact_material.set_shader_parameter(&"flash", flash)
+	_impact_material.set_shader_parameter(&"follow_sea", 1.0 if splashes_follow_sea else 0.0)
+	if not palette.is_empty():
+		_impact_material.set_shader_parameter(&"spray_tint",
+				_lin(palette["horizon"]).lerp(Vector3(0.75, 0.86, 0.94), 0.35))
+		_impact_material.set_shader_parameter(&"electric_tint",
+				_lin(palette["flash_color"]).lerp(Vector3(0.32, 0.88, 1.0), 0.55))
 
 
 # --- Helpers ------------------------------------------------------------
@@ -754,3 +845,96 @@ func _ribbon(st: SurfaceTool, pts: PackedVector3Array, side: Vector3, width: flo
 			st.set_color(v[2])
 			st.set_uv(Vector2(v[1], 0.0))
 			st.add_vertex(v[0])
+
+static func _make_impact_mesh() -> ArrayMesh:
+	## Combined 3-part reusable mesh for `lightning_impact.gdshader`:
+	##   COLOR.r = 0.0 -> 12x32 polar shockwave disc (rides Gerstner ocean waves)
+	##   COLOR.r = 0.5 -> 28x7 fluted rising ionized spray crown
+	##   COLOR.r = 1.0 -> 3 crossed 4x6 feathered inner plasma & geyser sheets
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Expanding horizontal shockwave disc (unit XZ disc, UV = (angle/TAU, radius)).
+	var disc_col := Color(0.0, 0.0, 0.0, 1.0)
+	var disc_rings := 12
+	var disc_segs := 32
+	for ri in disc_rings:
+		var r0 := float(ri) / float(disc_rings)
+		var r1 := float(ri + 1) / float(disc_rings)
+		for ai in disc_segs:
+			var u0 := float(ai) / float(disc_segs)
+			var u1 := float(ai + 1) / float(disc_segs)
+			var a0 := u0 * TAU
+			var a1 := u1 * TAU
+			var p00 := Vector3(cos(a0) * r0, 0.0, sin(a0) * r0)
+			var p01 := Vector3(cos(a1) * r0, 0.0, sin(a1) * r0)
+			var p10 := Vector3(cos(a0) * r1, 0.0, sin(a0) * r1)
+			var p11 := Vector3(cos(a1) * r1, 0.0, sin(a1) * r1)
+			var uv00 := Vector2(u0, r0)
+			var uv01 := Vector2(u1, r0)
+			var uv10 := Vector2(u0, r1)
+			var uv11 := Vector2(u1, r1)
+			if ri == 0:
+				_impact_tri(st, p00, uv00, p11, uv11, p10, uv10, disc_col)
+			else:
+				_impact_tri(st, p00, uv00, p01, uv01, p11, uv11, disc_col)
+				_impact_tri(st, p00, uv00, p11, uv11, p10, uv10, disc_col)
+
+	# 2. Vertical fluted ionized spray crown (unit open cylinder, UV = (angle/TAU, height)).
+	var crown_col := Color(0.5, 0.0, 0.0, 1.0)
+	var crown_segs := 28
+	var crown_rings := 7
+	for hi in crown_rings:
+		var h0 := float(hi) / float(crown_rings)
+		var h1 := float(hi + 1) / float(crown_rings)
+		for ai in crown_segs:
+			var u0 := float(ai) / float(crown_segs)
+			var u1 := float(ai + 1) / float(crown_segs)
+			var a0 := u0 * TAU
+			var a1 := u1 * TAU
+			var p00 := Vector3(cos(a0), h0, sin(a0))
+			var p01 := Vector3(cos(a1), h0, sin(a1))
+			var p10 := Vector3(cos(a0), h1, sin(a0))
+			var p11 := Vector3(cos(a1), h1, sin(a1))
+			_impact_tri(st, p00, Vector2(u0, h0), p11, Vector2(u1, h1), p10, Vector2(u0, h1), crown_col)
+			_impact_tri(st, p00, Vector2(u0, h0), p01, Vector2(u1, h0), p11, Vector2(u1, h1), crown_col)
+
+	# 3. Three crossed feathered plasma & billowing geyser plume sheets (0, 60, 120 deg).
+	var plume_col := Color(1.0, 0.0, 0.0, 1.0)
+	var sheet_cols := 4
+	var sheet_rows := 6
+	for pi in 3:
+		var ang := float(pi) * PI / 3.0
+		var ax := cos(ang)
+		var az := sin(ang)
+		for xi in sheet_cols:
+			var u0 := float(xi) / float(sheet_cols)
+			var u1 := float(xi + 1) / float(sheet_cols)
+			var s0 := u0 * 2.0 - 1.0
+			var s1 := u1 * 2.0 - 1.0
+			for yi in sheet_rows:
+				var h0 := float(yi) / float(sheet_rows)
+				var h1 := float(yi + 1) / float(sheet_rows)
+				var p00 := Vector3(ax * s0, h0, az * s0)
+				var p01 := Vector3(ax * s1, h0, az * s1)
+				var p10 := Vector3(ax * s0, h1, az * s0)
+				var p11 := Vector3(ax * s1, h1, az * s1)
+				_impact_tri(st, p00, Vector2(u0, h0), p01, Vector2(u1, h0), p11, Vector2(u1, h1), plume_col)
+				_impact_tri(st, p00, Vector2(u0, h0), p11, Vector2(u1, h1), p10, Vector2(u0, h1), plume_col)
+
+	return st.commit()
+
+static func _impact_tri(st: SurfaceTool, a: Vector3, uva: Vector2,
+		b: Vector3, uvb: Vector2, c: Vector3, uvc: Vector2, col: Color) -> void:
+	st.set_normal(Vector3.UP)
+	st.set_color(col)
+	st.set_uv(uva)
+	st.add_vertex(a)
+	st.set_normal(Vector3.UP)
+	st.set_color(col)
+	st.set_uv(uvb)
+	st.add_vertex(b)
+	st.set_normal(Vector3.UP)
+	st.set_color(col)
+	st.set_uv(uvc)
+	st.add_vertex(c)

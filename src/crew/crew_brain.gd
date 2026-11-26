@@ -673,8 +673,14 @@ func _animate_shanty_instrument(delta: float) -> void:
 		return
 	var audio_beat := Audio.shanty_beat() if Audio.is_shanty_playing() else -1.0
 	if audio_beat >= 0.0 and absf(audio_beat - _last_audio_beat) > 0.0001:
+		var wrapped := _last_audio_beat >= 0.0 and audio_beat < _last_audio_beat - 1.0
 		_last_audio_beat = audio_beat
-		_shanty_phase = audio_beat
+		if wrapped:
+			_shanty_phase = audio_beat
+		elif audio_beat > _shanty_phase:
+			_shanty_phase = audio_beat
+		else:
+			_shanty_phase += delta * 2.0
 	else:
 		_shanty_phase += delta * 2.0
 	var beat := _shanty_phase

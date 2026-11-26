@@ -86,11 +86,23 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	# stop everything so no playback outlives the players at shutdown
+	# Stop everything and release stream refs so no playback outlives shutdown.
 	for child in get_children():
-		if child is AudioStreamPlayer or child is AudioStreamPlayer3D:
-			child.stop()
+		if child is AudioStreamPlayer:
+			var p := child as AudioStreamPlayer
+			p.stop()
+			p.stream = null
+		elif child is AudioStreamPlayer3D:
+			var p3 := child as AudioStreamPlayer3D
+			p3.stop()
+			p3.stream = null
 	_clear_stems()
+	_sfx.clear()
+	_ambience_players.clear()
+	_music_players.clear()
+	_pool_3d.clear()
+	_pool_2d.clear()
+	_stinger_player = null
 
 
 # ----------------------------------------------------------------------------

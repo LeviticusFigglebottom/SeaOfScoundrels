@@ -17,6 +17,7 @@ signal sunk
 signal cannon_fired(side: StringName, cannonball: Cannonball)
 signal bell_rung(pawn: Node)
 signal supplies_taken(pawn: Node)
+signal wind_caught(efficiency: float)
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -172,6 +173,7 @@ var _rope_sfx_accum: float = 0.0
 var _capstan_sfx_accum: float = 0.0
 var _was_anchor_submerged: bool = false
 var _was_drawing_wind: bool = false
+var _was_peak_wind: bool = false
 
 # Client interpolation target state
 var _net_target_xform: Transform3D = Transform3D.IDENTITY
@@ -193,6 +195,7 @@ var _bow_spray_starboard: GPUParticles3D = null
 var _spray_tex: GradientTexture2D = null
 var _active_muzzle_vfx: Array[Node] = []
 
+static var _active_ship_count: int = 0
 static var _smoke_puff_tex: ImageTexture = null
 static var _muzzle_flash_tex: GradientTexture2D = null
 static var _muzzle_spark_tex: ImageTexture = null
@@ -213,6 +216,7 @@ func _init() -> void:
 
 
 func _enter_tree() -> void:
+	_active_ship_count += 1
 	add_to_group(&"ship")
 
 
@@ -285,6 +289,11 @@ func _exit_tree() -> void:
 		if fmat != null:
 			fmat.set_shader_parameter(&"albedo_tex", null)
 	_unregister_ocean_mask()
+	_active_ship_count = maxi(0, _active_ship_count - 1)
+	if _active_ship_count == 0:
+		_smoke_puff_tex = null
+		_muzzle_flash_tex = null
+		_muzzle_spark_tex = null
 
 
 # ------------------------------------------------------------------ construction
@@ -1448,7 +1457,10 @@ func patch_hole(index: int) -> bool:
 	slot["patched"] = true
 	slot["severity"] = 0.0
 	_sync_hole_visuals(slot)
-	var pos := global_transform * (slot["local_pos"] as Vector3)
+	var local_pos: Vector3 = slot["local_pos"] as Vector3
+	var pos := global_transform * local_pos
+	if enable_effects:
+		_spawn_patch_burst(local_pos)
 	Audio.play_sfx(&"hammer_plank", pos)
 	hole_patched.emit(index)
 	return true
@@ -1465,6 +1477,11 @@ func bail(amount: float = 0.14) -> float:
 	if removed > 0.001:
 		var bilge := get_station(&"bilge")
 		var pos := bilge.global_position if bilge != null else global_position
+		if enable_effects:
+			var bilge_local := to_local(bilge.global_position) + Vector3(0.0, 0.55, 0.0) if bilge != null else Vector3(0.0, -0.35, -2.1)
+			_spawn_bail_splash(bilge_local)
+		if Ocean.current != null:
+			Ocean.current.add_foam(global_transform * Vector3(2.8, 0.0, 1.0), 1.35, 0.55)
 		Audio.play_sfx(&"bucket_splash", pos)
 		bailed.emit(removed)
 	return removed
@@ -1656,6 +1673,15 @@ func _cleanup_muzzle_vfx_node(fx_node: Node) -> void:
 		if child is GPUParticles3D:
 			var gp := child as GPUParticles3D
 			gp.emitting = false
+			if gp.draw_pass_1 is QuadMesh:
+				var qm := gp.draw_pass_1 as QuadMesh
+				if qm.material is StandardMaterial3D:
+					(qm.material as StandardMaterial3D).albedo_texture = null
+				qm.material = null
+			if gp.process_material is ParticleProcessMaterial:
+				var pm := gp.process_material as ParticleProcessMaterial
+				pm.color_ramp = null
+				pm.scale_curve = null
 			gp.draw_pass_1 = null
 			gp.process_material = null
 	fx_node.queue_free()
@@ -1666,6 +1692,194 @@ func _cleanup_all_muzzle_vfx() -> void:
 	_active_muzzle_vfx.clear()
 	for fx in pending:
 		_cleanup_muzzle_vfx_node(fx)
+
+
+func _spawn_patch_burst(local_pos: Vector3) -> void:
+	if not is_inside_tree():
+		return
+	var fx_root := Node3D.new()
+	fx_root.name = "PatchBurstVFX"
+	fx_root.position = local_pos
+
+	var inward_x := -signf(local_pos.x) if absf(local_pos.x) > 0.05 else 0.0
+	var burst_dir := Vector3(inward_x, 0.35, 0.0).normalized()
+
+	# 1. Warm oak sawdust puff burst right at the nailed plank patch (0.45 s).
+	var sawdust := GPUParticles3D.new()
+	sawdust.name = "PatchSawdust"
+	sawdust.emitting = false
+	sawdust.one_shot = true
+	sawdust.explosiveness = 0.92
+	sawdust.amount = 10
+	sawdust.lifetime = 0.45
+	sawdust.local_coords = true
+	sawdust.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	sawdust.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sawdust.visibility_aabb = AABB(Vector3(-1.5, -1.5, -1.5), Vector3(3.0, 3.0, 3.0))
+
+	var s_proc := ParticleProcessMaterial.new()
+	s_proc.direction = burst_dir
+	s_proc.spread = 58.0
+	s_proc.initial_velocity_min = 0.75
+	s_proc.initial_velocity_max = 1.90
+	s_proc.damping_min = 2.6
+	s_proc.damping_max = 4.4
+	s_proc.gravity = Vector3(0.0, -1.8, 0.0)
+	s_proc.scale_min = 0.65
+	s_proc.scale_max = 1.20
+	s_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.45), Vector2(0.35, 1.15), Vector2(1.0, 1.45)])
+	s_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.18, 0.65, 1.0]),
+		PackedColorArray([
+			Color(0.88, 0.68, 0.38, 0.0),
+			Color(0.84, 0.60, 0.30, 0.74),
+			Color(0.72, 0.48, 0.24, 0.34),
+			Color(0.60, 0.40, 0.20, 0.0),
+		])
+	)
+	sawdust.process_material = s_proc
+
+	var s_quad := QuadMesh.new()
+	s_quad.size = Vector2(0.24, 0.24)
+	var s_mat := StandardMaterial3D.new()
+	s_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	s_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	s_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	s_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	s_mat.vertex_color_use_as_albedo = true
+	s_mat.albedo_texture = _get_smoke_puff_texture()
+	s_quad.material = s_mat
+	sawdust.draw_pass_1 = s_quad
+	fx_root.add_child(sawdust)
+
+	# 2. 7 bright additive hammer-nail spark motes flying off the iron nailhead.
+	var sparks := GPUParticles3D.new()
+	sparks.name = "HammerSparks"
+	sparks.emitting = false
+	sparks.one_shot = true
+	sparks.explosiveness = 0.96
+	sparks.amount = 7
+	sparks.lifetime = 0.38
+	sparks.local_coords = true
+	sparks.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sparks.visibility_aabb = AABB(Vector3(-1.5, -1.5, -1.5), Vector3(3.0, 3.0, 3.0))
+
+	var sp_proc := ParticleProcessMaterial.new()
+	sp_proc.direction = burst_dir
+	sp_proc.spread = 65.0
+	sp_proc.initial_velocity_min = 1.6
+	sp_proc.initial_velocity_max = 3.6
+	sp_proc.damping_min = 1.4
+	sp_proc.damping_max = 2.6
+	sp_proc.gravity = Vector3(0.0, -7.2, 0.0)
+	sp_proc.scale_min = 0.75
+	sp_proc.scale_max = 1.25
+	sp_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.30, 0.72, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.98, 0.86, 1.0),
+			Color(1.0, 0.74, 0.22, 0.95),
+			Color(0.96, 0.38, 0.06, 0.45),
+			Color(0.75, 0.14, 0.02, 0.0),
+		])
+	)
+	sparks.process_material = sp_proc
+
+	var sp_quad := QuadMesh.new()
+	sp_quad.size = Vector2(0.11, 0.11)
+	var sp_mat := StandardMaterial3D.new()
+	sp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sp_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	sp_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sp_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	sp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	sp_mat.vertex_color_use_as_albedo = true
+	sp_mat.albedo_texture = _get_muzzle_flash_texture()
+	sp_quad.material = sp_mat
+	sparks.draw_pass_1 = sp_quad
+	fx_root.add_child(sparks)
+
+	add_child(fx_root)
+	sawdust.restart()
+	sparks.restart()
+	sawdust.emitting = true
+	sparks.emitting = true
+	_active_muzzle_vfx.append(fx_root)
+
+	var cleanup := Timer.new()
+	cleanup.wait_time = 0.55
+	cleanup.one_shot = true
+	cleanup.autostart = true
+	cleanup.timeout.connect(_cleanup_muzzle_vfx_node.bind(fx_root))
+	fx_root.add_child(cleanup)
+
+
+func _spawn_bail_splash(local_pos: Vector3) -> void:
+	if not is_inside_tree():
+		return
+	var fx_root := Node3D.new()
+	fx_root.name = "BilgeBailSplashVFX"
+	fx_root.position = local_pos
+
+	var splash := GPUParticles3D.new()
+	splash.name = "BailSplashPuff"
+	splash.emitting = false
+	splash.one_shot = true
+	splash.explosiveness = 0.90
+	splash.amount = 12
+	splash.lifetime = 0.42
+	splash.local_coords = true
+	splash.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	splash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	splash.visibility_aabb = AABB(Vector3(-1.8, -1.2, -1.8), Vector3(3.6, 3.0, 3.6))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.direction = Vector3(0.25, 1.0, 0.0).normalized()
+	proc.spread = 48.0
+	proc.initial_velocity_min = 1.4
+	proc.initial_velocity_max = 3.1
+	proc.damping_min = 1.0
+	proc.damping_max = 2.0
+	proc.gravity = Vector3(0.0, -7.8, 0.0)
+	proc.scale_min = 0.65
+	proc.scale_max = 1.25
+	proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.45), Vector2(0.32, 1.15), Vector2(1.0, 0.55)])
+	proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.16, 0.65, 1.0]),
+		PackedColorArray([
+			Color(0.95, 0.99, 1.0, 0.0),
+			Color(0.92, 0.98, 1.0, 0.84),
+			Color(0.70, 0.92, 0.96, 0.45),
+			Color(0.60, 0.86, 0.92, 0.0),
+		])
+	)
+	splash.process_material = proc
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.26, 0.26)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = _get_smoke_puff_texture()
+	quad.material = mat
+	splash.draw_pass_1 = quad
+	fx_root.add_child(splash)
+
+	add_child(fx_root)
+	splash.restart()
+	splash.emitting = true
+	_active_muzzle_vfx.append(fx_root)
+
+	var cleanup := Timer.new()
+	cleanup.wait_time = 0.55
+	cleanup.one_shot = true
+	cleanup.autostart = true
+	cleanup.timeout.connect(_cleanup_muzzle_vfx_node.bind(fx_root))
+	fx_root.add_child(cleanup)
 
 
 func _spawn_muzzle_flash(pos: Vector3, dir: Vector3) -> void:
@@ -1935,9 +2149,20 @@ func _tick_controls(delta: float) -> void:
 	# Sail fill cue when catching wind strongly after raising sail.
 	_last_wind_catch = wind_catch()
 	var drawing := sail_set > 0.35 and _last_wind_catch > 0.65
-	if drawing and not _was_drawing_wind and prev_sail <= sail_set:
+	var played_fill := drawing and not _was_drawing_wind and prev_sail <= sail_set
+	if played_fill:
 		Audio.play_sfx(&"sail_fill", global_position + Vector3.UP * 6.0, -3.0)
 	_was_drawing_wind = drawing
+
+	# Full-wind sweet-spot cue & signal with clean hysteresis (no spam).
+	var at_peak_wind := sail_set >= 0.45 and _last_wind_catch >= 0.88
+	if at_peak_wind and not _was_peak_wind:
+		_was_peak_wind = true
+		if not played_fill:
+			Audio.play_sfx(&"sail_fill", global_position + Vector3.UP * 6.0, -2.0)
+		wind_caught.emit(_last_wind_catch)
+	elif _was_peak_wind and (sail_set < 0.35 or _last_wind_catch < 0.75):
+		_was_peak_wind = false
 
 
 func _tick_flooding(delta: float) -> void:

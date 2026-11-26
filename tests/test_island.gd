@@ -1,8 +1,9 @@
 extends TestCase
 ## Headless integration tests for Workstream `island`:
 ## 17 stylized props, 11 procedural archetypes, 11-island archipelago, Outpost
-## dock depth / mooring clearance / shelter / restock, Pawn beach landing walk,
-## 3-dig DigSite unearthing, Outpost MerchantStall selling, shore factor & discovery.
+## dock depth / mooring clearance / shelter / restock, harbour bunting / grog keg /
+## campfire bard, Pawn beach landing walk, 3-dig DigSite unearthing, Outpost
+## MerchantStall selling, shore factor & discovery.
 
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
@@ -779,5 +780,129 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 
 	arch.queue_free()
 	await physics_frames(3)
+
+
+func test_outpost_harbour_life_bunting_grog_keg_and_bard() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(4)
+
+	var op0 := arch.get_outpost(0)
+	var op1 := arch.get_outpost(1)
+	check(op0 != null and op1 != null, "archipelago provides at least two Outposts")
+	if op0 == null or op1 == null:
+		arch.queue_free()
+		return
+
+	# 1. Verify HarbourBunting: 1 batched draw call, valid ArrayMesh, wind shader, high overhead clearance.
+	var bunting := op0.find_child("HarbourBunting", true, false) as MeshInstance3D
+	check(bunting != null and bunting == op0.harbour_bunting,
+		"Outpost builds batched HarbourBunting MeshInstance3D")
+	var bunting_tris := 0
+	if bunting != null:
+		check_eq(bunting.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"HarbourBunting disables shadows for lean draw cost")
+		var smat := bunting.material_override as ShaderMaterial
+		check(smat != null and smat.shader == Outpost.BUNTING_SHADER,
+			"HarbourBunting binds bunting_wind.gdshader")
+		check(bunting.mesh is ArrayMesh and bunting.mesh.get_surface_count() == 1,
+			"HarbourBunting uses a single batched ArrayMesh surface")
+		if bunting.mesh is ArrayMesh:
+			var arr := (bunting.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+			bunting_tris = floori(float(verts.size()) / 3.0)
+			check(bunting_tris >= 300, "HarbourBunting has festive posts, ropes & pennants (%d tris)" % bunting_tris)
+			# Every fluttering pennant vertex (UV.y > 0.1) must clear >= 4.15 m above terrain!
+			var min_pennant_clear := INF
+			var pennant_verts := 0
+			for vi in verts.size():
+				if uvs[vi].y > 0.1:
+					pennant_verts += 1
+					var v := verts[vi]
+					min_pennant_clear = minf(min_pennant_clear, v.y - op0.surface_height(v.x, v.z))
+			check(pennant_verts >= 60, "HarbourBunting encodes flutter weights on pennant vertices (%d)" % pennant_verts)
+			check(min_pennant_clear >= 4.15,
+				"All bunting pennant tips hang high overhead (min_clear=%.2f m >= 4.15 m)" % min_pennant_clear)
+		if smat != null:
+			var wt0: float = float(smat.get_shader_parameter(&"wind_time"))
+			await get_tree().process_frame
+			await get_tree().process_frame
+			var wt1: float = float(smat.get_shader_parameter(&"wind_time"))
+			check(wt1 > wt0, "HarbourBunting updates wind_time smoothly in _process (%.3f -> %.3f)" % [wt0, wt1])
+
+	# 2. Verify Interactive Sculpted TavernGrogKeg, static mesh sharing, tavern_toast signal & +35 HP heal!
+	var keg0 := op0.find_child("TavernGrogKeg", true, false) as Node3D
+	var keg_mi0 := op0.find_child("TavernGrogKegMesh", true, false) as MeshInstance3D
+	var keg_mi1 := op1.find_child("TavernGrogKegMesh", true, false) as MeshInstance3D
+	check(keg0 != null and keg0 == op0.tavern_keg_node, "Outpost places TavernGrogKeg beside the Tavern porch")
+	check(keg_mi0 != null and keg_mi0.mesh is ArrayMesh, "TavernGrogKeg uses a sculpted ArrayMesh")
+	var keg_tris := 0
+	if keg_mi0 != null and keg_mi0.mesh is ArrayMesh:
+		var karr := (keg_mi0.mesh as ArrayMesh).surface_get_arrays(0)
+		var kverts: PackedVector3Array = karr[Mesh.ARRAY_VERTEX]
+		keg_tris = floori(float(kverts.size()) / 3.0)
+		check(keg_tris >= 250, "TavernGrogKeg has sculpted cradle/keg/hoops/tap/mug (%d tris)" % keg_tris)
+	if keg_mi0 != null and keg_mi1 != null:
+		check_eq(keg_mi0.mesh, keg_mi1.mesh, "Outposts share statically cached TavernGrogKeg ArrayMesh")
+	if keg0 != null:
+		var expected_ky := op0.surface_height(keg0.position.x, keg0.position.z)
+		check_near(keg0.position.y, expected_ky, 0.08, "TavernGrogKeg sits grounded cleanly on terrain")
+
+	check(op0.tavern_keg_interactable != null, "Outpost exposes tavern_keg_interactable")
+	var toast_pawns: Array[Node] = []
+	op0.tavern_toast.connect(func(p: Node) -> void: toast_pawns.append(p))
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	add_child(captain)
+	captain.global_position = op0.global_position + (keg0.position if keg0 != null else Vector3.ZERO) + Vector3(0.0, 0.2, -1.2)
+	captain.apply_damage(50.0, null)
+	check_near(captain.health, 50.0, 0.01, "damaged Pawn starts at 50.0 HP before tavern toast")
+	op0.tavern_keg_interactable.interact(captain)
+	check_eq(toast_pawns.size(), 1, "interacting with tavern_keg_interactable emits tavern_toast once")
+	check_eq(toast_pawns[0], captain, "tavern_toast emits interacting Pawn")
+	check_near(captain.health, 85.0, 0.01, "tapping tavern grog keg heals damaged Pawn by +35 HP")
+	captain.queue_free()
+
+	# 3. Verify Harbour Campfire Shanty Musician (TavernBardNPC) & held 3D sculpted instrument!
+	var bard := op0.find_child("TavernBardNPC", true, false) as Node3D
+	check(bard != null and bard == op0.tavern_bard_node, "Outpost spawns TavernBardNPC by the harbour campfire")
+	if bard != null:
+		var campfire := op0.find_child("OutpostCampfire", true, false) as Node3D
+		if campfire != null:
+			var d_fire := Vector2(bard.position.x - campfire.position.x, bard.position.z - campfire.position.z).length()
+			check(d_fire > 1.0 and d_fire < 3.5,
+				"TavernBardNPC stands beside the harbour campfire (dist=%.2f m)" % d_fire)
+		var bard_cv := bard.get_node_or_null(^"CharacterVisual") as CharacterVisual
+		check(bard_cv != null and bard_cv.skeleton != null, "TavernBardNPC owns a bound CharacterVisual skeleton")
+		if bard_cv != null and bard_cv.hand_right != null:
+			var held := bard_cv.hand_right.find_child("ShantyInstrument_*", true, false) as Node3D
+			check(held != null, "TavernBardNPC holds a sculpted 3D shanty instrument in hand_right")
+
+	# 4. Verify BeaconGlowCore is a sculpted ArrayMesh and ZERO raw primitive MeshInstance3Ds remain on Outpost!
+	var beacon_core := op0.find_child("BeaconGlowCore", true, false) as MeshInstance3D
+	check(beacon_core != null and beacon_core.mesh is ArrayMesh,
+		"BeaconGlowCore uses sculpted faceted ArrayMesh instead of SphereMesh")
+	var beacon_tris := 0
+	if beacon_core != null and beacon_core.mesh is ArrayMesh:
+		var barr := (beacon_core.mesh as ArrayMesh).surface_get_arrays(0)
+		var bverts: PackedVector3Array = barr[Mesh.ARRAY_VERTEX]
+		beacon_tris = floori(float(bverts.size()) / 3.0)
+
+	var raw_prims: Array[String] = []
+	for node in op0.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims.append(mi.name)
+	check(raw_prims.is_empty(),
+		"Outpost must have zero raw primitive MeshInstance3Ds (found: %s)" % str(raw_prims))
+	print("    outpost sculpted meshes: HarbourBunting=%d, TavernGrogKeg=%d, BeaconGlowCore=%d tris" % [
+		bunting_tris, keg_tris, beacon_tris])
+
+	arch.queue_free()
+	await physics_frames(3)
+	check(Outpost._keg_mesh == null and Outpost._beacon_halo_mesh == null,
+		"Outpost releases static mesh cache cleanly after all Outposts exit tree")
+
 
 

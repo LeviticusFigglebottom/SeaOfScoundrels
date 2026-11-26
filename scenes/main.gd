@@ -525,52 +525,12 @@ func _crew_specs_for(target_ship: Ship) -> Array[Dictionary]:
 func _mount_cooking_stove(target_ship: Ship) -> void:
 	cooking_stove = CookingStove.new()
 	cooking_stove.name = "CookingStove"
+	cooking_stove.build_hearth = true
 	if target_ship.ship_class == &"brigantine":
 		cooking_stove.position = Vector3(1.65, -0.95, 1.85)
 	else:
 		cooking_stove.position = Vector3(1.25, -0.85, 0.85)
 	target_ship.add_child(cooking_stove)
-
-	# Stylized chunky cast-iron galley stove + glowing embers + iron skillet visual.
-	var stove_mat := StandardMaterial3D.new()
-	stove_mat.albedo_color = Color(0.16, 0.16, 0.18)
-	stove_mat.metallic = 0.65
-	stove_mat.roughness = 0.55
-
-	var body := MeshInstance3D.new()
-	body.name = "StoveBody"
-	var bx := BoxMesh.new()
-	bx.size = Vector3(0.58, 0.68, 0.54)
-	body.mesh = bx
-	body.position = Vector3(0.0, 0.34, 0.0)
-	body.material_override = stove_mat
-	cooking_stove.add_child(body)
-
-	var ember := MeshInstance3D.new()
-	ember.name = "EmberGrate"
-	var ebx := BoxMesh.new()
-	ebx.size = Vector3(0.36, 0.14, 0.04)
-	ember.mesh = ebx
-	ember.position = Vector3(-0.28, 0.24, 0.0)
-	var emat := StandardMaterial3D.new()
-	emat.albedo_color = Color(1.0, 0.44, 0.12)
-	emat.emission_enabled = true
-	emat.emission = Color(1.0, 0.42, 0.10)
-	emat.emission_energy_multiplier = 2.4
-	ember.material_override = emat
-	cooking_stove.add_child(ember)
-
-	var pan := MeshInstance3D.new()
-	pan.name = "FryingPan"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.20
-	cyl.bottom_radius = 0.16
-	cyl.height = 0.06
-	cyl.radial_segments = 12
-	pan.mesh = cyl
-	pan.position = Vector3(0.0, 0.71, 0.0)
-	pan.material_override = stove_mat
-	cooking_stove.add_child(pan)
 
 	# Intercept stove interaction when player holds freshly caught fish from FishingLine.
 	if cooking_stove.interactable != null:
@@ -587,21 +547,44 @@ func _mount_fishing_station(target_ship: Ship) -> void:
 		fishing_line.position = Vector3(-1.48, 2.0, 5.72)
 	target_ship.add_child(fishing_line)
 
-	# Timber rod rest & angled bamboo rod visual at the aft rail.
+	# Sculpted carved oak & brass rail holder cleat + stowed 3-joint bamboo fishing rod.
+	var holder_origin := Vector3(0.02, 0.68, 0.24)
+	var rod_rot_deg := Vector3(38.0, 0.0, 8.0)
+	var rod_basis := Basis.from_euler(Vector3(deg_to_rad(rod_rot_deg.x), 0.0, deg_to_rad(rod_rot_deg.z)))
+
+	var oak_mat := StandardMaterial3D.new()
+	oak_mat.vertex_color_use_as_albedo = true
+	oak_mat.roughness = 0.72
+	oak_mat.metallic = 0.04
+
+	var brass_mat := StandardMaterial3D.new()
+	brass_mat.vertex_color_use_as_albedo = true
+	brass_mat.roughness = 0.28
+	brass_mat.metallic = 0.84
+
+	var cleat := MeshInstance3D.new()
+	cleat.name = "FishingRailCleat"
+	var cleat_mesh := _build_fishing_rail_cleat_mesh(holder_origin, rod_basis)
+	cleat.mesh = cleat_mesh
+	cleat.set_surface_override_material(0, oak_mat)
+	if cleat_mesh.get_surface_count() > 1:
+		cleat.set_surface_override_material(1, brass_mat)
+	fishing_line.add_child(cleat)
+
 	var rod_mat := StandardMaterial3D.new()
-	rod_mat.albedo_color = Color(0.56, 0.38, 0.20)
-	rod_mat.roughness = 0.78
+	rod_mat.vertex_color_use_as_albedo = true
+	rod_mat.roughness = 0.44
+	rod_mat.metallic = 0.12
+
 	var rod := MeshInstance3D.new()
 	rod.name = "FishingRodProp"
-	var rcyl := CylinderMesh.new()
-	rcyl.top_radius = 0.014
-	rcyl.bottom_radius = 0.028
-	rcyl.height = 1.9
-	rcyl.radial_segments = 8
-	rod.mesh = rcyl
-	rod.position = Vector3(0.0, 1.05, 0.55)
-	rod.rotation_degrees = Vector3(38.0, 0.0, 8.0)
-	rod.material_override = rod_mat
+	var rod_mesh := _build_stowed_fishing_rod_mesh()
+	rod.mesh = rod_mesh
+	rod.position = holder_origin
+	rod.rotation_degrees = rod_rot_deg
+	rod.set_surface_override_material(0, rod_mat)
+	if rod_mesh.get_surface_count() > 1:
+		rod.set_surface_override_material(1, brass_mat)
 	fishing_line.add_child(rod)
 
 	fishing_interactable = Interactable.create("Cast fishing line", 0.85)
@@ -613,6 +596,269 @@ func _mount_fishing_station(target_ship: Ship) -> void:
 
 	fishing_line.fish_caught.connect(_on_fish_caught)
 	fishing_line.line_snapped.connect(_on_fishing_line_snapped)
+
+
+static func _build_stowed_fishing_rod_mesh() -> ArrayMesh:
+	var wood_st := SurfaceTool.new()
+	wood_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var brass_st := SurfaceTool.new()
+	brass_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 3-joint tapered bamboo shaft along local +Y (seated inside rail socket from -0.22 to +1.78 m).
+	var butt_rings: Array[Array] = [
+		[-0.190, 0.025, FishingLine.COL_CORK_GRIP_DARK],
+		[-0.080, 0.030, FishingLine.COL_CORK_GRIP],
+		[0.045, 0.029, FishingLine.COL_CORK_GRIP],
+		[0.120, 0.025, FishingLine.COL_CORK_GRIP_DARK],
+	]
+	CookingStove._append_lathe_y(wood_st, butt_rings, 8)
+
+	# Joint 1 bamboo (with dark bamboo nodes & thread lashings).
+	var j1_rings: Array[Array] = [
+		[0.160, 0.022, FishingLine.COL_LASHING],
+		[0.195, 0.022, FishingLine.COL_LASHING],
+		[0.205, 0.021, FishingLine.COL_BAMBOO],
+		[0.345, 0.0195, FishingLine.COL_BAMBOO_HI],
+		[0.360, 0.0225, FishingLine.COL_BAMBOO_NODE],
+		[0.375, 0.0192, FishingLine.COL_BAMBOO],
+		[0.545, 0.0180, FishingLine.COL_BAMBOO_HI],
+		[0.560, 0.0205, FishingLine.COL_BAMBOO_NODE],
+		[0.575, 0.0178, FishingLine.COL_BAMBOO],
+		[0.585, 0.0190, FishingLine.COL_LASHING],
+		[0.625, 0.0186, FishingLine.COL_LASHING],
+		[0.635, 0.0174, FishingLine.COL_BAMBOO],
+		[0.700, 0.0170, FishingLine.COL_BAMBOO],
+	]
+	CookingStove._append_lathe_y(wood_st, j1_rings, 8)
+
+	# Joint 2 bamboo.
+	var j2_rings: Array[Array] = [
+		[0.742, 0.0165, FishingLine.COL_LASHING],
+		[0.768, 0.0162, FishingLine.COL_LASHING],
+		[0.776, 0.0156, FishingLine.COL_BAMBOO],
+		[0.925, 0.0144, FishingLine.COL_BAMBOO_HI],
+		[0.940, 0.0168, FishingLine.COL_BAMBOO_NODE],
+		[0.955, 0.0142, FishingLine.COL_BAMBOO],
+		[1.042, 0.0136, FishingLine.COL_BAMBOO_HI],
+		[1.050, 0.0148, FishingLine.COL_LASHING],
+		[1.084, 0.0144, FishingLine.COL_LASHING],
+		[1.092, 0.0132, FishingLine.COL_BAMBOO],
+		[1.145, 0.0128, FishingLine.COL_BAMBOO_HI],
+		[1.160, 0.0150, FishingLine.COL_BAMBOO_NODE],
+		[1.175, 0.0125, FishingLine.COL_BAMBOO],
+		[1.280, 0.0120, FishingLine.COL_BAMBOO],
+	]
+	CookingStove._append_lathe_y(wood_st, j2_rings, 8)
+
+	# Joint 3 slender bamboo tip.
+	var j3_rings: Array[Array] = [
+		[1.320, 0.0115, FishingLine.COL_LASHING],
+		[1.344, 0.0112, FishingLine.COL_LASHING],
+		[1.352, 0.0108, FishingLine.COL_BAMBOO],
+		[1.462, 0.0096, FishingLine.COL_BAMBOO_HI],
+		[1.470, 0.0108, FishingLine.COL_LASHING],
+		[1.500, 0.0104, FishingLine.COL_LASHING],
+		[1.508, 0.0092, FishingLine.COL_BAMBOO],
+		[1.555, 0.0086, FishingLine.COL_BAMBOO_HI],
+		[1.568, 0.0102, FishingLine.COL_BAMBOO_NODE],
+		[1.580, 0.0082, FishingLine.COL_BAMBOO],
+		[1.750, 0.0068, FishingLine.COL_BAMBOO],
+	]
+	CookingStove._append_lathe_y(wood_st, j3_rings, 8)
+
+	# Brass butt pommel cap, reel seat collar, two 3-joint ferrules & tip-top ferrule.
+	var brass_butt: Array[Array] = [
+		[-0.222, 0.000, FishingLine.COL_BRASS_DARK],
+		[-0.214, 0.027, FishingLine.COL_BRASS],
+		[-0.190, 0.028, FishingLine.COL_BRASS_DARK],
+	]
+	CookingStove._append_lathe_y(brass_st, brass_butt, 8)
+	var brass_seat: Array[Array] = [
+		[0.118, 0.025, FishingLine.COL_BRASS_DARK],
+		[0.125, 0.028, FishingLine.COL_BRASS],
+		[0.155, 0.027, FishingLine.COL_BRASS],
+		[0.162, 0.022, FishingLine.COL_BRASS_DARK],
+	]
+	CookingStove._append_lathe_y(brass_st, brass_seat, 8)
+	var ferrule_1: Array[Array] = [
+		[0.696, 0.0170, FishingLine.COL_BRASS_DARK],
+		[0.704, 0.0195, FishingLine.COL_BRASS],
+		[0.736, 0.0190, FishingLine.COL_BRASS],
+		[0.744, 0.0165, FishingLine.COL_BRASS_DARK],
+	]
+	CookingStove._append_lathe_y(brass_st, ferrule_1, 8)
+	var ferrule_2: Array[Array] = [
+		[1.276, 0.0120, FishingLine.COL_BRASS_DARK],
+		[1.284, 0.0142, FishingLine.COL_BRASS],
+		[1.314, 0.0138, FishingLine.COL_BRASS],
+		[1.322, 0.0115, FishingLine.COL_BRASS_DARK],
+	]
+	CookingStove._append_lathe_y(brass_st, ferrule_2, 8)
+	var tip_cap: Array[Array] = [
+		[1.748, 0.0068, FishingLine.COL_BRASS_DARK],
+		[1.754, 0.0086, FishingLine.COL_BRASS],
+		[1.780, 0.0072, FishingLine.COL_BRASS],
+		[1.785, 0.000, FishingLine.COL_BRASS_DARK],
+	]
+	CookingStove._append_lathe_y(brass_st, tip_cap, 8)
+
+	# Turned brass fishing reel drum + wound twine spool + starboard crank handle (at y = 0.14).
+	var reel_c := Vector3(0.0, 0.140, 0.062)
+	CookingStove._append_cylinder_between(
+		brass_st, Vector3(0.0, 0.140, 0.020), reel_c + Vector3(0.0, 0.0, -0.022),
+		0.011, 0.013, 6, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+	)
+	CookingStove._append_cylinder_between(
+		brass_st, reel_c + Vector3(-0.032, 0.0, 0.0), reel_c + Vector3(-0.022, 0.0, 0.0),
+		0.044, 0.046, 10, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+	)
+	CookingStove._append_cylinder_between(
+		brass_st, reel_c + Vector3(0.022, 0.0, 0.0), reel_c + Vector3(0.032, 0.0, 0.0),
+		0.046, 0.044, 10, FishingLine.COL_BRASS, FishingLine.COL_BRASS_DARK
+	)
+	CookingStove._append_cylinder_between(
+		wood_st, reel_c + Vector3(-0.022, 0.0, 0.0), reel_c + Vector3(0.022, 0.0, 0.0),
+		0.035, 0.035, 10, FishingLine.COL_SPOOL_TWINE, FishingLine.COL_SPOOL_TWINE
+	)
+	CookingStove._append_cylinder_between(
+		brass_st, reel_c + Vector3(0.032, 0.0, 0.0), reel_c + Vector3(0.048, 0.0, 0.0),
+		0.013, 0.010, 6, FishingLine.COL_BRASS, FishingLine.COL_BRASS_DARK
+	)
+	var crank_end := reel_c + Vector3(0.048, 0.026, 0.024)
+	CookingStove._append_cylinder_between(
+		brass_st, reel_c + Vector3(0.044, 0.0, 0.0), crank_end,
+		0.0065, 0.0060, 6, FishingLine.COL_BRASS, FishingLine.COL_BRASS
+	)
+	CookingStove._append_cylinder_between(
+		wood_st, crank_end, crank_end + Vector3(0.022, 0.0, 0.0),
+		0.010, 0.0085, 6, FishingLine.COL_KNOB_OAK, FishingLine.COL_IVORY
+	)
+
+	# 3 tiny brass line-guide rings + gleaming tip-top brass eyelet along +Z underside.
+	var guides: Array[Array] = [
+		[0.605, 0.035, 0.018, 0.0036, 0.017],
+		[1.067, 0.029, 0.015, 0.0033, 0.014],
+		[1.485, 0.023, 0.012, 0.0029, 0.010],
+	]
+	for g in guides:
+		var gy := float(g[0])
+		var gz := float(g[1])
+		var gr := float(g[2])
+		var wr := float(g[3])
+		var sr := float(g[4])
+		var gc := Vector3(0.0, gy, gz)
+		FishingLine._append_torus_ring(brass_st, gc, Vector3.UP, gr, wr, 8, 5, FishingLine.COL_BRASS)
+		var base_pt := gc + Vector3(0.0, 0.0, -gr)
+		CookingStove._append_cylinder_between(
+			brass_st, Vector3(0.0, gy - 0.018, sr * 0.72), base_pt,
+			wr * 0.9, wr * 0.8, 5, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+		)
+		CookingStove._append_cylinder_between(
+			brass_st, Vector3(0.0, gy + 0.018, sr * 0.72), base_pt,
+			wr * 0.9, wr * 0.8, 5, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+		)
+	FishingLine._append_torus_ring(
+		brass_st, Vector3(0.0, 1.782, 0.012), Vector3.UP, 0.010, 0.0028, 8, 5, FishingLine.COL_BRASS
+	)
+
+	wood_st.generate_normals()
+	var mesh := wood_st.commit()
+	brass_st.generate_normals()
+	brass_st.commit(mesh)
+	return mesh
+
+
+static func _build_fishing_rail_cleat_mesh(rod_origin: Vector3, rod_basis: Basis) -> ArrayMesh:
+	var oak_st := SurfaceTool.new()
+	oak_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var brass_st := SurfaceTool.new()
+	brass_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_oak_hi := Color(0.50, 0.33, 0.19)
+	var col_oak_mid := Color(0.38, 0.24, 0.13)
+	var col_oak_dark := Color(0.24, 0.15, 0.08)
+
+	# Carved oak deck mounting plinth resting solidly on quarterdeck (y = 0.0) + 4 brass bolts.
+	CookingStove._append_beveled_box(
+		oak_st, Vector3(0.04, 0.022, 0.12), Vector3(0.22, 0.044, 0.24), 0.010,
+		col_oak_hi, col_oak_mid, col_oak_dark
+	)
+	for bx: float in [-0.045, 0.125]:
+		for bz: float in [0.035, 0.205]:
+			CookingStove._append_rivet_dome(
+				brass_st, Vector3(bx, 0.044, bz), Vector3.UP, 0.011, 0.007, FishingLine.COL_BRASS
+			)
+
+	# Stout carved oak stanchion timber rising to rail height + angled oak cradle knee brace.
+	CookingStove._append_beveled_box(
+		oak_st, Vector3(0.04, 0.34, 0.13), Vector3(0.115, 0.60, 0.125), 0.014,
+		col_oak_hi, col_oak_mid, col_oak_dark
+	)
+	CookingStove._append_beveled_box(
+		oak_st, Vector3(0.04, 0.65, 0.16), Vector3(0.135, 0.085, 0.19), 0.012,
+		col_oak_hi, col_oak_mid, col_oak_dark
+	)
+	# Angled oak knee strut bracing the rod-socket cradle back into the post.
+	CookingStove._append_cylinder_between(
+		oak_st, Vector3(0.04, 0.38, 0.14), Vector3(0.03, 0.56, 0.21),
+		0.032, 0.028, 6, col_oak_dark, col_oak_mid
+	)
+
+	# Flared brass rod-holder socket tube aligned cleanly with FishingRodProp's butt shaft.
+	var ax := rod_basis.y.normalized()
+	var sock_bot := rod_origin - ax * 0.25
+	var sock_top := rod_origin + ax * 0.015
+	CookingStove._append_cylinder_between(
+		brass_st, sock_bot, sock_top, 0.036, 0.040, 10,
+		FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+	)
+	# Rolled flared brass mouth ring, dark hollow socket bore & two proud brass mounting clamp bands.
+	FishingLine._append_torus_ring(brass_st, sock_top, ax, 0.041, 0.007, 10, 5, FishingLine.COL_BRASS)
+	CookingStove._append_cylinder_between(
+		oak_st, sock_top - ax * 0.003, sock_top + ax * 0.002, 0.031, 0.031, 10,
+		CookingStove.COL_IRON_SOOT, CookingStove.COL_IRON_SOOT
+	)
+	FishingLine._append_torus_ring(brass_st, rod_origin - ax * 0.06, ax, 0.042, 0.006, 10, 5, FishingLine.COL_BRASS_DARK)
+	FishingLine._append_torus_ring(brass_st, rod_origin - ax * 0.18, ax, 0.040, 0.006, 10, 5, FishingLine.COL_BRASS_DARK)
+	# Riveted brass bracket strap linking the socket to the carved oak stanchion.
+	CookingStove._append_cylinder_between(
+		brass_st, Vector3(0.04, 0.63, 0.15), rod_origin - ax * 0.06,
+		0.014, 0.014, 6, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+	)
+	CookingStove._append_cylinder_between(
+		brass_st, Vector3(0.04, 0.52, 0.15), rod_origin - ax * 0.18,
+		0.014, 0.014, 6, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+	)
+
+	# Double-horned nautical brass belaying cleat bolted on the inboard (+X) post face!
+	var cl_base := Vector3(0.098, 0.46, 0.13)
+	CookingStove._append_beveled_box(
+		brass_st, cl_base, Vector3(0.018, 0.036, 0.082), 0.004,
+		FishingLine.COL_BRASS, FishingLine.COL_BRASS, FishingLine.COL_BRASS_DARK
+	)
+	for cz: float in [-0.022, 0.022]:
+		CookingStove._append_cylinder_between(
+			brass_st, cl_base + Vector3(0.008, 0.0, cz), cl_base + Vector3(0.038, 0.0, cz * 0.85),
+			0.008, 0.007, 6, FishingLine.COL_BRASS_DARK, FishingLine.COL_BRASS
+		)
+	CookingStove._append_cylinder_between(
+		brass_st, cl_base + Vector3(0.038, 0.0, -0.072), cl_base + Vector3(0.038, 0.0, 0.072),
+		0.007, 0.007, 6, FishingLine.COL_BRASS, FishingLine.COL_BRASS
+	)
+	CookingStove._append_cone_spike(
+		brass_st, cl_base + Vector3(0.038, 0.0, -0.070), cl_base + Vector3(0.046, 0.008, -0.098),
+		0.007, FishingLine.COL_BRASS, FishingLine.COL_BRASS_DARK
+	)
+	CookingStove._append_cone_spike(
+		brass_st, cl_base + Vector3(0.038, 0.0, 0.070), cl_base + Vector3(0.046, 0.008, 0.098),
+		0.007, FishingLine.COL_BRASS, FishingLine.COL_BRASS_DARK
+	)
+
+	oak_st.generate_normals()
+	var mesh := oak_st.commit()
+	brass_st.generate_normals()
+	brass_st.commit(mesh)
+	return mesh
 
 
 func _build_player_and_crew() -> void:
@@ -1388,7 +1634,7 @@ func _spawn_wreck_salvage_marker(wreck: Dictionary) -> void:
 	var wpos: Vector3 = wreck.get("position", Vector3.ZERO)
 	var items: Array = wreck.get("items", [])
 
-	# Floating red-and-brass salvage buoy + circling gulls so the wreck is readable from afar.
+	# Sculpted Nautical Iron Salvage Bell-Buoy + glowing beacon + circling gulls.
 	var buoy := Node3D.new()
 	buoy.name = "SalvageBuoy_" + String(wreck.get("id", "wreck"))
 	_entities_root.add_child(buoy)
@@ -1396,21 +1642,45 @@ func _spawn_wreck_salvage_marker(wreck: Dictionary) -> void:
 	var wreck_gulls := SeabirdFlock.spawn_over(_entities_root, Vector3(wpos.x, 0.0, wpos.z), 13.0, 15.0, 6)
 	wreck_gulls.is_loot_marker = true
 
-	var body := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.25
-	cyl.bottom_radius = 0.42
-	cyl.height = 1.6
-	cyl.radial_segments = 10
-	body.mesh = cyl
-	body.position = Vector3(0.0, 0.5, 0.0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.84, 0.16, 0.14)
-	mat.emission_enabled = true
-	mat.emission = Color(0.95, 0.35, 0.12)
-	mat.emission_energy_multiplier = 0.8
-	body.material_override = mat
-	buoy.add_child(body)
+	var hull_mat := StandardMaterial3D.new()
+	hull_mat.vertex_color_use_as_albedo = true
+	hull_mat.metallic = 0.42
+	hull_mat.roughness = 0.46
+
+	var bronze_mat := StandardMaterial3D.new()
+	bronze_mat.vertex_color_use_as_albedo = true
+	bronze_mat.metallic = 0.85
+	bronze_mat.roughness = 0.28
+
+	var beacon_mat := StandardMaterial3D.new()
+	beacon_mat.vertex_color_use_as_albedo = true
+	beacon_mat.albedo_color = Color(1.0, 0.82, 0.36)
+	beacon_mat.roughness = 0.16
+	beacon_mat.emission_enabled = true
+	beacon_mat.emission = Color(1.0, 0.60, 0.14)
+	beacon_mat.emission_energy_multiplier = 2.6
+
+	var buoy_mi := MeshInstance3D.new()
+	buoy_mi.name = "SalvageBuoyMesh"
+	var buoy_mesh := _build_salvage_buoy_mesh()
+	buoy_mi.mesh = buoy_mesh
+	buoy_mi.set_surface_override_material(0, hull_mat)
+	if buoy_mesh.get_surface_count() > 1:
+		buoy_mi.set_surface_override_material(1, bronze_mat)
+	if buoy_mesh.get_surface_count() > 2:
+		buoy_mi.set_surface_override_material(2, beacon_mat)
+	buoy.add_child(buoy_mi)
+
+	var beacon_light := OmniLight3D.new()
+	beacon_light.name = "SalvageBeaconLight"
+	beacon_light.position = Vector3(0.0, 1.92, 0.0)
+	beacon_light.light_color = Color(1.0, 0.66, 0.22)
+	beacon_light.light_energy = 1.1
+	beacon_light.omni_range = 10.0
+	beacon_light.omni_attenuation = 1.4
+	beacon_light.shadow_enabled = false
+	buoy.add_child(beacon_light)
+
 	_bobbing_props.append({"node": buoy, "x": wpos.x, "z": wpos.z, "y_off": 0.0, "phase": 0.2})
 
 	for i in items.size():
@@ -1425,6 +1695,203 @@ func _spawn_wreck_salvage_marker(wreck: Dictionary) -> void:
 		chest.set_meta(&"salvaged_from_wreck", true)
 		_entities_root.add_child(chest)
 		chest.global_position = Vector3(sx, Sea.height(sx, sz) + 0.35, sz)
+
+
+static func _build_salvage_buoy_mesh() -> ArrayMesh:
+	var hull_st := SurfaceTool.new()
+	hull_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bronze_st := SurfaceTool.new()
+	bronze_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var beacon_st := SurfaceTool.new()
+	beacon_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var col_crimson_dark := Color(0.64, 0.12, 0.10)
+	var col_crimson := Color(0.84, 0.17, 0.14)
+	var col_crimson_hi := Color(0.92, 0.24, 0.18)
+	var col_cream := Color(0.94, 0.89, 0.76)
+	var col_cream_shade := Color(0.82, 0.76, 0.63)
+	var col_bronze_hi := Color(0.88, 0.66, 0.26)
+	var col_bronze_mid := Color(0.70, 0.48, 0.17)
+	var col_bronze_dark := Color(0.42, 0.27, 0.10)
+	var col_amber_core := Color(1.00, 0.94, 0.68)
+	var col_amber_mid := Color(1.00, 0.70, 0.22)
+	var col_amber_deep := Color(0.92, 0.44, 0.10)
+
+	# 1. Riveted flared crimson-and-cream maritime conical iron float hull (r ~ 0.52 m at waterline).
+	var hull_rings: Array[Array] = [
+		[-0.340, 0.000, CookingStove.COL_IRON_DARK],
+		[-0.300, 0.210, CookingStove.COL_IRON_DARK],
+		[-0.045, 0.505, CookingStove.COL_IRON_MID],
+		[-0.025, 0.542, CookingStove.COL_IRON_DARK],
+		[0.025, 0.546, CookingStove.COL_IRON_HI],
+		[0.080, 0.540, CookingStove.COL_IRON_DARK],
+		[0.090, 0.518, col_crimson_dark],
+		[0.275, 0.464, col_crimson],
+		[0.285, 0.468, col_cream_shade],
+		[0.360, 0.438, col_cream],
+		[0.435, 0.408, col_cream_shade],
+		[0.445, 0.404, col_crimson],
+		[0.565, 0.342, col_crimson_hi],
+		[0.592, 0.312, col_crimson_dark],
+		[0.595, 0.185, CookingStove.COL_IRON_MID],
+		[0.625, 0.175, CookingStove.COL_IRON_HI],
+		[0.625, 0.000, CookingStove.COL_IRON_DARK],
+	]
+	CookingStove._append_lathe_y(hull_st, hull_rings, 10)
+
+	# Rivets around the waterline iron fender skirt band & brass bolts on the upper crown deck.
+	for r_i in 10:
+		var ang := TAU * float(r_i) / 10.0
+		var rdir := Vector3(cos(ang), 0.0, sin(ang))
+		CookingStove._append_rivet_dome(
+			hull_st, Vector3(0.0, 0.028, 0.0) + rdir * 0.544, rdir, 0.016, 0.010, CookingStove.COL_RIVET
+		)
+	for b_i in 8:
+		var ang := TAU * float(b_i) / 8.0
+		var pos := Vector3(cos(ang) * 0.255, 0.594, sin(ang) * 0.255)
+		CookingStove._append_rivet_dome(bronze_st, pos, Vector3.UP, 0.014, 0.009, col_bronze_hi)
+
+	# 2. 4 angled cast-iron lattice tower struts rising from y = 0.56 to y = 1.75 m with cross-braces.
+	var strut_bot_y := 0.56
+	var strut_top_y := 1.75
+	var strut_bot_r := 0.305
+	var strut_top_r := 0.148
+	var corners_bot: Array[Vector3] = []
+	var corners_mid1: Array[Vector3] = []
+	var corners_mid2: Array[Vector3] = []
+	var corners_top: Array[Vector3] = []
+	for ci in 4:
+		var ang := PI * 0.25 + float(ci) * PI * 0.5
+		var d := Vector3(cos(ang), 0.0, sin(ang))
+		var p_bot := Vector3(0.0, strut_bot_y, 0.0) + d * strut_bot_r
+		var p_top := Vector3(0.0, strut_top_y, 0.0) + d * strut_top_r
+		corners_bot.append(p_bot)
+		corners_mid1.append(p_bot.lerp(p_top, 0.34))
+		corners_mid2.append(p_bot.lerp(p_top, 0.71))
+		corners_top.append(p_top)
+		# Bolted cast-iron deck footpad + main lattice corner leg.
+		CookingStove._append_cylinder_between(
+			hull_st, p_bot - Vector3(0.0, 0.025, 0.0), p_bot + Vector3(0.0, 0.045, 0.0),
+			0.036, 0.026, 6, CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_HI
+		)
+		CookingStove._append_cylinder_between(
+			hull_st, p_bot, p_top, 0.022, 0.017, 6,
+			CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_HI
+		)
+
+	for ci in 4:
+		var ni := (ci + 1) % 4
+		# Mid-level horizontal tie rings & lower-bay diagonal X-bracing struts.
+		CookingStove._append_cylinder_between(
+			hull_st, corners_mid1[ci], corners_mid1[ni], 0.014, 0.014, 5,
+			CookingStove.COL_IRON_MID, CookingStove.COL_IRON_HI
+		)
+		CookingStove._append_cylinder_between(
+			hull_st, corners_mid2[ci], corners_mid2[ni], 0.013, 0.013, 5,
+			CookingStove.COL_IRON_MID, CookingStove.COL_IRON_HI
+		)
+		CookingStove._append_cylinder_between(
+			hull_st, corners_bot[ci] + Vector3(0.0, 0.04, 0.0), corners_mid1[ni], 0.0095, 0.0095, 5,
+			CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_MID
+		)
+		CookingStove._append_cylinder_between(
+			hull_st, corners_bot[ni] + Vector3(0.0, 0.04, 0.0), corners_mid1[ci], 0.0095, 0.0095, 5,
+			CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_MID
+		)
+
+	# Upper bell-yoke crossbeam spanning cleanly inside the lattice at y = 1.42 m.
+	var yoke_a := corners_mid2[0].lerp(corners_mid2[3], 0.5)
+	var yoke_b := corners_mid2[1].lerp(corners_mid2[2], 0.5)
+	CookingStove._append_cylinder_between(
+		hull_st, yoke_a, yoke_b, 0.016, 0.016, 6,
+		CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_HI
+	)
+
+	# 3. Hanging sculpted bronze maritime warning bell suspended inside the lattice tower.
+	var bell_rings: Array[Array] = [
+		[1.425, 0.000, col_bronze_dark],
+		[1.422, 0.036, col_bronze_mid],
+		[1.375, 0.032, col_bronze_dark],
+		[1.355, 0.068, col_bronze_hi],
+		[1.300, 0.080, col_bronze_mid],
+		[1.175, 0.092, col_bronze_mid],
+		[1.075, 0.140, col_bronze_hi],
+		[1.032, 0.152, col_bronze_hi],
+		[1.022, 0.146, col_bronze_dark],
+		[1.030, 0.124, col_bronze_dark],
+		[1.140, 0.072, col_bronze_dark],
+		[1.290, 0.048, col_bronze_dark],
+		[1.300, 0.000, col_bronze_dark],
+	]
+	CookingStove._append_lathe_y(bronze_st, bell_rings, 10)
+	# Hanging clapper stem & bronze clapper ball peeking below the bell lip.
+	CookingStove._append_cylinder_between(
+		bronze_st, Vector3(0.0, 1.30, 0.0), Vector3(0.0, 0.99, 0.0),
+		0.010, 0.009, 5, col_bronze_dark, col_bronze_mid
+	)
+	var clapper_rings: Array[Array] = [
+		[0.958, 0.000, col_bronze_dark],
+		[0.972, 0.024, col_bronze_mid],
+		[0.992, 0.028, col_bronze_hi],
+		[1.012, 0.018, col_bronze_mid],
+		[1.018, 0.000, col_bronze_dark],
+	]
+	CookingStove._append_lathe_y(bronze_st, clapper_rings, 6)
+
+	# 4. Top iron lantern gallery deck, 4 cage guard bars, weatherhood cap & emissive amber beacon!
+	var gallery_rings: Array[Array] = [
+		[1.720, 0.000, CookingStove.COL_IRON_DARK],
+		[1.725, 0.165, CookingStove.COL_IRON_DARK],
+		[1.750, 0.228, CookingStove.COL_IRON_HI],
+		[1.782, 0.222, CookingStove.COL_IRON_HI],
+		[1.786, 0.148, CookingStove.COL_IRON_MID],
+		[1.786, 0.000, CookingStove.COL_IRON_DARK],
+	]
+	CookingStove._append_lathe_y(hull_st, gallery_rings, 8)
+	for ci in 4:
+		var ang := PI * 0.25 + float(ci) * PI * 0.5
+		var rdir := Vector3(cos(ang), 0.0, sin(ang))
+		CookingStove._append_cylinder_between(
+			hull_st, Vector3(0.0, 1.78, 0.0) + rdir * 0.158, Vector3(0.0, 2.065, 0.0) + rdir * 0.152,
+			0.011, 0.011, 5, CookingStove.COL_IRON_DARK, CookingStove.COL_IRON_HI
+		)
+	var hood_rings: Array[Array] = [
+		[2.055, 0.140, CookingStove.COL_IRON_DARK],
+		[2.060, 0.222, CookingStove.COL_IRON_HI],
+		[2.085, 0.214, CookingStove.COL_IRON_MID],
+		[2.175, 0.095, CookingStove.COL_IRON_HI],
+		[2.225, 0.036, CookingStove.COL_IRON_DARK],
+		[2.240, 0.000, CookingStove.COL_IRON_HI],
+	]
+	CookingStove._append_lathe_y(hull_st, hood_rings, 8)
+	# Gleaming brass lantern finial orb & lightning spire.
+	var finial_rings: Array[Array] = [
+		[2.225, 0.028, col_bronze_dark],
+		[2.255, 0.038, col_bronze_hi],
+		[2.285, 0.024, col_bronze_mid],
+		[2.345, 0.000, col_bronze_hi],
+	]
+	CookingStove._append_lathe_y(bronze_st, finial_rings, 6)
+
+	# Emissive faceted Fresnel amber oil beacon crystal nestled inside the iron lantern cage.
+	var crystal_rings: Array[Array] = [
+		[1.786, 0.000, col_amber_deep],
+		[1.790, 0.092, col_amber_deep],
+		[1.845, 0.118, col_amber_mid],
+		[1.920, 0.130, col_amber_core],
+		[1.995, 0.116, col_amber_mid],
+		[2.052, 0.088, col_amber_deep],
+		[2.056, 0.000, col_amber_deep],
+	]
+	CookingStove._append_lathe_y(beacon_st, crystal_rings, 8)
+
+	hull_st.generate_normals()
+	var mesh := hull_st.commit()
+	bronze_st.generate_normals()
+	bronze_st.commit(mesh)
+	beacon_st.generate_normals()
+	beacon_st.commit(mesh)
+	return mesh
 
 
 func _restore_player_ship_at_outpost(outpost_id: StringName) -> void:
@@ -2195,6 +2662,133 @@ func _apply_hero_shot(mode: String) -> void:
 				cam_p.y = minf(cam_p.y, -1.15)
 				_mount_shot_camera(cam_p, target_w + Vector3(0.0, 0.45, 0.0), 66.0)
 
+		"galley":
+			# Tight watertight hold close-up on the Cast-Iron Galley Hearth, copper skillet, seared fish & steam!
+			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.05, 6.5, 0.0, 0.0, 0.35)
+			Sea.amp_scale = 0.0
+			player_ship.water_level = 0.0
+			if cooking_stove != null:
+				if not cooking_stove.cooking_item.is_empty():
+					cooking_stove.take_food()
+				cooking_stove.place_food({
+					"id": &"azure_snapper",
+					"name": "Azure Snapper",
+					"heal": 35.0,
+					"gold": 45,
+				})
+				cooking_stove.step(11.0)
+				var stove_local := cooking_stove.position
+				var cam_local_galley := stove_local + Vector3(-0.68, 1.00, -1.04)
+				var look_local_galley := stove_local + Vector3(0.0, 0.66, 0.02)
+				_enable_ship_track_shot(cam_local_galley, look_local_galley, 58.0)
+
+		"fishing":
+			# Golden-hour stern-rail showcase: flexed 3-section bamboo rod, amber taut catenary line, painted bobber & splashes!
+			Weather.time_of_day = 17.15 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.06, 9.0, -0.35, 0.0, 0.42)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.16)
+			_place_sailing_ship(Vector3(78.0, 0.0, -210.0), -0.40, 0.0, 0.0)
+			player_ship.set_anchor(true)
+			player_ship.anchor_progress = 1.0
+			player_ship.linear_velocity = Vector3.ZERO
+			if fishing_line != null:
+				if player_pawn != null:
+					player_pawn.board(player_ship, fishing_line.position + Vector3(0.45, 0.0, -0.45))
+					_fishing_pawn = player_pawn
+				var cast_local_dir := Vector3(-0.39, 0.0, 0.92).normalized()
+				var cast_world_dir := (player_ship.global_basis * cast_local_dir)
+				cast_world_dir.y = 0.0
+				cast_world_dir = cast_world_dir.normalized()
+				fishing_line.cancel_cast()
+				fishing_line.cast_line(fishing_line.global_position, cast_world_dir, 7.8)
+				fishing_line.state = FishingLine.State.HOOKED
+				fishing_line.hooked_species = FishingLine.SPECIES[2]
+				fishing_line.fish_fighting = true
+				fishing_line.line_tension = 0.80
+				fishing_line.distance_out = 7.8
+				fishing_line.step(0.016, fishing_line.global_position, false)
+				var cam_local_fish := fishing_line.position + Vector3(0.75, 1.75, -1.10)
+				var look_local_fish := fishing_line.position + Vector3(-1.75, -0.20, 4.10)
+				_enable_ship_track_shot(cam_local_fish, look_local_fish, 62.0)
+
+		"treasure_shark":
+			# Golden-afternoon beach cove showcase on Cutlass Cay: 6 signature sculpted treasures + circling/charging Sharks!
+			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.03, 7.5, -0.35, 0.0, 0.32)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
+			if cutlass != null:
+				var m_orig := cutlass.mooring_transform.origin
+				var sea_dir := Vector3(m_orig.x, 0.0, m_orig.z)
+				sea_dir = sea_dir.normalized() if sea_dir.length_squared() > 0.01 else Vector3(-0.363, 0.0, 0.932)
+				var side_dir := Vector3(-sea_dir.z, 0.0, sea_dir.x).normalized()
+
+				# Walk seaward along Cutlass Cay's landing cove to locate the exact shoreline crossing.
+				var shore_r := 46.0
+				for step_i in range(36, 150):
+					var r_test := float(step_i) * 0.5
+					var probe := cutlass.global_position + sea_dir * r_test
+					if cutlass.world_surface_height(probe) <= 0.15:
+						shore_r = r_test
+						break
+
+				var beach_c := cutlass.global_position + sea_dir * (shore_r - 3.8)
+				var cam_base := beach_c - sea_dir * 2.55
+				var cam_ground_y := maxf(cutlass.world_surface_height(cam_base), 0.35)
+				var cam_p := Vector3(cam_base.x, cam_ground_y + 1.10, cam_base.z)
+
+				# Arrange all 6 Wave 9B sculpted pirate treasures neatly across the sunlit golden dry sand.
+				var loot_layout: Array[Array] = [
+					[&"sovereign_chest", -1.10, 0.62, 0.32],
+					[&"weeping_bilge_chest", 0.08, 0.78, -0.16],
+					[&"spice_crate", 1.20, 0.50, -0.34],
+					[&"captains_skull", -0.58, -0.18, 0.24],
+					[&"archive_chalice", 0.04, -0.26, 0.08],
+					[&"drowned_skull", 0.66, -0.14, -0.26],
+				]
+				var base_face_yaw := atan2(sea_dir.x, sea_dir.z)
+				for entry in loot_layout:
+					var tid: StringName = entry[0]
+					var lat: float = float(entry[1])
+					var fwd_off: float = float(entry[2])
+					var yaw_jit: float = float(entry[3])
+					var p_xz := beach_c + side_dir * lat + sea_dir * fwd_off
+					var py := maxf(cutlass.world_surface_height(p_xz), 0.18) + 0.015
+					var item := TreasureCatalog.create_treasure_carryable(tid, Vector3(p_xz.x, py, p_xz.z))
+					item.freeze = true
+					_entities_root.add_child(item)
+					item.global_position = Vector3(p_xz.x, py, p_xz.z)
+					item.rotation.y = base_face_yaw + yaw_jit
+
+				# Spawn hero Wave 9A countershaded Shark surging broadside in ~1.05 m crystal turquoise shallows!
+				var hero_shark_pos := cutlass.global_position + sea_dir * (shore_r + 8.5) + side_dir * 0.40
+				var hero_shark := Shark.new()
+				hero_shark.name = "HeroShallowsShark"
+				hero_shark.circle_radius = 3.2
+				hero_shark.swim_speed = 2.4
+				_entities_root.add_child(hero_shark)
+				var hsy := Sea.height(hero_shark_pos.x, hero_shark_pos.z) - 0.18
+				hero_shark.global_position = Vector3(hero_shark_pos.x, hsy, hero_shark_pos.z)
+				# Orient broadside-3/4 across the cove so gills, countershading, dorsal fin, open toothed jaw & tail read vividly!
+				var shark_fwd := (side_dir * 0.88 - sea_dir * 0.47).normalized()
+				hero_shark.rotation.y = atan2(-shark_fwd.x, -shark_fwd.z)
+				hero_shark.state = Shark.State.CHARGE
+				hero_shark.set_meta(&"hero_shark_anchor", hero_shark_pos)
+				hero_shark.set_meta(&"hero_shark_dir", shark_fwd)
+				active_sharks.append(hero_shark)
+
+				# Second shark circling gracefully further out in the sunlit turquoise cove.
+				var outer_shark_pos := cutlass.global_position + sea_dir * (shore_r + 14.5) - side_dir * 3.8
+				var outer_shark := Shark.new()
+				outer_shark.name = "CoveCirclingShark"
+				outer_shark.circle_radius = 6.2
+				_entities_root.add_child(outer_shark)
+				outer_shark.global_position = Vector3(outer_shark_pos.x, Sea.height(outer_shark_pos.x, outer_shark_pos.z) - 0.30, outer_shark_pos.z)
+				active_sharks.append(outer_shark)
+
+				var look_p := cutlass.global_position + sea_dir * (shore_r + 4.0) + Vector3(0.0, 0.52, 0.0)
+				_mount_shot_camera(cam_p, look_p, 54.0)
+
 
 func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:
 	_shot_track_ship = true
@@ -2213,6 +2807,25 @@ func _tick_hero_shot_tracking(delta: float) -> void:
 			if player_ship.get_station(&"cannon", &"starboard_aft") != null:
 				player_ship.aim_cannon(&"starboard_aft", 0.0, 0.10)
 				player_ship.fire_cannon(&"starboard_aft", player_pawn)
+	if active_shot_mode == "fishing" and fishing_line != null and is_instance_valid(fishing_line):
+		if fishing_line.state == FishingLine.State.HOOKED:
+			var t_sec := float(Time.get_ticks_msec()) * 0.001
+			fishing_line.fish_fighting = true
+			fishing_line.line_tension = 0.80 + sin(t_sec * 4.5) * 0.05
+			fishing_line.distance_out = 7.8
+			fishing_line.step(0.0, fishing_line.global_position, false)
+	elif active_shot_mode == "treasure_shark":
+		var t_sec := float(Time.get_ticks_msec()) * 0.001
+		for sh in active_sharks:
+			if sh != null and is_instance_valid(sh) and sh.has_meta(&"hero_shark_anchor"):
+				var anchor: Vector3 = sh.get_meta(&"hero_shark_anchor")
+				var sdir: Vector3 = sh.get_meta(&"hero_shark_dir")
+				sh.state = Shark.State.CHARGE
+				var glide := sin(t_sec * 0.85) * 0.55
+				var px := anchor.x + sdir.x * glide
+				var pz := anchor.z + sdir.z * glide
+				sh.global_position = Vector3(px, Sea.height(px, pz) - 0.18, pz)
+				sh.rotation.y = atan2(-sdir.x, -sdir.z) + sin(t_sec * 1.4) * 0.08
 	if _shot_track_ship:
 		_update_tracked_shot_camera()
 

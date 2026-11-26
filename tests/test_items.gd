@@ -514,3 +514,125 @@ func test_armory_weapon_loadouts_and_meshes() -> void:
 	check_eq(cc.equipped_weapon, &"pistol", "CombatComponent updates live from ShipwrightMenu Armory")
 	await _end()
 
+
+# ---------------------------------------------------------------------------
+# 7. Wave 10D: Combat Hit-Confirm, Parry Arcs, Damage Vignette & Hull Alerts
+# ---------------------------------------------------------------------------
+
+func test_hud_combat_feedback_vignette_and_hull_alert() -> void:
+	_begin()
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	captain.board(ship, Vector3(0.0, 1.12, 0.2))
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	# Calling bind() twice verifies signal connections stay idempotent.
+	hud.bind(captain, pc, inv, cc, ship, null, null)
+	hud.bind(captain, pc, inv, cc, ship, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	# 1. Crosshair hit-confirm & parry guard-arc signals and smooth decay.
+	check_near(hud.get_hit_confirm_remaining(), 0.0, 0.001, "hit-confirm starts idle")
+	check_near(hud.get_parry_flash_remaining(), 0.0, 0.001, "parry flash starts idle")
+
+	cc.hit_landed.emit(captain, 20.0, false)
+	check(hud.get_hit_confirm_remaining() > 0.20, "hit_landed triggers crosshair hit-confirm")
+	hud._process(0.12)
+	check(hud.get_hit_confirm_remaining() > 0.08 and hud.get_hit_confirm_remaining() < 0.16,
+		"hit-confirm decays smoothly")
+	hud._process(0.16)
+	check_near(hud.get_hit_confirm_remaining(), 0.0, 0.001, "hit-confirm decays cleanly to 0")
+
+	cc.target_hit.emit(ship, 44.0, true)
+	check(hud.get_hit_confirm_remaining() > 0.20, "target_hit triggers heavy hit-confirm")
+	hud._process(0.30)
+	check_near(hud.get_hit_confirm_remaining(), 0.0, 0.001, "heavy hit-confirm decays to 0")
+
+	cc.parried.emit(captain)
+	check(hud.get_parry_flash_remaining() > 0.30, "parried triggers brass guard-arc flash")
+	hud._process(0.17)
+	check(hud.get_parry_flash_remaining() > 0.12 and hud.get_parry_flash_remaining() < 0.22,
+		"parry flash decays smoothly")
+	hud._process(0.22)
+	check_near(hud.get_parry_flash_remaining(), 0.0, 0.001, "parry flash decays cleanly to 0")
+
+	# Direct helper API works cleanly too.
+	hud.flash_hit_confirm(true)
+	hud.flash_parry()
+	check(hud.get_hit_confirm_remaining() > 0.20 and hud.get_parry_flash_remaining() > 0.30,
+		"public flash_hit_confirm and flash_parry helpers trigger timers")
+	hud._process(0.40)
+
+	# 2. Peripheral damage ink-wash vignette & low-HP heartbeat pulse.
+	check_near(hud.get_damage_vignette_alpha(), 0.0, 0.001, "damage vignette starts at 0 at full HP")
+	check(not hud.is_damage_vignette_visible(), "damage vignette is hidden at full HP")
+
+	captain.apply_damage(25.0)
+	check(hud.is_damage_vignette_visible() and hud.get_damage_vignette_alpha() > 0.25,
+		"taking damage spikes peripheral vignette (alpha=%.2f)" % hud.get_damage_vignette_alpha())
+	hud._process(0.60)
+	check_near(hud.get_damage_vignette_alpha(), 0.0, 0.005,
+		"damage flash decays back to 0 when HP stays above 30%")
+	check(not hud.is_damage_vignette_visible(), "vignette hides again once flash fades above 30% HP")
+
+	# Low HP (< 30%, alive) sustains gentle breathing pulse (0.12..0.28).
+	captain.apply_damage(55.0)  # now 20 / 100 HP
+	hud._process(0.60)  # let initial flash decay completely
+	hud._process(0.10)
+	var low_a := hud.get_damage_vignette_alpha()
+	check(hud.is_damage_vignette_visible() and low_a >= 0.11 and low_a <= 0.30,
+		"low HP maintains gentle peripheral heartbeat pulse (alpha=%.2f)" % low_a)
+
+	# Colorblind accessibility shifts tint cleanly without error.
+	var settings := UserSettings.new()
+	settings.data["colorblind_mode"] = "deuteranopia"
+	hud.user_settings = settings
+	hud._process(0.12)
+	check(hud.is_damage_vignette_visible(), "colorblind vignette mode updates cleanly")
+
+	# Healing to full HP hides the vignette cleanly again.
+	captain.heal(100.0)
+	hud._process(0.05)
+	check_near(hud.get_damage_vignette_alpha(), 0.0, 0.005, "full HP clears low-HP vignette pulse")
+	check(not hud.is_damage_vignette_visible(), "vignette hides cleanly after healing to full")
+
+	# 3. Hull leak & flooding urgency in bottom-right supplies chip.
+	hud._process(0.05)
+	check(not hud.is_hull_alert_active(), "intact dry ship shows no hull alert")
+	check(not hud.get_tool_meta_text().contains("LEAKS") and not hud.get_tool_meta_text().contains("FLOODING"),
+		"dry ship supplies chip stays clean")
+
+	var slot := ship.apply_hull_damage(ship.global_transform * Vector3(1.8, -0.45, 0.4), 0.5)
+	check(slot >= 0, "breached hull slot for HUD alert test")
+	hud._process(0.05)
+	check(hud.is_hull_alert_active() and hud.get_tool_meta_text().contains("LEAKS: 1"),
+		"open breach appends LEAKS warning (got '%s')" % hud.get_tool_meta_text())
+
+	ship.water_level = 0.48
+	hud._process(0.05)
+	check(hud.is_hull_alert_active() and hud.get_tool_meta_text().contains("FLOODING!"),
+		"high water level escalates chip to FLOODING! (got '%s')" % hud.get_tool_meta_text())
+
+	ship.patch_hole(slot)
+	ship.water_level = 0.0
+	hud._process(0.05)
+	check(not hud.is_hull_alert_active(), "patching & bailing clears hull alert cleanly")
+
+	# 4. Clean teardown disconnects combat/pawn signals with zero leaks.
+	hud.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(hud), "GameHUD frees cleanly on teardown")
+	await _end()
+
+

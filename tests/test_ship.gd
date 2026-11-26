@@ -372,3 +372,69 @@ func test_brigantine_dual_masts_four_cannons_and_sailing() -> void:
 	check(brig.global_basis.y.y > 0.90, "brigantine stays upright in waves")
 	await _end()
 
+
+func test_patch_bail_vfx_and_wind_caught_signal() -> void:
+	_begin()
+	Weather.set_weather(0.0, 12.0, 0.0)
+	Sea.amp_scale = 0.0
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = true
+	_root.add_child(s)
+	s.global_position = Vector3.ZERO
+	await physics_frames(8)
+
+	# 1. patch_hole() spawns oak sawdust + hammer-spark burst VFX tracked for leak-free cleanup.
+	var h_idx := s.apply_hull_damage(s.global_transform * Vector3(1.9, -0.35, 0.4), 0.5)
+	check(h_idx >= 0, "hull breach created before patch")
+	check(s.patch_hole(h_idx), "patch_hole succeeds")
+	var patch_fx := s.get_node_or_null(^"PatchBurstVFX") as Node3D
+	check(patch_fx != null and is_instance_valid(patch_fx), "PatchBurstVFX spawned on patch_hole")
+	var sawdust := patch_fx.get_node_or_null(^"PatchSawdust") as GPUParticles3D if patch_fx != null else null
+	var sparks := patch_fx.get_node_or_null(^"HammerSparks") as GPUParticles3D if patch_fx != null else null
+	check(sawdust != null and sawdust.one_shot and sawdust.emitting, "PatchSawdust GPUParticles3D emits one-shot burst")
+	check(sparks != null and sparks.one_shot and sparks.amount >= 6 and sparks.amount <= 8, "HammerSparks emits 6-8 bright hammer-nail spark motes")
+
+	# 2. bail() removes flood water and spawns BilgeBailSplashVFX; bailing dry spawns nothing.
+	s.water_level = 0.35
+	var removed := s.bail(0.14)
+	check_near(removed, 0.14, 0.005, "bail removes expected flood water")
+	var bail_fx := s.get_node_or_null(^"BilgeBailSplashVFX") as Node3D
+	check(bail_fx != null and is_instance_valid(bail_fx), "BilgeBailSplashVFX spawned on bail")
+	var splash := bail_fx.get_node_or_null(^"BailSplashPuff") as GPUParticles3D if bail_fx != null else null
+	check(splash != null and splash.one_shot and splash.emitting, "BailSplashPuff GPUParticles3D emits splash puff")
+
+	# Wait for transient timers to auto-free both bursts cleanly (at 6x test speedup, 0.55 s ~= 60 ticks).
+	await physics_frames(240)
+	check(not is_instance_valid(patch_fx) and not is_instance_valid(bail_fx), "patch & bail VFX auto-clean after burst lifetime")
+
+	# 3. wind_caught(efficiency) fires once on reaching peak wind trim, respects hysteresis (no spam), and re-arms after furling.
+	var caught_events: Array[float] = []
+	s.wind_caught.connect(func(eff: float) -> void: caught_events.append(eff))
+	s.set_sail_target(1.0)
+	s.set_trim_target(s.ideal_sail_trim())
+	await physics_frames(150)
+	check_eq(caught_events.size(), 1, "wind_caught fires exactly once upon reaching peak wind (no spam)")
+	if not caught_events.is_empty():
+		check(caught_events[0] >= 0.88, "wind_caught reports peak efficiency >= 0.88 (got %.2f)" % caught_events[0])
+
+	# Furl sails to drop below hysteresis threshold, then re-raise to verify clean re-arming.
+	s.set_sail_target(0.0)
+	await physics_frames(160)
+	check_eq(caught_events.size(), 1, "furling sails does not spuriously emit wind_caught")
+	s.set_sail_target(1.0)
+	s.set_trim_target(s.ideal_sail_trim())
+	await physics_frames(150)
+	check_eq(caught_events.size(), 2, "wind_caught re-arms cleanly after furling and re-catching peak wind")
+
+	# 4. Early ship teardown mid-burst frees active patch & bail VFX cleanly with zero leaks!
+	var h2 := s.apply_hull_damage(s.global_transform * Vector3(-1.9, -0.35, -0.8), 0.5)
+	check(s.patch_hole(h2), "second patch_hole succeeds before teardown")
+	s.water_level = 0.25
+	check(s.bail(0.14) > 0.01, "second bail succeeds before teardown")
+	var live_patch := s.get_node_or_null(^"PatchBurstVFX") as Node3D
+	var live_bail := s.get_node_or_null(^"BilgeBailSplashVFX") as Node3D
+	check(live_patch != null and live_bail != null, "fresh patch & bail bursts active right before ship exit")
+	await _end()
+	check(not is_instance_valid(live_patch) and not is_instance_valid(live_bail), "mid-burst patch & bail VFX freed cleanly on Ship _exit_tree()")
+
+

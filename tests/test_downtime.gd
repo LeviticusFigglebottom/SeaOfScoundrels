@@ -194,3 +194,124 @@ func test_fishing_visuals_rod_catenary_bobber_and_leaping_catch() -> void:
 	await get_tree().process_frame
 	check(not is_instance_valid(rod) and not is_instance_valid(leap2), "FishingLine and active LeapingCatchFish freed with zero leaks")
 
+
+func test_cooking_stove_sculpted_hearth_food_steam_and_teardown() -> void:
+	Net.start_single_player()
+	var stove := CookingStove.new()
+	add_child(stove)
+
+	# 1. Verify sculpted Cast-Iron Naval Galley Hearth, CoalBed, HearthLight & Copper-Rimmed Skillet.
+	var hearth := stove.get_node_or_null(^"GalleyHearth") as MeshInstance3D
+	var coals := stove.get_node_or_null(^"CoalBed") as MeshInstance3D
+	var light := stove.get_node_or_null(^"HearthLight") as OmniLight3D
+	var skillet := stove.get_node_or_null(^"FryingSkillet") as MeshInstance3D
+	var food := stove.get_node_or_null(^"SizzlingFood") as MeshInstance3D
+	var steam := stove.get_node_or_null(^"CookingSteam") as GPUParticles3D
+
+	check(hearth != null and hearth.mesh is ArrayMesh, "GalleyHearth built as sculpted ArrayMesh")
+	var hearth_am := hearth.mesh as ArrayMesh
+	check(hearth_am.get_surface_count() >= 2, "GalleyHearth has cast-iron + brass trim surfaces")
+	var hearth_aabb := hearth_am.get_aabb()
+	check(hearth_aabb.position.y >= -0.02 and hearth_aabb.position.y <= 0.02, "GalleyHearth legs rest firmly at y = 0 (%.3f)" % hearth_aabb.position.y)
+	check(hearth_aabb.end.y >= 1.38 and hearth_aabb.end.y <= 1.55, "GalleyHearth chimney flue rises cleanly to ~1.45 m (%.2f m)" % hearth_aabb.end.y)
+
+	check(coals != null and coals.mesh is ArrayMesh, "CoalBed built as sculpted ArrayMesh")
+	var coal_mat := coals.material_override as StandardMaterial3D
+	check(coal_mat != null and coal_mat.emission_enabled, "CoalBed has glowing emissive material")
+
+	check(light != null and not light.shadow_enabled, "HearthLight OmniLight3D exists with shadow_enabled = false")
+	check(light.omni_range >= 2.0 and light.light_energy > 0.25, "HearthLight provides subtle warm hold firelight")
+
+	check(skillet != null and skillet.mesh is ArrayMesh, "FryingSkillet built as sculpted ArrayMesh")
+	check((skillet.mesh as ArrayMesh).get_surface_count() >= 2, "FryingSkillet has seasoned iron + hammered copper rim surfaces")
+
+	check(food != null and food.mesh is ArrayMesh and not (food.mesh is CapsuleMesh), "SizzlingFood uses sculpted ArrayMesh, not CapsuleMesh")
+	check(not food.visible, "SizzlingFood hidden when stove is empty")
+
+	check(steam != null and steam is GPUParticles3D, "CookingSteam is a feathered billboard GPUParticles3D")
+	check(not steam.emitting and not steam.visible, "CookingSteam idle when stove is empty")
+	var steam_quad := steam.draw_pass_1 as QuadMesh
+	var steam_mat := (steam_quad.material as StandardMaterial3D) if steam_quad != null else null
+	check(steam_mat != null and steam_mat.albedo_texture is ImageTexture, "CookingSteam uses procedural radial puff ImageTexture")
+
+	# 2. Verify ZERO raw primitives (BoxMesh/CylinderMesh/CapsuleMesh/SphereMesh/PrismMesh) anywhere under CookingStove.
+	var primitive_hits := 0
+	for child in stove.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi != null and mi.mesh != null:
+			var m := mi.mesh
+			if m is BoxMesh or m is CylinderMesh or m is CapsuleMesh or m is SphereMesh or m is PrismMesh:
+				primitive_hits += 1
+	check_eq(primitive_hits, 0, "CookingStove contains zero raw primitive meshes")
+
+	# 3. Fish cooking lifecycle: raw -> golden cooked -> burnt (color, roughness, steam tint & mesh check).
+	check(stove.place_food({"id": &"azure_snapper", "name": "Azure Snapper", "heal": 35.0}), "place fish onto skillet")
+	check(food.visible and steam.emitting, "SizzlingFood visible & CookingSteam emitting while cooking fish")
+	var fish_am := food.mesh as ArrayMesh
+	check(fish_am != null and fish_am.get_surface_count() >= 1, "fish SizzlingFood has sculpted ArrayMesh surface")
+	var fish_verts: PackedVector3Array = fish_am.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	check(fish_verts.size() >= 180, "sculpted fish mesh is detailed flat-faceted geometry (%d verts)" % fish_verts.size())
+
+	var fmat := food.material_override as StandardMaterial3D
+	check(fmat != null and fmat.roughness < 0.45, "raw fish starts moist and glossy")
+	var raw_col := fmat.albedo_color
+	var steam_proc := steam.process_material as ParticleProcessMaterial
+	var raw_ramp := (steam_proc.color_ramp as GradientTexture1D).gradient
+	check(raw_ramp.colors[1].r > 0.85, "raw steam emits soft warm-white wisps")
+
+	stove.step(CookingStove.COOK_TIME + 0.5)
+	check_eq(stove.cook_state, &"cooked", "fish transitions to cooked")
+	var cooked_col := fmat.albedo_color
+	check(cooked_col.r > 0.75 and cooked_col.b < raw_col.b - 0.15, "cooked fish shifts to appetizing golden-brown glaze")
+
+	stove.step(CookingStove.BURN_TIME - CookingStove.COOK_TIME + 1.0)
+	check_eq(stove.cook_state, &"burnt", "fish transitions to burnt")
+	check(fmat.albedo_color.r < 0.25 and fmat.roughness > 0.85, "burnt fish shifts to matte charred charcoal")
+	var burnt_ramp := (steam_proc.color_ramp as GradientTexture1D).gradient
+	check(burnt_ramp.colors[1].r < 0.25 and burnt_ramp.colors[1].a > 0.50, "burnt steam shifts to thicker dark charcoal smoke")
+
+	var taken := stove.take_food()
+	check_eq(taken["cooked_state"], &"burnt")
+	check(not food.visible and not steam.emitting, "taking food hides SizzlingFood and stops CookingSteam")
+
+	# 4. Crab cooking swaps to distinct sculpted Spiced Island Crab Claw / Shell ArrayMesh.
+	check(stove.place_food({"id": &"island_crab_claw", "name": "Island Crab Claw", "heal": 45.0}), "place crab onto skillet")
+	var crab_am := food.mesh as ArrayMesh
+	check(crab_am != null and crab_am != fish_am, "crab item switches SizzlingFood to distinct sculpted crab ArrayMesh")
+	var crab_verts: PackedVector3Array = crab_am.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	check(crab_verts.size() >= 180, "sculpted crab mesh is detailed flat-faceted geometry (%d verts)" % crab_verts.size())
+	stove.step(CookingStove.COOK_TIME + 0.5)
+	check_eq(stove.cook_state, &"cooked", "crab transitions cleanly to cooked")
+
+	# 5. Optional build_hearth = false skips stove hardware while retaining food + steam.
+	var bare_pan := CookingStove.new()
+	bare_pan.build_hearth = false
+	add_child(bare_pan)
+	check(bare_pan.get_node_or_null(^"GalleyHearth") == null, "build_hearth = false skips GalleyHearth")
+	check(bare_pan.get_node_or_null(^"SizzlingFood") is MeshInstance3D, "build_hearth = false retains SizzlingFood")
+	check(bare_pan.get_node_or_null(^"CookingSteam") is GPUParticles3D, "build_hearth = false retains CookingSteam")
+
+	# 6. Verify sculpted stowed 3-joint bamboo fishing rod & carved oak/brass rail holder cleat from main.gd.
+	var main_gd := load("res://scenes/main.gd") as GDScript
+	check(main_gd != null, "loaded scenes/main.gd for stowed rod check")
+	if main_gd != null:
+		var stowed_rod := main_gd.call(&"_build_stowed_fishing_rod_mesh") as ArrayMesh
+		var rod_origin := Vector3(0.02, 0.68, 0.24)
+		var rod_basis := Basis.from_euler(Vector3(deg_to_rad(38.0), 0.0, deg_to_rad(8.0)))
+		var rail_cleat := main_gd.call(&"_build_fishing_rail_cleat_mesh", rod_origin, rod_basis) as ArrayMesh
+		check(stowed_rod != null and stowed_rod.get_surface_count() >= 2, "stowed FishingRodProp has bamboo/cork + brass hardware surfaces")
+		var rod_aabb := stowed_rod.get_aabb()
+		check(rod_aabb.size.y >= 1.9, "stowed bamboo rod spans ~2.0 m length (%.2f m)" % rod_aabb.size.y)
+		check(rail_cleat != null and rail_cleat.get_surface_count() >= 2, "FishingRailCleat has carved oak + brass socket/cleat surfaces")
+		var cleat_aabb := rail_cleat.get_aabb()
+		check(cleat_aabb.position.y >= -0.02 and cleat_aabb.position.y <= 0.02, "FishingRailCleat rests firmly on deck at y = 0 (%.3f)" % cleat_aabb.position.y)
+
+	# 7. Teardown while actively cooking frees all nodes & particle resources cleanly with zero leaks.
+	stove.queue_free()
+	bare_pan.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(stove) and not is_instance_valid(steam) and not is_instance_valid(hearth), "CookingStove, hearth, and CookingSteam freed with zero leaks")
+	check(not is_instance_valid(bare_pan), "bare CookingStove freed cleanly")
+
+

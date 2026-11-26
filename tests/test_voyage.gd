@@ -219,6 +219,167 @@ func test_treasure_catalog_and_carryable() -> void:
 	await physics_frames(1)
 
 
+func test_sculpted_treasure_meshes_no_primitives() -> void:
+	TreasureCatalog.clear_mesh_cache()
+
+	# 1. Verify EVERY catalogue treasure visual uses valid sculpted ArrayMesh geometry
+	#    with ZERO raw primitive meshes (SphereMesh/BoxMesh/CylinderMesh/CapsuleMesh/PrismMesh).
+	var all_ids := TreasureCatalog.get_all_ids()
+	var seen_shapes: Dictionary = {}
+	for tid in all_ids:
+		var entry := TreasureCatalog.get_entry(tid)
+		var shape_kind: StringName = StringName(entry["shape"])
+		seen_shapes[shape_kind] = true
+		var item := TreasureCatalog.create_treasure_carryable(tid)
+		var visual := item.get_node_or_null(^"Visual") as Node3D
+		check(visual != null, "%s builds a Visual Node3D" % tid)
+
+		var mis := _collect_mesh_instances(visual)
+		check(not mis.is_empty(), "%s visual contains at least one MeshInstance3D" % tid)
+		var total_tris := 0
+		for mi in mis:
+			var m := mi.mesh
+			check(m != null, "%s MeshInstance3D '%s' has non-null mesh" % [tid, mi.name])
+			check(m is ArrayMesh, "%s mesh '%s' is sculpted ArrayMesh" % [tid, mi.name])
+			check(not (m is PrimitiveMesh), "%s mesh '%s' is not a raw PrimitiveMesh" % [tid, mi.name])
+			check(not (m is SphereMesh) and not (m is BoxMesh) and not (m is CylinderMesh),
+				"%s mesh '%s' has zero SphereMesh/BoxMesh/CylinderMesh" % [tid, mi.name])
+			check(m.get_surface_count() >= 1, "%s mesh '%s' has >= 1 surface" % [tid, mi.name])
+			total_tris += _count_mesh_triangles(m)
+		check(total_tris >= 200, "%s visual has hero-grade triangle count (%d >= 200)" % [tid, total_tris])
+
+		# Cursed chests must carry a glowing spectral CursedAuraTrim overlay.
+		if bool(entry["cursed"]) and (shape_kind == &"chest" or shape_kind == &"coffer"):
+			var cursed_trim := visual.get_node_or_null(^"CursedAuraTrim") as MeshInstance3D
+			check(cursed_trim != null and cursed_trim.mesh is ArrayMesh,
+				"%s attaches glowing CursedAuraTrim ArrayMesh" % tid)
+			if cursed_trim != null and cursed_trim.mesh is ArrayMesh:
+				var has_emissive := false
+				for si in cursed_trim.mesh.get_surface_count():
+					var mat := cursed_trim.mesh.surface_get_material(si)
+					if mat is StandardMaterial3D and (mat as StandardMaterial3D).emission_enabled:
+						has_emissive = true
+				check(has_emissive, "%s CursedAuraTrim includes emissive spectral rune material" % tid)
+
+		item.free()
+
+	for expected_shape in [&"skull", &"chalice", &"crate", &"chest", &"coffer"]:
+		check(seen_shapes.has(expected_shape), "verified treasure archetype '%s'" % expected_shape)
+
+	# 2. Directly inspect sculpted SurfaceTool ArrayMeshes across all 4 procedural archetypes
+	#    (including the sculpted banded pirate chest fallback for normal + cursed chests).
+	var archetype_ids: Array[StringName] = [
+		&"drowned_skull",
+		&"captains_skull",
+		&"archive_chalice",
+		&"spice_crate",
+		&"wayfarer_chest",
+		&"weeping_bilge_chest",
+		&"ledger_coffer",
+	]
+	for tid in archetype_ids:
+		var entry := TreasureCatalog.get_entry(tid)
+		var mesh := TreasureCatalog.build_sculpted_mesh(entry)
+		check(mesh is ArrayMesh, "build_sculpted_mesh(%s) returns ArrayMesh" % tid)
+		check(mesh.get_surface_count() >= 2,
+			"build_sculpted_mesh(%s) has multi-surface materials (%d)" % [tid, mesh.get_surface_count()])
+		var tris := _count_mesh_triangles(mesh)
+		check(tris >= 600, "build_sculpted_mesh(%s) has rich sculpted detail (%d >= 600 tris)" % [tid, tris])
+
+		# Verify vertex colors, normals, and VERTEX_COLOR_USE_AS_ALBEDO on every surface.
+		for si in mesh.get_surface_count():
+			var arrays := mesh.surface_get_arrays(si)
+			var raw_verts: Variant = arrays[Mesh.ARRAY_VERTEX]
+			var raw_norms: Variant = arrays[Mesh.ARRAY_NORMAL]
+			var raw_cols: Variant = arrays[Mesh.ARRAY_COLOR]
+			check(raw_verts is PackedVector3Array and not (raw_verts as PackedVector3Array).is_empty(),
+				"%s surface %d has vertices" % [tid, si])
+			var vert_count := (raw_verts as PackedVector3Array).size() if raw_verts is PackedVector3Array else 0
+			check(raw_norms is PackedVector3Array and (raw_norms as PackedVector3Array).size() == vert_count,
+				"%s surface %d has normals per vertex" % [tid, si])
+			check(raw_cols is PackedColorArray and (raw_cols as PackedColorArray).size() == vert_count,
+				"%s surface %d has vertex colors" % [tid, si])
+			var mat := mesh.surface_get_material(si)
+			check(mat is StandardMaterial3D and (mat as StandardMaterial3D).vertex_color_use_as_albedo,
+				"%s surface %d uses vertex_color_use_as_albedo" % [tid, si])
+
+		# Grounded cleanly at y = 0 with pirate carry proportions (~0.34..0.65 m).
+		var aabb := mesh.get_aabb()
+		check(aabb.position.y >= -0.015 and aabb.position.y <= 0.025,
+			"%s grounded near y=0 (min_y=%.3f)" % [tid, aabb.position.y])
+		check(aabb.size.y >= 0.32 and aabb.size.y <= 0.65,
+			"%s carry height in 0.32..0.65 m (got %.3f)" % [tid, aabb.size.y])
+		if OS.get_cmdline_user_args().has("--treasure-stats"):
+			print("    [treasure-sculpt] %-20s shape=%-8s surfs=%d tris=%5d y=[%.3f..%.3f] size=(%.3f,%.3f,%.3f)" % [
+				String(tid), String(entry["shape"]), mesh.get_surface_count(), tris,
+				aabb.position.y, aabb.end.y, aabb.size.x, aabb.size.y, aabb.size.z])
+
+	if OS.get_cmdline_user_args().has("--treasure-stats"):
+		for tid in all_ids:
+			var it := TreasureCatalog.create_treasure_carryable(tid)
+			var vis_mis := _collect_mesh_instances(it.get_node(^"Visual"))
+			var sum_t := 0
+			var desc: PackedStringArray = []
+			for mi in vis_mis:
+				var mt := _count_mesh_triangles(mi.mesh)
+				sum_t += mt
+				desc.append("%s:%d" % [mi.name, mt])
+			print("    [treasure-live]   %-20s nodes=%d total_tris=%5d [%s]" % [
+				String(tid), vis_mis.size(), sum_t, ", ".join(desc)])
+			it.free()
+
+	# 3. Verify static WeakRef mesh cache shares identical ArrayMesh instances across live spawns.
+	var skull_a := TreasureCatalog.create_treasure_carryable(&"drowned_skull")
+	var skull_b := TreasureCatalog.create_treasure_carryable(&"drowned_skull")
+	var skull_c := TreasureCatalog.create_treasure_carryable(&"captains_skull")
+	var mi_a := _collect_mesh_instances(skull_a.get_node(^"Visual"))[0]
+	var mi_b := _collect_mesh_instances(skull_b.get_node(^"Visual"))[0]
+	var mi_c := _collect_mesh_instances(skull_c.get_node(^"Visual"))[0]
+	check(mi_a.mesh == mi_b.mesh, "spawning duplicate drowned_skull shares cached ArrayMesh")
+	check(mi_a.mesh != mi_c.mesh, "distinct skull tiers build distinct cached ArrayMeshes")
+
+	var cursed_a := TreasureCatalog.create_treasure_carryable(&"weeping_bilge_chest")
+	var cursed_b := TreasureCatalog.create_treasure_carryable(&"weeping_bilge_chest")
+	var trim_a := cursed_a.get_node(^"Visual").get_node_or_null(^"CursedAuraTrim") as MeshInstance3D
+	var trim_b := cursed_b.get_node(^"Visual").get_node_or_null(^"CursedAuraTrim") as MeshInstance3D
+	check(trim_a != null and trim_b != null and trim_a.mesh == trim_b.mesh,
+		"cursed chests share cached CursedAuraTrim ArrayMesh")
+
+	skull_a.free()
+	skull_b.free()
+	skull_c.free()
+	cursed_a.free()
+	cursed_b.free()
+	TreasureCatalog.clear_mesh_cache()
+
+
+func _collect_mesh_instances(node: Node) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if node == null:
+		return out
+	if node is MeshInstance3D:
+		out.append(node as MeshInstance3D)
+	for child in node.get_children():
+		out.append_array(_collect_mesh_instances(child))
+	return out
+
+
+func _count_mesh_triangles(mesh: Mesh) -> int:
+	var total := 0
+	if mesh == null:
+		return 0
+	for si in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(si)
+		var raw_idx: Variant = arrays[Mesh.ARRAY_INDEX]
+		if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+			total += floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+		else:
+			var raw_verts: Variant = arrays[Mesh.ARRAY_VERTEX]
+			if raw_verts is PackedVector3Array:
+				total += floori(float((raw_verts as PackedVector3Array).size()) / 3.0)
+	return total
+
+
 # ---------------------------------------------------------------------------
 # 2. Economy, curved renown progression, sidegrade trade-offs, Profile persistence
 # ---------------------------------------------------------------------------

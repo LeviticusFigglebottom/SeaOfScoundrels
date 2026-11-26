@@ -3,10 +3,11 @@ extends CanvasLayer
 ## Minimal, diegetic parchment-and-ink HUD for Sea of Scoundrels.
 ##
 ## Faithful to docs/DESIGN.md: no minimap and no arcade clutter. Provides:
-## - Subtle center crosshair dot (fades during spyglass or overlays)
+## - Subtle center crosshair dot with tactile ink hit-confirm ticks & brass parry arcs
+## - Peripheral damage ink-wash vignette & low-HP heartbeat pulse (hidden at full HP)
 ## - Faint health & stamina pips (fade out cleanly when full & out of combat)
 ## - Contextual interaction prompt ribbon driven by `PlayerController.focus_prompt`
-## - Subtle active tool / ammo / ship supplies chip
+## - Subtle active tool / ammo / ship supplies chip with hull leak & flooding urgency
 ## - Queued top-center Crew Callout & Notice parchment banner (`Game.notice`)
 ## - Upper-sky first-launch / chapter Diegetic Voyage Title Card (`show_voyage_title`)
 ## - Quiet top-right Gold & Voyage Objective whisper slip
@@ -60,6 +61,7 @@ var combat: CombatComponent = null
 var ship: Ship = null
 var voyage_manager: VoyageManager = null
 var sky_rig: Node = null
+var user_settings: UserSettings = null
 
 var item_radial: RadialWheel = null
 var command_wheel: RadialWheel = null
@@ -70,6 +72,7 @@ var crew_hold_fire: bool = false
 var _crew_brains: Array[CrewBrain] = []
 var _root: Control = null
 var _theme: Theme = null
+var _damage_vignette: _DamageVignette = null
 var _spyglass_view: _SpyglassOverlay = null
 var _crosshair_view: _CrosshairView = null
 var _vitals_view: _VitalsView = null
@@ -109,6 +112,7 @@ var _tool_panel: PanelContainer = null
 var _tool_title_label: Label = null
 var _tool_meta_label: Label = null
 var _tool_flash_timer: float = 0.0
+var _hull_alert_active: bool = false
 
 # Gold & Voyage whisper (top-right)
 var _whisper_panel: PanelContainer = null
@@ -121,11 +125,13 @@ var _last_gold: int = -1
 var _custom_voyage_title: String = ""
 var _custom_voyage_obj: String = ""
 
-# Vitals fade tracking
+# Vitals fade & peripheral damage vignette tracking
 var _vitals_show_timer: float = 0.0
 var _vitals_alpha: float = 0.0
 var _last_hp: float = -1.0
 var _last_stamina: float = -1.0
+var _damage_flash: float = 0.0
+var _low_hp_clock: float = 0.0
 
 # Pause menu widget references
 var _ocean_qual_btns: Array[Button] = []
@@ -149,6 +155,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_disconnect_signals()
 	if Game != null and Game.notice.is_connected(_on_game_notice):
 		Game.notice.disconnect(_on_game_notice)
 
@@ -189,7 +196,11 @@ func bind(
 					combat = c as CombatComponent
 					break
 
+	_last_hp = pawn.health if (pawn != null and is_instance_valid(pawn)) else -1.0
+	_damage_flash = 0.0
+	_low_hp_clock = 0.0
 	_connect_signals()
+	_sync_damage_vignette(0.0)
 	_refresh_item_radial_entries()
 	_refresh_tool_chip()
 	_sync_quality_button_states()
@@ -209,6 +220,13 @@ func _connect_signals() -> void:
 			inventory.bucket_changed.connect(_on_tool_state_changed)
 		if not inventory.shanty_playing_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_playing_changed.connect(_on_tool_state_changed)
+	if combat != null:
+		if not combat.hit_landed.is_connected(_on_combat_hit_landed):
+			combat.hit_landed.connect(_on_combat_hit_landed)
+		if not combat.target_hit.is_connected(_on_combat_target_hit):
+			combat.target_hit.connect(_on_combat_target_hit)
+		if not combat.parried.is_connected(_on_combat_parried):
+			combat.parried.connect(_on_combat_parried)
 	if pawn != null and not pawn.damaged.is_connected(_on_pawn_damaged):
 		pawn.damaged.connect(_on_pawn_damaged)
 	if voyage_manager != null:
@@ -232,6 +250,13 @@ func _disconnect_signals() -> void:
 			inventory.bucket_changed.disconnect(_on_tool_state_changed)
 		if inventory.shanty_playing_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_playing_changed.disconnect(_on_tool_state_changed)
+	if combat != null and is_instance_valid(combat):
+		if combat.hit_landed.is_connected(_on_combat_hit_landed):
+			combat.hit_landed.disconnect(_on_combat_hit_landed)
+		if combat.target_hit.is_connected(_on_combat_target_hit):
+			combat.target_hit.disconnect(_on_combat_target_hit)
+		if combat.parried.is_connected(_on_combat_parried):
+			combat.parried.disconnect(_on_combat_parried)
 	if pawn != null and is_instance_valid(pawn):
 		if pawn.damaged.is_connected(_on_pawn_damaged):
 			pawn.damaged.disconnect(_on_pawn_damaged)
@@ -464,6 +489,48 @@ func dismiss_voyage_title() -> void:
 		_voyage_card_panel.visible = false
 
 
+## Flash tactile diagonal ink hit-confirm ticks around the center crosshair.
+func flash_hit_confirm(was_heavy: bool = false) -> void:
+	if _crosshair_view != null:
+		_crosshair_view.trigger_hit_confirm(was_heavy)
+
+
+## Flash twin curved burnished-gold brass guard-arcs around the crosshair on parry.
+func flash_parry() -> void:
+	if _crosshair_view != null:
+		_crosshair_view.trigger_parry_flash()
+
+
+## Remaining seconds on the active crosshair hit-confirm flash (0 when idle).
+func get_hit_confirm_remaining() -> float:
+	return _crosshair_view.hit_timer if _crosshair_view != null else 0.0
+
+
+## Remaining seconds on the active crosshair parry guard-arc flash (0 when idle).
+func get_parry_flash_remaining() -> float:
+	return _crosshair_view.parry_timer if _crosshair_view != null else 0.0
+
+
+## Current peripheral damage ink-wash vignette alpha (0 when calm/full HP).
+func get_damage_vignette_alpha() -> float:
+	return _damage_vignette.get_alpha() if _damage_vignette != null else 0.0
+
+
+## True while the peripheral damage vignette is actively visible on screen.
+func is_damage_vignette_visible() -> bool:
+	return _damage_vignette != null and _damage_vignette.visible
+
+
+## Current bottom-right active tool / supplies chip subtitle text.
+func get_tool_meta_text() -> String:
+	return _tool_meta_label.text if _tool_meta_label != null else ""
+
+
+## True while the active ship has open hull breaches or critical flooding.
+func is_hull_alert_active() -> bool:
+	return _hull_alert_active
+
+
 ## Return true if any radial wheel or pause menu currently holds focus.
 func is_any_overlay_open() -> bool:
 	return pause_open \
@@ -483,12 +550,17 @@ func _build_ui() -> void:
 	_root.theme = _theme
 	add_child(_root)
 
+	# 0. Peripheral damage ink-wash & low-HP heartbeat vignette (behind all HUD panels).
+	_damage_vignette = _DamageVignette.new()
+	_damage_vignette.name = "DamageVignette"
+	_root.add_child(_damage_vignette)
+
 	# 1. Spyglass circular brass aperture vignette (behind center HUD elements).
 	_spyglass_view = _SpyglassOverlay.new()
 	_spyglass_view.name = "SpyglassOverlay"
 	_root.add_child(_spyglass_view)
 
-	# 2. Subtle center crosshair dot.
+	# 2. Subtle center crosshair dot with hit-confirm ticks & parry guard arcs.
 	_crosshair_view = _CrosshairView.new()
 	_crosshair_view.name = "Crosshair"
 	_root.add_child(_crosshair_view)
@@ -804,6 +876,8 @@ func _build_tool_chip() -> void:
 	_tool_panel.offset_right = -24.0
 	_tool_panel.offset_top = -88.0
 	_tool_panel.offset_bottom = -24.0
+	_tool_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_tool_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_tool_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tool_panel.add_theme_stylebox_override("panel",
 		HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.88), HudIcons.COL_INK_SOFT, 2, 6, 14, 7))
@@ -1070,6 +1144,7 @@ func _process(delta: float) -> void:
 	_tick_boss_bar(delta)
 	_tick_voyage_title(delta)
 	_tick_vitals(delta)
+	_sync_damage_vignette(delta)
 	_tick_context_prompt(delta)
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
@@ -1155,8 +1230,13 @@ func _tick_vitals(delta: float) -> void:
 	var in_combat := false
 	if pawn != null and is_instance_valid(pawn):
 		hp_ratio = clampf(pawn.health / maxf(pawn.max_health, 1.0), 0.0, 1.0)
-		if _last_hp >= 0.0 and absf(pawn.health - _last_hp) > 0.1:
-			_vitals_show_timer = 4.0
+		if _last_hp >= 0.0:
+			if pawn.health < _last_hp - 0.5:
+				var drop := _last_hp - pawn.health
+				_damage_flash = clampf(_damage_flash + clampf(drop / 35.0, 0.35, 0.9), 0.0, 1.0)
+				_vitals_show_timer = 4.5
+			elif absf(pawn.health - _last_hp) > 0.1:
+				_vitals_show_timer = 4.0
 		_last_hp = pawn.health
 	if combat != null and is_instance_valid(combat):
 		stam_ratio = clampf(combat.stamina / maxf(combat.max_stamina, 1.0), 0.0, 1.0)
@@ -1174,6 +1254,31 @@ func _tick_vitals(delta: float) -> void:
 	_vitals_alpha = move_toward(_vitals_alpha, want_a, delta * (5.5 if want_a > _vitals_alpha else 1.6))
 	if _vitals_view != null:
 		_vitals_view.set_values(hp_ratio, stam_ratio, _vitals_alpha)
+
+
+func _sync_damage_vignette(delta: float) -> void:
+	if _damage_vignette == null:
+		return
+	if delta > 0.0 and _damage_flash > 0.0:
+		_damage_flash = move_toward(_damage_flash, 0.0, delta / 0.48)
+
+	var low_pulse := 0.0
+	if pawn != null and is_instance_valid(pawn) and not pawn.dead and not pause_open:
+		var hp_ratio := clampf(pawn.health / maxf(pawn.max_health, 1.0), 0.0, 1.0)
+		if hp_ratio < 0.30:
+			_low_hp_clock = fmod(_low_hp_clock + maxf(delta, 0.0), TAU * 10.0)
+			var beat := 0.5 + 0.5 * sin(_low_hp_clock * 4.2)
+			var lub_dub := pow(maxf(0.0, sin(_low_hp_clock * 4.2 + 0.85)), 4.0) * 0.35
+			var wave := clampf(beat * 0.72 + lub_dub, 0.0, 1.0)
+			low_pulse = lerpf(0.12, 0.28, wave)
+		else:
+			_low_hp_clock = 0.0
+	else:
+		_low_hp_clock = 0.0
+
+	var flash_alpha := _damage_flash * 0.62 if not pause_open else 0.0
+	var total_alpha := clampf(maxf(flash_alpha, low_pulse) + minf(flash_alpha, low_pulse) * 0.35, 0.0, 0.78)
+	_damage_vignette.set_state(total_alpha, _damage_flash, _is_colorblind_mode())
 
 
 func _tick_context_prompt(delta: float) -> void:
@@ -1201,7 +1306,8 @@ func _tick_tool_chip(delta: float) -> void:
 	_refresh_tool_chip()
 	if _tool_panel != null:
 		var spy_hide := inventory != null and inventory.spyglass_zoom > 0.4
-		var target_a := 0.0 if (spy_hide or pause_open) else (0.96 if _tool_flash_timer > 0.0 else 0.76)
+		var urgent := _tool_flash_timer > 0.0 or _hull_alert_active
+		var target_a := 0.0 if (spy_hide or pause_open) else (0.96 if urgent else 0.76)
 		_tool_panel.modulate.a = move_toward(_tool_panel.modulate.a, target_a, delta * 5.0)
 		_tool_panel.visible = _tool_panel.modulate.a > 0.02
 
@@ -1218,12 +1324,13 @@ func _refresh_tool_chip() -> void:
 			resolved_id = StringName(inventory.get(&"ranged_weapon"))
 	var title := ToolMeshes.get_display_name(resolved_id)
 	var meta := "[Tab] Tools | [Q] Crew"
+	var active_ship := _active_ship()
 
 	if pawn != null and pawn.station != null:
 		var sk := StringName(pawn.station.get(&"kind"))
-		if sk == &"cannon" and ship != null:
+		if sk == &"cannon" and active_ship != null:
 			title = "Ship Cannon"
-			meta = "Shot: %d | [LMB] Fire" % ship.cannonballs_remaining
+			meta = "Shot: %d | [LMB] Fire" % active_ship.cannonballs_remaining
 		elif sk == &"helm":
 			title = "Ship's Wheel"
 			meta = "A/D Steer | RMB Center"
@@ -1244,7 +1351,6 @@ func _refresh_tool_chip() -> void:
 			&"bucket":
 				meta = "Full | [LMB] Splash" if inventory.bucket_full else "Empty | [LMB] Bail"
 			&"planks":
-				var active_ship := _active_ship()
 				if active_ship != null:
 					meta = "Planks: %d | [LMB] Patch" % active_ship.planks_remaining
 				else:
@@ -1257,6 +1363,28 @@ func _refresh_tool_chip() -> void:
 				meta = "True North | [RMB] Raise"
 			&"spyglass":
 				meta = "[RMB] Peer Through"
+
+	# Surface urgent ship flooding / open hull breach warnings right on the supplies chip.
+	var hull_warn := ""
+	var hull_critical := false
+	if active_ship != null and is_instance_valid(active_ship):
+		var open_leaks := active_ship.open_hole_count()
+		if active_ship.is_sinking or active_ship.water_level > 0.32:
+			hull_critical = true
+			hull_warn = "  |  FLOODING! (%d)" % open_leaks if open_leaks > 0 else "  |  FLOODING!"
+		elif open_leaks > 0:
+			hull_warn = "  |  LEAKS: %d" % open_leaks
+
+	_hull_alert_active = hull_warn != ""
+	if _hull_alert_active:
+		meta += hull_warn
+		var cb := _is_colorblind_mode()
+		var alert_col := Color(0.84, 0.44, 0.04, 0.98) if cb else (
+			Color(0.78, 0.14, 0.10, 0.98) if hull_critical else Color(0.74, 0.38, 0.05, 0.98)
+		)
+		_tool_meta_label.add_theme_color_override("font_color", alert_col)
+	else:
+		_tool_meta_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 
 	_tool_title_label.text = _to_ascii(title)
 	_tool_meta_label.text = _to_ascii(meta)
@@ -1306,8 +1434,11 @@ func _tick_crosshair(delta: float) -> void:
 	var spy := inventory.spyglass_zoom if inventory != null else 0.0
 	var hide_dot := is_any_overlay_open() or spy > 0.25
 	var want := 0.0 if hide_dot else 0.78
+	var prev_a := _crosshair_view.alpha
 	_crosshair_view.alpha = move_toward(_crosshair_view.alpha, want, delta * 10.0)
-	_crosshair_view.queue_redraw()
+	var fx_dirty := _crosshair_view.tick_effects(delta)
+	if fx_dirty or absf(_crosshair_view.alpha - prev_a) > 0.002:
+		_crosshair_view.queue_redraw()
 
 
 # ==============================================================================
@@ -1371,8 +1502,25 @@ func _on_sighting_updated(label: String, distance_m: float) -> void:
 		_spyglass_view.set_sighting(label, distance_m)
 
 
-func _on_pawn_damaged(_amount: float, _from: Node) -> void:
+func _on_pawn_damaged(amount: float, _from: Node) -> void:
 	_vitals_show_timer = 4.5
+	if amount > 0.5:
+		_damage_flash = clampf(_damage_flash + clampf(amount / 35.0, 0.35, 0.9), 0.0, 1.0)
+		if pawn != null and is_instance_valid(pawn):
+			_last_hp = pawn.health
+		_sync_damage_vignette(0.0)
+
+
+func _on_combat_hit_landed(_target: Pawn, _damage: float, was_heavy: bool) -> void:
+	flash_hit_confirm(was_heavy)
+
+
+func _on_combat_target_hit(_target: Node, _damage: float, was_heavy: bool) -> void:
+	flash_hit_confirm(was_heavy)
+
+
+func _on_combat_parried(_attacker: Pawn) -> void:
+	flash_parry()
 
 
 func _on_voyage_started(_voyage: Dictionary) -> void:
@@ -1430,9 +1578,26 @@ func _sync_look_pause() -> void:
 
 
 func _active_ship() -> Ship:
-	if pawn != null and pawn.platform is Ship:
+	if pawn != null and is_instance_valid(pawn) and is_instance_valid(pawn.platform) and pawn.platform is Ship:
 		return pawn.platform as Ship
-	return ship
+	if ship != null and is_instance_valid(ship):
+		return ship
+	return null
+
+
+func _is_colorblind_mode() -> bool:
+	var cfg := user_settings
+	if cfg == null and get_parent() != null:
+		var found: Variant = get_parent().get(&"user_settings")
+		if found is UserSettings:
+			cfg = found as UserSettings
+			user_settings = cfg
+	if cfg == null:
+		return false
+	var cb_mode := String(cfg.data.get("colorblind_mode", "")).strip_edges().to_lower()
+	if cb_mode != "" and cb_mode != "none" and cb_mode != "off":
+		return true
+	return bool(cfg.data.get("high_contrast_prompts", false))
 
 
 func _find_sky_rig() -> Node:
@@ -1486,20 +1651,180 @@ static func _to_ascii(text: String) -> String:
 # Custom drawn minimal HUD controls
 # ==============================================================================
 
+class _DamageVignette extends Control:
+	const RING_SEGMENTS := 36
+
+	var _alpha: float = 0.0
+	var _flash_intensity: float = 0.0
+	var _colorblind: bool = false
+
+	func _ready() -> void:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		clip_contents = true
+		visible = false
+
+	func get_alpha() -> float:
+		return _alpha
+
+	func is_colorblind_tinted() -> bool:
+		return _colorblind
+
+	func set_state(alpha: float, flash_intensity: float, colorblind: bool) -> void:
+		var clamped := clampf(alpha, 0.0, 0.85)
+		var changed := absf(clamped - _alpha) > 0.003 \
+			or absf(flash_intensity - _flash_intensity) > 0.005 \
+			or colorblind != _colorblind
+		_alpha = clamped
+		_flash_intensity = clampf(flash_intensity, 0.0, 1.0)
+		_colorblind = colorblind
+		visible = _alpha > 0.005
+		if changed and visible:
+			queue_redraw()
+
+	func _draw() -> void:
+		if _alpha <= 0.005:
+			return
+		var view_sz := size if (size.is_finite() and size.length_squared() >= 1.0) else get_viewport_rect().size
+		if not view_sz.is_finite() or view_sz.x < 4.0 or view_sz.y < 4.0:
+			return
+		var c := view_sz * 0.5
+		var cx := c.x
+		var cy := c.y
+		var intensity := clampf(_alpha / 0.65, 0.0, 1.0)
+
+		# Painterly ink-wash peripheral tint: warm vermilion-ink by default, amber-ochre for colorblind mode.
+		var base_rgb := Color(0.84, 0.42, 0.06) if _colorblind else Color(0.54, 0.08, 0.06)
+		var rim_rgb := Color(0.64, 0.28, 0.04) if _colorblind else Color(0.32, 0.05, 0.05)
+		var edge_rgb := rim_rgb.lerp(base_rgb, 0.55 + 0.35 * _flash_intensity)
+		var col_outer := Color(edge_rgb.r, edge_rgb.g, edge_rgb.b, _alpha)
+		var col_mid := Color(base_rgb.r, base_rgb.g, base_rgb.b, _alpha * 0.42)
+		var col_inner := Color(base_rgb.r, base_rgb.g, base_rgb.b, 0.0)
+
+		var in_rx := cx * lerpf(0.84, 0.68, intensity)
+		var in_ry := cy * lerpf(0.82, 0.66, intensity)
+		var mid_rx := cx * 1.04
+		var mid_ry := cy * 1.04
+		var out_rx := cx * 1.46
+		var out_ry := cy * 1.46
+
+		var outer_pts := PackedVector2Array()
+		var mid_pts := PackedVector2Array()
+		var inner_pts := PackedVector2Array()
+		outer_pts.resize(RING_SEGMENTS + 1)
+		mid_pts.resize(RING_SEGMENTS + 1)
+		inner_pts.resize(RING_SEGMENTS + 1)
+
+		for i in RING_SEGMENTS + 1:
+			var ang := float(i) / float(RING_SEGMENTS) * TAU
+			var dx := cos(ang)
+			var dy := sin(ang)
+			outer_pts[i] = c + Vector2(dx * out_rx, dy * out_ry)
+			mid_pts[i] = c + Vector2(dx * mid_rx, dy * mid_ry)
+			inner_pts[i] = c + Vector2(dx * in_rx, dy * in_ry)
+
+		var cols_outer := PackedColorArray([col_outer, col_outer, col_mid, col_mid])
+		var cols_inner := PackedColorArray([col_mid, col_mid, col_inner, col_inner])
+		for i in RING_SEGMENTS:
+			var q_out := PackedVector2Array([outer_pts[i], outer_pts[i + 1], mid_pts[i + 1], mid_pts[i]])
+			draw_polygon(q_out, cols_outer)
+			var q_in := PackedVector2Array([mid_pts[i], mid_pts[i + 1], inner_pts[i + 1], inner_pts[i]])
+			draw_polygon(q_in, cols_inner)
+
+
 class _CrosshairView extends Control:
+	const HIT_DURATION := 0.24
+	const PARRY_DURATION := 0.34
+
 	var alpha: float = 0.78
+	var hit_timer: float = 0.0
+	var hit_heavy: bool = false
+	var parry_timer: float = 0.0
 
 	func _ready() -> void:
 		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	func trigger_hit_confirm(was_heavy: bool = false) -> void:
+		if hit_timer > HIT_DURATION - 0.02:
+			hit_heavy = hit_heavy or was_heavy
+		else:
+			hit_heavy = was_heavy
+		hit_timer = HIT_DURATION
+		queue_redraw()
+
+	func trigger_parry_flash() -> void:
+		parry_timer = PARRY_DURATION
+		queue_redraw()
+
+	func tick_effects(delta: float) -> bool:
+		var was_active := hit_timer > 0.0 or parry_timer > 0.0
+		if hit_timer > 0.0:
+			hit_timer = maxf(0.0, hit_timer - maxf(delta, 0.0))
+		if parry_timer > 0.0:
+			parry_timer = maxf(0.0, parry_timer - maxf(delta, 0.0))
+		return was_active
+
 	func _draw() -> void:
 		if alpha <= 0.02:
 			return
-		var view_sz := size if size.length_squared() >= 1.0 else get_viewport_rect().size
+		var view_sz := size if (size.is_finite() and size.length_squared() >= 1.0) else get_viewport_rect().size
+		if not view_sz.is_finite() or view_sz.x < 4.0 or view_sz.y < 4.0:
+			return
 		var c := view_sz * 0.5
+		var vis_scale := clampf(alpha / 0.78, 0.0, 1.0)
+
+		# 1. Subtle parchment center dot with sepia ink halo.
 		draw_circle(c, 3.6, Color(0.14, 0.09, 0.05, 0.55 * alpha))
 		draw_circle(c, 2.2, Color(0.96, 0.91, 0.78, alpha))
+
+		# 2. Tactile diagonal tapered ink hit-confirm ticks (wider & burnt-crimson-gold for heavy hits).
+		if hit_timer > 0.001:
+			var t := clampf(hit_timer / HIT_DURATION, 0.0, 1.0)
+			var ease_t := t * t
+			var fade := smoothstep(0.0, 0.42, t) * vis_scale
+			var inner_r := lerpf(6.5, 11.5, ease_t) if hit_heavy else lerpf(5.5, 9.5, ease_t)
+			var outer_r := lerpf(14.5, 25.5, ease_t) if hit_heavy else lerpf(11.5, 19.5, ease_t)
+			var w_in := 1.1 if hit_heavy else 0.8
+			var w_out := 3.1 if hit_heavy else 2.1
+			var ink_col := Color(0.16, 0.09, 0.05, 0.80 * fade)
+			var fill_col := Color(0.95, 0.44, 0.16, 0.98 * fade) if hit_heavy else Color(0.96, 0.84, 0.44, 0.96 * fade)
+			var core_col := Color(0.84, 0.18, 0.12, 0.90 * fade) if hit_heavy else Color(1.0, 0.94, 0.72, 0.82 * fade)
+			for i in 4:
+				var ang := PI * 0.25 + float(i) * PI * 0.5
+				var dir := Vector2(cos(ang), sin(ang))
+				var perp := Vector2(-dir.y, dir.x)
+				var border_poly := PackedVector2Array([
+					c + dir * (inner_r - 1.1) - perp * (w_in + 0.9),
+					c + dir * (outer_r + 1.2) - perp * (w_out + 1.0),
+					c + dir * (outer_r + 1.2) + perp * (w_out + 1.0),
+					c + dir * (inner_r - 1.1) + perp * (w_in + 0.9),
+				])
+				draw_colored_polygon(border_poly, ink_col)
+				var tick_poly := PackedVector2Array([
+					c + dir * inner_r - perp * w_in,
+					c + dir * outer_r - perp * w_out,
+					c + dir * outer_r + perp * w_out,
+					c + dir * inner_r + perp * w_in,
+				])
+				draw_colored_polygon(tick_poly, fill_col)
+				draw_line(c + dir * (inner_r + 1.2), c + dir * (outer_r - 1.6), core_col, 1.3 if hit_heavy else 1.0, true)
+
+		# 3. Twin opposing burnished-gold brass guard-arcs on timed parry.
+		if parry_timer > 0.001:
+			var pt := clampf(parry_timer / PARRY_DURATION, 0.0, 1.0)
+			var pfade := smoothstep(0.0, 0.38, pt) * vis_scale
+			var arc_r := lerpf(16.0, 23.0, sin(pt * PI * 0.65))
+			var half_span := lerpf(0.42, 0.68, pt)
+			var shadow_col := Color(0.18, 0.11, 0.05, 0.74 * pfade)
+			var brass_col := Color(0.89, 0.69, 0.24, 0.96 * pfade)
+			var glint_col := Color(0.99, 0.93, 0.72, 0.90 * pfade)
+			for base_ang: float in [0.0, PI]:
+				var a0 := base_ang - half_span
+				var a1 := base_ang + half_span
+				draw_arc(c, arc_r, a0, a1, 20, shadow_col, 5.4, true)
+				draw_arc(c, arc_r, a0, a1, 20, brass_col, 3.2, true)
+				draw_arc(c, arc_r - 0.8, a0 + 0.06, a1 - 0.06, 16, glint_col, 1.3, true)
 
 
 class _VitalsView extends Control:
@@ -1528,7 +1853,7 @@ class _VitalsView extends Control:
 			queue_redraw()
 
 	func _draw() -> void:
-		if _alpha <= 0.01:
+		if _alpha <= 0.01 or not size.is_finite() or size.x < 4.0 or size.y < 4.0:
 			return
 		var bg := Color(0.91, 0.84, 0.69, 0.86 * _alpha)
 		var border := Color(0.22, 0.14, 0.09, 0.92 * _alpha)

@@ -7,6 +7,8 @@ extends TestCase
 ##   detection & bite + retreat, retreat on damage, apply_damage & defeated signal.
 ## - CoralReef: strictly 3 batched MultiMeshInstance3D draw calls, distance culling,
 ##   underwater depth placement, mooring keepout, static mesh sharing, clean teardown.
+## - Shark: sculpted countershaded ArrayMesh anatomy (zero raw primitives), static mesh
+##   sharing across packs, 2-segment traveling S-wave tail & snapping toothed jaw on CHARGE.
 
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const SPEEDUP := 6
@@ -416,4 +418,158 @@ func test_coral_reef_multimesh_budget_and_depth_placement() -> void:
 		"identical rng_seed yields deterministic max depth")
 
 	await _end()
+
+
+func test_shark_sculpted_meshes_caching_and_charge_animation() -> void:
+	_begin()
+
+	var shark_a := Shark.new()
+	shark_a.name = "SharkA"
+	shark_a.circle_radius = 8.0
+	_root.add_child(shark_a)
+	shark_a.global_position = Vector3(12.0, -0.35, 12.0)
+
+	var shark_b := Shark.new()
+	shark_b.name = "SharkB"
+	shark_b.circle_radius = 8.0
+	_root.add_child(shark_b)
+	shark_b.global_position = Vector3(-12.0, -0.35, 12.0)
+
+	check_near(shark_a.health, shark_a.max_health, 0.01, "shark spawns at full health")
+	check_eq(shark_a.faction, &"beast", "shark preserves beast faction")
+	check(shark_a.is_in_group(&"sharks") and shark_a.is_in_group(&"beasts"),
+		"shark registers in sharks and beasts groups")
+	var hitbox := shark_a.get_node_or_null(^"SharkHitbox") as StaticBody3D
+	check(hitbox != null and hitbox.collision_layer == Pawn.LAYER_PAWN,
+		"shark preserves SharkHitbox on Pawn.LAYER_PAWN")
+
+	# Verify articulated pivots exist with sculpted ArrayMesh children.
+	check(shark_a._jaw_node != null, "shark builds articulated hinged _jaw_node")
+	check(shark_a._tail_mid_node != null, "shark builds articulated mid-tail _tail_mid_node")
+	check(shark_a._tail_node != null, "shark builds articulated caudal fin _tail_node")
+	check_eq(shark_a._tail_node.get_parent(), shark_a._tail_mid_node,
+		"caudal fin _tail_node chains cleanly as child of _tail_mid_node")
+
+	# Walk every MeshInstance3D on SharkA: strictly sculpted ArrayMeshes, zero raw primitives!
+	var mesh_nodes := shark_a.find_children("*", "MeshInstance3D", true, false)
+	check(mesh_nodes.size() >= 5,
+		"shark builds sculpted body/eyes/jaw/tail_mid/tail_fin meshes (got %d)" % mesh_nodes.size())
+
+	var raw_primitive_count := 0
+	var total_tris := 0
+	var bad_normals := 0
+	var part_summary: PackedStringArray = []
+	for n in mesh_nodes:
+		var mi := n as MeshInstance3D
+		if mi == null:
+			continue
+		var m := mi.mesh
+		var is_raw_prim := (m is PrimitiveMesh) \
+			or (m is CapsuleMesh) \
+			or (m is BoxMesh) \
+			or (m is PrismMesh) \
+			or (m is SphereMesh) \
+			or (m is CylinderMesh)
+		if is_raw_prim:
+			raw_primitive_count += 1
+		check(m is ArrayMesh, "shark part '%s' uses sculpted ArrayMesh" % mi.name)
+		if m is ArrayMesh:
+			var am := m as ArrayMesh
+			check(am.get_surface_count() > 0, "shark ArrayMesh '%s' has surface geometry" % mi.name)
+			if am.get_surface_count() > 0:
+				var arrays := am.surface_get_arrays(0)
+				var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+				var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+				var tris := floori(float(indices.size()) / 3.0) if indices.size() > 0 else floori(float(verts.size()) / 3.0)
+				check(tris > 0, "shark ArrayMesh '%s' has non-zero triangles (%d)" % [mi.name, tris])
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+				total_tris += tris
+				part_summary.append("%s=%d" % [mi.name, tris])
+
+	print("    shark sculpted meshes: %s (total=%d tris)" % [", ".join(part_summary), total_tris])
+	check_eq(raw_primitive_count, 0,
+		"shark has zero raw primitive CapsuleMesh/BoxMesh/PrismMesh/SphereMesh meshes")
+	check_eq(bad_normals, 0, "all sculpted shark mesh normals are finite unit vectors")
+	check(total_tris >= 900,
+		"shark has richly sculpted faceted triangle budget (got %d tris)" % total_tris)
+
+	# Verify static ArrayMesh caching shares identical resources across shark pack instances.
+	var part_names: Array[String] = ["BodyMesh", "EyesMesh", "JawMesh", "TailMidMesh", "TailFinMesh"]
+	for part in part_names:
+		var mi_a := shark_a.find_child(part, true, false) as MeshInstance3D
+		var mi_b := shark_b.find_child(part, true, false) as MeshInstance3D
+		check(mi_a != null and mi_b != null, "both sharks contain sculpted '%s'" % part)
+		if mi_a != null and mi_b != null:
+			check_eq(mi_a.mesh, mi_b.mesh,
+				"shark pack shares static cached ArrayMesh for '%s'" % part)
+
+	# Step CIRCLE state for ~1.15 s (70 physics ticks) and record baseline undulation + closed jaw.
+	shark_a.state = Shark.State.CIRCLE
+	shark_a._state_timer = 10.0
+	var circle_mid_min := INF
+	var circle_mid_max := -INF
+	var circle_fin_min := INF
+	var circle_fin_max := -INF
+	for _i in 70:
+		await physics_frames(1)
+		circle_mid_min = minf(circle_mid_min, shark_a._tail_mid_node.rotation.y)
+		circle_mid_max = maxf(circle_mid_max, shark_a._tail_mid_node.rotation.y)
+		circle_fin_min = minf(circle_fin_min, shark_a._tail_node.rotation.y)
+		circle_fin_max = maxf(circle_fin_max, shark_a._tail_node.rotation.y)
+
+	var circle_mid_span := circle_mid_max - circle_mid_min
+	var circle_fin_span := circle_fin_max - circle_fin_min
+	var circle_jaw_x := shark_a._jaw_node.rotation.x
+	check(circle_mid_span > 0.25,
+		"shark _tail_mid_node undulates during CIRCLE (span=%.3f)" % circle_mid_span)
+	check(circle_fin_span > 0.45,
+		"shark _tail_node undulates during CIRCLE (span=%.3f)" % circle_fin_span)
+	check(absf(circle_jaw_x) < 0.12,
+		"shark lower jaw stays nearly closed during CIRCLE (rot_x=%.3f)" % circle_jaw_x)
+
+	# Switch into State.CHARGE and verify faster/wider S-wave tail undulation + wide open toothed jaw!
+	shark_a.state = Shark.State.CHARGE
+	shark_a._state_timer = 10.0
+	var charge_mid_min := INF
+	var charge_mid_max := -INF
+	var charge_fin_min := INF
+	var charge_fin_max := -INF
+	var charge_jaw_min := INF
+	var max_phase_diff := 0.0
+	for _i in 42:
+		await physics_frames(1)
+		var mid_y := shark_a._tail_mid_node.rotation.y
+		var fin_y := shark_a._tail_node.rotation.y
+		charge_mid_min = minf(charge_mid_min, mid_y)
+		charge_mid_max = maxf(charge_mid_max, mid_y)
+		charge_fin_min = minf(charge_fin_min, fin_y)
+		charge_fin_max = maxf(charge_fin_max, fin_y)
+		charge_jaw_min = minf(charge_jaw_min, shark_a._jaw_node.rotation.x)
+		max_phase_diff = maxf(max_phase_diff, absf(fin_y - mid_y))
+
+	var charge_mid_span := charge_mid_max - charge_mid_min
+	var charge_fin_span := charge_fin_max - charge_fin_min
+	check(charge_mid_span > circle_mid_span + 0.15,
+		"shark _tail_mid_node beats wider during CHARGE (%.3f > %.3f)" % [charge_mid_span, circle_mid_span])
+	check(charge_fin_span > circle_fin_span + 0.25,
+		"shark _tail_node beats wider during CHARGE (%.3f > %.3f)" % [charge_fin_span, circle_fin_span])
+	check(max_phase_diff > 0.30,
+		"shark 2-segment tail exhibits traveling S-wave phase lag (max_diff=%.3f)" % max_phase_diff)
+	check(charge_jaw_min < -0.38 and absf(charge_jaw_min - Shark.JAW_OPEN_ANGLE) < 0.08,
+		"shark _jaw_node snaps wide open (~-0.46 rad) during CHARGE (min_x=%.3f)" % charge_jaw_min)
+
+	# Switch to RETREAT and confirm jaw smoothly closes again.
+	shark_a.state = Shark.State.RETREAT
+	shark_a._state_timer = 10.0
+	await physics_frames(36)
+	check(absf(shark_a._jaw_node.rotation.x - Shark.JAW_CLOSED_ANGLE) < 0.08,
+		"shark _jaw_node closes smoothly during RETREAT (rot_x=%.3f)" % shark_a._jaw_node.rotation.x)
+
+	await _end()
+	check(Shark._mesh_cache.is_empty(),
+		"Shark releases static mesh cache cleanly when last active shark exits tree")
+
 
