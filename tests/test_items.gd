@@ -1195,6 +1195,127 @@ func test_spyglass_callout_signals_and_crew_acknowledgement() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 11. Wave 20C: Spyglass Whale/Manta Sightings, Helm Telemetry & Ship Title
+# ---------------------------------------------------------------------------
+
+func test_spyglass_whale_manta_and_helm_sailing_telemetry_pill() -> void:
+	_begin()
+	Weather.set_weather(0.0, 10.0, 0.0)
+	Sea.amp_scale = 0.0
+
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = true
+	_root.add_child(ship)
+	ship.global_position = Vector3.ZERO
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 4.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	captain.board(ship, Vector3(0.0, 2.02, 4.1))
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, ship, null, null)
+	await physics_frames(4)
+
+	# 1. Verify Spyglass identifies Humpback Whale (&"whales") & Giant Manta Ray (&"manta_rays").
+	var whale := Node3D.new()
+	whale.add_to_group(&"whales")
+	_root.add_child(whale)
+	whale.global_position = Vector3(-115.0, 0.0, -280.0)  # NNW, ~303 m
+
+	var manta := Node3D.new()
+	manta.add_to_group(&"manta_rays")
+	_root.add_child(manta)
+	manta.global_position = Vector3(68.0, 0.0, 28.0)  # ESE, ~73 m
+
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+
+	var aim_at := func(world_pt: Vector3) -> void:
+		var d := world_pt - captain.eye_position()
+		var h := maxf(Vector2(d.x, d.z).length(), 0.001)
+		captain.look_yaw = atan2(-d.x, -d.z)
+		captain.look_pitch = atan2(d.y, h)
+		inv.call(&"_scan_spyglass_sighting")
+
+	aim_at.call(whale.global_position + Vector3.UP * 2.5)
+	check_eq(inv.spyglass_sighting, "Humpback Whale", "spyglass identifies Humpback Whale in group &'whales'")
+	check_eq(inv.spyglass_sighting_bearing, "NNW", "Humpback Whale bearing is NNW")
+
+	aim_at.call(manta.global_position + Vector3.UP * 0.4)
+	check_eq(inv.spyglass_sighting, "Giant Manta Ray", "spyglass identifies Giant Manta Ray in group &'manta_rays'")
+	check_eq(inv.spyglass_sighting_bearing, "ESE", "Giant Manta Ray bearing is ESE")
+	inv.set_secondary_held(false)
+
+	# 2. Verify helm-only SailingTrimPill stays strictly hidden while free-roaming & at non-sailing stations!
+	hud._process(0.05)
+	check(not hud.is_sailing_telemetry_visible(), "SailingTrimPill is strictly hidden while walking free on deck")
+
+	var map_st := ship.get_station(&"map_table")
+	if map_st != null:
+		captain.enter_station(map_st)
+		hud._process(0.05)
+		check(not hud.is_sailing_telemetry_visible(), "SailingTrimPill stays hidden at non-sailing MapTable station")
+		captain.leave_station()
+
+	# Occupy Station_Helm -> pill becomes visible and tracks ANCHORED, SAILS FURLED, FULL WIND, TRIM SAILS!
+	var helm_st := ship.get_station(&"helm")
+	check(helm_st != null and captain.enter_station(helm_st), "captain takes Station_Helm")
+
+	ship.anchor_down = true
+	hud._process(0.05)
+	check(hud.is_sailing_telemetry_visible(), "SailingTrimPill shows while occupying Station_Helm")
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  ANCHORED"),
+		"anchored ship displays ANCHORED telemetry (got '%s')" % hud.get_sailing_telemetry_text())
+
+	ship.anchor_down = false
+	ship.sail_set = 0.0
+	hud._process(0.05)
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  SAILS FURLED"),
+		"furled sails display SAILS FURLED telemetry (got '%s')" % hud.get_sailing_telemetry_text())
+
+	ship.sail_set = 0.90
+	ship.sail_trim = ship.ideal_sail_trim()
+	hud._process(0.05)
+	var full_txt := hud.get_sailing_telemetry_text()
+	check(full_txt.ends_with("kt  |  FULL WIND"),
+		"aligned sail trim displays FULL WIND telemetry (got '%s')" % full_txt)
+	for ci in full_txt.length():
+		check(full_txt.unicode_at(ci) < 128, "SailingTrimPill text is strictly ASCII")
+
+	ship.sail_trim = wrapf(ship.ideal_sail_trim() + 1.15, -PI, PI)
+	hud._process(0.05)
+	check(hud.get_sailing_telemetry_text().ends_with("kt  |  TRIM SAILS"),
+		"misaligned sail trim displays TRIM SAILS telemetry (got '%s')" % hud.get_sailing_telemetry_text())
+
+	# Leaving helm hides pill immediately.
+	captain.leave_station()
+	hud._process(0.05)
+	check(not hud.is_sailing_telemetry_visible(), "SailingTrimPill hides immediately upon leaving Station_Helm")
+
+	# 3. Verify show_voyage_title() appends custom ship name cleanly in strict ASCII.
+	var prev_ship_name := Game.profile.get_ship_name()
+	Game.profile.set_ship_name("Gilded Gull")
+	hud.show_voyage_title("CUTLASS CAY", "Buried Hoard", 4.0)
+	var sub_txt := hud.get_voyage_title_subtitle_text()
+	check(sub_txt.contains("Aboard Gilded Gull"),
+		"Voyage Title Card subtitle includes custom ship name (got '%s')" % sub_txt)
+	for ci in sub_txt.length():
+		check(sub_txt.unicode_at(ci) < 128, "Voyage Title Card subtitle is strictly ASCII")
+	Game.profile.set_ship_name(prev_ship_name)
+
+	hud.queue_free()
+	await physics_frames(2)
+	await _end()
+
+
+
 
 
 

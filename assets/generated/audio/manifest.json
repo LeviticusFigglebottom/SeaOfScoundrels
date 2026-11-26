@@ -582,6 +582,16 @@
 			"max_distance": 0,
 			"unit_size": 0
 		},
+		"whale_call": {
+			"bus": "SFX",
+			"files": [
+				"sfx/whale_call_1.wav",
+				"sfx/whale_call_2.wav"
+			],
+			"lufs": -21,
+			"max_distance": 340,
+			"unit_size": 25
+		},
 		"wheel_creak": {
 			"bus": "SFX",
 			"files": [

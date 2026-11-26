@@ -146,8 +146,9 @@ func _ready() -> void:
 	_plaque_mat.roughness = 0.32
 	_plaque_mat.metallic = 0.25
 	_plaque_mat.emission_enabled = true
-	_plaque_mat.emission = Color.WHITE
-	_plaque_mat.emission_energy_multiplier = 0.22
+	_plaque_mat.emission_operator = BaseMaterial3D.EMISSION_OP_MULTIPLY
+	_plaque_mat.emission = Color(1.0, 0.90, 0.65)
+	_plaque_mat.emission_energy_multiplier = 0.16
 
 	_plaque_mi = MeshInstance3D.new()
 	_plaque_mi.name = "NameplateFace"

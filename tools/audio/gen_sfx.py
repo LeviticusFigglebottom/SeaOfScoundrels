@@ -582,6 +582,68 @@ def seagull(rng, v):
 	return room(out, 0.25, 1.2, 0.5, 9, 0.03)
 
 
+def whale_call(rng, v):
+	"""Haunting deep-ocean humpback song phrase: smooth biological pitch contour,
+	warm rolling harmonics, muffled water-column breath, and spacious ocean reverb."""
+	dur = rng.uniform(2.50, 2.95)
+	n = S.sec(dur)
+	t = S.tgrid(n)
+	u = t / dur
+	scale = rng.uniform(0.95, 1.05)
+
+	# Smoothly interpolated organic humpback glide contour varied by variation index.
+	if v % 2 == 0:
+		knots_u = np.array([0.0, 0.18, 0.42, 0.70, 1.0])
+		knots_f = np.array([155.0, 245.0, 340.0, 215.0, 140.0]) * scale
+	else:
+		knots_u = np.array([0.0, 0.22, 0.50, 0.76, 1.0])
+		knots_f = np.array([134.0, 265.0, 305.0, 182.0, 122.0]) * scale
+
+	# Cosine-smooth interpolation between contour knots for natural vocal glide.
+	f_curve = np.interp(u, knots_u, knots_f)
+	win = max(5, S.sec(0.14) | 1)
+	k_sm = np.hanning(win)
+	k_sm /= k_sm.sum()
+	f_smooth = np.convolve(np.pad(f_curve, win // 2, mode="edge"), k_sm, mode="valid")[:n]
+
+	# Gentle biological vibrato (~4.5 Hz) + subtle slow organic drift.
+	vib_rate = rng.uniform(4.2, 4.8)
+	vib_env = np.sin(np.pi * u) ** 0.85
+	drift = S.lfo_noise(n, 2.2, rng, False) * 0.014
+	f_inst = f_smooth * (1.0 + 0.018 * vib_env * np.sin(2.0 * np.pi * vib_rate * t) + drift)
+
+	# Warm harmonic series (1x..4x) whose overtones bloom gently around the phrase crest.
+	phi = S.phase(f_inst, n)
+	crest = np.sin(np.pi * u) ** 1.6
+	voice = (
+		1.00 * np.sin(phi)
+		+ (0.46 + 0.18 * crest) * np.sin(2.0 * phi + 0.25)
+		+ (0.18 + 0.10 * crest) * np.sin(3.0 * phi + 0.70)
+		+ 0.07 * np.sin(4.0 * phi + 1.15)
+	)
+	amp_env = (np.clip(u / 0.16, 0.0, 1.0) ** 1.4) * (np.clip((1.0 - u) / 0.28, 0.0, 1.0) ** 1.35)
+	amp_env *= 0.74 + 0.26 * crest
+	voice = S.highpass(S.lowpass(voice * amp_env, 1450.0, 2), 45.0, 1)
+	voice /= np.abs(voice).max() + 1e-9
+
+	# Subtle muffled ocean breath resonance (280..650 Hz) following the phrase swell.
+	bp_center = rng.uniform(320.0, 560.0)
+
+	def breath_gain(fc, tt):
+		uu = np.clip(tt / dur, 0.0, 1.0)
+		be = (np.clip(uu / 0.18, 0.0, 1.0) ** 1.3) * (np.clip((1.0 - uu) / 0.30, 0.0, 1.0) ** 1.4)
+		return be * bp_shape(fc, bp_center, 1.9) * lp_shape(fc, 1300.0, 2.0)
+
+	breath = nz(dur, breath_gain, rng, fmin=80.0, fmax=2200.0)
+	breath /= np.abs(breath).max() + 1e-9
+
+	dry = buf(dur + 0.65)
+	S.place(dry, voice + 0.11 * breath, 0.02)
+	wet = room(dry, 0.34, 1.35, damp=0.72, seed=41 + v, predelay=0.025)
+	wet = S.lowpass(wet, 1800.0, 1)
+	return S.fade(wet, 0.04, 0.12)
+
+
 # ----------------------------------------------------------------------------
 # Crew: grog, burps, shouts
 # ----------------------------------------------------------------------------
@@ -689,6 +751,7 @@ SOUNDS = {
 	"thunder_near": (thunder_near, 2, -13, 0, 0, "SFX"),
 	"thunder_far": (thunder_far, 2, -22, 0, 0, "SFX"),
 	"seagull": (seagull, 4, -25, 12, 200, "SFX"),
+	"whale_call": (whale_call, 2, -21, 25, 340, "SFX"),
 	"grog_gulp": (grog_gulp, 3, -23, 2.5, 18, "Voice"),
 	"burp": (burp, 3, -19, 3, 25, "Voice"),
 	"crew_shout": (crew_shout, 3, -17, 6, 80, "Voice"),

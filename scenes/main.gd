@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|whale_breach|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -23,6 +23,7 @@ const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
 const DOLPHIN_POD_PATH := "res://src/world/dolphin_pod.gd"
 const FLOTSAM_CLUSTER_PATH := "res://src/world/flotsam_cluster.gd"
+const OCEAN_WHALE_PATH := "res://src/world/ocean_whale.gd"
 
 const CREW_SPECS: Array[Dictionary] = [
 	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
@@ -102,6 +103,11 @@ var _revive_timer: float = -1.0
 var _ship_restoring: bool = false
 var _active_dolphin_pod: Node3D = null
 var _dolphin_pod_cooldown: float = 52.0
+var _active_whale: Node3D = null
+var _whale_ambient_timer: float = 95.0
+var _hero_coral_manta: Node3D = null
+var _hero_coral_manta_anchor: Vector3 = Vector3.ZERO
+var _hero_coral_manta_dir: Vector3 = Vector3.RIGHT
 
 # Parsed CLI options
 var _cli_host: bool = false
@@ -1157,6 +1163,7 @@ func _physics_process(delta: float) -> void:
 
 	_tick_world_director(delta)
 	_tick_dolphin_pod(delta)
+	_tick_ambient_whale(delta)
 
 
 func _apply_inventory_tool_modifiers() -> void:
@@ -1225,6 +1232,60 @@ func _tick_dolphin_pod(delta: float) -> void:
 				speaker = br.crew_name()
 				break
 		Game.post_notice("%s: Dolphins off the bow, Cap'n! Fair winds ahead!" % speaker)
+
+
+func _spawn_whale_breach(world_pos: Vector3, heading_yaw: float) -> Node3D:
+	if _entities_root == null or not ResourceLoader.exists(OCEAN_WHALE_PATH):
+		return null
+	var whale_script := load(OCEAN_WHALE_PATH) as GDScript
+	if whale_script == null:
+		return null
+	var whale: Node3D = null
+	if whale_script.has_method(&"spawn_breach"):
+		whale = whale_script.call(&"spawn_breach", _entities_root, world_pos, heading_yaw) as Node3D
+	else:
+		whale = whale_script.new() as Node3D
+		if whale != null:
+			_entities_root.add_child(whale)
+			whale.global_position = world_pos
+			whale.rotation.y = heading_yaw
+	_active_whale = whale
+	return whale
+
+
+func _tick_ambient_whale(delta: float) -> void:
+	if active_shot_mode != "" or archipelago == null:
+		return
+	if _active_whale != null:
+		if is_instance_valid(_active_whale) and _active_whale.is_inside_tree():
+			return
+		_active_whale = null
+	if player_ship == null or not is_instance_valid(player_ship) or player_ship.is_sinking:
+		return
+	if player_ship.forward_speed() < 2.8 or Weather.storminess >= 0.40:
+		return
+	if _has_active_combat_or_boss():
+		return
+	var near_isl := archipelago.nearest_island(player_ship.global_position)
+	if near_isl != null and player_ship.global_position.distance_to(near_isl.global_position) <= 160.0:
+		return
+	_whale_ambient_timer -= delta
+	if _whale_ambient_timer > 0.0:
+		return
+	_whale_ambient_timer = randf_range(95.0, 155.0)
+	var side := 1.0 if randf() >= 0.5 else -1.0
+	var ahead_dist := randf_range(70.0, 110.0)
+	var lat_dist := side * randf_range(24.0, 42.0)
+	var wpos := player_ship.global_transform * Vector3(lat_dist, 0.0, -ahead_dist)
+	wpos.y = Sea.height(wpos.x, wpos.z)
+	var whale := _spawn_whale_breach(wpos, player_ship.rotation.y + side * 0.65)
+	if whale != null:
+		var speaker := "Maren"
+		for br in crew_brains:
+			if br != null and is_instance_valid(br) and br.persona_id == &"lookout":
+				speaker = br.crew_name()
+				break
+		Game.post_notice("%s: Great Humpback breaching off the bow, Cap'n! What a sight!" % speaker)
 
 
 func _tick_world_director(delta: float) -> void:
@@ -2814,6 +2875,7 @@ func _apply_hero_shot(mode: String) -> void:
 	_shot_track_world_blend = 0.0
 	_shot_combat_timer = -1.0
 	_shot_duel_spark_timer = -1.0
+	_hero_coral_manta = null
 	if hud != null:
 		hud.input_enabled = false
 		hud.clear_banners()
@@ -2826,7 +2888,7 @@ func _apply_hero_shot(mode: String) -> void:
 	if p_cv != null:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
-			"storm", "sunset", "night", "night_sail", "night_lighthouse", "rainbow", "leviathan", "fleet",
+			"storm", "sunset", "night", "night_sail", "night_lighthouse", "rainbow", "whale_breach", "leviathan", "fleet",
 			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam", "deck_duel",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
@@ -3057,7 +3119,7 @@ func _apply_hero_shot(mode: String) -> void:
 			var cap_loc := Vector3(1.55, 1.25, 3.30) if is_brig else Vector3(1.18, 1.10, 2.55)
 			var foe1_loc := Vector3(1.65, 1.82, 4.35) if is_brig else Vector3(1.22, 1.56, 3.45)
 			var crew_loc := Vector3(0.45, 2.25, 4.95) if is_brig else Vector3(0.38, 2.00, 3.85)
-			var foe2_loc := Vector3(-0.78, 1.25, 2.45) if is_brig else Vector3(-0.68, 1.10, 1.95)
+			var foe2_loc := Vector3(0.05, 1.25, 3.45) if is_brig else Vector3(0.0, 1.10, 2.65)
 			var clash_loc := Vector3(1.60, 2.52, 3.84) if is_brig else Vector3(1.20, 2.26, 3.00)
 			_shot_duel_clash_local = clash_loc
 
@@ -3093,7 +3155,7 @@ func _apply_hero_shot(mode: String) -> void:
 				barnaby.look_yaw = atan2(-b_to_foe.x, -b_to_foe.z)
 				var b_cv := _character_visual_of(barnaby)
 				if b_cv != null:
-					b_cv.set_livery(Color(0.14, 0.36, 0.78), Color(0.92, 0.74, 0.24))
+					b_cv.set_tint(Color(0.14, 0.36, 0.78), Color(0.92, 0.74, 0.24))
 				var b_cc := barnaby.get_node_or_null(^"CombatComponent") as CombatComponent
 				if b_cc != null:
 					b_cc.equip_weapon(&"cutlass")
@@ -3114,10 +3176,23 @@ func _apply_hero_shot(mode: String) -> void:
 				player_combat._spawn_clash_vfx(player_ship.global_transform * clash_loc, &"parried")
 			_shot_duel_spark_timer = 0.42
 
-			# Dynamic low-angle quarterdeck action camera looking up the stairs past Captain's shoulder into the clash!
-			var cam_duel := Vector3(0.32, 1.92, 1.48) if is_brig else Vector3(0.24, 1.72, 1.05)
-			var look_duel := Vector3(1.12, 2.48, 4.35) if is_brig else Vector3(0.88, 2.22, 3.45)
-			_enable_ship_track_shot(cam_duel, look_duel, 58.0)
+			# Dynamic low-angle quarterdeck action camera clear of masts & rails looking up the starboard stairs!
+			var cam_duel := Vector3(-0.35, 2.05, 1.35) if is_brig else Vector3(-0.26, 1.82, 0.96)
+			var look_duel := Vector3(1.18, 2.22, 4.35) if is_brig else Vector3(0.90, 2.02, 3.45)
+			_enable_ship_track_shot(cam_duel, look_duel, 60.0)
+
+		"whale_breach":
+			# Golden-hour sunset open-sea showcase: sailing Brigantine/Sloop left-foreground + colossal 14 m Humpback Whale breaching right-center!
+			Weather.time_of_day = 17.55 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 10.8, -0.38, 0.0, 0.38)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.22)
+			_place_sailing_ship(Vector3(64.0, 0.0, -205.0), -0.38, 0.94, 5.2)
+			var whale_pos := player_ship.global_transform * Vector3(16.0 * sc, 0.0, -24.0 * sc)
+			whale_pos.y = Sea.height(whale_pos.x, whale_pos.z)
+			var whale := _spawn_whale_breach(whale_pos, player_ship.rotation.y + 0.55)
+			if whale != null and whale.has_method(&"force_breach_apex"):
+				whale.call(&"force_breach_apex")
+			_enable_ship_track_shot(Vector3(2.0 * sc, 4.4 * sc, 16.5 * sc), Vector3(8.5 * sc, 5.2 * sc, -10.5 * sc), 54.0)
 
 		"night_lighthouse":
 			# Panoramic moonlit Port Scoundrel harbour showcase: glowing Tavern, HarbourBunting, beach campfire,
@@ -3375,7 +3450,43 @@ func _apply_hero_shot(mode: String) -> void:
 				dir_out = dir_out.normalized() if dir_out.length_squared() > 0.01 else Vector3(0.0, 0.0, -1.0)
 				var cam_p := target_w + dir_out * 6.5 + Vector3(0.0, 1.35, 0.0)
 				cam_p.y = minf(cam_p.y, -1.15)
-				_mount_shot_camera(cam_p, target_w + Vector3(0.0, 0.45, 0.0), 66.0)
+				var look_p := target_w + Vector3(0.0, 0.45, 0.0)
+				_mount_shot_camera(cam_p, look_p, 66.0)
+
+				# Pose Crescent Atoll's Giant Reef Manta Ray gliding gracefully through the sunlit upper-midground!
+				var manta := atoll.get_node_or_null(^"MantaRay") as Node3D
+				if manta == null and get_tree() != null:
+					var best_d := INF
+					for mn in get_tree().get_nodes_in_group(&"manta_rays"):
+						if mn is Node3D and is_instance_valid(mn):
+							var d_m := (mn as Node3D).global_position.distance_squared_to(atoll.global_position)
+							if d_m < best_d:
+								best_d = d_m
+								manta = mn as Node3D
+				if manta != null:
+					manta.set_physics_process(false)
+					var cam_fwd_h := Vector3(look_p.x - cam_p.x, 0.0, look_p.z - cam_p.z).normalized()
+					var cam_r_h := cam_fwd_h.cross(Vector3.UP).normalized()
+					var manta_w := cam_p + cam_fwd_h * 7.6 + cam_r_h * 0.65
+					manta_w.y = -2.20
+					manta.global_position = manta_w
+					manta.rotation = Vector3.ZERO
+					var glide_dir := (-cam_r_h * 0.88 + cam_fwd_h * 0.46).normalized()
+					var g_root := manta.get_node_or_null(^"GlideRoot") as Node3D
+					if g_root != null:
+						g_root.position = Vector3.ZERO
+						g_root.global_basis = Basis(Vector3.UP, atan2(-glide_dir.x, -glide_dir.z)) \
+							* Basis(Vector3.RIGHT, 0.08) \
+							* Basis(Vector3.FORWARD, -0.26)
+						var lw := g_root.get_node_or_null(^"LeftWingPivot") as Node3D
+						var rw := g_root.get_node_or_null(^"RightWingPivot") as Node3D
+						if lw != null:
+							lw.rotation.z = 0.24
+						if rw != null:
+							rw.rotation.z = -0.24
+					_hero_coral_manta = manta
+					_hero_coral_manta_anchor = manta_w
+					_hero_coral_manta_dir = glide_dir
 
 		"galley":
 			# Tight watertight hold close-up on the Cast-Iron Galley Hearth, copper skillet, seared fish & steam!
@@ -3555,6 +3666,20 @@ func _tick_hero_shot_tracking(delta: float) -> void:
 			_shot_duel_spark_timer = 0.42
 			if player_combat != null:
 				player_combat._spawn_clash_vfx(player_ship.global_transform * _shot_duel_clash_local, &"parried")
+	elif active_shot_mode == "coral_reef" and _hero_coral_manta != null and is_instance_valid(_hero_coral_manta):
+		var t_m := float(Time.get_ticks_msec()) * 0.001
+		var flap := sin(t_m * 2.15) * 0.30
+		var heave := -cos(t_m * 2.15) * 0.14
+		var surge := sin(t_m * 0.55) * 0.85
+		_hero_coral_manta.global_position = _hero_coral_manta_anchor + _hero_coral_manta_dir * surge + Vector3(0.0, heave, 0.0)
+		var g_root := _hero_coral_manta.get_node_or_null(^"GlideRoot") as Node3D
+		if g_root != null:
+			var lw := g_root.get_node_or_null(^"LeftWingPivot") as Node3D
+			var rw := g_root.get_node_or_null(^"RightWingPivot") as Node3D
+			if lw != null:
+				lw.rotation.z = flap
+			if rw != null:
+				rw.rotation.z = -flap
 	if _shot_track_ship:
 		_update_tracked_shot_camera()
 

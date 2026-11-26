@@ -102,10 +102,13 @@ var _voyage_card_elapsed: float = 0.0
 var _voyage_card_hold: float = 4.2
 var _voyage_card_alpha: float = 0.0
 
-# Context prompt (bottom-center)
+# Context prompt & helm-only sailing trim telemetry pill (bottom-center)
+const SAILING_STATION_KINDS: Array[StringName] = [&"helm", &"sail_length", &"sail_angle"]
 var _prompt_panel: PanelContainer = null
 var _prompt_label: Label = null
 var _prompt_alpha: float = 0.0
+var _sailing_pill_panel: PanelContainer = null
+var _sailing_pill_label: Label = null
 
 # Active tool / supplies chip (bottom-right)
 var _tool_panel: PanelContainer = null
@@ -203,6 +206,7 @@ func bind(
 	_sync_damage_vignette(0.0)
 	_refresh_item_radial_entries()
 	_refresh_tool_chip()
+	_tick_sailing_telemetry()
 	_sync_quality_button_states()
 
 
@@ -451,6 +455,11 @@ func set_voyage_whisper(title: String, objective: String, hold_seconds: float = 
 func show_voyage_title(title: String, subtitle: String, duration: float = 4.2) -> void:
 	var clean_title := _to_ascii(title.strip_edges())
 	var clean_sub := _to_ascii(subtitle.strip_edges())
+	if Game != null and Game.profile != null and Game.profile.has_method(&"get_ship_name"):
+		var ship_nm := _to_ascii(String(Game.profile.call(&"get_ship_name")).strip_edges())
+		if ship_nm != "" and not clean_sub.to_lower().contains(ship_nm.to_lower()) \
+				and not clean_title.to_lower().contains(ship_nm.to_lower()):
+			clean_sub = ("Aboard %s" % ship_nm) if clean_sub == "" else ("%s - Aboard %s" % [clean_sub, ship_nm])
 	if clean_title == "" and clean_sub == "":
 		dismiss_voyage_title()
 		return
@@ -472,6 +481,21 @@ func show_voyage_title(title: String, subtitle: String, duration: float = 4.2) -
 	if _voyage_card_panel != null:
 		_voyage_card_panel.modulate.a = 0.0
 		_voyage_card_panel.visible = true
+
+
+## Return the currently rendered Voyage Title Card subtitle text.
+func get_voyage_title_subtitle_text() -> String:
+	return _voyage_card_subtitle_label.text if _voyage_card_subtitle_label != null else ""
+
+
+## Return the live helm/sail telemetry pill text (e.g. "11.8 kt  |  FULL WIND").
+func get_sailing_telemetry_text() -> String:
+	return _sailing_pill_label.text if _sailing_pill_label != null else ""
+
+
+## True while the diegetic helm/sail-station telemetry pill is visible.
+func is_sailing_telemetry_visible() -> bool:
+	return _sailing_pill_panel != null and _sailing_pill_panel.visible
 
 
 ## True while the diegetic Voyage Title Card is active and visible on screen.
@@ -578,8 +602,9 @@ func _build_ui() -> void:
 	_vitals_view.name = "VitalsPips"
 	_root.add_child(_vitals_view)
 
-	# 6. Bottom-center contextual interaction prompt ribbon.
+	# 6. Bottom-center contextual interaction prompt ribbon & helm-only sailing telemetry pill.
 	_build_context_prompt()
+	_build_sailing_telemetry_pill()
 
 	# 7. Bottom-right active tool / ammo / supplies chip.
 	_build_tool_chip()
@@ -865,6 +890,35 @@ func _build_context_prompt() -> void:
 	_prompt_panel.add_child(_prompt_label)
 
 
+func _build_sailing_telemetry_pill() -> void:
+	var holder := CenterContainer.new()
+	holder.name = "SailingTrimHolder"
+	holder.anchor_left = 0.0
+	holder.anchor_right = 1.0
+	holder.anchor_top = 1.0
+	holder.anchor_bottom = 1.0
+	holder.offset_top = -64.0
+	holder.offset_bottom = -22.0
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(holder)
+
+	_sailing_pill_panel = PanelContainer.new()
+	_sailing_pill_panel.name = "SailingTrimPill"
+	_sailing_pill_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sailing_pill_panel.add_theme_stylebox_override("panel",
+		HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.90), HudIcons.COL_INK_SOFT, 2, 6, 16, 6))
+	_sailing_pill_panel.visible = false
+	holder.add_child(_sailing_pill_panel)
+
+	_sailing_pill_label = Label.new()
+	_sailing_pill_label.name = "SailingTrimText"
+	_sailing_pill_label.text = ""
+	_sailing_pill_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_sailing_pill_label.add_theme_font_size_override("font_size", 15)
+	_sailing_pill_label.add_theme_color_override("font_color", HudIcons.COL_INK)
+	_sailing_pill_panel.add_child(_sailing_pill_label)
+
+
 func _build_tool_chip() -> void:
 	_tool_panel = PanelContainer.new()
 	_tool_panel.name = "ToolChip"
@@ -1146,9 +1200,50 @@ func _process(delta: float) -> void:
 	_tick_vitals(delta)
 	_sync_damage_vignette(delta)
 	_tick_context_prompt(delta)
+	_tick_sailing_telemetry()
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
 	_tick_crosshair(delta)
+
+
+func _tick_sailing_telemetry() -> void:
+	if _sailing_pill_panel == null or _sailing_pill_label == null:
+		return
+	var on_sailing_station := false
+	if pawn != null and is_instance_valid(pawn) and not pawn.dead \
+			and pawn.station != null and is_instance_valid(pawn.station):
+		var st_kind: Variant = pawn.station.get(&"kind")
+		if st_kind is StringName and SAILING_STATION_KINDS.has(st_kind as StringName):
+			on_sailing_station = true
+	var show_pill := on_sailing_station \
+		and ship != null and is_instance_valid(ship) \
+		and not is_any_overlay_open()
+	if not show_pill:
+		_sailing_pill_panel.visible = false
+		return
+
+	var kts := maxf(0.0, ship.speed_knots())
+	var state_txt := "TRIM SAILS"
+	var ink_col := HudIcons.COL_INK_SOFT
+	if ship.anchor_down:
+		state_txt = "ANCHORED"
+	elif ship.sail_set < 0.08:
+		state_txt = "SAILS FURLED"
+	else:
+		var err := absf(angle_difference(ship.sail_trim, ship.ideal_sail_trim()))
+		if err <= 0.24:
+			state_txt = "FULL WIND"
+			ink_col = Color(0.68, 0.36, 0.04)
+		elif err <= 0.65:
+			state_txt = "GOOD TRIM"
+			ink_col = HudIcons.COL_INK
+		else:
+			state_txt = "TRIM SAILS"
+			ink_col = HudIcons.COL_INK_SOFT
+
+	_sailing_pill_label.text = "%.1f kt  |  %s" % [kts, state_txt]
+	_sailing_pill_label.add_theme_color_override("font_color", ink_col)
+	_sailing_pill_panel.visible = true
 
 
 func _tick_boss_bar(delta: float) -> void:

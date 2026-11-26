@@ -1346,9 +1346,15 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	check(main_src.contains("\"flotsam\":"), "scenes/main.gd registers shot=flotsam")
 	check(main_src.contains("\"deck_duel\":"), "scenes/main.gd registers shot=deck_duel")
 	check(main_src.contains("\"night_lighthouse\":"), "scenes/main.gd registers shot=night_lighthouse")
+	check(main_src.contains("\"whale_breach\":"), "scenes/main.gd registers shot=whale_breach")
+	check(not main_src.contains(".set_livery("), "scenes/main.gd uses CharacterVisual.set_tint (zero nonexistent set_livery calls)")
+	check(main_src.contains("b_cv.set_tint("), "shot=deck_duel tints Barnaby via CharacterVisual.set_tint")
 	check(main_src.contains("sync_cabin_renown"), "scenes/main.gd wires live sync_cabin_renown updates")
 	check(main_src.contains("flotsam_cluster.gd") and main_src.contains("flotsam_salvaged"),
 		"scenes/main.gd wires FlotsamCluster & flotsam_salvaged rewards cleanly")
+	var nameplate_src := FileAccess.get_file_as_string("res://src/ship/ship_nameplate.gd")
+	check(nameplate_src.contains("EMISSION_OP_MULTIPLY"),
+		"ship_nameplate.gd uses EMISSION_OP_MULTIPLY so dark mahogany stays rich at night")
 
 	# Verify tightened ShipBellInteractable reach (<= 1.8 m) & Ship.set_ship_name() API with zero leaks.
 	var sloop_scene := preload("res://src/ship/sloop.tscn")

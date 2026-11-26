@@ -24,10 +24,12 @@ func test_catalogue_loads() -> void:
 	for sound in [&"cannon_fire", &"hull_creak", &"sail_flap", &"sail_fill", &"rope_creak", &"capstan_clank",
 			&"wheel_creak", &"anchor_drop", &"anchor_splash", &"hold_slosh", &"bucket_splash", &"hammer_plank",
 			&"cannonball_whistle", &"hull_impact", &"splash_large", &"splash_small", &"sword_swing",
-			&"sword_clash", &"parry_ring", &"hit_flesh", &"skeleton_rattle", &"pistol_shot", &"footstep_wood",
+			&"sword_clash", &"parry_ring", &"ship_bell", &"hit_flesh", &"skeleton_rattle", &"pistol_shot", &"footstep_wood",
 			&"footstep_sand", &"footstep_water", &"chest_thump", &"coin_jingle", &"dig_sand", &"ui_tick",
-			&"thunder_near", &"thunder_far", &"seagull", &"spyglass_slide", &"lantern_click", &"grog_gulp", &"burp"]:
+			&"thunder_near", &"thunder_far", &"seagull", &"whale_call", &"spyglass_slide", &"lantern_click", &"grog_gulp", &"burp"]:
 		check(a.has_sound(sound), "catalogue should list '%s'" % sound)
+	check(a.catalogue["sfx"].has("ship_bell"), "sfx catalogue registers ship_bell")
+	check(a.catalogue["sfx"].has("whale_call"), "sfx catalogue registers whale_call")
 	for layer in ["sea_calm", "sea_rough", "wind_light", "wind_storm", "rain", "underwater", "shore_surf", "below_deck"]:
 		check(a.catalogue["ambience"].has(layer), "ambience layer '%s'" % layer)
 	for m in ["shanty", "sailing", "combat", "sail_day", "sail_night", "storm"]:
@@ -99,6 +101,12 @@ func test_play_sfx() -> void:
 	if spatial is AudioStreamPlayer3D:
 		check_near((spatial as AudioStreamPlayer3D).global_position.x, 50.0, 0.001)
 		check((spatial as AudioStreamPlayer3D).max_distance >= 1000.0, "cannon carries far")
+	var bell_p: Node = a.play_sfx(&"ship_bell", Vector3(12, 2, -8))
+	check(bell_p is AudioStreamPlayer3D and (bell_p as AudioStreamPlayer3D).max_distance >= 120.0,
+		"ship_bell plays spatially across deck & harbour")
+	var whale_p: Node = a.play_sfx(&"whale_call", Vector3(45, -4, -90))
+	check(whale_p is AudioStreamPlayer3D and (whale_p as AudioStreamPlayer3D).max_distance >= 300.0,
+		"whale_call plays spatially with deep-ocean carry distance")
 	# more calls than pool slots: voices are stolen, never an error
 	for i in 80:
 		a.play_sfx(&"footstep_wood", Vector3(i, 0, 0))

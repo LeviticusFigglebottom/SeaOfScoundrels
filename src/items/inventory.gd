@@ -1096,7 +1096,7 @@ func _scan_spyglass_sighting() -> void:
 			best_pos = target_pos
 			best_label = "Abyssal Leviathan"
 
-	# 3. Living sea wildlife: Dolphin Pods & Ocean Sharks.
+	# 3. Living sea wildlife: Dolphin Pods, Humpback Whales, Giant Manta Rays & Ocean Sharks.
 	var max_dolphin_dist := 1200.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"dolphins"):
 		if not (node is Node3D):
@@ -1112,6 +1112,40 @@ func _scan_spyglass_sighting() -> void:
 			best_dist = dist
 			best_pos = target_pos
 			best_label = "Dolphin Pod"
+
+	var max_whale_dist := 520.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"whales"):
+		if not (node is Node3D):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 2.5
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 12.0 or dist > max_whale_dist:
+			continue
+		var score := to.dot(dir) / dist
+		var req := 0.978 if best_label == "" else best_score
+		if score >= req and (best_label == "" or score > best_score):
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Humpback Whale"
+
+	var max_manta_dist := 120.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"manta_rays"):
+		if not (node is Node3D):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 0.4
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 4.0 or dist > max_manta_dist:
+			continue
+		var score := to.dot(dir) / dist
+		var req := 0.972 if best_label == "" else best_score
+		if score >= req and (best_label == "" or score > best_score):
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Giant Manta Ray"
 
 	var max_shark_dist := 900.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"sharks"):

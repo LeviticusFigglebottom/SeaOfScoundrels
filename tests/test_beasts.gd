@@ -1007,6 +1007,111 @@ func test_manta_ray_sculpted_wing_glide_submerged_and_teardown() -> void:
 		"MantaRay releases all static mesh & material caches cleanly to null")
 
 
+func test_ocean_whale_sculpted_breach_cycle_and_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	var whale_a := OceanWhale.spawn_breach(_root, Vector3(0.0, 0.0, -40.0), 0.2)
+	whale_a.auto_despawn = false
+	var whale_b := OceanWhale.spawn_breach(_root, Vector3(36.0, 0.0, -45.0), -0.3)
+	whale_b.auto_despawn = false
+
+	check(whale_a != null and whale_b != null, "OceanWhale.spawn_breach spawns whales cleanly")
+	check(whale_a.is_in_group(&"whales") and whale_a.is_in_group(&"beasts"),
+		"OceanWhale registers in whales and beasts groups")
+
+	# 1. Verify zero raw primitives, finite unit normals, sRGB clearcoat skin & static mesh sharing across 2 whales!
+	var raw_prims := 0
+	var bad_normals := 0
+	var total_tris := 0
+	var srgb_missing := 0
+	var part_names: Array[String] = ["BodyMesh", "LeftFlipperMesh", "RightFlipperMesh", "TailFlukeMesh"]
+	var part_summary: PackedStringArray = []
+
+	for part_nm in part_names:
+		var mi_a := whale_a.find_child(part_nm, true, false) as MeshInstance3D
+		var mi_b := whale_b.find_child(part_nm, true, false) as MeshInstance3D
+		check(mi_a != null and mi_b != null, "both whales build sculpted %s" % part_nm)
+		if mi_a == null:
+			continue
+		if mi_a.mesh is PrimitiveMesh:
+			raw_prims += 1
+		if mi_b != null:
+			check_eq(mi_a.mesh, mi_b.mesh, "whales share static cached ArrayMesh for %s" % part_nm)
+		check_eq(mi_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_ON,
+			"%s casts dramatic sunlit shadow on sea" % part_nm)
+		check_near(mi_a.visibility_range_end, 420.0, 0.1, "%s sets visibility_range_end = 420 m" % part_nm)
+		var mat := mi_a.material_override as StandardMaterial3D
+		if mat == null or not mat.vertex_color_is_srgb:
+			srgb_missing += 1
+		var am := mi_a.mesh as ArrayMesh
+		if am != null:
+			var p_tris := 0
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				p_tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+			total_tris += p_tris
+			part_summary.append("%s=%d" % [part_nm, p_tris])
+
+	print("    OceanWhale sculpted meshes: %s (total=%d tris)" % [", ".join(part_summary), total_tris])
+	check_eq(raw_prims, 0, "OceanWhale contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all sculpted OceanWhale normals are finite unit vectors")
+	check_eq(srgb_missing, 0, "OceanWhale material enables vertex_color_is_srgb = true")
+	check(total_tris >= 900 and total_tris <= 1600,
+		"OceanWhale total sculpted triangles within target budget (%d tris)" % total_tris)
+
+	# 2. Step deterministically through full 6-phase breach cycle: APPROACH -> BREACH_RISE -> APEX_TWIST -> SPLASH_REENTRY -> SUBMERGE -> DONE!
+	var seen_phases: Dictionary = {}
+	var splash_positions: Array[Vector3] = []
+	whale_a.whale_splashed.connect(func(wp: Vector3) -> void: splash_positions.append(wp))
+
+	var peak_rel_y := -INF
+	var max_abs_roll := 0.0
+	seen_phases[whale_a.phase] = true
+	for _i in 45:
+		whale_a.step_breach(0.20)
+		seen_phases[whale_a.phase] = true
+		var sea_y := Sea.height(whale_a.global_position.x, whale_a.global_position.z)
+		peak_rel_y = maxf(peak_rel_y, whale_a.global_position.y - sea_y)
+		if whale_a.phase == OceanWhale.Phase.APEX_TWIST and whale_a.body_root != null:
+			max_abs_roll = maxf(max_abs_roll, absf(whale_a.body_root.rotation.z))
+
+	for req_phase: OceanWhale.Phase in [
+		OceanWhale.Phase.APPROACH,
+		OceanWhale.Phase.BREACH_RISE,
+		OceanWhale.Phase.APEX_TWIST,
+		OceanWhale.Phase.SPLASH_REENTRY,
+		OceanWhale.Phase.SUBMERGE,
+		OceanWhale.Phase.DONE,
+	]:
+		check(seen_phases.has(req_phase), "OceanWhale steps cleanly through phase %d" % int(req_phase))
+	check(peak_rel_y > 4.5, "OceanWhale crests high above Sea.height() during breach (peak=%.2f m)" % peak_rel_y)
+	check(max_abs_roll > 0.70, "OceanWhale executes twisting roll through APEX_TWIST (max_roll=%.2f rad)" % max_abs_roll)
+	check_eq(splash_positions.size(), 1, "OceanWhale emits whale_splashed exactly once on splash re-entry")
+
+	# 3. Verify force_breach_apex() positions whale majestically airborne for showcase captures!
+	whale_b.force_breach_apex()
+	var apex_sea := Sea.height(whale_b.global_position.x, whale_b.global_position.z)
+	check_eq(whale_b.phase, OceanWhale.Phase.APEX_TWIST, "force_breach_apex sets Phase.APEX_TWIST")
+	check(whale_b.global_position.y - apex_sea >= 5.0,
+		"force_breach_apex places whale soaring >= 5.0 m above Sea.height() (got %.2f m)" % (whale_b.global_position.y - apex_sea))
+
+	# 4. Zero-leak teardown releases ALL static caches cleanly to null when last OceanWhale exits tree!
+	await _end()
+	check_eq(OceanWhale._active_whales, 0, "all OceanWhales exited cleanly")
+	check(OceanWhale._body_mesh == null and OceanWhale._flipper_l_mesh == null \
+			and OceanWhale._flipper_r_mesh == null and OceanWhale._fluke_mesh == null \
+			and OceanWhale._whale_mat == null and OceanWhale._spray_tex == null,
+		"OceanWhale releases all static mesh, material & spray caches cleanly to null")
+
+
+
 
 
 
