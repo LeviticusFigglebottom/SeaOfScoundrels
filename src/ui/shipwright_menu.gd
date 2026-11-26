@@ -368,14 +368,14 @@ func _input(event: InputEvent) -> void:
 func _build_ui() -> void:
 	_backdrop = ColorRect.new()
 	_backdrop.name = "ShipwrightBackdrop"
-	_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_backdrop.color = Color(0.05, 0.04, 0.02, 0.58)
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
 	_backdrop.theme = _theme
 	add_child(_backdrop)
 
 	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 72)
 	margin.add_theme_constant_override("margin_right", 72)
 	margin.add_theme_constant_override("margin_top", 44)
@@ -463,7 +463,7 @@ func _build_ui() -> void:
 func _make_scroll_page(parent: Control, node_name: String, tab_id: StringName) -> VBoxContainer:
 	var scroll := ScrollContainer.new()
 	scroll.name = node_name
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	parent.add_child(scroll)
 	_tab_pages[tab_id] = scroll
@@ -495,12 +495,12 @@ func _rebuild_voyages_tab() -> void:
 		bv.add_theme_constant_override("separation", 4)
 		banner.add_child(bv)
 		var hdr := Label.new()
-		hdr.text = "ACTIVE VOYAGE: %s" % String(av.get("title", "Voyage"))
+		hdr.text = _to_ascii("ACTIVE VOYAGE: %s" % String(av.get("title", "Voyage")))
 		hdr.add_theme_font_size_override("font_size", 17)
 		hdr.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
 		bv.add_child(hdr)
 		var obj := Label.new()
-		obj.text = voyage_manager.get_current_objective()
+		obj.text = _to_ascii(voyage_manager.get_current_objective())
 		obj.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		obj.add_theme_font_size_override("font_size", 14)
 		bv.add_child(obj)
@@ -596,21 +596,21 @@ func _build_voyage_card(voyage: Dictionary, is_story: bool) -> PanelContainer:
 
 	var title_lbl := Label.new()
 	var prefix := "[STORY CH.%d] " % int(voyage.get("story_chapter", 1)) if is_story else ""
-	title_lbl.text = "%s%s" % [prefix, String(voyage.get("title", "Voyage"))]
+	title_lbl.text = _to_ascii("%s%s" % [prefix, String(voyage.get("title", "Voyage"))])
 	title_lbl.add_theme_font_size_override("font_size", 18)
 	title_lbl.add_theme_color_override("font_color", HudIcons.COL_CRIMSON if is_story else HudIcons.COL_INK)
 	info_v.add_child(title_lbl)
 
 	var meta_lbl := Label.new()
-	meta_lbl.text = "%s  |  %s  |  Destination: %s  |  Reward: ~%d Gold, +%d Renown" % [
-		comp_name, shape_name, island_name, est_gold, est_renown]
+	meta_lbl.text = _to_ascii("%s  |  %s  |  Destination: %s  |  Reward: ~%d Gold, +%d Renown" % [
+		comp_name, shape_name, island_name, est_gold, est_renown])
 	meta_lbl.add_theme_font_size_override("font_size", 13)
 	meta_lbl.add_theme_color_override("font_color", Color(0.45, 0.30, 0.10))
 	info_v.add_child(meta_lbl)
 
 	if briefing != "":
 		var brief_lbl := Label.new()
-		brief_lbl.text = briefing
+		brief_lbl.text = _to_ascii(briefing)
 		brief_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		brief_lbl.add_theme_font_size_override("font_size", 13)
 		brief_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
@@ -666,7 +666,7 @@ func _rebuild_shipwright_tab() -> void:
 		cv.add_child(cname)
 
 		var rank_lbl := Label.new()
-		rank_lbl.text = "Rank %d — %s" % [int(prog["rank"]), String(prog["title"])]
+		rank_lbl.text = _to_ascii("Rank %d -- %s" % [int(prog["rank"]), String(prog["title"])])
 		rank_lbl.add_theme_font_size_override("font_size", 14)
 		rank_lbl.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
 		cv.add_child(rank_lbl)
@@ -890,7 +890,16 @@ func _rebuild_settings_tab() -> void:
 
 func _set_status(msg: String) -> void:
 	if _status_label != null:
-		_status_label.text = msg
+		_status_label.text = _to_ascii(msg)
+
+
+static func _to_ascii(text: String) -> String:
+	var out := text.replace(char(0x2014), "--").replace(char(0x2013), "-")
+	out = out.replace(char(0x00B7), "|").replace(char(0x2022), "*")
+	out = out.replace(char(0x2018), "'").replace(char(0x2019), "'")
+	out = out.replace(char(0x201C), "\"").replace(char(0x201D), "\"")
+	out = out.replace(char(0x2026), "...")
+	return out
 
 
 static func _make_card_panel(bg: Color, border: Color) -> PanelContainer:

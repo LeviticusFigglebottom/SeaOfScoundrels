@@ -11,8 +11,9 @@ const SHADER := preload("res://src/ocean/crest_spray.gdshader")
 const FOAM_TEX := preload("res://assets/generated/ocean/foam.png")
 
 const QUALITY_AMOUNT := [0, 128, 256]
-const QUALITY_PROBES := [0, 22, 38]
+const QUALITY_PROBES := [0, 28, 46]
 const QUALITY_RANGE := [0.0, 62.0, 86.0]
+const MIN_SPRAY_DEPTH := 5.0
 
 var material: ShaderMaterial
 var particles: GPUParticles3D
@@ -110,7 +111,7 @@ func update(delta: float, cam: Camera3D, submerged: bool, crest_start: float) ->
 		return
 
 	# Cluster emission budget scales smoothly with quality, wind speed, and storminess.
-	var cluster_rate := lerpf(5.0, 20.0, storm) * wind_factor * (0.60 if _quality == 1 else 1.0)
+	var cluster_rate := lerpf(7.5, 22.0, storm) * wind_factor * (0.60 if _quality == 1 else 1.0)
 	if not _warmed:
 		_warmed = true
 		_emit_accum = minf(cluster_rate * 0.35, 5.0)
@@ -130,9 +131,22 @@ func update(delta: float, cam: Camera3D, submerged: bool, crest_start: float) ->
 
 	var probes: int = QUALITY_PROBES[_quality]
 	var max_dist: float = QUALITY_RANGE[_quality]
-	# Strict breaking-crest gate: only genuine steep pinched peaks throw spray.
-	var jac_thr := minf(crest_start - 0.04, 0.86)
-	var min_h := hs * 0.34
+	# Collect nearby islands once per frame for strict depth >= 5.0 m lagoon protection.
+	var nearby_islands: Array[Island] = []
+	var tree := get_tree()
+	if tree != null:
+		for node in tree.get_nodes_in_group(&"islands"):
+			var isl := node as Island
+			if isl == null:
+				continue
+			var reach := isl.seabed_radius + max_dist + 16.0
+			var dx := isl.global_position.x - cp.x
+			var dz := isl.global_position.z - cp.z
+			if dx * dx + dz * dz <= reach * reach:
+				nearby_islands.append(isl)
+	# Breaking-crest gate: steep pinched fair-weather & storm ridges throw backlit mist.
+	var jac_thr := minf(crest_start, 0.90)
+	var min_h := hs * 0.24
 	var clusters_done := 0
 	var emit_flags := (
 		GPUParticles3D.EMIT_FLAG_POSITION
@@ -157,6 +171,8 @@ func update(delta: float, cam: Camera3D, submerged: bool, crest_start: float) ->
 			continue
 		var wp := Vector3(rx + dj.x, dj.y + 0.08, rz + dj.z)
 		if _ocean != null and _ocean.call(&"is_point_in_dry_hull", wp):
+			continue
+		if _is_shallow_lagoon(wp, nearby_islands):
 			continue
 		var pinch := clampf((jac_thr - dj.w) / maxf(jac_thr - 0.56, 0.12), 0.0, 1.0)
 		var orb := Sea.orbital_velocity(rx, rz)
@@ -184,11 +200,21 @@ func update(delta: float, cam: Camera3D, submerged: bool, crest_start: float) ->
 				_rng.randf_range(0.80, 2.20),
 				storm
 			) * lerpf(0.78, 1.18, pinch)
-			var strength := lerpf(0.30, 0.62, storm) * lerpf(0.70, 1.10, pinch) * clampf(wind_factor, 0.55, 1.20)
+			var strength := lerpf(0.48, 0.78, storm) * lerpf(0.75, 1.12, pinch) * clampf(wind_factor, 0.55, 1.20)
 			var mist_mix := lerpf(0.14, 0.48, storm) * _rng.randf_range(0.6, 1.25)
 			var xform := Transform3D(Basis.from_scale(Vector3.ONE * sz), wisp_pos)
-			var col := Color(_rng.randf(), clampf(strength, 0.14, 0.72), clampf(mist_mix, 0.0, 1.0), 1.0)
+			var col := Color(_rng.randf(), clampf(strength, 0.18, 0.85), clampf(mist_mix, 0.0, 1.0), 1.0)
 			particles.emit_particle(xform, vel, col, Color(0.0, 0.0, 0.0, 0.0), emit_flags)
 		clusters_done += 1
 
 	_emit_accum = maxf(_emit_accum - float(clusters_done), 0.0)
+
+
+static func _is_shallow_lagoon(wp: Vector3, islands: Array[Island]) -> bool:
+	for isl in islands:
+		var dx := wp.x - isl.global_position.x
+		var dz := wp.z - isl.global_position.z
+		var r := isl.seabed_radius + 4.0
+		if dx * dx + dz * dz <= r * r and isl.seabed_depth(wp) < MIN_SPRAY_DEPTH:
+			return true
+	return false

@@ -284,13 +284,14 @@ static func _build_pistol() -> Node3D:
 		var c: Vector3 = s[0]
 		var rx: float = s[1]
 		var ry: float = s[2]
+		# Ring wound so dT (-Z) x dU points strictly outward on all side walls & end caps.
 		stock_rings.append([
 			c + Vector3(0.0, ry, 0.0),
-			c + Vector3(rx, ry * 0.45, 0.0),
-			c + Vector3(rx * 0.9, -ry * 0.55, 0.0),
-			c + Vector3(0.0, -ry, 0.0),
-			c + Vector3(-rx * 0.9, -ry * 0.55, 0.0),
 			c + Vector3(-rx, ry * 0.45, 0.0),
+			c + Vector3(-rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(0.0, -ry, 0.0),
+			c + Vector3(rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(rx, ry * 0.45, 0.0),
 		])
 	root.add_child(_make_mesh_node("Stock", _loft_mesh(stock_rings, true), _make_mat(COL_WALNUT, 0.62, 0.04)))
 
@@ -377,29 +378,58 @@ static func _build_compass() -> Node3D:
 		ring_pts.append(Vector3(cos(a) * 0.018, -0.004, 0.090 + sin(a) * 0.018))
 	_append_tube(st_brass, ring_pts, 0.004, 6, false)
 	st_brass.generate_normals()
-	root.add_child(_make_mesh_node("BrassCase", st_brass.commit(), _make_mat(COL_BRASS, 0.25, 0.88)))
+	root.add_child(_make_mesh_node("BrassCase", st_brass.commit(), _make_mat(COL_BRASS, 0.36, 0.82)))
 
-	# Ivory compass face plate with raised cardinal notches.
+	# Warm antique parchment dial face with high roughness (0.88) to eliminate white specular glare.
 	var dial_mesh := _lathe_mesh([
 		Vector2(0.0, 0.004),
 		Vector2(0.058, 0.004),
 		Vector2(0.058, 0.008),
 		Vector2(0.0, 0.008),
 	], 18)
-	root.add_child(_make_mesh_node("DialFace", dial_mesh, _make_mat(COL_IVORY, 0.72, 0.02)))
+	root.add_child(_make_mesh_node("DialFace", dial_mesh, _make_mat(Color(0.76, 0.67, 0.49), 0.88, 0.0)))
 
-	# Cardinal ink markers on the dial (N/E/S/W ticks).
+	# High-contrast dark navy-ink dial rings, cardinal/intercardinal ticks & wind-rose lines.
 	var st_ticks := SurfaceTool.new()
 	st_ticks.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in 8:
+	# Outer graduated bezel ink ring & inner rose ring.
+	_append_lathe(st_ticks, [
+		Vector2(0.0525, 0.0082),
+		Vector2(0.0565, 0.0082),
+		Vector2(0.0565, 0.0095),
+		Vector2(0.0525, 0.0095),
+	], 24)
+	_append_lathe(st_ticks, [
+		Vector2(0.024, 0.0082),
+		Vector2(0.0265, 0.0082),
+		Vector2(0.0265, 0.0092),
+		Vector2(0.024, 0.0092),
+	], 18)
+	# E/S/W major ticks, NE/SE/SW/NW minor ticks, and delicate inner rose cross-bars.
+	for i in range(1, 8):
 		var a := float(i) * PI * 0.25
-		var len_t := 0.014 if (i % 2 == 0) else 0.008
-		var wid_t := 0.0045 if (i % 2 == 0) else 0.0028
-		var rad := 0.049
-		var xf := Transform3D(Basis(Vector3.UP, a), Vector3(sin(a) * rad, 0.0095, -cos(a) * rad))
-		_append_beveled_box(st_ticks, Vector3(wid_t, 0.0025, len_t), 0.0005, xf)
+		var is_cardinal := (i % 2 == 0)
+		var len_t := 0.0145 if is_cardinal else 0.0095
+		var wid_t := 0.0048 if is_cardinal else 0.0030
+		var rad := 0.0465
+		var xf := Transform3D(Basis(Vector3.UP, a), Vector3(sin(a) * rad, 0.0094, -cos(a) * rad))
+		_append_beveled_box(st_ticks, Vector3(wid_t, 0.0022, len_t), 0.0004, xf)
+	for i in 4:
+		var a := float(i) * PI * 0.5
+		var xf := Transform3D(Basis(Vector3.UP, a), Vector3(0.0, 0.0089, 0.0))
+		_append_beveled_box(st_ticks, Vector3(0.0022, 0.0014, 0.050), 0.0003, xf)
 	st_ticks.generate_normals()
-	root.add_child(_make_mesh_node("DialTicks", st_ticks.commit(), _make_mat(COL_BRONZE, 0.45, 0.65)))
+	root.add_child(_make_mesh_node("DialTicks", st_ticks.commit(), _make_mat(Color(0.11, 0.14, 0.22), 0.78, 0.08)))
+
+	# Bold deep-crimson North cardinal wedge & flanking chevron at -Z rim.
+	var st_north := SurfaceTool.new()
+	st_north.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_beveled_box(st_north, Vector3(0.0072, 0.0026, 0.0165), 0.0005,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0096, -0.0455)))
+	_append_beveled_box(st_north, Vector3(0.0135, 0.0022, 0.0042), 0.0004,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0094, -0.0510)))
+	st_north.generate_normals()
+	root.add_child(_make_mesh_node("NorthMarker", st_north.commit(), _make_mat(Color(0.72, 0.10, 0.09), 0.72, 0.05)))
 
 	# Live rotating `Needle` node (local -Z is the crimson North arrow!).
 	var needle := Node3D.new()
@@ -407,29 +437,40 @@ static func _build_compass() -> Node3D:
 	needle.position = Vector3(0.0, 0.013, 0.0)
 	root.add_child(needle)
 
-	# North crimson diamond half (-Z).
+	# North crimson diamond half (-Z) with rich saturated paint contrast.
 	var n_st := SurfaceTool.new()
 	n_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	_append_diamond_needle(n_st, -0.048, 0.0, 0.0095, 0.004)
 	n_st.generate_normals()
-	needle.add_child(_make_mesh_node("NorthTip", n_st.commit(), _make_mat(COL_CRIMSON, 0.35, 0.25, COL_CRIMSON * 0.35, 0.4)))
+	needle.add_child(_make_mesh_node("NorthTip", n_st.commit(),
+		_make_mat(Color(0.74, 0.08, 0.07), 0.42, 0.16, Color(0.55, 0.06, 0.05), 0.14)))
 
-	# South gleaming gold tail (+Z) + brass center cap pin.
+	# South blued-steel counterweight tail (+Z) for unmistakable contrast against parchment dial.
 	var s_st := SurfaceTool.new()
 	s_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	_append_diamond_needle(s_st, 0.042, 0.0, 0.0085, 0.0038)
-	_append_lathe(s_st, [Vector2(0.0, -0.002), Vector2(0.0075, -0.002), Vector2(0.0075, 0.004), Vector2(0.0, 0.0055)], 10)
 	s_st.generate_normals()
-	needle.add_child(_make_mesh_node("SouthTail", s_st.commit(), _make_mat(COL_GOLD_BRIGHT, 0.24, 0.85)))
+	needle.add_child(_make_mesh_node("SouthTail", s_st.commit(), _make_mat(Color(0.16, 0.21, 0.30), 0.34, 0.72)))
 
-	# Translucent curved glass crystal dome.
+	# Gleaming brass center pivot cap.
+	var pin_mesh := _lathe_mesh([
+		Vector2(0.0, -0.002),
+		Vector2(0.0075, -0.002),
+		Vector2(0.0075, 0.004),
+		Vector2(0.0, 0.0055),
+	], 10)
+	needle.add_child(_make_mesh_node("CenterPin", pin_mesh, _make_mat(COL_GOLD_BRIGHT, 0.28, 0.86)))
+
+	# Ultra-clear subtle curved watch crystal (low alpha & specular so dial never washes out).
 	var glass_mesh := _lathe_mesh([
 		Vector2(0.058, 0.016),
 		Vector2(0.044, 0.022),
 		Vector2(0.022, 0.025),
 		Vector2(0.0, 0.026),
 	], 16)
-	root.add_child(_make_mesh_node("CrystalDome", glass_mesh, _make_mat(COL_CRYSTAL, 0.08, 0.1, Color.BLACK, 0.0, true)))
+	var crystal_mat := _make_mat(Color(0.88, 0.93, 0.96, 0.08), 0.22, 0.04, Color.BLACK, 0.0, true)
+	crystal_mat.metallic_specular = 0.22
+	root.add_child(_make_mesh_node("CrystalDome", glass_mesh, crystal_mat))
 	return root
 
 
@@ -476,8 +517,9 @@ static func _build_spyglass() -> Node3D:
 
 	var st_tubes := SurfaceTool.new()
 	st_tubes.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Stage 1 mid draw tube.
+	# Stage 1 mid draw tube (starts at y = -0.06 inside Stage 0 so full extension has zero gap).
 	_append_lathe(st_tubes, [
+		Vector2(0.025, -0.06),
 		Vector2(0.027, 0.115),
 		Vector2(0.028, 0.255),
 		Vector2(0.033, 0.260),
@@ -1053,6 +1095,7 @@ static func _append_loft(st: SurfaceTool, rings: Array, close_caps: bool = true)
 			_add_quad(st, r1[ni], r1[i], r0[i], r0[ni],
 				Vector2(u1, v1), Vector2(u0, v1), Vector2(u0, v0), Vector2(u1, v0))
 	if close_caps:
+		# Bottom cap outward normal = -dT; top cap outward normal = +dT (CW from outside).
 		var first: Array = rings[0]
 		var c0 := Vector3.ZERO
 		for p: Vector3 in first:
@@ -1061,8 +1104,8 @@ static func _append_loft(st: SurfaceTool, rings: Array, close_caps: bool = true)
 		for i in ring_len:
 			var ni := (i + 1) % ring_len
 			st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c0)
-			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(first[i])
 			st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(first[ni])
+			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(first[i])
 		var last: Array = rings[rings.size() - 1]
 		var c1 := Vector3.ZERO
 		for p: Vector3 in last:
@@ -1071,8 +1114,8 @@ static func _append_loft(st: SurfaceTool, rings: Array, close_caps: bool = true)
 		for i in ring_len:
 			var ni := (i + 1) % ring_len
 			st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c1)
-			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni])
 			st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(last[i])
+			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni])
 
 
 static func _append_tube(st: SurfaceTool, points: Array[Vector3], radius: float, segs: int = 8, close_caps: bool = true) -> void:
@@ -1118,8 +1161,8 @@ static func _append_beveled_box(st: SurfaceTool, size: Vector3, bevel: float, xf
 		var y: float = ys[k]
 		var rx: float = xs[k]
 		var rz: float = zs[k]
-		var bx: float = maxf(rx - b * 0.55, rx * 0.72) if (k == 1 or k == 2) else rx
-		var bz: float = maxf(rz - b * 0.55, rz * 0.72) if (k == 1 or k == 2) else rz
+		var bx: float = maxf(rx - b * 0.55, rx * 0.72) if (k == 1 or k == 2) else maxf(rx - b * 0.35, rx * 0.80)
+		var bz: float = maxf(rz - b * 0.55, rz * 0.72) if (k == 1 or k == 2) else maxf(rz - b * 0.35, rz * 0.80)
 		var ring: Array = [
 			xform * Vector3(bx, y, -rz),
 			xform * Vector3(rx, y, -bz),

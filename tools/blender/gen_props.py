@@ -56,11 +56,15 @@ C_CHAR = srgb('#231d19')
 C_TRUNK_DARK = srgb('#66462b')
 C_TRUNK_LIGHT = srgb('#a07b51')
 C_COCONUT = srgb('#5b3a1c')
-C_LEAF_DEEP = srgb('#236620')
-C_LEAF_MID = srgb('#3f8e25')
-C_LEAF_SUN = srgb('#7cb52f')
+C_LEAF_DEEP = srgb('#1b6826')
+C_LEAF_MID = srgb('#399b29')
+C_LEAF_SUN = srgb('#9bd12f')
 C_FLOWER = srgb('#e64527')
 
+C_STONE_PALE = srgb('#f7eed8')
+C_STONE_WARM = srgb('#dfb882')
+C_STONE_SHADE = srgb('#ab9b86')
+C_SEA_MOSS = srgb('#4f6344')
 C_STONE_LIGHT = srgb('#a69b86')
 C_STONE_MID = srgb('#7a7265')
 C_STONE_DARK = srgb('#4f4b46')
@@ -70,6 +74,14 @@ C_SAND = srgb('#cbb076')
 C_SAND_DARK = srgb('#937847')
 C_THATCH = srgb('#c99d4a')
 C_SHINGLE = srgb('#68412b')
+C_CEDAR_PALETTE = (
+    srgb('#6b422a'),
+    srgb('#7e4b2d'),
+    srgb('#8f4f32'),
+    srgb('#5f3d2b'),
+    srgb('#985f3b'),
+    srgb('#76462e'),
+)
 C_WHITE = (1.0, 1.0, 1.0)
 
 SU, SV = 1.0 / 1.8, 1.0 / 0.9
@@ -749,31 +761,32 @@ def _add_palm_frond(mb, crown, azimuth, pitch_deg, length, width, droop, tier_ti
             mb.fp(q, 'foliage', stem_col, fwd, p0 - up, smooth=True, uv2=[u0, u0, u1, u1])
 
     # Paired arched serrated leaflet blades along left and right sides of the midrib
+    frond_shift = rng.uniform(-0.08, 0.10)
+    base_tier = max(0.0, min(1.0, tier_tint * 0.88 + frond_shift))
     for i in range(segs):
         t0 = i / float(segs)
         t1 = (i + 1) / float(segs)
-        tm = 0.5 * (t0 + t1)
-        # Envelope: narrow at stem base, lush and wide in middle, pointed at tip
-        env0 = sin(pi * pow(max(0.03, t0), 0.78))
-        env1 = sin(pi * pow(min(0.99, t1), 0.78))
+        # Envelope: narrow at stem base, lush and wide in middle, sweeping to pointed tip
+        env0 = sin(pi * pow(max(0.03, t0), 0.72))
+        env1 = sin(pi * pow(min(0.99, t1), 0.72))
         bw0 = width * env0
         bw1 = width * env1
         # Slight notch between leaflet clusters for unmistakable palm silhouette
-        notch = 0.80 if (i % 2 == 1 and 1 <= i <= segs - 2) else 1.0
+        notch = 0.82 if (i % 2 == 1 and 1 <= i <= segs - 2) else 1.0
         p0, p1 = pts[i], pts[i + 1]
         tan = (p1 - p0).normalized()
         bn = tan.cross(side).normalized()  # local frond up
         w_base0 = pow(t0, 1.35)
         w_base1 = pow(t1, 1.35)
-        # Colour gradient: rich deep emerald at crown -> sunlit vibrant lime-yellow at frond tips
-        c0 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, tier_tint), C_LEAF_SUN, pow(t0, 1.2)), rng, 0.05, 0.02)
-        c1 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, tier_tint), C_LEAF_SUN, pow(t1, 1.2)), rng, 0.05, 0.02)
+        # Rich sunlit emerald-to-chartreuse tropical gradient from crown to drooping tips
+        c0 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, base_tier), C_LEAF_SUN, pow(t0, 1.05)), rng, 0.06, 0.03)
+        c1 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, base_tier), C_LEAF_SUN, pow(t1, 1.05)), rng, 0.06, 0.03)
         for sgn in (-1.0, 1.0):
             # Folded V-profile blade (inner rib -> arched mid -> drooping tip edge)
-            m0 = p0 + side * (sgn * bw0 * 0.52) + bn * (0.09 * bw0)
-            m1 = p1 + side * (sgn * bw1 * 0.52 * notch) + bn * (0.09 * bw1)
-            e0 = p0 + side * (sgn * bw0) - bn * (0.24 * bw0) + fwd * (0.10 * bw0)
-            e1 = p1 + side * (sgn * bw1 * notch) - bn * (0.24 * bw1) + fwd * (0.10 * bw1)
+            m0 = p0 + side * (sgn * bw0 * 0.54) + bn * (0.11 * bw0)
+            m1 = p1 + side * (sgn * bw1 * 0.54 * notch) + bn * (0.11 * bw1)
+            e0 = p0 + side * (sgn * bw0) - bn * (0.28 * bw0) + fwd * (0.11 * bw0)
+            e1 = p1 + side * (sgn * bw1 * notch) - bn * (0.28 * bw1) + fwd * (0.11 * bw1)
             u_in0 = (min(1.0, w_base0), phase)
             u_in1 = (min(1.0, w_base1), phase)
             u_mid0 = (min(1.0, w_base0 * 0.92 + 0.08), phase)
@@ -782,9 +795,9 @@ def _add_palm_frond(mb, crown, azimuth, pitch_deg, length, width, droop, tier_ti
             u_out1 = (min(1.0, w_base1 * 0.85 + 0.15), phase)
             # Inner blade quad
             mb.fp([p0, m0, m1, p1], 'foliage', [c0, c0, c1, c1], fwd, None, smooth=True, uv2=[u_in0, u_mid0, u_mid1, u_in1])
-            # Outer drooping blade quad (slightly brighter sunlit tip)
-            c0_tip = mix(c0, C_LEAF_SUN, 0.25)
-            c1_tip = mix(c1, C_LEAF_SUN, 0.30)
+            # Outer drooping blade quad (sunlit chartreuse-emerald edge catch)
+            c0_tip = mix(c0, C_LEAF_SUN, 0.32)
+            c1_tip = mix(c1, C_LEAF_SUN, 0.42)
             mb.fp([m0, e0, e1, m1], 'foliage', [c0, c0_tip, c1_tip, c1], fwd, None, smooth=True, uv2=[u_mid0, u_out0, u_out1, u_mid1])
 
 def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count, seed_off):
@@ -851,28 +864,39 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
         ccol = jit(mix(C_COCONUT, C_LEAF_DEEP, 0.15 if ci % 3 == 0 else 0.0), rng, 0.08, 0.02)
         ellipsoid(mb_trunk, cpos, (0.14, 0.17, 0.14), 'paint', ccol, 7, 5, R('Z', rng.uniform(-25, 25)))
 
-    # Layered tropical palm fronds (lower sweeping tier + upper sunlit crown tier)
+    # Lush 3-tier tropical palm crown (~35% wider reach & fuller drooping silhouette)
     lower_n = frond_count // 2 + 1
     upper_n = frond_count - lower_n
     for i in range(lower_n):
         az = i * (2.0 * pi / lower_n) + rng.uniform(-0.18, 0.18)
         _add_palm_frond(
-            mb_fronds, crown + Vector((0, 0.04, 0)), az,
-            pitch_deg=rng.uniform(14.0, 24.0),
-            length=rng.uniform(3.2, 3.9),
-            width=rng.uniform(0.76, 0.92),
-            droop=rng.uniform(0.46, 0.56),
-            tier_tint=0.25, phase=rng.random(), rng=rng
+            mb_fronds, crown + Vector((0, 0.02, 0)), az,
+            pitch_deg=rng.uniform(14.0, 26.0),
+            length=rng.uniform(4.35, 5.25),
+            width=rng.uniform(1.04, 1.26),
+            droop=rng.uniform(0.50, 0.62),
+            tier_tint=0.22, phase=rng.random(), rng=rng
         )
     for i in range(upper_n):
-        az = (i + 0.5) * (2.0 * pi / upper_n) + rng.uniform(-0.2, 0.2)
+        az = (i + 0.5) * (2.0 * pi / upper_n) + rng.uniform(-0.20, 0.20)
         _add_palm_frond(
             mb_fronds, crown + Vector((0, 0.16, 0)), az,
-            pitch_deg=rng.uniform(34.0, 48.0),
-            length=rng.uniform(2.5, 3.2),
-            width=rng.uniform(0.68, 0.84),
-            droop=rng.uniform(0.38, 0.48),
-            tier_tint=0.80, phase=rng.random(), rng=rng
+            pitch_deg=rng.uniform(35.0, 50.0),
+            length=rng.uniform(3.45, 4.30),
+            width=rng.uniform(0.92, 1.14),
+            droop=rng.uniform(0.40, 0.50),
+            tier_tint=0.78, phase=rng.random(), rng=rng
+        )
+    # Sunlit chartreuse-emerald young crown shoots for a rich, full canopy heart
+    for i in range(3):
+        az = i * (2.0 * pi / 3.0) + rng.uniform(-0.35, 0.35)
+        _add_palm_frond(
+            mb_fronds, crown + Vector((0, 0.24, 0)), az,
+            pitch_deg=rng.uniform(58.0, 74.0),
+            length=rng.uniform(2.15, 2.85),
+            width=rng.uniform(0.66, 0.84),
+            droop=rng.uniform(0.26, 0.35),
+            tier_tint=1.0, phase=rng.random(), rng=rng
         )
 
     build(mb_trunk)
@@ -881,11 +905,11 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
     col_piece('col_trunk_upper', col_pts_b)
 
 def gen_palm_tall(outdir):
-    _build_palm_tree('palm_tall', height=11.4, lean_x=1.15, lean_z=-0.55, s_curve=0.32, n_rings=14, frond_count=11, seed_off=11)
+    _build_palm_tree('palm_tall', height=11.4, lean_x=1.15, lean_z=-0.55, s_curve=0.32, n_rings=14, frond_count=13, seed_off=11)
     export_glb(outdir, 'palm_tall.glb')
 
 def gen_palm_curved(outdir):
-    _build_palm_tree('palm_curved', height=9.0, lean_x=3.15, lean_z=-1.05, s_curve=0.68, n_rings=13, frond_count=10, seed_off=23)
+    _build_palm_tree('palm_curved', height=9.0, lean_x=3.15, lean_z=-1.05, s_curve=0.68, n_rings=13, frond_count=12, seed_off=23)
     export_glb(outdir, 'palm_curved.glb')
 
 def gen_bush_fern(outdir):
@@ -930,20 +954,125 @@ def gen_rock_boulder(outdir):
     col_piece('col_rock_boulder', pts)
     export_glb(outdir, 'rock_boulder.glb')
 
+def _limestone_monolith(mb, ring_specs, sides, rng, rot_y=0.0, twist=0.18, apex_y=None, apex_off=(0.0, 0.0)):
+    """Build a continuous tapered faceted sunlit limestone spire matching island cliff planes."""
+    # Per-rib angular profile creates bold vertical limestone facets without stacked-sphere waists.
+    rib_scale = [rng.uniform(0.84, 1.16) for _ in range(sides)]
+    rib_phase = [rng.uniform(0.0, 6.28) for _ in range(sides)]
+    rings = []
+    centers = []
+    out_pts = []
+
+    n_rings = len(ring_specs)
+    for ri, (y, rx, rz, ox, oz) in enumerate(ring_specs):
+        t = ri / float(max(1, n_rings - 1))
+        ring = []
+        centers.append(Vector((ox, y, oz)))
+        for k in range(sides):
+            ang = rot_y + 2.0 * pi * k / float(sides) + twist * t
+            # Subtle organic chisel relief along height while preserving clean monotonic taper
+            chisel = rib_scale[k] * (1.0 + 0.06 * sin(t * 5.2 + rib_phase[k]))
+            px = ox + cos(ang) * rx * chisel
+            pz = oz + sin(ang) * rz * chisel
+            py = y + (0.0 if ri == 0 else rng.uniform(-0.18, 0.18) * (1.0 - 0.5 * t))
+            v = Vector((px, py, pz))
+            ring.append(v)
+            out_pts.append(v)
+        rings.append(ring)
+
+    def _stone_face_col(pts, inside_pt):
+        fn = newell(pts)
+        fn = fn.normalized() if fn.length > 1e-8 else Vector((0.0, 1.0, 0.0))
+        fc = sum(pts, Vector()) / float(len(pts))
+        if fn.dot(fc - inside_pt) < 0.0:
+            fn = -fn
+        # Sunlit pale limestone upper planes blending smoothly into warm ochre lower cliffs
+        pale_t = smooth01((fc.y - 1.8) / 11.5)
+        facet_var = max(-0.5, min(0.5, fn.x * 0.35 - fn.z * 0.30 + fn.y * 0.40))
+        ivory_t = max(0.0, min(1.0, pale_t * 0.78 + 0.18 + facet_var * 0.18))
+        base = mix(C_STONE_WARM, C_STONE_PALE, ivory_t)
+        if fn.y < -0.08:
+            base = mix(base, C_STONE_SHADE, 0.38)
+        elif fn.y > 0.50:
+            base = mix(base, C_STONE_PALE, 0.25)
+        # Subtle coastal sea-moss collar right around the tidal waterline
+        moss_t = smooth01((2.2 - fc.y) / 2.6) * smooth01((fc.y + 3.2) / 2.0)
+        if moss_t > 0.0:
+            base = mix(base, C_SEA_MOSS, moss_t * 0.50)
+        return jit(base, rng, 0.045, 0.016)
+
+    mb.newoff()
+    for ri in range(n_rings - 1):
+        r0, r1 = rings[ri], rings[ri + 1]
+        inside = 0.5 * (centers[ri] + centers[ri + 1])
+        for k in range(sides):
+            kn = (k + 1) % sides
+            q = [r0[k], r0[kn], r1[kn], r1[k]]
+            mb.fp(q, 'stone', _stone_face_col(q, inside), (1, 0, 0), inside, smooth=False)
+
+    # Bottom cap
+    mb.fp(rings[0], 'stone', C_STONE_SHADE, (1, 0, 0), centers[0] + Vector((0, 1.0, 0)), smooth=False)
+
+    # Tapered chisel summit cap (crisp faceted peak with zero flat disc look)
+    top_ring = rings[-1]
+    top_c = centers[-1]
+    if apex_y is not None:
+        apex = Vector((top_c.x + apex_off[0], apex_y, top_c.z + apex_off[1]))
+        out_pts.append(apex)
+        inside_top = Vector((top_c.x, top_c.y - 0.6, top_c.z))
+        for k in range(sides):
+            kn = (k + 1) % sides
+            tri = [top_ring[k], top_ring[kn], apex]
+            mb.fp(tri, 'stone', _stone_face_col(tri, inside_top), (1, 0, 0), inside_top, smooth=False)
+    else:
+        inside_top = top_c - Vector((0, 1.0, 0))
+        mb.fp(top_ring, 'stone', _stone_face_col(top_ring, inside_top), (1, 0, 0), inside_top, smooth=False)
+
+    return out_pts
+
 def gen_rock_spire(outdir):
     clear_scene()
     rng = random.Random(SEED + 67)
     mb = MB('RockSpire', seed=67)
-    # Towering dramatic sea-stack / crag spire (~18.5 m tall, bold tilted twin-peak silhouette)
-    pts_bot = []
-    pts_mid = []
-    pts_top = []
-    pts_bot += faceted_rock(mb, (0.0, 1.6, 0.0), (3.8, 4.4, 3.4), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.16, rot_deg=(0, 12, 4))
-    pts_bot += faceted_rock(mb, (2.3, 0.4, 1.2), (2.2, 2.8, 2.0), 'stone', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.14, rot_deg=(4, 55, -8))
-    pts_mid += faceted_rock(mb, (-0.35, 7.2, -0.2), (2.7, 5.2, 2.4), 'stone', C_STONE_OCHRE, C_STONE_LIGHT, C_STONE_MID, rng, subdiv=2, warp=0.25, strata=0.18, rot_deg=(3, -18, 7))
-    pts_top += faceted_rock(mb, (-0.95, 13.8, -0.35), (1.75, 4.8, 1.55), 'stone', C_STONE_LIGHT, C_STONE_OCHRE, C_STONE_MID, rng, subdiv=2, warp=0.26, strata=0.14, rot_deg=(5, 22, 9))
-    # Secondary jagged shoulder crag for iconic asymmetric horizon silhouette
-    pts_mid += faceted_rock(mb, (1.95, 6.2, -0.85), (1.55, 3.9, 1.40), 'stone', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.25, strata=0.14, rot_deg=(-4, 30, -14))
+    # Unified tapered faceted sunlit limestone sea-stack monolith (~19 m tall)
+    # matching the island limestone cliffs (no stacked dark bowling-pin spheres).
+    main_rings = [
+        (-4.2, 4.35, 3.80,  0.15,  0.10),
+        (-1.2, 3.95, 3.45,  0.10,  0.06),
+        ( 1.5, 3.55, 3.10,  0.02,  0.00),
+        ( 4.4, 3.10, 2.70, -0.10, -0.05),
+        ( 7.6, 2.60, 2.25, -0.24, -0.12),
+        (10.8, 2.05, 1.75, -0.40, -0.20),
+        (13.8, 1.48, 1.26, -0.58, -0.26),
+        (16.4, 0.92, 0.76, -0.76, -0.32),
+        (18.2, 0.42, 0.30, -0.88, -0.35),
+    ]
+    all_pts = _limestone_monolith(mb, main_rings, sides=7, rng=rng, rot_y=0.22, twist=0.26, apex_y=19.2, apex_off=(-0.10, -0.04))
+
+    # Fused secondary limestone shoulder fin for an iconic asymmetric horizon silhouette
+    fin_rings = [
+        (-4.0, 2.45, 2.15, 1.70, -0.45),
+        (-0.8, 2.20, 1.92, 1.85, -0.50),
+        ( 2.4, 1.88, 1.62, 2.05, -0.58),
+        ( 5.6, 1.46, 1.24, 2.22, -0.68),
+        ( 8.4, 0.95, 0.78, 2.38, -0.76),
+        (10.4, 0.44, 0.34, 2.50, -0.82),
+    ]
+    all_pts += _limestone_monolith(mb, fin_rings, sides=6, rng=rng, rot_y=-0.45, twist=-0.18, apex_y=11.3, apex_off=(0.08, -0.04))
+
+    # Wave-cut limestone base buttress anchoring the opposite flank into the surf
+    spur_rings = [
+        (-3.8, 2.10, 1.85, -1.75, 1.05),
+        (-1.0, 1.85, 1.60, -1.82, 1.08),
+        ( 1.6, 1.42, 1.22, -1.70, 0.98),
+        ( 3.6, 0.78, 0.66, -1.52, 0.85),
+    ]
+    all_pts += _limestone_monolith(mb, spur_rings, sides=6, rng=rng, rot_y=0.85, twist=0.12, apex_y=4.4, apex_off=(0.12, -0.06))
+
+    pts_bot = [p for p in all_pts if p.y <= 5.0]
+    pts_mid = [p for p in all_pts if 3.5 <= p.y <= 12.2]
+    pts_top = [p for p in all_pts if p.y >= 10.2]
+
     build(mb)
     col_piece('col_spire_base', pts_bot)
     col_piece('col_spire_mid', pts_mid)
@@ -1129,31 +1258,43 @@ def gen_outpost_tavern(outdir):
             cbox(mb, (sx, 2.20, sz), (0.22, 3.25, 0.22), 'wood', C_DARK, 0.02)
         tube(mb, [(sx, FLOOR_Y + 0.2, -3.48), (sx + (1.8 if sx > 0 else -1.8), 2.15, -3.54)], 0.09, 4, 'wood', C_DARK, mode='flat')
 
-    # Steep pitched wooden-shingle roof with chunky overhang & curved ridge beam
-    roof_n = 7
+    # Steep pitched weathered cedar-shake roof with staggered seams, chunky overhang & roof sag
+    courses = 6
     for side_z in (-1, 1):
-        # 5 layered shingle courses from ridge down to eave for rich silhouette
-        for ci in range(5):
-            f0 = ci / 5.0
-            f1 = (ci + 1) / 5.0
+        for ci in range(courses):
+            f0 = ci / float(courses)
+            f1 = min(1.02, (ci + 1) / float(courses) + 0.025)
             y0 = RIDGE_Y - (RIDGE_Y - EAVE_Y + 0.45) * f0
             y1 = RIDGE_Y - (RIDGE_Y - EAVE_Y + 0.45) * f1
             z0 = 0.10 + side_z * (4.65 * f0)
             z1 = 0.10 + side_z * (4.65 * f1)
-            th = 0.18
-            # Slight picturesque sag in roof middle!
-            for seg in range(roof_n):
-                x0 = -5.65 + (11.30 * seg / roof_n)
-                x1 = -5.65 + (11.30 * (seg + 1) / roof_n)
+            # Organically staggered cedar shake widths (zero aligned grid or checkerboard!)
+            xs = [-5.65]
+            cur_x = -5.65 + (rng.uniform(0.42, 0.64) if ci % 2 == 1 else rng.uniform(0.80, 1.12))
+            while cur_x < 5.65 - 0.55:
+                xs.append(cur_x)
+                cur_x += rng.uniform(0.76, 1.18)
+            xs.append(5.65)
+            prev_pal_idx = -1
+            for si in range(len(xs) - 1):
+                x0, x1 = xs[si], xs[si + 1]
                 xm = 0.5 * (x0 + x1)
                 sag = -0.14 * (1.0 - (xm / 5.65) ** 2)
-                c_sh = jit(C_SHINGLE if (ci + seg) % 2 == 0 else C_HULL, rng, 0.09, 0.03)
-                # Slanted shingle slab
-                p_top = [(x0, y0 + sag + th, z0), (x1, y0 + sag + th, z0), (x1, y1 + sag + th, z1), (x0, y1 + sag + th, z1)]
-                p_bot = [(x0, y0 + sag, z0), (x1, y0 + sag, z0), (x1, y1 + sag, z1), (x0, y1 + sag, z1)]
+                th = 0.165 + rng.uniform(-0.020, 0.026)
+                lip_dy = rng.uniform(-0.016, 0.014)
+                # Pick organically from warm weathered cedar/terracotta/umber palette
+                pal_idx = rng.randrange(len(C_CEDAR_PALETTE))
+                if pal_idx == prev_pal_idx and rng.random() < 0.65:
+                    pal_idx = (pal_idx + rng.randint(1, len(C_CEDAR_PALETTE) - 1)) % len(C_CEDAR_PALETTE)
+                prev_pal_idx = pal_idx
+                base_sh = mix(C_CEDAR_PALETTE[pal_idx], C_DARK, 0.12 * f0)
+                c_sh = jit(base_sh, rng, 0.075, 0.022)
+                mb.newoff()
+                p_top = [(x0, y0 + sag + th, z0), (x1, y0 + sag + th, z0), (x1, y1 + sag + th + lip_dy, z1), (x0, y1 + sag + th + lip_dy, z1)]
+                p_bot = [(x0, y0 + sag, z0), (x1, y0 + sag, z0), (x1, y1 + sag + lip_dy, z1), (x0, y1 + sag + lip_dy, z1)]
                 mb.fp(p_top, 'wood', c_sh, (1, 0, 0), (xm, y0 - 2.0, 0.10))
                 mb.fp(p_bot, 'wood', mul(c_sh, 0.65), (1, 0, 0), (xm, y0 + 2.0, 0.10))
-                # Front lip edge of shingle course
+                # Front lip edge of shake course
                 mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'wood', mul(c_sh, 0.78), (1, 0, 0), (xm, y0, 0.10))
     # Heavy ridge cap timber + crimson bargeboards
     cbox(mb, (0.0, RIDGE_Y + 0.12, 0.10), (11.6, 0.32, 0.34), 'wood', C_DARK, 0.03)

@@ -59,16 +59,17 @@ vec3 uw_shafts(vec3 cam, vec3 dir, float dist, vec2 frag) {
 	float sun_up = max(L.y, 0.2);
 	float tmax = min(dist, 40.0);
 	float jitter = fract(52.9829189 * fract(dot(frag, vec2(0.06711056, 0.00583715))));
+	float soft_jitter = mix(0.5, jitter, 0.38);
 	float shaft = 0.0;
 	for (int i = 0; i < uw_shaft_steps; i++) {
-		float t = (float(i) + jitter) / float(uw_shaft_steps) * tmax;
+		float t = (float(i) + soft_jitter) / float(uw_shaft_steps) * tmax;
 		vec3 p = cam + dir * t;
 		float d = -p.y;
 		if (d > 0.0) {
 			vec2 q = p.xz + L.xz * (d / sun_up);
-			float a = textureLod(detail_tex, q * 0.061 + vec2(0.006, 0.004) * sea_time, 1.5).b;
-			float b = textureLod(detail_tex, q.yx * 0.043 - vec2(0.005, 0.007) * sea_time + 0.5, 1.5).b;
-			float beam = smoothstep(0.22, 0.75, a + b);
+			float a = textureLod(detail_tex, q * 0.061 + vec2(0.006, 0.004) * sea_time, 2.2).b;
+			float b = textureLod(detail_tex, q.yx * 0.043 - vec2(0.005, 0.007) * sea_time + 0.5, 2.2).b;
+			float beam = smoothstep(0.24, 0.78, a + b);
 			shaft += beam * exp(-d * 0.10) * exp(-t * 0.06);
 		}
 	}

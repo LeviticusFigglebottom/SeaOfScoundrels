@@ -15,14 +15,14 @@ global uniform vec3 sky_horizon_color;
 
 uniform vec3 deep_seabed_color : source_color = vec3(0.16, 0.26, 0.30);
 uniform vec3 shallow_seabed_color : source_color = vec3(0.76, 0.80, 0.64);
-uniform vec3 wet_sand_color : source_color = vec3(0.54, 0.43, 0.26);
-uniform vec3 dry_sand_color : source_color = vec3(0.88, 0.76, 0.49);
+uniform vec3 wet_sand_color : source_color = vec3(0.57, 0.46, 0.28);
+uniform vec3 dry_sand_color : source_color = vec3(0.89, 0.77, 0.50);
 uniform vec3 grass_deep_color : source_color = vec3(0.14, 0.37, 0.12);
 uniform vec3 grass_sun_color : source_color = vec3(0.40, 0.63, 0.17);
-uniform vec3 cliff_warm_color : source_color = vec3(0.73, 0.61, 0.44);
-uniform vec3 cliff_pale_color : source_color = vec3(0.88, 0.83, 0.73);
-uniform vec3 cliff_dark_color : source_color = vec3(0.44, 0.41, 0.38);
-uniform vec3 sea_moss_color : source_color = vec3(0.20, 0.25, 0.20);
+uniform vec3 cliff_warm_color : source_color = vec3(0.79, 0.66, 0.47);
+uniform vec3 cliff_pale_color : source_color = vec3(0.90, 0.85, 0.74);
+uniform vec3 cliff_dark_color : source_color = vec3(0.56, 0.50, 0.43);
+uniform vec3 sea_moss_color : source_color = vec3(0.22, 0.27, 0.20);
 
 uniform vec3 cliff_tint : source_color = vec3(1.0, 1.0, 1.0);
 uniform vec3 grass_tint : source_color = vec3(1.0, 1.0, 1.0);
@@ -30,6 +30,7 @@ uniform float cliff_facet_strength : hint_range(0.0, 1.0) = 0.72;
 
 varying vec3 v_world;
 varying vec3 v_world_normal;
+varying vec3 v_view_up;
 
 float hash21(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -63,6 +64,7 @@ float fbm2(vec2 p) {
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_view_up = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 }
 
 void fragment() {
@@ -70,11 +72,27 @@ void fragment() {
 	float h = v_world.y;
 	vec2 xz = v_world.xz;
 
-	// Zero-tiling world-space painterly brush & strata noise fields.
+	// Compute crisp geometric facet normal early so spire apexes (where smooth_n.y -> 1.0)
+	// evaluate cliff slope accurately and never receive green grass triangle caps.
+	vec3 dpdx = dFdx(v_world);
+	vec3 dpdy = dFdy(v_world);
+	vec3 raw_face_n = cross(dpdy, dpdx);
+	float fn_len = length(raw_face_n);
+	vec3 face_n = fn_len > 1e-5 ? (raw_face_n / fn_len) : smooth_n;
+	face_n *= (dot(face_n, smooth_n) >= 0.0) ? 1.0 : -1.0;
+
+	// Zero-tiling world-space painterly brush & wind-ripple noise fields.
 	float macro_n = fbm2(xz * 0.032);
 	float brush_n = fbm2(xz * 0.14 + vec2(macro_n * 2.6, -macro_n * 2.1));
 	float grain_n = vnoise2(xz * 0.72 + vec2(brush_n * 1.4));
 	float ripple_n = sin(xz.x * 0.42 + xz.y * 0.35 + macro_n * 4.5) * 0.5 + 0.5;
+
+	// Subtle trade-wind sand drifts and ripples for painterly broad beaches.
+	vec2 wind_uv = vec2(xz.x * 0.78 + xz.y * 0.62, -xz.x * 0.62 + xz.y * 0.78);
+	float dune_drift = fbm2(vec2(wind_uv.x * 0.075, wind_uv.y * 0.22) + vec2(macro_n * 1.6, -macro_n * 1.1));
+	float sand_ripple_phase = wind_uv.y * 2.35 + dune_drift * 5.2 + brush_n * 1.8;
+	float sand_ripple = smoothstep(0.18, 0.82, sin(sand_ripple_phase) * 0.5 + 0.5);
+	float sand_wave = mix(dune_drift, sand_ripple, 0.42);
 
 	// Height-jittered boundaries keep biome edges organic and hand-painted.
 	float edge_jit = (macro_n - 0.5) * 0.65 + (brush_n - 0.5) * 0.30;
@@ -89,7 +107,13 @@ void fragment() {
 	vec3 col_deep = deep_seabed_color * mix(0.86, 1.14, brush_n);
 	vec3 col_shallow = shallow_seabed_color * mix(0.92, 1.08, ripple_n * 0.6 + brush_n * 0.4);
 	vec3 col_wet = wet_sand_color * mix(0.90, 1.10, ripple_n * 0.5 + grain_n * 0.5);
-	vec3 col_dry = dry_sand_color * mix(0.92, 1.08, brush_n * 0.65 + ripple_n * 0.35);
+
+	// Low-contrast warm wind-ripple variation across the dry sand beach band.
+	float beach_band = smoothstep(0.55, 1.15, h_org) * smoothstep(3.15, 2.35, h_org);
+	vec3 sand_trough = dry_sand_color * vec3(0.95, 0.90, 0.83);
+	vec3 sand_crest = dry_sand_color * vec3(1.05, 1.04, 1.00);
+	float sand_t = mix(brush_n * 0.65 + ripple_n * 0.35, sand_wave, 0.62 * beach_band);
+	vec3 col_dry = mix(sand_trough, sand_crest, sand_t) * mix(0.97, 1.03, grain_n);
 
 	// Painterly layered tropical grass with golden coastal verge and deep emerald patches.
 	vec3 col_grass = mix(grass_deep_color, grass_sun_color, smoothstep(0.24, 0.78, brush_n * 0.72 + macro_n * 0.28));
@@ -103,47 +127,50 @@ void fragment() {
 	ground_col = mix(ground_col, col_dry, t_dry_in);
 	ground_col = mix(ground_col, col_grass, t_grass_in);
 
-	// --- Bold chunky faceted limestone / warm sandstone coastal cliffs ---
-	float strata_coord = h * 0.42 + macro_n * 2.8 + brush_n * 0.9;
-	float strata_band = smoothstep(0.25, 0.75, sin(strata_coord * 3.14159) * 0.5 + 0.5);
-	float height_pale = smoothstep(5.0, 26.0, h + (macro_n - 0.5) * 5.0);
+	// --- Bold chunky faceted sunlit limestone / warm ochre coastal cliffs ---
+	// Organic warped sedimentary drift & ochre washes (no harsh periodic sine stripes).
+	float drift_n = fbm2(vec2(h * 0.075 + macro_n * 1.85, (xz.x - xz.y) * 0.028 + brush_n * 1.15));
+	float ochre_wash = fbm2(vec2(h * 0.048 - macro_n * 1.4, (xz.x + xz.y) * 0.036));
+	float strata_soft = smoothstep(0.28, 0.78, drift_n);
+	float height_pale = smoothstep(4.0, 22.0, h + (macro_n - 0.5) * 6.0);
 
-	vec3 cliff_base = mix(cliff_warm_color, cliff_pale_color, clamp(height_pale * 0.78 + strata_band * 0.26, 0.0, 1.0));
-	float ledge_crevice = smoothstep(0.78, 0.96, sin(strata_coord * 6.28318) * 0.5 + 0.5);
-	cliff_base = mix(cliff_base, cliff_dark_color, ledge_crevice * 0.26 + (1.0 - brush_n) * 0.14);
+	// Subtle per-facet tonal variation emphasizes sculpted monolithic cliff planes.
+	float facet_var = clamp(face_n.x * 0.35 - face_n.z * 0.30 + face_n.y * 0.45, -0.5, 0.5);
+	float ivory_mix = clamp(height_pale * 0.72 + strata_soft * 0.24 + facet_var * 0.16, 0.0, 1.0);
+	vec3 cliff_base = mix(cliff_warm_color, cliff_pale_color, ivory_mix);
+	cliff_base = mix(cliff_base, cliff_warm_color * vec3(1.04, 0.98, 0.90),
+			smoothstep(0.52, 0.85, ochre_wash) * 0.28 * (1.0 - height_pale * 0.45));
+	float weather_shade = (1.0 - brush_n) * 0.11 + smoothstep(0.76, 0.95, 1.0 - drift_n) * 0.08;
+	cliff_base = mix(cliff_base, cliff_dark_color, weather_shade);
 	// Wet sea-line algae/barnacle band where rocky cliffs plunge into the surf.
 	float sea_band = smoothstep(-2.4, -0.2, h) * smoothstep(2.2, 0.45, h + (brush_n - 0.5) * 0.5);
-	cliff_base = mix(cliff_base, sea_moss_color, sea_band * 0.62);
+	cliff_base = mix(cliff_base, sea_moss_color, sea_band * 0.58);
 	cliff_base *= cliff_tint;
 
-	// Slope-driven cliff mask (normal.y < 0.70 -> bold cliffs) + high rocky summits.
-	float slope_cliff = smoothstep(0.76, 0.56, smooth_n.y + (brush_n - 0.5) * 0.09);
-	float summit_rock = smoothstep(28.0, 44.0, h_org) * smoothstep(0.95, 0.74, smooth_n.y);
+	// Slope-driven cliff mask using min(smooth_n.y, face_n.y) + rocky summits above 14-24 m.
+	float cliff_ny = min(smooth_n.y, face_n.y);
+	float slope_cliff = smoothstep(0.76, 0.56, cliff_ny + (brush_n - 0.5) * 0.09);
+	float summit_rock = smoothstep(14.0, 24.0, h_org);
 	float cliff_mask = clamp(max(slope_cliff, summit_rock), 0.0, 1.0);
-	cliff_mask *= mix(smoothstep(0.55, 0.35, smooth_n.y), 1.0, smoothstep(-1.8, 0.35, h));
+	cliff_mask *= mix(smoothstep(0.55, 0.35, cliff_ny), 1.0, smoothstep(-1.8, 0.35, h));
 
 	// Subtle per-vertex tint (crevice AO / volcanic rim / coastal paths).
 	vec3 albedo = mix(ground_col, cliff_base, cliff_mask) * COLOR.rgb;
 
-	// Crisp geometric facet normals on cliffs for that sculpted monolithic spire look.
-	vec3 dpdx = dFdx(v_world);
-	vec3 dpdy = dFdy(v_world);
-	vec3 raw_face_n = cross(dpdy, dpdx);
-	float fn_len = length(raw_face_n);
-	vec3 face_n = fn_len > 1e-5 ? (raw_face_n / fn_len) : smooth_n;
-	face_n *= (dot(face_n, smooth_n) >= 0.0) ? 1.0 : -1.0;
-
-	vec3 final_n_world = normalize(mix(smooth_n, face_n, cliff_mask * cliff_facet_strength));
+	// Gentle wind-ripple normal modeling on dry beaches + crisp geometric facets on cliffs.
+	float ripple_slope = cos(sand_ripple_phase);
+	vec3 beach_n = normalize(smooth_n + vec3(-0.62, 0.0, 0.78) * (ripple_slope * 0.042 * beach_band));
+	vec3 final_n_world = normalize(mix(beach_n, face_n, cliff_mask * cliff_facet_strength));
 	float facet_pop = clamp(dot(face_n, smooth_n), 0.75, 1.0);
-	albedo *= mix(1.0, 0.90 + 0.14 * facet_pop, cliff_mask);
+	albedo *= mix(1.0, 0.92 + 0.12 * facet_pop, cliff_mask);
 
 	// Surface roughness & specular: glistening wet sand, dry matte sand, textured cliffs.
 	float wet_mask = t_wet_in * (1.0 - t_dry_in) * (1.0 - cliff_mask * 0.85);
 	float rough = mix(0.92, 0.86, t_shallow);
 	rough = mix(rough, mix(0.20, 0.32, grain_n), wet_mask);
-	rough = mix(rough, 0.88, t_dry_in * (1.0 - t_grass_in));
+	rough = mix(rough, mix(0.86, 0.91, sand_wave), t_dry_in * (1.0 - t_grass_in));
 	rough = mix(rough, 0.84, t_grass_in);
-	rough = mix(rough, mix(0.78, 0.92, 1.0 - strata_band), cliff_mask);
+	rough = mix(rough, mix(0.78, 0.92, 1.0 - strata_soft), cliff_mask);
 
 	ALBEDO = albedo;
 	ROUGHNESS = rough;
@@ -157,8 +184,9 @@ void light() {
 	float sun = LIGHT_IS_DIRECTIONAL ? cloud_light(v_world.xz) : 1.0;
 	float ndl_raw = dot(NORMAL, LIGHT);
 	float ndl = clamp(ndl_raw, 0.0, 1.0);
-	float up_n = normalize(v_world_normal).y;
-	float cliff_m = clamp(max(smoothstep(0.76, 0.56, up_n), smoothstep(28.0, 44.0, v_world.y) * smoothstep(0.95, 0.74, up_n)), 0.0, 1.0);
+	float face_up_n = dot(NORMAL, normalize(v_view_up));
+	float up_n = min(normalize(v_world_normal).y, face_up_n);
+	float cliff_m = clamp(max(smoothstep(0.76, 0.56, up_n), smoothstep(14.0, 24.0, v_world.y)), 0.0, 1.0);
 	float wet_m = smoothstep(0.60, 0.32, ROUGHNESS);
 
 	if (LIGHT_IS_DIRECTIONAL) {

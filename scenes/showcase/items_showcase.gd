@@ -68,10 +68,19 @@ func _setup_tools_table_shot() -> void:
 
 	var st_wood := SurfaceTool.new()
 	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Solid tabletop (top flush at y = 0.0) & four heavy oak legs.
 	ToolMeshes._append_beveled_box(st_wood, Vector3(3.15, 0.12, 1.25), 0.02, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.06, 0.0)))
 	for sx in [-1.35, 1.35]:
 		for sz in [-0.46, 0.46]:
 			ToolMeshes._append_beveled_box(st_wood, Vector3(0.14, 1.10, 0.14), 0.015, Transform3D(Basis.IDENTITY, Vector3(sx, -0.62, sz)))
+	# Rear oak display rack (uprights, leaning crossbar, front cleat & cutlass cradle pegs) resting flush on y = 0.0.
+	ToolMeshes._append_beveled_box(st_wood, Vector3(0.07, 0.40, 0.07), 0.008, Transform3D(Basis.IDENTITY, Vector3(-1.38, 0.20, -0.46)))
+	ToolMeshes._append_beveled_box(st_wood, Vector3(0.07, 0.40, 0.07), 0.008, Transform3D(Basis.IDENTITY, Vector3(0.94, 0.20, -0.46)))
+	ToolMeshes._append_beveled_box(st_wood, Vector3(2.40, 0.055, 0.055), 0.008, Transform3D(Basis.IDENTITY, Vector3(-0.22, 0.32, -0.46)))
+	ToolMeshes._append_beveled_box(st_wood, Vector3(2.36, 0.022, 0.032), 0.005, Transform3D(Basis.IDENTITY, Vector3(-0.22, 0.011, -0.18)))
+	# Two notched timber pegs cradling the cutlass cleanly above the tabletop.
+	ToolMeshes._append_beveled_box(st_wood, Vector3(0.045, 0.095, 0.065), 0.006, Transform3D(Basis.IDENTITY, Vector3(-1.24, 0.0475, -0.26)))
+	ToolMeshes._append_beveled_box(st_wood, Vector3(0.045, 0.140, 0.065), 0.006, Transform3D(Basis.IDENTITY, Vector3(-0.86, 0.070, -0.26)))
 	st_wood.generate_normals()
 	var table_mi := MeshInstance3D.new()
 	table_mi.mesh = st_wood.commit()
@@ -86,21 +95,21 @@ func _setup_tools_table_shot() -> void:
 	fill.omni_range = 8.0
 	bench.add_child(fill)
 
-	# Place all 11 procedural 3D tools in two curated gallery rows on the bench!
+	# Place all 11 procedural 3D tools grounded on the oak bench & rear display rack!
 	var layout: Array[Array] = [
-		# Back row (tall iconic pieces)
-		[&"cutlass", Vector3(-1.18, 0.18, -0.26), Vector3(-12.0, 28.0, -76.0), 1.0],
-		[&"shovel", Vector3(-0.55, 0.42, -0.34), Vector3(-10.0, 12.0, -8.0), 0.86],
-		[&"map", Vector3(0.04, 0.22, -0.28), Vector3(-16.0, 0.0, 0.0), 1.12],
-		[&"planks", Vector3(0.62, 0.24, -0.30), Vector3(-14.0, -18.0, 10.0), 0.96],
-		[&"lantern", Vector3(1.16, 0.36, -0.22), Vector3(0.0, -24.0, 0.0), 1.05],
-		# Front row (close-up tactile craft)
-		[&"pistol", Vector3(-1.05, 0.13, 0.24), Vector3(0.0, -58.0, 0.0), 1.15],
-		[&"compass", Vector3(-0.56, 0.04, 0.28), Vector3(12.0, 16.0, 0.0), 1.45],
-		[&"spyglass", Vector3(-0.12, 0.06, 0.32), Vector3(0.0, -72.0, 0.0), 1.15],
-		[&"bucket", Vector3(0.36, 0.36, 0.24), Vector3(0.0, 15.0, 0.0), 0.98],
-		[&"tankard", Vector3(0.78, 0.11, 0.28), Vector3(0.0, -35.0, 0.0), 1.18],
-		[&"instrument", Vector3(1.18, 0.11, 0.26), Vector3(12.0, -20.0, 0.0), 1.15],
+		# Back row (resting flush on y = 0.0 & leaning against the oak display rail; cutlass on twin pegs)
+		[&"cutlass", Vector3(-1.26, 0.112, -0.26), Vector3(-14.0, 8.0, -82.0), 0.98],
+		[&"shovel", Vector3(-0.38, 0.528, -0.484), Vector3(158.0, 10.0, 0.0), 0.78],
+		[&"map", Vector3(0.14, 0.177, -0.359), Vector3(-18.0, 0.0, 0.0), 1.06],
+		[&"planks", Vector3(0.68, 0.156, -0.338), Vector3(-18.0, -8.0, 3.0), 0.94],
+		[&"lantern", Vector3(1.20, 0.352, -0.24), Vector3(0.0, -24.0, 0.0), 1.02],
+		# Front row (grounded flush on tabletop; spyglass & bucket separated by ~14 cm clear air gap)
+		[&"pistol", Vector3(-1.18, 0.029, 0.26), Vector3(0.0, -55.0, 88.0), 1.12],
+		[&"compass", Vector3(-0.76, 0.032, 0.28), Vector3(0.0, 18.0, 0.0), 1.32],
+		[&"spyglass", Vector3(-0.34, 0.043, 0.34), Vector3(0.0, -76.0, 0.0), 1.02],
+		[&"bucket", Vector3(0.46, 0.348, 0.24), Vector3(0.0, 15.0, 0.0), 0.98],
+		[&"tankard", Vector3(0.85, 0.121, 0.28), Vector3(0.0, -35.0, 0.0), 1.12],
+		[&"instrument", Vector3(1.24, 0.112, 0.26), Vector3(0.0, -22.0, 0.0), 1.08],
 	]
 
 	for spec in layout:

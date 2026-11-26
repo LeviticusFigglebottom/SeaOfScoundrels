@@ -17,6 +17,7 @@ const CHART_RES := Vector2i(1024, 680)
 const CHART_WIDTH_M := 1.08
 const CHART_DEPTH_M := 0.70
 const SHIP_TABLE_TOP_Y := 0.874
+const BRIGANTINE_TABLE_TOP_Y := 0.897
 const MIN_SPAN := 420.0
 const MAX_SPAN := 5600.0
 const MAX_TRAIL_POINTS := 48
@@ -75,7 +76,7 @@ func mount_to_ship(ship: Ship) -> bool:
 	_mounted_ship = ship
 	tracked_ship = ship
 	_table_station = ship.get_station(&"map_table")
-	surface_height_y = SHIP_TABLE_TOP_Y
+	surface_height_y = BRIGANTINE_TABLE_TOP_Y if ship.ship_class == &"brigantine" else SHIP_TABLE_TOP_Y
 
 	var target_parent: Node = ship.find_child("MapTable", true, false)
 	if target_parent == null:
@@ -238,7 +239,7 @@ func _auto_detect_parent_ship() -> void:
 				tracked_ship = _mounted_ship
 			_table_station = _mounted_ship.get_station(&"map_table")
 			if is_zero_approx(surface_height_y):
-				surface_height_y = SHIP_TABLE_TOP_Y
+				surface_height_y = BRIGANTINE_TABLE_TOP_Y if _mounted_ship.ship_class == &"brigantine" else SHIP_TABLE_TOP_Y
 			break
 		anc = anc.get_parent()
 
@@ -272,16 +273,16 @@ func _build_surface_mesh() -> void:
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(CHART_WIDTH_M, CHART_DEPTH_M)
 	_surface_mat = StandardMaterial3D.new()
-	_surface_mat.albedo_color = Color.WHITE
-	_surface_mat.roughness = 0.82
+	_surface_mat.albedo_color = Color(0.92, 0.87, 0.78)
+	_surface_mat.roughness = 0.90
 	_surface_mat.metallic = 0.0
 	var vp_tex := _viewport.get_texture()
 	_surface_mat.albedo_texture = vp_tex
-	# Subtle warm readability glow so the map table stays crisp in the candle-lit hold.
+	# Subtle warm readability glow so the map table stays crisp without washing out in sunlight.
 	_surface_mat.emission_enabled = true
-	_surface_mat.emission = Color.WHITE
+	_surface_mat.emission = Color(0.96, 0.88, 0.72)
 	_surface_mat.emission_texture = vp_tex
-	_surface_mat.emission_energy_multiplier = 0.24
+	_surface_mat.emission_energy_multiplier = 0.06
 
 	_surface_mesh = MeshInstance3D.new()
 	_surface_mesh.name = "ChartSurface"
@@ -296,16 +297,16 @@ func _build_surface_mesh() -> void:
 
 
 func _build_wooden_frame_and_tacks() -> void:
-	# Backing board & beveled oak molding sitting flush on the map table top (covers baked paper cleanly).
+	# Solid beveled dark-oak backing tray sized to completely enclose both sloop & brigantine baked static maps.
 	var st_wood := SurfaceTool.new()
 	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
-	ToolMeshes._append_beveled_box(st_wood, Vector3(CHART_WIDTH_M + 0.09, 0.026, CHART_DEPTH_M + 0.09), 0.005,
-		Transform3D(Basis.IDENTITY, Vector3(0.0, -0.014, 0.0)))
+	ToolMeshes._append_beveled_box(st_wood, Vector3(CHART_WIDTH_M + 0.18, 0.032, CHART_DEPTH_M + 0.14), 0.006,
+		Transform3D(Basis.IDENTITY, Vector3(0.01, -0.017, 0.0)))
 	st_wood.generate_normals()
 	var board := MeshInstance3D.new()
 	board.name = "ChartBacking"
 	board.mesh = st_wood.commit()
-	board.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.78, 0.04)
+	board.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.80, 0.04)
 	_frame_root.add_child(board)
 
 	# Four gleaming brass corner pins + nautical divider compass resting on the chart edge.
@@ -490,19 +491,19 @@ func _build_draw_snapshot() -> Dictionary:
 # ==============================================================================
 
 class _ChartCanvas extends Control:
-	const COL_PARCHMENT := Color(0.89, 0.82, 0.67)
-	const COL_VIGNETTE := Color(0.71, 0.59, 0.40, 0.45)
-	const COL_GRID := Color(0.45, 0.35, 0.22, 0.30)
-	const COL_RHUMB := Color(0.48, 0.37, 0.24, 0.16)
-	const COL_INK := Color(0.22, 0.14, 0.09, 0.96)
-	const COL_INK_SOFT := Color(0.36, 0.26, 0.16, 0.72)
-	const COL_LAND := Color(0.75, 0.71, 0.49, 0.94)
-	const COL_LAND_CORE := Color(0.62, 0.64, 0.42, 0.85)
-	const COL_GHOST_LAND := Color(0.76, 0.68, 0.53, 0.46)
-	const COL_COAST_WASH := Color(0.42, 0.56, 0.54, 0.34)
-	const COL_CRIMSON := Color(0.78, 0.12, 0.10, 0.96)
-	const COL_GOLD := Color(0.86, 0.65, 0.20, 1.0)
-	const COL_STORM := Color(0.26, 0.32, 0.38, 0.62)
+	const COL_PARCHMENT := Color(0.84, 0.76, 0.59)
+	const COL_VIGNETTE := Color(0.62, 0.49, 0.31, 0.50)
+	const COL_GRID := Color(0.42, 0.31, 0.18, 0.34)
+	const COL_RHUMB := Color(0.45, 0.34, 0.20, 0.18)
+	const COL_INK := Color(0.14, 0.08, 0.04, 0.98)
+	const COL_INK_SOFT := Color(0.28, 0.19, 0.11, 0.82)
+	const COL_LAND := Color(0.69, 0.65, 0.41, 0.96)
+	const COL_LAND_CORE := Color(0.52, 0.56, 0.33, 0.90)
+	const COL_GHOST_LAND := Color(0.71, 0.62, 0.46, 0.52)
+	const COL_COAST_WASH := Color(0.34, 0.50, 0.48, 0.40)
+	const COL_CRIMSON := Color(0.76, 0.10, 0.08, 0.98)
+	const COL_GOLD := Color(0.86, 0.64, 0.18, 1.0)
+	const COL_STORM := Color(0.22, 0.28, 0.36, 0.68)
 
 	const FONT_PATH := "res://assets/generated/ui/scoundrel_font.fnt"
 	var snapshot: Dictionary = {}
@@ -669,10 +670,8 @@ class _ChartCanvas extends Control:
 				draw_arc(center, 6.5, 0.0, TAU, 14, COL_INK, 1.6, true)
 			elif kind == &"fort":
 				draw_rect(Rect2(center - Vector2(4.5, 4.5), Vector2(9.0, 9.0)), COL_CRIMSON, true)
-			if font != null:
-				var tw := font.get_string_size(nm, HORIZONTAL_ALIGNMENT_CENTER, -1, 15).x
-				draw_string(font, Vector2(center.x - tw * 0.5, center.y + r_px + 17.0),
-					nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, COL_INK)
+			if font != null and center.x >= -30.0 and center.x <= size.x + 30.0 and center.y >= -30.0 and center.y <= size.y + 30.0:
+				_draw_island_label(font, nm, center, r_px)
 		else:
 			draw_colored_polygon(poly, COL_GHOST_LAND)
 			var n := poly.size()
@@ -680,6 +679,48 @@ class _ChartCanvas extends Control:
 				draw_line(poly[i], poly[(i + 1) % n], COL_INK_SOFT, 1.5, true)
 			if font != null:
 				draw_string(font, Vector2(center.x - 4.0, center.y + 5.0), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, COL_INK_SOFT)
+
+	func _draw_island_label(font: Font, nm: String, center: Vector2, r_px: float) -> void:
+		var fs := 15
+		var tsz := font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var tw := tsz.x
+		var th := 16.0
+		var margin_x := 34.0
+		var min_y := 44.0
+		var max_y := size.y - 30.0
+		var max_x := maxf(margin_x, size.x - margin_x - tw)
+
+		# Avoid physical top-left brass paperweight & bottom-right compass rose / candle.
+		var paperweight_rect := Rect2(0.0, 0.0, 182.0, 188.0)
+		var compass_rect := Rect2(size.x - 204.0, size.y - 196.0, 204.0, 196.0)
+
+		var candidates: Array[Vector2] = [
+			Vector2(center.x - tw * 0.5, center.y + r_px + 18.0),
+			Vector2(center.x - tw * 0.5, center.y - r_px - 8.0),
+			Vector2(center.x + r_px + 10.0, center.y + 5.0),
+			Vector2(center.x - r_px - 10.0 - tw, center.y + 5.0),
+			Vector2(paperweight_rect.end.x + 6.0, maxf(center.y + 5.0, min_y)),
+		]
+		var chosen := Vector2(clampf(candidates[0].x, margin_x, max_x), clampf(candidates[0].y, min_y, max_y))
+		var found_clear := false
+		for cand in candidates:
+			var clamped := Vector2(clampf(cand.x, margin_x, max_x), clampf(cand.y, min_y, max_y))
+			var box := Rect2(clamped.x - 3.0, clamped.y - th + 2.0, tw + 6.0, th + 2.0)
+			if not box.intersects(paperweight_rect) and not box.intersects(compass_rect):
+				chosen = clamped
+				found_clear = true
+				break
+
+		if not found_clear:
+			var box := Rect2(chosen.x - 3.0, chosen.y - th + 2.0, tw + 6.0, th + 2.0)
+			if box.intersects(paperweight_rect):
+				chosen.x = clampf(paperweight_rect.end.x + 6.0, margin_x, max_x)
+			elif box.intersects(compass_rect):
+				chosen.y = clampf(compass_rect.position.y - 8.0, min_y, max_y)
+
+		var halo_r := Rect2(chosen.x - 4.0, chosen.y - th + 2.0, tw + 8.0, th + 3.0)
+		draw_rect(halo_r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.68), true)
+		draw_string(font, chosen, nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_INK)
 
 	func _draw_ship_marker(center: Vector2, heading_rad: float) -> void:
 		# heading_rad = atan2(fwd.x, fwd.z), so forward vector in 2D canvas is (sin(h), cos(h)).

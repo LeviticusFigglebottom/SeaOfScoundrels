@@ -269,12 +269,16 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			var sp3 := _faceted_spire(u, v, -22.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, 14.0 * scale_r, target_peak * 0.45, 0.85, 4.0, 1.50)
 			h = maxf(h, maxf(sp1, maxf(sp2, sp3)))
 			h += ridge_n * 3.2 * _smoothstep(8.0, 26.0, h)
-			# Carve a wide, welcoming golden sand cove on the -v landing beach.
-			var cove_u := _smoothstep(28.0 * scale_r, 12.0 * scale_r, absf(u - 2.0 * scale_r))
-			var cove_v := _smoothstep(6.0 * scale_r, -16.0 * scale_r, v) * _smoothstep(-48.0 * scale_r, -28.0 * scale_r, v)
+			# Grade a wide, welcoming golden sand cove on the -v landing beach.
+			# Strictly monotonic inland from the shoreline contour (>= 1.45 m once
+			# inland of the wet shore ramp) so ocean swells never poke through mid-beach.
+			var cove_u := _smoothstep(30.0 * scale_r, 12.0 * scale_r, absf(u - 2.0 * scale_r))
+			var cove_v := _smoothstep(6.0 * scale_r, -16.0 * scale_r, v)
 			var cove_mask := cove_u * cove_v
-			var cove_h := lerpf(-1.6, 3.2, clampf((v + 38.0 * scale_r) / (30.0 * scale_r), 0.0, 1.0))
-			h = lerpf(h, minf(h, cove_h), cove_mask * 0.78)
+			if d_shore < 0.0 and cove_mask > 0.001:
+				var inland_c := -d_shore
+				var cove_h := 1.48 + 1.42 * clampf((inland_c - 4.8) / (26.0 * scale_r), 0.0, 1.0)
+				h = lerpf(h, minf(h, cove_h), cove_mask * 0.82)
 
 		&"twin_spires":
 			# Soaring cathedral-like twin pale-limestone needles separated by a walkable green saddle!
@@ -669,8 +673,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		exclusions: Array[Vector3], rng: RandomNumberGenerator, prop_body: StaticBody3D,
 		props_root: Node3D, foliage_cache: Dictionary) -> void:
 	var placed: Array[Vector3] = []  # (x, z, spacing_r)
+	var keepout_zones: Array[Vector3] = []  # hard keepouts (docks, plaza, campfires, dig sites, landmarks)
 	for ex in exclusions:
 		placed.append(ex)
+		keepout_zones.append(ex)
 
 	var basis := Basis(Vector3.UP, landing_yaw)
 
@@ -685,6 +691,7 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					Vector3(arch_p.x, minf(arch_y, 0.6) - 0.6, arch_p.z)),
 				prop_body, props_root, foliage_cache)
 			placed.append(Vector3(arch_p.x, arch_p.z, 9.5))
+			keepout_zones.append(Vector3(arch_p.x, arch_p.z, 9.5))
 
 			var arch2_p := basis * Vector3(island.island_radius * 0.56, 0.0, -island.island_radius * 0.58)
 			_spawn_prop(island, ROCK_ARCH_SCENE, "SeaArch_Outer",
@@ -701,6 +708,7 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					Vector3(w1.x, w1_y + 0.15, w1.z)),
 				prop_body, props_root, foliage_cache)
 			placed.append(Vector3(w1.x, w1.z, 8.5))
+			keepout_zones.append(Vector3(w1.x, w1.z, 8.5))
 
 			var w2 := basis * Vector3(20.0, 0.0, -island.island_radius * 0.44)
 			var w2_y := maxf(-1.4, island.surface_height(w2.x, w2.z))
@@ -709,13 +717,15 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 					Vector3(w2.x, w2_y + 0.10, w2.z)),
 				prop_body, props_root, foliage_cache)
 			placed.append(Vector3(w2.x, w2.z, 8.0))
+			keepout_zones.append(Vector3(w2.x, w2.z, 8.0))
 
 		&"treasure_peak", &"smuggler_cove", &"fort_rock":
 			# Stranded explorer campfire + supply barrels/crates near the landing cove.
 			if island.dig_points.size() >= 2:
 				var camp := island.dig_points[1]
 				_spawn_campfire(island, "BeachCampfire", camp, rng, prop_body, props_root, foliage_cache)
-				placed.append(Vector3(camp.x, camp.z, 4.5))
+				placed.append(Vector3(camp.x, camp.z, 4.8))
+				keepout_zones.append(Vector3(camp.x, camp.z, 4.8))
 				for ci in 3:
 					var ca := rng.randf() * TAU
 					var cp := camp + Vector3(cos(ca) * 2.4, 0.0, sin(ca) * 2.4)
@@ -743,18 +753,20 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 				Vector3(sp.x, maxf(sy - 1.2, -3.5), sp.z)),
 			prop_body, props_root, foliage_cache)
 		placed.append(Vector3(sp.x, sp.z, 6.5))
+		keepout_zones.append(Vector3(sp.x, sp.z, 5.5))
 
-	# 3. Lush tropical palm groves (curved palms leaning over golden beaches + tall palms on green hills).
-	var palm_target := 18
+	# 3. Lush tropical palm groves (2-3 palm clusters leaning over golden beaches & green rims).
+	var palm_target := 22
 	if arch in [&"crescent_lagoon", &"palm_atoll", &"treasure_peak"]:
-		palm_target = 26
+		palm_target = 28
 	elif arch == &"volcano_crag":
-		palm_target = 10
+		palm_target = 12
 	elif arch == &"outpost":
-		palm_target = 16
+		palm_target = 20
 
 	var palms_placed := 0
-	for _attempt in palm_target * 9:
+	var palm_positions: Array[Vector3] = []
+	for _attempt in palm_target * 10:
 		if palms_placed >= palm_target:
 			break
 		var ang := rng.randf() * TAU
@@ -764,37 +776,109 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		if _in_exclusion(px, pz, placed):
 			continue
 		var h := island.surface_height(px, pz)
-		if h < 1.25 or h > 16.0:
+		if h < 1.35 or h > 15.0:
 			continue
 		var n := island.surface_normal(px, pz)
 		if n.y < 0.80:
 			continue
 		# Curved palms favour beach verges and lean picturesquely toward the sea!
-		var use_curved := (h < 3.6 and rng.randf() < 0.72) or rng.randf() < 0.42
+		var use_curved := (h < 3.8 and rng.randf() < 0.74) or rng.randf() < 0.44
 		var scene := PALM_CURVED_SCENE if use_curved else PALM_TALL_SCENE
-		var outward_yaw := atan2(px, pz) - PI * 0.5 + rng.randf_range(-0.65, 0.65)
-		var sc_p := rng.randf_range(0.84, 1.22)
+		var outward_yaw := atan2(px, pz) - PI * 0.5 + rng.randf_range(-0.55, 0.55)
+		var sc_p := rng.randf_range(0.86, 1.22)
 		var xform := Transform3D(
 			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.92, 1.12), sc_p)),
-			Vector3(px, h - 0.14, pz))
+			Vector3(px, h - 0.16, pz))
 		_spawn_prop(island, scene, "Palm_%d" % palms_placed, xform, prop_body, props_root, foliage_cache)
-		placed.append(Vector3(px, pz, 4.4))
+		placed.append(Vector3(px, pz, 4.6))
+		palm_positions.append(Vector3(px, h, pz))
 		palms_placed += 1
 
-	# 4. Lush tropical bush ferns along grassy benches & beneath palms.
-	var fern_target := 22 if arch != &"volcano_crag" else 8
+		# Cluster 1-2 companion palms around beach & grass-verge trunks for lush groves.
+		if palms_placed < palm_target and h < 8.5 and rng.randf() < 0.68:
+			var companions := mini(rng.randi_range(1, 2), palm_target - palms_placed)
+			for ci in companions:
+				for _c_try in 5:
+					var c_ang := ang + rng.randf_range(-1.9, 1.9) + float(ci) * 2.1
+					var c_dist := rng.randf_range(2.2, 3.5)
+					var cx := px + cos(c_ang) * c_dist
+					var cz := pz + sin(c_ang) * c_dist
+					if _in_exclusion(cx, cz, keepout_zones):
+						continue
+					if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.95):
+						continue
+					var ch := island.surface_height(cx, cz)
+					if ch < 1.35 or ch > 14.0:
+						continue
+					var cn := island.surface_normal(cx, cz)
+					if cn.y < 0.80:
+						continue
+					var c_curved := (ch < 4.0 and rng.randf() < 0.78) or rng.randf() < 0.50
+					var c_scene := PALM_CURVED_SCENE if c_curved else PALM_TALL_SCENE
+					var c_yaw := atan2(cx, cz) - PI * 0.5 + (0.48 if ci == 0 else -0.48) + rng.randf_range(-0.28, 0.28)
+					var c_sc := rng.randf_range(0.74, 1.08)
+					var c_xf := Transform3D(
+						Basis(Vector3.UP, c_yaw) * Basis.from_scale(Vector3(c_sc, c_sc * rng.randf_range(0.88, 1.08), c_sc)),
+						Vector3(cx, ch - 0.16, cz))
+					_spawn_prop(island, c_scene, "Palm_%d" % palms_placed, c_xf, prop_body, props_root, foliage_cache)
+					placed.append(Vector3(cx, cz, 2.6))
+					palm_positions.append(Vector3(cx, ch, cz))
+					palms_placed += 1
+					break
+
+	# 4. Lush tropical bush ferns tucked around beach/grass-rim palms & grassy verges.
+	var fern_target := 32 if arch != &"volcano_crag" else 10
+	if arch == &"outpost":
+		fern_target = 26
 	var ferns_placed := 0
-	for _attempt in fern_target * 6:
+	var fern_positions: Array[Vector3] = []
+	var palm_fern_cap := int(fern_target * 0.55)
+
+	# First tuck 1-2 ferns around palm bases near the beach/grass transition rim.
+	for palm_p in palm_positions:
+		if ferns_placed >= palm_fern_cap:
+			break
+		if palm_p.y < 1.65 or palm_p.y > 8.5:
+			continue
+		var tuft_n := rng.randi_range(1, 2)
+		for _ti in tuft_n:
+			if ferns_placed >= palm_fern_cap:
+				break
+			var f_ang := rng.randf() * TAU
+			var f_dist := rng.randf_range(1.15, 2.45)
+			var fx := palm_p.x + cos(f_ang) * f_dist
+			var fz := palm_p.z + sin(f_ang) * f_dist
+			if _in_exclusion(fx, fz, keepout_zones):
+				continue
+			if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.35):
+				continue
+			var fh := island.surface_height(fx, fz)
+			if fh < 1.75 or fh > 14.0:
+				continue
+			if island.surface_normal(fx, fz).y < 0.78:
+				continue
+			var sc_f := rng.randf_range(0.78, 1.32)
+			var xform := Transform3D(
+				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
+				Vector3(fx, fh - 0.10, fz))
+			_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
+			fern_positions.append(Vector3(fx, fh, fz))
+			ferns_placed += 1
+
+	# Fill remaining ferns along beach/grass rims and grassy benches.
+	for _attempt in fern_target * 8:
 		if ferns_placed >= fern_target:
 			break
 		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.85)
+		var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.88)
 		var fx := cos(ang) * rad
 		var fz := sin(ang) * rad
-		if _in_exclusion(fx, fz, exclusions):
+		if _in_exclusion(fx, fz, keepout_zones):
+			continue
+		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.8):
 			continue
 		var h := island.surface_height(fx, fz)
-		if h < 2.2 or h > 18.0:
+		if h < 1.85 or h > 16.0:
 			continue
 		var n := island.surface_normal(fx, fz)
 		if n.y < 0.78:
@@ -802,14 +886,15 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var sc_f := rng.randf_range(0.80, 1.38)
 		var xform := Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
-			Vector3(fx, h - 0.08, fz))
+			Vector3(fx, h - 0.10, fz))
 		_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
+		fern_positions.append(Vector3(fx, h, fz))
 		ferns_placed += 1
 
-	# 5. Faceted coastal boulders anchoring headlands, cliff toes, and shallows.
+	# 5. Faceted coastal boulders anchoring gentle beaches, headlands, and shallows.
 	var rock_target := 14
 	var rocks_placed := 0
-	for _attempt in rock_target * 7:
+	for _attempt in rock_target * 14:
 		if rocks_placed >= rock_target:
 			break
 		var ang := rng.randf() * TAU
@@ -819,12 +904,24 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		if _in_exclusion(rx, rz, placed):
 			continue
 		var h := island.surface_height(rx, rz)
-		if h < -1.0 or h > 14.0:
+		if h < -1.0 or h > 10.5:
 			continue
-		var sc_r := rng.randf_range(0.75, 1.65)
+		if island.surface_normal(rx, rz).y < 0.72:
+			continue
+		if island.surface_normal(rx, rz, 2.5).y < 0.72:
+			continue
+		var sc_r := rng.randf_range(0.75, 1.55)
+		var min_foot_h := h
+		for off: Vector2 in [Vector2(1.3, 0.0), Vector2(-1.3, 0.0), Vector2(0.0, 1.3), Vector2(0.0, -1.3)]:
+			var fh := island.surface_height(rx + off.x * sc_r, rz + off.y * sc_r)
+			if fh < min_foot_h:
+				min_foot_h = fh
+		if h - min_foot_h > 1.05 * sc_r:
+			continue
+		var embed_y := minf(h, min_foot_h + 0.35 * sc_r) - 0.38 * sc_r
 		var xform := Transform3D(
-			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(sc_r, sc_r * rng.randf_range(0.75, 1.25), sc_r)),
-			Vector3(rx, h - 0.28, rz))
+			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(sc_r, sc_r * rng.randf_range(0.75, 1.20), sc_r)),
+			Vector3(rx, embed_y, rz))
 		_spawn_prop(island, ROCK_BOULDER_SCENE, "Boulder_%d" % rocks_placed, xform, prop_body, props_root, foliage_cache)
 		placed.append(Vector3(rx, rz, 3.6))
 		rocks_placed += 1

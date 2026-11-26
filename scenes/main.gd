@@ -22,9 +22,15 @@ const CRATE_PROP_SCENE: PackedScene = preload("res://assets/generated/props/crat
 const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
 
 const CREW_SPECS: Array[Dictionary] = [
-	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.02, 4.65)},
-	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.12, -3.20)},
-	{"persona": &"carpenter", "local_pos": Vector3(1.05, 1.12, -0.35)},
+	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
+	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.10, -3.20)},
+	{"persona": &"carpenter", "local_pos": Vector3(1.05, 1.10, -0.35)},
+]
+
+const BRIGANTINE_CREW_SPECS: Array[Dictionary] = [
+	{"persona": &"helmsman", "local_pos": Vector3(-1.15, 2.25, 6.20)},
+	{"persona": &"lookout", "local_pos": Vector3(0.0, 1.25, -5.60)},
+	{"persona": &"carpenter", "local_pos": Vector3(1.35, 1.25, -0.60)},
 ]
 
 const PEER_TINTS: Array[Array] = [
@@ -67,6 +73,13 @@ var active_shot_mode: String = ""
 
 var _entities_root: Node3D = null
 var _shot_camera: Camera3D = null
+var _shot_track_ship: bool = false
+var _shot_track_cam_local: Vector3 = Vector3.ZERO
+var _shot_track_look_local: Vector3 = Vector3.ZERO
+var _shot_track_world_target: Node3D = null
+var _shot_track_world_blend: float = 0.0
+var _shot_track_world_y_off: float = 3.2
+var _shot_combat_timer: float = -1.0
 var _bobbing_props: Array[Dictionary] = []   # {node, base_x, base_z, y_off, phase}
 var _peer_pawns: Dictionary = {}             # int peer_id -> Pawn
 var _peer_yielded_crew: Dictionary = {}      # int peer_id -> int crew index
@@ -260,10 +273,25 @@ func _resolve_ship_scene(cls: StringName) -> PackedScene:
 	return SLOOP_SCENE
 
 
+func _captain_deck_pos(target_ship: Ship) -> Vector3:
+	if target_ship != null and target_ship.ship_class == &"brigantine":
+		return Vector3(0.0, 2.25, 5.65)
+	return Vector3(0.0, 2.00, 4.15)
+
+
+func _crew_specs_for(target_ship: Ship) -> Array[Dictionary]:
+	if target_ship != null and target_ship.ship_class == &"brigantine":
+		return BRIGANTINE_CREW_SPECS
+	return CREW_SPECS
+
+
 func _mount_cooking_stove(target_ship: Ship) -> void:
 	cooking_stove = CookingStove.new()
 	cooking_stove.name = "CookingStove"
-	cooking_stove.position = Vector3(1.25, -0.85, 0.85)
+	if target_ship.ship_class == &"brigantine":
+		cooking_stove.position = Vector3(1.65, -0.95, 1.85)
+	else:
+		cooking_stove.position = Vector3(1.25, -0.85, 0.85)
 	target_ship.add_child(cooking_stove)
 
 	# Stylized chunky cast-iron galley stove + glowing embers + iron skillet visual.
@@ -316,7 +344,10 @@ func _mount_cooking_stove(target_ship: Ship) -> void:
 func _mount_fishing_station(target_ship: Ship) -> void:
 	fishing_line = FishingLine.new()
 	fishing_line.name = "FishingLine"
-	fishing_line.position = Vector3(-1.48, 2.0, 5.72)
+	if target_ship.ship_class == &"brigantine":
+		fishing_line.position = Vector3(-1.75, 2.25, 7.65)
+	else:
+		fishing_line.position = Vector3(-1.48, 2.0, 5.72)
 	target_ship.add_child(fishing_line)
 
 	# Timber rod rest & angled bamboo rod visual at the aft rail.
@@ -352,7 +383,7 @@ func _build_player_and_crew() -> void:
 	player_pawn = PAWN_SCENE.instantiate() as Pawn
 	player_pawn.name = "PlayerCaptain"
 	add_child(player_pawn)
-	player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+	player_pawn.board(player_ship, _captain_deck_pos(player_ship))
 	var bow_fwd := -player_ship.global_basis.z
 	player_pawn.look_yaw = atan2(-bow_fwd.x, -bow_fwd.z)
 
@@ -386,7 +417,7 @@ func _build_player_and_crew() -> void:
 	# 2. Three AI Crewmates: Barnaby (helmsman), Maren (lookout), Pip (carpenter).
 	crew_pawns.clear()
 	crew_brains.clear()
-	for spec in CREW_SPECS:
+	for spec in _crew_specs_for(player_ship):
 		var persona: StringName = spec["persona"]
 		var local_pos: Vector3 = spec["local_pos"]
 		var cp := PAWN_SCENE.instantiate() as Pawn
@@ -544,6 +575,12 @@ func _apply_cli_overrides() -> void:
 			ocean.quality = lv as Ocean.Quality
 		if sky_rig != null:
 			sky_rig.set(&"cloud_quality", lv)
+	elif active_shot_mode != "":
+		# Showcase captures always default to flagship quality regardless of local settings.json.
+		if ocean != null:
+			ocean.quality = Ocean.Quality.HIGH
+		if sky_rig != null:
+			sky_rig.set(&"cloud_quality", 2)
 
 
 # ==============================================================================
@@ -552,6 +589,7 @@ func _apply_cli_overrides() -> void:
 
 func _process(delta: float) -> void:
 	_tick_bobbing_props(delta)
+	_tick_hero_shot_tracking(delta)
 	_update_live_audio(false)
 	_music_accum += delta
 	if _music_accum >= 1.0:
@@ -1326,8 +1364,80 @@ func _on_ship_class_selected(cls: StringName) -> void:
 	_cli_ship_class = cls
 	if cls == &"brigantine" and not ResourceLoader.exists(BRIGANTINE_SCENE_PATH):
 		Game.post_notice("Brigantine hull commissioned at the drydock (sailing Sloop in harbour).")
-	else:
-		Game.post_notice("Ship class set to %s." % String(cls).capitalize())
+		return
+	if Net.is_host() and player_ship != null and is_instance_valid(player_ship) and player_ship.ship_class != cls:
+		var near_outpost := false
+		for op in archipelago.get_outposts():
+			if player_ship.global_position.distance_to(op.global_position) < 130.0:
+				near_outpost = true
+				break
+		if near_outpost:
+			_swap_player_ship_class(cls)
+			Game.post_notice("Launched your %s from the drydock!" % String(cls).capitalize())
+			return
+	Game.post_notice("Ship class set to %s (launches at your next Outpost)." % String(cls).capitalize())
+
+
+func _swap_player_ship_class(cls: StringName) -> void:
+	var old_ship := player_ship
+	var xf := old_ship.global_transform
+	xf.origin.y = Sea.height(xf.origin.x, xf.origin.z)
+	if old_ship.sunk.is_connected(_on_player_ship_sunk):
+		old_ship.sunk.disconnect(_on_player_ship_sunk)
+	Net.unregister_replicated_ship(&"player_sloop")
+
+	var ship_scene := _resolve_ship_scene(cls)
+	var new_ship := ship_scene.instantiate() as Ship
+	new_ship.name = "PlayerShip"
+	new_ship.faction = &"player"
+	new_ship.start_anchored = old_ship.anchor_down
+	add_child(new_ship)
+	new_ship.global_transform = xf
+	player_ship = new_ship
+
+	map_table = MapTableView.new()
+	map_table.name = "MapTableView"
+	map_table.mount_to_ship(player_ship)
+	map_table.set_archipelago_data(_build_chart_map_data())
+	map_table.voyage_manager = voyage_manager
+	map_table.world_director = world_director
+	map_table.refresh_now()
+
+	_mount_cooking_stove(player_ship)
+	_mount_fishing_station(player_ship)
+	Net.register_replicated_ship(&"player_sloop", player_ship)
+	player_ship.sunk.connect(_on_player_ship_sunk)
+
+	if player_pawn != null and is_instance_valid(player_pawn):
+		if player_pawn.station != null:
+			player_pawn.leave_station()
+		if player_pawn.platform == old_ship:
+			player_pawn.board(player_ship, _captain_deck_pos(player_ship))
+	var specs := _crew_specs_for(player_ship)
+	for i in crew_pawns.size():
+		var cp := crew_pawns[i]
+		if cp != null and is_instance_valid(cp):
+			if cp.station != null:
+				cp.leave_station()
+			cp.board(player_ship, specs[i % specs.size()]["local_pos"] as Vector3)
+		if i < crew_brains.size() and crew_brains[i] != null:
+			crew_brains[i].ship = player_ship
+	for pid: int in _peer_pawns.keys():
+		var pp: Pawn = _peer_pawns[pid]
+		if pp != null and is_instance_valid(pp) and pp.platform == old_ship:
+			if pp.station != null:
+				pp.leave_station()
+			pp.board(player_ship, _captain_deck_pos(player_ship) + Vector3(0.8, 0.0, 0.0))
+
+	if world_director != null:
+		world_director.player_ship = player_ship
+	if hud != null:
+		hud.ship = player_ship
+	if shipwright_menu != null:
+		shipwright_menu.ship = player_ship
+		shipwright_menu.map_table = map_table
+	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
+	old_ship.queue_free()
 
 
 func _on_settings_changed() -> void:
@@ -1566,9 +1676,20 @@ func _play_stinger_safe(preferred: StringName, fallback: StringName) -> void:
 func _apply_hero_shot(mode: String) -> void:
 	var cutlass := archipelago.get_island_by_id("cutlass_cay")
 	var port := archipelago.get_outpost(0)
+	var is_brig := (player_ship != null and player_ship.ship_class == &"brigantine")
+	var sc := 1.38 if is_brig else 1.0
+	_shot_track_ship = false
+	_shot_track_world_target = null
+	_shot_track_world_blend = 0.0
+	_shot_combat_timer = -1.0
 	if hud != null:
 		hud.input_enabled = false
 		hud.clear_banners()
+	# Show the Captain's full 3D character mesh on external third-person hero cameras.
+	var p_cv := _character_visual_of(player_pawn)
+	if p_cv != null:
+		var third_person := mode in ["outpost_dock", "sailing", "island_approach", "combat", "storm", "sunset", "night"]
+		p_cv.set_first_person_hidden(not third_person)
 
 	match mode:
 		"outpost_dock":
@@ -1577,8 +1698,8 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = Sea.AMP_CALM
 			if port != null:
 				var pier_xf := port.global_transform * port.dock_local_transform
-				var cam_pos := pier_xf * Vector3(-5.8, 4.6, -1.5)
-				var look_at_pt := player_ship.global_position + Vector3(0.0, 3.2, -1.0)
+				var cam_pos := pier_xf * Vector3(-6.8 * sc, 5.2 * sc, -2.5 * sc)
+				var look_at_pt := player_ship.global_position + Vector3(0.0, 4.2 * sc, -0.8)
 				_mount_shot_camera(cam_pos, look_at_pt, 56.0)
 
 		"sailing":
@@ -1587,9 +1708,7 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
 			var mid := Vector3(72.0, 0.0, -190.0)
 			_place_sailing_ship(mid, -0.38, 1.0, 6.2)
-			var cam_pos := player_ship.global_transform * Vector3(13.5, 5.2, -13.5)
-			var look_pt := player_ship.global_transform * Vector3(0.0, 3.8, -0.5)
-			_mount_shot_camera(cam_pos, look_pt, 54.0)
+			_enable_ship_track_shot(Vector3(16.8 * sc, 5.6 * sc, -17.2 * sc), Vector3(0.0, 4.8 * sc, -0.5), 54.0)
 
 		"island_approach":
 			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time
@@ -1599,24 +1718,30 @@ func _apply_hero_shot(mode: String) -> void:
 			var ship_pos := isl_pos + Vector3(-42.0, 0.0, 96.0)
 			var yaw := atan2(-(isl_pos.x - ship_pos.x), -(isl_pos.z - ship_pos.z))
 			_place_sailing_ship(ship_pos, yaw, 0.85, 4.8)
-			var cam_pos := player_ship.global_transform * Vector3(11.0, 6.4, 15.0)
-			var look_pt := isl_pos + Vector3(0.0, 12.0, 0.0)
-			_mount_shot_camera(cam_pos, look_pt, 56.0)
+			_enable_ship_track_shot(Vector3(13.5 * sc, 6.8 * sc, 17.5 * sc), Vector3(0.0, 4.5, -25.0), 56.0)
+			_shot_track_world_target = cutlass
+			_shot_track_world_blend = 0.85
+			_shot_track_world_y_off = 12.0
+			_update_tracked_shot_camera()
 
 		"combat":
 			Weather.time_of_day = 14.5 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.24, 12.5, -0.2, 0.0, 0.56)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.28)
 			_place_sailing_ship(Vector3(60.0, 0.0, -210.0), -0.35, 0.9, 5.2)
-			var foe_pos := player_ship.global_transform * Vector3(44.0, 0.0, -12.0)
+			var foe_pos := player_ship.global_transform * Vector3(42.0, 0.0, -10.0)
 			var foe := _spawn_enemy_vessel(&"drowned_sloop", foe_pos)
 			if foe != null:
 				foe.rotation.y = player_ship.rotation.y + 0.12
-				player_ship.aim_cannon(&"starboard", 0.0, 0.12)
-				player_ship.fire_cannon(&"starboard", player_pawn)
-			var cam_pos := player_ship.global_transform * Vector3(-11.0, 6.5, 16.0)
-			var look_pt := player_ship.global_position.lerp(foe_pos, 0.42) + Vector3(0.0, 3.2, 0.0)
-			_mount_shot_camera(cam_pos, look_pt, 58.0)
+				player_ship.aim_cannon(&"starboard", 0.0, 0.10)
+				if player_ship.get_station(&"cannon", &"starboard_aft") != null:
+					player_ship.aim_cannon(&"starboard_aft", 0.0, 0.10)
+				_shot_combat_timer = 0.25
+			_enable_ship_track_shot(Vector3(-13.5 * sc, 7.0 * sc, 18.5 * sc), Vector3(12.0, 3.6, -4.0), 58.0)
+			_shot_track_world_target = foe
+			_shot_track_world_blend = 0.42
+			_shot_track_world_y_off = 3.2
+			_update_tracked_shot_camera()
 
 		"storm":
 			Weather.time_of_day = 15.2 if is_nan(_cli_time) else _cli_time
@@ -1624,18 +1749,14 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.92)
 			_place_sailing_ship(Vector3(-120.0, 0.0, -260.0), 0.15, 0.75, 5.5)
 			Weather.strike_lightning(Vector3(0.25, 0.0, -0.96).normalized(), 520.0, 0.9)
-			var cam_pos := player_ship.global_transform * Vector3(14.0, 4.8, -14.5)
-			var look_pt := player_ship.global_transform * Vector3(0.0, 3.5, 0.0)
-			_mount_shot_camera(cam_pos, look_pt, 58.0)
+			_enable_ship_track_shot(Vector3(17.0 * sc, 5.6 * sc, -17.5 * sc), Vector3(0.0, 4.5 * sc, 0.0), 58.0)
 
 		"sunset":
 			Weather.time_of_day = 17.85 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.06, 8.5, -0.5, 0.0, 0.44)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.12)
 			_place_sailing_ship(Vector3(85.0, 0.0, -210.0), -0.42, 1.0, 5.8)
-			var cam_pos := player_ship.global_transform * Vector3(13.0, 4.4, 14.0)
-			var look_pt := player_ship.global_transform * Vector3(0.0, 4.2, -3.0)
-			_mount_shot_camera(cam_pos, look_pt, 56.0)
+			_enable_ship_track_shot(Vector3(15.5 * sc, 5.0 * sc, 16.5 * sc), Vector3(0.0, 4.8 * sc, -2.5), 56.0)
 
 		"night":
 			Weather.time_of_day = 23.2 if is_nan(_cli_time) else _cli_time
@@ -1643,8 +1764,8 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
 			if port != null:
 				var pier_xf := port.global_transform * port.dock_local_transform
-				var cam_pos := pier_xf * Vector3(-6.2, 4.5, -2.0)
-				var look_pt := player_ship.global_position + Vector3(0.0, 3.0, -2.0)
+				var cam_pos := pier_xf * Vector3(-6.8 * sc, 4.8 * sc, -2.2 * sc)
+				var look_pt := player_ship.global_position + Vector3(0.0, 3.6 * sc, -1.8)
 				_mount_shot_camera(cam_pos, look_pt, 56.0)
 
 		"helm":
@@ -1652,9 +1773,9 @@ func _apply_hero_shot(mode: String) -> void:
 			Weather.set_weather(0.06, 10.5, -0.37, 0.0, 0.36)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
 			_place_sailing_ship(Vector3(76.0, 0.0, -195.0), -0.37, 1.0, 6.0)
-			var helm_eye := player_ship.global_transform * Vector3(0.0, 3.65, 5.75)
-			var helm_look := player_ship.global_transform * Vector3(0.0, 2.55, -24.0)
-			_mount_shot_camera(helm_eye, helm_look, 74.0)
+			var helm_eye := Vector3(0.0, 3.95, 7.35) if is_brig else Vector3(0.0, 3.65, 5.75)
+			var helm_look := Vector3(0.0, 2.75, -24.0) if is_brig else Vector3(0.0, 2.55, -24.0)
+			_enable_ship_track_shot(helm_eye, helm_look, 74.0)
 
 		"map_table":
 			Weather.time_of_day = 12.0 if is_nan(_cli_time) else _cli_time
@@ -1662,9 +1783,10 @@ func _apply_hero_shot(mode: String) -> void:
 			Sea.amp_scale = 0.0
 			if map_table != null:
 				map_table.refresh_now()
-				var table_top := map_table.global_position + Vector3(0.0, MapTableView.SHIP_TABLE_TOP_Y, 0.0)
-				var cam_pos := player_ship.global_transform * Vector3(0.0, 0.85, 3.15)
-				_mount_shot_camera(cam_pos, table_top, 52.0)
+				var table_y := MapTableView.BRIGANTINE_TABLE_TOP_Y if is_brig else MapTableView.SHIP_TABLE_TOP_Y
+				var table_top := map_table.global_position + Vector3(0.0, table_y, 0.0)
+				var cam_local := Vector3(0.0, 0.58, 3.60) if is_brig else Vector3(0.0, 0.62, 1.58)
+				_mount_shot_camera(player_ship.global_transform * cam_local, table_top, 52.0)
 
 		"hold":
 			Weather.time_of_day = 14.0 if is_nan(_cli_time) else _cli_time
@@ -1673,9 +1795,44 @@ func _apply_hero_shot(mode: String) -> void:
 			player_ship.water_level = 0.18
 			if map_table != null:
 				map_table.refresh_now()
-			var cam_pos := player_ship.global_transform * Vector3(-0.75, 0.55, -2.35)
-			var look_pt := player_ship.global_transform * Vector3(0.35, -0.15, 2.35)
-			_mount_shot_camera(cam_pos, look_pt, 68.0)
+			var cam_local_hold := Vector3(-1.35, 0.45, -1.85) if is_brig else Vector3(-1.05, 0.48, -1.95)
+			var look_local_hold := Vector3(0.15, -0.25, 3.60) if is_brig else Vector3(0.20, -0.20, 2.25)
+			_mount_shot_camera(player_ship.global_transform * cam_local_hold, player_ship.global_transform * look_local_hold, 68.0)
+
+
+func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:
+	_shot_track_ship = true
+	_shot_track_cam_local = cam_local
+	_shot_track_look_local = look_local
+	_mount_shot_camera(player_ship.global_transform * cam_local, player_ship.global_transform * look_local, fov_deg)
+	_update_tracked_shot_camera()
+
+
+func _tick_hero_shot_tracking(delta: float) -> void:
+	if _shot_combat_timer > 0.0:
+		_shot_combat_timer -= delta
+		if _shot_combat_timer <= 0.0 and player_ship != null and is_instance_valid(player_ship):
+			player_ship.aim_cannon(&"starboard", 0.0, 0.10)
+			player_ship.fire_cannon(&"starboard", player_pawn)
+			if player_ship.get_station(&"cannon", &"starboard_aft") != null:
+				player_ship.aim_cannon(&"starboard_aft", 0.0, 0.10)
+				player_ship.fire_cannon(&"starboard_aft", player_pawn)
+	if _shot_track_ship:
+		_update_tracked_shot_camera()
+
+
+func _update_tracked_shot_camera() -> void:
+	if _shot_camera == null or player_ship == null or not is_instance_valid(player_ship):
+		return
+	var yaw_basis := Basis(Vector3.UP, player_ship.global_rotation.y)
+	var ship_pos := player_ship.global_position
+	var cam_pos := ship_pos + yaw_basis * _shot_track_cam_local
+	var look_pt := ship_pos + yaw_basis * _shot_track_look_local
+	if _shot_track_world_target != null and is_instance_valid(_shot_track_world_target):
+		var target_pt := _shot_track_world_target.global_position + Vector3(0.0, _shot_track_world_y_off, 0.0)
+		look_pt = ship_pos.lerp(target_pt, _shot_track_world_blend) + Vector3(0.0, 1.4, 0.0)
+	_shot_camera.global_position = cam_pos
+	_shot_camera.look_at(look_pt, Vector3.UP)
 
 
 func _place_sailing_ship(pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_speed: float) -> void:
@@ -1692,11 +1849,12 @@ func _place_sailing_ship(pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_s
 	player_ship.angular_velocity = Vector3.ZERO
 	# Re-board player and crew cleanly onto the moved ship.
 	if player_pawn != null:
-		player_pawn.board(player_ship, Vector3(0.0, 2.02, 4.15))
+		player_pawn.board(player_ship, _captain_deck_pos(player_ship))
 		player_pawn.look_yaw = yaw_rad
+	var specs := _crew_specs_for(player_ship)
 	for i in crew_pawns.size():
 		if crew_pawns[i] != null:
-			crew_pawns[i].board(player_ship, CREW_SPECS[i]["local_pos"] as Vector3)
+			crew_pawns[i].board(player_ship, specs[i % specs.size()]["local_pos"] as Vector3)
 
 
 func _mount_shot_camera(world_pos: Vector3, look_target: Vector3, fov_deg: float) -> void:

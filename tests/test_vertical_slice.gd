@@ -16,6 +16,8 @@ var _saved_weather: Dictionary = {}
 var _saved_amp: float = 1.0
 var _had_profile_file: bool = false
 var _saved_profile_raw: String = ""
+var _had_settings_file: bool = false
+var _saved_settings_raw: String = ""
 
 
 func _fast(on: bool) -> void:
@@ -31,6 +33,9 @@ func _begin(use_fast: bool = false) -> void:
 	_had_profile_file = FileAccess.file_exists(Profile.DEFAULT_PATH)
 	if _had_profile_file:
 		_saved_profile_raw = FileAccess.get_file_as_string(Profile.DEFAULT_PATH)
+	_had_settings_file = FileAccess.file_exists(UserSettings.DEFAULT_PATH)
+	if _had_settings_file:
+		_saved_settings_raw = FileAccess.get_file_as_string(UserSettings.DEFAULT_PATH)
 	# Start each test with a clean captain profile so assertions are deterministic.
 	Game.profile.data = Profile._defaults()
 	Net.start_single_player()
@@ -67,6 +72,15 @@ func _end() -> void:
 		var dir := DirAccess.open(Profile.DEFAULT_PATH.get_base_dir())
 		if dir != null:
 			dir.remove(Profile.DEFAULT_PATH.get_file())
+	if _had_settings_file:
+		var sf := FileAccess.open(UserSettings.DEFAULT_PATH, FileAccess.WRITE)
+		if sf != null:
+			sf.store_string(_saved_settings_raw)
+			sf.close()
+	elif FileAccess.file_exists(UserSettings.DEFAULT_PATH):
+		var sdir := DirAccess.open(UserSettings.DEFAULT_PATH.get_base_dir())
+		if sdir != null:
+			sdir.remove(UserSettings.DEFAULT_PATH.get_file())
 
 
 # ==============================================================================
@@ -341,8 +355,11 @@ func test_shipwright_menu_and_world_director_wreck_salvage() -> void:
 	var picked_classes: Array[StringName] = []
 	menu.ship_class_selected.connect(func(cls: StringName) -> void: picked_classes.append(cls))
 	menu.select_ship_class(&"brigantine")
+	await physics_frames(2)
 	check_eq(picked_classes.size(), 1, "ship_class_selected emitted")
 	check_eq(picked_classes[0], &"brigantine", "ship class toggled to brigantine")
+	ship = m.get(&"player_ship") as Ship
+	check(ship != null and ship.ship_class == &"brigantine", "harbour ship live-swapped to Brigantine")
 
 	menu.apply_quality_preset(0)
 	check_eq(int(Ocean.current.quality), int(Ocean.Quality.LOW), "quality preset propagated to Ocean")
@@ -366,7 +383,8 @@ func test_shipwright_menu_and_world_director_wreck_salvage() -> void:
 	var wreck_spot := Vector3(140.0, 0.0, -240.0)
 	ship.global_transform = Transform3D(Basis.IDENTITY, wreck_spot)
 	ship.set_anchor(false)
-	player.board(ship, Vector3(0.0, 2.02, 4.15))
+	var deck_pos := Vector3(0.0, 2.25, 5.65) if ship.ship_class == &"brigantine" else Vector3(0.0, 2.00, 4.15)
+	player.board(ship, deck_pos)
 
 	var cargo_ids: Array[StringName] = [&"corsair_chest", &"wayfarer_chest", &"drowned_skull"]
 	for i in cargo_ids.size():

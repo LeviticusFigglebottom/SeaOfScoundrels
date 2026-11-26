@@ -775,7 +775,22 @@ func _tick_lookout(delta: float) -> void:
 			var wdir := Vector3(sin(Weather.wind_heading), 0.0, -cos(Weather.wind_heading))
 			_speak(&"wind_shift", {"bearing": CrewDialogue.compass_bearing(Vector3.ZERO, wdir)}, "wind_shift", 35.0)
 
-	# Island sightings (nodes in group `islands`).
+	# Hostile ship sightings take top priority over distant landmarks.
+	var enemy := _find_hostile_ship(lookout_range)
+	if enemy != null:
+		var eid := enemy.get_instance_id()
+		if not _reported_ships.has(eid):
+			_reported_ships[eid] = true
+			var label := "Drowned Sloop"
+			if enemy.faction == &"ghost":
+				label = "Ghost Ship"
+			elif enemy.faction == &"corsair":
+				label = "Corsair Raider"
+			var brg := CrewDialogue.ship_relative_bearing(ship, enemy.global_position)
+			_speak(&"sail_sighted", {"target": label, "bearing": brg}, "ship:" + str(eid), 35.0)
+			return
+
+	# Island sightings (nodes in group `islands`) ahead or abeam — ignore islands behind the stern.
 	for node in get_tree().get_nodes_in_group(&"islands"):
 		if not (node is Node3D):
 			continue
@@ -786,24 +801,16 @@ func _tick_lookout(delta: float) -> void:
 			continue
 		var dist := origin.distance_to(isl.global_position)
 		if dist < lookout_range and dist > 95.0:
+			var brg := CrewDialogue.ship_relative_bearing(ship, isl.global_position)
+			if brg.contains("stern"):
+				continue
 			_reported_islands[id_key] = true
 			var raw_nm: Variant = isl.get(&"display_name")
 			var nm: String = String(raw_nm) if raw_nm != null else String(isl.name)
 			if raw_nm == null and isl.has_meta("display_name"):
 				nm = String(isl.get_meta("display_name"))
-			var brg := CrewDialogue.ship_relative_bearing(ship, isl.global_position)
 			_speak(&"land_ho", {"target": nm, "bearing": brg}, "land:" + id_key, 60.0)
 			break
-
-	# Hostile ship sightings.
-	var enemy := _find_hostile_ship(lookout_range)
-	if enemy != null:
-		var eid := enemy.get_instance_id()
-		if not _reported_ships.has(eid):
-			_reported_ships[eid] = true
-			var label := "Ghost Ship" if enemy.faction == &"ghost" else "Drowned Sloop"
-			var brg := CrewDialogue.ship_relative_bearing(ship, enemy.global_position)
-			_speak(&"sail_sighted", {"target": label, "bearing": brg}, "ship:" + str(eid), 35.0)
 
 	# Calm sailing banter.
 	if _banter_timer <= 0.0 and current_task == &"idle" and ship != null and ship.forward_speed() > 1.8:

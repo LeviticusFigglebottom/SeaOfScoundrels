@@ -440,8 +440,8 @@ func _update_camera() -> void:
 			if _sloop_model != null:
 				var xf := _sloop_model.global_transform
 				var phase := clampf(t / 2.5, 0.0, 1.0)
-				var from_local := Vector3(0.0, 2.05, 2.3).lerp(Vector3(0.0, 0.35, 1.5), phase)
-				var target_local := Vector3(0.0, -0.50, -0.4).lerp(Vector3(0.0, -0.45, -2.2), phase)
+				var from_local := Vector3(0.0, 2.35, 1.85).lerp(Vector3(0.0, 0.48, 0.90), phase)
+				var target_local := Vector3(0.0, -0.55, -0.6).lerp(Vector3(0.0, -0.45, -2.3), phase)
 				_look(xf * from_local, xf * target_local)
 			else:
 				_look(Vector3(0, 3, 6), Vector3(0, 0, -12))

@@ -1317,12 +1317,35 @@ def build_drowned_meshes(arm_obj):
 
     # Vertebrae column + chunky ribcage + clavicles + pelvis
     with wctx(body, w_torso):
-        # Segmented chunky spine column (y = 0.92 .. 1.48)
+        # Segmented chunky spine column (y = 0.92 .. 1.52)
         for i in range(7):
             sy = 0.95 + i * 0.082
             cbox(body, (0.0, sy, 0.032), (0.056, 0.054, 0.062), 'bone', C_BONE_DARK if i % 2 else C_BONE, 0.012)
             # Dorsal spine ridge knob
             cbox(body, (0.0, sy, 0.072), (0.026, 0.032, 0.034), 'bone', C_BONE, 0.006)
+
+        # Continuous thoracic-to-cervical spine column seated cleanly into skull base & jaw
+        tube(body, [
+            (0.0, 1.130, 0.026),
+            (0.0, 1.250, 0.030),
+            (0.0, 1.350, 0.028),
+            (0.0, 1.415, 0.022),
+            (0.0, 1.470, 0.014),
+            (0.0, 1.520, 0.006),
+            (0.0, 1.585, 0.008),
+        ], [
+            (0.036, 0.036),
+            (0.034, 0.034),
+            (0.038, 0.038),
+            (0.042, 0.042),
+            (0.044, 0.046),
+            (0.044, 0.052),
+            (0.048, 0.054),
+        ], 6, 'bone', C_BONE, (True, True), False,
+             scols=[C_BONE_DARK, C_BONE, C_BONE, C_BONE_DARK, C_BONE, C_BONE_DARK])
+        # Upper cervical (atlas/axis) vertebra collar bridging clavicles solidly into skull base
+        cbox(body, (0.0, 1.492, 0.018), (0.060, 0.054, 0.068), 'bone', C_BONE_DARK, 0.011)
+        cbox(body, (0.0, 1.492, 0.060), (0.024, 0.030, 0.030), 'bone', C_BONE, 0.006)
 
         # Sternum plate
         cbox(body, (0.0, 1.275, -0.106), (0.062, 0.190, 0.034), 'bone', C_BONE, 0.009)

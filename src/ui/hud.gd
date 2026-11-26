@@ -18,14 +18,14 @@ signal pause_changed(open: bool)
 signal quality_changed(target: StringName, level: int)
 
 const ITEM_SLICE_HINTS := {
-	&"cutlass": "Light combo · Hold heavy · RMB parry",
-	&"pistol": "Flintlock shot · RMB aim",
-	&"compass": "Points true North · RMB raise",
+	&"cutlass": "Light combo | Hold heavy | RMB parry",
+	&"pistol": "Flintlock shot | RMB aim",
+	&"compass": "Points true North | RMB raise",
 	&"spyglass": "RMB zoom & sight horizon",
-	&"lantern": "LMB toggle flame · RMB raise",
-	&"map": "Treasure chart · RMB read",
+	&"lantern": "LMB toggle flame | RMB raise",
+	&"map": "Treasure chart | RMB read",
 	&"shovel": "Dig buried treasure mounds",
-	&"bucket": "Bail bilge water · Splash out",
+	&"bucket": "Bail bilge water | Splash out",
 	&"planks": "Patch open hull breaches",
 	&"tankard": "Drink grog (+15 HP)",
 	&"instrument": "Strike up a crew shanty",
@@ -358,7 +358,7 @@ func set_bus_volume(bus: StringName, linear: float) -> void:
 
 ## Queue a crew callout or game notice on the top-center parchment scroll banner.
 func post_banner(text: String) -> void:
-	var clean := text.strip_edges()
+	var clean := _to_ascii(text.strip_edges())
 	if clean == "":
 		return
 	if clean == _banner_current and _banner_timer > 1.2:
@@ -410,7 +410,7 @@ func is_any_overlay_open() -> bool:
 func _build_ui() -> void:
 	_root = Control.new()
 	_root.name = "HUDRoot"
-	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.theme = _theme
 	add_child(_root)
@@ -609,7 +609,7 @@ func _build_tool_chip() -> void:
 	vbox.add_child(_tool_title_label)
 
 	_tool_meta_label = Label.new()
-	_tool_meta_label.text = "[Tab] Tools · [Q] Crew"
+	_tool_meta_label.text = "[Tab] Tools | [Q] Crew"
 	_tool_meta_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_tool_meta_label.add_theme_font_size_override("font_size", 13)
 	_tool_meta_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
@@ -619,14 +619,14 @@ func _build_tool_chip() -> void:
 func _build_pause_overlay() -> void:
 	pause_overlay = ColorRect.new()
 	pause_overlay.name = "PauseOverlay"
-	pause_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	pause_overlay.color = Color(0.06, 0.04, 0.02, 0.52)
 	pause_overlay.visible = false
 	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_root.add_child(pause_overlay)
 
 	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	pause_overlay.add_child(center)
 
 	var book := PanelContainer.new()
@@ -769,7 +769,7 @@ func _build_pause_overlay() -> void:
 
 func _make_section_divider(heading: String) -> Label:
 	var l := Label.new()
-	l.text = "— %s —" % heading
+	l.text = "-- %s --" % heading
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.add_theme_font_size_override("font_size", 14)
 	l.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
@@ -913,7 +913,7 @@ func _tick_context_prompt(delta: float) -> void:
 	var want_a := 1.0 if txt != "" else 0.0
 	_prompt_alpha = move_toward(_prompt_alpha, want_a, delta * 9.0)
 	if _prompt_label != null and txt != "":
-		_prompt_label.text = txt
+		_prompt_label.text = _to_ascii(txt)
 	if _prompt_panel != null:
 		_prompt_panel.modulate.a = _prompt_alpha
 		_prompt_panel.visible = _prompt_alpha > 0.01
@@ -934,45 +934,45 @@ func _refresh_tool_chip() -> void:
 		return
 	var item_id := inventory.active_item if inventory != null else &"cutlass"
 	var title := ToolMeshes.get_display_name(item_id)
-	var meta := "[Tab] Tools · [Q] Crew"
+	var meta := "[Tab] Tools | [Q] Crew"
 
 	if pawn != null and pawn.station != null:
 		var sk := StringName(pawn.station.get(&"kind"))
 		if sk == &"cannon" and ship != null:
 			title = "Ship Cannon"
-			meta = "Shot: %d · [LMB] Fire" % ship.cannonballs_remaining
+			meta = "Shot: %d | [LMB] Fire" % ship.cannonballs_remaining
 		elif sk == &"helm":
 			title = "Ship's Wheel"
-			meta = "A/D Steer · RMB Center"
+			meta = "A/D Steer | RMB Center"
 		elif sk == &"map_table":
 			title = "Map Table"
-			meta = "WASD Pan · LMB/RMB Zoom"
+			meta = "WASD Pan | LMB/RMB Zoom"
 	elif inventory != null:
 		match item_id:
 			&"pistol":
 				if combat != null:
-					meta = "Ammo: %d / 6 · [RMB] Aim" % combat.ammo
+					meta = "Ammo: %d / 6 | [RMB] Aim" % combat.ammo
 			&"lantern":
-				meta = "Lit · [LMB] Snuff" if inventory.lantern_lit else "Unlit · [LMB] Light"
+				meta = "Lit | [LMB] Snuff" if inventory.lantern_lit else "Unlit | [LMB] Light"
 			&"bucket":
-				meta = "Full · [LMB] Splash" if inventory.bucket_full else "Empty · [LMB] Bail"
+				meta = "Full | [LMB] Splash" if inventory.bucket_full else "Empty | [LMB] Bail"
 			&"planks":
 				var active_ship := _active_ship()
 				if active_ship != null:
-					meta = "Planks: %d · [LMB] Patch" % active_ship.planks_remaining
+					meta = "Planks: %d | [LMB] Patch" % active_ship.planks_remaining
 				else:
 					meta = "[LMB] Patch breach"
 			&"instrument":
-				meta = "Playing Shanty · [LMB] Stop" if inventory.playing_shanty else "[LMB] Play Shanty"
+				meta = "Playing Shanty | [LMB] Stop" if inventory.playing_shanty else "[LMB] Play Shanty"
 			&"map":
-				meta = "%s · [RMB] Read" % inventory.map_island_name
+				meta = "%s | [RMB] Read" % inventory.map_island_name
 			&"compass":
-				meta = "True North · [RMB] Raise"
+				meta = "True North | [RMB] Raise"
 			&"spyglass":
 				meta = "[RMB] Peer Through"
 
-	_tool_title_label.text = title
-	_tool_meta_label.text = meta
+	_tool_title_label.text = _to_ascii(title)
+	_tool_meta_label.text = _to_ascii(meta)
 
 
 func _tick_whisper(delta: float) -> void:
@@ -1007,9 +1007,9 @@ func _refresh_whisper_labels() -> void:
 	if voyage_manager != null and is_instance_valid(voyage_manager) and voyage_manager.has_active_voyage():
 		v_title = String(voyage_manager.active_voyage.get("title", "Active Voyage"))
 		v_obj = voyage_manager.get_current_objective()
-	_voyage_title_label.text = v_title
+	_voyage_title_label.text = _to_ascii(v_title)
 	_voyage_title_label.visible = v_title != ""
-	_voyage_obj_label.text = v_obj
+	_voyage_obj_label.text = _to_ascii(v_obj)
 	_voyage_obj_label.visible = v_obj != ""
 
 
@@ -1180,6 +1180,15 @@ static func _style_toggle_btn(btn: Button, selected: bool) -> void:
 		btn.remove_theme_stylebox_override("normal")
 
 
+static func _to_ascii(text: String) -> String:
+	var out := text.replace(char(0x2014), "--").replace(char(0x2013), "-")
+	out = out.replace(char(0x00B7), "|").replace(char(0x2022), "*")
+	out = out.replace(char(0x2018), "'").replace(char(0x2019), "'")
+	out = out.replace(char(0x201C), "\"").replace(char(0x201D), "\"")
+	out = out.replace(char(0x2026), "...")
+	return out
+
+
 # ==============================================================================
 # Custom drawn minimal HUD controls
 # ==============================================================================
@@ -1188,13 +1197,14 @@ class _CrosshairView extends Control:
 	var alpha: float = 0.78
 
 	func _ready() -> void:
-		set_anchors_preset(Control.PRESET_FULL_RECT)
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	func _draw() -> void:
 		if alpha <= 0.02:
 			return
-		var c := size * 0.5
+		var view_sz := size if size.length_squared() >= 1.0 else get_viewport_rect().size
+		var c := view_sz * 0.5
 		draw_circle(c, 3.6, Color(0.14, 0.09, 0.05, 0.55 * alpha))
 		draw_circle(c, 2.2, Color(0.96, 0.91, 0.78, alpha))
 
@@ -1268,7 +1278,7 @@ class _SpyglassOverlay extends Control:
 	var _font: Font = null
 
 	func _ready() -> void:
-		set_anchors_preset(Control.PRESET_FULL_RECT)
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 		visible = false
 		_font = HudIcons.get_ui_font()
@@ -1279,17 +1289,18 @@ class _SpyglassOverlay extends Control:
 		queue_redraw()
 
 	func set_sighting(label: String, dist_m: float) -> void:
-		_sighting_label = label
+		_sighting_label = GameHUD._to_ascii(label)
 		_sighting_dist = dist_m
 		queue_redraw()
 
 	func _draw() -> void:
 		if _zoom <= 0.03:
 			return
-		var c := size * 0.5
-		var min_dim := minf(size.x, size.y)
+		var view_sz := size if size.length_squared() >= 1.0 else get_viewport_rect().size
+		var c := view_sz * 0.5
+		var min_dim := minf(view_sz.x, view_sz.y)
 		var aperture_r := lerpf(min_dim * 0.68, min_dim * 0.42, _zoom)
-		var outer_r := maxf(size.x, size.y) * 0.82
+		var outer_r := maxf(view_sz.x, view_sz.y) * 0.82
 		var a := smoothstep(0.05, 0.55, _zoom)
 
 		# Opaque dark brass-housing mask outside the circular telescope aperture.
@@ -1314,7 +1325,7 @@ class _SpyglassOverlay extends Control:
 
 		# Subtle horizon sighting readout tucked cleanly at the bottom of the lens.
 		if _sighting_label != "" and _zoom > 0.45 and _font != null:
-			var txt := "%s  —  %d m" % [_sighting_label, int(roundf(_sighting_dist))]
+			var txt := "%s -- %d m" % [_sighting_label, int(roundf(_sighting_dist))]
 			var sz := _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 17)
 			var box_r := Rect2(c.x - sz.x * 0.5 - 16.0, c.y + aperture_r - 58.0, sz.x + 32.0, 32.0)
 			draw_rect(box_r, Color(0.92, 0.85, 0.70, 0.90 * a), true)

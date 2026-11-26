@@ -119,7 +119,22 @@ GLYPHS = {
     "|": [[(0.50, 0.04), (0.50, 1.02)]],
     "}": [[(0.32, 0.04), (0.52, 0.12), (0.54, 0.44), (0.68, 0.52), (0.54, 0.60), (0.52, 0.92), (0.32, 1.00)]],
     "~": [[(0.18, 0.54), (0.36, 0.40), (0.64, 0.64), (0.82, 0.48)]],
+    "\u00b7": [[(0.47, 0.50), (0.53, 0.54)]],  # middle dot
+    "\u2022": [[(0.44, 0.48), (0.56, 0.48), (0.56, 0.58), (0.44, 0.58), (0.44, 0.48)]],  # bullet
+    "\u2013": [[(0.16, 0.54), (0.84, 0.54)]],  # en-dash
+    "\u2014": [[(0.06, 0.54), (0.94, 0.54)]],  # em-dash
+    "\u2026": [[(0.18, 0.86), (0.22, 0.94)], [(0.48, 0.86), (0.52, 0.94)], [(0.78, 0.86), (0.82, 0.94)]],  # ellipsis
+    "\u00b0": [[(0.50, 0.12), (0.66, 0.22), (0.50, 0.34), (0.34, 0.22), (0.50, 0.12)]],  # degree
+    "\u2018": [[(0.54, 0.06), (0.46, 0.28)]],  # left single quote
+    "\u2019": [[(0.54, 0.06), (0.46, 0.28)]],  # right single quote
+    "\u201c": [[(0.36, 0.06), (0.30, 0.28)], [(0.66, 0.06), (0.60, 0.28)]],  # left double quote
+    "\u201d": [[(0.36, 0.06), (0.30, 0.28)], [(0.66, 0.06), (0.60, 0.28)]],  # right double quote
 }
+
+EXTRA_CHARS = [
+    "\u00b7", "\u2022", "\u2013", "\u2014", "\u2026",
+    "\u00b0", "\u2018", "\u2019", "\u201c", "\u201d",
+]
 
 
 def draw_stroke(draw, pts, ox, oy, scale_x, scale_y, width):
@@ -141,7 +156,7 @@ def main():
     img = Image.new("RGBA", (ATLAS_W * ss, ATLAS_H * ss), (255, 255, 255, 0))
     draw = ImageDraw.Draw(img)
 
-    chars = [chr(c) for c in range(32, 127)]
+    chars = [chr(c) for c in range(32, 127)] + EXTRA_CHARS
     entries = []
     for idx, ch in enumerate(chars):
         col = idx % COLS
@@ -160,9 +175,9 @@ def main():
         # Tight proportional xadvance for crisp kerning feel.
         if ch == " ":
             xadv = 12
-        elif ch in "iIl!|.,;:'`":
+        elif ch in "iIl!|.,;:'`\u00b7\u2018\u2019":
             xadv = 14
-        elif ch in "MW@#%&":
+        elif ch in "MW@#%&\u2014\u2026":
             xadv = 28
         elif ch.isupper():
             xadv = 24

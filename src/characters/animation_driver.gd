@@ -52,10 +52,13 @@ var _bone_count: int = 0
 var _rest_pos: PackedVector3Array = PackedVector3Array()
 var _rest_rot: Array[Quaternion] = []
 var _par_grest_rot: Array[Quaternion] = []
+var _grest_rot: Array[Quaternion] = []
 var _cur_rot: Array[Quaternion] = []
 var _target_rot: Array[Quaternion] = []
 var _cur_hips_offset: Vector3 = Vector3.ZERO
 var _target_hips_offset: Vector3 = Vector3.ZERO
+var _rest_ankle_y_l: float = 0.09
+var _rest_ankle_y_r: float = 0.09
 
 # Cached 19-bone indices
 var _b_hips: int = -1
@@ -221,6 +224,7 @@ func update_pose(delta: float, snap: bool = false) -> void:
 			_layer_carry(_carry_blend)
 
 		_tick_and_layer_action(dt)
+		_apply_grounded_leg_flexion(st)
 
 	_compensate_parent_scale(st)
 	_update_carry_anchor(st)
@@ -288,10 +292,13 @@ func _bind_skeleton(sk: Skeleton3D) -> void:
 	_rest_pos.clear()
 	_rest_rot.clear()
 	_par_grest_rot.clear()
+	_grest_rot.clear()
 	_cur_rot.clear()
 	_target_rot.clear()
 	_cur_hips_offset = Vector3.ZERO
 	_target_hips_offset = Vector3.ZERO
+	_rest_ankle_y_l = 0.09
+	_rest_ankle_y_r = 0.09
 	if skeleton == null:
 		return
 
@@ -299,6 +306,7 @@ func _bind_skeleton(sk: Skeleton3D) -> void:
 	_rest_pos.resize(_bone_count)
 	_rest_rot.resize(_bone_count)
 	_par_grest_rot.resize(_bone_count)
+	_grest_rot.resize(_bone_count)
 	_cur_rot.resize(_bone_count)
 	_target_rot.resize(_bone_count)
 
@@ -307,6 +315,7 @@ func _bind_skeleton(sk: Skeleton3D) -> void:
 		var r_rot := rest.basis.orthonormalized().get_rotation_quaternion().normalized()
 		_rest_pos[i] = rest.origin
 		_rest_rot[i] = r_rot
+		_grest_rot[i] = skeleton.get_bone_global_rest(i).basis.orthonormalized().get_rotation_quaternion().normalized()
 		_cur_rot[i] = r_rot
 		_target_rot[i] = r_rot
 		var par := skeleton.get_bone_parent(i)
@@ -334,6 +343,10 @@ func _bind_skeleton(sk: Skeleton3D) -> void:
 	_b_thigh_r = skeleton.find_bone("Thigh_R")
 	_b_shin_r = skeleton.find_bone("Shin_R")
 	_b_foot_r = skeleton.find_bone("Foot_R")
+	if _b_foot_l >= 0:
+		_rest_ankle_y_l = skeleton.get_bone_global_rest(_b_foot_l).origin.y
+	if _b_foot_r >= 0:
+		_rest_ankle_y_r = skeleton.get_bone_global_rest(_b_foot_r).origin.y
 
 
 # ------------------------------------------------------------------ state sampling
@@ -445,6 +458,21 @@ static func _safe_slerp(a: Quaternion, b: Quaternion, t: float) -> Quaternion:
 	return q.normalized()
 
 
+static func _quat_from_to(from_v: Vector3, to_v: Vector3, fallback_axis: Vector3 = Vector3.RIGHT) -> Quaternion:
+	if from_v.length_squared() < 1e-10 or to_v.length_squared() < 1e-10:
+		return Quaternion.IDENTITY
+	var u := from_v.normalized()
+	var v := to_v.normalized()
+	var d := clampf(u.dot(v), -1.0, 1.0)
+	if d > 0.999999:
+		return Quaternion.IDENTITY
+	if d < -0.999999:
+		var ax := fallback_axis.normalized() if fallback_axis.length_squared() > 1e-6 else Vector3.RIGHT
+		return Quaternion(ax, PI)
+	var c := u.cross(v)
+	return Quaternion(c.x, c.y, c.z, 1.0 + d).normalized()
+
+
 static func _euler_char(pitch: float, yaw: float, roll: float) -> Quaternion:
 	return Basis.from_euler(Vector3(pitch, yaw, roll), EULER_ORDER_YXZ).get_rotation_quaternion().normalized()
 
@@ -537,6 +565,112 @@ func _set_leg(
 
 	var ft_char := Quaternion(Vector3.RIGHT, clampf(foot_up, -1.2, 1.1))
 	_set_char_rot(ft_idx, ft_char, w)
+
+
+func _apply_grounded_leg_flexion(st: _AnimState) -> void:
+	# Whenever a grounded pose drops the hips (block, heavy, stagger, dig, bail, crouch,
+	# stations, etc.), flex any leg whose ankle sinks below its rest floor height using exact
+	# 2-bone analytical kinematics with a forward knee pole so knees always bend anatomically
+	# backward (never inverted) and boot soles plant flat at y = 0.0.
+	if st.dead or not st.grounded:
+		return
+	if st.mode == Pawn.Mode.SWIM or st.mode == Pawn.Mode.LADDER:
+		return
+	if st.station_kind == &"sit" or st.station_kind == &"seat":
+		return
+	if _target_hips_offset.y >= -0.002 or _b_hips < 0:
+		return
+
+	var hips_par := skeleton.get_bone_parent(_b_hips)
+	var par_gpos := Vector3.ZERO
+	var par_grot := Quaternion.IDENTITY
+	if hips_par >= 0:
+		var par_grest := skeleton.get_bone_global_rest(hips_par)
+		par_gpos = par_grest.origin
+		par_grot = par_grest.basis.orthonormalized().get_rotation_quaternion().normalized()
+	var p_hips := par_gpos + par_grot * (_rest_pos[_b_hips] + _target_hips_offset)
+	var q_hips_g := (par_grot * _target_rot[_b_hips]).normalized()
+	var c_hips := (q_hips_g * _grest_rot[_b_hips].inverse()).normalized()
+
+	for side_i in 2:
+		var side := -1.0 if side_i == 0 else 1.0
+		var th_idx := _b_thigh_l if side_i == 0 else _b_thigh_r
+		var sh_idx := _b_shin_l if side_i == 0 else _b_shin_r
+		var ft_idx := _b_foot_l if side_i == 0 else _b_foot_r
+		if th_idx < 0 or sh_idx < 0 or ft_idx < 0:
+			continue
+
+		var rest_an_y := _rest_ankle_y_l if side_i == 0 else _rest_ankle_y_r
+		var p_hip := p_hips + q_hips_g * _rest_pos[th_idx]
+		var q_th_g := (q_hips_g * _target_rot[th_idx]).normalized()
+		var p_kn := p_hip + q_th_g * _rest_pos[sh_idx]
+		var q_sh_g := (q_th_g * _target_rot[sh_idx]).normalized()
+		var p_an := p_kn + q_sh_g * _rest_pos[ft_idx]
+
+		var sink := rest_an_y - p_an.y
+		if sink <= 0.002 or p_hip.y <= rest_an_y + 0.08:
+			continue
+
+		var l1 := _rest_pos[sh_idx].length()
+		var l2 := _rest_pos[ft_idx].length()
+		if l1 < 0.05 or l2 < 0.05:
+			continue
+
+		var target_an := Vector3(p_an.x, rest_an_y, p_an.z)
+		var to_target := target_an - p_hip
+		var raw_dist := to_target.length()
+		if raw_dist < 1e-4:
+			continue
+		var d_min := absf(l1 - l2) + 0.06
+		var d_max := l1 + l2 - 0.0005
+		var d := clampf(raw_dist, d_min, d_max)
+		var u := to_target / raw_dist
+
+		# Anatomical forward knee pole (-Z in pelvis heading with gentle outward turnout).
+		var fwd_hint := c_hips * Vector3(side * 0.14, 0.0, -1.0)
+		fwd_hint.y = 0.0
+		if fwd_hint.length_squared() < 1e-6:
+			fwd_hint = Vector3(side * 0.14, 0.0, -1.0)
+		else:
+			fwd_hint = fwd_hint.normalized()
+
+		var bend_dir := fwd_hint - u * fwd_hint.dot(u)
+		if bend_dir.length_squared() < 1e-6:
+			bend_dir = Vector3(0.0, 0.0, -1.0)
+		else:
+			bend_dir = bend_dir.normalized()
+
+		var cos_a := clampf((l1 * l1 + d * d - l2 * l2) / maxf(2.0 * l1 * d, 1e-5), -1.0, 1.0)
+		var sin_a := sqrt(maxf(0.0, 1.0 - cos_a * cos_a))
+		var p_kn_new := p_hip + u * (l1 * cos_a) + bend_dir * (l1 * sin_a)
+		var p_an_eff := p_hip + u * d
+
+		var dq_th := _quat_from_to(p_kn - p_hip, p_kn_new - p_hip)
+		var q_th_g_new := (dq_th * q_th_g).normalized()
+		var new_th_local := (q_hips_g.inverse() * q_th_g_new).normalized()
+		if new_th_local.is_finite():
+			_target_rot[th_idx] = new_th_local
+
+		var q_sh_g_mid := (q_th_g_new * _target_rot[sh_idx]).normalized()
+		var mid_sh_vec := q_sh_g_mid * _rest_pos[ft_idx]
+		var dq_sh := _quat_from_to(mid_sh_vec, p_an_eff - p_kn_new)
+		var q_sh_g_new := (dq_sh * q_sh_g_mid).normalized()
+		var new_sh_local := (q_th_g_new.inverse() * q_sh_g_new).normalized()
+		if new_sh_local.is_finite():
+			_target_rot[sh_idx] = new_sh_local
+
+		# Counter-pitch ankle so boot sole stays level on the deck at y = 0.0.
+		var q_ft_g_mid := (q_sh_g_new * _target_rot[ft_idx]).normalized()
+		var c_ft_mid := (q_ft_g_mid * _grest_rot[ft_idx].inverse()).normalized()
+		var dq_shin_added := (q_sh_g_new * q_sh_g.inverse()).normalized()
+		var dq_ft_counter := dq_shin_added.inverse()
+		var dq_ft_flat := _quat_from_to(c_ft_mid * Vector3.UP, Vector3.UP)
+		var flat_w := smoothstep(0.003, 0.025, sink)
+		var dq_ft := _safe_slerp(dq_ft_counter, dq_ft_flat, flat_w)
+		var q_ft_g_new := (dq_ft * q_ft_g_mid).normalized()
+		var new_ft_local := (q_sh_g_new.inverse() * q_ft_g_new).normalized()
+		if new_ft_local.is_finite():
+			_target_rot[ft_idx] = new_ft_local
 
 
 # ------------------------------------------------------------------ locomotion modes

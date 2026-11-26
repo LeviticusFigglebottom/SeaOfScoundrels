@@ -6,7 +6,9 @@ Prints every diagnostic as path:line: severity [CODE] message.
 Exit code 1 if any error-severity diagnostic is found, else 0.
 `godot --check-only` cannot do this: it reports parse errors only and fails on autoload names.
 """
-import json, os, random, socket, subprocess, sys, time
+import json, os, pathlib, random, socket, subprocess, sys, time
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GODOT = os.environ.get("GODOT", "godot")
@@ -61,7 +63,7 @@ def main():
                 return None
 
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-              "params": {"processId": None, "rootUri": "file://" + ROOT, "capabilities": {}}})
+              "params": {"processId": None, "rootUri": pathlib.Path(ROOT).as_uri(), "capabilities": {}}})
         while True:
             m = recv(30)
             if m is None or m.get("id") == 1:
@@ -69,10 +71,10 @@ def main():
         send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
         pending = set()
         for f in files:
-            uri = "file://" + f
-            pending.add(uri)
+            uri = pathlib.Path(f).as_uri()
+            pending.add(os.path.normcase(os.path.normpath(f)))
             send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
-                "uri": uri, "languageId": "gdscript", "version": 1, "text": open(f).read()}}})
+                "uri": uri, "languageId": "gdscript", "version": 1, "text": open(f, encoding="utf-8").read()}}})
         errors = warnings = 0
         deadline = time.time() + 20 + len(files) * 0.5
         while pending and time.time() < deadline:
@@ -81,8 +83,9 @@ def main():
                 continue
             if m.get("method") == "textDocument/publishDiagnostics":
                 p = m["params"]
-                pending.discard(p["uri"])
-                rel = os.path.relpath(p["uri"][7:], ROOT)
+                fpath = os.path.normpath(url2pathname(unquote(urlparse(p["uri"]).path)))
+                pending.discard(os.path.normcase(fpath))
+                rel = os.path.relpath(fpath, ROOT).replace("\\", "/")
                 for d in p["diagnostics"]:
                     sev = d.get("severity", 2)
                     errors += sev == 1

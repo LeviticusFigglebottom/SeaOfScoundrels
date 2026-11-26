@@ -1708,11 +1708,11 @@ def standing_stays():
         (Vector((0, MAST_TOP - 0.40, MAST_Z - 0.08)), Vector((0, MAST_FORE_TOP - 0.55, MAST_FORE_Z + 0.10)), 0.030),
         (Vector((0, 13.45, MAST_Z - 0.20)), Vector((0, 11.82, MAST_FORE_Z + 0.18)), 0.032),
     ]
-    # Mainmast backstays to stern quarterdeck rail
+    # Mainmast backstays to outboard stern quarterdeck rail cleat (clear of balusters)
     p_aft, _ = rail_frame(2.2)
     for sg in (-1, 1):
         stays.append((Vector((sg * 0.10, MAST_TOP - 0.50, MAST_Z + 0.08)),
-                      Vector((sg * (p_aft.x - 0.05), p_aft.y + 0.58, p_aft.z)), 0.028))
+                      Vector((sg * (p_aft.x + 0.06), p_aft.y + 0.68, p_aft.z)), 0.028))
     return stays
 
 def build_rigging(mb):
@@ -2587,7 +2587,7 @@ def main():
         assert g > 0.05, '%s yard fouls standing rigging (%.3f m)' % (label, g)
 
     # Rope attachment helpers & unit ropes for mainmast + foremast
-    bp, _ = rail_frame(s_of_z(7.2))
+    bp, _ = rail_frame(s_of_z(6.2))
     ya_z = MAST_Z - YARD_FWD
     ya_fz = MAST_FORE_Z - YARD_FORE_FWD
     bp_f, _ = rail_frame(s_of_z(2.1))
@@ -2600,8 +2600,8 @@ def main():
         'Yardarm_Starboard': (Vector((YARD_HALF, YARD_Y, ya_z)), 'Yard', (0, YARD_Y, MAST_Z)),
         'SheetPoint_Port': (Vector((-2.25, DECK_Y + 0.62, 2.55)), None, None),
         'SheetPoint_Starboard': (Vector((2.25, DECK_Y + 0.62, 2.55)), None, None),
-        'BracePoint_Port': (Vector((-(bp.x - 0.07), bp.y + 0.66, bp.z)), None, None),
-        'BracePoint_Starboard': (Vector((bp.x - 0.07, bp.y + 0.66, bp.z)), None, None),
+        'BracePoint_Port': (Vector((-(bp.x + 0.08), bp.y + 0.72, bp.z)), None, None),
+        'BracePoint_Starboard': (Vector((bp.x + 0.08, bp.y + 0.72, bp.z)), None, None),
         'AnchorCablePoint': (Vector((2.06, ytop(-7.2) + 0.10, -7.2)), None, None),
         # Foremast rope empties
         'Clew_Fore_Port': (fore_sail_pt(-1, 1), 'Sail_Fore', (0, YARD_FORE_Y, MAST_FORE_Z)),

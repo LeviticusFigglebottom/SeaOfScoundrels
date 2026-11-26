@@ -1,7 +1,7 @@
 info face="ScoundrelInk" size=32 bold=1 italic=0 charset="" unicode=1 stretchH=100 smooth=1 aa=1 padding=0,0,0,0 spacing=1,1
 common lineHeight=38 base=30 scaleW=528 scaleH=396 pages=1 packed=0
 page id=0 file="scoundrel_font.png"
-chars count=95
+chars count=105
 char id=32 x=0 y=0 width=44 height=44 xoffset=0 yoffset=0 xadvance=12 page=0 chnl=15
 char id=33 x=44 y=0 width=44 height=44 xoffset=0 yoffset=0 xadvance=14 page=0 chnl=15
 char id=34 x=88 y=0 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
@@ -97,3 +97,13 @@ char id=123 x=308 y=308 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=
 char id=124 x=352 y=308 width=44 height=44 xoffset=0 yoffset=0 xadvance=14 page=0 chnl=15
 char id=125 x=396 y=308 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
 char id=126 x=440 y=308 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
+char id=183 x=484 y=308 width=44 height=44 xoffset=0 yoffset=0 xadvance=14 page=0 chnl=15
+char id=8226 x=0 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
+char id=8211 x=44 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
+char id=8212 x=88 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=28 page=0 chnl=15
+char id=8230 x=132 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=28 page=0 chnl=15
+char id=176 x=176 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
+char id=8216 x=220 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=14 page=0 chnl=15
+char id=8217 x=264 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=14 page=0 chnl=15
+char id=8220 x=308 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15
+char id=8221 x=352 y=352 width=44 height=44 xoffset=0 yoffset=0 xadvance=20 page=0 chnl=15

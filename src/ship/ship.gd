@@ -176,8 +176,14 @@ var _net_has_state: bool = false
 var _livery_sail_tint: Color = Color.WHITE
 var _livery_flag_tint: Color = Color.WHITE
 var _livery_glow_accent: Color = Color.BLACK
+var _livery_hull_tint: Color = Color.WHITE
+var _effective_glow_accent: Color = Color.BLACK
+var _hull_mats_duplicated: bool = false
+var _hull_mat_entries: Array[Dictionary] = []
 
-var _bow_spray: GPUParticles3D = null
+var _bow_spray_port: GPUParticles3D = null
+var _bow_spray_starboard: GPUParticles3D = null
+var _spray_tex: GradientTexture2D = null
 
 
 func _init() -> void:
@@ -227,6 +233,7 @@ func _ready() -> void:
 		_build_bow_spray()
 	_setup_sail_shaders()
 	_setup_lights_and_glass()
+	_apply_current_livery()
 	_cache_ropes()
 	_register_ocean_mask()
 	_last_wind_catch = wind_catch()
@@ -495,75 +502,170 @@ func _build_damage_slots() -> void:
 		})
 
 
+func _get_spray_texture() -> GradientTexture2D:
+	if _spray_tex != null:
+		return _spray_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.30, 0.68, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 1.0, 1.0, 0.94),
+		Color(0.95, 0.99, 1.0, 0.62),
+		Color(0.86, 0.96, 1.0, 0.18),
+		Color(0.84, 0.95, 1.0, 0.0),
+	])
+	var tex := GradientTexture2D.new()
+	tex.width = 64
+	tex.height = 64
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.gradient = grad
+	_spray_tex = tex
+	return _spray_tex
+
+
+func _make_spray_material(tint: Color, emit_tint: Color, emit_energy: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = _get_spray_texture()
+	mat.albedo_color = tint
+	mat.roughness = 0.85
+	mat.backlight_enabled = true
+	mat.backlight = Color(0.78, 0.88, 0.92)
+	if emit_energy > 0.001:
+		mat.emission_enabled = true
+		mat.emission = emit_tint
+		mat.emission_energy_multiplier = emit_energy
+	return mat
+
+
+static func _make_color_ramp(offsets: PackedFloat32Array, colors: PackedColorArray) -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = offsets
+	grad.colors = colors
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+
+
+static func _make_scale_curve(points: Array[Vector2]) -> CurveTexture:
+	var curve := Curve.new()
+	for pt in points:
+		curve.add_point(pt)
+	var tex := CurveTexture.new()
+	tex.curve = curve
+	return tex
+
+
 func _make_leak_jet(local_pos: Vector3, hole_basis: Basis) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
 	p.name = "LeakJet"
 	p.emitting = false
 	p.visible = false
-	p.amount = 48
-	p.lifetime = 0.48
+	p.amount = 44
+	p.lifetime = 0.34
 	p.local_coords = true
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.position = local_pos + hole_basis.z * 0.08
 
 	var proc := ParticleProcessMaterial.new()
-	# Hole -Z points outboard, so +Z sprays inward into the hold.
-	var inward := (hole_basis.z + Vector3(0.0, 0.28, 0.0)).normalized()
+	# Hole -Z points outboard, so +Z sprays inward and arcs naturally down into the bilge.
+	var inward := (hole_basis.z + Vector3(0.0, 0.12, 0.0)).normalized()
 	proc.direction = inward
-	proc.spread = 14.0
-	proc.initial_velocity_min = 3.0
-	proc.initial_velocity_max = 5.2
-	proc.gravity = Vector3(0.0, -12.0, 0.0)
-	proc.scale_min = 0.5
+	proc.spread = 11.0
+	proc.initial_velocity_min = 1.8
+	proc.initial_velocity_max = 3.0
+	proc.gravity = Vector3(0.0, -13.5, 0.0)
+	proc.damping_min = 0.6
+	proc.damping_max = 1.4
+	proc.scale_min = 0.65
 	proc.scale_max = 1.15
-	proc.particle_flag_align_y = true
+	proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.65), Vector2(0.35, 1.05), Vector2(1.0, 0.55)])
+	proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.18, 0.65, 1.0]),
+		PackedColorArray([
+			Color(0.88, 0.97, 1.0, 0.72),
+			Color(0.80, 0.95, 0.99, 0.78),
+			Color(0.74, 0.93, 0.97, 0.42),
+			Color(0.70, 0.90, 0.96, 0.0),
+		])
+	)
 	p.process_material = proc
 
-	var streak := BoxMesh.new()
-	streak.size = Vector3(0.032, 0.22, 0.032)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.78, 0.96, 0.98, 0.72)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	streak.material = mat
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.095, 0.24)
+	streak.material = _make_spray_material(
+		Color(0.78, 0.95, 0.98, 0.84),
+		Color(0.55, 0.82, 0.88),
+		0.14
+	)
 	p.draw_pass_1 = streak
 	return p
 
 
 func _build_bow_spray() -> void:
+	var is_brig := ship_class == &"brigantine"
+	var x_off := 1.75 if is_brig else 1.35
+	var y_off := 0.45 if is_brig else 0.35
+	var z_off := -7.6 if is_brig else -5.4
+	_bow_spray_port = _make_bow_cheek_spray("BowSprayPort", Vector3(-x_off, y_off, z_off), -1.0)
+	_bow_spray_starboard = _make_bow_cheek_spray("BowSprayStarboard", Vector3(x_off, y_off, z_off), 1.0)
+	add_child(_bow_spray_port)
+	add_child(_bow_spray_starboard)
+
+
+func _make_bow_cheek_spray(node_name: String, pos: Vector3, side_sign: float) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
-	p.name = "BowSpray"
+	p.name = node_name
 	p.emitting = false
-	p.amount = 64
-	p.lifetime = 0.62
+	p.amount = 38
+	p.lifetime = 0.56
 	p.local_coords = false
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	p.position = Vector3(0.0, 0.25, -6.1)
+	p.position = pos
 	p.visibility_aabb = AABB(Vector3(-6.0, -3.0, -8.0), Vector3(12.0, 8.0, 16.0))
 
 	var proc := ParticleProcessMaterial.new()
 	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	proc.emission_box_extents = Vector3(0.85, 0.25, 0.9)
-	proc.direction = Vector3(0.0, 0.72, 0.68)
-	proc.spread = 48.0
-	proc.initial_velocity_min = 2.6
-	proc.initial_velocity_max = 5.4
+	proc.emission_box_extents = Vector3(0.08, 0.12, 0.48)
+	# Flare spray dramatically outboard & upward off the bow wave so it never enters the hull.
+	proc.direction = Vector3(side_sign * 0.78, 0.62, 0.12).normalized()
+	proc.spread = 18.0
+	proc.initial_velocity_min = 3.4
+	proc.initial_velocity_max = 5.6
+	proc.inherit_velocity_ratio = 0.45
+	proc.damping_min = 0.7
+	proc.damping_max = 1.5
 	proc.gravity = Vector3(0.0, -9.8, 0.0)
-	proc.scale_min = 0.5
-	proc.scale_max = 1.35
-	proc.particle_flag_align_y = true
+	proc.scale_min = 0.70
+	proc.scale_max = 1.45
+	proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.60), Vector2(0.35, 1.15), Vector2(1.0, 1.50)])
+	proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.14, 0.62, 1.0]),
+		PackedColorArray([
+			Color(0.95, 0.99, 1.0, 0.0),
+			Color(0.92, 0.98, 1.0, 0.82),
+			Color(0.86, 0.96, 0.99, 0.44),
+			Color(0.82, 0.94, 0.98, 0.0),
+		])
+	)
 	p.process_material = proc
 
-	var drop := BoxMesh.new()
-	drop.size = Vector3(0.055, 0.24, 0.055)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.92, 0.98, 0.99, 0.65)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	drop.material = mat
+	var drop := QuadMesh.new()
+	drop.size = Vector2(0.28, 0.40)
+	drop.material = _make_spray_material(
+		Color(0.90, 0.97, 0.99, 0.84),
+		Color(0.76, 0.90, 0.94),
+		0.10
+	)
 	p.draw_pass_1 = drop
-	add_child(p)
-	_bow_spray = p
+	return p
 
 
 func _build_hold_water() -> void:
@@ -890,27 +992,244 @@ func apply_modifiers(mods: Dictionary) -> void:
 	cannon_radius_modifier = float(mods.get("cannon_radius_scale", 1.0))
 
 
-## Customize sail/flag colours and optional spectral glow (player cosmetics, Drowned/Ghost ships).
-func apply_livery(sail_tint: Color, flag_tint: Color, glow_accent: Color = Color.BLACK) -> void:
+## Customize sail/flag/hull colours and optional spectral glow (player cosmetics, Drowned/Ghost/Corsair ships).
+func apply_livery(
+		sail_tint: Color,
+		flag_tint: Color,
+		glow_accent: Color = Color.BLACK,
+		hull_tint: Color = Color.WHITE
+) -> void:
 	_livery_sail_tint = sail_tint
 	_livery_flag_tint = flag_tint
 	_livery_glow_accent = glow_accent
-	var glow_mag := glow_accent.get_luminance()
-	for sm in _sail_mats:
-		sm.set_shader_parameter(&"albedo_tint", sail_tint)
-		if glow_mag > 0.01:
-			sm.set_shader_parameter(&"emission_tint", glow_accent)
-			sm.set_shader_parameter(&"emission_strength", clampf(glow_mag * 0.85, 0.12, 0.9))
-	for fmat in _flag_mats:
-		fmat.set_shader_parameter(&"albedo_tint", flag_tint)
-		if glow_mag > 0.01:
-			fmat.set_shader_parameter(&"emission_tint", glow_accent)
-			fmat.set_shader_parameter(&"emission_strength", clampf(glow_mag * 0.75, 0.12, 0.8))
+	_livery_hull_tint = hull_tint
+	if is_node_ready():
+		_apply_current_livery()
+
+
+func _apply_current_livery() -> void:
+	var eff_glow := _livery_glow_accent
+	var eff_hull := _livery_hull_tint
+	var eff_paint := _livery_hull_tint.lerp(Color.WHITE, 0.15)
+	var eff_rough_add := 0.06 if _livery_hull_tint != Color.WHITE and _livery_hull_tint.get_luminance() < 0.5 else 0.0
+	var eff_hull_emit := Color.BLACK
+	var eff_hull_emit_energy := 0.0
+
+	if _livery_hull_tint == Color.WHITE:
+		if faction == &"drowned":
+			# Charred barnacle-slate / waterlogged oak hull + tarnished verdigris carvings + eerie sea-green glow.
+			eff_hull = Color(0.42, 0.48, 0.49)
+			eff_paint = Color(0.38, 0.50, 0.48)
+			eff_rough_add = 0.14
+			if eff_glow.get_luminance() <= 0.01:
+				eff_glow = Color(0.14, 0.92, 0.52)
+		elif faction == &"ghost":
+			eff_hull = Color(0.42, 0.86, 0.84)
+			eff_paint = Color(0.48, 0.92, 0.90)
+			eff_rough_add = 0.04
+			eff_hull_emit = Color(0.14, 0.88, 0.82)
+			eff_hull_emit_energy = 0.35
+			if eff_glow.get_luminance() <= 0.01:
+				eff_glow = Color(0.22, 0.98, 0.84)
+		elif faction == &"corsair":
+			eff_hull = Color(0.58, 0.46, 0.44)
+			eff_paint = Color(0.64, 0.42, 0.38)
+			eff_rough_add = 0.08
+		else:
+			eff_paint = Color.WHITE
+
+	_effective_glow_accent = eff_glow
+	var glow_mag := eff_glow.get_luminance()
+	var sail_glow_strength := 0.0
 	if glow_mag > 0.01:
-		for l in _lantern_lights:
-			l.light_color = glow_accent.lerp(Color.WHITE, 0.3)
-		for wm in _window_mats:
-			wm.emission = glow_accent
+		# Keep Drowned sails dark & weathered with a faint eerie sheen; let Ghost sails glow brightly.
+		sail_glow_strength = 0.08 if faction == &"drowned" else clampf(glow_mag * 0.78, 0.14, 0.82)
+
+	for sm in _sail_mats:
+		sm.set_shader_parameter(&"albedo_tint", _livery_sail_tint)
+		if glow_mag > 0.01:
+			sm.set_shader_parameter(&"emission_tint", eff_glow)
+			sm.set_shader_parameter(&"emission_strength", sail_glow_strength)
+		else:
+			var is_back := float(sm.get_shader_parameter(&"is_back_face")) > 0.5
+			sm.set_shader_parameter(&"emission_tint", Color(1.0, 0.86, 0.6))
+			sm.set_shader_parameter(&"emission_strength", 0.08 if is_back else 0.0)
+	for fmat in _flag_mats:
+		fmat.set_shader_parameter(&"albedo_tint", _livery_flag_tint)
+		if glow_mag > 0.01:
+			fmat.set_shader_parameter(&"emission_tint", eff_glow)
+			fmat.set_shader_parameter(&"emission_strength", sail_glow_strength)
+		else:
+			fmat.set_shader_parameter(&"emission_strength", 0.0)
+
+	var lantern_col := eff_glow.lerp(Color.WHITE, 0.28) if glow_mag > 0.01 else Color(1.0, 0.74, 0.42)
+	for l in _lantern_lights:
+		l.light_color = lantern_col
+	for wm in _window_mats:
+		if glow_mag > 0.01:
+			wm.emission = eff_glow
+			wm.albedo_color = Color(eff_glow.r * 0.65, eff_glow.g * 0.88, eff_glow.b * 0.72, 0.58)
+		else:
+			wm.emission = Color(1.0, 0.72, 0.34)
+			wm.albedo_color = Color(1.0, 1.0, 1.0, 0.30)
+
+	var need_hull_livery := (
+		eff_hull != Color.WHITE
+		or glow_mag > 0.01
+		or _livery_sail_tint != Color.WHITE
+		or _livery_flag_tint != Color.WHITE
+		or _hull_mats_duplicated
+	)
+	if not need_hull_livery:
+		return
+
+	_ensure_hull_livery_mats()
+	for entry in _hull_mat_entries:
+		var mat: BaseMaterial3D = entry["mat"]
+		var kind: StringName = entry["kind"]
+		var orig_albedo: Color = entry["orig_albedo"]
+		var orig_rough: float = float(entry["orig_rough"])
+		match kind:
+			&"wood":
+				mat.albedo_color = orig_albedo * eff_hull
+				mat.roughness = clampf(orig_rough + eff_rough_add, 0.0, 0.98)
+				if eff_hull_emit_energy > 0.01:
+					mat.emission_enabled = true
+					mat.emission = eff_hull_emit
+					mat.emission_energy_multiplier = eff_hull_emit_energy
+				else:
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"paint":
+				mat.albedo_color = orig_albedo * eff_paint
+				mat.roughness = clampf(orig_rough + eff_rough_add * 1.35, 0.0, 0.96)
+				if eff_hull_emit_energy > 0.01:
+					mat.emission_enabled = true
+					mat.emission = eff_hull_emit
+					mat.emission_energy_multiplier = eff_hull_emit_energy
+				else:
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"cloth":
+				mat.albedo_color = orig_albedo * eff_hull.lerp(Color.WHITE, 0.10)
+			&"rope":
+				mat.albedo_color = orig_albedo * eff_hull.lerp(Color.WHITE, 0.35)
+			&"brass":
+				mat.albedo_color = orig_albedo * eff_paint.lerp(Color.WHITE, 0.22)
+				mat.roughness = clampf(orig_rough + eff_rough_add * 1.6, 0.0, 0.95)
+			&"lantern":
+				if glow_mag > 0.01:
+					mat.albedo_color = eff_glow.lerp(Color.WHITE, 0.22)
+					mat.emission_enabled = true
+					mat.emission = eff_glow
+					mat.emission_energy_multiplier = 2.8
+				else:
+					mat.albedo_color = orig_albedo
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"lod_window":
+				if glow_mag > 0.01:
+					mat.albedo_color = Color(eff_glow.r * 0.65, eff_glow.g * 0.88, eff_glow.b * 0.72, 0.65)
+					mat.emission_enabled = true
+					mat.emission = eff_glow
+					mat.emission_energy_multiplier = 2.0
+				else:
+					mat.albedo_color = orig_albedo
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"lod_canvas":
+				mat.albedo_color = orig_albedo * _livery_sail_tint
+				if glow_mag > 0.01:
+					mat.emission_enabled = true
+					mat.emission = eff_glow
+					mat.emission_energy_multiplier = sail_glow_strength
+				else:
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"lod_flag":
+				mat.albedo_color = orig_albedo * _livery_flag_tint
+				if glow_mag > 0.01:
+					mat.emission_enabled = true
+					mat.emission = eff_glow
+					mat.emission_energy_multiplier = sail_glow_strength
+				else:
+					mat.emission_enabled = bool(entry["orig_emit_on"])
+					mat.emission = entry["orig_emit"] as Color
+					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+
+
+func _ensure_hull_livery_mats() -> void:
+	if _hull_mats_duplicated:
+		return
+	_hull_mats_duplicated = true
+	_hull_mat_entries.clear()
+	var mat_cache: Dictionary = {}  # orig BaseMaterial3D -> duplicated per-ship BaseMaterial3D
+	var roots: Array[Node3D] = []
+	if _model != null:
+		roots.append(_model)
+	if _lod_model != null:
+		roots.append(_lod_model)
+	for root in roots:
+		var is_lod := root == _lod_model
+		for node in root.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			var nname := String(mi.name)
+			if nname.begins_with("col_") or nname.begins_with("mask_"):
+				continue
+			for si in mi.mesh.get_surface_count():
+				var orig := mi.mesh.surface_get_material(si) as BaseMaterial3D
+				if orig == null:
+					continue
+				var kind := _classify_livery_material(orig.resource_name, is_lod)
+				if kind == &"":
+					continue
+				var dup: BaseMaterial3D
+				if mat_cache.has(orig):
+					dup = mat_cache[orig] as BaseMaterial3D
+				else:
+					dup = orig.duplicate() as BaseMaterial3D
+					mat_cache[orig] = dup
+					_hull_mat_entries.append({
+						"mat": dup,
+						"kind": kind,
+						"orig_albedo": orig.albedo_color,
+						"orig_rough": orig.roughness,
+						"orig_emit_on": orig.emission_enabled,
+						"orig_emit": orig.emission,
+						"orig_emit_e": orig.emission_energy_multiplier,
+					})
+				mi.set_surface_override_material(si, dup)
+
+
+static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringName:
+	if mat_name == "mat_wood" or mat_name == "mat_hull_wood":
+		return &"wood"
+	if mat_name == "mat_paint":
+		return &"paint"
+	if mat_name == "mat_cloth":
+		return &"cloth"
+	if mat_name == "mat_rope":
+		return &"rope"
+	if mat_name == "mat_brass":
+		return &"brass"
+	if mat_name == "mat_lantern_glass":
+		return &"lantern"
+	if is_lod:
+		if mat_name == "mat_window_glass":
+			return &"lod_window"
+		if mat_name == "mat_canvas_lod" or mat_name == "mat_canvas_back_lod" \
+				or mat_name == "mat_canvas" or mat_name == "mat_canvas_back":
+			return &"lod_canvas"
+		if mat_name == "mat_flag":
+			return &"lod_flag"
+	return &""
 
 
 ## Ring the ship's bell (swing + cue).
@@ -1528,15 +1847,16 @@ func _update_visuals(delta: float) -> void:
 	if not _using_lod:
 		_aim_ropes()
 
-	# Night cabin glass glow & lantern flicker.
+	# Night cabin glass glow & lantern flicker (cursed vessels keep eerie glow even by day).
 	var night := 1.0 - Weather.daylight()
-	var window_em := lerpf(0.22, 2.2, night)
+	var has_curse_glow := _effective_glow_accent.get_luminance() > 0.01
+	var window_em := lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)
 	for wm in _window_mats:
 		wm.emission_energy_multiplier = window_em
 	var flicker := 0.94 + 0.06 * sin(_sail_time * 9.3) * cos(_sail_time * 6.1)
 	for idx in _lantern_lights.size():
 		var l := _lantern_lights[idx]
-		var base_e := 1.45 if l.get_parent().name.contains("Hold") else lerpf(0.35, 1.35, night)
+		var base_e := 1.45 if l.get_parent().name.contains("Hold") else (lerpf(0.95, 1.85, night) if has_curse_glow else lerpf(0.35, 1.35, night))
 		l.light_energy = base_e * flicker
 
 	# Rising hold bilge water & ocean hull mask flood update.
@@ -1550,7 +1870,8 @@ func _update_visuals(delta: float) -> void:
 			_hold_water_mat.set_shader_parameter(&"disturbance", dist_amt)
 
 	if _mask_registered and Ocean.current != null and Ocean.current.has_method(&"update_hull_mask"):
-		var mask_flood := 1.0 if is_sinking else water_level * 0.85
+		# HoldWater renders interior flooding cleanly; keep external ocean carved out until foundering.
+		var mask_flood := 1.0 if is_sinking else clampf((water_level - 0.78) / 0.22, 0.0, 1.0)
 		Ocean.current.call(&"update_hull_mask", self, mask_flood)
 
 
@@ -1574,25 +1895,31 @@ func _aim_ropes() -> void:
 
 func _update_wake() -> void:
 	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
-	if _bow_spray != null:
-		_bow_spray.emitting = (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
-		_bow_spray.amount_ratio = clampf((spd - 2.0) / 5.5, 0.15, 1.0)
+	var spray_on := (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
+	var spray_ratio := clampf((spd - 2.0) / 5.5, 0.15, 1.0)
+	for spray: GPUParticles3D in [_bow_spray_port, _bow_spray_starboard]:
+		if spray != null:
+			spray.emitting = spray_on
+			spray.amount_ratio = spray_ratio
 	if Ocean.current == null or is_sinking:
 		return
+	var is_brig := (ship_class == &"brigantine")
+	var len_sc := 1.32 if is_brig else 1.0
+	var beam_sc := 1.24 if is_brig else 1.0
 	if spd < 0.35:
 		# Subtle waterline collar foam even while gently bobbing at anchor.
-		Ocean.current.add_foam(global_transform * Vector3(0.0, 0.0, -5.6), 1.4, 0.14)
+		Ocean.current.add_foam(global_transform * Vector3(0.0, 0.0, -5.6 * len_sc), 1.4 * beam_sc, 0.14)
 		return
 	var s_norm := clampf(spd / 7.5, 0.0, 1.2)
 	var xf := global_transform
-	# Foaming bow wave & diverging bow shoulders (matching image_2.png presence!).
-	Ocean.current.add_foam(xf * Vector3(0.0, 0.0, -6.2), 1.65, 0.45 * s_norm)
-	Ocean.current.add_foam(xf * Vector3(-1.85, 0.0, -3.9), 1.45, 0.38 * s_norm)
-	Ocean.current.add_foam(xf * Vector3(1.85, 0.0, -3.9), 1.45, 0.38 * s_norm)
-	# Mid-hull wash & churned stern wake.
-	Ocean.current.add_foam(xf * Vector3(-2.1, 0.0, 0.8), 1.3, 0.25 * s_norm)
-	Ocean.current.add_foam(xf * Vector3(2.1, 0.0, 0.8), 1.3, 0.25 * s_norm)
-	Ocean.current.add_foam(xf * Vector3(0.0, 0.0, 6.7), 2.5, 0.56 * s_norm)
+	# Foaming bow wave & diverging bow shoulders (scaled cleanly for Sloop & Brigantine).
+	Ocean.current.add_foam(xf * Vector3(0.0, 0.0, -6.2 * len_sc), 1.65 * beam_sc, 0.45 * s_norm)
+	Ocean.current.add_foam(xf * Vector3(-1.85 * beam_sc, 0.0, -3.9 * len_sc), 1.45 * beam_sc, 0.38 * s_norm)
+	Ocean.current.add_foam(xf * Vector3(1.85 * beam_sc, 0.0, -3.9 * len_sc), 1.45 * beam_sc, 0.38 * s_norm)
+	# Mid-hull wash & churned stern wake seated behind rudder.
+	Ocean.current.add_foam(xf * Vector3(-2.1 * beam_sc, 0.0, 0.8 * len_sc), 1.3 * beam_sc, 0.25 * s_norm)
+	Ocean.current.add_foam(xf * Vector3(2.1 * beam_sc, 0.0, 0.8 * len_sc), 1.3 * beam_sc, 0.25 * s_norm)
+	Ocean.current.add_foam(xf * Vector3(0.0, 0.0, 6.7 * len_sc), 2.5 * beam_sc, 0.56 * s_norm)
 
 
 func _anchor_world_pos() -> Vector3:

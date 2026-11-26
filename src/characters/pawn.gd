@@ -161,7 +161,11 @@ func _ready() -> void:
 # ------------------------------------------------------------------ queries
 
 func is_grounded() -> bool:
-	return mode == Mode.WALK and is_on_floor()
+	if mode != Mode.WALK:
+		return false
+	if is_on_floor():
+		return true
+	return platform != null and _coyote > 0.0 and velocity.y <= 0.25
 
 func is_swimming() -> bool:
 	return mode == Mode.SWIM
@@ -213,6 +217,7 @@ func board(body: PhysicsBody3D, local_feet: Vector3) -> void:
 	velocity = Vector3.ZERO
 	_set_platform(body)
 	velocity = Vector3.ZERO
+	_coyote = COYOTE_TIME
 	if not crouched and _headroom_blocked():
 		_crouch()
 
@@ -410,7 +415,8 @@ func _tick_walk(delta: float) -> void:
 		_coyote = 0.0
 		jumped.emit()
 	velocity = Vector3(hv.x, vy, hv.z)
-	floor_snap_length = 0.0 if (jumping or vy > 0.0) else snap_length
+	var eff_snap := maxf(snap_length, 0.55) if platform != null else snap_length
+	floor_snap_length = 0.0 if (jumping or vy > 0.0) else eff_snap
 	if not jumping and (grounded or _coyote > 0.0) and vy <= 0.0:
 		_try_step_up(hv, delta)
 	var before := global_position
