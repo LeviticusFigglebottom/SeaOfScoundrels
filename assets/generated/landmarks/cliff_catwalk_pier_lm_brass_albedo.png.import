@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://c7n6l8yto7r65"
-path="res://.godot/imported/cliff_catwalk_pier_lm_brass_albedo.png-3bec537ab5a96fd257d62070253ffdc5.ctex"
+path.s3tc="res://.godot/imported/cliff_catwalk_pier_lm_brass_albedo.png-3bec537ab5a96fd257d62070253ffdc5.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "53c692b0f47f7034550c0b258c4b35ed"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/cliff_catwalk_pier_lm_brass_albedo.png"
-dest_files=["res://.godot/imported/cliff_catwalk_pier_lm_brass_albedo.png-3bec537ab5a96fd257d62070253ffdc5.ctex"]
+dest_files=["res://.godot/imported/cliff_catwalk_pier_lm_brass_albedo.png-3bec537ab5a96fd257d62070253ffdc5.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://3fm1o2otew2h"
-path="res://.godot/imported/stone_cairn_marker_lm_temple_stone_rough.png-5e46e9352ecb9d86bea8e9774fae36a0.ctex"
+path.s3tc="res://.godot/imported/stone_cairn_marker_lm_temple_stone_rough.png-5e46e9352ecb9d86bea8e9774fae36a0.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "aa65ccc3703b51cf0c89395b6191bafa"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/stone_cairn_marker_lm_temple_stone_rough.png"
-dest_files=["res://.godot/imported/stone_cairn_marker_lm_temple_stone_rough.png-5e46e9352ecb9d86bea8e9774fae36a0.ctex"]
+dest_files=["res://.godot/imported/stone_cairn_marker_lm_temple_stone_rough.png-5e46e9352ecb9d86bea8e9774fae36a0.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

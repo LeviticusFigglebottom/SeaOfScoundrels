@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cn6sxm1lecii5"
-path="res://.godot/imported/ancient_temple_stairway_lm_foliage_rough.png-1fac9c32e117096f74f0004b8de80b8f.ctex"
+path.s3tc="res://.godot/imported/ancient_temple_stairway_lm_foliage_rough.png-1fac9c32e117096f74f0004b8de80b8f.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "a5ef0ae9117a1c5332afc8f9929b6b6d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/ancient_temple_stairway_lm_foliage_rough.png"
-dest_files=["res://.godot/imported/ancient_temple_stairway_lm_foliage_rough.png-1fac9c32e117096f74f0004b8de80b8f.ctex"]
+dest_files=["res://.godot/imported/ancient_temple_stairway_lm_foliage_rough.png-1fac9c32e117096f74f0004b8de80b8f.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

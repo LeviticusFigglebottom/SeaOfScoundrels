@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cwqmddgyj1ae1"
-path="res://.godot/imported/trail_lantern_post_lm_iron_rough.png-f729c7c9491bf9c7fc703eca0eac093d.ctex"
+path.s3tc="res://.godot/imported/trail_lantern_post_lm_iron_rough.png-f729c7c9491bf9c7fc703eca0eac093d.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "8aac870f7cc0b1d9b00b0b174f939639"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/trail_lantern_post_lm_iron_rough.png"
-dest_files=["res://.godot/imported/trail_lantern_post_lm_iron_rough.png-f729c7c9491bf9c7fc703eca0eac093d.ctex"]
+dest_files=["res://.godot/imported/trail_lantern_post_lm_iron_rough.png-f729c7c9491bf9c7fc703eca0eac093d.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

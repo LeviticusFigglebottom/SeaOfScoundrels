@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ci3uuxyinprmb"
-path="res://.godot/imported/cliff_overhang_ledge_lm_limestone_albedo.png-250615e402f8a949cabb9e90133bc614.ctex"
+path.s3tc="res://.godot/imported/cliff_overhang_ledge_lm_limestone_albedo.png-250615e402f8a949cabb9e90133bc614.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "2a431c0782f0cfe234063462a67fa000"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/cliff_overhang_ledge_lm_limestone_albedo.png"
-dest_files=["res://.godot/imported/cliff_overhang_ledge_lm_limestone_albedo.png-250615e402f8a949cabb9e90133bc614.ctex"]
+dest_files=["res://.godot/imported/cliff_overhang_ledge_lm_limestone_albedo.png-250615e402f8a949cabb9e90133bc614.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

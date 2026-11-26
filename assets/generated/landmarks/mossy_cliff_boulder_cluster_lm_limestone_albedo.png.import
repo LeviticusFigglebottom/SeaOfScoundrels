@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://b1vvwdlifdycs"
-path="res://.godot/imported/mossy_cliff_boulder_cluster_lm_limestone_albedo.png-e3925c72cde8c551a83bd7d3c44f851e.ctex"
+path.s3tc="res://.godot/imported/mossy_cliff_boulder_cluster_lm_limestone_albedo.png-e3925c72cde8c551a83bd7d3c44f851e.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "2a431c0782f0cfe234063462a67fa000"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/mossy_cliff_boulder_cluster_lm_limestone_albedo.png"
-dest_files=["res://.godot/imported/mossy_cliff_boulder_cluster_lm_limestone_albedo.png-e3925c72cde8c551a83bd7d3c44f851e.ctex"]
+dest_files=["res://.godot/imported/mossy_cliff_boulder_cluster_lm_limestone_albedo.png-e3925c72cde8c551a83bd7d3c44f851e.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

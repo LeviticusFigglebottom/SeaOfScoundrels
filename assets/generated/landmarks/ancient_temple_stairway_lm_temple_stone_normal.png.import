@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cfdo8vusdjeo5"
-path="res://.godot/imported/ancient_temple_stairway_lm_temple_stone_normal.png-b38c0bbdd57ab5755ae0b3d9b6a9842d.ctex"
+path.s3tc="res://.godot/imported/ancient_temple_stairway_lm_temple_stone_normal.png-b38c0bbdd57ab5755ae0b3d9b6a9842d.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0c88b3b95412eb673a47a6b5223ee53b"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/ancient_temple_stairway_lm_temple_stone_normal.png"
-dest_files=["res://.godot/imported/ancient_temple_stairway_lm_temple_stone_normal.png-b38c0bbdd57ab5755ae0b3d9b6a9842d.ctex"]
+dest_files=["res://.godot/imported/ancient_temple_stairway_lm_temple_stone_normal.png-b38c0bbdd57ab5755ae0b3d9b6a9842d.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

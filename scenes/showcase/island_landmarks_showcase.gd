@@ -1,13 +1,13 @@
 extends Node3D
-## Visual verification showcase for sculpted 3D island landmarks (12 PBR GLBs)
-## and batched MultiMesh `IslandDetails` ground foliage, coastal details &
-## steep-slope cliff buttresses using the real `SkyRig`, `Ocean` & `Archipelago`.
+## Visual verification showcase for Wave I-2 sculpted 3D island landmarks (12 PBR GLBs),
+## winding walkable terrain trails, and native batched MultiMesh `IslandDetails` ground foliage,
+## coastal dressing & steep-slope cliff buttresses across the real 14-island `Archipelago`.
 ##
 ## Usage:
 ##   tools/capture.sh res://scenes/showcase/island_landmarks_showcase.tscn cutlass_overhaul 2 5 -- shot=cutlass_overhaul
 ##
 ## User args (after `--`), all optional:
-##   shot=gallery_geology|gallery_setpieces|cutlass_overhaul|skull_bluff  (default cutlass_overhaul)
+##   shot=gallery_geology|gallery_setpieces|cutlass_overhaul|skull_bluff|emerald_temple|galleons_catwalk|cinder_basalt|gulls_arch
 ##   time=<hour>       hour of day (auto per-shot sunlit / golden-hour default)
 ##   storm=<0..1>      storminess (default 0.0)
 ##   cloud=<0..1>      cloudiness (default 0.30)
@@ -16,20 +16,11 @@ extends Node3D
 ##   clock=<seconds>   starting pan clock
 ##   t=<seconds>       initial Sea.time (default 36.0)
 ##
-## Interactive keys: 1=gallery_geology  2=gallery_setpieces  3=cutlass_overhaul  4=skull_bluff
+## Interactive keys:
+##   1=gallery_geology  2=gallery_setpieces  3=cutlass_overhaul  4=skull_bluff
+##   5=emerald_temple   6=galleons_catwalk   7=cinder_basalt     8=gulls_arch
 
-const IslandDetailsCls := preload("res://src/world/island_details.gd")
 const LANDMARK_DIR := "res://assets/generated/landmarks/"
-
-const DETAIL_ISLAND_IDS: Array[String] = [
-	"cutlass_cay",
-	"skull_bluff",
-	"emerald_spire",
-	"cinder_crag",
-	"port_scoundrel",
-	"sovereigns_bastion",
-	"galleons_reach",
-]
 
 const GEOLOGY_GLBS: Array[String] = [
 	"cliff_buttress_tall.glb",
@@ -62,6 +53,10 @@ var _cam: Camera3D = null
 var _archipelago: Archipelago = null
 var _cutlass: Island = null
 var _skull_bluff: Island = null
+var _emerald_spire: Island = null
+var _galleons_reach: Island = null
+var _cinder_crag: Island = null
+var _gulls_arch: Island = null
 
 var _gallery_root: Node3D = null
 var _gallery_stage_mi: MeshInstance3D = null
@@ -72,9 +67,10 @@ var _gallery_bounds: AABB = AABB(Vector3(-25.0, 0.0, -10.0), Vector3(50.0, 18.0,
 var _landmark_scenes: Dictionary = {}  # filename -> PackedScene
 var _flicker_lights: Array[Dictionary] = []
 
-var _cutlass_hero_aim: Vector3 = Vector3.ZERO
 var _skull_hero_aim: Vector3 = Vector3.ZERO
-var _skull_wreck_world: Vector3 = Vector3.ZERO
+var _emerald_hero_aim: Vector3 = Vector3.ZERO
+var _galleons_hero_aim: Vector3 = Vector3.ZERO
+var _gulls_arch_aim: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -96,34 +92,29 @@ func _ready() -> void:
 	if sky_rig != null:
 		var q_str := String(_args.get("quality", "medium"))
 		sky_rig.set(&"cloud_quality", {"low": 0, "medium": 1, "high": 2}.get(q_str, 1))
-		sky_rig.set(&"shadow_distance", 320.0)
+		sky_rig.set(&"shadow_distance", 360.0)
 
 	var ocean := get_node_or_null(^"Ocean") as Ocean
 	if ocean != null:
 		var oq_str := String(_args.get("quality", "high"))
 		ocean.quality = {"low": Ocean.Quality.LOW, "medium": Ocean.Quality.MEDIUM}.get(oq_str, Ocean.Quality.HIGH)
 
-	# Build real 14-island deterministic archipelago.
+	# Build real 14-island deterministic archipelago (natively includes IslandDetails,
+	# winding COLOR.a terrain trails, and bespoke Wave I-2 signature 3D landmarks).
 	_archipelago = Archipelago.new()
 	_archipelago.name = "Archipelago"
 	add_child(_archipelago)
 
 	_cutlass = _archipelago.get_island_by_id("cutlass_cay")
 	_skull_bluff = _archipelago.get_island_by_id("skull_bluff")
+	_emerald_spire = _archipelago.get_island_by_id("emerald_spire")
+	_galleons_reach = _archipelago.get_island_by_id("galleons_reach")
+	_cinder_crag = _archipelago.get_island_by_id("cinder_crag")
+	_gulls_arch = _archipelago.get_island_by_id("gulls_arch")
 
-	# Populate live batched IslandDetails across flagship & hero showcase islands.
-	for isl_id in DETAIL_ISLAND_IDS:
-		var isl := _archipelago.get_island_by_id(isl_id)
-		if isl == null:
-			continue
-		if isl.get_node_or_null(^"IslandDetails") == null:
-			IslandDetailsCls.populate_for_island(isl, isl.archetype, isl.island_id.hash() ^ 0x51A7)
+	_resolve_native_landmark_aims()
 
-	# Stage Cutlass Cay & Skull Bluff hero landmarks onto real island terrain.
-	_stage_cutlass_landmarks()
-	_stage_skull_bluff_landmarks()
-
-	# Stage sunlit open-water gallery sandbar for gallery shots.
+	# Stage sunlit open-water gallery sandbar for asset lineup shots.
 	_gallery_root = Node3D.new()
 	_gallery_root.name = "LandmarkGallery"
 	_gallery_root.position = GALLERY_ORIGIN
@@ -157,7 +148,13 @@ func _exit_tree() -> void:
 	_archipelago = null
 	_cutlass = null
 	_skull_bluff = null
+	_emerald_spire = null
+	_galleons_reach = null
+	_cinder_crag = null
+	_gulls_arch = null
 	_cam = null
+	TreasureCatalog.clear_mesh_cache()
+	IslandDetails.clear_shared_cache()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -176,6 +173,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			next_shot = "cutlass_overhaul"
 		KEY_4:
 			next_shot = "skull_bluff"
+		KEY_5:
+			next_shot = "emerald_temple"
+		KEY_6:
+			next_shot = "galleons_catwalk"
+		KEY_7:
+			next_shot = "cinder_basalt"
+		KEY_8:
+			next_shot = "gulls_arch"
 	if next_shot != "" and next_shot != _shot:
 		_shot = next_shot
 		_clock = 0.0
@@ -210,8 +215,18 @@ func _apply_shot_weather() -> void:
 		"cutlass_overhaul":
 			default_time = 10.4
 		"skull_bluff":
-			default_time = 16.0
+			default_time = 16.3
+		"emerald_temple":
+			default_time = 10.8
+		"galleons_catwalk":
+			default_time = 16.1
+		"cinder_basalt":
+			default_time = 17.1
+		"gulls_arch":
+			default_time = 10.2
 	var default_cloud := 0.30 if _shot.begins_with("gallery_") else 0.34
+	if _shot == "cinder_basalt":
+		default_cloud = 0.44
 	Weather.time_of_day = float(_args.get("time", str(default_time)))
 	var storm := float(_args.get("storm", "0.0"))
 	var cloud := float(_args.get("cloud", str(default_cloud)))
@@ -221,8 +236,12 @@ func _apply_shot_weather() -> void:
 	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, storm)
 	if _shot.begins_with("gallery_"):
 		Sea.amp_scale = 0.28
-	elif _shot == "cutlass_overhaul":
-		Sea.amp_scale = 0.48
+	elif _shot == "cutlass_overhaul" or _shot == "gulls_arch":
+		Sea.amp_scale = 0.46
+	elif _shot == "galleons_catwalk" or _shot == "emerald_temple":
+		Sea.amp_scale = 0.42
+	elif _shot == "cinder_basalt":
+		Sea.amp_scale = 0.62
 	Sea.time = float(_args.get("t", "36.0"))
 
 
@@ -588,120 +607,53 @@ func _layout_setpieces_gallery() -> void:
 		_gallery_bounds = bounds
 
 
-# ------------------------------------------------------------------ hero island landmark staging
+# ------------------------------------------------------------------ native Wave I-2 landmark targeting
 
-func _find_terrain_point(isl: Island, frame_basis: Basis, u_vals: Array[float],
-		v_start: float, v_end: float, v_step: float,
-		h_min: float, h_max: float, ny_min: float, ny_max: float) -> Dictionary:
-	var best_pos := Vector3.ZERO
-	var best_nrm := Vector3.UP
-	var best_score := -INF
-	var found := false
-
-	for u in u_vals:
-		var v := v_start
-		while (v_step > 0.0 and v <= v_end) or (v_step < 0.0 and v >= v_end):
-			var lp := frame_basis * Vector3(u, 0.0, v)
-			var h := isl.surface_height(lp.x, lp.z)
-			if h >= h_min and h <= h_max:
-				var nrm := isl.surface_normal(lp.x, lp.z, 2.0)
-				if nrm.y >= ny_min and nrm.y <= ny_max:
-					var mid_h := (h_min + h_max) * 0.5
-					var score := -absf(h - mid_h) * 0.4 - absf(u) * 0.08
-					if score > best_score:
-						best_score = score
-						best_pos = Vector3(lp.x, h, lp.z)
-						best_nrm = nrm
-						found = true
-			v += v_step
-	return {"found": found, "pos": best_pos, "normal": best_nrm}
+func _island_landing_yaw(isl: Island, fallback_yaw: float) -> float:
+	if isl != null and isl.has_meta(&"landing_yaw"):
+		return float(isl.get_meta(&"landing_yaw"))
+	return fallback_yaw
 
 
-func _stage_cutlass_landmarks() -> void:
-	if _cutlass == null:
-		return
-	var lm_root := Node3D.new()
-	lm_root.name = "ShowcaseLandmarks"
-	_cutlass.add_child(lm_root)
+func _find_native_landmark_aim(isl: Island, pattern: String, fallback_world: Vector3) -> Vector3:
+	if isl == null:
+		return fallback_world
+	var node := isl.find_child(pattern, true, false) as Node3D
+	if node == null:
+		return fallback_world
+	var bb := _compute_visual_aabb(node)
+	return node.global_transform * bb.get_center()
 
-	var cc_yaw := 2.77
-	var cc_basis := Basis(Vector3.UP, cc_yaw)
-	_cutlass_hero_aim = _cutlass.global_position + cc_basis * Vector3(1.5, 9.5, 2.0)
 
-	# 1. Coastal sea arch straddling the turquoise surf on Cutlass Cay's port cove flank.
-	var arch_hit := _find_terrain_point(_cutlass, cc_basis,
-		[-34.0, -30.0, -38.0, -26.0], -38.0, -8.0, 2.0, -1.2, 1.2, 0.65, 1.0)
-	var arch_pos := arch_hit["pos"] as Vector3 if bool(arch_hit["found"]) else cc_basis * Vector3(-31.0, -0.3, -22.0)
-	arch_pos.y = maxf(arch_pos.y, -0.9) - 0.55
-	_spawn_landmark("coastal_sea_arch.glb", lm_root, "CutlassSeaArch",
-		Transform3D(Basis(Vector3.UP, cc_yaw + 0.58), arch_pos), _cutlass, true)
+func _resolve_native_landmark_aims() -> void:
+	if _skull_bluff != null:
+		var sb_basis := Basis(Vector3.UP, _island_landing_yaw(_skull_bluff, 2.35))
+		var sb_fallback := _skull_bluff.global_position + sb_basis * Vector3(0.0, 26.0, -26.0)
+		_skull_hero_aim = _find_native_landmark_aim(_skull_bluff, "SkullCliffCarving*", sb_fallback)
 
-	# 2. Cliff overhang ledge embedded into the steep limestone face overlooking the golden cove.
-	var ledge_hit := _find_terrain_point(_cutlass, cc_basis,
-		[6.0, 12.0, -4.0, 16.0, -10.0], -14.0, 22.0, 2.0, 10.5, 22.0, 0.15, 0.72)
-	if bool(ledge_hit["found"]):
-		var lp := ledge_hit["pos"] as Vector3
-		var ln := ledge_hit["normal"] as Vector3
-		var h_dir := Vector3(ln.x, 0.0, ln.z)
-		if h_dir.length_squared() < 0.01:
-			h_dir = cc_basis * Vector3(0.0, 0.0, -1.0)
+	if _emerald_spire != null:
+		var es_basis := Basis(Vector3.UP, _island_landing_yaw(_emerald_spire, -1.42))
+		var es_fallback := _emerald_spire.global_position + es_basis * Vector3(0.0, 14.0, 8.0)
+		var stair_aim := _find_native_landmark_aim(_emerald_spire, "TempleStairway*", es_fallback)
+		var wf_node := _emerald_spire.find_child("EmeraldCanyonWaterfall*", true, false) as Node3D
+		if wf_node != null:
+			var wf_aim := wf_node.global_position - Vector3(0.0, 6.0, 0.0)
+			_emerald_hero_aim = stair_aim.lerp(wf_aim, 0.35)
 		else:
-			h_dir = h_dir.normalized()
-		var ledge_yaw := atan2(-h_dir.x, -h_dir.z)
-		var embed_pos := lp - h_dir * 1.8 - Vector3(0.0, 0.6, 0.0)
-		_spawn_landmark("cliff_overhang_ledge.glb", lm_root, "CutlassOverhangLedge",
-			Transform3D(Basis(Vector3.UP, ledge_yaw), embed_pos), _cutlass, true)
+			_emerald_hero_aim = stair_aim
 
-	# 3. Trail lantern post along the sunlit golden cove trail (with warm live lantern light).
-	var lantern_hit := _find_terrain_point(_cutlass, cc_basis,
-		[-6.0, -9.0, -3.0, -12.0], -34.0, -8.0, 1.5, 2.0, 4.0, 0.85, 1.0)
-	var lantern_pos := lantern_hit["pos"] as Vector3 if bool(lantern_hit["found"]) else cc_basis * Vector3(-7.0, 2.5, -22.0)
-	lantern_pos.y = _cutlass.surface_height(lantern_pos.x, lantern_pos.z) - 0.12
-	_spawn_landmark("trail_lantern_post.glb", lm_root, "CutlassTrailLantern",
-		Transform3D(Basis(Vector3.UP, cc_yaw - 0.35), lantern_pos), _cutlass, true)
+	if _galleons_reach != null:
+		var gr_basis := Basis(Vector3.UP, _island_landing_yaw(_galleons_reach, 0.12))
+		var gr_fallback := _galleons_reach.global_position + gr_basis * Vector3(-16.0, 10.0, -34.0)
+		var catwalk_aim := _find_native_landmark_aim(_galleons_reach, "CliffCatwalk*", gr_fallback)
+		var harbor_hub := _galleons_reach.global_position + gr_basis * Vector3(-4.0, 9.0, -24.0)
+		_galleons_hero_aim = catwalk_aim.lerp(harbor_hub, 0.35)
 
-	# 4. Stone cairn marker flanking the opposite side of the landing beach trail.
-	var cairn_hit := _find_terrain_point(_cutlass, cc_basis,
-		[7.0, 10.0, 4.0, 13.0], -34.0, -8.0, 1.5, 2.1, 4.2, 0.85, 1.0)
-	var cairn_pos := cairn_hit["pos"] as Vector3 if bool(cairn_hit["found"]) else cc_basis * Vector3(8.0, 2.6, -21.0)
-	cairn_pos.y = _cutlass.surface_height(cairn_pos.x, cairn_pos.z) - 0.10
-	_spawn_landmark("stone_cairn_marker.glb", lm_root, "CutlassStoneCairn",
-		Transform3D(Basis(Vector3.UP, cc_yaw + 0.42), cairn_pos), _cutlass, true)
-
-
-func _stage_skull_bluff_landmarks() -> void:
-	if _skull_bluff == null:
-		return
-	var lm_root := Node3D.new()
-	lm_root.name = "ShowcaseLandmarks"
-	_skull_bluff.add_child(lm_root)
-
-	var sb_yaw := 2.35
-	var sb_basis := Basis(Vector3.UP, sb_yaw)
-
-	# 1. Colossal glowing-eyed skull carving embedded boldly into Skull Bluff's high seaward cliff face!
-	var skull_hit := _find_terrain_point(_skull_bluff, sb_basis,
-		[0.0, -5.0, 5.0, -10.0, 10.0], -78.0, 18.0, 2.5, 22.0, 44.0, 0.05, 0.78)
-	var skull_pos := skull_hit["pos"] as Vector3 if bool(skull_hit["found"]) else sb_basis * Vector3(0.0, 28.0, -34.0)
-	var sea_dir := (sb_basis * Vector3(0.0, 0.0, -1.0)).normalized()
-	# Embed rear cranium snugly into the limestone cliff wall while face looks straight seaward.
-	var skull_mount := skull_pos - sea_dir * 3.2 - Vector3(0.0, 2.5, 0.0)
-	var skull_inst := _spawn_landmark("skull_cliff_carving.glb", lm_root, "SkullBluffCarving",
-		Transform3D(Basis(Vector3.UP, sb_yaw).scaled(Vector3.ONE * 1.45), skull_mount), _skull_bluff, true)
-	if skull_inst != null:
-		var sbb := _compute_visual_aabb(skull_inst)
-		_skull_hero_aim = _skull_bluff.global_position + skull_inst.transform * sbb.get_center()
-	else:
-		_skull_hero_aim = _skull_bluff.global_position + skull_pos
-
-	# 2. Impaled shipwreck bow on the seaward fore-shoal with warm glowing wreck lantern!
-	var wreck_hit := _find_terrain_point(_skull_bluff, sb_basis,
-		[-24.0, -30.0, -18.0, 24.0, 30.0], -128.0, -52.0, 2.5, -0.7, 1.4, 0.72, 1.0)
-	var wreck_pos := wreck_hit["pos"] as Vector3 if bool(wreck_hit["found"]) else sb_basis * Vector3(-24.0, 0.3, -96.0)
-	wreck_pos.y = maxf(_skull_bluff.surface_height(wreck_pos.x, wreck_pos.z), -0.35) - 0.35
-	_spawn_landmark("impaled_shipwreck_bow.glb", lm_root, "SkullForeShoalWreck",
-		Transform3D(Basis(Vector3.UP, sb_yaw + 0.62), wreck_pos), _skull_bluff, true)
-	_skull_wreck_world = _skull_bluff.global_position + wreck_pos
+	if _gulls_arch != null:
+		var ga_basis := Basis(Vector3.UP, _island_landing_yaw(_gulls_arch, -2.15))
+		var ga_fallback := _gulls_arch.global_position + ga_basis * Vector3(0.0, 9.0, -28.0)
+		_gulls_arch_aim = _find_native_landmark_aim(_gulls_arch, "CoastalSeaArch_Main*",
+			_find_native_landmark_aim(_gulls_arch, "CoastalSeaArch*", ga_fallback))
 
 
 # ------------------------------------------------------------------ camera choreography
@@ -726,11 +678,11 @@ func _update_camera() -> void:
 			if _cutlass == null:
 				return
 			var cc_pos := _cutlass.global_position
-			var cc_basis := Basis(Vector3.UP, 2.77)
+			var cc_basis := Basis(Vector3.UP, _island_landing_yaw(_cutlass, 2.77))
 			var sweep := clampf(_clock * 0.22, 0.0, 1.0)
 			var pan := sin(_clock * 0.42) * 5.0
-			var eye := cc_pos + cc_basis * Vector3(-16.0 + pan, lerpf(11.5, 5.2, sweep), lerpf(-58.0, -38.0, sweep))
-			var aim := cc_pos + cc_basis * Vector3(1.5, lerpf(10.0, 5.6, sweep), lerpf(2.0, -10.0, sweep))
+			var eye := cc_pos + cc_basis * Vector3(-16.0 + pan, lerpf(12.0, 5.6, sweep), lerpf(-60.0, -39.0, sweep))
+			var aim := cc_pos + cc_basis * Vector3(1.5, lerpf(10.5, 5.8, sweep), lerpf(3.0, -9.0, sweep))
 			_cam.fov = 58.0
 			_cam.look_at_from_position(eye, aim)
 
@@ -738,16 +690,66 @@ func _update_camera() -> void:
 			if _skull_bluff == null:
 				return
 			var sb_pos := _skull_bluff.global_position
-			var sb_basis := Basis(Vector3.UP, 2.35)
-			var pan := sin(_clock * 0.32) * 7.0
-			var eye := sb_pos + sb_basis * Vector3(-26.0 + pan, 17.5, -138.0)
-			var aim := _skull_hero_aim.lerp(_skull_wreck_world, 0.16)
+			var sb_basis := Basis(Vector3.UP, _island_landing_yaw(_skull_bluff, 2.35))
+			var sweep := clampf(_clock * 0.20, 0.0, 1.0)
+			var pan := sin(_clock * 0.32) * 7.5
+			var eye := sb_pos + sb_basis * Vector3(-26.0 + pan, lerpf(21.0, 17.5, sweep), lerpf(-142.0, -124.0, sweep))
+			var aim := _skull_hero_aim - Vector3(0.0, 2.0, 0.0)
 			_cam.fov = 54.0
+			_cam.look_at_from_position(eye, aim)
+
+		"emerald_temple":
+			if _emerald_spire == null:
+				return
+			var es_pos := _emerald_spire.global_position
+			var es_basis := Basis(Vector3.UP, _island_landing_yaw(_emerald_spire, -1.42))
+			var sweep := clampf(_clock * 0.22, 0.0, 1.0)
+			var pan := sin(_clock * 0.36) * 6.0
+			var eye := es_pos + es_basis * Vector3(-14.0 + pan, lerpf(17.5, 11.8, sweep), lerpf(-94.0, -66.0, sweep))
+			var aim := _emerald_hero_aim
+			_cam.fov = 56.0
+			_cam.look_at_from_position(eye, aim)
+
+		"galleons_catwalk":
+			if _galleons_reach == null:
+				return
+			var gr_pos := _galleons_reach.global_position
+			var gr_basis := Basis(Vector3.UP, _island_landing_yaw(_galleons_reach, 0.12))
+			var sweep := clampf(_clock * 0.20, 0.0, 1.0)
+			var pan := sin(_clock * 0.34) * 8.0
+			var eye := gr_pos + gr_basis * Vector3(-34.0 + pan, lerpf(23.0, 15.0, sweep), lerpf(-114.0, -80.0, sweep))
+			var aim := _galleons_hero_aim
+			_cam.fov = 56.0
+			_cam.look_at_from_position(eye, aim)
+
+		"cinder_basalt":
+			if _cinder_crag == null:
+				return
+			var cr_pos := _cinder_crag.global_position
+			var cr_basis := Basis(Vector3.UP, _island_landing_yaw(_cinder_crag, 2.90))
+			var sweep := clampf(_clock * 0.18, 0.0, 1.0)
+			var pan := sin(_clock * 0.28) * 14.0
+			var eye := cr_pos + cr_basis * Vector3(-52.0 + pan, lerpf(56.0, 44.0, sweep), lerpf(-236.0, -196.0, sweep))
+			var aim := cr_pos + cr_basis * Vector3(0.0, 50.0, -10.0)
+			_cam.fov = 54.0
+			_cam.look_at_from_position(eye, aim)
+
+		"gulls_arch":
+			if _gulls_arch == null:
+				return
+			var ga_pos := _gulls_arch.global_position
+			var ga_basis := Basis(Vector3.UP, _island_landing_yaw(_gulls_arch, -2.15))
+			var sweep := clampf(_clock * 0.22, 0.0, 1.0)
+			var pan := sin(_clock * 0.36) * 6.5
+			var eye := ga_pos + ga_basis * Vector3(-22.0 + pan, lerpf(15.5, 9.2, sweep), lerpf(-96.0, -68.0, sweep))
+			var aim := _gulls_arch_aim
+			_cam.fov = 56.0
 			_cam.look_at_from_position(eye, aim)
 
 		_:
 			if _cutlass != null:
 				var cc_pos := _cutlass.global_position
-				var cc_basis := Basis(Vector3.UP, 2.77)
-				_cam.look_at_from_position(cc_pos + cc_basis * Vector3(-16.0, 11.5, -58.0),
-					cc_pos + cc_basis * Vector3(1.5, 10.0, 2.0))
+				var cc_basis := Basis(Vector3.UP, _island_landing_yaw(_cutlass, 2.77))
+				_cam.look_at_from_position(cc_pos + cc_basis * Vector3(-16.0, 12.0, -60.0),
+					cc_pos + cc_basis * Vector3(1.5, 10.5, 3.0))
+

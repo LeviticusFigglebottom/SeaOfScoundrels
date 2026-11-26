@@ -35,6 +35,19 @@ const CAMPFIRE_SCENE: PackedScene = preload("res://assets/generated/props/campfi
 const SUPPLY_BARREL_SCRIPT: GDScript = preload("res://src/world/supply_barrel.gd")
 const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 
+const TERRAIN_PBR_TEXTURE_PATHS: Dictionary = {
+	"tex_grass_albedo": "res://assets/generated/textures/terrain_grass_albedo.png",
+	"tex_grass_normal": "res://assets/generated/textures/terrain_grass_normal.png",
+	"tex_dirt_albedo": "res://assets/generated/textures/terrain_dirt_albedo.png",
+	"tex_dirt_normal": "res://assets/generated/textures/terrain_dirt_normal.png",
+	"tex_sand_albedo": "res://assets/generated/textures/terrain_sand_albedo.png",
+	"tex_sand_normal": "res://assets/generated/textures/terrain_sand_normal.png",
+	"tex_cliff_albedo": "res://assets/generated/textures/terrain_cliff_albedo.png",
+	"tex_cliff_normal": "res://assets/generated/textures/terrain_cliff_normal.png",
+	"tex_volcanic_albedo": "res://assets/generated/textures/terrain_volcanic_albedo.png",
+	"tex_volcanic_normal": "res://assets/generated/textures/terrain_volcanic_normal.png",
+}
+
 const ARCHETYPES: Array[StringName] = [
 	&"outpost",
 	&"treasure_peak",
@@ -456,9 +469,12 @@ static func build_island(spec: Dictionary) -> Island:
 		island.spawn_dig_site(island.dig_points[0], tid)
 
 	# Place ground-snapped stylized props (palms, ferns, boulders, spires, arches, wrecks, campfires,
-	# plus duck-typed Wave 24A architecture/jungle props & Wave 24B waterfalls/fumaroles).
+	# plus duck-typed Wave 24A architecture/jungle props, Wave 24B waterfalls/fumaroles & Wave I-2 landmarks).
 	var foliage_mat_cache: Dictionary = {}
 	_populate_archetype_props(island, arch, landing_yaw, exclusions, rng, prop_body, props_root, foliage_mat_cache)
+
+	# Populate batched MultiMesh 3D ground cover, coastal shoreline details & steep-slope cliff buttresses.
+	IslandDetails.populate_for_island(island, arch, seed_val + 503, exclusions)
 
 	# Atmospheric night-time tropical fireflies over palm groves, coves & outposts (skip stark volcanic crag).
 	if arch != &"volcano_crag":
@@ -602,11 +618,11 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 				12.0 * scale_r, 11.0 * scale_r, target_peak * 0.58, 0.65, 3, 0.24, s + 3.2)
 			h = maxf(h, maxf(fang_main, fang_sub))
 			h += ridge_n * 3.2 * _smoothstep(6.0, 22.0, h)
-			# Carve a tiny walkable golden sandbar landing pocket on the -v seaward shelf.
-			var pocket := _smoothstep(18.0 * scale_r, 6.0 * scale_r, absf(u - 3.0 * scale_r)) * _smoothstep(-2.0 * scale_r, -20.0 * scale_r, v)
+			# Carve a walkable golden sandbar landing pocket on the -v seaward shelf for the tide-path.
+			var pocket := _smoothstep(20.0 * scale_r, 7.5 * scale_r, absf(u - 2.0 * scale_r)) * _smoothstep(-3.0 * scale_r, -13.0 * scale_r, v)
 			if d_shore < 0.0 and pocket > 0.001:
-				var p_h := 1.45 + 0.95 * clampf((-d_shore - 3.0) / (14.0 * scale_r), 0.0, 1.0)
-				h = lerpf(h, minf(h, p_h), pocket * 0.85)
+				var p_h := 1.45 + 1.05 * clampf((-d_shore - 2.5) / (14.0 * scale_r), 0.0, 1.0)
+				h = lerpf(h, minf(h, p_h), pocket * 0.94)
 
 		&"treasure_peak":
 			# Iconic Cutlass Cay: sweeping golden landing cove + curved terraced twin limestone ridge peaks!
@@ -1026,6 +1042,10 @@ static func _stepped_mesa(u: float, v: float, cx: float, cz: float, rx: float, r
 
 # ============================================================ terrain mesh & collider
 
+static func get_terrain_pbr_texture_paths() -> Dictionary:
+	return TERRAIN_PBR_TEXTURE_PATHS.duplicate()
+
+
 static func _create_terrain_material(arch: StringName) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = ISLAND_SHADER
@@ -1101,6 +1121,14 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 	var sin_y := sin(landing_yaw)
 	var peak_ref := maxf(island.peak_height, 24.0)
 
+	# Compute winding walkable trail polylines & expose lightweight metadata for IslandDetails trail parting.
+	var trail_polylines: Array[PackedVector2Array] = IslandTrails.get_trail_polylines(arch, island.island_radius, island.island_id)
+	var trail_hw: float = IslandTrails.get_trail_half_width(arch)
+	var trail_sample_hw := maxf(trail_hw, step * 1.05)
+	island.set_meta(&"trail_polylines", trail_polylines)
+	island.set_meta(&"trail_half_width", trail_hw)
+	island.set_meta(&"landing_yaw", landing_yaw)
+
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
@@ -1155,32 +1183,19 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 				if y > -1.5 and y < 4.0 and n.y < 0.72:
 					c_vert *= Color(0.84, 0.87, 0.86)
 
-			# Warm sunlit pebbled dirt footpaths along walkable harbour, bastion, canyon & grotto lanes.
-			# Drives island_shader.gdshader's `dirt_path_mask = 1.0 - COLOR.a` (1024x1024 pebbled dirt PBR).
-			var trail_w := 0.0
-			var wobble := sin(v * 0.14 + u * 0.09) * 2.4 + cos(v * 0.27 - u * 0.13) * 1.1
+			# Organic winding walkable dirt/cobble footpaths across all 14 islands (1.0 - COLOR.a)
+			# plus warm pebbled harbour plaza clearing on outposts (drives 1024x1024 pebbled dirt PBR).
+			var trail_a := IslandTrails.sample_trail_alpha(u, v, trail_polylines, trail_sample_hw, n.y, y)
 			if (arch == &"outpost" or arch == &"grand_outpost") and n.y > 0.78 and y > 1.0:
-				# Harbour plaza & pier-to-tavern lane + curved path up to the lighthouse & village terrace.
+				var wobble := sin(v * 0.14 + u * 0.09) * 2.4 + cos(v * 0.27 - u * 0.13) * 1.1
 				var plaza_d := Vector2((u + 1.5) * 0.78, v + 14.0).length()
-				var plaza_t := 1.0 - _smoothstep(8.0, 17.5, plaza_d + wobble * 0.5)
-				var lane_u := absf(u + 1.5 + wobble * 0.55)
-				var lane_t := (1.0 - _smoothstep(2.4, 5.8, lane_u)) * _smoothstep(-32.0, -24.0, v) * (1.0 - _smoothstep(-4.0, 4.0, v))
-				var lh_u := absf(u + 14.5 - (v + 12.0) * 0.35 + wobble * 0.4)
-				var lh_t := (1.0 - _smoothstep(1.8, 4.4, lh_u)) * _smoothstep(-16.0, -8.0, v) * (1.0 - _smoothstep(14.0, 22.0, v))
-				trail_w = maxf(plaza_t * 0.88, maxf(lane_t, lh_t * 0.85))
-			elif (arch == &"fort_rock" or arch == &"grand_citadel") and n.y > 0.78 and y > 1.2:
-				var f_u := absf(u + wobble * 0.65)
-				trail_w = (1.0 - _smoothstep(3.0, 7.2, f_u)) * _smoothstep(-82.0, -68.0, v) * (1.0 - _smoothstep(6.0, 16.0, v))
-			elif arch == &"smuggler_cove" and n.y > 0.80 and y > 1.1:
-				var s_u := absf(u + wobble * 0.55)
-				trail_w = (1.0 - _smoothstep(2.4, 5.8, s_u)) * _smoothstep(-22.0, -14.0, v) * (1.0 - _smoothstep(10.0, 18.0, v))
-			elif (arch == &"twin_spires" or arch == &"treasure_peak" or arch == &"skull_bluff") and n.y > 0.78 and y > 1.6 and y < 26.0:
-				var p_u := absf(u + wobble * 0.9)
-				trail_w = (1.0 - _smoothstep(2.0, 5.2, p_u)) * _smoothstep(-island.island_radius * 0.72, -island.island_radius * 0.55, v) \
-					* (1.0 - _smoothstep(island.island_radius * 0.16, island.island_radius * 0.34, v)) * 0.82
-			if trail_w > 0.01:
-				c_vert = c_vert.lerp(Color(1.04, 1.01, 0.95), trail_w * 0.25)
-				c_vert.a = lerpf(1.0, 0.06, clampf(trail_w, 0.0, 1.0))
+				var plaza_t := (1.0 - _smoothstep(8.0, 17.5, plaza_d + wobble * 0.5)) * 0.88
+				if plaza_t > 0.01:
+					trail_a = minf(trail_a, lerpf(1.0, 0.06, clampf(plaza_t, 0.0, 1.0)))
+			if trail_a < 0.90:
+				var warm_t := clampf((0.90 - trail_a) / 0.90, 0.0, 1.0) * 0.25
+				c_vert = c_vert.lerp(Color(1.05, 1.01, 0.94), warm_t)
+			c_vert.a = trail_a
 			colors[idx] = c_vert
 
 	# Triangulate active cells (skip flat outer abyss beyond seabed_radius).
@@ -1378,21 +1393,24 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 	# 1. Signature landmark props per archetype (sea arches, shipwrecks, sea stacks, campfires).
 	match arch:
 		&"sea_arch":
-			# Monumental coastal rock arch straddling the sandy tide cove + flanking sea stack!
-			var arch_p := basis * Vector3(0.0, 0.0, -island.island_radius * 0.45)
-			var arch_y := island.surface_height(arch_p.x, arch_p.z)
-			_spawn_prop(island, ROCK_ARCH_SCENE, "SeaArch_Main",
-				Transform3D(Basis(Vector3.UP, landing_yaw) * Basis.from_scale(Vector3(1.55, 1.50, 1.45)),
-					Vector3(arch_p.x, minf(arch_y, 0.6) - 0.6, arch_p.z)),
-				prop_body, props_root, foliage_cache)
-			placed.append(Vector3(arch_p.x, arch_p.z, 9.5))
-			keepout_zones.append(Vector3(arch_p.x, arch_p.z, 9.5))
+			# Wave I-2 IslandLandmarks places our 19 m PBR `coastal_sea_arch.glb` (`CoastalSeaArch_Main` &
+			# `CoastalSeaArch_Outer`) straddling Gull's Arch's tide bay; only fall back to legacy
+			# `ROCK_ARCH_SCENE` if the PBR landmark asset is absent so there are zero overlapping arches.
+			if not ResourceLoader.exists("res://assets/generated/landmarks/coastal_sea_arch.glb"):
+				var arch_p := basis * Vector3(0.0, 0.0, -island.island_radius * 0.45)
+				var arch_y := island.surface_height(arch_p.x, arch_p.z)
+				_spawn_prop(island, ROCK_ARCH_SCENE, "SeaArch_Main",
+					Transform3D(Basis(Vector3.UP, landing_yaw) * Basis.from_scale(Vector3(1.55, 1.50, 1.45)),
+						Vector3(arch_p.x, minf(arch_y, 0.6) - 0.6, arch_p.z)),
+					prop_body, props_root, foliage_cache)
+				placed.append(Vector3(arch_p.x, arch_p.z, 9.5))
+				keepout_zones.append(Vector3(arch_p.x, arch_p.z, 9.5))
 
-			var arch2_p := basis * Vector3(island.island_radius * 0.56, 0.0, -island.island_radius * 0.58)
-			_spawn_prop(island, ROCK_ARCH_SCENE, "SeaArch_Outer",
-				Transform3D(Basis(Vector3.UP, landing_yaw + 0.65) * Basis.from_scale(Vector3(1.15, 1.10, 1.10)),
-					Vector3(arch2_p.x, -1.2, arch2_p.z)),
-				prop_body, props_root, foliage_cache)
+				var arch2_p := basis * Vector3(island.island_radius * 0.56, 0.0, -island.island_radius * 0.58)
+				_spawn_prop(island, ROCK_ARCH_SCENE, "SeaArch_Outer",
+					Transform3D(Basis(Vector3.UP, landing_yaw + 0.65) * Basis.from_scale(Vector3(1.15, 1.10, 1.10)),
+						Vector3(arch2_p.x, -1.2, arch2_p.z)),
+					prop_body, props_root, foliage_cache)
 
 		&"wreck_shoal":
 			# Two dramatic half-sunken pirate shipwrecks stranded on the shallow sandbars!
@@ -1461,6 +1479,13 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 	_populate_wave24_landmarks_and_architecture(
 		island, arch, landing_yaw, area_scale, placed, keepout_zones,
 		rng, prop_body, props_root, foliage_cache, opt_prop_cache)
+
+	# 1e. Bespoke Wave I-2 signature 3D landmarks & trail storytelling markers across all 14 islands.
+	var landmark_cache: Dictionary = {}
+	var trail_markers := IslandTrails.get_trail_marker_spots(island, arch, landing_yaw)
+	IslandLandmarks.populate_signature_landmarks(
+		island, arch, landing_yaw, placed, keepout_zones, rng,
+		prop_body, props_root, foliage_cache, landmark_cache, trail_markers)
 
 	# 2. Dramatic offshore sea stacks (`rock_spire.glb`) for iconic horizon silhouettes.
 	var base_spires := 4 if arch == &"sea_stack" else (3 if arch in [&"treasure_peak", &"twin_spires", &"volcano_crag", &"skull_bluff", &"grand_citadel"] else 2)
@@ -2551,6 +2576,14 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 	var stone_mat := StandardMaterial3D.new()
 	stone_mat.vertex_color_use_as_albedo = true
 	stone_mat.vertex_color_is_srgb = true
+	stone_mat.uv1_triplanar = true
+	stone_mat.uv1_world_triplanar = false
+	stone_mat.uv1_scale = Vector3(0.22, 0.22, 0.22)
+	stone_mat.albedo_texture = TEX_CLIFF_ALB
+	stone_mat.albedo_color = Color(1.20, 1.18, 1.14)
+	stone_mat.normal_enabled = true
+	stone_mat.normal_scale = 0.72
+	stone_mat.normal_texture = TEX_CLIFF_NRM
 	stone_mat.roughness = 0.90
 	stone_mat.metallic = 0.0
 	stone_mat.metallic_specular = 0.24

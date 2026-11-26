@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ca2hj3cyii5m5"
-path="res://.godot/imported/trail_lantern_post_lm_iron_albedo.png-5bd067f007ae4c2074123f2378011a88.ctex"
+path.s3tc="res://.godot/imported/trail_lantern_post_lm_iron_albedo.png-5bd067f007ae4c2074123f2378011a88.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "de867f9753028a685e7d9042d3f726bb"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/trail_lantern_post_lm_iron_albedo.png"
-dest_files=["res://.godot/imported/trail_lantern_post_lm_iron_albedo.png-5bd067f007ae4c2074123f2378011a88.ctex"]
+dest_files=["res://.godot/imported/trail_lantern_post_lm_iron_albedo.png-5bd067f007ae4c2074123f2378011a88.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

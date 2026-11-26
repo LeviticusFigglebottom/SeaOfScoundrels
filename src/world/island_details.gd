@@ -257,12 +257,14 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var all_radius_t := clampf((radius - 38.0) / 144.0, 0.0, 1.0)
 
 	# 1. Build automatic keepout zones (outpost pier/plaza/tavern/stall/beacon, mooring,
-	#    dig points, major structures, plus caller exclusions).
+	#    dig points, major structures, Wave I-2 signature landmarks, plus caller exclusions)
+	#    and optional walkable trail polylines stored on `island` metadata.
 	var keepouts: Array[Vector3] = []
 	var pier_seg := _collect_keepouts(island, arch, exclusions, keepouts)
 	var has_pier := bool(pier_seg["has_pier"])
 	var pier_a: Vector2 = pier_seg["pier_a"] as Vector2
 	var pier_b: Vector2 = pier_seg["pier_b"] as Vector2
+	var trail_ctx := _collect_trail_context(island)
 
 	# 2. Compute radius- & archetype-scaled layer budgets.
 	var grass_target := _compute_grass_target(arch, radius, radius_t, is_volcanic, is_tiny)
@@ -286,7 +288,7 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var grass_col: Array[Color] = []
 	var grass_pos := PackedVector3Array()
 	_place_grass_clumps(island, arch, rng, grass_target, radius, max_grass_h, is_volcanic,
-		meadow_centers, keepouts, has_pier, pier_a, pier_b, grass_xf, grass_col, grass_pos)
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, grass_xf, grass_col, grass_pos)
 
 	# 5. Populate Layers 2 & 3: JungleFerns & HibiscusShrubs (linear colors for `foliage_wind.gdshader`).
 	var fern_xf: Array[Transform3D] = []
@@ -295,9 +297,9 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var hibiscus_col: Array[Color] = []
 	var bush_grid: Dictionary = {}
 	_place_jungle_ferns(island, rng, fern_target, radius, max_fern_h, is_volcanic,
-		meadow_centers, keepouts, has_pier, pier_a, pier_b, bush_grid, fern_xf, fern_col)
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, fern_xf, fern_col)
 	_place_hibiscus_shrubs(island, rng, hibiscus_target, radius, max_shrub_h, is_volcanic,
-		meadow_centers, keepouts, has_pier, pier_a, pier_b, bush_grid, hibiscus_xf, hibiscus_col)
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, hibiscus_xf, hibiscus_col)
 
 	# 6. Populate Layers 4, 5, 6: CoastalDriftwood, ShorePebblesShells, TidalOutcrops (sRGB vertex colors).
 	var driftwood_xf: Array[Transform3D] = []
@@ -552,31 +554,14 @@ static func _collect_keepouts(island: Island, arch: StringName, caller_exclusion
 		if Vector2(m_pos.x, m_pos.z).length_squared() > 1.0:
 			out_keepouts.append(Vector3(m_pos.x, m_pos.z, MOORING_KEEPOUT_RADIUS))
 
-	# Automatically avoid overlapping major placed structures (bastions, warehouses, campfires, grottoes, vents).
+	# Automatically avoid overlapping major placed structures (bastions, warehouses, campfires, grottoes,
+	# vents, and Wave I-2 signature landmarks).
 	var props_root := island.get_node_or_null(^"Props") as Node3D
 	if props_root != null:
-		for child in props_root.get_children():
-			var n3 := child as Node3D
-			if n3 == null:
-				continue
-			var cname := n3.name
-			var keep_r := 0.0
-			if cname == "FortBastion":
-				keep_r = 18.5
-			elif cname.begins_with("SmugglerGrotto"):
-				keep_r = 10.5
-			elif cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck"):
-				keep_r = 7.5
-			elif cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall"):
-				keep_r = 7.2
-			elif cname.begins_with("HeadlandWatchtower") or cname.begins_with("FortWatchtower"):
-				keep_r = 5.8
-			elif cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") or cname.begins_with("BluffTimberBridge"):
-				keep_r = 5.8
-			elif cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire"):
-				keep_r = 4.2
-			if keep_r > 0.0:
-				out_keepouts.append(Vector3(n3.position.x, n3.position.z, keep_r))
+		_collect_prop_keepouts(props_root, props_root.transform, out_keepouts)
+	var landmarks_root := island.get_node_or_null(^"Landmarks") as Node3D
+	if landmarks_root != null:
+		_collect_prop_keepouts(landmarks_root, landmarks_root.transform, out_keepouts)
 
 	for child in island.get_children():
 		var n3 := child as Node3D
@@ -590,6 +575,142 @@ static func _collect_keepouts(island: Island, arch: StringName, caller_exclusion
 		"pier_a": pier_a,
 		"pier_b": pier_b,
 	}
+
+
+static func _collect_prop_keepouts(container: Node3D, parent_xf: Transform3D,
+		out_keepouts: Array[Vector3]) -> void:
+	for child in container.get_children():
+		var n3 := child as Node3D
+		if n3 == null:
+			continue
+		var cname := String(n3.name)
+		if cname == "Landmarks" or cname == "IslandLandmarks":
+			_collect_prop_keepouts(n3, parent_xf * n3.transform, out_keepouts)
+			continue
+		var keep_r := _prop_keepout_radius(cname)
+		if keep_r > 0.0:
+			var p := parent_xf * n3.position
+			out_keepouts.append(Vector3(p.x, p.z, keep_r))
+
+
+static func _prop_keepout_radius(cname: String) -> float:
+	if cname == "FortBastion":
+		return 18.5
+	if cname.begins_with("SkullCliffCarving"):
+		return 15.0
+	if cname.begins_with("SmugglerGrotto") or cname.begins_with("CoastalSeaArch"):
+		return 10.5
+	if cname.begins_with("TempleStairway"):
+		return 9.0
+	if cname.begins_with("CliffCatwalk") or cname.begins_with("ImpaledShipwreck"):
+		return 8.5
+	if cname.begins_with("CliffOverhang") or cname.begins_with("CliffButtressWide"):
+		return 8.0
+	if cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck"):
+		return 7.5
+	if cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall"):
+		return 7.2
+	if cname.begins_with("VolcanicBasaltSpire"):
+		return 7.0
+	if cname.begins_with("HeadlandWatchtower") or cname.begins_with("FortWatchtower"):
+		return 5.8
+	if cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") or cname.begins_with("BluffTimberBridge"):
+		return 5.8
+	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") or cname.begins_with("MossyBoulder"):
+		return 4.2
+	if cname.begins_with("TrailLantern") or cname.begins_with("StoneCairn"):
+		return 2.0
+	return 0.0
+
+
+static func _collect_trail_context(island: Island) -> Dictionary:
+	var seg_a := PackedVector2Array()
+	var seg_b := PackedVector2Array()
+	var empty_ctx := {
+		"active": false,
+		"cos_y": 1.0,
+		"sin_y": 0.0,
+		"clear_r_sq": 0.0,
+		"min_u": 0.0,
+		"max_u": 0.0,
+		"min_v": 0.0,
+		"max_v": 0.0,
+		"seg_a": seg_a,
+		"seg_b": seg_b,
+	}
+	if not island.has_meta(&"trail_polylines"):
+		return empty_ctx
+
+	# Part tall foliage strictly inside 72% of painted footpath half-width so grass & wildflowers
+	# hug and frame the edges of every winding dirt trail while keeping the walking tread clear.
+	var half_w := maxf(0.0, float(island.get_meta(&"trail_half_width", 2.8)))
+	var clear_r := half_w * 0.72
+	if clear_r <= 0.001:
+		return empty_ctx
+
+	var raw_trails: Variant = island.get_meta(&"trail_polylines", [])
+	var min_u := INF
+	var max_u := -INF
+	var min_v := INF
+	var max_v := -INF
+
+	if raw_trails is Array:
+		for poly_var: Variant in (raw_trails as Array):
+			var pts := PackedVector2Array()
+			if poly_var is PackedVector2Array:
+				pts = poly_var as PackedVector2Array
+			elif poly_var is Array:
+				for p_var: Variant in (poly_var as Array):
+					if p_var is Vector2:
+						pts.append(p_var as Vector2)
+			if pts.size() < 2:
+				continue
+			for i in range(pts.size() - 1):
+				var a: Vector2 = pts[i]
+				var b: Vector2 = pts[i + 1]
+				if a.distance_squared_to(b) < 1e-6:
+					continue
+				seg_a.append(a)
+				seg_b.append(b)
+				min_u = minf(min_u, minf(a.x, b.x))
+				max_u = maxf(max_u, maxf(a.x, b.x))
+				min_v = minf(min_v, minf(a.y, b.y))
+				max_v = maxf(max_v, maxf(a.y, b.y))
+
+	if seg_a.is_empty():
+		return empty_ctx
+
+	var landing_yaw := float(island.get_meta(&"landing_yaw", 0.0))
+	return {
+		"active": true,
+		"cos_y": cos(landing_yaw),
+		"sin_y": sin(landing_yaw),
+		"clear_r_sq": clear_r * clear_r,
+		"min_u": min_u - clear_r,
+		"max_u": max_u + clear_r,
+		"min_v": min_v - clear_r,
+		"max_v": max_v + clear_r,
+		"seg_a": seg_a,
+		"seg_b": seg_b,
+	}
+
+
+static func _is_on_trail(pt: Vector2, trail_ctx: Dictionary) -> bool:
+	if not bool(trail_ctx["active"]):
+		return false
+	var cos_y: float = float(trail_ctx["cos_y"])
+	var sin_y: float = float(trail_ctx["sin_y"])
+	var uv := Vector2(pt.x * cos_y - pt.y * sin_y, pt.x * sin_y + pt.y * cos_y)
+	if uv.x < float(trail_ctx["min_u"]) or uv.x > float(trail_ctx["max_u"]) \
+			or uv.y < float(trail_ctx["min_v"]) or uv.y > float(trail_ctx["max_v"]):
+		return false
+	var clear_r_sq: float = float(trail_ctx["clear_r_sq"])
+	var seg_a: PackedVector2Array = trail_ctx["seg_a"] as PackedVector2Array
+	var seg_b: PackedVector2Array = trail_ctx["seg_b"] as PackedVector2Array
+	for i in seg_a.size():
+		if _point_segment_dist_sq(uv, seg_a[i], seg_b[i]) < clear_r_sq:
+			return true
+	return false
 
 
 static func _is_in_keepout(pt: Vector2, keepouts: Array[Vector3], has_pier: bool,
@@ -671,7 +792,7 @@ static func _discover_meadow_centers(island: Island, rng: RandomNumberGenerator,
 static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNumberGenerator,
 		target: int, radius: float, max_grass_h: float, is_volcanic: bool,
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
-		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
 	var base_spacing := clampf(radius * 0.017, 0.95, 2.55)
 	var cell_size := maxf(1.5, base_spacing)
@@ -681,7 +802,7 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 	var passes: Array[Array] = [
 		[2.75, max_grass_h, 0.72, base_spacing, 0.56, target * 14 + 260],
 		[2.30, max_grass_h + 4.0, 0.72, base_spacing * 0.68, 0.35, target * 12 + 220],
-		[1.95, max_grass_h + 6.0, 0.66, 0.65, 0.20, target * 10 + 180],
+		[1.95, max_grass_h + 6.0, 0.66, 0.65, 0.20, target * 14 + 300],
 	]
 
 	for cfg in passes:
@@ -701,6 +822,8 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.04, radius * 0.94,
 				cluster_prob, 1.4, patch_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if _is_on_trail(pt, trail_ctx):
 				continue
 			if not _grid_is_clear(grid, cell_size, pt, min_sep):
 				continue
@@ -741,12 +864,14 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, target: int,
 		radius: float, max_fern_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
 		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
-		bush_grid: Dictionary, out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
+		trail_ctx: Dictionary, bush_grid: Dictionary, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
 	var min_sep := clampf(radius * 0.026, 1.45, 3.4)
 	var cell_size := 2.6
 	var passes: Array[Array] = [
 		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 180],
 		[2.35, max_fern_h + 5.0, 0.66, min_sep * 0.68, 0.30, target * 12 + 160],
+		[2.05, max_fern_h + 8.0, 0.62, maxf(0.95, min_sep * 0.50), 0.18, target * 14 + 220],
 	]
 
 	for cfg in passes:
@@ -766,6 +891,8 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.06, radius * 0.92,
 				cluster_prob, 1.6, patch_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if _is_on_trail(pt, trail_ctx):
 				continue
 			if not _grid_is_clear(bush_grid, cell_size, pt, sep):
 				continue
@@ -790,12 +917,14 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, target: int,
 		radius: float, max_shrub_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
 		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
-		bush_grid: Dictionary, out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
+		trail_ctx: Dictionary, bush_grid: Dictionary, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
 	var min_sep := clampf(radius * 0.032, 1.75, 4.0)
 	var cell_size := 2.6
 	var passes: Array[Array] = [
-		[2.95, max_shrub_h, 0.74, min_sep, 0.52, target * 18 + 160],
-		[2.55, max_shrub_h + 5.0, 0.68, min_sep * 0.68, 0.28, target * 14 + 140],
+		[3.05, max_shrub_h, 0.74, min_sep, 0.52, target * 18 + 160],
+		[2.85, max_shrub_h + 5.0, 0.68, min_sep * 0.68, 0.28, target * 14 + 140],
+		[2.85, max_shrub_h + 8.0, 0.64, maxf(1.05, min_sep * 0.50), 0.16, target * 16 + 220],
 	]
 
 	for cfg in passes:
@@ -815,6 +944,8 @@ static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, t
 			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.08, radius * 0.90,
 				cluster_prob, 1.8, patch_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if _is_on_trail(pt, trail_ctx):
 				continue
 			if not _grid_is_clear(bush_grid, cell_size, pt, sep):
 				continue
@@ -1011,10 +1142,16 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 		out_tall_xf: Array[Transform3D], out_tall_col: Array[Color],
 		out_wide_xf: Array[Transform3D], out_wide_col: Array[Color],
 		out_normals_y: PackedFloat32Array) -> void:
-	# 1. Systematically scan radial & elevation rings across lower-to-mid cliff skirts & mountain shoulders
-	#    (keeps monumental rocky buttresses rooted solidly at cliff bases instead of floating high mid-wall!).
-	var max_h := maxf(8.0, island.peak_height * 0.68) if (is_volcanic or arch == &"sea_stack") else clampf(island.peak_height * 0.48, 12.0, 34.0)
-	var min_h := 2.0
+	# 1. Systematically scan radial & elevation rings across grounded lower cliff skirts & mountain bases
+	#    (keeps monumental 15-24 m rocky buttresses rooted directly into the valley floor / coastal earth!).
+	var max_h: float
+	if is_volcanic or arch == &"sea_stack":
+		max_h = maxf(8.0, island.peak_height * 0.58)
+	elif radius < 70.0:
+		max_h = clampf(island.peak_height * 0.24, 9.0, 14.0)
+	else:
+		max_h = clampf(island.peak_height * 0.26, 11.0, 18.5)
+	var min_h := 1.6
 	var candidates: Array[Dictionary] = []  # {pos: Vector3, normal: Vector3, ny: float, az: float}
 
 	var radial_steps := clampi(int(roundf(radius / 3.4)), 14, 38)
@@ -1080,10 +1217,10 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 
 			var out_xz: Vector3 = cand["out_xz"] as Vector3
 			var ny: float = float(cand["ny"])
-			# Choose wide headland bluff on ~46% of spots on medium/large non-volcanic islands.
+			# Mix wide coastal headland massifs (~52%) with tall rocky spurs (~48%) to eliminate repetitive silhouettes.
 			var pick_wide := false
 			if use_wide_layer:
-				var wide_bias := 0.54 if ny > 0.48 else 0.36
+				var wide_bias := 0.58 if ny > 0.44 else 0.44
 				pick_wide = rng.randf() < wide_bias
 
 			var aabb := wide_aabb if pick_wide else tall_aabb
@@ -1094,36 +1231,48 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 			var sc_y: float
 			var sc_xz: float
 			if pick_wide:
-				var target_h := rng.randf_range(11.0, 15.8) * clampf(size_scale, 0.85, 1.28)
+				var target_h := rng.randf_range(11.2, 16.4) * clampf(size_scale, 0.85, 1.30)
 				sc_y = clampf(target_h / ref_h, 0.72, 1.38)
-				sc_xz = clampf(sc_y * rng.randf_range(0.88, 1.12), 0.72, 1.32)
+				sc_xz = clampf(sc_y * rng.randf_range(0.86, 1.16), 0.72, 1.36)
 			else:
-				var target_h := rng.randf_range(16.5, 24.5) * size_scale
-				sc_y = clampf(target_h / ref_h, 0.76, 1.65)
-				sc_xz = clampf(sc_y * rng.randf_range(0.86, 1.14), 0.74, 1.55)
+				var target_h := rng.randf_range(15.5, 23.5) * size_scale
+				sc_y = clampf(target_h / ref_h, 0.74, 1.58)
+				sc_xz = clampf(sc_y * rng.randf_range(0.82, 1.18), 0.70, 1.52)
 
-			# Orient local -Z outward along horizontal slope direction `out_xz` (+ subtle geological jitter).
-			var yaw := atan2(-out_xz.x, -out_xz.z) + rng.randf_range(-0.24, 0.24)
-			var pitch := rng.randf_range(-0.05, 0.07)
-			var roll := rng.randf_range(-0.06, 0.06)
+			# Orient local -Z outward along horizontal slope direction `out_xz` with broad natural yaw/roll variety.
+			# Positive pitch around +X rotates +Y toward +Z (tucking top caps INWARD into the cliff shoulder!).
+			var yaw := atan2(-out_xz.x, -out_xz.z) + rng.randf_range(-0.42, 0.42)
+			var pitch := rng.randf_range(0.08, 0.24) if not is_volcanic else rng.randf_range(-0.08, 0.14)
+			var roll := rng.randf_range(-0.11, 0.11)
 			var rot_basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.FORWARD, roll)
 			var xf_basis := rot_basis.scaled(Vector3(sc_xz, sc_y, sc_xz))
 
-			# Embed rear +Z skirt solidly into the mountain while letting the sculpted -Z prow & vertical ribs jut boldly outward!
-			var back_frac := 0.25 if pick_wide else 0.22
-			var embed_back := clampf(aabb.size.z * back_frac, 1.4, 3.0) * sc_xz
-			var base_sink := clampf(aabb.size.y * 0.20, 1.6, 4.2) * sc_y
+			# Embed deeply into the hillside (`pos -= out_xz * embed_back`) so pitched -5.8 m feet & top caps
+			# fuse organically into the mountain rock with ZERO floating undersides or mushroom-cap overhangs!
+			var back_frac := 0.36 if pick_wide else 0.34
+			var embed_back := (clampf(aabb.size.z * back_frac, 2.2, 4.4) + maxf(0.0, (0.45 - ny) * 2.2)) * sc_xz
+			var base_sink := clampf(aabb.size.y * 0.24, 2.0, 4.8) * sc_y
 			if aabb.position.y > -2.5:
 				base_sink += (aabb.position.y + 2.5) * sc_y
 			var right_xz := Vector3(out_xz.z, 0.0, -out_xz.x)
 			var flank_half := aabb.size.x * 0.34 * sc_xz
 			var back_px := pos.x - out_xz.x * embed_back
 			var back_pz := pos.z - out_xz.z * embed_back
+			var pitched_foot_out := maxf(0.0, sin(pitch) * absf(aabb.position.y) * sc_y)
+			var front_probe_dist := maxf(1.8 * sc_xz, (2.2 * sc_xz) + pitched_foot_out - embed_back * 0.45)
 			var h_left := island.surface_height(back_px - right_xz.x * flank_half, back_pz - right_xz.z * flank_half)
 			var h_right := island.surface_height(back_px + right_xz.x * flank_half, back_pz + right_xz.z * flank_half)
-			var flank_drop := maxf(0.0, pos.y - minf(h_left, h_right))
-			base_sink += minf(flank_drop * 0.55, aabb.size.y * 0.24 * sc_y)
-			var origin := pos - out_xz * embed_back - Vector3(0.0, base_sink, 0.0)
+			var h_front := island.surface_height(pos.x + out_xz.x * front_probe_dist, pos.z + out_xz.z * front_probe_dist)
+			var foot_ground := minf(h_front, minf(h_left, h_right))
+			var desired_origin_y := pos.y - base_sink
+			# Ensure mesh bottom (`origin.y + aabb.position.y * sc_y * cos(pitch)`) sits at least 0.9 m BELOW `foot_ground`!
+			var max_origin_y := foot_ground - aabb.position.y * sc_y * cos(pitch) - 0.9
+			if not is_volcanic and desired_origin_y > max_origin_y:
+				# Skip positions where sinking to valley floor would bury the whole buttress top below pos.y.
+				if max_origin_y + (aabb.position.y + aabb.size.y) * sc_y * cos(pitch) < pos.y + 1.4:
+					continue
+				desired_origin_y = max_origin_y
+			var origin := Vector3(back_px, desired_origin_y, back_pz)
 			var xf := Transform3D(xf_basis, origin)
 
 			var inst_col: Color

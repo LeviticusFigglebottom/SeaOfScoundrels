@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cwqrvluio64oh"
-path="res://.godot/imported/coastal_sea_arch_lm_foliage_rough.png-3eae12cc70c33cb1ea3c09ce2a76b479.ctex"
+path.s3tc="res://.godot/imported/coastal_sea_arch_lm_foliage_rough.png-3eae12cc70c33cb1ea3c09ce2a76b479.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "a5ef0ae9117a1c5332afc8f9929b6b6d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/coastal_sea_arch_lm_foliage_rough.png"
-dest_files=["res://.godot/imported/coastal_sea_arch_lm_foliage_rough.png-3eae12cc70c33cb1ea3c09ce2a76b479.ctex"]
+dest_files=["res://.godot/imported/coastal_sea_arch_lm_foliage_rough.png-3eae12cc70c33cb1ea3c09ce2a76b479.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

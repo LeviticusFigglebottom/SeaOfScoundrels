@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cgdgjrnf5ikme"
-path="res://.godot/imported/cliff_buttress_tall_lm_foliage_rough.png-7090be046509fd5ddb29129c97bd210e.ctex"
+path.s3tc="res://.godot/imported/cliff_buttress_tall_lm_foliage_rough.png-7090be046509fd5ddb29129c97bd210e.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "a5ef0ae9117a1c5332afc8f9929b6b6d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/cliff_buttress_tall_lm_foliage_rough.png"
-dest_files=["res://.godot/imported/cliff_buttress_tall_lm_foliage_rough.png-7090be046509fd5ddb29129c97bd210e.ctex"]
+dest_files=["res://.godot/imported/cliff_buttress_tall_lm_foliage_rough.png-7090be046509fd5ddb29129c97bd210e.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

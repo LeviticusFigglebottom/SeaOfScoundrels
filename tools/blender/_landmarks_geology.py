@@ -483,75 +483,79 @@ def _basalt_column_hull_pts(base_pos, height, radius, sides, tilt_x, tilt_z):
 # ---------------------------------------------------------------- 1. Cliff Buttress Tall
 
 def gen_cliff_buttress_tall(outdir):
-    """Monumental ~19 m tall continuous fractured limestone mountain spur / cliff buttress jutting toward -Z."""
+    """Monumental ~20 m tall solid bottom-heavy A-frame stepped limestone cliff buttress spur jutting toward -Z.
+    Broad flared talus skirt (y = -7.0..+3.0 m) tapers steadily upward & inward toward +Z into fractured
+    sedimentary shoulders and a diagonal craggy crest — zero flat mushroom cap and zero dangling legs!
+    """
     clear_scene()
     rng = random.Random(SEED + 201)
     mb = MB('CliffButtressTall', seed=201)
     col_pts = []
 
-    # Deep continuous flared rock core plunging to y = -6.0 m and z = +5.2 m so steep cliffs never expose a bottom gap!
+    # 1. Massive unified flared lower talus massif (y = -7.0 .. +13.8 m, wide base tapering smoothly upward & back)
     col_pts += _sculpt_crag_rib(
-        mb, (0.0, -5.80, 1.30), (0.0, 12.20, -0.45),
-        4.45, 3.85, 2.85, 2.75, 7, rng,
+        mb, (0.0, -7.00, 1.35), (0.0, 12.80, 1.95),
+        5.35, 4.75, 2.35, 2.15, 7, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=0.14, rings=7, arch_z=-0.55,
+        twist=0.10, rings=7, arch_z=-0.25, apex_y=13.85,
     )
 
-    # Bold forward-jutting central limestone prow spur descending cleanly from overhanging crown to y = -5.5 m
+    # 2. Bold forward-flaring lower-to-mid prow rib (widest at the foot y=-6.8 m, stepping back into the cliff by y=9.8 m!)
     col_pts += _sculpt_crag_rib(
-        mb, (0.15, -5.50, -0.35), (-0.15, 10.60, -2.20),
-        3.40, 2.85, 2.25, 2.35, 6, rng,
+        mb, (0.12, -6.80, -0.45), (-0.12, 9.60, 0.75),
+        4.15, 3.65, 1.75, 1.85, 6, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_MID,
-        twist=-0.16, rings=7, arch_z=-0.75,
+        twist=-0.12, rings=7, arch_z=-0.35, apex_y=10.85,
     )
 
-    # Port (-X) angular coastal buttress flank stepping outward & anchoring deep into the mountain skirt
+    # 3. Port (-X) broad grounded talus shoulder rib sloping steadily back into the upper massif
     col_pts += _sculpt_crag_rib(
-        mb, (-2.90, -5.20, 0.55), (-2.35, 9.40, -0.95),
-        2.55, 2.75, 1.75, 2.05, 6, rng,
+        mb, (-3.15, -6.60, 0.85), (-1.95, 8.80, 1.55),
+        3.25, 3.35, 1.55, 1.65, 6, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=0.20, rings=6, arch_z=-0.45, apex_y=11.0,
+        twist=0.14, rings=6, arch_z=-0.20, apex_y=9.95,
     )
 
-    # Starboard (+X) towering secondary rocky shoulder spur
+    # 4. Starboard (+X) broad grounded coastal flank buttress welding seamlessly into the core
     col_pts += _sculpt_crag_rib(
-        mb, (2.95, -5.00, 0.65), (2.25, 10.20, -0.80),
-        2.65, 2.70, 1.85, 2.05, 6, rng,
+        mb, (3.20, -6.50, 0.90), (2.05, 9.40, 1.50),
+        3.35, 3.30, 1.60, 1.70, 6, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=-0.18, rings=6, arch_z=-0.40, apex_y=12.1,
+        twist=-0.14, rings=6, arch_z=-0.20, apex_y=10.65,
     )
 
-    # Sculpted angular mid-cliff rock cheek blocks fused solidly into the ribs (natural geological fractures, zero air gaps!)
+    # 5. Grounded stepped lower apron rock blocks welding the front toe solidly to y = -6.5 m (ZERO gaps!)
     col_pts += sculpt_rock_mass(
-        mb, (-1.15, 3.80, -1.65), (2.55, 3.85, 2.15), 'limestone',
-        C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.20, strata=0.14, overhang=(-0.15, -0.55),
-        base_flare=0.24, rot_deg=(3, -15, 4), crag_ribs=5, rib_amp=0.14,
+        mb, (-1.65, -1.60, -1.75), (3.15, 4.95, 2.55), 'limestone',
+        C_LIME_PALE, C_LIME_WARM, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.18, strata=0.16, base_flare=0.28,
+        rot_deg=(4, -14, 5), crag_ribs=5, rib_amp=0.13,
     )
     col_pts += sculpt_rock_mass(
-        mb, (1.35, 5.40, -1.55), (2.40, 3.95, 2.15), 'limestone',
-        C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.20, strata=0.14, overhang=(0.18, -0.60),
-        base_flare=0.18, rot_deg=(-2, 16, -3), crag_ribs=5, rib_amp=0.14,
+        mb, (1.75, -1.25, -1.60), (3.05, 5.10, 2.50), 'limestone',
+        C_LIME_PALE, C_LIME_WARM, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.18, strata=0.16, base_flare=0.28,
+        rot_deg=(3, 15, -4), crag_ribs=5, rib_amp=0.13,
     )
 
-    # Chunky overhanging sunlit limestone brow & integrated mossy crown shoulder (y = 9.8..14.0 m)
+    # 6. Angled stepped mossy mid-shoulder strata ledge tucked INTO the tapering face (NOT a flat mushroom lid!)
     col_pts += _sculpt_faceted_slab(
-        mb, (-0.10, 11.40, -1.15), (3.85, 2.35, 3.10), 'limestone_moss',
+        mb, (-0.35, 6.25, -0.35), (3.10, 1.75, 2.25), 'limestone_moss',
         C_LEDGE_MOSS, C_LIME_PALE, C_LIME_WARM, rng,
-        subdiv=3, warp=0.18, strata=0.12, flat_top=0.58,
-        rot_deg=(0, 8, -2), crag_ribs=6, rib_amp=0.12, moss_cap=0.68,
+        subdiv=2, warp=0.16, strata=0.14, flat_top=0.42,
+        rot_deg=(-12, 10, -5), crag_ribs=6, rib_amp=0.12, moss_cap=0.62,
     )
+    # Upper diagonal craggy limestone crest shoulder tapering cleanly back into the cliff wall
     col_pts += sculpt_rock_mass(
-        mb, (-0.70, 12.60, 0.25), (2.75, 1.95, 2.35), 'limestone_moss',
+        mb, (0.45, 10.65, 1.25), (2.45, 2.55, 2.15), 'limestone_moss',
         C_GRASS_SUN, C_LIME_PALE, C_LIME_WARM, rng,
-        subdiv=2, warp=0.18, strata=0.12, flat_top=0.62,
-        rot_deg=(2, -14, 3), crag_ribs=5, rib_amp=0.12, moss_cap=0.78,
+        subdiv=2, warp=0.18, strata=0.14, flat_top=0.32,
+        rot_deg=(-16, -12, 6), crag_ribs=5, rib_amp=0.14, moss_cap=0.58,
     )
 
-    # Subtle hanging jungle vines tucked along the overhanging brow shoulder
-    add_vine_drape(mb, (-1.45, 10.65, -3.75), 3.30, 0.34, (-0.18, 0.0, -1.0), rng, phase=0.15)
-    add_vine_drape(mb, ( 1.40, 10.75, -3.55), 2.85, 0.32, ( 0.14, 0.0, -1.0), rng, phase=0.62)
+    # Short hanging cliff vines clinging closely to the stepped mossy shoulder
+    add_vine_drape(mb, (-1.45, 6.05, -2.15), 2.35, 0.30, (-0.16, 0.0, -1.0), rng, phase=0.18)
+    add_vine_drape(mb, ( 1.15, 5.95, -2.05), 2.05, 0.28, ( 0.14, 0.0, -1.0), rng, phase=0.64)
 
     build(mb)
     col_piece('col_buttress_tall', col_pts)
@@ -665,80 +669,92 @@ def gen_cliff_overhang_ledge(outdir):
     rng = random.Random(SEED + 233)
     mb = MB('CliffOverhangLedge', seed=233)
 
-    # --- Sturdy Anchored Cliff Heel (z = +1.5 .. +5.0 m, plunging deeply to y <= -2.45 m) ---
+    # --- Sturdy Anchored Cliff Heel & Sculpted Alcove Arch Haunches (z = +1.4..+5.2 m, y = -3.0..+4.9 m) ---
     sculpt_rock_mass(
-        mb, (0.0, 0.72, 3.20), (3.95, 4.18, 1.75), 'limestone',
-        C_LIME_MID, C_LIME_SHADE, C_LIME_SHADE, rng,
+        mb, (0.0, 0.65, 3.25), (4.25, 4.45, 1.90), 'limestone',
+        C_LIME_PALE, C_LIME_WARM, C_LIME_SHADE, rng,
         subdiv=2, warp=0.19, strata=0.20, flat_top=0.68,
-        base_flare=0.22, rot_deg=(0, 5, 0), crag_ribs=5, rib_amp=0.12,
+        base_flare=0.26, rot_deg=(0, 5, 0), crag_ribs=5, rib_amp=0.12,
     )
-    # Flanking alcove cheek buttresses framing the shadowed grotto (kept back at z >= +1.2 m)
+    # Flanking alcove cheek pillars & sloped arch haunches framing the shadowed grotto warmly
     sculpt_rock_mass(
-        mb, (-3.95, 0.72, 2.55), (2.05, 4.15, 1.65), 'limestone',
-        C_LIME_WARM, C_LIME_MID, C_LIME_SHADE, rng,
-        subdiv=2, warp=0.20, strata=0.20, overhang=(0.15, -0.35),
-        flat_top=0.68, base_flare=0.22, rot_deg=(0, -16, 4), crag_ribs=5, rib_amp=0.13,
+        mb, (-4.25, 0.55, 2.25), (2.25, 4.40, 2.05), 'limestone',
+        C_LIME_PALE, C_LIME_WARM, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.20, strata=0.20, overhang=(0.22, -0.55),
+        flat_top=0.68, base_flare=0.28, rot_deg=(0, -16, 5), crag_ribs=5, rib_amp=0.13,
     )
     sculpt_rock_mass(
-        mb, (3.95, 0.72, 2.65), (2.05, 4.15, 1.65), 'limestone',
-        C_LIME_WARM, C_LIME_MID, C_LIME_SHADE, rng,
-        subdiv=2, warp=0.20, strata=0.20, overhang=(-0.15, -0.35),
-        flat_top=0.68, base_flare=0.22, rot_deg=(0, 14, -4), crag_ribs=5, rib_amp=0.13,
+        mb, (4.25, 0.55, 2.35), (2.25, 4.40, 2.05), 'limestone',
+        C_LIME_PALE, C_LIME_WARM, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.20, strata=0.20, overhang=(-0.22, -0.55),
+        flat_top=0.68, base_flare=0.28, rot_deg=(0, 14, -5), crag_ribs=5, rib_amp=0.13,
+    )
+    # Tapered forward-curving side arch haunch ribs tying the wings solidly into the earth!
+    _sculpt_crag_rib(
+        mb, (-5.15, -3.10, 1.45), (-4.75, 4.15, -0.55),
+        2.15, 2.05, 1.45, 1.65, 6, rng,
+        mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
+        twist=0.12, rings=5, arch_z=-0.35,
+    )
+    _sculpt_crag_rib(
+        mb, (5.15, -3.10, 1.45), (4.75, 4.15, -0.55),
+        2.15, 2.05, 1.45, 1.65, 6, rng,
+        mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
+        twist=-0.12, rings=5, arch_z=-0.35,
     )
 
-    # --- Cantilevered Main Overhanging Brow Slab (z = -5.4 .. +2.8 m, y = 3.55 .. 4.98 m) ---
-    # Thick chunky limestone canopy slab (~1.3 m thick!) with flat walkable mossy plateau at y ≈ 4.8 m!
+    # --- Cantilevered Main Overhanging Brow Slab (chunky sculpted limestone roof, walkable mossy top at y ≈ 4.8 m) ---
     _sculpt_faceted_slab(
-        mb, (0.0, 4.30, -1.15), (4.15, 1.12, 3.55), 'limestone_moss',
-        C_LEDGE_MOSS, C_LIME_PALE, C_LIME_SHADE, rng,
-        subdiv=3, warp=0.13, strata=0.16, flat_top=0.52, flat_bot=0.56,
-        rot_deg=(0, 4, 0), crag_ribs=6, rib_amp=0.10, moss_cap=0.72,
+        mb, (0.0, 4.30, -1.15), (4.25, 1.32, 3.55), 'limestone_moss',
+        C_LEDGE_MOSS, C_LIME_PALE, C_LIME_WARM, rng,
+        subdiv=3, warp=0.14, strata=0.16, flat_top=0.52, flat_bot=0.50,
+        rot_deg=(0, 4, 0), crag_ribs=6, rib_amp=0.11, moss_cap=0.72,
     )
-    # Chunky cantilevered forward prow nose jutting boldly out to z ≈ -5.5 m
+    # Chunky cantilevered forward prow nose jutting boldly out to z ≈ -5.4 m
     _sculpt_faceted_slab(
-        mb, (-0.25, 4.34, -3.50), (2.65, 1.06, 1.68), 'limestone_moss',
-        C_GRASS_SUN, C_LIME_PALE, C_LIME_SHADE, rng,
-        subdiv=2, warp=0.14, strata=0.15, flat_top=0.52, flat_bot=0.54,
+        mb, (-0.25, 4.36, -3.45), (2.75, 1.18, 1.68), 'limestone_moss',
+        C_GRASS_SUN, C_LIME_PALE, C_LIME_WARM, rng,
+        subdiv=2, warp=0.14, strata=0.15, flat_top=0.52, flat_bot=0.48,
         rot_deg=(0, -6, 0), crag_ribs=5, rib_amp=0.11, moss_cap=0.78,
     )
     # Port (-X) wing cantilevered brow slab expanding total width cleanly to ~12.5 m (X ≈ -6.25 m)
     _sculpt_faceted_slab(
-        mb, (-3.75, 4.28, -0.35), (2.15, 1.08, 2.85), 'limestone_moss',
+        mb, (-3.75, 4.26, -0.35), (2.25, 1.24, 2.85), 'limestone_moss',
         C_LEDGE_MOSS, C_LIME_WARM, C_LIME_SHADE, rng,
-        subdiv=2, warp=0.15, strata=0.16, flat_top=0.52, flat_bot=0.56,
+        subdiv=2, warp=0.15, strata=0.16, flat_top=0.52, flat_bot=0.50,
         rot_deg=(0, -13, 0), crag_ribs=5, rib_amp=0.11, moss_cap=0.64,
     )
     # Starboard (+X) wing cantilevered brow slab expanding width cleanly to X ≈ +6.25 m
     _sculpt_faceted_slab(
-        mb, (3.70, 4.26, -0.45), (2.20, 1.08, 2.80), 'limestone_moss',
+        mb, (3.70, 4.24, -0.45), (2.25, 1.24, 2.80), 'limestone_moss',
         C_LEDGE_MOSS, C_LIME_WARM, C_LIME_SHADE, rng,
-        subdiv=2, warp=0.15, strata=0.16, flat_top=0.52, flat_bot=0.56,
+        subdiv=2, warp=0.15, strata=0.16, flat_top=0.52, flat_bot=0.50,
         rot_deg=(0, 14, 0), crag_ribs=5, rib_amp=0.11, moss_cap=0.66,
     )
-    # Shadowed stepped strata chin plate welding the rear overhang solidly into the heel
+    # Shadowed stepped strata chin arch welding the rear overhang solidly into the heel
     _sculpt_faceted_slab(
-        mb, (0.10, 4.02, 0.80), (4.45, 0.82, 2.25), 'limestone',
-        C_LIME_MID, C_LIME_SHADE, C_LIME_DARK, rng,
-        subdiv=2, warp=0.14, strata=0.18, flat_top=0.56, flat_bot=0.56,
+        mb, (0.10, 3.92, 0.95), (4.55, 1.05, 2.35), 'limestone',
+        C_LIME_WARM, C_LIME_MID, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.14, strata=0.18, flat_top=0.56, flat_bot=0.50,
         rot_deg=(0, -5, 0), crag_ribs=6, rib_amp=0.10,
     )
 
     # --- Sculpted Underside Structural Rock Ribs bracing heel up into the overhang canopy ---
-    _sculpt_underside_rib(mb, (-3.15, 3.15, 1.95), (-3.55, 3.88, -2.55), 0.88, 0.65, 0.44, 0.34, rng, arch_lift=0.38)
-    _sculpt_underside_rib(mb, ( 0.05, 3.25, 2.05), (-0.15, 3.92, -4.15), 0.98, 0.68, 0.48, 0.36, rng, arch_lift=0.42)
-    _sculpt_underside_rib(mb, ( 3.15, 3.12, 1.95), ( 3.45, 3.86, -2.45), 0.86, 0.64, 0.44, 0.34, rng, arch_lift=0.38)
+    _sculpt_underside_rib(mb, (-3.25, 2.85, 1.95), (-3.55, 3.84, -2.55), 1.02, 0.78, 0.48, 0.36, rng, arch_lift=0.42)
+    _sculpt_underside_rib(mb, ( 0.05, 2.95, 2.05), (-0.15, 3.88, -4.15), 1.12, 0.82, 0.52, 0.38, rng, arch_lift=0.45)
+    _sculpt_underside_rib(mb, ( 3.25, 2.82, 1.95), ( 3.45, 3.82, -2.45), 1.00, 0.76, 0.48, 0.36, rng, arch_lift=0.42)
 
     # --- Sculpted Chunky Limestone Stalactite Teeth framing the outer lip & alcove flanks ---
     teeth_specs = [
-        (-4.65, 3.80, -1.75, 0.82, 0.34),
-        (-3.35, 3.78, -2.95, 0.68, 0.30),
-        (-1.95, 3.78, -4.20, 0.56, 0.26),
-        (-0.45, 3.80, -4.85, 0.52, 0.25),
-        ( 1.15, 3.78, -4.45, 0.58, 0.27),
-        ( 2.65, 3.78, -3.25, 0.72, 0.31),
-        ( 4.35, 3.80, -2.05, 0.84, 0.35),
-        (-4.30, 3.75,  0.10, 0.78, 0.32),
-        ( 4.25, 3.75,  0.15, 0.80, 0.33),
+        (-4.65, 3.74, -1.75, 0.82, 0.34),
+        (-3.35, 3.72, -2.95, 0.68, 0.30),
+        (-1.95, 3.72, -4.20, 0.56, 0.26),
+        (-0.45, 3.74, -4.85, 0.52, 0.25),
+        ( 1.15, 3.72, -4.45, 0.58, 0.27),
+        ( 2.65, 3.72, -3.25, 0.72, 0.31),
+        ( 4.35, 3.74, -2.05, 0.84, 0.35),
+        (-4.30, 3.68,  0.10, 0.78, 0.32),
+        ( 4.25, 3.68,  0.15, 0.80, 0.33),
     ]
     for tx, ty, tz, tlen, trad in teeth_specs:
         _sculpt_stalactite_tooth(mb, (tx, ty, tz), tlen, trad, rng)
@@ -949,9 +965,9 @@ def gen_volcanic_basalt_spire(outdir):
         subdiv=2, warp=0.22, strata=0.14, base_flare=0.26,
         rot_deg=(0, 14, 0), crag_ribs=7, rib_amp=0.18,
     )
-    # Upper fractured volcanic shoulder crag wedging the tall inner columns together
+    # Upper fractured volcanic shoulder crag wedging the tall inner columns solidly together (zero sky slits!)
     col_pts += sculpt_rock_mass(
-        mb, (-0.30, 6.10, 0.20), (2.05, 3.15, 1.95), 'basalt',
+        mb, (-0.12, 6.85, 0.08), (2.75, 4.65, 2.65), 'basalt',
         C_BASALT_TOP, C_BASALT_MID, C_BASALT_DARK, rng,
         subdiv=2, warp=0.20, strata=0.12,
         rot_deg=(3, -22, -4), crag_ribs=6, rib_amp=0.16,
@@ -959,24 +975,24 @@ def gen_volcanic_basalt_spire(outdir):
 
     # 13 fractured hexagonal/pentagonal volcanic organ-pipe columns erupting at dynamic outward leans!
     column_specs = [
-        # Hero central spire monolith (reaches y ≈ +16.5 m cleanly including sloped fracture crown!)
-        ( 0.00, -2.60,  0.00, 18.55, 1.48, 6, -3.2, -2.4, True),
+        # Hero central spire monolith (broadened core seals central vertical gap cleanly; peaks at y ≈ +16.5 m)
+        ( 0.00, -2.60,  0.00, 18.55, 1.92, 6, -3.2, -2.4, True),
 
-        # Inner ring: 5 tall jagged fractured columns leaning dynamically outward (6..9.5 deg)
-        (-1.40, -2.60, -1.00, 16.05, 1.20, 6, -7.2, -5.5, True),
-        ( 1.50, -2.60, -0.90, 14.95, 1.16, 5,  7.8, -4.8, True),
-        ( 1.55, -2.60,  1.20, 14.05, 1.14, 6,  7.0,  6.5, True),
-        (-0.22, -2.60,  1.75, 13.35, 1.10, 5, -1.8,  8.2, True),
-        (-1.75, -2.60,  0.80, 14.55, 1.14, 6, -9.0,  3.8, True),
+        # Inner ring: 5 tall jagged fractured columns overlapping core cleanly and leaning outward (6..9.5 deg)
+        (-1.26, -2.60, -0.90, 16.05, 1.34, 6, -7.2, -5.5, True),
+        ( 1.34, -2.60, -0.82, 14.95, 1.30, 5,  7.8, -4.8, True),
+        ( 1.38, -2.60,  1.08, 14.05, 1.28, 6,  7.0,  6.5, True),
+        (-0.20, -2.60,  1.56, 13.35, 1.26, 5, -1.8,  8.2, True),
+        (-1.56, -2.60,  0.72, 14.55, 1.28, 6, -9.0,  3.8, True),
 
         # Outer ring: 7 shorter dramatic organ-pipe buttress columns leaning boldly outward (10..15 deg)
-        ( 0.15, -2.60, -2.40, 11.20, 0.96, 6,  1.5, -12.5, True),
-        (-2.40, -2.60, -1.75, 10.05, 0.90, 5, -11.5, -9.0, False),
-        ( 2.50, -2.60, -1.60,  9.45, 0.88, 6,  12.0, -8.2, True),
-        ( 2.85, -2.60,  0.42,  8.65, 0.86, 5,  14.2,  2.5, False),
-        ( 2.05, -2.60,  2.30,  9.25, 0.90, 6,  9.8,  11.5, True),
-        (-1.18, -2.60,  2.55,  8.35, 0.84, 5, -6.0,  13.2, False),
-        (-2.85, -2.60,  0.15, 10.45, 0.94, 6, -13.8,  1.2, True),
+        ( 0.15, -2.60, -2.25, 11.20, 1.02, 6,  1.5, -12.5, True),
+        (-2.25, -2.60, -1.65, 10.05, 0.96, 5, -11.5, -9.0, False),
+        ( 2.35, -2.60, -1.52,  9.45, 0.94, 6,  12.0, -8.2, True),
+        ( 2.68, -2.60,  0.40,  8.65, 0.92, 5,  14.2,  2.5, False),
+        ( 1.92, -2.60,  2.18,  9.25, 0.96, 6,  9.8,  11.5, True),
+        (-1.12, -2.60,  2.40,  8.35, 0.90, 5, -6.0,  13.2, False),
+        (-2.68, -2.60,  0.15, 10.45, 1.00, 6, -13.8,  1.2, True),
     ]
 
     for bx, by, bz, h, rad, sides, tx, tz, seam in column_specs:

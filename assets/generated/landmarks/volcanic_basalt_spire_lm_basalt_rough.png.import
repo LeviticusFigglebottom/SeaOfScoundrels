@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://clyb4wi6210ub"
-path="res://.godot/imported/volcanic_basalt_spire_lm_basalt_rough.png-4ea1907c69e6c48fe429508e5713c9be.ctex"
+path.s3tc="res://.godot/imported/volcanic_basalt_spire_lm_basalt_rough.png-4ea1907c69e6c48fe429508e5713c9be.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "3bd172b446e371bb776a6108eaea2ee3"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/volcanic_basalt_spire_lm_basalt_rough.png"
-dest_files=["res://.godot/imported/volcanic_basalt_spire_lm_basalt_rough.png-4ea1907c69e6c48fe429508e5713c9be.ctex"]
+dest_files=["res://.godot/imported/volcanic_basalt_spire_lm_basalt_rough.png-4ea1907c69e6c48fe429508e5713c9be.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

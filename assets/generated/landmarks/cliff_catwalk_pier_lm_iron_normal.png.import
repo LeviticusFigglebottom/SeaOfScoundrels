@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dqj55711rn2ih"
-path="res://.godot/imported/cliff_catwalk_pier_lm_iron_normal.png-c83340b072070db571f968a0845e7c68.ctex"
+path.s3tc="res://.godot/imported/cliff_catwalk_pier_lm_iron_normal.png-c83340b072070db571f968a0845e7c68.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0e41875bc80c69aca9ed9d6e0fa2cc14"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/cliff_catwalk_pier_lm_iron_normal.png"
-dest_files=["res://.godot/imported/cliff_catwalk_pier_lm_iron_normal.png-c83340b072070db571f968a0845e7c68.ctex"]
+dest_files=["res://.godot/imported/cliff_catwalk_pier_lm_iron_normal.png-c83340b072070db571f968a0845e7c68.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

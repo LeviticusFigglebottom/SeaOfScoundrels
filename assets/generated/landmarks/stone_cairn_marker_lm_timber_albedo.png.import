@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://0flwopp08b64"
-path="res://.godot/imported/stone_cairn_marker_lm_timber_albedo.png-364107abcefc9a8e2622348be8f785a3.ctex"
+path.s3tc="res://.godot/imported/stone_cairn_marker_lm_timber_albedo.png-364107abcefc9a8e2622348be8f785a3.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "d8479619f5af27fafe977b154553ed42"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/stone_cairn_marker_lm_timber_albedo.png"
-dest_files=["res://.godot/imported/stone_cairn_marker_lm_timber_albedo.png-364107abcefc9a8e2622348be8f785a3.ctex"]
+dest_files=["res://.godot/imported/stone_cairn_marker_lm_timber_albedo.png-364107abcefc9a8e2622348be8f785a3.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://gsxag13bvewo"
-path="res://.godot/imported/impaled_shipwreck_bow_lm_iron_normal.png-a3dbffff66f5a661b4b5deaab35bc25e.ctex"
+path.s3tc="res://.godot/imported/impaled_shipwreck_bow_lm_iron_normal.png-a3dbffff66f5a661b4b5deaab35bc25e.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0e41875bc80c69aca9ed9d6e0fa2cc14"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/impaled_shipwreck_bow_lm_iron_normal.png"
-dest_files=["res://.godot/imported/impaled_shipwreck_bow_lm_iron_normal.png-a3dbffff66f5a661b4b5deaab35bc25e.ctex"]
+dest_files=["res://.godot/imported/impaled_shipwreck_bow_lm_iron_normal.png-a3dbffff66f5a661b4b5deaab35bc25e.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

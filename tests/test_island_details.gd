@@ -217,23 +217,60 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 		inst.free()
 
 
+func _collect_leaked_detail_caches() -> Array[String]:
+	var leaked_fields: Array[String] = []
+	if IslandDetailsCls._grass_mesh != null:
+		leaked_fields.append("_grass_mesh")
+	if IslandDetailsCls._fern_mesh != null:
+		leaked_fields.append("_fern_mesh")
+	if IslandDetailsCls._hibiscus_mesh != null:
+		leaked_fields.append("_hibiscus_mesh")
+	if IslandDetailsCls._driftwood_mesh != null:
+		leaked_fields.append("_driftwood_mesh")
+	if IslandDetailsCls._pebbles_mesh != null:
+		leaked_fields.append("_pebbles_mesh")
+	if IslandDetailsCls._tidal_rock_mesh != null:
+		leaked_fields.append("_tidal_rock_mesh")
+	if IslandDetailsCls._fallback_buttress_mesh != null:
+		leaked_fields.append("_fallback_buttress_mesh")
+	if IslandDetailsCls._fallback_buttress_wide_mesh != null:
+		leaked_fields.append("_fallback_buttress_wide_mesh")
+	if IslandDetailsCls._foliage_material != null:
+		leaked_fields.append("_foliage_material")
+	if IslandDetailsCls._wood_stone_material != null:
+		leaked_fields.append("_wood_stone_material")
+	if IslandDetailsCls._pebble_material != null:
+		leaked_fields.append("_pebble_material")
+	if IslandDetailsCls._tidal_rock_material != null:
+		leaked_fields.append("_tidal_rock_material")
+	if IslandDetailsCls._buttress_fallback_material != null:
+		leaked_fields.append("_buttress_fallback_material")
+	if not IslandDetailsCls._glb_mesh_cache.is_empty():
+		leaked_fields.append("_glb_mesh_cache(%d)" % IslandDetailsCls._glb_mesh_cache.size())
+	return leaked_fields
+
+
 func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() -> void:
 	_init_host()
 	check_eq(IslandGenerator.ARCHETYPES.size(), 14, "expected 14 island archetypes")
 
 	for idx in IslandGenerator.ARCHETYPES.size():
 		var arch := IslandGenerator.ARCHETYPES[idx]
-		var isl := IslandGenerator.build_island({
+		var spec := {
 			"id": "test_det_" + String(arch),
 			"name": "Test Details " + String(arch),
 			"archetype": arch,
 			"seed": 700 + idx,
-		})
+		}
+		var isl := IslandGenerator.build_island(spec)
 		add_child(isl)
 
-		var seed_val := 9001 + idx
-		var details := IslandDetailsCls.populate_for_island(isl, arch, seed_val)
-		check(details != null, "populate_for_island returned null for " + String(arch))
+		# IslandGenerator.build_island() natively attaches exactly one IslandDetails child.
+		var detail_nodes := isl.find_children("*", "IslandDetails", false, false)
+		check_eq(detail_nodes.size(), 1,
+			"build_island attaches exactly 1 IslandDetails child on " + String(arch))
+		var details := isl.get_node_or_null(^"IslandDetails") as IslandDetails
+		check(details != null, "build_island attached null IslandDetails for " + String(arch))
 		if details == null:
 			isl.queue_free()
 			continue
@@ -345,9 +382,11 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 			"archetype %s placed %d buttress(es) on shallow slope (max ny=%.3f >= 0.725)" % [
 				arch, bad_slope_count, max_ny])
 
-		# Verify determinism: second pass with identical seed produces exact same layer counts.
-		var details_b := IslandDetailsCls.populate_for_island(isl, arch, seed_val)
-		check(details_b != null, "second populate_for_island returned null for " + String(arch))
+		# Verify determinism: building a second island with identical spec produces exact same counts.
+		var isl_b := IslandGenerator.build_island(spec)
+		add_child(isl_b)
+		var details_b := isl_b.get_node_or_null(^"IslandDetails") as IslandDetails
+		check(details_b != null, "second build_island attached null IslandDetails for " + String(arch))
 		if details_b != null:
 			check_eq(details_b.get_multimesh_count(), mm_count,
 				"archetype %s deterministic multimesh count" % arch)
@@ -363,10 +402,9 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 				"archetype %s deterministic coastal detail count" % arch)
 			check_eq(details_b.get_cliff_buttress_count(), buttress_n,
 				"archetype %s deterministic cliff buttress count" % arch)
-			if details_b.get_parent() == null:
-				details_b.free()
 
 		isl.queue_free()
+		isl_b.queue_free()
 
 	await physics_frames(3)
 
@@ -380,13 +418,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 	check(cutlass != null, "Cutlass Cay built as Island")
 	add_child(outpost)
 	add_child(cutlass)
-
-	var op_details := IslandDetailsCls.populate_for_island(outpost, outpost.archetype, 1101 + 313)
-	var cc_details := IslandDetailsCls.populate_for_island(cutlass, cutlass.archetype, 2203 + 313)
 	await physics_frames(1)
 
+	# Read the auto-attached IslandDetails children created by IslandGenerator.build_island().
+	var op_details := outpost.get_node_or_null(^"IslandDetails") as IslandDetails
+	var cc_details := cutlass.get_node_or_null(^"IslandDetails") as IslandDetails
+
 	check(op_details != null and cc_details != null,
-		"IslandDetails populated cleanly on Port Scoundrel and Cutlass Cay")
+		"IslandDetails auto-populated cleanly on Port Scoundrel and Cutlass Cay")
+	check_eq(outpost.find_children("*", "IslandDetails", false, false).size(), 1,
+		"Port Scoundrel owns exactly one IslandDetails node")
+	check_eq(cutlass.find_children("*", "IslandDetails", false, false).size(), 1,
+		"Cutlass Cay owns exactly one IslandDetails node")
 	check(IslandDetailsCls._active_details >= 2,
 		"active IslandDetails counter tracks live instances (got %d)" % IslandDetailsCls._active_details)
 
@@ -440,35 +483,179 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 
 	check_eq(IslandDetailsCls._active_details, 0,
 		"all IslandDetails exited cleanly (_active_details == 0)")
-	var leaked_fields: Array[String] = []
-	if IslandDetailsCls._grass_mesh != null:
-		leaked_fields.append("_grass_mesh")
-	if IslandDetailsCls._fern_mesh != null:
-		leaked_fields.append("_fern_mesh")
-	if IslandDetailsCls._hibiscus_mesh != null:
-		leaked_fields.append("_hibiscus_mesh")
-	if IslandDetailsCls._driftwood_mesh != null:
-		leaked_fields.append("_driftwood_mesh")
-	if IslandDetailsCls._pebbles_mesh != null:
-		leaked_fields.append("_pebbles_mesh")
-	if IslandDetailsCls._tidal_rock_mesh != null:
-		leaked_fields.append("_tidal_rock_mesh")
-	if IslandDetailsCls._fallback_buttress_mesh != null:
-		leaked_fields.append("_fallback_buttress_mesh")
-	if IslandDetailsCls._fallback_buttress_wide_mesh != null:
-		leaked_fields.append("_fallback_buttress_wide_mesh")
-	if IslandDetailsCls._foliage_material != null:
-		leaked_fields.append("_foliage_material")
-	if IslandDetailsCls._wood_stone_material != null:
-		leaked_fields.append("_wood_stone_material")
-	if IslandDetailsCls._pebble_material != null:
-		leaked_fields.append("_pebble_material")
-	if IslandDetailsCls._tidal_rock_material != null:
-		leaked_fields.append("_tidal_rock_material")
-	if IslandDetailsCls._buttress_fallback_material != null:
-		leaked_fields.append("_buttress_fallback_material")
-	if not IslandDetailsCls._glb_mesh_cache.is_empty():
-		leaked_fields.append("_glb_mesh_cache(%d)" % IslandDetailsCls._glb_mesh_cache.size())
-
+	var leaked_fields := _collect_leaked_detail_caches()
 	check(leaked_fields.is_empty(),
 		"IslandDetails releases all static caches cleanly on teardown (leaked: %s)" % ", ".join(leaked_fields))
+
+
+func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks() -> void:
+	_init_host()
+
+	var archipelago := Archipelago.new()
+	add_child(archipelago)
+	await physics_frames(1)
+
+	var all_islands := archipelago.get_islands()
+	check_eq(all_islands.size(), 14, "full Archipelago builds all 14 islands")
+	check_eq(IslandDetailsCls._active_details, 14,
+		"all 14 Archipelago islands register live IslandDetails (_active_details=%d)" % IslandDetailsCls._active_details)
+
+	var total_trail_markers := 0
+
+	# 1. Verify EVERY island across all 14 carries batched IslandDetails, painted trails, and zero visible col_*.
+	for isl in all_islands:
+		var details := isl.get_node_or_null(^"IslandDetails") as IslandDetails
+		check(details != null, "island %s missing native IslandDetails child" % isl.island_id)
+		if details != null:
+			var dc := details.get_multimesh_count()
+			var inst_n := details.get_total_instance_count()
+			check(dc >= 5 and dc <= 8,
+				"island %s IslandDetails draw calls must be 5..8 (got %d)" % [isl.island_id, dc])
+			check(inst_n >= 200,
+				"island %s IslandDetails total instance count must be >= 200 (got %d)" % [isl.island_id, inst_n])
+
+			var prim_count := 0
+			for n in details.find_children("*", "MultiMeshInstance3D", true, false):
+				var mmi := n as MultiMeshInstance3D
+				if mmi != null and mmi.multimesh != null and mmi.multimesh.mesh is PrimitiveMesh:
+					prim_count += 1
+			for n in details.find_children("*", "MeshInstance3D", true, false):
+				var mi := n as MeshInstance3D
+				if mi != null and mi.mesh is PrimitiveMesh:
+					prim_count += 1
+			check_eq(prim_count, 0, "island %s IslandDetails has zero PrimitiveMeshes" % isl.island_id)
+
+		# Verify painted walkable trail vertices in TerrainMesh ARRAY_COLOR (1.0 - COLOR.a).
+		var terrain_mi := isl.get_node_or_null(^"TerrainMesh") as MeshInstance3D
+		check(terrain_mi != null and terrain_mi.mesh != null,
+			"island %s missing TerrainMesh" % isl.island_id)
+		var trail_vert_count := 0
+		if terrain_mi != null and terrain_mi.mesh != null and terrain_mi.mesh.get_surface_count() > 0:
+			var surf_arrays := terrain_mi.mesh.surface_get_arrays(0)
+			var cols_var: Variant = surf_arrays[Mesh.ARRAY_COLOR] if not surf_arrays.is_empty() else null
+			if cols_var is PackedColorArray:
+				for c: Color in cols_var as PackedColorArray:
+					if c.a < 0.75:
+						trail_vert_count += 1
+		check(trail_vert_count >= 10,
+			"island %s TerrainMesh must have >= 10 painted trail vertices (c.a < 0.75, got %d)" % [
+				isl.island_id, trail_vert_count])
+
+		# Verify ZERO visible col_* collider meshes anywhere on the island.
+		var visible_cols := 0
+		for c_node in isl.find_children("col_*", "MeshInstance3D", true, false):
+			var c_mi := c_node as MeshInstance3D
+			if c_mi != null and c_mi.visible:
+				visible_cols += 1
+		check_eq(visible_cols, 0,
+			"island %s has %d visible col_* collider mesh(es)" % [isl.island_id, visible_cols])
+
+		var lanterns := isl.find_children("TrailLantern*", "Node3D", true, false).size()
+		var cairns := isl.find_children("StoneCairn*", "Node3D", true, false).size()
+		total_trail_markers += lanterns + cairns
+
+		print("    arch14  %-20s r=%5.1fm  trail_v=%4d  markers=%2d (L=%d C=%d)  det=%4d" % [
+			isl.island_id, isl.island_radius, trail_vert_count, lanterns + cairns, lanterns, cairns,
+			details.get_total_instance_count() if details != null else 0])
+
+	check(total_trail_markers >= 20,
+		"archipelago must place >= 20 trail storytelling markers (TrailLantern*/StoneCairn*, got %d)" % total_trail_markers)
+
+	# 2. Verify bespoke Wave I-2 signature 3D landmarks spawned on their assigned islands!
+	var skull_isl := archipelago.get_island_by_id("skull_bluff")
+	check(skull_isl != null, "Skull Bluff exists in Archipelago")
+	if skull_isl != null:
+		var skull_carving := skull_isl.find_child("SkullCliffCarving*", true, false) as Node3D
+		check(skull_carving != null, "Skull Bluff spawns SkullCliffCarving landmark")
+		if skull_carving != null:
+			var eye_lights := skull_carving.find_children("*", "OmniLight3D", true, false)
+			check(eye_lights.size() >= 2,
+				"SkullCliffCarving mounts >= 2 glowing eye OmniLight3Ds (got %d)" % eye_lights.size())
+
+	var emerald_isl := archipelago.get_island_by_id("emerald_spire")
+	check(emerald_isl != null, "Emerald Spire exists in Archipelago")
+	if emerald_isl != null:
+		var stairs_e := emerald_isl.find_children("TempleStairway*", "Node3D", true, false)
+		check(stairs_e.size() >= 1,
+			"Emerald Spire spawns >= 1 TempleStairway* landmark (got %d)" % stairs_e.size())
+
+	var sov_isl := archipelago.get_island_by_id("sovereigns_bastion")
+	check(sov_isl != null, "Sovereign's Bastion exists in Archipelago")
+	if sov_isl != null:
+		var stairs_s := sov_isl.find_children("TempleStairway*", "Node3D", true, false)
+		check(stairs_s.size() >= 2,
+			"Sovereign's Bastion spawns >= 2 TempleStairway* landmarks (got %d)" % stairs_s.size())
+
+	var gal_isl := archipelago.get_island_by_id("galleons_reach")
+	check(gal_isl != null, "Galleon's Reach exists in Archipelago")
+	if gal_isl != null:
+		var catwalks_g := gal_isl.find_children("CliffCatwalk*", "Node3D", true, false)
+		var stairs_g := gal_isl.find_children("TempleStairway*", "Node3D", true, false)
+		check(catwalks_g.size() >= 2,
+			"Galleon's Reach spawns >= 2 CliffCatwalk* landmarks (got %d)" % catwalks_g.size())
+		check(stairs_g.size() >= 1,
+			"Galleon's Reach spawns >= 1 TempleStairway* landmark (got %d)" % stairs_g.size())
+
+	var smug_isl := archipelago.get_island_by_id("smugglers_cove")
+	check(smug_isl != null, "Smuggler's Cove exists in Archipelago")
+	if smug_isl != null:
+		var catwalks_sm := smug_isl.find_children("CliffCatwalk*", "Node3D", true, false)
+		check(catwalks_sm.size() >= 1,
+			"Smuggler's Cove spawns >= 1 CliffCatwalk* landmark (got %d)" % catwalks_sm.size())
+
+	var barn_isl := archipelago.get_island_by_id("barnacle_haven")
+	check(barn_isl != null, "Barnacle Haven exists in Archipelago")
+	if barn_isl != null:
+		var arches_b := barn_isl.find_children("CoastalSeaArch*", "Node3D", true, false)
+		var catwalks_b := barn_isl.find_children("CliffCatwalk*", "Node3D", true, false)
+		check(arches_b.size() >= 1,
+			"Barnacle Haven spawns >= 1 CoastalSeaArch* landmark (got %d)" % arches_b.size())
+		check(catwalks_b.size() >= 1,
+			"Barnacle Haven spawns >= 1 CliffCatwalk* landmark (got %d)" % catwalks_b.size())
+
+	var gulls_isl := archipelago.get_island_by_id("gulls_arch")
+	check(gulls_isl != null, "Gull's Arch exists in Archipelago")
+	if gulls_isl != null:
+		var arches_gu := gulls_isl.find_children("CoastalSeaArch*", "Node3D", true, false)
+		check(arches_gu.size() >= 1,
+			"Gull's Arch spawns >= 1 CoastalSeaArch* landmark (got %d)" % arches_gu.size())
+		check(gulls_isl.find_child("SeaArch_Main", true, false) == null,
+			"Gull's Arch skips legacy SeaArch_Main when PBR coastal_sea_arch.glb exists")
+
+	for wreck_id: String in ["wreckers_shoal", "sirens_tooth", "crescent_atoll"]:
+		var w_isl := archipelago.get_island_by_id(wreck_id)
+		check(w_isl != null, "%s exists in Archipelago" % wreck_id)
+		if w_isl != null:
+			var wrecks := w_isl.find_children("ImpaledShipwreck*", "Node3D", true, false)
+			check(wrecks.size() >= 1,
+				"%s spawns >= 1 ImpaledShipwreck* landmark (got %d)" % [wreck_id, wrecks.size()])
+
+	var cinder_isl := archipelago.get_island_by_id("cinder_crag")
+	check(cinder_isl != null, "Cinder Crag exists in Archipelago")
+	if cinder_isl != null:
+		var spires_c := cinder_isl.find_children("VolcanicBasaltSpire*", "Node3D", true, false)
+		check(spires_c.size() >= 4,
+			"Cinder Crag spawns >= 4 VolcanicBasaltSpire* landmarks (got %d)" % spires_c.size())
+
+	# 3. Verify ALL 10 Wave 25B 1024x1024 PBR terrain textures exist on disk and load cleanly.
+	var pbr_paths := IslandGenerator.get_terrain_pbr_texture_paths()
+	check_eq(pbr_paths.size(), 10, "IslandGenerator exposes all 10 Wave 25B PBR terrain texture paths")
+	for param_key in pbr_paths:
+		var tex_path := String(pbr_paths[param_key])
+		check(ResourceLoader.exists(tex_path), "missing Wave 25B PBR terrain texture: " + tex_path)
+		var tex := load(tex_path) as Texture2D
+		check(tex != null, "failed to load Wave 25B PBR terrain texture as Texture2D: " + tex_path)
+		if tex != null:
+			check_eq(tex.get_width(), 1024, "PBR terrain texture %s width == 1024" % tex_path)
+			check_eq(tex.get_height(), 1024, "PBR terrain texture %s height == 1024" % tex_path)
+
+	# 4. Full teardown & ZERO-leak verification!
+	archipelago.queue_free()
+	await physics_frames(2)
+
+	check_eq(IslandDetailsCls._active_details, 0,
+		"full 14-island Archipelago tears down IslandDetails cleanly (_active_details == 0)")
+	var leaked_fields := _collect_leaked_detail_caches()
+	check(leaked_fields.is_empty(),
+		"full 14-island Archipelago releases all IslandDetails static caches (leaked: %s)" % ", ".join(leaked_fields))
+

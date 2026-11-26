@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dcsfp26hc6wf8"
-path="res://.godot/imported/impaled_shipwreck_bow_lm_brass_albedo.png-b52810e5c0514fbb31db343e58631257.ctex"
+path.s3tc="res://.godot/imported/impaled_shipwreck_bow_lm_brass_albedo.png-b52810e5c0514fbb31db343e58631257.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "53c692b0f47f7034550c0b258c4b35ed"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/impaled_shipwreck_bow_lm_brass_albedo.png"
-dest_files=["res://.godot/imported/impaled_shipwreck_bow_lm_brass_albedo.png-b52810e5c0514fbb31db343e58631257.ctex"]
+dest_files=["res://.godot/imported/impaled_shipwreck_bow_lm_brass_albedo.png-b52810e5c0514fbb31db343e58631257.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cvdr6r8ji7g2"
-path="res://.godot/imported/cliff_buttress_wide_lm_limestone_rough.png-ab94cf4943b3d2895ff2067f1eba39a4.ctex"
+path.s3tc="res://.godot/imported/cliff_buttress_wide_lm_limestone_rough.png-ab94cf4943b3d2895ff2067f1eba39a4.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "61b4967008d0bf6fcf61fa97338d0555"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/landmarks/cliff_buttress_wide_lm_limestone_rough.png"
-dest_files=["res://.godot/imported/cliff_buttress_wide_lm_limestone_rough.png-ab94cf4943b3d2895ff2067f1eba39a4.ctex"]
+dest_files=["res://.godot/imported/cliff_buttress_wide_lm_limestone_rough.png-ab94cf4943b3d2895ff2067f1eba39a4.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7
