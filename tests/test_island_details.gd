@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (38 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (42 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -70,6 +70,13 @@ const WORLD_CRAFT_LANDMARKS: Array[String] = [
 	"ancient_astronomer_orrery_ruin.glb",
 ]
 
+const ONFOOT_CRAFT_LANDMARKS: Array[String] = [
+	"wooden_trail_footbridge.glb",
+	"coastal_smuggler_jetty.glb",
+	"ancient_ruined_obelisk_gate.glb",
+	"pirate_lookout_bell_frame.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -109,6 +116,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cursed_skeleton_throne_shrine.glb": 1,
 	"tropical_fishing_stilts_hut.glb": 1,
 	"ancient_astronomer_orrery_ruin.glb": 1,
+	"wooden_trail_footbridge.glb": 1,
+	"coastal_smuggler_jetty.glb": 1,
+	"ancient_ruined_obelisk_gate.glb": 1,
+	"pirate_lookout_bell_frame.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -137,6 +148,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"cursed_skeleton_throne_shrine.glb": ["Lantern_Throne*"],
 	"tropical_fishing_stilts_hut.glb": ["Lantern_FishHut*"],
 	"ancient_astronomer_orrery_ruin.glb": ["Lantern_Orrery*"],
+	"wooden_trail_footbridge.glb": ["Lantern_Footbridge*"],
+	"coastal_smuggler_jetty.glb": ["Lantern_Jetty*"],
+	"ancient_ruined_obelisk_gate.glb": ["Lantern_ObeliskGate*"],
+	"pirate_lookout_bell_frame.glb": ["Lantern_BellFrame*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -168,6 +183,9 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"SkeletonThrone_",
 	"FishingHut_",
 	"AstronomerOrrery_",
+	"ObeliskGate_",
+	"TrailFootbridge_",
+	"LookoutBell_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -283,7 +301,7 @@ func _compute_landmark_visual_aabb(landmark: Node3D, isl: Node3D) -> Dictionary:
 
 func _is_grounding_audit_landmark(node_name: String) -> bool:
 	if node_name.begins_with("CoastalSeaArch_") or node_name.begins_with("TidalCoralArch_") \
-			or node_name.begins_with("ReefBeacon_"):
+			or node_name.begins_with("ReefBeacon_") or node_name.begins_with("SmugglerJetty_"):
 		return false
 	for prefix in GROUNDING_AUDIT_PREFIXES:
 		if node_name.begins_with(prefix):
@@ -301,7 +319,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(HARBOUR_RUINS_LANDMARKS)
 	all_landmarks.append_array(MARITIME_RELICS_LANDMARKS)
 	all_landmarks.append_array(WORLD_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 38, "expected 38 sculpted landmark GLBs")
+	all_landmarks.append_array(ONFOOT_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 42, "expected 42 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -407,14 +426,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 38 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 42 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 38 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected <= 36 unique shared landmark PBR texture paths across all 42 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -1077,7 +1096,25 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check(fish_hut_total >= 4, "Wave I-9 spawns >= 4 FishingHut_* landmarks (got %d)" % fish_hut_total)
 	check(orrery_total >= 3, "Wave I-9 spawns >= 3 AstronomerOrrery_* landmarks (got %d)" % orrery_total)
 
-	# 2h. Automated 14-island landmark anti-float grounding audit!
+	# 2h. Verify Wave I-10 on-foot craft landmarks (coastal smuggler jetty, ancient ruined obelisk gate,
+	#     wooden trail footbridge & pirate lookout bell frame)!
+	var jetty_total := 0
+	var obelisk_gate_total := 0
+	var footbridge_total := 0
+	var lookout_bell_total := 0
+	for isl_i10 in all_islands:
+		jetty_total += isl_i10.find_children("SmugglerJetty_*", "Node3D", true, false).size()
+		obelisk_gate_total += isl_i10.find_children("ObeliskGate_*", "Node3D", true, false).size()
+		footbridge_total += isl_i10.find_children("TrailFootbridge_*", "Node3D", true, false).size()
+		lookout_bell_total += isl_i10.find_children("LookoutBell_*", "Node3D", true, false).size()
+	print("    wave_i10 onfoot_craft landmarks: jetties=%d obelisk_gates=%d footbridges=%d lookout_bells=%d" % [
+		jetty_total, obelisk_gate_total, footbridge_total, lookout_bell_total])
+	check(jetty_total >= 4, "Wave I-10 spawns >= 4 SmugglerJetty_* landmarks (got %d)" % jetty_total)
+	check(obelisk_gate_total >= 3, "Wave I-10 spawns >= 3 ObeliskGate_* landmarks (got %d)" % obelisk_gate_total)
+	check(footbridge_total >= 3, "Wave I-10 spawns >= 3 TrailFootbridge_* landmarks (got %d)" % footbridge_total)
+	check(lookout_bell_total >= 4, "Wave I-10 spawns >= 4 LookoutBell_* landmarks (got %d)" % lookout_bell_total)
+
+	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
 	var worst_clearance := -INF
@@ -1119,7 +1156,7 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i9 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i10 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
 	check(grounded_checked >= 50,
 		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)
