@@ -17,10 +17,46 @@ const FALLBACK_COMPANY := &"gilded_compass"
 @export var merchant_name: String = "Port Factor"
 
 var interactable: Interactable = null
+var _coin_burst: CPUParticles3D = null
 
 
 func _ready() -> void:
 	_build_interactable()
+	_build_coin_burst()
+
+
+func _build_coin_burst() -> void:
+	var p := CPUParticles3D.new()
+	p.name = "GoldCoinBurst"
+	p.emitting = false
+	p.one_shot = true
+	p.amount = 20
+	p.lifetime = 0.85
+	p.explosiveness = 0.88
+	p.position = Vector3(0.0, 1.35, -0.85)
+	p.direction = Vector3(0.0, 1.0, 0.0)
+	p.spread = 48.0
+	p.initial_velocity_min = 2.2
+	p.initial_velocity_max = 4.5
+	p.gravity = Vector3(0.0, -9.2, 0.0)
+	p.scale_amount_min = 0.055
+	p.scale_amount_max = 0.095
+	var coin := CylinderMesh.new()
+	coin.top_radius = 0.65
+	coin.bottom_radius = 0.65
+	coin.height = 0.16
+	coin.radial_segments = 8
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.98, 0.80, 0.22)
+	mat.metallic = 0.85
+	mat.roughness = 0.22
+	mat.emission_enabled = true
+	mat.emission = Color(0.98, 0.78, 0.18)
+	mat.emission_energy_multiplier = 0.45
+	coin.material = mat
+	p.mesh = coin
+	add_child(p)
+	_coin_burst = p
 
 
 func _build_interactable() -> void:
@@ -81,6 +117,9 @@ func accept_carryable(item: Node) -> bool:
 
 	Game.save()
 	Audio.play_sfx(&"coin_jingle", global_position)
+	if _coin_burst != null:
+		_coin_burst.restart()
+		_coin_burst.emitting = true
 	Game.post_notice("Sold %s for %d gold (+%d renown)" % [sold_name, gold, renown])
 	if bool(receipt.get("ranked_up", false)):
 		var promo := String(receipt.get("rank_up_notice", ""))

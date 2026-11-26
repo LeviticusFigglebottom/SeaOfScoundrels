@@ -15,6 +15,7 @@ enum State { CIRCLE, CHARGE, RETREAT }
 
 var health: float = 80.0
 var dead: bool = false
+var faction: StringName = &"beast"
 var target: Pawn = null
 var state: State = State.CIRCLE
 
@@ -22,6 +23,7 @@ var _angle: float = 0.0
 var _state_timer: float = 3.5
 var _tail_phase: float = 0.0
 var _tail_node: Node3D = null
+var _jaw_node: Node3D = null
 var _center: Vector3 = Vector3.ZERO
 
 
@@ -29,16 +31,36 @@ func _ready() -> void:
 	health = max_health
 	_center = global_position
 	add_to_group(&"sharks")
+	add_to_group(&"beasts")
 	_build_mesh()
+	_build_hitbox()
+
+
+func _build_hitbox() -> void:
+	var body := StaticBody3D.new()
+	body.name = "SharkHitbox"
+	body.collision_layer = Pawn.LAYER_PAWN
+	body.collision_mask = 0
+	var cs := CollisionShape3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.55
+	cap.height = 2.6
+	cs.shape = cap
+	cs.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	body.add_child(cs)
+	add_child(body)
 
 
 func _build_mesh() -> void:
 	var body_mat := StandardMaterial3D.new()
 	body_mat.albedo_color = Color(0.24, 0.34, 0.42)
-	body_mat.roughness = 0.45
+	body_mat.roughness = 0.40
 	var belly_mat := StandardMaterial3D.new()
 	belly_mat.albedo_color = Color(0.78, 0.84, 0.86)
-	belly_mat.roughness = 0.55
+	belly_mat.roughness = 0.52
+	var eye_mat := StandardMaterial3D.new()
+	eye_mat.albedo_color = Color(0.05, 0.06, 0.08)
+	eye_mat.roughness = 0.15
 
 	# Chunky stylized fuselage (-Z nose).
 	var body := MeshInstance3D.new()
@@ -62,6 +84,30 @@ func _build_mesh() -> void:
 	belly.position = Vector3(0.0, -0.14, 0.0)
 	belly.material_override = belly_mat
 	add_child(belly)
+
+	# Glossy predator eyes & snapping lower jaw.
+	for sg: float in [-1.0, 1.0]:
+		var eye := MeshInstance3D.new()
+		var esph := SphereMesh.new()
+		esph.radius = 0.06
+		esph.height = 0.12
+		esph.radial_segments = 8
+		esph.rings = 4
+		eye.mesh = esph
+		eye.position = Vector3(sg * 0.28, 0.08, -0.82)
+		eye.material_override = eye_mat
+		add_child(eye)
+
+	_jaw_node = Node3D.new()
+	_jaw_node.position = Vector3(0.0, -0.14, -0.78)
+	add_child(_jaw_node)
+	var jaw := MeshInstance3D.new()
+	var jbox := BoxMesh.new()
+	jbox.size = Vector3(0.36, 0.12, 0.48)
+	jaw.mesh = jbox
+	jaw.position = Vector3(0.0, -0.04, -0.16)
+	jaw.material_override = belly_mat
+	_jaw_node.add_child(jaw)
 
 	# Iconic dorsal fin breaking the surface.
 	var fin := MeshInstance3D.new()
@@ -118,6 +164,9 @@ func _physics_process(delta: float) -> void:
 	_tail_phase += delta * (11.0 if state == State.CHARGE else 6.5)
 	if _tail_node != null:
 		_tail_node.rotation.y = sin(_tail_phase) * 0.45
+	if _jaw_node != null:
+		var want_jaw := 0.42 if state == State.CHARGE else 0.04
+		_jaw_node.rotation.x = lerpf(_jaw_node.rotation.x, want_jaw, clampf(delta * 8.0, 0.0, 1.0))
 
 	if not Net.is_host():
 		return
@@ -171,8 +220,11 @@ func _physics_process(delta: float) -> void:
 	var surf := Sea.height(global_position.x, global_position.z)
 	var depth_off := -0.35 if state == State.CIRCLE else -0.22
 	global_position.y = lerpf(global_position.y, surf + depth_off, clampf(delta * 8.0, 0.0, 1.0))
-	if Ocean.current != null and state == State.CHARGE:
-		Ocean.current.add_foam(global_position, 1.1, 0.35)
+	if Ocean.current != null:
+		if state == State.CHARGE:
+			Ocean.current.add_foam(global_position, 1.15, 0.42)
+		else:
+			Ocean.current.add_foam(global_position, 0.65, 0.14)
 
 
 func _find_swimmer() -> Pawn:

@@ -5,17 +5,20 @@ extends Node3D
 ##
 ## User args (after `--`):
 ##   shot=sailing|storm|sunset|damage|broadside|helm|hold   (default sailing)
+##   ship=sloop|brigantine   (default sloop)
 ##   time=<0..24>   override time of day
 ##   storm=<0..1>   override weather storminess
-##   livery=player|drowned|ghost   optional ship livery
+##   livery=player|drowned|ghost|corsair   optional ship livery
 
 const SKY_RIG: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
 const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
+const BRIGANTINE_SCENE: PackedScene = preload("res://src/ship/brigantine.tscn")
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 
 var _args: Dictionary = {}
 var _shot: String = "sailing"
+var _is_brig: bool = false
 var _ship: Ship
 var _target_ship: Ship = null
 var _pawn: Pawn = null
@@ -30,6 +33,7 @@ func _ready() -> void:
 		if kv.size() == 2:
 			_args[kv[0]] = kv[1]
 	_shot = String(_args.get("shot", "sailing"))
+	_is_brig = String(_args.get("ship", "sloop")).to_lower() == "brigantine"
 
 	Net.start_single_player()
 	Weather.day_length_seconds = 0.0
@@ -72,7 +76,14 @@ func _ready() -> void:
 	add_child(SKY_RIG.instantiate())
 	add_child(OCEAN_SCENE.instantiate())
 
-	_ship = SLOOP_SCENE.instantiate() as Ship
+	_ship = (BRIGANTINE_SCENE if _is_brig else SLOOP_SCENE).instantiate() as Ship
+	var liv := String(_args.get("livery", "player")).to_lower()
+	if liv == "drowned":
+		_ship.faction = &"drowned"
+	elif liv == "ghost":
+		_ship.faction = &"ghost"
+	elif liv == "corsair":
+		_ship.faction = &"corsair"
 	add_child(_ship)
 	_ship.global_position = Vector3(0.0, Sea.height(0.0, 0.0), 0.0)
 	_ship.set_sail_target(1.0)
@@ -81,16 +92,18 @@ func _ready() -> void:
 	_ship.sail_trim = _ship.trim_target
 	_ship.linear_velocity = Vector3(0.0, 0.0, -5.8)
 
-	var liv := String(_args.get("livery", "player"))
 	if liv == "drowned":
 		_ship.apply_livery(Color(0.32, 0.38, 0.34), Color(0.18, 0.55, 0.42), Color(0.16, 0.95, 0.62))
 	elif liv == "ghost":
 		_ship.apply_livery(Color(0.45, 0.92, 0.88), Color(0.35, 0.95, 0.9), Color(0.25, 0.98, 0.85))
+	elif liv == "corsair":
+		_ship.apply_livery(Color(0.22, 0.16, 0.16), Color(0.84, 0.18, 0.14), Color(0.0, 0.0, 0.0))
 
 	if _shot == "damage" or _shot == "hold":
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(2.0, -0.35, 0.4), 0.55)
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(-2.0, -0.35, -1.2), 0.55)
-		_ship.apply_hull_damage(_ship.global_transform * Vector3(1.9, -0.3, -2.5), 0.5)
+		var bx := 2.4 if _is_brig else 2.0
+		_ship.apply_hull_damage(_ship.global_transform * Vector3(bx, -0.35, 0.4), 0.55)
+		_ship.apply_hull_damage(_ship.global_transform * Vector3(-bx, -0.35, -1.2), 0.55)
+		_ship.apply_hull_damage(_ship.global_transform * Vector3(bx - 0.1, -0.3, -2.5), 0.5)
 		_ship.patch_hole(0)
 		_ship.water_level = 0.26
 
@@ -103,12 +116,15 @@ func _ready() -> void:
 		_target_ship.set_sail_target(0.6)
 		_target_ship.sail_set = 0.6
 		_ship.aim_cannon(&"starboard", 0.0, 0.09)
+		if _is_brig:
+			_ship.aim_cannon(&"starboard_aft", 0.0, 0.09)
 
 	_pawn = PAWN_SCENE.instantiate() as Pawn
 	add_child(_pawn)
 	var helm_st := _ship.get_station(&"helm")
 	if helm_st != null:
-		_pawn.board(_ship, Vector3(0.0, 2.02, 5.9))
+		var helm_pos := Vector3(0.0, 2.25, 7.2) if _is_brig else Vector3(0.0, 2.02, 5.9)
+		_pawn.board(_ship, helm_pos)
 		_pawn.enter_station(helm_st)
 
 	_cam = Camera3D.new()
@@ -125,38 +141,41 @@ func _process(delta: float) -> void:
 	if _shot == "broadside" and not _fired and _clock > 0.45:
 		_fired = true
 		_ship.fire_cannon(&"starboard", _pawn)
+		if _is_brig:
+			_ship.fire_cannon(&"starboard_aft", _pawn)
 	_update_camera()
 
 
 func _update_camera() -> void:
 	var xf := _ship.global_transform
 	var pos := xf.origin
+	var sc := 1.32 if _is_brig else 1.0
 	# Ship bow faces local -Z (xf.basis.z points aft), so atan2(z.x, z.z) aligns with ship yaw.
 	var yaw := Basis(Vector3.UP, atan2(xf.basis.z.x, xf.basis.z.z))
 	match _shot:
 		"helm":
 			# Over-the-shoulder helm framing showing Captain gripping wheel, deck, sail, and horizon.
-			var eye := xf * Vector3(0.85, 3.65, 7.1)
-			var look := xf * Vector3(-0.15, 2.85, -10.0)
+			var eye := xf * (Vector3(1.05, 3.95, 8.7) if _is_brig else Vector3(0.85, 3.65, 7.1))
+			var look := xf * Vector3(-0.15, 2.95, -12.0)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"hold":
-			var eye := xf * Vector3(-0.35, 0.68, 4.3)
+			var eye := xf * (Vector3(-0.45, 0.58, 6.1) if _is_brig else Vector3(-0.35, 0.68, 4.3))
 			var look := xf * Vector3(0.2, -0.3, -1.8)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"damage":
-			var eye := pos + yaw * Vector3(11.0, 3.0, 2.0)
+			var eye := pos + yaw * Vector3(11.0 * sc, 3.2 * sc, 2.0)
 			_cam.look_at_from_position(eye, pos + Vector3(0.0, 0.8, 0.0), Vector3.UP)
 		"broadside":
-			var eye := pos + yaw * Vector3(-11.0, 6.5, 16.0)
+			var eye := pos + yaw * Vector3(-11.0 * sc, 6.5 * sc, 16.0 * sc)
 			_cam.look_at_from_position(eye, pos + Vector3(18.0, 1.5, -4.0), Vector3.UP)
 		"storm":
 			var ang := 0.58 + _clock * 0.12
-			var eye := pos + yaw * Vector3(sin(ang) * 23.5, 5.8, -cos(ang) * 23.5)
+			var eye := pos + yaw * Vector3(sin(ang) * 23.5 * sc, 5.8 * sc, -cos(ang) * 23.5 * sc)
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.4)
-			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2, -1.0), Vector3.UP)
+			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.2 * sc, -1.0), Vector3.UP)
 		_:
 			# Quarter-bow hero view showing figurehead, bow wave, billowing sail, and pennant.
 			var ang := 0.66 + _clock * 0.10
-			var eye := pos + yaw * Vector3(sin(ang) * 22.5, 4.8, -cos(ang) * 22.5)
+			var eye := pos + yaw * Vector3(sin(ang) * 22.5 * sc, 4.8 * sc, -cos(ang) * 22.5 * sc)
 			eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.2)
-			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.8, -1.0), Vector3.UP)
+			_cam.look_at_from_position(eye, pos + Vector3(0.0, 4.8 * sc, -1.0), Vector3.UP)
