@@ -1,0 +1,17 @@
+[remap]
+
+importer="font_data_bmfont"
+type="FontFile"
+uid="uid://dtlqkux2c51eh"
+path="res://.godot/imported/scoundrel_font.fnt-84048e37f855e2af4f2b813acad5f9ac.fontdata"
+
+[deps]
+
+source_file="res://assets/generated/ui/scoundrel_font.fnt"
+dest_files=["res://.godot/imported/scoundrel_font.fnt-84048e37f855e2af4f2b813acad5f9ac.fontdata"]
+
+[params]
+
+fallbacks=[]
+compress=true
+scaling_mode=2
