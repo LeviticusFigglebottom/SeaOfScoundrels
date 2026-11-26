@@ -1579,6 +1579,24 @@ func _scan_spyglass_sighting() -> void:
 			best_pos = target_pos
 			best_label = "Castaway Raft"
 
+	var max_wreck_dist := 2000.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"sunken_shipwrecks"):
+		if not (node is Node3D):
+			continue
+		if node.has_method(&"is_cleared") and bool(node.call(&"is_cleared")):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 5.0
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 12.0 or dist > max_wreck_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Sunken Shipwreck"
+
 	var max_fort_dist := 1800.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"fort_batteries"):
 		if not (node is Node3D):

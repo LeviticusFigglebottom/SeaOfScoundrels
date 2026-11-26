@@ -419,6 +419,10 @@ func _physics_process(delta: float) -> void:
 	var to := from + velocity * delta
 
 	var world := get_world_3d()
+	var solid_hit_pos := Vector3.ZERO
+	var solid_hit_normal := Vector3.UP
+	var solid_hit_col: Object = null
+	var has_solid_hit := false
 	if world != null and _ray_params != null:
 		_refresh_exclusions()
 		_ray_params.from = from
@@ -426,21 +430,31 @@ func _physics_process(delta: float) -> void:
 		var space := world.direct_space_state
 		if _ray_result != null and space.has_method(&"intersect_ray_into"):
 			if bool(space.call(&"intersect_ray_into", _ray_params, _ray_result)):
-				_on_solid_hit(
-					_ray_result.get(&"position") as Vector3,
-					_ray_result.get(&"normal") as Vector3,
-					_ray_result.get(&"collider") as Object
-				)
-				return
+				has_solid_hit = true
+				solid_hit_pos = _ray_result.get(&"position") as Vector3
+				solid_hit_normal = _ray_result.get(&"normal") as Vector3
+				solid_hit_col = _ray_result.get(&"collider") as Object
 		else:
 			var hit := space.intersect_ray(_ray_params)
 			if not hit.is_empty():
-				_on_solid_hit(
-					hit["position"] as Vector3,
-					hit["normal"] as Vector3,
-					hit["collider"] as Object
-				)
-				return
+				has_solid_hit = true
+				solid_hit_pos = hit["position"] as Vector3
+				solid_hit_normal = hit["normal"] as Vector3
+				solid_hit_col = hit["collider"] as Object
+
+	if _resolved_style != &"flare":
+		var seg_end := solid_hit_pos if has_solid_hit else to
+		var keg_hit := _find_direct_powder_keg_hit(from, seg_end)
+		if not keg_hit.is_empty():
+			var hit_keg := keg_hit["keg"] as PowderKeg
+			var hit_kpos := keg_hit["pos"] as Vector3
+			var hit_knorm := -velocity.normalized() if velocity.length_squared() > 0.01 else Vector3.UP
+			_on_solid_hit(hit_kpos, hit_knorm, hit_keg)
+			return
+
+	if has_solid_hit:
+		_on_solid_hit(solid_hit_pos, solid_hit_normal, solid_hit_col)
+		return
 
 	var sea_y := Sea.height(to.x, to.z)
 	if to.y <= sea_y:
@@ -494,9 +508,19 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 					var t_idx_fb := int(target.get_meta("tentacle_index", -1))
 					(lev_fb as Object).call(&"damage_tentacle", t_idx_fb, FIREBOMB_SPLASH_DAMAGE)
 			_apply_firebomb_splash_scorch(hit_pos, collider as Node)
+			_detonate_nearby_powder_kegs(hit_pos, FIREBOMB_SPLASH_RADIUS)
 		if _spawn_dust_burst(hit_pos, hit_normal, Color(1.0, 0.46, 0.10)):
 			cleanup_delay = 0.9
 		Audio.play_sfx(&"hull_impact", hit_pos, -1.5)
+		_mark_impacted(hit_pos, target, cleanup_delay)
+		return
+
+	if target is PowderKeg:
+		if Net.is_host():
+			(target as PowderKeg).detonate(shooter_pawn)
+			_detonate_nearby_powder_kegs(hit_pos, 3.2)
+		if _spawn_dust_burst(hit_pos, hit_normal, Color(1.0, 0.56, 0.16)):
+			cleanup_delay = 0.85
 		_mark_impacted(hit_pos, target, cleanup_delay)
 		return
 
@@ -517,6 +541,7 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 				rel_pos.y = clampf(rel_pos.y, -1.5, 1.5)
 				var imp_scale := 0.55 if is_chain else 1.0
 				rb.apply_impulse(imp_dir * hull_impact_impulse * imp_scale, rel_pos)
+			_detonate_nearby_powder_kegs(hit_pos, 3.2)
 		if _spawn_splinter_burst(hit_pos, hit_normal):
 			cleanup_delay = 1.15
 		if is_chain:
@@ -528,21 +553,83 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 		if Net.is_host() and lev != null and is_instance_valid(lev) and (lev as Object).has_method(&"damage_tentacle"):
 			var t_idx := int(target.get_meta("tentacle_index", -1))
 			(lev as Object).call(&"damage_tentacle", t_idx, pawn_damage)
+		if Net.is_host():
+			_detonate_nearby_powder_kegs(hit_pos, 3.2)
 		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.24, 0.72, 0.68)):
 			cleanup_delay = 0.8
 		Audio.play_sfx(&"hit_flesh", hit_pos)
 	elif target != null and target.has_method(&"apply_damage"):
 		if Net.is_host():
 			target.call(&"apply_damage", pawn_damage, shooter_pawn)
+			_detonate_nearby_powder_kegs(hit_pos, 3.2)
 		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.85, 0.72, 0.56)):
 			cleanup_delay = 0.8
 		Audio.play_sfx(&"hit_flesh", hit_pos)
 	else:
+		if Net.is_host():
+			_detonate_nearby_powder_kegs(hit_pos, 3.2)
 		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.76, 0.74, 0.68)):
 			cleanup_delay = 0.8
 		Audio.play_sfx(&"hull_impact", hit_pos, -4.0)
 
 	_mark_impacted(hit_pos, target, cleanup_delay)
+
+
+func _find_direct_powder_keg_hit(from: Vector3, to: Vector3) -> Dictionary:
+	if not is_inside_tree():
+		return {}
+	var tree := get_tree()
+	if tree == null:
+		return {}
+	var kegs := tree.get_nodes_in_group(&"powder_kegs")
+	if kegs.is_empty():
+		return {}
+	var best_keg: PowderKeg = null
+	var best_pos := Vector3.ZERO
+	var best_d2 := INF
+	const HIT_R_SQ := 0.46 * 0.46
+	for node in kegs:
+		if not is_instance_valid(node) or not (node is PowderKeg):
+			continue
+		var keg := node as PowderKeg
+		if keg.exploded:
+			continue
+		var kpos := keg.global_position + Vector3(0.0, PowderKeg.KEG_CENTER_Y, 0.0)
+		var closest := Geometry3D.get_closest_point_to_segment(kpos, from, to)
+		if closest.distance_squared_to(kpos) <= HIT_R_SQ:
+			var dist_from_sq := from.distance_squared_to(closest)
+			if dist_from_sq < best_d2:
+				best_d2 = dist_from_sq
+				best_keg = keg
+				best_pos = closest
+	if best_keg != null:
+		return {"keg": best_keg, "pos": best_pos}
+	return {}
+
+
+func _detonate_nearby_powder_kegs(blast_origin: Vector3, radius: float) -> int:
+	if not Net.is_host() or not is_inside_tree():
+		return 0
+	var tree := get_tree()
+	if tree == null:
+		return 0
+	var kegs := tree.get_nodes_in_group(&"powder_kegs")
+	if kegs.is_empty():
+		return 0
+	var r_sq := radius * radius
+	var blown := 0
+	for node in kegs:
+		if not is_instance_valid(node) or not (node is PowderKeg):
+			continue
+		var keg := node as PowderKeg
+		if keg.exploded:
+			continue
+		var kpos := keg.global_position + Vector3(0.0, PowderKeg.KEG_CENTER_Y, 0.0)
+		if kpos.distance_squared_to(blast_origin) <= r_sq:
+			var res := keg.detonate(shooter_pawn)
+			if not res.is_empty():
+				blown += 1
+	return blown
 
 
 func _apply_firebomb_splash_scorch(hit_pos: Vector3, direct_node: Node = null) -> void:
@@ -594,6 +681,9 @@ func _apply_firebomb_splash_scorch(hit_pos: Vector3, direct_node: Node = null) -
 
 func _on_water_hit(hit_pos: Vector3) -> void:
 	global_position = hit_pos
+	if Net.is_host() and _resolved_style != &"flare":
+		var keg_r := FIREBOMB_SPLASH_RADIUS if _resolved_style == &"firebomb" else 3.2
+		_detonate_nearby_powder_kegs(hit_pos, keg_r)
 	if Ocean.current != null:
 		Ocean.current.add_foam(hit_pos, 3.2, 0.95)
 	var spawned := _spawn_splash_burst(hit_pos)

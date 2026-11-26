@@ -145,6 +145,10 @@ const LINES := {
 			"Blimey, Cap'n! Fired yourself clean out of the barrel - watch the splash!",
 			"There goes the Captain like a human cannonball! Fair flight, Cap'n!",
 		],
+		&"shipwreck_sighted": [
+			"Gulls wheeling over splintered oak! {target} off the {bearing} -- drop anchor for a dive, Cap'n!",
+			"Half-capsized hull breaking the swell! {target} bearing {bearing} -- bound to be treasure below!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -255,6 +259,10 @@ const LINES := {
 			"Whoa! Captain's airborne! Right over the swells - stick the landing!",
 			"Human shot away! Best boarding move on the archipelago, Cap'n!",
 		],
+		&"shipwreck_sighted": [
+			"Circling seabirds off the {bearing}, Cap'n! {target} with flooded cabin loot waiting!",
+			"Broken mast jutting from the waves -- {target} dead {bearing}! Worth a swim, Cap'n!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -364,6 +372,10 @@ const LINES := {
 		&"cannon_self_launch": [
 			"Haha! Mind your hat, Cap'n - that barrel packs a wallop!",
 			"Up and over the gunwale! I'll keep the sloop afloat till you swim back, Cap'n!",
+		],
+		&"shipwreck_sighted": [
+			"Oof, poor timbers! {target} listing hard off the {bearing} -- bet her cabin's still full of gold!",
+			"Spot those gulls to the {bearing}, Cap'n? {target} -- grab a deep breath and dive for salvage!",
 		],
 	},
 }

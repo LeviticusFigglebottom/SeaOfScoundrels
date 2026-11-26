@@ -244,6 +244,8 @@ static func _drain_static_visual_caches() -> void:
 	DolphinPod.clear_shared_cache()
 	OceanWhale.clear_shared_cache()
 	FlotsamCluster.clear_shared_cache()
+	SunkenShipwreck.clear_shared_cache()
+	PowderKeg.clear_shared_cache()
 	FortBattery.clear_shared_cache()
 	IslandDetails.clear_shared_cache()
 	FortVault.clear_shared_cache()
@@ -1244,6 +1246,7 @@ func _wire_world_signals() -> void:
 	world_director.spawn_flotsam_barrels.connect(_on_director_spawn_flotsam)
 	world_director.spawn_fort_siege.connect(_on_director_spawn_fort_siege)
 	world_director.spawn_castaway.connect(_on_director_spawn_castaway)
+	world_director.spawn_shipwreck.connect(_on_director_spawn_shipwreck)
 	world_director.spawn_storm_cell.connect(_on_director_spawn_storm_cell)
 	world_director.sighting_warning.connect(_on_director_sighting_warning)
 	world_director.event_cloud_spawned.connect(_on_director_event_cloud_spawned)
@@ -2047,6 +2050,12 @@ func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
 	_entities_root.add_child(vault_chest)
 	vault_chest.global_position = vault_world
 
+	# Stash two interactive Gunpowder Kegs beside the fort ramp for tactical raiding or salvage!
+	for k_idx in 2:
+		var k_local := Vector3(-4.2 if k_idx == 0 else 4.2, 0.0, 11.5)
+		k_local.y = fort.surface_height(k_local.x, k_local.z) + 0.08
+		PowderKeg.spawn_at(_entities_root, fort.global_transform * k_local)
+
 
 func _ensure_fort_vault(bastion: Node3D) -> Node3D:
 	if bastion == null or not is_instance_valid(bastion):
@@ -2252,6 +2261,30 @@ func _on_director_spawn_castaway(pos: Vector3) -> void:
 			raft_gulls.queue_free()
 		r.queue_free()
 	)
+
+
+func _on_director_spawn_shipwreck(pos: Vector3, seed_val: int) -> void:
+	if not Net.is_host():
+		return
+	var safe_pos := pos
+	if archipelago != null:
+		var near_isl := archipelago.nearest_island(safe_pos)
+		if near_isl != null:
+			var flat := Vector3(safe_pos.x - near_isl.global_position.x, 0.0, safe_pos.z - near_isl.global_position.z)
+			var min_clear := near_isl.seabed_radius + 45.0
+			if flat.length() < min_clear:
+				var push_dir := flat.normalized() if flat.length_squared() > 0.01 else Vector3.FORWARD
+				safe_pos = near_isl.global_position + push_dir * min_clear
+	var wreck := SunkenShipwreck.spawn_at(_entities_root, safe_pos, seed_val)
+	if wreck != null:
+		wreck.shipwreck_cleared.connect(func(_w: SunkenShipwreck) -> void:
+			if Net.is_host():
+				Audio.play_stinger(&"discovery")
+				Game.post_notice("Shipwreck plundered clean! All sunken treasures recovered.")
+		)
+		# Tuck a buoyant Gunpowder Keg near the wreck's broken port flank for daring divers!
+		var keg_pos := Vector3(safe_pos.x + 5.2, Sea.height(safe_pos.x + 5.2, safe_pos.z - 2.4) + 0.15, safe_pos.z - 2.4)
+		PowderKeg.spawn_at(_entities_root, keg_pos)
 
 
 func _on_director_spawn_storm_cell(_center: Vector3, _radius: float, _velocity: Vector3) -> void:

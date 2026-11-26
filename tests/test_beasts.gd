@@ -1112,6 +1112,253 @@ func test_ocean_whale_sculpted_breach_cycle_and_teardown() -> void:
 		"OceanWhale releases all static mesh, material & spray caches cleanly to null")
 
 
+func test_wave34_sunken_shipwreck_sculpted_hull_dive_loot_spyglass_director_and_crew() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Spawn two SunkenShipwrecks and verify sculpted ArrayMesh, zero primitives, PBR materials,
+	#    dramatic 32-deg roll / -18-deg pitch hull list, layer-1 collider, & level SeabirdFlock!
+	var wreck_a := SunkenShipwreck.spawn_at(_root, Vector3(180.0, 0.0, -180.0), 3401)
+	var wreck_far := SunkenShipwreck.spawn_at(_root, Vector3(0.0, 0.0, -650.0), 3402)
+	await physics_frames(1)
+
+	check(wreck_a != null and wreck_far != null, "SunkenShipwreck.spawn_at spawns wrecks cleanly")
+	check(wreck_a.is_in_group(SunkenShipwreck.GROUP), "SunkenShipwreck registers in sunken_shipwrecks group")
+
+	var pivot_a := wreck_a.get_hull_pivot()
+	check(pivot_a != null, "SunkenShipwreck creates _hull_pivot child")
+	if pivot_a != null:
+		check_near(rad_to_deg(pivot_a.rotation.z), 32.0, 0.05,
+			"SunkenShipwreck lists dramatically at 32 deg roll (got %.2f)" % rad_to_deg(pivot_a.rotation.z))
+		check_near(rad_to_deg(pivot_a.rotation.x), -18.0, 0.05,
+			"SunkenShipwreck pitches at -18 deg stern-up (got %.2f)" % rad_to_deg(pivot_a.rotation.x))
+
+	var mi_a := wreck_a.get_hull_mesh_instance()
+	var mi_b := wreck_far.get_hull_mesh_instance()
+	check(mi_a != null and mi_b != null, "both wrecks mount SunkenHullMesh MeshInstance3D")
+	check(mi_a.mesh is ArrayMesh and not (mi_a.mesh is PrimitiveMesh),
+		"SunkenShipwreck hull uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(mi_a.mesh, mi_b.mesh, "SunkenShipwrecks share statically cached hull ArrayMesh")
+
+	var raw_prims := 0
+	for mi_node in wreck_a.find_children("*", "MeshInstance3D", true, false):
+		var mi := mi_node as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+	check_eq(raw_prims, 0, "SunkenShipwreck hierarchy contains zero raw PrimitiveMeshes")
+
+	var hull_am := mi_a.mesh as ArrayMesh
+	var total_tris := 0
+	var bad_normals := 0
+	var surf_report: PackedStringArray = []
+	for si in hull_am.get_surface_count():
+		var arr := hull_am.surface_get_arrays(si)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var s_tris := floori(float(verts.size()) / 3.0)
+		total_tris += s_tris
+		surf_report.append("s%d=%d" % [si, s_tris])
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				bad_normals += 1
+		var smat := mi_a.get_surface_override_material(si) as StandardMaterial3D
+		check(smat != null, "surface %d binds StandardMaterial3D override" % si)
+		if smat != null:
+			check(smat.vertex_color_use_as_albedo and smat.vertex_color_is_srgb,
+				"surface %d enables sRGB vertex_color_use_as_albedo" % si)
+			check(smat.uv1_triplanar and not smat.uv1_world_triplanar,
+				"surface %d uses object-space triplanar (uv1_world_triplanar == false)" % si)
+			if si == 0:
+				check(smat.normal_enabled and smat.normal_texture != null,
+					"hull surface 0 binds WeakRef-cached BC7 ship normal texture")
+
+	print("    SunkenShipwreck sculpted hull: %s (total=%d tris)" % [", ".join(surf_report), total_tris])
+	check_eq(bad_normals, 0, "all sculpted SunkenShipwreck hull normals are finite unit vectors")
+	check(total_tris >= 1400, "SunkenShipwreck sculpted hull >= 1,400 tris (got %d)" % total_tris)
+	check_eq(wreck_a.get_triangle_count(), total_tris, "get_triangle_count() matches ArrayMesh surface count")
+
+	# Verify simplified outer hull collider exists on layer 1.
+	var col_body := pivot_a.get_node_or_null(^"HullCollider") as StaticBody3D if pivot_a != null else null
+	check(col_body != null and col_body.collision_layer == 1,
+		"SunkenShipwreck mounts simplified StaticBody3D outer hull collider on layer 1")
+
+	# Verify circling SeabirdFlock loot marker overhead attached to upright root (NOT _hull_pivot!).
+	var flock := wreck_a.get_gull_flock()
+	check(flock != null and is_instance_valid(flock), "SunkenShipwreck spawns overhead SeabirdFlock")
+	if flock != null:
+		check_eq(flock.get_parent(), wreck_a, "SeabirdFlock attaches to upright root (not tilted _hull_pivot)")
+		check(flock.get_birds().size() >= 5,
+			"overhead SeabirdFlock spawns >= 5 circling gulls (got %d)" % flock.get_birds().size())
+
+	# Verify wave wallow stays gently damped (~0.05 rad) on the upright root.
+	wreck_a.step_buoyancy(0.5)
+	check(absf(wreck_a.rotation.x) <= 0.06 and absf(wreck_a.rotation.z) <= 0.06,
+		"upright root wave wallow stays damped (~0.05 rad)")
+
+	# 2. Verify 2..3 diveable underwater cabin treasures, idempotent spawn, turquoise glow,
+	#    and pickup tracking (shipwreck_looted + shipwreck_cleared).
+	var init_count := wreck_a.get_remaining_loot_count()
+	check(init_count >= 2 and init_count <= 3,
+		"SunkenShipwreck spawns 2..3 underwater cabin treasures (got %d)" % init_count)
+	check(not wreck_a.is_cleared(), "fresh SunkenShipwreck is not cleared")
+
+	var repeat_loot := wreck_a.spawn_cabin_loot()
+	check_eq(repeat_loot.size(), init_count, "spawn_cabin_loot() is strictly idempotent")
+
+	var sea_y_a := Sea.height(wreck_a.base_x, wreck_a.base_z)
+	for item_node in wreck_a.loot_items:
+		check(item_node is Carryable and is_instance_valid(item_node), "cabin loot item is a valid Carryable")
+		var c := item_node as Carryable
+		check(c.freeze, "anchored cabin treasure starts frozen underwater inside flooded cabin")
+		check(c.global_position.y < sea_y_a - 2.2,
+			"cabin treasure sits submerged below Sea.height (y=%.2f vs sea=%.2f)" % [c.global_position.y, sea_y_a])
+
+	var guide_light := wreck_a.get_cabin_light()
+	check(guide_light != null and not guide_light.shadow_enabled and is_equal_approx(guide_light.omni_range, 9.0),
+		"underwater cabin mounts shadowless 9.0 m turquoise OmniLight3D guide glow")
+	check(guide_light.visible, "underwater cabin glow is visible before clearing")
+
+	var looted_events: Array[Node] = []
+	var cleared_events: Array[SunkenShipwreck] = []
+	wreck_a.shipwreck_looted.connect(func(_w: SunkenShipwreck, item: Node) -> void: looted_events.append(item))
+	wreck_a.shipwreck_cleared.connect(func(w: SunkenShipwreck) -> void: cleared_events.append(w))
+
+	# 3. Verify Brass Spyglass identifies distant uncleared wreck at 650 m as "Sunken Shipwreck"
+	#    and ignores it once cleared!
+	var captain := _spawn_pawn(Vector3(0.0, 4.0, 0.0), &"player")
+	var inv := Inventory.new()
+	inv.input_enabled = false
+	captain.add_child(inv)
+	await physics_frames(1)
+
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+
+	var aim_at := func(world_pt: Vector3) -> void:
+		var delta := world_pt - captain.eye_position()
+		var horiz := maxf(Vector2(delta.x, delta.z).length(), 0.001)
+		captain.look_yaw = atan2(-delta.x, -delta.z)
+		captain.look_pitch = atan2(delta.y, horiz)
+		inv.call(&"_scan_spyglass_sighting")
+
+	aim_at.call(wreck_far.global_position + Vector3.UP * 5.0)
+	check_eq(inv.spyglass_sighting, "Sunken Shipwreck",
+		"spyglass identifies uncleared wreck at 650 m as 'Sunken Shipwreck' (got '%s')" % inv.spyglass_sighting)
+	check(inv.spyglass_sighting_dist >= 635.0 and inv.spyglass_sighting_dist <= 665.0,
+		"spyglass reports accurate 650 m wreck sighting distance (got %.1f m)" % inv.spyglass_sighting_dist)
+
+	# Salvage all treasures from wreck_a via Pawn.pick_up() and verify signals + cleared state!
+	var diver := _spawn_pawn(wreck_a.global_position + Vector3(0.0, -2.8, 0.0), &"player")
+	await physics_frames(1)
+	var remaining_expected := init_count
+	for item_node in wreck_a.loot_items.duplicate():
+		var c := item_node as Carryable
+		check(diver.pick_up(c), "diver picks up submerged treasure '%s'" % c.item_name)
+		remaining_expected -= 1
+		check_eq(wreck_a.get_remaining_loot_count(), remaining_expected,
+			"get_remaining_loot_count() decrements to %d after pickup" % remaining_expected)
+		diver.drop_carried(0.0)
+	check_eq(looted_events.size(), init_count, "shipwreck_looted emitted once per cabin treasure")
+	check_eq(cleared_events.size(), 1, "shipwreck_cleared emitted once when last treasure is salvaged")
+	check(wreck_a.is_cleared(), "SunkenShipwreck.is_cleared() is true after all loot recovered")
+	check(not guide_light.visible, "underwater cabin glow hides automatically once wreck is cleared")
+
+	# Clear wreck_far as well and confirm spyglass ignores cleared wrecks!
+	for item_node in wreck_far.loot_items.duplicate():
+		var c := item_node as Carryable
+		diver.pick_up(c)
+		diver.drop_carried(0.0)
+	check(wreck_far.is_cleared(), "wreck_far cleared after salvaging its cabin treasures")
+	aim_at.call(wreck_far.global_position + Vector3.UP * 5.0)
+	check_eq(inv.spyglass_sighting, "", "spyglass ignores cleared SunkenShipwrecks")
+	inv.set_secondary_held(false)
+
+	# 4. Verify WorldDirector.force_spawn_shipwreck() emits spawn_shipwreck + strict-ASCII warning!
+	var director := WorldDirector.new(0x34A01)
+	director.post_notices = false
+	director.weather_integration = false
+	director.player_ship_pos = Vector3(200.0, 0.0, -150.0)
+	_root.add_child(director)
+
+	var dir_spawns: Array[Dictionary] = []
+	var dir_warnings: Array[Dictionary] = []
+	director.spawn_shipwreck.connect(func(pos: Vector3, sval: int) -> void:
+		dir_spawns.append({"pos": pos, "seed": sval})
+	)
+	director.sighting_warning.connect(func(msg: String, pos: Vector3, kind: StringName, brg: String, dist: float) -> void:
+		dir_warnings.append({"msg": msg, "pos": pos, "kind": kind, "bearing": brg, "dist": dist})
+	)
+
+	var dir_evt := director.force_spawn_shipwreck(Vector3.FORWARD)
+	check(not dir_evt.is_empty(), "WorldDirector.force_spawn_shipwreck() returns event dict")
+	check_eq(dir_spawns.size(), 1, "WorldDirector.force_spawn_shipwreck() emits spawn_shipwreck")
+	check_eq(dir_warnings.size(), 1, "WorldDirector.force_spawn_shipwreck() emits sighting_warning")
+	if not dir_warnings.is_empty():
+		var w_msg := String(dir_warnings[0]["msg"])
+		var w_dist := float(dir_warnings[0]["dist"])
+		check_eq(dir_warnings[0]["kind"], &"sunken_shipwreck", "sighting_warning kind is sunken_shipwreck")
+		check(WorldDirector.COMPASS_POINTS.has(String(dir_warnings[0]["bearing"])),
+			"shipwreck sighting_warning has valid compass bearing")
+		check(w_dist >= WorldDirector.SHIPWRECK_MIN_RANGE and w_dist <= WorldDirector.SHIPWRECK_MAX_RANGE,
+			"shipwreck sighting distance within 180..320 m (got %.1f)" % w_dist)
+		for ci in w_msg.length():
+			check(w_msg.unicode_at(ci) < 128, "WorldDirector shipwreck warning is strict ASCII")
+
+	# 5. Verify CrewBrain.notify_shipwreck_sighted() (all 3 personas, strict ASCII)
+	#    and _tick_lookout() deduplicated auto-detection of uncleared sunken_shipwrecks!
+	var wreck_crew := SunkenShipwreck.spawn_at(_root, Vector3(120.0, 0.0, -320.0), 3403)
+	await physics_frames(1)
+
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var cp := _spawn_pawn(Vector3(0.0, 4.0, 0.0), &"player")
+		var cb := CrewBrain.new()
+		cb.persona_id = pid
+		cp.add_child(cb)
+		cb.setup(null, captain, pid)
+		await physics_frames(1)
+
+		var spoken: Array[Dictionary] = []
+		cb.callout_spoken.connect(func(speaker: String, text: String, cat: StringName) -> void:
+			spoken.append({"speaker": speaker, "text": text, "cat": cat})
+		)
+
+		check(cb.notify_shipwreck_sighted("Sunken Galleon", "NNE"),
+			"%s notify_shipwreck_sighted returns true" % pid)
+		check_eq(spoken.size(), 1, "%s emits shipwreck_sighted callout" % pid)
+		if not spoken.is_empty():
+			var line := String(spoken[0]["text"])
+			check_eq(spoken[0]["cat"], &"shipwreck_sighted", "%s callout category matches" % pid)
+			check(line.contains("NNE"), "%s shipwreck callout references bearing (got '%s')" % [pid, line])
+			for ci in line.length():
+				check(line.unicode_at(ci) < 128, "%s shipwreck_sighted line is strict ASCII" % pid)
+		check(not cb.notify_shipwreck_sighted("Sunken Galleon", "NNE"),
+			"%s SHIPWRECK_COOLDOWN prevents immediate duplicate callout" % pid)
+
+		# Verify _tick_lookout() auto-detects uncleared wreck_crew within lookout_range * 1.15 once!
+		if pid == &"lookout":
+			spoken.clear()
+			cb._scan_timer = 0.0
+			cb._tick_lookout(0.1)
+			check_eq(spoken.size(), 1, "lookout _tick_lookout() auto-detects uncleared SunkenShipwreck")
+			cb._scan_timer = 0.0
+			cb._tick_lookout(0.1)
+			check_eq(spoken.size(), 1, "lookout _tick_lookout() deduplicates shipwreck callout per instance ID")
+
+	# 6. Zero-leak teardown releases all static caches cleanly!
+	await _end()
+	SunkenShipwreck.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+	check(not is_instance_valid(wreck_a) and not is_instance_valid(wreck_far) and not is_instance_valid(wreck_crew),
+		"all SunkenShipwrecks freed cleanly")
+	check_eq(SunkenShipwreck._active_wrecks, 0, "SunkenShipwreck._active_wrecks == 0 after teardown")
+	check(SunkenShipwreck._hull_mesh == null and SunkenShipwreck._hull_mat == null \
+			and SunkenShipwreck._accent_mat == null and SunkenShipwreck._glow_mat == null \
+			and SunkenShipwreck._pbr_tex_cache.is_empty(),
+		"SunkenShipwreck.clear_shared_cache() clears all static caches with zero leaks")
+
+
+
 
 
 

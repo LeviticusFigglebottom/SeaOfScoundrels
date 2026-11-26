@@ -21,6 +21,7 @@ var _shot: String = "sailing"
 var _is_brig: bool = false
 var _ship: Ship
 var _rowboat: Rowboat = null
+var _shipwreck: SunkenShipwreck = null
 var _target_ship: Ship = null
 var _pawn: Pawn = null
 var _cam: Camera3D
@@ -63,10 +64,15 @@ func _ready() -> void:
 			time_h = 14.5
 			storm = 0.18
 			wind_spd = 9.5
-		"fire", "rage_chest":
+		"fire", "rage_chest", "powder_keg":
 			time_h = 18.25
 			storm = 0.24
 			wind_spd = 11.0
+		"shipwreck":
+			time_h = 16.4
+			storm = 0.16
+			wind_spd = 10.2
+			wind_hdg = 0.42
 		"emissary":
 			time_h = 16.9
 			storm = 0.14
@@ -152,6 +158,34 @@ func _ready() -> void:
 			if tid == &"blazing_rage_chest":
 				item.set_meta(&"rage_heat", 0.88)
 				TreasureCatalog.sync_rage_visual(item)
+
+	if _shot == "powder_keg":
+		var deck_y := 1.24 if _is_brig else 1.08
+		var z_shift := -0.75 if _is_brig else 0.0
+		var keg_left := PowderKeg.new()
+		keg_left.name = "ShowcasePowderKegUnlit"
+		keg_left.freeze = true
+		_ship.add_child(keg_left)
+		keg_left.position = _ship.ship_point(Vector3(-0.48, deck_y, -2.42 + z_shift))
+		keg_left.rotation.y = 0.28
+		var keg_right := PowderKeg.new()
+		keg_right.name = "ShowcasePowderKegLit"
+		keg_right.freeze = true
+		_ship.add_child(keg_right)
+		keg_right.position = _ship.ship_point(Vector3(0.40, deck_y, -2.36 + z_shift))
+		keg_right.rotation.y = -0.32
+		keg_right.ignite_fuse()
+
+	if _shot == "shipwreck":
+		_ship.linear_velocity = Vector3.ZERO
+		_ship.set_sail_target(0.35)
+		_ship.sail_set = 0.35
+		_shipwreck = SunkenShipwreck.spawn_at(self, Vector3(13.5, 0.0, -24.0), 42)
+		if _shipwreck != null:
+			_shipwreck.rotation.y = -0.68
+		var float_keg := PowderKeg.spawn_at(self, Vector3(8.2, Sea.height(8.2, -18.8) + 0.08, -18.8))
+		if float_keg != null:
+			float_keg.rotation.y = 0.45
 
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
@@ -250,6 +284,17 @@ func _update_camera() -> void:
 			var eye := xf * _ship.ship_point(Vector3(0.32, 2.48, -2.05) if _is_brig else Vector3(0.28, 2.34, -1.32))
 			var look := xf * _ship.ship_point(Vector3(-0.06, 1.46, -3.22) if _is_brig else Vector3(-0.06, 1.32, -2.55))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"powder_keg":
+			# Intimate foredeck dusk close-up framing unlit & live sizzling-fuse PowderKegs flush on oak deck planks.
+			var eye := xf * _ship.ship_point(Vector3(0.25, 2.42, -1.98) if _is_brig else Vector3(0.20, 2.26, -1.32))
+			var look := xf * _ship.ship_point(Vector3(-0.04, 1.56, -3.15) if _is_brig else Vector3(-0.04, 1.42, -2.42))
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"shipwreck":
+			# Golden-hour ocean hero shot cleanly ahead of bowsprit framing half-capsized 3,620-tri SunkenShipwreck, port breach, circling gulls & floating PowderKeg.
+			var wpos := _shipwreck.global_position if (_shipwreck != null and is_instance_valid(_shipwreck)) else Vector3(13.5, 0.0, -24.0)
+			var eye := Vector3(1.8, Sea.height(1.8, -12.8) + 5.2, -12.8)
+			var look := Vector3(wpos.x - 0.6, 3.2, wpos.z + 0.6)
+			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"rowboat":
 			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
 			var eye := xf * _ship.ship_point(Vector3(5.6, 2.65, 14.4) if _is_brig else Vector3(4.8, 2.35, 11.8))
@@ -273,6 +318,8 @@ func _exit_tree() -> void:
 	if Audio != null and Audio.has_method(&"shutdown"):
 		Audio.shutdown()
 	TreasureCatalog.clear_mesh_cache()
+	SunkenShipwreck.clear_shared_cache()
+	PowderKeg.clear_shared_cache()
 	ShipFire.clear_shared_cache()
 	ShipEmissaryFlag.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()

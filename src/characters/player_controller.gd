@@ -165,8 +165,14 @@ func _physics_process(delta: float) -> void:
 	pawn.wish_jump = Input.is_action_pressed(&"jump")
 	if Input.is_action_just_pressed(&"interact"):
 		pawn.interact()
+	elif pawn.carried != null and Input.is_action_just_pressed(&"primary") and pawn.carried.has_method(&"ignite_fuse"):
+		pawn.carried.call(&"ignite_fuse", pawn)
 	elif pawn.carried != null and Input.is_action_just_pressed(&"secondary"):
-		pawn.drop_carried()
+		if pawn.carried.has_method(&"is_fuse_lit") and bool(pawn.carried.call(&"is_fuse_lit")):
+			if pawn.carried.has_method(&"extinguish_fuse"):
+				pawn.carried.call(&"extinguish_fuse")
+		else:
+			pawn.drop_carried()
 
 # ------------------------------------------------------------------- focus
 
@@ -182,7 +188,14 @@ func _update_focus() -> void:
 		focus_prompt = ap if ap != "" else "Step away"
 	elif pawn.carried != null:
 		var cont := pawn._container_of(found)
-		focus_prompt = found.prompt if cont != null else "Drop"
+		var has_fuse := pawn.carried.has_method(&"is_fuse_lit")
+		var fuse_live := has_fuse and bool(pawn.carried.call(&"is_fuse_lit"))
+		if cont != null and not fuse_live:
+			focus_prompt = found.prompt
+		elif has_fuse:
+			focus_prompt = "[RMB] Defuse  |  [F] Drop (LIVE FUSE!)" if fuse_live else "[LMB] Light Fuse  |  [F/RMB] Drop"
+		else:
+			focus_prompt = "Drop"
 	elif found != null:
 		var st := Pawn.station_of(found)
 		if st != null and st.has_method(&"get_focus_prompt"):

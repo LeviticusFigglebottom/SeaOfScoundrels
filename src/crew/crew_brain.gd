@@ -106,6 +106,7 @@ const ROWBOAT_COOLDOWN := 6.0
 const EVENT_CLOUD_COOLDOWN := 10.0
 const FIRE_CALLOUT_COOLDOWN := 7.0
 const CANNON_SELF_LAUNCH_COOLDOWN := 6.0
+const SHIPWRECK_COOLDOWN := 10.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -140,6 +141,7 @@ var _banter_timer: float = 28.0
 var _callout_cooldowns: Dictionary = {}  # String -> float seconds left
 var _reported_islands: Dictionary = {}   # String -> true
 var _reported_ships: Dictionary = {}     # int instance_id -> true
+var _reported_wrecks: Dictionary = {}    # int instance_id -> true
 var _last_wind_heading: float = NAN
 var _was_breached: bool = false
 var _was_on_fire: bool = false
@@ -1732,6 +1734,28 @@ func _tick_lookout(delta: float) -> void:
 			_speak(&"sail_sighted", {"target": label, "bearing": brg}, "ship:" + str(eid), 35.0)
 			return
 
+	# Half-submerged Sunken Shipwreck sightings within extended gull-marker range (deduplicated per wreck).
+	var wreck_range := lookout_range * 1.15
+	for node in get_tree().get_nodes_in_group(&"sunken_shipwrecks"):
+		if not (node is Node3D):
+			continue
+		var wreck := node as Node3D
+		if wreck.has_method(&"is_cleared") and bool(wreck.call(&"is_cleared")):
+			continue
+		var wid := wreck.get_instance_id()
+		if _reported_wrecks.has(wid):
+			continue
+		var wdist := origin.distance_to(wreck.global_position)
+		if wdist <= wreck_range:
+			_reported_wrecks[wid] = true
+			var raw_wnm: Variant = wreck.get(&"wreck_name")
+			var wnm: String = String(raw_wnm).strip_edges() if raw_wnm != null else "Sunken Shipwreck"
+			if wnm == "":
+				wnm = "Sunken Shipwreck"
+			var wbrg := CrewDialogue.ship_relative_bearing(ship, wreck.global_position)
+			_speak(&"shipwreck_sighted", {"target": wnm, "bearing": wbrg}, "wreck:" + str(wid), 45.0)
+			return
+
 	# Island sightings (nodes in group `islands`) ahead or abeam — ignore islands behind the stern.
 	for node in get_tree().get_nodes_in_group(&"islands"):
 		if not (node is Node3D):
@@ -1879,6 +1903,23 @@ func notify_event_cloud_sighted(cloud_label: String, bearing: String) -> bool:
 	if clean_bearing == "":
 		clean_bearing = "ahead"
 	_speak(&"event_cloud_sighted", {"cloud": clean_cloud, "bearing": clean_bearing}, "event_cloud", EVENT_CLOUD_COOLDOWN)
+	return true
+
+
+## Persona horizon callout when a half-submerged Sunken Shipwreck dive encounter is spotted.
+func notify_shipwreck_sighted(wreck_label: String, bearing: String) -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("shipwreck_sighted"):
+		return false
+	var clean_target := wreck_label.strip_edges()
+	if clean_target == "":
+		clean_target = "Sunken Shipwreck"
+	var clean_bearing := bearing.strip_edges()
+	if clean_bearing == "":
+		clean_bearing = "ahead"
+	_speak(&"shipwreck_sighted", {"target": clean_target, "bearing": clean_bearing},
+		"shipwreck_sighted", SHIPWRECK_COOLDOWN)
 	return true
 
 

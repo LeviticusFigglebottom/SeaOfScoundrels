@@ -1011,6 +1011,264 @@ func test_wave31_ship_fire_scorches_pawns_spreads_and_storm_rain_extinguishes() 
 		"ShipFire static cache released cleanly (0 leaks)")
 
 
+class _MockKegContainer extends Node:
+	var accepted_count: int = 0
+
+	func accept_carryable(_item: Node) -> bool:
+		accepted_count += 1
+		return true
+
+
+func test_wave34_powder_keg_sculpted_fuse_shoot_slash_fire_chain_and_hull_breach() -> void:
+	_begin()
+	_ground()
+
+	# 1. Spawn PowderKeg: verify sculpted geometry (>= 640 tris, 0 PrimitiveMesh, shared BC7 PBR, 0 extra VRAM)
+	#    and MerchantStall / TreasureCatalog sellable metadata (220g, 30 Iron Tide Renown).
+	var keg := PowderKeg.spawn_at(_root, Vector3(0.0, 5.05, -2.5))
+	await physics_frames(2)
+
+	var tris := keg.get_triangle_count()
+	print("    Wave 34B PowderKeg sculpted triangles: %d (body=%d cord=%d ember=%d spark=%d)" % [
+		tris,
+		PowderKeg._count_mesh_tris(PowderKeg._keg_mesh),
+		PowderKeg._count_mesh_tris(PowderKeg._fuse_cord_mesh),
+		PowderKeg._count_mesh_tris(PowderKeg._ember_mesh),
+		PowderKeg._count_mesh_tris(PowderKeg._spark_mesh),
+	])
+	check(tris >= 640, "PowderKeg sculpted mesh must have >= 640 triangles (got %d)" % tris)
+	check_eq(PowderKeg._count_mesh_tris(PowderKeg._spark_mesh), 16, "FuseSparks uses sculpted 16-tri diamond mesh")
+
+	var primitive_count := 0
+	for mi_n in keg.find_children("*", "MeshInstance3D", true, false):
+		var mi := mi_n as MeshInstance3D
+		if mi.mesh is PrimitiveMesh:
+			primitive_count += 1
+	for cp_n in keg.find_children("*", "CPUParticles3D", true, false):
+		var cp := cp_n as CPUParticles3D
+		if cp.mesh is PrimitiveMesh:
+			primitive_count += 1
+	for static_m: Mesh in [
+		PowderKeg._keg_mesh, PowderKeg._fuse_cord_mesh, PowderKeg._ember_mesh,
+		PowderKeg._spark_mesh, PowderKeg._fireball_mesh, PowderKeg._shockwave_mesh,
+		PowderKeg._splinter_mesh, PowderKeg._smoke_puff_mesh,
+	]:
+		check(static_m is ArrayMesh and not (static_m is PrimitiveMesh),
+			"all PowderKeg body & blast VFX meshes are sculpted ArrayMeshes (zero PrimitiveMesh)")
+	check_eq(primitive_count, 0, "PowderKeg node tree contains zero PrimitiveMeshes")
+
+	var kmat := keg.get_keg_material()
+	check(kmat != null and kmat.vertex_color_use_as_albedo and kmat.vertex_color_is_srgb,
+		"PowderKeg material uses sRGB vertex-color albedo")
+	check(kmat != null and kmat.uv1_triplanar and not kmat.uv1_world_triplanar,
+		"PowderKeg material uses object-space triplanar mapping (uv1_world_triplanar == false)")
+	check(kmat != null and kmat.normal_texture != null and not PowderKeg._pbr_tex_cache.is_empty(),
+		"PowderKeg shares WeakRef-cached ship BC7 PBR textures (0 extra VRAM)")
+
+	var info := TreasureCatalog.inspect_carryable(keg)
+	check_eq(StringName(info.get("treasure_id", &"")), &"powder_keg", "metadata treasure_id == powder_keg")
+	check_eq(int(info.get("gold_value", 0)), 220, "metadata gold_value == 220")
+	check_eq(int(info.get("renown_value", 0)), 30, "metadata renown_value == 30")
+	check_eq(StringName(info.get("company_id", &"")), &"iron_tide", "metadata company_id == iron_tide")
+
+	# 2. Fuse lifecycle + PlayerController prompts + refuse hand_to while lit!
+	var hero_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var hero: Pawn = hero_pair[0]
+	var hcc: CombatComponent = hero_pair[1]
+	var pc := PlayerController.new()
+	pc.name = "PlayerController"
+	pc.input_enabled = false
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.bob_amount = 0.028
+	hero.add_child(pc)
+
+	var bystander_pair := _fighter(Vector3(0.0, 5.05, -5.2), &"drowned", PI)
+	var bystander: Pawn = bystander_pair[0]
+	await physics_frames(4)
+
+	check(hero.pick_up(keg), "Pawn picks up PowderKeg cleanly")
+	pc._update_focus()
+	check_eq(pc.focus_prompt, "[LMB] Light Fuse  |  [F/RMB] Drop", "unlit carried PowderKeg shows strict ASCII light prompt")
+
+	var lit_count := [0]
+	var ext_count := [0]
+	var det_count := [0]
+	keg.fuse_lit.connect(func(_k: PowderKeg, _l: Node) -> void: lit_count[0] += 1)
+	keg.fuse_extinguished.connect(func(_k: PowderKeg) -> void: ext_count[0] += 1)
+	keg.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: det_count[0] += 1)
+
+	var fuse_light := keg.find_child("FuseLight", true, false) as OmniLight3D
+	check(fuse_light != null and not fuse_light.visible and not fuse_light.shadow_enabled,
+		"FuseLight starts hidden and unshadowed")
+
+	check(keg.ignite_fuse(hero), "ignite_fuse() lights the 4.5 s countdown")
+	check(keg.is_fuse_lit() and lit_count[0] == 1, "is_fuse_lit() == true and fuse_lit emitted")
+	check_near(keg.fuse_remaining, PowderKeg.FUSE_DURATION, 0.05, "fuse_remaining starts at 4.5 s")
+	check(fuse_light.visible, "FuseLight illuminates while fuse burns")
+
+	pc._update_focus()
+	check_eq(pc.focus_prompt, "[RMB] Defuse  |  [F] Drop (LIVE FUSE!)", "lit carried PowderKeg shows strict ASCII defuse prompt")
+	for ch_idx in pc.focus_prompt.length():
+		check(pc.focus_prompt.unicode_at(ch_idx) < 128, "focus_prompt stays strictly ASCII (< 128)")
+
+	var mock_stall := _MockKegContainer.new()
+	_root.add_child(mock_stall)
+	check(not keg.hand_to(mock_stall), "hand_to() refuses selling a live lit PowderKeg")
+	check_eq(mock_stall.accepted_count, 0, "container did not receive lit PowderKeg")
+
+	check(keg.extinguish_fuse(), "extinguish_fuse() snuffs active fuse cleanly")
+	check(not keg.is_fuse_lit() and ext_count[0] == 1, "fuse_extinguished emitted and fuse snuffed")
+	check(not fuse_light.visible, "FuseLight hides once defused")
+
+	# Verify an unlit PowderKeg CAN be handed to a container / merchant stall.
+	var sell_keg := PowderKeg.spawn_at(_root, Vector3(8.0, 5.05, 0.0))
+	await physics_frames(2)
+	check(sell_keg.hand_to(mock_stall) and mock_stall.accepted_count == 1,
+		"unlit PowderKeg hands over cleanly to MerchantStall/container")
+	sell_keg.queue_free()
+
+	# Drop keg near bystander, re-light, and step 4.6 s until detonation!
+	hero.drop_carried(0.0)
+	keg.global_position = Vector3(0.0, 5.05, -4.5)
+	await physics_frames(2)
+	var by_hp0 := bystander.health
+	pc._trauma = 0.0
+	check(keg.ignite_fuse(hero), "re-lighting dropped PowderKeg succeeds")
+	for _step in 46:
+		keg._physics_process(0.1)
+		if keg.exploded:
+			break
+	check(keg.exploded and det_count[0] == 1, "stepping 4.6 s detonates lit PowderKeg and emits detonated")
+	check(bystander.health < by_hp0 - 40.0, "PowderKeg blast deals heavy quadratic damage to nearby pawn (hp %.1f -> %.1f)" % [by_hp0, bystander.health])
+	check(pc.get_camera_trauma() >= 0.40, "nearby PlayerController receives heavy blast trauma (%.2f)" % pc.get_camera_trauma())
+	await physics_frames(2)
+
+	# 3. Ship hull devastation: 3 hull breaches + ShipFire deck flames!
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = true
+	_root.add_child(ship)
+	ship.global_position = Vector3(60.0, 0.0, 0.0)
+	await physics_frames(6)
+	check_eq(ship.open_hole_count(), 0, "fresh ship starts with 0 open hull holes")
+	check(not ship.has_deck_fire(), "fresh ship starts with no deck fire")
+
+	var deck_keg := PowderKeg.spawn_at(_root, ship.global_transform * ship.ship_point(Vector3(0.0, 1.25, -1.0)))
+	await physics_frames(2)
+	var ship_res := deck_keg.detonate(hero)
+	check_eq(int(ship_res.get("ships_breached", 0)), 1, "detonating PowderKeg on Ship reports 1 ship breached")
+	check(ship.open_hole_count() >= 3, "PowderKeg punches >= 3 hull breaches (got %d)" % ship.open_hole_count())
+	check(ship.has_deck_fire(), "PowderKeg ignites ShipFire deck flames on breached Ship")
+	await physics_frames(2)
+
+	# 4. Flintlock ranged shot detonates PowderKeg + emits target_hit!
+	var shot_keg := PowderKeg.spawn_at(_root, Vector3(5.5, 5.05, -6.0))
+	shot_keg.freeze = true
+	var shot_blown := [false]
+	shot_keg.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: shot_blown[0] = true)
+	var shot_keg_id := shot_keg.get_instance_id()
+	await physics_frames(4)
+	var ranged_hit_ids: Array[int] = []
+	var hit_cb := func(t: Node, _d: float, _h: bool) -> void:
+		if t != null:
+			ranged_hit_ids.append(t.get_instance_id())
+	hcc.target_hit.connect(hit_cb)
+	hero.global_position = Vector3(0.0, 5.05, 0.0)
+	var aim := (shot_keg.global_position + Vector3(0.0, PowderKeg.KEG_CENTER_Y, 0.0)) - hero.eye_position()
+	hero.look_yaw = atan2(-aim.x, -aim.z)
+	hero.look_pitch = atan2(aim.y, Vector2(aim.x, aim.z).length())
+	hcc.equip_weapon(&"pistol")
+	hcc.state = CombatComponent.State.IDLE
+	hcc.refill_ammo()
+	check(hcc.primary_attack(), "Flintlock pistol fires at PowderKeg")
+	check(shot_blown[0], "Flintlock pistol shot detonates PowderKeg immediately")
+	check(ranged_hit_ids.has(shot_keg_id), "CombatComponent emits target_hit for shot PowderKeg")
+	await physics_frames(2)
+
+	# 5. Cutlass melee slash detonates PowderKeg!
+	var slash_keg := PowderKeg.spawn_at(_root, Vector3(0.0, 5.05, -1.7))
+	slash_keg.freeze = true
+	var slash_blown := [false]
+	slash_keg.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: slash_blown[0] = true)
+	var slash_keg_id := slash_keg.get_instance_id()
+	await physics_frames(3)
+	ranged_hit_ids.clear()
+	hero.global_position = Vector3(0.0, 5.05, 0.0)
+	hero.look_yaw = 0.0
+	hero.look_pitch = 0.0
+	hcc.equip_weapon(&"cutlass")
+	hcc.state = CombatComponent.State.IDLE
+	hcc._state_timer = 0.0
+	check(hcc.primary_attack(), "Cutlass melee swing starts cleanly")
+	await physics_frames(18)
+	check(slash_blown[0], "Cutlass melee slash detonates PowderKeg immediately")
+	check(ranged_hit_ids.has(slash_keg_id), "CombatComponent emits target_hit for slashed PowderKeg")
+	hcc.target_hit.disconnect(hit_cb)
+
+	# 6. ShipFire active zone detonates adjacent PowderKeg within 2.4 m!
+	var sf := ship.get_ship_fire()
+	sf.douse_all()
+	var z0_world := sf.get_zone_world_pos(0)
+	var fire_keg := PowderKeg.spawn_at(_root, z0_world + Vector3(1.1, 0.05, 0.0))
+	fire_keg.freeze = true
+	var fire_blown := [false]
+	fire_keg.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: fire_blown[0] = true)
+	await physics_frames(2)
+	check(sf.ignite_zone(0, 0.9), "ShipFire ignites zone 0 next to PowderKeg")
+	for _f in 6:
+		sf.step_fire(0.15)
+		if fire_blown[0]:
+			break
+	check(fire_blown[0], "ShipFire active zone detonates adjacent PowderKeg within 2.4 m")
+	await physics_frames(2)
+
+	# 7. Cannonball impact detonates adjacent PowderKeg!
+	var cb_keg := PowderKeg.spawn_at(_root, Vector3(18.0, 5.05, -6.0))
+	cb_keg.freeze = true
+	var cb_blown := [false]
+	cb_keg.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: cb_blown[0] = true)
+	await physics_frames(2)
+	var ball := Cannonball.new()
+	ball.enable_effects = false
+	ball.shooter_pawn = hero
+	ball.velocity = Vector3(0.0, -24.0, 0.0)
+	_root.add_child(ball)
+	ball.global_position = Vector3(19.6, 5.45, -6.0)
+	await physics_frames(8)
+	check(cb_blown[0], "Cannonball ground/deck splash within 3.2 m detonates adjacent PowderKeg")
+	if is_instance_valid(ball):
+		ball.queue_free()
+	await physics_frames(2)
+
+	# 8. Chain detonation blows adjacent PowderKeg within CHAIN_BLAST_RADIUS without infinite recursion!
+	var chain_a := PowderKeg.spawn_at(_root, Vector3(-16.0, 5.05, -6.0))
+	var chain_b := PowderKeg.spawn_at(_root, Vector3(-11.5, 5.05, -6.0))
+	var chain_far := PowderKeg.spawn_at(_root, Vector3(-28.0, 5.05, -6.0))
+	chain_a.freeze = true
+	chain_b.freeze = true
+	chain_far.freeze = true
+	var chain_a_blown := [false]
+	var chain_b_blown := [false]
+	chain_a.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: chain_a_blown[0] = true)
+	chain_b.detonated.connect(func(_k: PowderKeg, _p: Vector3, _t: Node) -> void: chain_b_blown[0] = true)
+	await physics_frames(2)
+	var chain_res := chain_a.detonate(hero)
+	check(chain_a_blown[0] and chain_b_blown[0], "Chain detonation blows adjacent PowderKeg within 7.8 m")
+	check_eq(int(chain_res.get("kegs_chained", 0)), 1, "chain_res reports exactly 1 chained keg without recursion")
+	check(is_instance_valid(chain_far) and not chain_far.exploded, "distant PowderKeg outside 7.8 m remains intact")
+
+	# 9. Clean teardown with PowderKeg.clear_shared_cache() and ZERO leaks!
+	await _end()
+	PowderKeg.clear_shared_cache()
+	check_eq(PowderKeg._active_kegs, 0, "PowderKeg._active_kegs == 0 after teardown")
+	check(PowderKeg._keg_mesh == null and PowderKeg._ember_mesh == null and PowderKeg._spark_mesh == null,
+		"PowderKeg static meshes released cleanly to null (0 leaks)")
+	check(PowderKeg._keg_mat == null and PowderKeg._ember_mat == null and PowderKeg._pbr_tex_cache.is_empty(),
+		"PowderKeg static materials and WeakRef PBR cache released cleanly (0 leaks)")
+
+
+
 
 
 

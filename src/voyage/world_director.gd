@@ -17,6 +17,7 @@ signal spawn_storm_cell(center: Vector3, radius: float, velocity: Vector3)
 signal spawn_leviathan(center: Vector3, target_ship: Node)
 signal spawn_fort_siege(fort_pos: Vector3, bearing: String)
 signal spawn_castaway(pos: Vector3)
+signal spawn_shipwreck(pos: Vector3, seed_val: int)
 signal wreck_recorded(wreck: Dictionary)
 signal wreck_salvaged(wreck_id: String, recovered_items: Array)
 signal event_cloud_spawned(kind: StringName, world_pos: Vector3, cloud_node: Node3D)
@@ -32,6 +33,9 @@ const SIGHTING_MAX_RANGE := 450.0
 ## Distance band for small flotsam sightings ahead of the bow (metres).
 const FLOTSAM_MIN_RANGE := 120.0
 const FLOTSAM_MAX_RANGE := 210.0
+## Distance band for half-submerged sunken shipwreck dive sightings (metres).
+const SHIPWRECK_MIN_RANGE := 180.0
+const SHIPWRECK_MAX_RANGE := 320.0
 ## Seconds a pawn may swim in deep open water before attracting a shark pack.
 const SHARK_SWIM_THRESHOLD := 12.0
 ## Cooldown (seconds) between shark pack spawns.
@@ -50,6 +54,8 @@ var time_since_event: float = 0.0
 var time_since_major_event: float = 0.0
 ## Seconds elapsed since the last flotsam barrel cluster.
 var time_since_flotsam: float = 0.0
+## Seconds elapsed since the last half-submerged sunken shipwreck dive encounter.
+var time_since_shipwreck: float = 0.0
 ## Total gold value of treasure currently aboard the player ship.
 var cargo_value_aboard: int = 0
 ## Last known world position of the player ship.
@@ -84,10 +90,12 @@ var weather_integration: bool = true
 var post_notices: bool = true
 
 var _rng := RandomNumberGenerator.new()
+var _shipwreck_rng := RandomNumberGenerator.new()
 var _event_serial: int = 0
 var _wreck_serial: int = 0
 var _next_major_delay: float = 130.0
 var _next_flotsam_delay: float = 70.0
+var _next_shipwreck_delay: float = 215.0
 var _shark_cooldown: float = 0.0
 var _has_prev_pos: bool = false
 var _storm_active_id: String = ""
@@ -99,6 +107,8 @@ func _init(seed_value: int = 0) -> void:
 		set_seed(seed_value)
 	else:
 		_rng.randomize()
+		_shipwreck_rng.randomize()
+		_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
 	_roll_next_delays()
 
 
@@ -114,8 +124,11 @@ func _exit_tree() -> void:
 
 func set_seed(seed_value: int) -> void:
 	_rng.seed = seed_value
+	_shipwreck_rng.seed = seed_value ^ 0x5419EC
 	_event_serial = 0
 	_wreck_serial = 0
+	time_since_shipwreck = 0.0
+	_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
 	_roll_next_delays()
 
 
@@ -179,6 +192,7 @@ func step(delta: float, context: Dictionary = {}) -> Array[Dictionary]:
 		time_since_event += delta
 		time_since_major_event += delta * (1.0 if is_sailing else 0.45)
 		time_since_flotsam += delta * (1.0 if is_sailing else 0.35)
+		time_since_shipwreck += delta * (1.0 if is_sailing else 0.35)
 
 	if in_harbor:
 		return spawned
@@ -202,6 +216,15 @@ func step(delta: float, context: Dictionary = {}) -> Array[Dictionary]:
 		time_since_flotsam = 0.0
 		time_since_event = 0.0
 		_next_flotsam_delay = _rng.randf_range(65.0, 100.0)
+
+	# 3b. Half-submerged Sunken Shipwreck ocean dive encounters on a dedicated cooldown
+	#     so calm/rich flotsam & major-event pacing stays 100% deterministic.
+	if time_since_shipwreck >= _next_shipwreck_delay and not _has_active_event(&"sunken_shipwreck"):
+		var wreck_evt := _trigger_shipwreck(heading_dir)
+		spawned.append(wreck_evt)
+		time_since_shipwreck = 0.0
+		time_since_event = 0.0
+		_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
 
 	return spawned
 
@@ -375,6 +398,9 @@ func trigger_event(kind: StringName, context: Dictionary = {}) -> Dictionary:
 		&"flotsam_barrels":
 			evt = _trigger_flotsam(heading_dir)
 			time_since_flotsam = 0.0
+		&"sunken_shipwreck":
+			evt = _trigger_shipwreck(heading_dir)
+			time_since_shipwreck = 0.0
 		&"shark_pack":
 			var swimmer_pos: Vector3 = context.get("swimmer_pos", player_ship_pos)
 			evt = _trigger_shark_pack(swimmer_pos)
@@ -385,6 +411,21 @@ func trigger_event(kind: StringName, context: Dictionary = {}) -> Dictionary:
 	if not evt.is_empty():
 		time_since_event = 0.0
 	return evt
+
+
+## Trigger a half-submerged Sunken Shipwreck ocean dive sighting ahead of `heading_dir` (host-only).
+func trigger_shipwreck(heading_dir: Vector3 = Vector3.FORWARD) -> Dictionary:
+	if not Net.is_host():
+		return {}
+	var evt := _trigger_shipwreck(heading_dir)
+	time_since_shipwreck = 0.0
+	time_since_event = 0.0
+	return evt
+
+
+## Immediately force-spawn a Sunken Shipwreck encounter along `heading_dir` (host-only).
+func force_spawn_shipwreck(heading_dir: Vector3 = Vector3.FORWARD) -> Dictionary:
+	return trigger_shipwreck(heading_dir)
 
 
 func get_state() -> Dictionary:
@@ -623,6 +664,40 @@ func _trigger_flotsam(heading_dir: Vector3) -> Dictionary:
 	_emit_warning(msg, pos, &"flotsam_barrels", bearing, dist)
 	spawn_flotsam_barrels.emit(pos, count)
 	return evt
+
+
+func _trigger_shipwreck(heading_dir: Vector3) -> Dictionary:
+	var flat_hdg := Vector3(heading_dir.x, 0.0, heading_dir.z)
+	if flat_hdg.length_squared() < 0.001:
+		flat_hdg = Vector3.FORWARD
+	else:
+		flat_hdg = flat_hdg.normalized()
+	var dist := _shipwreck_rng.randf_range(SHIPWRECK_MIN_RANGE, SHIPWRECK_MAX_RANGE)
+	var base_az := atan2(flat_hdg.x, -flat_hdg.z)
+	var az := base_az + _shipwreck_rng.randf_range(-0.65, 0.65)
+	var offset := Vector3(sin(az) * dist, 0.0, -cos(az) * dist)
+	var pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
+	var bearing := compass_bearing(player_ship_pos, pos)
+	var wreck_seed := maxi(1, int(_shipwreck_rng.randi() & 0x7FFFFFFF))
+	var msg := "Circling gulls over a half-sunk hull -- Sunken Shipwreck bearing %s (%d m)!" % [
+		bearing, roundi(dist)]
+
+	var evt := _register_event(&"sunken_shipwreck", pos, 360.0, {
+		"seed_val": wreck_seed,
+		"bearing": bearing,
+		"distance": dist,
+		"message": msg,
+	})
+	_emit_warning(msg, pos, &"sunken_shipwreck", bearing, dist)
+	spawn_shipwreck.emit(pos, wreck_seed)
+	return evt
+
+
+func _has_active_event(kind: StringName) -> bool:
+	for evt in active_events:
+		if evt.get("kind", &"") == kind:
+			return true
+	return false
 
 
 func _trigger_shark_pack(swimmer_pos: Vector3) -> Dictionary:

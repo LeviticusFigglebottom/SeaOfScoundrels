@@ -52,6 +52,8 @@ const SPREAD_MIN_INTENSITY := 0.75
 const SCORCH_INTERVAL := 0.5
 const SCORCH_RADIUS := 1.85
 const SCORCH_DAMAGE := 3.0
+const KEG_IGNITE_RADIUS := 2.4
+const KEG_IGNITE_MIN_INTENSITY := 0.25
 const HULL_CHAR_INTERVAL := 18.0
 const HULL_CHAR_RADIUS := 0.35
 const NEIGHBOR_COOL_AMOUNT := 0.35
@@ -302,11 +304,13 @@ func step_fire(delta: float) -> void:
 				if not _try_spread_fire():
 					break
 
-	# 3. Pawn Scorching: every 0.5 s deal 3.0 fire damage to living pawns within 1.85 m of active flames.
+	# 3. Pawn Scorching & Powder Keg Ignition: every 0.5 s scorch living pawns within 1.85 m
+	#    and detonate any unexploded PowderKegs within 2.4 m of an active burning zone (>= 0.25).
 	_scorch_accum += delta
 	while _scorch_accum >= SCORCH_INTERVAL:
 		_scorch_accum -= SCORCH_INTERVAL
 		_scorch_nearby_pawns()
+		_check_nearby_powder_kegs()
 
 	# 4. Hull Charring: unchecked deck fire pops 1 hull hole every 18.0 s.
 	if storm <= STORM_EXTINGUISH_THRESHOLD and has_active_fire():
@@ -489,6 +493,39 @@ func _scorch_nearby_pawns() -> void:
 				p.call(&"take_damage", SCORCH_DAMAGE)
 			elif p.has_method(&"apply_damage"):
 				p.call(&"apply_damage", SCORCH_DAMAGE, self)
+
+
+func _check_nearby_powder_kegs() -> void:
+	if not Net.is_host() or not is_inside_tree():
+		return
+	var tree := get_tree()
+	if tree == null:
+		return
+	var kegs := tree.get_nodes_in_group(&"powder_kegs")
+	if kegs.is_empty():
+		return
+	var hot_positions: Array[Vector3] = []
+	for i in _zone_intensity.size():
+		if _zone_intensity[i] >= KEG_IGNITE_MIN_INTENSITY:
+			hot_positions.append(get_zone_world_pos(i))
+	if hot_positions.is_empty():
+		return
+
+	var r_sq := KEG_IGNITE_RADIUS * KEG_IGNITE_RADIUS
+	for node in kegs:
+		if not is_instance_valid(node) or not (node is PowderKeg):
+			continue
+		var keg := node as PowderKeg
+		if keg.exploded:
+			continue
+		var kpos := keg.global_position + Vector3(0.0, PowderKeg.KEG_CENTER_Y, 0.0)
+		var ignited := false
+		for f_pos: Vector3 in hot_positions:
+			if kpos.distance_squared_to(f_pos) <= r_sq:
+				ignited = true
+				break
+		if ignited:
+			keg.detonate(ship)
 
 
 func _collect_candidate_pawns() -> Array[Node3D]:

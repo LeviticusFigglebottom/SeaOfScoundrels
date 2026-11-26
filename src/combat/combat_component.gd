@@ -134,7 +134,7 @@ func _ready() -> void:
 	assert(pawn != null, "CombatComponent must be a child of a Pawn")
 	stamina = max_stamina
 	_rng.randomize()
-	_ray_params.collision_mask = Pawn.LAYER_WORLD | Pawn.LAYER_SHIP | Pawn.LAYER_PAWN
+	_ray_params.collision_mask = Pawn.LAYER_WORLD | Pawn.LAYER_SHIP | Pawn.LAYER_PAWN | Carryable.LAYER
 	_ray_params.collide_with_areas = false
 	_ray_params.collide_with_bodies = true
 	_shape_params.shape = _melee_sphere
@@ -528,8 +528,8 @@ func _check_melee_hits(spec: Dictionary) -> void:
 					continue
 				_try_melee_hit_damageable(target_node as Node3D, my_pos, fwd, reach + 0.45, arc_cos, dmg, cleave)
 
-	# 3. Wildlife/beast nodes in common groups (e.g. Shark, IslandCrab, ReefEel).
-	for grp: StringName in [&"sharks", &"wildlife", &"beasts", &"enemies"]:
+	# 3. Wildlife/beast nodes & volatile powder kegs in common groups (e.g. Shark, IslandCrab, ReefEel, PowderKeg).
+	for grp: StringName in [&"sharks", &"wildlife", &"beasts", &"enemies", &"powder_kegs"]:
 		for node in get_tree().get_nodes_in_group(grp):
 			if not (node is Node3D):
 				continue
@@ -703,14 +703,20 @@ func _fire_ranged(spec: Dictionary) -> bool:
 						if lev is Node:
 							target_hit.emit(lev as Node, dmg, false)
 				else:
-					var dmg_node := _resolve_damageable(col)
-					if dmg_node != null and _is_hostile_target(dmg_node):
+					var hit_keg := _resolve_powder_keg(col)
+					if hit_keg != null and not hit_keg.exploded:
 						struck_entity = true
-						_call_apply_damage(dmg_node, dmg, pawn)
-						if dmg_node is CharacterBody3D:
-							(dmg_node as CharacterBody3D).velocity += dir * kb
-						Audio.play_sfx(&"hit_flesh", hit_pos)
-						target_hit.emit(dmg_node, dmg, false)
+						hit_keg.detonate(pawn)
+						target_hit.emit(hit_keg, dmg, false)
+					else:
+						var dmg_node := _resolve_damageable(col)
+						if dmg_node != null and _is_hostile_target(dmg_node):
+							struck_entity = true
+							_call_apply_damage(dmg_node, dmg, pawn)
+							if dmg_node is CharacterBody3D:
+								(dmg_node as CharacterBody3D).velocity += dir * kb
+							Audio.play_sfx(&"hit_flesh", hit_pos)
+							target_hit.emit(dmg_node, dmg, false)
 		if not struck_entity:
 			hit_pos = _check_ranged_soft_targets(origin, dir, origin.distance_to(hit_pos), dmg, kb)
 		last_hit = hit_pos
@@ -753,6 +759,9 @@ func _check_ranged_soft_targets(origin: Vector3, dir: Vector3, max_dist: float, 
 func _is_hostile_target(node: Node) -> bool:
 	if node == null or node == pawn:
 		return false
+	if node is PowderKeg:
+		var keg := node as PowderKeg
+		return not keg.exploded and keg.holder != pawn
 	var dead_val: Variant = node.get(&"dead")
 	if dead_val is bool and dead_val:
 		return false
@@ -762,6 +771,19 @@ func _is_hostile_target(node: Node) -> bool:
 		if tfac != &"" and tfac == faction:
 			return false
 	return true
+
+
+static func _resolve_powder_keg(obj: Object) -> PowderKeg:
+	if not (obj is Node):
+		return null
+	var n := obj as Node
+	for _depth in 3:
+		if n == null:
+			break
+		if n is PowderKeg:
+			return n as PowderKeg
+		n = n.get_parent()
+	return null
 
 
 static func _resolve_damageable(obj: Object) -> Node:
