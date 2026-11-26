@@ -217,7 +217,8 @@ func _build_stage() -> void:
 	sea_mesh.size = Vector2(360.0, 360.0)
 	var mat_sea := StandardMaterial3D.new()
 	mat_sea.albedo_color = Color(0.06, 0.34, 0.44)
-	mat_sea.roughness = 0.28
+	mat_sea.roughness = 0.68
+	mat_sea.metallic_specular = 0.18
 	var sea := MeshInstance3D.new()
 	sea.mesh = sea_mesh
 	sea.position = Vector3(0.0, -0.78, 0.0)

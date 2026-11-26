@@ -157,20 +157,21 @@ vec2 milky_way(vec3 sd) {
 	return vec2(glow, band);
 }
 
-// Cirrus: thin streaks high above. They are laid out on an equal-angle map of
-// the sky dome (distance from the zenith = angle), not on a flat plane: on a
-// plane, parallel streaks race to a vanishing point and fan out like rays at a
-// wide field of view; on this map they stay evenly spaced arcs to the horizon.
+// Cirrus: delicate high-altitude painted wisps projected on a gently curved
+// atmospheric dome so streaks flow organically across the sky without polar
+// comb lines or harsh ribbons.
 float cirrus_layer(vec3 d) {
-	float zen = acos(clamp(d.y, -1.0, 1.0));
-	vec2 p = d.xz / max(length(d.xz), 0.0001) * zen * 4.2;
-	// A slow warp bends them into hooks.
-	vec2 warp = texture(noise_tex, p * 0.05 + cirrus_scroll * 0.3).ag - 0.5;
-	vec2 cp = vec2(p.x * 0.8 + p.y * 0.6, p.y * 0.8 - p.x * 0.6) + warp * 1.1;
-	float wisp = texture(noise_tex, cp * vec2(0.085, 0.3) - cirrus_scroll).b;
-	float patches = texture(noise_tex, cp * 0.055 + 0.21 - cirrus_scroll * 0.5).a;
-	float c = smoothstep(0.6, 0.98, wisp) * smoothstep(0.45, 0.72, patches);
-	return c * smoothstep(0.05, 0.3, d.y);
+	vec2 p = d.xz / (max(d.y, 0.0) + 0.34) * 1.45;
+	// Organic two-axis domain warp breaks any parallel striping.
+	vec2 w1 = texture(noise_tex, p * 0.11 + cirrus_scroll * 0.35).ag - 0.5;
+	vec2 w2 = texture(noise_tex, p * 0.23 - cirrus_scroll * 0.22 + vec2(0.37, 0.61)).ga - 0.5;
+	vec2 cp = vec2(p.x * 0.8 + p.y * 0.6, p.y * 0.8 - p.x * 0.6) + w1 * 1.45 + w2 * 0.55;
+	float wisp_a = texture(noise_tex, cp * vec2(0.11, 0.20) - cirrus_scroll).b;
+	float wisp_b = texture(noise_tex, (cp.yx * vec2(0.15, 0.12)) + 0.41 - cirrus_scroll * 0.65).a;
+	float patches = texture(noise_tex, cp * 0.075 + 0.21 - cirrus_scroll * 0.45).a;
+	float blend_w = wisp_a * 0.62 + wisp_b * 0.38;
+	float c = smoothstep(0.56, 0.92, blend_w) * smoothstep(0.42, 0.78, patches);
+	return c * smoothstep(0.05, 0.34, d.y) * smoothstep(0.99, 0.42, d.y * 0.5 + 0.4);
 }
 
 // --- Weather layer ----------------------------------------------------------
@@ -204,7 +205,7 @@ float light_march(vec3 p, int samples) {
 }
 
 // Clouds along a ray: premultiplied colour and alpha.
-vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 haze) {
+vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 haze, vec2 frag) {
 	float a = CURVE * (1.0 - rd.y * rd.y);
 	float top = slab_top;
 	if (storm_cell.w > 0.0) {
@@ -223,11 +224,13 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 	if (rd.y < -0.05 || t0 >= t1) {
 		return vec4(0.0);
 	}
-	float t = t0;
+	// Subtle Interleaved Gradient Noise jitter eliminates concentric raymarch stair-stepping.
+	float ign = fract(52.9829189 * fract(dot(frag, vec2(0.06711056, 0.00583715))));
+	float t = t0 + ign * min(48.0, (t1 - t0) / float(steps));
 	float last_t = t0;
 	float last_reach = 1.0e9;
 	bool inside = false;
-	int lit_left = 2;
+	int lit_left = 3;
 	float trans = 1.0;
 	float direct = 1.0;
 	// Weighted sums over the visible cloud: light, height in cloud, storminess, flash, distance.
@@ -251,42 +254,42 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 			// least an even share of what is left so the ray always arrives.
 			inside = false;
 			last_t = t;
-			last_reach = -sd * 0.7 + t * 0.003;
+			last_reach = -sd * 0.65 + t * 0.0025;
 			// Close to a surface the forced share is cut, so grazing rays do
 			// not hop over the thin top of a cloud.
 			float share = (t1 - t) / float(steps - i);
-			t += max(last_reach, share * (-sd < share ? 0.4 : 1.0));
+			t += max(last_reach, share * (-sd < share ? 0.35 : 1.0));
 			continue;
 		}
 		if (!inside) {
 			inside = true;
-			if (t - last_t > last_reach * 1.5) {
-				// A forced long stride landed inside a cloud: bisect back to
-				// its surface so silhouettes stay crisp and steady.
+			if (t > last_t + 12.0) {
+				// Always bisect cleanly back to the cloud surface on first entry so
+				// silhouettes stay silky and painterly without voxel-like steps.
 				float lo = last_t;
 				float hi = t;
 				for (int j = 0; j < 4; j++) {
 					float mid = 0.5 * (lo + hi);
 					CloudColumn mc;
 					vec3 mp;
-					if (sample_sd(ro, rd, mid, a, false, mc, mp) > 0.0) {
+					if (sample_sd(ro, rd, mid, a, fine, mc, mp) > 0.0) {
 						hi = mid;
 					} else {
 						lo = mid;
 					}
 				}
-				t = hi + 8.0;
+				t = hi + 4.0;
 				sd = sample_sd(ro, rd, t, a, fine, c, p);
 			}
 		}
-		float dens = cloud_density(max(sd, 4.0));
+		float dens = smoothstep(0.0, 1.0, clamp(max(sd, 2.0) / 96.0, 0.0, 1.0));
 		// Anything that belongs to the storm cell wears storm colours, tower and anvil included.
 		float in_cell = 0.0;
 		if (storm_cell.w > 0.0) {
 			float rc = length(p.xz - storm_cell.xy) / (storm_cell.z * 1.4);
 			in_cell = storm_cell.w * (1.0 - smoothstep(0.75, 1.0, rc));
 		}
-		float dt = clamp(t * 0.03, 80.0, 520.0);
+		float dt = clamp(t * 0.020, 48.0, 290.0);
 		if (lit_left > 0) {
 			lit_left -= 1;
 			direct = light_steps > 0 ? light_march(p, light_steps) : 1.0;
@@ -401,9 +404,9 @@ vec4 weather_layer(vec3 ro, vec3 rd, vec2 frag, float time, bool cube) {
 	vec3 haze = sky_gradient(flat_dir);
 	vec4 layer;
 	if (cube) {
-		layer = march_clouds(ro, rd, 10, 1, false, haze);
+		layer = march_clouds(ro, rd, 10, 1, false, haze, frag);
 	} else {
-		layer = march_clouds(ro, rd, STEPS, LIGHT_STEPS, FINE, haze);
+		layer = march_clouds(ro, rd, STEPS, LIGHT_STEPS, FINE, haze, frag);
 	}
 	if (rd.y < -0.05) {
 		return layer;
@@ -504,12 +507,13 @@ void sky() {
 			sun_add += sun_disc_color * disc * limb * 6.0;
 		}
 
-		// Cirrus, high above everything else.
+		// Cirrus, high above everything else (softened gently at night so wisps stay subtle).
 		float cirrus = 0.0;
 		if (d.y > 0.0 && cirrus_amount > 0.0 && !AT_CUBEMAP_PASS) {
-			cirrus = cirrus_layer(d) * cirrus_amount;
-			float c_light = pow(max(sun_dot, 0.0), 4.0);
-			vec3 c_col = mix(cloud_shade_color, cloud_lit_color, 0.8 * light_amount) + cloud_rim_color * c_light * 0.5;
+			float day_vis = mix(0.22, 1.0, smoothstep(-0.08, 0.14, sun_dir.y));
+			cirrus = cirrus_layer(d) * cirrus_amount * day_vis;
+			float c_light = pow(max(sun_dot, 0.0), 4.0) * smoothstep(-0.05, 0.15, sun_dir.y);
+			vec3 c_col = mix(cloud_shade_color, cloud_lit_color, 0.75 * light_amount) + cloud_rim_color * c_light * 0.45;
 			col = mix(col, c_col, cirrus);
 		}
 		col += moon_add * (1.0 - cirrus * 0.5);

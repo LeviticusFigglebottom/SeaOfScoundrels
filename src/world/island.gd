@@ -40,6 +40,7 @@ var _sea_floor_y: float = -20.0
 var _foliage_materials: Array[ShaderMaterial] = []
 var _flicker_lights: Array[Dictionary] = []
 var _flicker_time: float = 0.0
+var _wind_accum: float = 0.25
 var _dig_sites_root: Node3D = null
 
 
@@ -49,7 +50,12 @@ func _enter_tree() -> void:
 
 func _process(delta: float) -> void:
 	_flicker_time += delta
-	if not _foliage_materials.is_empty():
+	_wind_accum += delta
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	var dist_sq := global_position.distance_squared_to(cam.global_position) if cam != null else 0.0
+
+	if not _foliage_materials.is_empty() and _wind_accum >= 0.16 and dist_sq <= 380.0 * 380.0:
+		_wind_accum = 0.0
 		var wind := Weather.wind_vector()
 		var spd := wind.length()
 		var dir2 := Vector2(wind.x, wind.z)
@@ -62,15 +68,16 @@ func _process(delta: float) -> void:
 				mat.set_shader_parameter(&"wind_dir", dir2)
 				mat.set_shader_parameter(&"wind_speed", spd)
 
-	for entry in _flicker_lights:
-		var light: OmniLight3D = entry.get("light")
-		if light == null or not is_instance_valid(light):
-			continue
-		var base_e: float = float(entry["base_energy"])
-		var amp: float = float(entry["amp"])
-		var phase: float = float(entry["phase"])
-		var wave := sin(_flicker_time * 5.3 + phase) * 0.6 + sin(_flicker_time * 11.7 + phase * 1.9) * 0.4
-		light.light_energy = maxf(0.1, base_e * (1.0 + wave * amp))
+	if not _flicker_lights.is_empty() and dist_sq <= 160.0 * 160.0:
+		for entry in _flicker_lights:
+			var light: OmniLight3D = entry.get("light")
+			if light == null or not is_instance_valid(light):
+				continue
+			var base_e: float = float(entry["base_energy"])
+			var amp: float = float(entry["amp"])
+			var phase: float = float(entry["phase"])
+			var wave := sin(_flicker_time * 5.3 + phase) * 0.6 + sin(_flicker_time * 11.7 + phase * 1.9) * 0.4
+			light.light_energy = maxf(0.1, base_e * (1.0 + wave * amp))
 
 
 ## Bind the exact terrain height grid built by `IslandGenerator`.

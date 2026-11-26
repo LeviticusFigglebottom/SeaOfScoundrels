@@ -119,21 +119,23 @@ GLYPHS = {
     "|": [[(0.50, 0.04), (0.50, 1.02)]],
     "}": [[(0.32, 0.04), (0.52, 0.12), (0.54, 0.44), (0.68, 0.52), (0.54, 0.60), (0.52, 0.92), (0.32, 1.00)]],
     "~": [[(0.18, 0.54), (0.36, 0.40), (0.64, 0.64), (0.82, 0.48)]],
-    "\u00b7": [[(0.47, 0.50), (0.53, 0.54)]],  # middle dot
-    "\u2022": [[(0.44, 0.48), (0.56, 0.48), (0.56, 0.58), (0.44, 0.58), (0.44, 0.48)]],  # bullet
-    "\u2013": [[(0.16, 0.54), (0.84, 0.54)]],  # en-dash
-    "\u2014": [[(0.06, 0.54), (0.94, 0.54)]],  # em-dash
-    "\u2026": [[(0.18, 0.86), (0.22, 0.94)], [(0.48, 0.86), (0.52, 0.94)], [(0.78, 0.86), (0.82, 0.94)]],  # ellipsis
-    "\u00b0": [[(0.50, 0.12), (0.66, 0.22), (0.50, 0.34), (0.34, 0.22), (0.50, 0.12)]],  # degree
-    "\u2018": [[(0.54, 0.06), (0.46, 0.28)]],  # left single quote
-    "\u2019": [[(0.54, 0.06), (0.46, 0.28)]],  # right single quote
-    "\u201c": [[(0.36, 0.06), (0.30, 0.28)], [(0.66, 0.06), (0.60, 0.28)]],  # left double quote
-    "\u201d": [[(0.36, 0.06), (0.30, 0.28)], [(0.66, 0.06), (0.60, 0.28)]],  # right double quote
+    # Extended nautical & UI punctuation (zero third-party glyphs).
+    "\u00b7": [[(0.46, 0.48), (0.54, 0.48), (0.54, 0.56), (0.46, 0.56), (0.46, 0.48)]],  # middle dot ·
+    "\u2014": [[(0.06, 0.54), (0.94, 0.54)]],                                            # em dash —
+    "\u2013": [[(0.16, 0.54), (0.84, 0.54)]],                                            # en dash –
+    "\u00b0": [[(0.50, 0.10), (0.66, 0.18), (0.66, 0.34), (0.50, 0.42), (0.34, 0.34), (0.34, 0.18), (0.50, 0.10)]],  # degree °
+    "\u2019": [[(0.54, 0.08), (0.52, 0.22), (0.42, 0.34)]],                              # right single quote ’
+    "\u2018": [[(0.46, 0.32), (0.48, 0.18), (0.58, 0.08)]],                              # left single quote ‘
+    "\u201c": [[(0.30, 0.30), (0.34, 0.14), (0.42, 0.08)], [(0.60, 0.30), (0.64, 0.14), (0.72, 0.08)]],  # “
+    "\u201d": [[(0.38, 0.08), (0.36, 0.22), (0.28, 0.30)], [(0.68, 0.08), (0.66, 0.22), (0.58, 0.30)]],  # ”
+    "\u2022": [[(0.50, 0.38), (0.64, 0.50), (0.50, 0.62), (0.36, 0.50), (0.50, 0.38)]],  # bullet •
+    "\u00d7": [[(0.24, 0.30), (0.76, 0.82)], [(0.76, 0.30), (0.24, 0.82)]],              # multiply ×
+    "\u2026": [[(0.16, 0.88), (0.20, 0.92)], [(0.48, 0.88), (0.52, 0.92)], [(0.80, 0.88), (0.84, 0.92)]],  # ellipsis …
 }
 
 EXTRA_CHARS = [
-    "\u00b7", "\u2022", "\u2013", "\u2014", "\u2026",
-    "\u00b0", "\u2018", "\u2019", "\u201c", "\u201d",
+    "\u00b7", "\u2014", "\u2013", "\u00b0", "\u2019", "\u2018",
+    "\u201c", "\u201d", "\u2022", "\u00d7", "\u2026",
 ]
 
 
@@ -157,6 +159,7 @@ def main():
     draw = ImageDraw.Draw(img)
 
     chars = [chr(c) for c in range(32, 127)] + EXTRA_CHARS
+    assert len(chars) <= COLS * ROWS, f"Too many glyphs ({len(chars)}) for {COLS}x{ROWS} atlas"
     entries = []
     for idx, ch in enumerate(chars):
         col = idx % COLS
@@ -172,18 +175,28 @@ def main():
         stroke_w = 3.2 * ss
         for poly in strokes:
             draw_stroke(draw, poly, gx, gy, gw, gh, stroke_w)
-        # Tight proportional xadvance for crisp kerning feel.
-        if ch == " ":
-            xadv = 12
-        elif ch in "iIl!|.,;:'`\u00b7\u2018\u2019":
-            xadv = 14
-        elif ch in "MW@#%&\u2014\u2026":
-            xadv = 28
-        elif ch.isupper():
-            xadv = 24
+
+        # Measure exact horizontal ink bounds in cell coordinates for tight, even kerning.
+        if ch == " " or not strokes:
+            xoff = 0
+            xadv = 11
         else:
-            xadv = 20
-        entries.append((ord(ch), cx, cy, CELL, CELL, 0, 0, xadv))
+            xs = [p[0] for poly in strokes for p in poly]
+            min_x = min(xs)
+            max_x = max(xs)
+            gw_1x = CELL - pad * 2 - 4
+            left_px = pad + min_x * gw_1x - 1.6
+            right_px = pad + max_x * gw_1x + 1.6
+            ink_w = max(right_px - left_px, 4.0)
+            side_bearing = 2.0
+            if ch in "\u2014\u2013":
+                side_bearing = 3.0
+            elif ch in "\u00b7\u2022":
+                side_bearing = 4.0
+            xoff = int(round(side_bearing - left_px))
+            xadv = int(round(ink_w + side_bearing * 2.0))
+            xadv = max(xadv, 8)
+        entries.append((ord(ch), cx, cy, CELL, CELL, xoff, 0, xadv))
 
     final_img = img.resize((ATLAS_W, ATLAS_H), Image.LANCZOS)
     png_path = os.path.join(out_dir, "scoundrel_font.png")

@@ -48,7 +48,7 @@ func _ready() -> void:
 	_hero_cc.faction = &"player"
 	_hero.add_child(_hero_cc)
 	add_child(_hero)
-	_hero.board(_ship, Vector3(-0.6, 1.12, 1.4))
+	_hero.board(_ship, Vector3(-1.05, 1.12, 0.35) if _shot != "tidecaller" else Vector3(-0.95, 1.12, 1.2))
 
 	if _shot == "naval":
 		_ship.set_sail_target(0.85)
@@ -59,10 +59,10 @@ func _ready() -> void:
 		_ship.set_anchor(true)
 		_ship.anchor_progress = 1.0
 		var arch := &"tidecaller" if _shot == "tidecaller" else &"drowned_cutlass"
-		EnemyBrain.spawn_enemy(arch, _ship.global_transform * Vector3(0.7, 1.12, -2.0), self, _ship)
+		EnemyBrain.spawn_enemy(arch, _ship.global_transform * Vector3(0.85, 1.12, -2.2), self, _ship)
 		if _shot == "melee":
-			EnemyBrain.spawn_enemy(&"drowned_shield", _ship.global_transform * Vector3(-1.1, 1.12, -2.6), self, _ship)
-			EnemyBrain.spawn_enemy(&"drowned_captain", _ship.global_transform * Vector3(0.1, 1.12, -3.5), self, _ship)
+			EnemyBrain.spawn_enemy(&"drowned_shield", _ship.global_transform * Vector3(-0.85, 1.12, -2.8), self, _ship)
+			EnemyBrain.spawn_enemy(&"drowned_captain", _ship.global_transform * Vector3(0.15, 1.12, -3.7), self, _ship)
 
 	_cam = Camera3D.new()
 	_cam.fov = 66.0
@@ -96,5 +96,5 @@ func _update_camera() -> void:
 		var mid := (xf.origin + _foe_ship.global_position) * 0.5 if _foe_ship != null else xf.origin
 		_cam.look_at_from_position(eye, mid + Vector3(0.0, 2.0, 0.0), Vector3.UP)
 	else:
-		var eye := xf * Vector3(2.8, 3.6, 3.8)
-		_cam.look_at_from_position(eye, xf * Vector3(-0.2, 1.8, -1.2), Vector3.UP)
+		var eye := xf * Vector3(2.4, 3.25, 2.65)
+		_cam.look_at_from_position(eye, xf * Vector3(-0.2, 1.75, -1.6), Vector3.UP)

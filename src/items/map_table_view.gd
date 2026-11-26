@@ -13,6 +13,9 @@ signal marker_placed(world_pos: Vector3)
 signal view_changed(center: Vector2, span: float)
 
 const UPDATE_INTERVAL := 0.15
+const FAR_UPDATE_INTERVAL := 1.25
+const FAR_CAMERA_DIST := 7.5
+const ISLAND_CACHE_INTERVAL := 1.5
 const CHART_RES := Vector2i(1024, 680)
 const CHART_WIDTH_M := 1.08
 const CHART_DEPTH_M := 0.70
@@ -54,6 +57,7 @@ var _surface_mat: StandardMaterial3D = null
 var _islands_cache: Array[Dictionary] = []
 var _trail: Array[Vector2] = []
 var _update_accum: float = 0.0
+var _cache_accum: float = 0.0
 var _dirty: bool = true
 var _storm_phase: float = 0.0
 var _mounted_ship: Ship = null
@@ -186,8 +190,13 @@ func get_ship_chart_pos() -> Vector2:
 ## Force an immediate chart redraw right now (bypasses the 0.15 s throttle).
 func refresh_now() -> void:
 	_update_accum = 0.0
+	_cache_accum = 0.0
 	_dirty = false
 	_refresh_islands_cache()
+	_redraw_chart()
+
+
+func _redraw_chart() -> void:
 	_record_trail_point()
 	if _canvas != null:
 		_canvas.snapshot = _build_draw_snapshot()
@@ -200,8 +209,20 @@ func _process(delta: float) -> void:
 	_storm_phase = fmod(_storm_phase + delta * 1.1, TAU)
 	_poll_table_station_controls(delta)
 	_update_accum += delta
-	if _dirty or _update_accum >= UPDATE_INTERVAL:
-		refresh_now()
+	_cache_accum += delta
+	var interval := UPDATE_INTERVAL
+	if not _dirty and is_inside_tree():
+		var cam := get_viewport().get_camera_3d()
+		if cam != null and cam.global_position.distance_squared_to(global_position) > FAR_CAMERA_DIST * FAR_CAMERA_DIST:
+			interval = FAR_UPDATE_INTERVAL
+	if _dirty or _update_accum >= interval:
+		_update_accum = 0.0
+		var need_cache := _dirty or _islands_cache.is_empty() or _cache_accum >= ISLAND_CACHE_INTERVAL
+		_dirty = false
+		if need_cache:
+			_cache_accum = 0.0
+			_refresh_islands_cache()
+		_redraw_chart()
 
 
 func _poll_table_station_controls(delta: float) -> void:
