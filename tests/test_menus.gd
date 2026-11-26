@@ -527,3 +527,149 @@ func test_wave32_main_scene_title_menu_live_preview_tutorial_skirmish_and_return
 	await physics_frames(4)
 	check(not is_instance_valid(main), "Main scene tears down cleanly after Wave 32 flow")
 
+
+# ---------------------------------------------------------------------------
+# 5. Pass Q6A: Sailing Rudder Bar, Full-Wind Gold Highlight & Strict-ASCII Controls
+# ---------------------------------------------------------------------------
+
+func test_q6a_sailing_rudder_bar_and_strict_ascii_controls() -> void:
+	var saved_weather := Weather.get_state()
+	var saved_amp := Sea.amp_scale
+	Net.start_single_player()
+	Weather.day_length_seconds = 0.0
+	Weather.lightning_enabled = false
+	Weather.set_weather(0.0, 10.0, 0.0)
+	Sea.amp_scale = 0.0
+
+	var root := Node3D.new()
+	add_child(root)
+
+	var sloop_scene: PackedScene = load("res://src/ship/sloop.tscn")
+	var pawn_scene: PackedScene = load("res://src/characters/pawn.tscn")
+	var ship := sloop_scene.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = true
+	root.add_child(ship)
+	ship.global_position = Vector3.ZERO
+
+	var captain := pawn_scene.instantiate() as Pawn
+	root.add_child(captain)
+	captain.board(ship, ship.ship_point(Vector3(0.0, 2.02, 4.1)))
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	root.add_child(hud)
+	hud.bind(captain, null, null, null, ship, null, null)
+	await physics_frames(3)
+
+	# 1. Pure rudder bar formatter verifies centered, port, and starboard strict ASCII output!
+	check_eq(GameHUD.format_rudder_bar(0.0), "[---|---] CTR", "centered helm renders [---|---] CTR")
+	check_eq(GameHUD.format_rudder_bar(-0.45), "[<--|---] PORT 45%", "45% port helm renders [<--|---] PORT 45%")
+	check_eq(GameHUD.format_rudder_bar(-1.0), "[<<<|---] PORT 100%", "full port helm renders [<<<|---] PORT 100%")
+	check_eq(GameHUD.format_rudder_bar(0.45), "[---|-->] STBD 45%", "45% starboard helm renders [---|-->] STBD 45%")
+	check_eq(GameHUD.format_rudder_bar(1.0), "[---|>>>] STBD 100%", "full starboard helm renders [---|>>>] STBD 100%")
+
+	# 2. Live SailingTrimPill renders rudder bar across sailing stations (helm & anchor)
+	#    and highlights border warmly in nautical gold on Full-Billow Wind Catch!
+	var helm_st := ship.get_station(&"helm")
+	check(helm_st != null and captain.enter_station(helm_st), "captain occupies Station_Helm")
+
+	ship.anchor_down = false
+	ship.sail_set = 0.90
+	ship.sail_trim = ship.ideal_sail_trim()
+	ship.helm = 0.0
+	hud._process(0.05)
+	var ctr_txt := hud.get_sailing_telemetry_text()
+	check(hud.is_sailing_telemetry_visible(), "SailingTrimPill visible at helm")
+	check(ctr_txt.contains("[---|---]") and ctr_txt.contains("CTR") and ctr_txt.ends_with("kt  |  FULL WIND"),
+		"centered full-wind pill shows rudder bar + FULL WIND (got '%s')" % ctr_txt)
+	check(hud.is_sailing_full_wind_highlighted(), "Full-Billow Wind Catch activates nautical gold highlight")
+	check(hud.get_sailing_pill_border_color().is_equal_approx(HudIcons.COL_GOLD),
+		"Full-Billow sailing pill border gleams in HudIcons.COL_GOLD")
+	check(_is_strict_ascii(ctr_txt), "centered sailing pill text is strict ASCII")
+
+	ship.helm = -0.45
+	hud._process(0.05)
+	var port_txt := hud.get_sailing_telemetry_text()
+	check(port_txt.contains("[<--|---]") and port_txt.contains("PORT 45%"),
+		"port helm updates live sailing pill rudder bar (got '%s')" % port_txt)
+	check(_is_strict_ascii(port_txt), "port sailing pill text is strict ASCII")
+
+	ship.helm = 1.0
+	ship.sail_trim = wrapf(ship.ideal_sail_trim() + 1.2, -PI, PI)
+	hud._process(0.05)
+	var stbd_txt := hud.get_sailing_telemetry_text()
+	check(stbd_txt.contains("[---|>>>]") and stbd_txt.contains("STBD 100%") and stbd_txt.ends_with("kt  |  TRIM SAILS"),
+		"starboard helm & misaligned sail show STBD 100%% + TRIM SAILS (got '%s')" % stbd_txt)
+	check(not hud.is_sailing_full_wind_highlighted(), "misaligned sails clear nautical gold highlight")
+	check(_is_strict_ascii(stbd_txt), "starboard sailing pill text is strict ASCII")
+	captain.leave_station()
+
+	# Also visible when manning the anchor capstan!
+	var anchor_st := ship.get_station(&"anchor")
+	if anchor_st != null:
+		check(captain.enter_station(anchor_st), "captain occupies Station_Anchor")
+		hud._process(0.05)
+		check(hud.is_sailing_telemetry_visible(), "SailingTrimPill also displays while manning anchor station")
+		captain.leave_station()
+
+	# 3. Verify complete strict-ASCII controls documentation on GameHUD Pause Overlay AND TitleMenu!
+	var required_tokens: Array[String] = [
+		"[Q / Tab]",
+		"[G] Crew Orders",
+		"[1-6] Quick Slots",
+		"[F] Use / Leave Stations & Quick-Drop Anchor",
+		"[Hold W] Heave Anchor",
+		"[S / W] Lower / Raise Sails",
+		"[A / D] Steer Wheel & Trim Sails",
+		"[RMB] Center Helm",
+		"[LMB / RMB] Slash / Aim / Block / Climb in Cannon",
+		"[R] Swap Cannon Shot (6 Types)",
+		"[T] Speaking Trumpet Crew Recall",
+		"[B] Shipwright (at Outpost)",
+		"[Esc] Pause",
+	]
+
+	hud.set_pause_open(true)
+	var ctrl_strip := hud.find_child("CaptainControlsStrip", true, false) as VBoxContainer
+	check(ctrl_strip != null and ctrl_strip.get_child_count() == 2,
+		"GameHUD pause overlay keeps compact 2-group CaptainControlsStrip")
+	var hud_controls_joined := ""
+	if ctrl_strip != null:
+		for ch in ctrl_strip.get_children():
+			if ch is Label:
+				hud_controls_joined += (ch as Label).text + "\n"
+	for tok in required_tokens:
+		check(hud_controls_joined.contains(tok),
+			"GameHUD Pause Controls documents '%s'" % tok)
+	var hud_widgets := _check_tree_strict_ascii(hud, "GameHUD")
+	check(hud_widgets >= 20, "scanned all GameHUD widgets for strict ASCII (checked %d)" % hud_widgets)
+	hud.set_pause_open(false)
+
+	var menu := TitleMenu.new()
+	add_child(menu)
+	await get_tree().process_frame
+	menu.open_menu(TitleMenu.Page.SETTINGS)
+	var title_ctrl_list := menu.find_child("TitleControlsList", true, false) as VBoxContainer
+	check(title_ctrl_list != null, "TitleMenu Settings includes TitleControlsList")
+	var menu_controls_joined := ""
+	if title_ctrl_list != null:
+		for ch in title_ctrl_list.get_children():
+			if ch is Label:
+				menu_controls_joined += (ch as Label).text + "\n"
+	for tok in required_tokens:
+		check(menu_controls_joined.contains(tok),
+			"TitleMenu Settings Controls documents '%s'" % tok)
+	var menu_widgets := _check_tree_strict_ascii(menu, "TitleMenu")
+	check(menu_widgets >= 45, "scanned all TitleMenu widgets for strict ASCII (checked %d)" % menu_widgets)
+
+	# Clean zero-leak teardown.
+	menu.close_menu()
+	menu.queue_free()
+	root.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(menu) and not is_instance_valid(root), "Q6A test nodes free cleanly with 0 leaks")
+	Weather.apply_state(saved_weather)
+	Sea.amp_scale = saved_amp
+
+

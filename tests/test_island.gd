@@ -1945,3 +1945,228 @@ func test_q3b_living_island_wildlife_species_behaviors_grounding_and_teardown() 
 	Weather.apply_state(saved_weather)
 
 
+func test_q5a_upgraded_harbour_bastion_pier_architecture_and_rocks() -> void:
+	# Verify Pass Q5A sculpted seawall_bastion, dock_pier, sunlit limestone rocks, and coastal architecture.
+	var prop_specs: Array[Dictionary] = [
+		{
+			"file": "seawall_bastion.glb",
+			"min_tris": 1000,
+			"max_tris": 2500,
+			"cols": 2,
+			"empty": "Lantern_Seawall",
+			"mats": ["mat_stone", "mat_wood", "mat_iron", "mat_rope", "mat_foliage"],
+			"need_ivy_uv2": true,
+			"max_base_y": -0.60,
+			"warm_stone": true,
+		},
+		{
+			"file": "dock_pier.glb",
+			"min_tris": 3000,
+			"max_tris": 18000,
+			"cols": 10,
+			"empty": "Lantern_Dock",
+			"mats": ["mat_wood", "mat_stone", "mat_rope", "mat_iron"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.60,
+			"warm_stone": false,
+		},
+		{
+			"file": "rock_boulder.glb",
+			"min_tris": 350,
+			"max_tris": 800,
+			"cols": 1,
+			"empty": "",
+			"mats": ["mat_rock"],
+			"need_ivy_uv2": false,
+			"max_base_y": 0.0,
+			"warm_rock": true,
+		},
+		{
+			"file": "rock_spire.glb",
+			"min_tris": 350,
+			"max_tris": 800,
+			"cols": 3,
+			"empty": "",
+			"mats": ["mat_rock"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.50,
+			"warm_rock": true,
+		},
+		{
+			"file": "rock_arch.glb",
+			"min_tris": 400,
+			"max_tris": 1200,
+			"cols": 3,
+			"empty": "",
+			"mats": ["mat_rock"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.50,
+			"warm_rock": true,
+		},
+		{
+			"file": "outpost_tavern.glb",
+			"min_tris": 3000,
+			"max_tris": 12000,
+			"cols": 8,
+			"empty": "Lantern_Tavern",
+			"mats": ["mat_plaster", "mat_stone", "mat_wood"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.70,
+			"warm_stone": false,
+		},
+		{
+			"file": "harbour_warehouse.glb",
+			"min_tris": 2500,
+			"max_tris": 12000,
+			"cols": 2,
+			"empty": "Lantern_Warehouse",
+			"mats": ["mat_plaster", "mat_stone", "mat_wood"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.70,
+			"warm_stone": false,
+		},
+		{
+			"file": "beacon_tower.glb",
+			"min_tris": 2500,
+			"max_tris": 10000,
+			"cols": 3,
+			"empty": "Lantern_Beacon",
+			"mats": ["mat_plaster", "mat_stone", "mat_wood"],
+			"need_ivy_uv2": false,
+			"max_base_y": -0.70,
+			"warm_stone": false,
+		},
+	]
+
+	for spec: Dictionary in prop_specs:
+		var fname := String(spec["file"])
+		var path := "res://assets/generated/props/" + fname
+		var packed := load(path) as PackedScene
+		check(packed != null, "Q5A prop failed to load: " + path)
+		if packed == null:
+			continue
+		var inst := packed.instantiate() as Node3D
+		check(inst != null, "Q5A prop root must be Node3D: " + fname)
+		if inst == null:
+			continue
+
+		var vis_tris := 0
+		var col_count := 0
+		var found_mats: Dictionary = {}
+		var all_have_tangents := true
+		var ivy_has_uv2 := false
+		var ivy_max_w := 0.0
+		var min_vis_y := 999.0
+		var warm_r_sum := 0.0
+		var warm_g_sum := 0.0
+		var warm_b_sum := 0.0
+		var warm_count := 0
+		var moss_count := 0
+
+		for node in inst.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			if mi.name.begins_with("col_"):
+				col_count += 1
+				continue
+			var mesh := mi.mesh
+			for si in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(si)
+				var raw_idx: Variant = arrays[Mesh.ARRAY_INDEX]
+				var s_tris := 0
+				if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+					s_tris = floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+				else:
+					var raw_v0: Variant = arrays[Mesh.ARRAY_VERTEX]
+					if raw_v0 is PackedVector3Array:
+						s_tris = floori(float((raw_v0 as PackedVector3Array).size()) / 3.0)
+				vis_tris += s_tris
+
+				var raw_tan: Variant = arrays[Mesh.ARRAY_TANGENT]
+				if not (raw_tan is PackedFloat32Array) or (raw_tan as PackedFloat32Array).is_empty():
+					all_have_tangents = false
+
+				var mat := mesh.surface_get_material(si)
+				var mname := mat.resource_name if mat != null else ""
+				if not mname.is_empty():
+					found_mats[mname] = true
+
+				var raw_verts: Variant = arrays[Mesh.ARRAY_VERTEX]
+				var raw_cols: Variant = arrays[Mesh.ARRAY_COLOR]
+				if raw_verts is PackedVector3Array:
+					var verts := raw_verts as PackedVector3Array
+					for vi in verts.size():
+						var vp := mi.transform * verts[vi]
+						min_vis_y = minf(min_vis_y, vp.y)
+						if raw_cols is PackedColorArray and vi < (raw_cols as PackedColorArray).size():
+							var vc: Color = (raw_cols as PackedColorArray)[vi]
+							if bool(spec.get("warm_rock", false)) and mname.begins_with("mat_rock") and vp.y >= 0.50:
+								if vc.g > vc.r + 0.03:
+									moss_count += 1
+								else:
+									warm_r_sum += vc.r
+									warm_g_sum += vc.g
+									warm_b_sum += vc.b
+									warm_count += 1
+							elif bool(spec.get("warm_stone", false)) and mname.begins_with("mat_stone") and vp.y >= 0.70:
+								warm_r_sum += vc.r
+								warm_g_sum += vc.g
+								warm_b_sum += vc.b
+								warm_count += 1
+
+				if mname.begins_with("mat_foliage"):
+					var raw_uv2: Variant = arrays[Mesh.ARRAY_TEX_UV2]
+					if raw_uv2 is PackedVector2Array and not (raw_uv2 as PackedVector2Array).is_empty():
+						ivy_has_uv2 = true
+						for uv2_pt: Vector2 in (raw_uv2 as PackedVector2Array):
+							ivy_max_w = maxf(ivy_max_w, uv2_pt.x)
+
+		var min_t: int = int(spec["min_tris"])
+		var max_t: int = int(spec["max_tris"])
+		var req_cols: int = int(spec["cols"])
+		check(vis_tris >= min_t and vis_tris <= max_t,
+			"%s visual tris %d outside Q5A budget [%d..%d]" % [fname, vis_tris, min_t, max_t])
+		check_eq(col_count, req_cols, "%s must preserve %d col_* colliders" % [fname, req_cols])
+		check(all_have_tangents, "%s visual surfaces must all carry valid MikkTSpace tangents" % fname)
+
+		var req_empty := String(spec["empty"])
+		if not req_empty.is_empty():
+			check(inst.find_child(req_empty, true, false) != null,
+				"%s must preserve %s empty marker" % [fname, req_empty])
+
+		for req_mat_v: Variant in (spec["mats"] as Array):
+			var req_mat := String(req_mat_v)
+			var matched := false
+			for fm_key: Variant in found_mats.keys():
+				if String(fm_key).begins_with(req_mat):
+					matched = true
+					break
+			check(matched, "%s missing required material '%s' (found: %s)" % [fname, req_mat, str(found_mats.keys())])
+
+		if bool(spec["need_ivy_uv2"]):
+			check(ivy_has_uv2, "%s sea-ivy mat_foliage must carry UV2 wind weights" % fname)
+			check(ivy_max_w >= 0.70,
+				"%s sea-ivy UV2 wind sway weights must reach tips (>= 0.70, got %.2f)" % [fname, ivy_max_w])
+
+		var max_base_y: float = float(spec["max_base_y"])
+		check(min_vis_y <= max_base_y,
+			"%s foundation/base must plunge cleanly <= %.2f m (got min_y=%.2f)" % [fname, max_base_y, min_vis_y])
+
+		if bool(spec.get("warm_rock", false)) or bool(spec.get("warm_stone", false)):
+			check(warm_count > 20, "%s must contain sunlit limestone/sandstone upper vertices" % fname)
+			if warm_count > 0:
+				var mr := warm_r_sum / float(warm_count)
+				var mg := warm_g_sum / float(warm_count)
+				var mb := warm_b_sum / float(warm_count)
+				check(mr >= 0.45 and mr >= mg and mg > mb and (mr - mb) >= 0.12,
+					"%s upper stone/rock must be warm sunlit limestone, not dark charcoal (mean rgb=%.2f,%.2f,%.2f)" % [
+						fname, mr, mg, mb])
+				if fname == "rock_boulder.glb" or fname == "rock_arch.glb":
+					check(moss_count > 0, "%s must include emerald coastal moss cap accents on upper shelves" % fname)
+				print("    q5a %s: %d tris, %d cols, min_y=%.2f, sunlit_rgb=(%.2f,%.2f,%.2f), moss_v=%d" % [
+					fname, vis_tris, col_count, min_vis_y, mr, mg, mb, moss_count])
+		else:
+			print("    q5a %s: %d tris, %d cols, min_y=%.2f" % [fname, vis_tris, col_count, min_vis_y])
+
+		inst.free()

@@ -227,6 +227,11 @@ var _action_oar_phase_l: float = 0.0
 var _action_oar_phase_r: float = 0.0
 var _action_oar_effort_l: float = 0.0
 var _action_oar_effort_r: float = 0.0
+var _action_swim_phase: float = 0.0
+var _action_swim_blend: float = 0.0
+var _action_ladder_phase: float = 0.0
+var _action_prev_ladder_y: float = 0.0
+var _action_ladder_effort: float = 0.0
 var _rng := RandomNumberGenerator.new()
 
 # Statically cached zero-primitive sculpted particle ArrayMeshes (released when _active_inventories hits 0).
@@ -297,6 +302,8 @@ func _exit_tree() -> void:
 			pawn.station_changed.disconnect(_on_pawn_action_state_changed)
 		if pawn.carried_changed.is_connected(_on_pawn_action_state_changed):
 			pawn.carried_changed.disconnect(_on_pawn_action_state_changed)
+		if pawn.mode_changed.is_connected(_on_pawn_mode_changed):
+			pawn.mode_changed.disconnect(_on_pawn_mode_changed)
 	if fp_action_hands != null and is_instance_valid(fp_action_hands):
 		fp_action_hands.queue_free()
 	fp_action_hands = null
@@ -367,6 +374,8 @@ func _connect_bindings() -> void:
 			pawn.station_changed.connect(_on_pawn_action_state_changed)
 		if not pawn.carried_changed.is_connected(_on_pawn_action_state_changed):
 			pawn.carried_changed.connect(_on_pawn_action_state_changed)
+		if not pawn.mode_changed.is_connected(_on_pawn_mode_changed):
+			pawn.mode_changed.connect(_on_pawn_mode_changed)
 	if combat != null:
 		if not combat.attack_started.is_connected(_on_combat_attack_started):
 			combat.attack_started.connect(_on_combat_attack_started)
@@ -377,6 +386,12 @@ func _connect_bindings() -> void:
 
 
 func _on_pawn_action_state_changed(_arg: Node3D) -> void:
+	_ensure_mounts()
+	_tick_action_hands(0.0)
+	_sync_visibility()
+
+
+func _on_pawn_mode_changed(_mode: int) -> void:
 	_ensure_mounts()
 	_tick_action_hands(0.0)
 	_sync_visibility()
@@ -2613,6 +2628,11 @@ func _get_action_hand_mode() -> StringName:
 		var sk := _get_station_kind()
 		if ACTION_HAND_STATIONS.has(sk):
 			return sk
+	if pawn.station == null and pawn.carried == null:
+		if pawn.mode == Pawn.Mode.SWIM:
+			return &"swim"
+		if pawn.mode == Pawn.Mode.LADDER:
+			return &"ladder"
 	return &""
 
 
@@ -2651,6 +2671,14 @@ func _tick_action_hands(delta: float) -> void:
 		_action_oar_phase_r = 0.0
 		_action_oar_effort_l = 0.0
 		_action_oar_effort_r = 0.0
+		_action_swim_phase = 0.0
+		_action_swim_blend = 0.0
+		_action_ladder_phase = 0.45
+		_action_ladder_effort = 0.0
+		if pawn != null and is_instance_valid(pawn):
+			_action_prev_ladder_y = pawn.global_position.y if pawn.is_inside_tree() else pawn.position.y
+		else:
+			_action_prev_ladder_y = 0.0
 		if st_ship != null:
 			var h_v: Variant = st_ship.get(&"helm")
 			_action_prev_helm = float(h_v) if h_v != null else 0.0
@@ -2956,6 +2984,95 @@ func _tick_action_hands(delta: float) -> void:
 			l_rot = Vector3(14.0, -16.0, 24.0) + common_rot
 			r_rot = Vector3(14.0, 16.0, -24.0) + common_rot
 
+		&"swim":
+			# 7. Swimming: alternating crawl/breaststroke sweep when swimming forward,
+			#    blending smoothly to calm wide figure-8 sculling when treading water.
+			var swim_spd := Vector2(pawn.velocity.x, pawn.velocity.z).length() if (pawn != null and is_instance_valid(pawn)) else 0.0
+			var is_fwd := swim_spd > 0.45
+			var target_fwd := maxf(0.55, clampf((swim_spd - 0.45) / 1.85, 0.0, 1.0)) if is_fwd else 0.0
+			_action_swim_blend = lerpf(_action_swim_blend, target_fwd, 1.0 - exp(-9.0 * smooth_dt))
+			var swim_rate := lerpf(2.2, clampf(3.6 + swim_spd * 1.45, 4.2, 8.8), _action_swim_blend)
+			_action_swim_phase = wrapf(_action_swim_phase + dt * swim_rate, -PI, PI)
+
+			var pt := _action_swim_phase
+			var l_tread_pos := Vector3(
+				-0.27 - 0.026 * sin(pt),
+				-0.27 + 0.015 * sin(pt * 2.0) + breath * 0.004,
+				-0.44 + 0.018 * cos(pt)
+			)
+			var r_tread_pos := Vector3(
+				0.27 + 0.026 * sin(pt),
+				-0.27 + 0.015 * sin(pt * 2.0) + breath * 0.004,
+				-0.44 + 0.018 * cos(pt)
+			)
+			var l_tread_rot := Vector3(10.0 + 7.0 * cos(pt), -12.0 - 8.0 * sin(pt), -74.0 + 10.0 * cos(pt))
+			var r_tread_rot := Vector3(10.0 + 7.0 * cos(pt), 12.0 + 8.0 * sin(pt), 74.0 - 10.0 * cos(pt))
+
+			var pl := _action_swim_phase
+			var pr := _action_swim_phase + PI
+			var cl := cos(pl)
+			var sl := sin(pl)
+			var cr := cos(pr)
+			var sr := sin(pr)
+			var l_abs_x := 0.248 - 0.055 * cl + 0.068 * sl - 0.028 * cos(2.0 * pl)
+			var r_abs_x := 0.248 - 0.055 * cr + 0.068 * sr - 0.028 * cos(2.0 * pr)
+			var l_fwd_pos := Vector3(
+				-l_abs_x,
+				-0.235 + 0.050 * cl - 0.025 * sl + breath * 0.003,
+				-0.460 - 0.115 * cl + 0.015 * sl
+			)
+			var r_fwd_pos := Vector3(
+				r_abs_x,
+				-0.235 + 0.050 * cr - 0.025 * sr + breath * 0.003,
+				-0.460 - 0.115 * cr + 0.015 * sr
+			)
+			var l_fwd_rot := Vector3(8.0 + 18.0 * cl - 12.0 * sl, -12.0 + 16.0 * cl - 18.0 * sl, -64.0 - 18.0 * sl + 12.0 * cl)
+			var r_fwd_rot := Vector3(8.0 + 18.0 * cr - 12.0 * sr, 12.0 - 16.0 * cr + 18.0 * sr, 64.0 + 18.0 * sr - 12.0 * cr)
+
+			var sway_off := Vector3(clampf(_sway_yaw * 0.014, -0.018, 0.018), clampf(-_sway_pitch * 0.012, -0.015, 0.015), 0.0)
+			var sway_rot := Vector3(-_sway_pitch * 3.0, _sway_yaw * 3.5, 0.0)
+			var fwd_w := _action_swim_blend
+			l_pos = l_tread_pos.lerp(l_fwd_pos, fwd_w) + sway_off
+			r_pos = r_tread_pos.lerp(r_fwd_pos, fwd_w) + sway_off
+			l_rot = l_tread_rot.lerp(l_fwd_rot, fwd_w) + sway_rot
+			r_rot = r_tread_rot.lerp(r_fwd_rot, fwd_w) + sway_rot
+
+		&"ladder":
+			# 8. Ladder Climbing: opposite-phase vertical hand-over-hand rung grasping
+			#    driven directly by vertical climb delta, holding steadily gripped when stationary.
+			var cur_y := _action_prev_ladder_y
+			if pawn != null and is_instance_valid(pawn):
+				cur_y = pawn.global_position.y if pawn.is_inside_tree() else pawn.position.y
+			var dy := clampf(cur_y - _action_prev_ladder_y, -1.5, 1.5)
+			_action_prev_ladder_y = cur_y
+			if absf(dy) > 0.0001:
+				_action_ladder_phase = wrapf(_action_ladder_phase + dy * 3.8, -PI, PI)
+				_action_ladder_effort = lerpf(_action_ladder_effort, 1.0, 1.0 - exp(-12.0 * smooth_dt))
+			else:
+				_action_ladder_effort = lerpf(_action_ladder_effort, 0.0, 1.0 - exp(-8.0 * smooth_dt))
+
+			var pl := _action_ladder_phase
+			var pr := _action_ladder_phase + PI
+			var sl := sin(pl)
+			var cl := cos(pl)
+			var sr := sin(pr)
+			var cr := cos(pr)
+			var eff := _action_ladder_effort
+			var sway_x := clampf(_sway_yaw * 0.010, -0.014, 0.014)
+
+			l_pos = Vector3(
+				-0.19 - maxf(0.0, cl) * 0.012 * eff + sway_x,
+				-0.18 + sl * 0.115 + breath * 0.003,
+				-0.45 - sl * 0.018 + cl * 0.014 * eff
+			)
+			r_pos = Vector3(
+				0.19 + maxf(0.0, cr) * 0.012 * eff + sway_x,
+				-0.18 + sr * 0.115 + breath * 0.003,
+				-0.45 - sr * 0.018 + cr * 0.014 * eff
+			)
+			l_rot = Vector3(14.0 + sl * 14.0 - cl * 6.0 * eff, -10.0 + _sway_yaw * 2.5, -78.0 + sl * 7.0)
+			r_rot = Vector3(14.0 + sr * 14.0 - cr * 6.0 * eff, 10.0 + _sway_yaw * 2.5, 78.0 - sr * 7.0)
+
 	if enter_drop > 0.0001:
 		var drop_v := Vector3(0.0, -enter_drop, enter_drop * 0.38)
 		l_pos += drop_v
@@ -2973,10 +3090,17 @@ func _tick_action_hands(delta: float) -> void:
 
 
 func _sync_visibility() -> void:
-	var hide_tools := pawn != null and (pawn.dead or pawn.station != null or pawn.carried != null)
+	var has_pawn := pawn != null and is_instance_valid(pawn)
+	var hide_tools := has_pawn and (
+		pawn.dead
+		or pawn.station != null
+		or pawn.carried != null
+		or pawn.mode == Pawn.Mode.SWIM
+		or pawn.mode == Pawn.Mode.LADDER
+	)
 	var showing_trumpet := _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node) and _trumpet_display_timer > 0.0
 	if _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node):
-		var hide_trumpet := pawn != null and (pawn.dead or pawn.station != null)
+		var hide_trumpet := has_pawn and (pawn.dead or pawn.station != null)
 		_fp_trumpet_node.visible = showing_trumpet and (not hide_trumpet)
 	if fp_tool_node != null and is_instance_valid(fp_tool_node):
 		var hide_for_lens := (active_item == &"spyglass" and spyglass_zoom > 0.62)

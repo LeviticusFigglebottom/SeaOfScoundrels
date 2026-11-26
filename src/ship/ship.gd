@@ -232,6 +232,11 @@ var _creak_cooldown: float = 0.0
 var _flap_cooldown: float = 0.0
 var _slosh_cooldown: float = 0.0
 var _wheel_sfx_accum: float = 0.0
+var _last_spoke_notch: int = 0
+var helm_spoke_clicks: int = 0
+var _spoke_click_cd: float = 0.0
+var _rigging_creak_cd: float = 0.0
+var rigging_creak_count: int = 0
 var _rope_sfx_accum: float = 0.0
 var _capstan_sfx_accum: float = 0.0
 var _was_anchor_submerged: bool = false
@@ -4252,10 +4257,24 @@ func _tick_controls(delta: float) -> void:
 	var prev_helm := helm
 	var wheel_rate := 0.46 if ship_class == &"brigantine" else 0.62
 	helm = move_toward(helm, helm_target, wheel_rate * delta)
+	if _spoke_click_cd > 0.0:
+		_spoke_click_cd = maxf(0.0, _spoke_click_cd - delta)
+	var hst := get_station(&"helm")
+	var hpos := hst.global_position if (hst != null and hst.is_inside_tree()) else (global_position if is_inside_tree() else position)
+	var wheel_turns := 1.5 if ship_class == &"brigantine" else 1.0
+	var spoke_notch := int(roundf(helm * wheel_turns * 8.0))
+	if spoke_notch != _last_spoke_notch:
+		helm_spoke_clicks += absi(spoke_notch - _last_spoke_notch)
+		_last_spoke_notch = spoke_notch
+		if spoke_notch != 0 and _spoke_click_cd <= 0.0:
+			_spoke_click_cd = 0.08
+			var wheel_pos := _wheel.global_position if (_wheel != null and is_instance_valid(_wheel) and _wheel.is_inside_tree()) else hpos
+			var click_sfx := &"capstan_clank" if Audio.has_sound(&"capstan_clank") else &"wheel_creak"
+			var click_snd := Audio.play_sfx(click_sfx, wheel_pos, -12.0, 0.06)
+			if click_snd is AudioStreamPlayer3D:
+				(click_snd as AudioStreamPlayer3D).pitch_scale *= 1.38
 	if absf(helm - prev_helm) > 0.0005:
 		_wheel_sfx_accum += absf(helm - prev_helm)
-		var hst := get_station(&"helm")
-		var hpos := hst.global_position if hst != null else global_position
 		if absf(prev_helm) >= 0.04 and absf(helm) < 0.04:
 			# Golden King-Spoke 12-o'clock center CLUNK detent cue.
 			var detent_sfx := &"wood_clunk" if Audio.has_sound(&"wood_clunk") else &"wheel_creak"
@@ -4276,6 +4295,16 @@ func _tick_controls(delta: float) -> void:
 	sail_set = move_toward(sail_set, sail_target, sail_move_rate * delta)
 	var prev_trim := sail_trim
 	sail_trim = move_toward(sail_trim, trim_target, 1.15 * delta)
+	if _rigging_creak_cd > 0.0:
+		_rigging_creak_cd = maxf(0.0, _rigging_creak_cd - delta)
+	var hauling_sail := absf(sail_set - sail_target) > 0.03
+	var bracing_yard := absf(sail_trim - trim_target) > 0.05
+	if (hauling_sail or bracing_yard) and _rigging_creak_cd <= 0.0:
+		_rigging_creak_cd = 0.55
+		rigging_creak_count += 1
+		var rig_st := get_station(&"sail_length") if hauling_sail else get_station(&"sail_angle")
+		var rig_pos := rig_st.global_position if (rig_st != null and rig_st.is_inside_tree()) else (global_position if is_inside_tree() else position)
+		Audio.play_sfx(&"rope_creak", rig_pos, -11.0, 0.07)
 	if (prev_trim * sail_trim < 0.0) or (absf(prev_trim) >= 0.04 and absf(sail_trim) < 0.04):
 		var st_angle := get_station(&"sail_angle")
 		Audio.play_sfx(&"rope_creak", st_angle.global_position if st_angle != null else global_position, -5.0)
@@ -4978,6 +5007,7 @@ func apply_net_state(state: Dictionary) -> void:
 		angular_velocity = state["ang_vel"]
 	helm = float(state.get("helm", helm))
 	helm_target = float(state.get("helm_target", helm_target))
+	_last_spoke_notch = int(roundf(helm * (1.5 if ship_class == &"brigantine" else 1.0) * 8.0))
 	sail_set = float(state.get("sail_set", sail_set))
 	sail_target = float(state.get("sail_target", sail_target))
 	sail_trim = float(state.get("sail_trim", sail_trim))

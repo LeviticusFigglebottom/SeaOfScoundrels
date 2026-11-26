@@ -14,6 +14,8 @@ extends Node
 signal attack_started(kind: StringName)
 signal hit_landed(target: Pawn, damage: float, was_heavy: bool)
 signal target_hit(target: Node, damage: float, was_heavy: bool)
+signal damage_received(amount: float, attacker_pos: Vector3)
+signal stamina_depleted(cost: float)
 signal blocked(attacker: Pawn)
 signal parried(attacker: Pawn)
 signal staggered(duration: float)
@@ -115,6 +117,8 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	if pawn != null and is_instance_valid(pawn) and pawn.damaged.is_connected(_on_pawn_damaged):
+		pawn.damaged.disconnect(_on_pawn_damaged)
 	_cleanup_all_vfx()
 	_active_combatants = maxi(0, _active_combatants - 1)
 	if _active_combatants == 0:
@@ -132,6 +136,8 @@ static func clear_shared_vfx_cache() -> void:
 func _ready() -> void:
 	pawn = get_parent() as Pawn
 	assert(pawn != null, "CombatComponent must be a child of a Pawn")
+	if not pawn.damaged.is_connected(_on_pawn_damaged):
+		pawn.damaged.connect(_on_pawn_damaged)
 	stamina = max_stamina
 	_rng.randomize()
 	_ray_params.collision_mask = Pawn.LAYER_WORLD | Pawn.LAYER_SHIP | Pawn.LAYER_PAWN | Carryable.LAYER
@@ -235,6 +241,8 @@ func set_blocking(on: bool) -> void:
 		return
 	if on:
 		if state == State.IDLE:
+			if stamina < 14.0:
+				stamina_depleted.emit(14.0)
 			state = State.BLOCKING
 			is_blocking = true
 			_block_elapsed = 0.0
@@ -300,7 +308,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	if frontal and is_in_parry_window():
 		stamina = minf(max_stamina, stamina + 26.0)
 		_play_anim(&"parry", 0.35)
-		Audio.play_sfx(&"parry_ring", pawn.eye_position())
+		Audio.play_sfx(&"parry_ring", pawn.eye_position(), 1.5, 0.11)
 		_spawn_clash_vfx(clash_pos, &"parried")
 		_trigger_hitstop(HITSTOP_HEAVY, 0.30, 1.0)
 		if attacker_cc != null:
@@ -314,7 +322,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	if guarding:
 		if is_heavy or cleaves_shield:
 			# Guard broken!
-			Audio.play_sfx(&"sword_clash", pawn.eye_position())
+			Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.8, 0.10)
 			_spawn_clash_vfx(clash_pos, &"heavy")
 			_trigger_hitstop(HITSTOP_HEAVY, 0.24, 0.85)
 			if attacker_cc != null:
@@ -325,6 +333,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		if state == State.BLOCKING and stamina < 14.0:
 			# Out of stamina -> guard breaks!
 			stamina = 0.0
+			stamina_depleted.emit(14.0)
+			Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.4, 0.10)
 			_spawn_clash_vfx(clash_pos, &"heavy")
 			_trigger_hitstop(HITSTOP_HEAVY, 0.22, 0.75)
 			if attacker_cc != null:
@@ -334,7 +344,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			return &"hit"
 		if state == State.BLOCKING:
 			_spend_stamina(16.0)
-		Audio.play_sfx(&"sword_clash", pawn.eye_position())
+		Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.0, 0.10)
 		_spawn_clash_vfx(clash_pos, &"blocked")
 		_trigger_recoil_pulse(0.45)
 		blocked.emit(attacker_pawn)
@@ -344,7 +354,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	var mult := 1.5 if is_staggered() else 1.0
 	var dmg := raw_damage * mult
 	pawn.apply_damage(dmg, attacker_pawn)
-	Audio.play_sfx(&"hit_flesh", pawn.eye_position())
+	Audio.play_sfx(&"hit_flesh", pawn.eye_position(), 0.5 if is_heavy else 0.0, 0.09)
 	var is_combo_finisher := attacker_cc != null and not is_heavy and attacker_cc.combo_step == 3
 	var is_big_hit := is_heavy or is_combo_finisher
 	if is_big_hit:
@@ -438,7 +448,7 @@ func _physics_process(delta: float) -> void:
 				# Forward lunge momentum on melee release!
 				var lunge := float(spec.get("lunge", 3.5)) * (1.35 if _attack_is_heavy else 1.0)
 				pawn.velocity += pawn.facing() * lunge
-				Audio.play_sfx(&"sword_swing", pawn.eye_position())
+				Audio.play_sfx(&"sword_swing", pawn.eye_position(), 0.5 if _attack_is_heavy else 0.0, 0.09)
 				_spawn_slash_arc(_current_slash_arc_style())
 				_check_melee_hits(spec)
 		State.ACTIVE:
@@ -816,8 +826,21 @@ static func _call_apply_damage(target: Node, amount: float, attacker: Node) -> v
 	target.call(&"apply_damage", amount, attacker)
 
 
+func _on_pawn_damaged(amount: float, from: Node) -> void:
+	if amount <= 0.0:
+		return
+	var attacker_pos := Vector3.INF
+	if from != null and is_instance_valid(from):
+		if from is Node3D:
+			attacker_pos = (from as Node3D).global_position
+		elif from.get_parent() is Node3D:
+			attacker_pos = (from.get_parent() as Node3D).global_position
+	damage_received.emit(amount, attacker_pos)
+
+
 func _spend_stamina(cost: float) -> bool:
 	if stamina < cost:
+		stamina_depleted.emit(cost)
 		return false
 	stamina -= cost
 	_stamina_delay = STAMINA_REGEN_DELAY
@@ -1318,30 +1341,30 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	sparks.name = "SparkStreaks"
 	sparks.one_shot = true
 	sparks.explosiveness = 0.96
-	sparks.amount = 32 if is_parry else (24 if is_heavy else 16)
-	sparks.lifetime = 0.40 if is_parry else (0.34 if is_heavy else 0.28)
+	sparks.amount = 40 if is_parry else (24 if is_heavy else 16)
+	sparks.lifetime = 0.44 if is_parry else (0.34 if is_heavy else 0.28)
 	sparks.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	sparks.visibility_aabb = AABB(Vector3(-3.5, -3.5, -3.5), Vector3(7.0, 7.0, 7.0))
 
 	var proc := ParticleProcessMaterial.new()
 	proc.direction = Vector3.UP
-	proc.spread = 160.0 if is_parry else (140.0 if is_heavy else 115.0)
-	proc.initial_velocity_min = 4.6 if is_parry else (3.8 if is_heavy else 3.0)
-	proc.initial_velocity_max = 11.4 if is_parry else (9.4 if is_heavy else 7.4)
+	proc.spread = 165.0 if is_parry else (140.0 if is_heavy else 115.0)
+	proc.initial_velocity_min = 5.4 if is_parry else (3.8 if is_heavy else 3.0)
+	proc.initial_velocity_max = 12.8 if is_parry else (9.4 if is_heavy else 7.4)
 	proc.damping_min = 1.8
 	proc.damping_max = 3.6
 	proc.gravity = Vector3(0.0, -13.5, 0.0)
-	proc.scale_min = 0.68
-	proc.scale_max = 1.40 if is_parry else (1.22 if is_heavy else 1.04)
+	proc.scale_min = 0.72 if is_parry else 0.68
+	proc.scale_max = 1.48 if is_parry else (1.22 if is_heavy else 1.04)
 
-	var mid_tint := Color(1.0, 0.94, 0.56) if is_parry else (Color(1.0, 0.86, 0.42) if is_heavy else Color(1.0, 0.78, 0.34))
+	var mid_tint := Color(1.0, 0.96, 0.60) if is_parry else (Color(1.0, 0.86, 0.42) if is_heavy else Color(1.0, 0.78, 0.34))
 	var grad := Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.70, 1.0])
 	grad.colors = PackedColorArray([
 		Color(1.0, 0.99, 0.94, 1.0),
-		Color(mid_tint.r, mid_tint.g, mid_tint.b, 0.96),
-		Color(1.0, 0.52, 0.10, 0.65),
+		Color(mid_tint.r, mid_tint.g, mid_tint.b, 0.98),
+		Color(1.0, 0.56, 0.12, 0.68),
 		Color(0.92, 0.22, 0.04, 0.0),
 	])
 	var ramp := GradientTexture1D.new()
@@ -1351,7 +1374,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	sparks.process_material = proc
 
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.050, 0.33) if is_parry else (Vector2(0.044, 0.27) if is_heavy else Vector2(0.036, 0.20))
+	quad.size = Vector2(0.052, 0.36) if is_parry else (Vector2(0.044, 0.27) if is_heavy else Vector2(0.036, 0.20))
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1371,8 +1394,8 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	embers.name = "CombatEmbers"
 	embers.one_shot = true
 	embers.explosiveness = 0.82
-	embers.amount = 22 if is_parry else (16 if is_heavy else 10)
-	embers.lifetime = 0.92 if is_parry else (0.82 if is_heavy else 0.70)
+	embers.amount = 26 if is_parry else (16 if is_heavy else 10)
+	embers.lifetime = 0.96 if is_parry else (0.82 if is_heavy else 0.70)
 	embers.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	embers.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	embers.visibility_aabb = AABB(Vector3(-4.0, -2.5, -4.0), Vector3(8.0, 6.0, 8.0))
@@ -1412,7 +1435,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	e_grad.offsets = PackedFloat32Array([0.0, 0.18, 0.62, 1.0])
 	e_grad.colors = PackedColorArray([
 		Color(1.0, 0.88, 0.42, 0.0),
-		Color(1.0, 0.56, 0.12, 0.96) if not is_parry else Color(1.0, 0.72, 0.18, 1.0),
+		Color(1.0, 0.56, 0.12, 0.96) if not is_parry else Color(1.0, 0.78, 0.24, 1.0),
 		Color(0.98, 0.22, 0.05, 0.78),
 		Color(0.72, 0.06, 0.02, 0.0),
 	])
@@ -1444,7 +1467,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	flash.one_shot = true
 	flash.explosiveness = 1.0
 	flash.amount = 2 if is_parry else 1
-	flash.lifetime = 0.22 if is_parry else (0.16 if is_heavy else 0.11)
+	flash.lifetime = 0.24 if is_parry else (0.16 if is_heavy else 0.11)
 	flash.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var fproc := ParticleProcessMaterial.new()
@@ -1453,7 +1476,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	fproc.initial_velocity_max = 0.0
 	var fcurve := Curve.new()
 	fcurve.add_point(Vector2(0.0, 0.38))
-	fcurve.add_point(Vector2(0.24, 1.45 if is_parry else 1.10))
+	fcurve.add_point(Vector2(0.24, 1.52 if is_parry else 1.10))
 	fcurve.add_point(Vector2(1.0, 0.12))
 	var fcurve_tex := CurveTexture.new()
 	fcurve_tex.curve = fcurve
@@ -1461,8 +1484,8 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	var fgrad := Gradient.new()
 	fgrad.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
 	fgrad.colors = PackedColorArray([
-		Color(1.0, 0.99, 0.90, 1.0),
-		Color(1.0, 0.80, 0.24, 0.92) if is_parry else Color(1.0, 0.68, 0.22, 0.72),
+		Color(1.0, 0.99, 0.92, 1.0),
+		Color(1.0, 0.84, 0.28, 0.96) if is_parry else Color(1.0, 0.68, 0.22, 0.72),
 		Color(0.95, 0.32, 0.05, 0.0),
 	])
 	var framp := GradientTexture1D.new()
@@ -1472,7 +1495,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	flash.process_material = fproc
 
 	var fquad := QuadMesh.new()
-	fquad.size = Vector2(0.95, 0.95) if is_parry else (Vector2(0.58, 0.58) if is_heavy else Vector2(0.30, 0.30))
+	fquad.size = Vector2(1.05, 1.05) if is_parry else (Vector2(0.58, 0.58) if is_heavy else Vector2(0.30, 0.30))
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1489,7 +1512,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 
 	_active_vfx.append(fx_root)
 	var cleanup := Timer.new()
-	cleanup.wait_time = 1.08 if is_parry else (0.96 if is_heavy else 0.85)
+	cleanup.wait_time = 1.12 if is_parry else (0.96 if is_heavy else 0.85)
 	cleanup.one_shot = true
 	cleanup.autostart = true
 	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))

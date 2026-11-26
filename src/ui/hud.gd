@@ -53,6 +53,16 @@ const CREW_COMMAND_SLICES: Array[Dictionary] = [
 
 const VOYAGE_TITLE_FADE_IN := 0.45
 const VOYAGE_TITLE_FADE_OUT := 0.90
+const STAMINA_FLASH_DURATION := 0.45
+
+const CAPTAIN_CONTROLS_LINES: Array[String] = [
+	"[WASD] Move  |  [Space] Jump  |  [Shift] Sprint  |  [X] Step Off",
+	"[Q / Tab] Tools Radial (Hold or Tap)  |  [G] Crew Orders  |  [1-6] Quick Slots",
+	"[F] Use / Leave Stations & Quick-Drop Anchor  |  [Hold W] Heave Anchor",
+	"[S / W] Lower / Raise Sails  |  [A / D] Steer Wheel & Trim Sails  |  [RMB] Center Helm",
+	"[LMB / RMB] Slash / Aim / Block / Climb in Cannon  |  [R] Swap Cannon Shot (6 Types)",
+	"[T] Speaking Trumpet Crew Recall  |  [B] Shipwright (at Outpost)  |  [Esc] Pause",
+]
 
 ## Accent color palette for all 6 cannon ordnance types (strict-ASCII live cannon chip).
 const ORDNANCE_ACCENT_COLORS := {
@@ -91,6 +101,7 @@ var _root: Control = null
 var _theme: Theme = null
 var _damage_vignette: _DamageVignette = null
 var _spyglass_view: _SpyglassOverlay = null
+var _directional_damage_view: DirectionalDamageOverlay = null
 var _crosshair_view: _CrosshairView = null
 var _vitals_view: _VitalsView = null
 
@@ -119,13 +130,15 @@ var _voyage_card_elapsed: float = 0.0
 var _voyage_card_hold: float = 4.2
 var _voyage_card_alpha: float = 0.0
 
-# Context prompt & helm-only sailing trim telemetry pill (bottom-center)
-const SAILING_STATION_KINDS: Array[StringName] = [&"helm", &"sail_length", &"sail_angle"]
+# Context prompt & sailing-station telemetry pill (bottom-center)
+const SAILING_STATION_KINDS: Array[StringName] = [&"helm", &"sail_length", &"sail_angle", &"anchor"]
 var _prompt_panel: PanelContainer = null
 var _prompt_label: Label = null
 var _prompt_alpha: float = 0.0
 var _sailing_pill_panel: PanelContainer = null
+var _sailing_pill_style: StyleBoxFlat = null
 var _sailing_pill_label: Label = null
+var _sailing_full_wind_active: bool = false
 
 # Active tool / supplies chip & always-visible diegetic keycap strip (bottom-right)
 var _keycap_strip: HBoxContainer = null
@@ -155,13 +168,15 @@ var _last_gold: int = -1
 var _custom_voyage_title: String = ""
 var _custom_voyage_obj: String = ""
 
-# Vitals fade & peripheral damage vignette tracking
+# Vitals fade, combat feedback timers & peripheral damage vignette tracking
 var _vitals_show_timer: float = 0.0
 var _vitals_alpha: float = 0.0
 var _last_hp: float = -1.0
 var _last_stamina: float = -1.0
 var _damage_flash: float = 0.0
 var _low_hp_clock: float = 0.0
+var _parry_flash_timer: float = 0.0
+var _stamina_flash_timer: float = 0.0
 
 # Pause menu widget references
 var _ocean_qual_btns: Array[Button] = []
@@ -238,6 +253,9 @@ func bind(
 	_last_hp = pawn.health if (pawn != null and is_instance_valid(pawn)) else -1.0
 	_damage_flash = 0.0
 	_low_hp_clock = 0.0
+	_parry_flash_timer = 0.0
+	_stamina_flash_timer = 0.0
+	clear_directional_damage_arcs()
 	_connect_signals()
 	if voyage_manager != null and voyage_manager.emissary != null and voyage_manager.emissary.is_active():
 		set_emissary_status(
@@ -283,6 +301,10 @@ func _connect_signals() -> void:
 			combat.target_hit.connect(_on_combat_target_hit)
 		if not combat.parried.is_connected(_on_combat_parried):
 			combat.parried.connect(_on_combat_parried)
+		if not combat.damage_received.is_connected(_on_combat_damage_received):
+			combat.damage_received.connect(_on_combat_damage_received)
+		if not combat.stamina_depleted.is_connected(_on_combat_stamina_depleted):
+			combat.stamina_depleted.connect(_on_combat_stamina_depleted)
 	if pawn != null:
 		if not pawn.damaged.is_connected(_on_pawn_damaged):
 			pawn.damaged.connect(_on_pawn_damaged)
@@ -336,6 +358,10 @@ func _disconnect_signals() -> void:
 			combat.target_hit.disconnect(_on_combat_target_hit)
 		if combat.parried.is_connected(_on_combat_parried):
 			combat.parried.disconnect(_on_combat_parried)
+		if combat.damage_received.is_connected(_on_combat_damage_received):
+			combat.damage_received.disconnect(_on_combat_damage_received)
+		if combat.stamina_depleted.is_connected(_on_combat_stamina_depleted):
+			combat.stamina_depleted.disconnect(_on_combat_stamina_depleted)
 	if pawn != null and is_instance_valid(pawn):
 		if pawn.damaged.is_connected(_on_pawn_damaged):
 			pawn.damaged.disconnect(_on_pawn_damaged)
@@ -689,14 +715,40 @@ func get_voyage_title_subtitle_text() -> String:
 	return _voyage_card_subtitle_label.text if _voyage_card_subtitle_label != null else ""
 
 
-## Return the live helm/sail telemetry pill text (e.g. "11.8 kt  |  FULL WIND").
+## Format a compact strict-ASCII 9-slot rudder bar mirroring the 3D King Spoke & brass arch.
+## Centered: `[---|---] CTR`, Port: `[<--|---] PORT 45%`, Starboard: `[---|>>>] STBD 100%`.
+static func format_rudder_bar(helm_val: float) -> String:
+	var h := clampf(helm_val, -1.0, 1.0)
+	var mag := absf(h)
+	if mag < 0.06:
+		return "[---|---] CTR"
+	var pct := clampi(int(roundf(mag * 100.0)), 1, 100)
+	var chevrons := 3 if mag >= 0.80 else (2 if mag >= 0.48 else 1)
+	if h < 0.0:
+		var left_slots := "<".repeat(chevrons) + "-".repeat(3 - chevrons)
+		return "[%s|---] PORT %d%%" % [left_slots, pct]
+	var right_slots := "-".repeat(3 - chevrons) + ">".repeat(chevrons)
+	return "[---|%s] STBD %d%%" % [right_slots, pct]
+
+
+## Return the live helm/sail telemetry pill text (e.g. "[---|---] CTR  |  Sail 90%  |  11.8 kt  |  FULL WIND").
 func get_sailing_telemetry_text() -> String:
 	return _sailing_pill_label.text if _sailing_pill_label != null else ""
 
 
-## True while the diegetic helm/sail-station telemetry pill is visible.
+## True while the diegetic sailing-station telemetry pill is visible.
 func is_sailing_telemetry_visible() -> bool:
 	return _sailing_pill_panel != null and _sailing_pill_panel.visible
+
+
+## True while the sailing telemetry pill is warmly highlighted in nautical gold for full-billow wind catch.
+func is_sailing_full_wind_highlighted() -> bool:
+	return _sailing_full_wind_active
+
+
+## Current border Color of the sailing telemetry pill StyleBoxFlat.
+func get_sailing_pill_border_color() -> Color:
+	return _sailing_pill_style.border_color if _sailing_pill_style != null else HudIcons.COL_INK_SOFT
 
 
 ## True while the diegetic Voyage Title Card is active and visible on screen.
@@ -714,16 +766,85 @@ func dismiss_voyage_title() -> void:
 		_voyage_card_panel.visible = false
 
 
+## Compute horizontal bearing (radians in [-PI, PI]) from the Captain's facing yaw to `source_world_pos`.
+## Front = 0, Right = +PI/2, Left = -PI/2, Behind = PI. Returns NAN if source is invalid or coincident.
+func compute_relative_bearing(source_world_pos: Vector3) -> float:
+	if not source_world_pos.is_finite():
+		return NAN
+	var origin := Vector3.ZERO
+	var fwd := Vector2(0.0, -1.0)
+	var right := Vector2(1.0, 0.0)
+	if pawn != null and is_instance_valid(pawn):
+		origin = pawn.global_position
+		var yaw := pawn.look_yaw
+		fwd = Vector2(-sin(yaw), -cos(yaw))
+		right = Vector2(cos(yaw), -sin(yaw))
+	elif player_controller != null and is_instance_valid(player_controller) and player_controller.camera != null:
+		var cam := player_controller.camera
+		origin = cam.global_position
+		var cf := -cam.global_basis.z
+		var cr := cam.global_basis.x
+		var cf2 := Vector2(cf.x, cf.z)
+		var cr2 := Vector2(cr.x, cr.z)
+		if cf2.length_squared() > 0.0001:
+			fwd = cf2.normalized()
+		if cr2.length_squared() > 0.0001:
+			right = cr2.normalized()
+	var delta_xz := Vector2(source_world_pos.x - origin.x, source_world_pos.z - origin.z)
+	if delta_xz.length_squared() < 0.0004:
+		return NAN
+	var dir_xz := delta_xz.normalized()
+	return atan2(dir_xz.dot(right), dir_xz.dot(fwd))
+
+
+## Queue a crisp directional crimson threat/damage arc pointing toward `source_world_pos`.
+func register_directional_damage(source_world_pos: Vector3, intensity: float = 1.0) -> void:
+	if _directional_damage_view == null:
+		return
+	var bearing := compute_relative_bearing(source_world_pos)
+	if is_nan(bearing):
+		return
+	_directional_damage_view.add_arc(source_world_pos, bearing, clampf(intensity, 0.25, 1.0), _is_colorblind_mode())
+
+
+## Number of currently active fading directional damage arcs around the reticle.
+func get_directional_damage_arc_count() -> int:
+	return _directional_damage_view.get_arc_count() if _directional_damage_view != null else 0
+
+
+## Snapshot of active directional damage arcs (`[{"bearing", "remaining", "intensity", "source_pos"}]`).
+func get_directional_damage_arcs() -> Array[Dictionary]:
+	return _directional_damage_view.get_arcs_snapshot() if _directional_damage_view != null else []
+
+
+## Immediately clear all active directional damage arcs.
+func clear_directional_damage_arcs() -> void:
+	if _directional_damage_view != null:
+		_directional_damage_view.clear_arcs()
+
+
 ## Flash tactile diagonal ink hit-confirm ticks around the center crosshair.
 func flash_hit_confirm(was_heavy: bool = false) -> void:
 	if _crosshair_view != null:
 		_crosshair_view.trigger_hit_confirm(was_heavy)
 
 
-## Flash twin curved burnished-gold brass guard-arcs around the crosshair on parry.
+## Flash a crisp golden ring & twin burnished-gold brass guard-arcs around the crosshair on parry.
 func flash_parry() -> void:
+	_parry_flash_timer = _CrosshairView.PARRY_DURATION
 	if _crosshair_view != null:
 		_crosshair_view.trigger_parry_flash()
+
+
+## Pulse the bottom-left stamina bar gold/red when an action fails due to insufficient stamina.
+func flash_stamina_depleted() -> void:
+	_stamina_flash_timer = STAMINA_FLASH_DURATION
+	_vitals_show_timer = maxf(_vitals_show_timer, 3.5)
+	if _vitals_view != null:
+		var hp_r := clampf(pawn.health / maxf(pawn.max_health, 1.0), 0.0, 1.0) if (pawn != null and is_instance_valid(pawn)) else 1.0
+		var st_r := clampf(combat.stamina / maxf(combat.max_stamina, 1.0), 0.0, 1.0) if (combat != null and is_instance_valid(combat)) else 0.0
+		_vitals_alpha = maxf(_vitals_alpha, 0.92)
+		_vitals_view.set_values(hp_r, st_r, _vitals_alpha, 1.0)
 
 
 ## Remaining seconds on the active crosshair hit-confirm flash (0 when idle).
@@ -731,9 +852,14 @@ func get_hit_confirm_remaining() -> float:
 	return _crosshair_view.hit_timer if _crosshair_view != null else 0.0
 
 
-## Remaining seconds on the active crosshair parry guard-arc flash (0 when idle).
+## Remaining seconds on the active crosshair parry ring & guard-arc flash (0 when idle).
 func get_parry_flash_remaining() -> float:
-	return _crosshair_view.parry_timer if _crosshair_view != null else 0.0
+	return _crosshair_view.parry_timer if _crosshair_view != null else _parry_flash_timer
+
+
+## Remaining seconds on the bottom-left stamina depletion pulse (0 when idle).
+func get_stamina_flash_remaining() -> float:
+	return _stamina_flash_timer
 
 
 ## Current peripheral damage ink-wash vignette alpha (0 when calm/full HP).
@@ -825,7 +951,12 @@ func _build_ui() -> void:
 	_spyglass_view.name = "SpyglassOverlay"
 	_root.add_child(_spyglass_view)
 
-	# 2. Subtle center crosshair dot with hit-confirm ticks & parry guard arcs.
+	# 1b. Directional crimson parchment-ink damage arcs around the screen reticle.
+	_directional_damage_view = DirectionalDamageOverlay.new()
+	_directional_damage_view.name = "DirectionalDamageOverlay"
+	_root.add_child(_directional_damage_view)
+
+	# 2. Subtle center crosshair dot with hit-confirm ticks, parry ring & brass guard arcs.
 	_crosshair_view = _CrosshairView.new()
 	_crosshair_view.name = "Crosshair"
 	_root.add_child(_crosshair_view)
@@ -1225,8 +1356,8 @@ func _build_sailing_telemetry_pill() -> void:
 	_sailing_pill_panel = PanelContainer.new()
 	_sailing_pill_panel.name = "SailingTrimPill"
 	_sailing_pill_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_sailing_pill_panel.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.90), HudIcons.COL_INK_SOFT, 2, 6, 16, 6))
+	_sailing_pill_style = HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.90), HudIcons.COL_INK_SOFT, 2, 6, 16, 6)
+	_sailing_pill_panel.add_theme_stylebox_override("panel", _sailing_pill_style)
 	_sailing_pill_panel.visible = false
 	holder.add_child(_sailing_pill_panel)
 
@@ -1394,13 +1525,13 @@ func _build_pause_overlay() -> void:
 
 	var book := PanelContainer.new()
 	book.name = "CaptainLogPanel"
-	book.custom_minimum_size = Vector2(580.0, 0.0)
+	book.custom_minimum_size = Vector2(640.0, 0.0)
 	book.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.72, 0.98), HudIcons.COL_INK, 3, 10, 26, 16))
+		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.72, 0.98), HudIcons.COL_INK, 3, 10, 24, 12))
 	center.add_child(book)
 
 	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 8)
+	root_v.add_theme_constant_override("separation", 6)
 	book.add_child(root_v)
 
 	var title := Label.new()
@@ -1544,18 +1675,27 @@ func _build_pause_overlay() -> void:
 
 	var controls_box := VBoxContainer.new()
 	controls_box.name = "CaptainControlsStrip"
-	controls_box.add_theme_constant_override("separation", 2)
+	controls_box.add_theme_constant_override("separation", 3)
 	root_v.add_child(controls_box)
 
-	var ctrl_lines: Array[String] = [
-		"[WASD] Move  [Space] Jump  [Shift] Sprint  [F] Use / Leave  [X] Step Off",
-		"[Q/Tab] Tools  [G] Crew Orders  [1-6] Slots  [B] Shipwright  [LMB/RMB] Use & Aim  [Esc] Pause",
+	var ctrl_groups: Array[String] = [
+		"\n".join(PackedStringArray([
+			CAPTAIN_CONTROLS_LINES[0],
+			CAPTAIN_CONTROLS_LINES[2],
+			CAPTAIN_CONTROLS_LINES[3],
+		])),
+		"\n".join(PackedStringArray([
+			CAPTAIN_CONTROLS_LINES[1],
+			CAPTAIN_CONTROLS_LINES[4],
+			CAPTAIN_CONTROLS_LINES[5],
+		])),
 	]
-	for line_txt in ctrl_lines:
+	for gi in ctrl_groups.size():
 		var ctrl_lbl := Label.new()
-		ctrl_lbl.text = line_txt
+		ctrl_lbl.name = "ControlsGroup_%d" % gi
+		ctrl_lbl.text = _to_ascii(ctrl_groups[gi])
 		ctrl_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		ctrl_lbl.add_theme_font_size_override("font_size", 13)
+		ctrl_lbl.add_theme_font_size_override("font_size", 12)
 		ctrl_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
 		controls_box.add_child(ctrl_lbl)
 
@@ -1650,6 +1790,7 @@ func _process(delta: float) -> void:
 	_tick_voyage_title(delta)
 	_tick_vitals(delta)
 	_sync_damage_vignette(delta)
+	_tick_directional_damage(delta)
 	_tick_context_prompt(delta)
 	_tick_sailing_telemetry()
 	_tick_tool_chip(delta)
@@ -1671,10 +1812,15 @@ func _tick_sailing_telemetry() -> void:
 		and ship != null and is_instance_valid(ship) \
 		and not is_any_overlay_open()
 	if not show_pill:
+		_sailing_full_wind_active = false
 		_sailing_pill_panel.visible = false
 		return
 
 	var kts := maxf(0.0, ship.speed_knots())
+	var rudder_txt := format_rudder_bar(ship.helm)
+	var sail_pct := clampi(int(roundf(ship.sail_set * 100.0)), 0, 100)
+	var efficiency := ship.wind_catch()
+	var full_billow := not ship.anchor_down and ship.sail_set >= 0.25 and efficiency >= 0.88
 	var state_txt := "TRIM SAILS"
 	var ink_col := HudIcons.COL_INK_SOFT
 	if ship.anchor_down:
@@ -1683,9 +1829,9 @@ func _tick_sailing_telemetry() -> void:
 		state_txt = "SAILS FURLED"
 	else:
 		var err := absf(angle_difference(ship.sail_trim, ship.ideal_sail_trim()))
-		if err <= 0.24:
+		if full_billow or err <= 0.24:
 			state_txt = "FULL WIND"
-			ink_col = Color(0.68, 0.36, 0.04)
+			ink_col = Color(0.58, 0.34, 0.02) if full_billow else Color(0.68, 0.36, 0.04)
 		elif err <= 0.65:
 			state_txt = "GOOD TRIM"
 			ink_col = HudIcons.COL_INK
@@ -1693,7 +1839,18 @@ func _tick_sailing_telemetry() -> void:
 			state_txt = "TRIM SAILS"
 			ink_col = HudIcons.COL_INK_SOFT
 
-	_sailing_pill_label.text = "%.1f kt  |  %s" % [kts, state_txt]
+	_sailing_full_wind_active = full_billow
+	if _sailing_pill_style != null:
+		if full_billow:
+			_sailing_pill_style.border_color = HudIcons.COL_GOLD
+			_sailing_pill_style.bg_color = Color(0.97, 0.91, 0.72, 0.95)
+			_sailing_pill_style.set_border_width_all(3)
+		else:
+			_sailing_pill_style.border_color = HudIcons.COL_INK_SOFT
+			_sailing_pill_style.bg_color = Color(0.92, 0.85, 0.70, 0.90)
+			_sailing_pill_style.set_border_width_all(2)
+
+	_sailing_pill_label.text = _to_ascii("%s  |  Sail %d%%  |  %.1f kt  |  %s" % [rudder_txt, sail_pct, kts, state_txt])
 	_sailing_pill_label.add_theme_color_override("font_color", ink_col)
 	_sailing_pill_panel.visible = true
 
@@ -1775,6 +1932,7 @@ func _tick_vitals(delta: float) -> void:
 	var hp_ratio := 1.0
 	var stam_ratio := 1.0
 	var in_combat := false
+	_stamina_flash_timer = maxf(0.0, _stamina_flash_timer - maxf(delta, 0.0))
 	if pawn != null and is_instance_valid(pawn):
 		hp_ratio = clampf(pawn.health / maxf(pawn.max_health, 1.0), 0.0, 1.0)
 		if _last_hp >= 0.0:
@@ -1792,7 +1950,7 @@ func _tick_vitals(delta: float) -> void:
 		_last_stamina = combat.stamina
 		in_combat = (combat.state != CombatComponent.State.IDLE)
 
-	if hp_ratio < 0.99 or stam_ratio < 0.99 or in_combat or force_show_vitals:
+	if hp_ratio < 0.99 or stam_ratio < 0.99 or in_combat or _stamina_flash_timer > 0.0 or force_show_vitals:
 		_vitals_show_timer = maxf(_vitals_show_timer, 3.0)
 	else:
 		_vitals_show_timer = maxf(0.0, _vitals_show_timer - delta)
@@ -1800,7 +1958,8 @@ func _tick_vitals(delta: float) -> void:
 	var want_a := 0.92 if (_vitals_show_timer > 0.0 or force_show_vitals) else 0.0
 	_vitals_alpha = move_toward(_vitals_alpha, want_a, delta * (5.5 if want_a > _vitals_alpha else 1.6))
 	if _vitals_view != null:
-		_vitals_view.set_values(hp_ratio, stam_ratio, _vitals_alpha)
+		var stam_flash := clampf(_stamina_flash_timer / STAMINA_FLASH_DURATION, 0.0, 1.0)
+		_vitals_view.set_values(hp_ratio, stam_ratio, _vitals_alpha, stam_flash)
 
 
 func _sync_damage_vignette(delta: float) -> void:
@@ -2063,6 +2222,14 @@ func _sync_emissary_label() -> void:
 	_emissary_label.visible = emissary_badge_text != ""
 
 
+func _tick_directional_damage(delta: float) -> void:
+	if _directional_damage_view == null:
+		return
+	var spy := inventory.spyglass_zoom if inventory != null else 0.0
+	var hidden := pause_open or spy > 0.35
+	_directional_damage_view.tick(delta, compute_relative_bearing, _is_colorblind_mode(), hidden)
+
+
 func _tick_crosshair(delta: float) -> void:
 	if _crosshair_view == null:
 		return
@@ -2072,6 +2239,7 @@ func _tick_crosshair(delta: float) -> void:
 	var prev_a := _crosshair_view.alpha
 	_crosshair_view.alpha = move_toward(_crosshair_view.alpha, want, delta * 10.0)
 	var fx_dirty := _crosshair_view.tick_effects(delta)
+	_parry_flash_timer = _crosshair_view.parry_timer
 	if fx_dirty or absf(_crosshair_view.alpha - prev_a) > 0.002:
 		_crosshair_view.queue_redraw()
 
@@ -2153,13 +2321,19 @@ func _on_sighting_updated(label: String, distance_m: float) -> void:
 		_spyglass_view.set_sighting(label, distance_m, bearing)
 
 
-func _on_pawn_damaged(amount: float, _from: Node) -> void:
+func _on_pawn_damaged(amount: float, from: Node) -> void:
 	_vitals_show_timer = 4.5
 	if amount > 0.5:
 		_damage_flash = clampf(_damage_flash + clampf(amount / 35.0, 0.35, 0.9), 0.0, 1.0)
 		if pawn != null and is_instance_valid(pawn):
 			_last_hp = pawn.health
 		_sync_damage_vignette(0.0)
+		# Fallback when no CombatComponent is bound; when combat is bound, combat.damage_received drives arcs once.
+		if (combat == null or not is_instance_valid(combat)) and from != null and is_instance_valid(from):
+			if from is Node3D:
+				register_directional_damage((from as Node3D).global_position, clampf(amount / 25.0, 0.45, 1.0))
+			elif from.get_parent() is Node3D:
+				register_directional_damage((from.get_parent() as Node3D).global_position, clampf(amount / 25.0, 0.45, 1.0))
 
 
 func _on_pawn_station_changed(_st: Node3D) -> void:
@@ -2178,6 +2352,15 @@ func _on_combat_target_hit(_target: Node, _damage: float, was_heavy: bool) -> vo
 
 func _on_combat_parried(_attacker: Pawn) -> void:
 	flash_parry()
+
+
+func _on_combat_damage_received(amount: float, attacker_pos: Vector3) -> void:
+	if amount > 0.5 and attacker_pos.is_finite():
+		register_directional_damage(attacker_pos, clampf(amount / 25.0, 0.45, 1.0))
+
+
+func _on_combat_stamina_depleted(_cost: float) -> void:
+	flash_stamina_depleted()
 
 
 func _on_voyage_started(_voyage: Dictionary) -> void:
@@ -2401,6 +2584,147 @@ class _DamageVignette extends Control:
 			draw_polygon(q_in, cols_inner)
 
 
+class DirectionalDamageOverlay extends Control:
+	const ARC_RADIUS := 92.0
+	const ARC_DURATION := 0.90
+	const MAX_ARCS := 8
+	const ARC_SEGMENTS := 12
+
+	var _arcs: Array[Dictionary] = []
+	var _colorblind: bool = false
+
+	func _ready() -> void:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		visible = false
+
+	func add_arc(source_pos: Vector3, bearing: float, intensity: float, colorblind: bool = false) -> void:
+		_colorblind = colorblind
+		for arc in _arcs:
+			if absf(angle_difference(float(arc["bearing"]), bearing)) < 0.24:
+				arc["source_pos"] = source_pos
+				arc["bearing"] = bearing
+				arc["remaining"] = ARC_DURATION
+				arc["intensity"] = maxf(float(arc["intensity"]), intensity)
+				visible = true
+				queue_redraw()
+				return
+		if _arcs.size() >= MAX_ARCS:
+			_arcs.remove_at(0)
+		_arcs.append({
+			"source_pos": source_pos,
+			"bearing": bearing,
+			"remaining": ARC_DURATION,
+			"intensity": intensity,
+		})
+		visible = true
+		queue_redraw()
+
+	func clear_arcs() -> void:
+		_arcs.clear()
+		visible = false
+
+	func get_arc_count() -> int:
+		return _arcs.size()
+
+	func get_arcs_snapshot() -> Array[Dictionary]:
+		var out: Array[Dictionary] = []
+		for arc in _arcs:
+			out.append({
+				"bearing": float(arc["bearing"]),
+				"remaining": float(arc["remaining"]),
+				"intensity": float(arc["intensity"]),
+				"source_pos": arc["source_pos"] as Vector3,
+			})
+		return out
+
+	func tick(delta: float, bearing_fn: Callable, colorblind: bool, is_suppressed: bool) -> void:
+		_colorblind = colorblind
+		if _arcs.is_empty():
+			visible = false
+			return
+		var dt := maxf(delta, 0.0)
+		for i in range(_arcs.size() - 1, -1, -1):
+			var arc: Dictionary = _arcs[i]
+			var rem := float(arc["remaining"]) - dt
+			if rem <= 0.0:
+				_arcs.remove_at(i)
+				continue
+			arc["remaining"] = rem
+			if bearing_fn.is_valid():
+				var updated: Variant = bearing_fn.call(arc["source_pos"])
+				if updated is float and not is_nan(updated as float):
+					arc["bearing"] = updated as float
+		visible = not is_suppressed and not _arcs.is_empty()
+		if visible:
+			queue_redraw()
+
+	func _draw() -> void:
+		if _arcs.is_empty():
+			return
+		var view_sz := size if (size.is_finite() and size.length_squared() >= 1.0) else get_viewport_rect().size
+		if not view_sz.is_finite() or view_sz.x < 4.0 or view_sz.y < 4.0:
+			return
+		var c := view_sz * 0.5
+		for arc in _arcs:
+			var t := clampf(float(arc["remaining"]) / ARC_DURATION, 0.0, 1.0)
+			var inten := clampf(float(arc["intensity"]), 0.25, 1.0)
+			var fade := smoothstep(0.0, 0.72, t)
+			var r := ARC_RADIUS + pow(t, 3.0) * 7.0
+			var screen_ang := float(arc["bearing"]) - PI * 0.5
+			var half_span := lerpf(0.24, 0.36, inten)
+			var peak_half_w := lerpf(3.4, 5.2, inten)
+
+			var ink_col := Color(0.14, 0.07, 0.04, 0.84 * fade)
+			var fill_col := Color(0.92, 0.48, 0.08, 0.94 * fade) if _colorblind else Color(0.84, 0.13, 0.10, 0.94 * fade)
+			var glint_col := Color(0.98, 0.86, 0.50, 0.78 * fade)
+
+			# Tapered curved parchment-ink directional threat ribbon.
+			for s in ARC_SEGMENTS:
+				var u0 := float(s) / float(ARC_SEGMENTS)
+				var u1 := float(s + 1) / float(ARC_SEGMENTS)
+				var a0 := lerpf(screen_ang - half_span, screen_ang + half_span, u0)
+				var a1 := lerpf(screen_ang - half_span, screen_ang + half_span, u1)
+				var w0 := 0.8 + peak_half_w * pow(sin(u0 * PI), 0.75)
+				var w1 := 0.8 + peak_half_w * pow(sin(u1 * PI), 0.75)
+				var d0 := Vector2(cos(a0), sin(a0))
+				var d1 := Vector2(cos(a1), sin(a1))
+				var border_quad := PackedVector2Array([
+					c + d0 * (r - w0 - 1.5),
+					c + d0 * (r + w0 + 1.5),
+					c + d1 * (r + w1 + 1.5),
+					c + d1 * (r - w1 - 1.5),
+				])
+				draw_colored_polygon(border_quad, ink_col)
+				var fill_quad := PackedVector2Array([
+					c + d0 * (r - w0),
+					c + d0 * (r + w0),
+					c + d1 * (r + w1),
+					c + d1 * (r - w1),
+				])
+				draw_colored_polygon(fill_quad, fill_col)
+
+			# Crisp outward-pointing directional crimson chevron beak with gold ink accent.
+			var dir := Vector2(cos(screen_ang), sin(screen_ang))
+			var perp := Vector2(-dir.y, dir.x)
+			var beak_outer := PackedVector2Array([
+				c + dir * (r + 14.5),
+				c + dir * (r + 1.0) + perp * 10.5,
+				c + dir * (r - 3.0),
+				c + dir * (r + 1.0) - perp * 10.5,
+			])
+			draw_colored_polygon(beak_outer, ink_col)
+			var beak_inner := PackedVector2Array([
+				c + dir * (r + 12.2),
+				c + dir * (r + 1.8) + perp * 8.2,
+				c + dir * (r - 1.4),
+				c + dir * (r + 1.8) - perp * 8.2,
+			])
+			draw_colored_polygon(beak_inner, fill_col)
+			draw_line(c + dir * (r + 10.0), c + dir * (r + 2.8) + perp * 5.2, glint_col, 1.4, true)
+			draw_line(c + dir * (r + 10.0), c + dir * (r + 2.8) - perp * 5.2, glint_col, 1.4, true)
+
+
 class _CrosshairView extends Control:
 	const HIT_DURATION := 0.24
 	const PARRY_DURATION := 0.34
@@ -2479,10 +2803,17 @@ class _CrosshairView extends Control:
 				draw_colored_polygon(tick_poly, fill_col)
 				draw_line(c + dir * (inner_r + 1.2), c + dir * (outer_r - 1.6), core_col, 1.3 if hit_heavy else 1.0, true)
 
-		# 3. Twin opposing burnished-gold brass guard-arcs on timed parry.
+		# 3. Crisp expanding golden ring flash & twin opposing burnished-gold brass guard-arcs on timed parry.
 		if parry_timer > 0.001:
 			var pt := clampf(parry_timer / PARRY_DURATION, 0.0, 1.0)
 			var pfade := smoothstep(0.0, 0.38, pt) * vis_scale
+			var ring_expand := 1.0 - pt * pt
+			var ring_r := lerpf(12.0, 32.0, ring_expand)
+			var ring_fade := smoothstep(0.0, 0.55, pt) * vis_scale
+			draw_arc(c, ring_r, 0.0, TAU, 36, Color(0.18, 0.11, 0.05, 0.52 * ring_fade), 4.6, true)
+			draw_arc(c, ring_r, 0.0, TAU, 36, Color(0.96, 0.80, 0.30, 0.90 * ring_fade), 2.4, true)
+			draw_arc(c, ring_r - 0.8, 0.0, TAU, 36, Color(1.0, 0.96, 0.80, 0.82 * ring_fade), 1.1, true)
+
 			var arc_r := lerpf(16.0, 23.0, sin(pt * PI * 0.65))
 			var half_span := lerpf(0.42, 0.68, pt)
 			var shadow_col := Color(0.18, 0.11, 0.05, 0.74 * pfade)
@@ -2500,6 +2831,7 @@ class _VitalsView extends Control:
 	var _hp: float = 1.0
 	var _stamina: float = 1.0
 	var _alpha: float = 0.0
+	var _stamina_flash: float = 0.0
 
 	func _ready() -> void:
 		anchor_left = 0.0
@@ -2512,11 +2844,14 @@ class _VitalsView extends Control:
 		offset_bottom = -24.0
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	func set_values(hp: float, stamina: float, alpha: float) -> void:
-		var changed := absf(hp - _hp) > 0.002 or absf(stamina - _stamina) > 0.002 or absf(alpha - _alpha) > 0.004
+	func set_values(hp: float, stamina: float, alpha: float, stamina_flash: float = 0.0) -> void:
+		var clamped_flash := clampf(stamina_flash, 0.0, 1.0)
+		var changed := absf(hp - _hp) > 0.002 or absf(stamina - _stamina) > 0.002 \
+			or absf(alpha - _alpha) > 0.004 or absf(clamped_flash - _stamina_flash) > 0.005
 		_hp = hp
 		_stamina = stamina
 		_alpha = alpha
+		_stamina_flash = clamped_flash
 		visible = _alpha > 0.01
 		if changed:
 			queue_redraw()
@@ -2529,6 +2864,17 @@ class _VitalsView extends Control:
 		var track := Color(0.32, 0.24, 0.16, 0.35 * _alpha)
 		var hp_col := Color(0.76, 0.15, 0.12, 0.95 * _alpha)
 		var st_col := Color(0.84, 0.61, 0.18, 0.92 * _alpha)
+		var st_track := track
+		var st_border := border
+		var st_border_w := 1.1
+		if _stamina_flash > 0.01:
+			var pulse := 0.5 + 0.5 * sin(_stamina_flash * PI * 4.0)
+			var warn_col := Color(0.92, 0.22, 0.12).lerp(Color(0.98, 0.76, 0.20), pulse)
+			var blend := clampf(_stamina_flash * 0.92, 0.0, 1.0)
+			st_col = st_col.lerp(Color(warn_col.r, warn_col.g, warn_col.b, 0.98 * _alpha), blend)
+			st_track = track.lerp(Color(warn_col.r, warn_col.g, warn_col.b, 0.45 * _alpha), blend)
+			st_border = border.lerp(Color(warn_col.r, warn_col.g, warn_col.b, 0.98 * _alpha), blend)
+			st_border_w = lerpf(1.1, 2.1, blend)
 
 		draw_rect(Rect2(Vector2.ZERO, size), bg, true)
 		draw_rect(Rect2(Vector2.ZERO, size), border, false, 2.0)
@@ -2547,15 +2893,15 @@ class _VitalsView extends Control:
 				draw_rect(Rect2(x, 12.0, pip_w * fill_hp, 15.0), hp_col, true)
 			draw_rect(r_hp, border, false, 1.4)
 
-		# Slender 5-segment ochre stamina bar below.
+		# Slender 5-segment ochre stamina bar below (pulses gold/red on stamina depletion).
 		for i in pips:
 			var x := pad_x + float(i) * (pip_w + gap)
 			var r_st := Rect2(x, 35.0, pip_w, 9.0)
-			draw_rect(r_st, track, true)
+			draw_rect(r_st, st_track, true)
 			var fill_st := clampf(_stamina * float(pips) - float(i), 0.0, 1.0)
 			if fill_st > 0.01:
 				draw_rect(Rect2(x, 35.0, pip_w * fill_st, 9.0), st_col, true)
-			draw_rect(r_st, border, false, 1.1)
+			draw_rect(r_st, st_border, false, st_border_w)
 
 
 class _SpyglassOverlay extends Control:

@@ -2959,3 +2959,447 @@ func test_q4a_fp_station_and_carry_hands_visibility_animation_and_teardown() -> 
 	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q4A teardown clears ToolMeshes._fp_hand_mesh_cache cleanly")
 	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q4A teardown clears ToolMeshes._fp_hand_mat_cache cleanly")
 
+
+# ---------------------------------------------------------------------------
+# 20. Pass Q5B: First-Person Sculpted Swimming & Ladder-Climbing Hands
+# ---------------------------------------------------------------------------
+
+func test_q5b_fp_swim_and_ladder_hands() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+
+	# Pause Pawn physics so we can deterministically drive SWIM velocity & LADDER climb height.
+	captain.set_physics_process(false)
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	inv._sway_yaw = 0.0
+	inv._sway_pitch = 0.0
+	inv._ship_roll_lag = 0.0
+	inv.equip(&"cutlass", true)
+	inv._process(0.016)
+
+	check(inv.fp_action_hands != null and not inv.fp_action_hands.visible,
+		"FPActionHands starts hidden in Pawn.Mode.WALK")
+	check(inv.fp_tool_node != null and inv.fp_tool_node.visible,
+		"fp_tool_node starts visible in Pawn.Mode.WALK")
+
+	var lh := inv.fp_action_hands.get_node(^"LeftHand") as Node3D
+	var rh := inv.fp_action_hands.get_node(^"RightHand") as Node3D
+
+	# 1. Swimming (&"swim"): hides fp_tool_node & tp_tool_node, shows fp_action_hands,
+	#    distinguishes calm treading water from lively alternating forward crawl strokes!
+	captain.mode = Pawn.Mode.SWIM
+	captain.velocity = Vector3.ZERO
+	captain.mode_changed.emit(Pawn.Mode.SWIM)
+	for _i in 18:
+		inv._process(0.025)
+	check(inv.fp_action_hands.visible, "Pawn.Mode.SWIM activates fp_action_hands")
+	check(not inv.fp_tool_node.visible, "Pawn.Mode.SWIM hides fp_tool_node")
+	if inv.tp_tool_node != null:
+		check(not inv.tp_tool_node.visible, "Pawn.Mode.SWIM hides tp_tool_node")
+
+	# Measure treading water motion span (calm wide gentle sculling around x ~= +/-0.27, y ~= -0.27).
+	var tread_z_min := 99.0
+	var tread_z_max := -99.0
+	var tread_x_sum := 0.0
+	for _step in 32:
+		inv._process(0.03)
+		check(lh.position.is_finite() and rh.position.is_finite()
+			and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+			"treading water hand transforms stay finite")
+		tread_z_min = minf(tread_z_min, lh.position.z)
+		tread_z_max = maxf(tread_z_max, lh.position.z)
+		tread_x_sum += absf(lh.position.x)
+	var tread_z_span := tread_z_max - tread_z_min
+	var tread_x_avg := tread_x_sum / 32.0
+	check(tread_x_avg >= 0.23 and tread_x_avg <= 0.31,
+		"treading water holds wide calm hand stance (avg |x|=%.3f)" % tread_x_avg)
+	check(tread_z_span > 0.008 and tread_z_span < 0.06,
+		"treading water has gentle figure-8 sculling span (dz=%.3f)" % tread_z_span)
+
+	# Switch to brisk forward swimming (> 0.45 m/s) -> large opposite-phase alternating stroke sweep!
+	captain.velocity = Vector3(0.0, 0.0, -2.5)
+	for _warmup in 18:
+		inv._process(0.025)
+	var swim_z_min := 99.0
+	var swim_z_max := -99.0
+	var swim_x_min := 99.0
+	var swim_x_max := -99.0
+	var max_lr_z_sep := 0.0
+	var saw_left_ahead := false
+	var saw_right_ahead := false
+	for _step in 42:
+		inv._process(0.025)
+		check(lh.position.is_finite() and rh.position.is_finite()
+			and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+			"forward swim hand transforms stay finite")
+		swim_z_min = minf(swim_z_min, lh.position.z)
+		swim_z_max = maxf(swim_z_max, lh.position.z)
+		swim_x_min = minf(swim_x_min, absf(lh.position.x))
+		swim_x_max = maxf(swim_x_max, absf(lh.position.x))
+		var lr_z_diff := lh.position.z - rh.position.z
+		max_lr_z_sep = maxf(max_lr_z_sep, absf(lr_z_diff))
+		if lr_z_diff < -0.08:
+			saw_left_ahead = true
+		elif lr_z_diff > 0.08:
+			saw_right_ahead = true
+	var swim_z_span := swim_z_max - swim_z_min
+	check(swim_z_span > tread_z_span * 2.5 and swim_z_span > 0.14,
+		"forward swimming produces lively stroke sweep vs treading (swim_dz=%.3f vs tread_dz=%.3f)" % [swim_z_span, tread_z_span])
+	check(swim_x_max - swim_x_min > 0.09,
+		"forward swimming sweeps wide outward & back (|x| %.3f..%.3f)" % [swim_x_min, swim_x_max])
+	check(max_lr_z_sep > 0.14 and saw_left_ahead and saw_right_ahead,
+		"forward swimming alternates left & right hands in opposite phase (max sep=%.3f)" % max_lr_z_sep)
+
+	# 2. Ladder Climbing (&"ladder"): hides tools, shows fp_action_hands, drives opposite-phase
+	#    vertical hand-over-hand rung offsets as pawn.global_position.y increases, and holds steady when still!
+	captain.velocity = Vector3.ZERO
+	captain.mode = Pawn.Mode.LADDER
+	captain.global_position = Vector3(0.0, 1.0, 0.0)
+	captain.mode_changed.emit(Pawn.Mode.LADDER)
+	for _i in 15:
+		inv._process(0.025)
+	check(inv.fp_action_hands.visible, "Pawn.Mode.LADDER activates fp_action_hands")
+	check(not inv.fp_tool_node.visible, "Pawn.Mode.LADDER hides fp_tool_node")
+	if inv.tp_tool_node != null:
+		check(not inv.tp_tool_node.visible, "Pawn.Mode.LADDER hides tp_tool_node")
+
+	# Stationary hold keeps hands gripped steadily on their rungs!
+	var hold_ly0 := lh.position.y
+	var hold_ry0 := rh.position.y
+	for _i in 8:
+		inv._process(0.02)
+	check(absf(lh.position.y - hold_ly0) < 0.02 and absf(rh.position.y - hold_ry0) < 0.02,
+		"stationary ladder climb holds hands steadily gripped on rungs")
+
+	# Climb 2.2 m upward -> opposing vertical hand-over-hand offsets sweep across rungs!
+	var lad_ly_min := 99.0
+	var lad_ly_max := -99.0
+	var lad_ry_min := 99.0
+	var lad_ry_max := -99.0
+	var saw_left_higher := false
+	var saw_right_higher := false
+	var opposing_steps := 0
+	var prev_ly := lh.position.y
+	var prev_ry := rh.position.y
+	for step in 32:
+		captain.global_position = Vector3(0.0, 1.0 + float(step + 1) * 0.07, 0.0)
+		inv._process(0.025)
+		check(lh.position.is_finite() and rh.position.is_finite()
+			and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+			"ladder climbing hand transforms stay finite at step %d" % step)
+		check(absf(lh.position.x + 0.19) < 0.05 and absf(rh.position.x - 0.19) < 0.05,
+			"ladder hands grip sides of rungs around x=+/-0.19 (L=%.3f R=%.3f)" % [lh.position.x, rh.position.x])
+		lad_ly_min = minf(lad_ly_min, lh.position.y)
+		lad_ly_max = maxf(lad_ly_max, lh.position.y)
+		lad_ry_min = minf(lad_ry_min, rh.position.y)
+		lad_ry_max = maxf(lad_ry_max, rh.position.y)
+		if lh.position.y - rh.position.y > 0.10:
+			saw_left_higher = true
+		elif rh.position.y - lh.position.y > 0.10:
+			saw_right_higher = true
+		var dly := lh.position.y - prev_ly
+		var dry := rh.position.y - prev_ry
+		if dly * dry < -0.00001:
+			opposing_steps += 1
+		prev_ly = lh.position.y
+		prev_ry = rh.position.y
+
+	check(lad_ly_max - lad_ly_min > 0.18 and lad_ry_max - lad_ry_min > 0.18,
+		"ladder climbing sweeps full vertical rung span (dL=%.3f dR=%.3f)" % [lad_ly_max - lad_ly_min, lad_ry_max - lad_ry_min])
+	check(saw_left_higher and saw_right_higher and opposing_steps >= 18,
+		"ladder climbing drives opposing vertical hand-over-hand motion (opposing_steps=%d)" % opposing_steps)
+
+	# 3. Returning to Pawn.Mode.WALK cleanly hides fp_action_hands and restores fp_tool_node!
+	captain.mode = Pawn.Mode.WALK
+	captain.mode_changed.emit(Pawn.Mode.WALK)
+	inv._process(0.016)
+	check(not inv.fp_action_hands.visible, "returning to Pawn.Mode.WALK hides fp_action_hands")
+	check(inv.fp_tool_node.visible, "returning to Pawn.Mode.WALK restores fp_tool_node.visible == true")
+
+	# 4. Zero-leak teardown!
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "Q5B teardown clears ToolMeshes._pbr_tex_cache cleanly")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q5B teardown clears ToolMeshes._fp_hand_mesh_cache cleanly")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q5B teardown clears ToolMeshes._fp_hand_mat_cache cleanly")
+
+
+# ---------------------------------------------------------------------------
+# Pass Q6B: Sea-of-Thieves Nautical Grid, Course Ray, Living Icons & Painter
+# ---------------------------------------------------------------------------
+
+class MockShipwreckNode:
+	extends Node3D
+	var cleared: bool = false
+
+	func is_cleared() -> bool:
+		return cleared
+
+
+class MockRivalShipNode:
+	extends Node3D
+	var faction: StringName = &"corsair"
+	var is_sinking: bool = false
+
+
+func test_q6b_map_table_nautical_grid_course_ray_living_icons_and_painter() -> void:
+	_begin()
+
+	# 1. MapTableView.world_to_grid_coord() returns valid strict-ASCII A1..H8 nautical coordinates!
+	var grid_cases: Array[Array] = [
+		[Vector3(-1400.0, 0.0, -1400.0), "A1"],
+		[Vector3(-1240.0, 0.0, -960.0), "A2"],
+		[Vector3(-320.0, 0.0, -1420.0), "D1"],
+		[Vector3(-200.0, 0.0, -200.0), "D4"],
+		[Vector3(0.0, 0.0, 0.0), "E5"],
+		[Vector3(178.0, 0.0, -456.0), "E3"],
+		[Vector3(1560.0, 0.0, 120.0), "H5"],
+		[Vector3(1400.0, 0.0, 1400.0), "H8"],
+		[Vector3(-9999.0, 0.0, -9999.0), "A1"],
+		[Vector3(9999.0, 0.0, 9999.0), "H8"],
+	]
+	for gc in grid_cases:
+		var coord := MapTableView.world_to_grid_coord(gc[0] as Vector3)
+		check_eq(coord, String(gc[1]), "world_to_grid_coord(%s) == %s" % [str(gc[0]), String(gc[1])])
+		check_eq(coord.length(), 2, "grid coordinate '%s' has exact length 2" % coord)
+		for ci in coord.length():
+			check(coord.unicode_at(ci) < 128, "grid coordinate '%s' is strict ASCII" % coord)
+
+	var inf_coord := MapTableView.world_to_grid_coord(Vector3.INF)
+	check_eq(inf_coord.length(), 2, "world_to_grid_coord(Vector3.INF) returns safe 2-char grid square")
+
+	var pin_tag := MapTableView.format_pin_course_tag(Vector3.ZERO, Vector3(297.0, 0.0, -450.0))
+	check(pin_tag.contains("(E3)") and pin_tag.contains("m"),
+		"format_pin_course_tag includes distance & grid square (got '%s')" % pin_tag)
+	for ci in pin_tag.length():
+		check(pin_tag.unicode_at(ci) < 128, "pin course tag is strict ASCII")
+
+	# 2. MapTableView.zoom_in() / zoom_out() clamp cleanly within [900.0, 4400.0]
+	#    and mouse-wheel / [E]/[C] zoom controls work while manning Station_MapTable.
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+	ship.global_position = Vector3.ZERO
+	ship.rotation = Vector3.ZERO
+
+	var mtv := MapTableView.new()
+	check(mtv.mount_to_ship(ship), "MapTableView mounts cleanly onto sloop for Q6B")
+
+	for _i in 30:
+		mtv.zoom_in()
+	check_near(mtv.view_span, 900.0, 0.05, "zoom_in() clamps cleanly at 900.0 m")
+	mtv.zoom_by(0.1)
+	check_near(mtv.view_span, 900.0, 0.05, "zoom_by(0.1) never drops below 900.0 m")
+
+	for _i in 30:
+		mtv.zoom_out()
+	check_near(mtv.view_span, 4400.0, 0.05, "zoom_out() clamps cleanly at 4400.0 m")
+	mtv.zoom_by(20.0)
+	check_near(mtv.view_span, 4400.0, 0.05, "zoom_by(20.0) never exceeds 4400.0 m")
+
+	mtv.view_span = 2400.0
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	pc.input_enabled = true
+	captain.board(ship, Vector3(0.0, -0.82, 2.5) * _ship_scale(ship))
+	var map_st := ship.get_station(&"map_table")
+	check(map_st != null and captain.enter_station(map_st), "captain occupies Station_MapTable")
+	mtv._poll_table_station_controls(1.0 / 60.0)
+
+	# Wheel up zooms in, wheel down zooms out cleanly.
+	var span_before_wheel := mtv.view_span
+	var ev_up := InputEventMouseButton.new()
+	ev_up.button_index = MOUSE_BUTTON_WHEEL_UP
+	ev_up.pressed = true
+	mtv._unhandled_input(ev_up)
+	check(mtv.view_span < span_before_wheel, "mouse wheel up zooms chart in")
+
+	var span_after_up := mtv.view_span
+	var ev_dn := InputEventMouseButton.new()
+	ev_dn.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	ev_dn.pressed = true
+	mtv._unhandled_input(ev_dn)
+	check(mtv.view_span > span_after_up, "mouse wheel down zooms chart out")
+
+	# Holding [E] (item_next) zooms in and [C] (item_prev) zooms out smoothly.
+	var span_e0 := mtv.view_span
+	Input.action_press(&"item_next")
+	mtv._poll_table_station_controls(0.10)
+	Input.action_release(&"item_next")
+	check(mtv.view_span < span_e0, "[E] smoothly zooms chart in while at MapTable")
+
+	var span_c0 := mtv.view_span
+	Input.action_press(&"item_prev")
+	mtv._poll_table_station_controls(0.10)
+	Input.action_release(&"item_prev")
+	check(mtv.view_span > span_c0, "[C] smoothly zooms chart out while at MapTable")
+	captain.leave_station()
+
+	# 3. Full living-world render: Outpost, Sea Forts, Volcano, Chart Pin, 550 m Heading Ray,
+	#    active + cleared SunkenShipwrecks, alive + defeated Megalodons, active + sinking Rival Ships.
+	var arch := MockArchipelago.new()
+	arch.islands_data = [
+		{"id": &"port_scoundrel", "name": "Port Scoundrel", "kind": &"outpost", "archetype": &"outpost", "is_outpost": true, "position": Vector3(0.0, 0.0, 0.0), "radius": 82.0, "discovered": true},
+		{"id": &"cutlass_cay", "name": "Cutlass Cay", "kind": &"treasure_island", "archetype": &"treasure_peak", "position": Vector3(178.0, 0.0, -456.0), "radius": 54.0, "discovered": true},
+		{"id": &"ironwatch_fort", "name": "Ironwatch Fort", "kind": &"fort", "archetype": &"fort_rock", "position": Vector3(-1240.0, 0.0, -960.0), "radius": 92.0, "discovered": true},
+		{"id": &"sovereigns_bastion", "name": "Sovereign's Bastion", "kind": &"fort", "archetype": &"grand_citadel", "position": Vector3(1560.0, 0.0, 120.0), "radius": 182.0, "discovered": true},
+		{"id": &"cinder_crag", "name": "Cinder Crag", "kind": &"landmark", "archetype": &"volcano_crag", "position": Vector3(-320.0, 0.0, -1420.0), "radius": 176.0, "discovered": true},
+	]
+	_root.add_child(arch)
+	mtv.set_archipelago_data(arch)
+
+	var sw_active := MockShipwreckNode.new()
+	sw_active.add_to_group(&"sunken_shipwrecks")
+	_root.add_child(sw_active)
+	sw_active.global_position = Vector3(-260.0, 0.0, -520.0)
+
+	var sw_cleared := MockShipwreckNode.new()
+	sw_cleared.cleared = true
+	sw_cleared.add_to_group(&"sunken_shipwrecks")
+	_root.add_child(sw_cleared)
+	sw_cleared.global_position = Vector3(440.0, 0.0, -320.0)
+
+	var meg_alive := MockThreatNode.new()
+	meg_alive.add_to_group(&"megalodons")
+	_root.add_child(meg_alive)
+	meg_alive.global_position = Vector3(520.0, 0.0, -640.0)
+
+	var meg_dead := MockThreatNode.new()
+	meg_dead.dead = true
+	meg_dead.add_to_group(&"megalodons")
+	_root.add_child(meg_dead)
+	meg_dead.global_position = Vector3(-620.0, 0.0, -640.0)
+
+	var rival_alive := MockRivalShipNode.new()
+	rival_alive.faction = &"corsair"
+	rival_alive.add_to_group(&"ship")
+	_root.add_child(rival_alive)
+	rival_alive.global_position = Vector3(-420.0, 0.0, -240.0)
+
+	var rival_sinking := MockRivalShipNode.new()
+	rival_sinking.faction = &"drowned"
+	rival_sinking.is_sinking = true
+	rival_sinking.add_to_group(&"ship")
+	_root.add_child(rival_sinking)
+	rival_sinking.global_position = Vector3(310.0, 0.0, 210.0)
+
+	mtv.view_center = Vector2(0.0, -450.0)
+	mtv.view_span = 2900.0
+	mtv.place_marker(Vector3(178.0, 0.0, -456.0))
+	check(mtv.has_active_pin(), "MapTableView reports active chart pin")
+	mtv.refresh_now()
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var snap := mtv.get_last_snapshot()
+	var ray_end: Vector3 = snap.get("heading_ray_end", Vector3.INF)
+	check(ray_end.is_finite(), "snapshot projects finite live ship heading course ray")
+	var ray_dist := Vector2(ray_end.x - ship.global_position.x, ray_end.z - ship.global_position.z).length()
+	check_near(ray_dist, MapTableView.COURSE_RAY_LENGTH_M, 1.0,
+		"ship heading course ray projects ~550 m ahead of bow (got %.1f m)" % ray_dist)
+	check(bool(snap.get("course_from_pin", false)), "active chart pin drives crimson-gold rhumb line")
+	check_eq(String(snap.get("course_grid_coord", "")), "E3", "pin course grid coord resolves to E3")
+	var bearing_str := String(snap.get("course_bearing_text", ""))
+	check(bearing_str.contains("(E3)") and bearing_str.contains("m"),
+		"pin course bearing text carries distance & grid square (got '%s')" % bearing_str)
+	for ci in bearing_str.length():
+		check(bearing_str.unicode_at(ci) < 128, "snapshot course_bearing_text is strict ASCII")
+
+	check_eq((snap.get("sunken_shipwrecks", []) as Array).size(), 1,
+		"chart plots exactly 1 active SunkenShipwreck (ignoring cleared)")
+	check_eq((snap.get("megalodons", []) as Array).size(), 1,
+		"chart plots exactly 1 alive AncientMegalodon (ignoring defeated)")
+	check_eq((snap.get("rival_ships", []) as Array).size(), 1,
+		"chart plots exactly 1 active rival ship (ignoring player ship & sinking)")
+
+	var vp_tex := mtv.get_chart_texture()
+	check(vp_tex != null, "MapTableView exposes non-null SubViewport texture")
+	check(mtv._canvas != null and mtv._canvas.size == Vector2(MapTableView.CHART_RES)
+		and not mtv._canvas.snapshot.is_empty(),
+		"MapTableView ChartCanvas is sized 1024x680 with populated draw snapshot")
+	check(mtv._surface_mat != null and mtv._surface_mat.albedo_texture == vp_tex,
+		"MapTableView surface material binds live SubViewport chart texture")
+	if vp_tex != null:
+		check_eq(Vector2i(vp_tex.get_size()), MapTableView.CHART_RES,
+			"MapTableView SubViewport texture matches 1024x680 resolution")
+		if DisplayServer.get_name() != "headless":
+			var vp_img := vp_tex.get_image()
+			check(vp_img != null and not vp_img.is_empty(), "MapTableView SubViewport image is non-empty")
+			if vp_img != null and not vp_img.is_empty():
+				var non_blank := 0
+				for py in range(0, vp_img.get_height(), 16):
+					for px in range(0, vp_img.get_width(), 16):
+						var c := vp_img.get_pixel(px, py)
+						if c.r + c.g + c.b > 0.15:
+							non_blank += 1
+				check(non_blank > 100, "MapTableView SubViewport renders non-empty chart pixels (%d samples)" % non_blank)
+
+	# 4. MapPainter.render_treasure_map() generates rich shoreline wave-ripple hatches,
+	#    topo hachures, corner-tick weathered border, strict-ASCII title, and crimson X
+	#    deterministically in fast time with zero leaks!
+	var contour := PackedVector2Array([
+		Vector2(-68.0, -52.0), Vector2(0.0, -76.0), Vector2(64.0, -48.0),
+		Vector2(80.0, 12.0), Vector2(46.0, 68.0), Vector2(-38.0, 64.0),
+		Vector2(-78.0, 8.0),
+	])
+	# Warm cache once, then measure deterministic generation speed (< 40 ms).
+	var warm_tex := MapPainter.render_treasure_map("Cutlass Cay", contour, Vector2(24.0, -18.0), 100.0, 256)
+	check(warm_tex != null, "MapPainter.render_treasure_map returns valid ImageTexture")
+
+	var t0_us := Time.get_ticks_usec()
+	var img_a := MapPainter.render_treasure_map_image("Cutlass Cay", contour, Vector2(24.0, -18.0), 100.0, 256)
+	var elapsed_ms := float(Time.get_ticks_usec() - t0_us) / 1000.0
+	var img_b := MapPainter.render_treasure_map_image("Cutlass Cay", contour, Vector2(24.0, -18.0), 100.0, 256)
+
+	check(elapsed_ms < 40.0, "MapPainter.render_treasure_map_image completes under 40 ms (took %.2f ms)" % elapsed_ms)
+	check_eq(img_a.get_width(), 256, "treasure map width is 256")
+	check_eq(img_a.get_height(), 256, "treasure map height is 256")
+	check_eq(img_a.get_data(), img_b.get_data(), "MapPainter.render_treasure_map_image is 100% deterministic")
+
+	# Verify shoreline wave-ripple hatches, weathered border + corner ticks, crimson X, and ASCII title sanitization.
+	check_eq(MapPainter.sanitize_ascii("Cinder Crag \u2014 North"), "CINDER CRAG NORTH",
+		"MapPainter.sanitize_ascii strips non-ASCII cleanly")
+	var coastal_hatch_px := 0
+	var border_ink_px := 0
+	var corner_tick_px := 0
+	var crimson_x_px := 0
+	var title_ink_px := 0
+	var map_center := Vector2(128.0, 256.0 * 0.53)
+	for y in 256:
+		for x in 256:
+			var c := img_a.get_pixel(x, y)
+			var is_ink := c.r < 0.56 and c.g < 0.44 and c.b < 0.32
+			var is_sea_ripple := c.g > c.r - 0.04 and c.b > c.r - 0.12 and c.r < 0.80 and c.g > 0.55
+			if (x >= 10 and x <= 18) or (y >= 10 and y <= 18) or (x >= 237 and x <= 245) or (y >= 237 and y <= 245):
+				if is_ink:
+					border_ink_px += 1
+			if x >= 17 and x <= 30 and y >= 225 and y <= 238 and is_ink:
+				corner_tick_px += 1
+			if x >= 24 and x <= 150 and y >= 23 and y <= 38 and is_ink:
+				title_ink_px += 1
+			if c.r > 0.62 and c.g < 0.25 and c.b < 0.25:
+				crimson_x_px += 1
+			var d_c := Vector2(float(x), float(y)).distance_to(map_center)
+			if d_c > 64.0 and d_c < 98.0 and (is_sea_ripple or is_ink):
+				coastal_hatch_px += 1
+
+	check(coastal_hatch_px > 220, "treasure map renders outer coastal wave-ripple & shoreline hatches (%d px)" % coastal_hatch_px)
+	check(border_ink_px > 900, "treasure map renders crisp weathered double border frame (%d px)" % border_ink_px)
+	check(corner_tick_px > 12, "treasure map renders inner corner compass ticks (%d px)" % corner_tick_px)
+	check(title_ink_px > 40, "treasure map inks crisp strict-ASCII island title cartouche (%d px)" % title_ink_px)
+	check(crimson_x_px > 120, "treasure map keeps bold crimson X dig site unmistakable (%d px)" % crimson_x_px)
+
+	# 5. Clean zero-leak teardown!
+	await _end()
+	check(not is_instance_valid(mtv), "Q6B MapTableView tears down cleanly with 0 leaks")
+
+
+

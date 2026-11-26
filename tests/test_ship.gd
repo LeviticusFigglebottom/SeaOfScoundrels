@@ -3136,3 +3136,108 @@ func test_wave36_cursed_cannonballs_anchorball_ballastball_curse_physics_vfx_and
 		"Cannonball.clear_shared_cache() releases _anchorball_mesh, _ballastball_mesh, and _ball_meshes (0 leaks)")
 	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 on teardown")
 	check(Ship._curse_ring_mesh == null, "Ship releases static _curse_ring_mesh cache cleanly (0 leaks)")
+
+
+func test_q5b_helm_spoke_clicks_rigging_creaks_and_shore_soundscape() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	Weather.time_of_day = 11.5
+
+	var sloop := _spawn_sloop(Vector3.ZERO)
+	sloop.start_anchored = true
+	await physics_frames(4)
+	sloop.freeze = true
+	sloop.rotation = Vector3.ZERO
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+
+	# 1. Wooden helm spoke detent clicks: turning a Sloop helm 0.0 -> 1.0 (1.0 wheel turn x 8 spokes)
+	#    cleanly increments ship.helm_spoke_clicks (>= 6).
+	check_eq(sloop.helm_spoke_clicks, 0, "Sloop starts with 0 helm_spoke_clicks")
+	sloop.set_helm_target(1.0)
+	await physics_frames(130)
+	check(sloop.helm >= 0.99, "Sloop helm reaches hard-over 1.0 (got %.2f)" % sloop.helm)
+	check(sloop.helm_spoke_clicks >= 6,
+		"Turning Sloop helm 0.0 -> 1.0 increments helm_spoke_clicks >= 6 (got %d)" % sloop.helm_spoke_clicks)
+	var clicks_at_lock := sloop.helm_spoke_clicks
+	await physics_frames(20)
+	check_eq(sloop.helm_spoke_clicks, clicks_at_lock,
+		"Steady helm at hard-over does not spuriously increment helm_spoke_clicks")
+
+	# 2. Sail-hoist & yardarm-brace pulley creaks: actively hoisting/trimming increments rigging_creak_count
+	#    (>= 1) while strict 0.55 s rate-limiting prevents per-tick audio spam!
+	check_eq(sloop.rigging_creak_count, 0, "Sloop starts with 0 rigging_creak_count")
+	sloop.set_sail_target(1.0)
+	await physics_frames(120)
+	var hoist_creaks := sloop.rigging_creak_count
+	check(hoist_creaks >= 1 and hoist_creaks <= 5,
+		"Full Sloop sail hoist triggers rate-limited pulley creaks in 1..5 (got %d)" % hoist_creaks)
+	sloop.set_trim_target(1.1)
+	await physics_frames(80)
+	check(sloop.rigging_creak_count > hoist_creaks and sloop.rigging_creak_count <= hoist_creaks + 4,
+		"Bracing yardarm triggers additional rate-limited pulley creaks (total=%d)" % sloop.rigging_creak_count)
+	var settled_creaks := sloop.rigging_creak_count
+	await physics_frames(45)
+	check_eq(sloop.rigging_creak_count, settled_creaks,
+		"Settled sails emit zero extra rigging pulley creaks")
+
+	# 3. Living tropical island shore ambiance on SeaSoundscape!
+	var soundscape := SeaSoundscape.new()
+	soundscape.set_physics_process(false)
+	_root.add_child(soundscape)
+	soundscape.bind_ship(sloop)
+
+	var isl := Island.new()
+	isl.island_id = "q5b_test_cay"
+	isl.display_name = "Test Cay"
+	isl.island_radius = 65.0
+	_root.add_child(isl)
+	isl.global_position = Vector3(200.0, 0.0, 0.0)
+	check(isl.is_in_group(&"islands"), "Island joins &'islands' group cleanly")
+
+	# Place ship well within island_radius + 35.0 m (= 100.0 m) -> near_island_factor rises to 1.0
+	# and triggers rate-limited daytime coastal bird ambiance!
+	sloop.global_position = Vector3(120.0, 0.0, 0.0)  # 80 m from island center <= 100 m
+	sloop.sail_set = 0.0
+	sloop.sail_target = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+	soundscape.step(0.1)
+	check_near(soundscape.near_island_factor, 1.0, 0.01,
+		"SeaSoundscape.near_island_factor rises to 1.0 within island_radius + 35 m (got %.2f)" % soundscape.near_island_factor)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_SHORE_BIRD, 0)), 1,
+		"Daytime calm shore proximity triggers coastal bird call once")
+	# Rate limit (7..14 s) prevents rapid spam over 5 s.
+	for _i in 5:
+		soundscape.step(1.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_SHORE_BIRD, 0)), 1,
+		"Coastal bird call 7..14 s cooldown prevents spam")
+	# Nighttime (23:00) & stormy weather (0.75) suppress daytime coastal birds cleanly!
+	Weather.time_of_day = 23.0
+	soundscape.step(15.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_SHORE_BIRD, 0)), 1,
+		"Nighttime suppresses daytime coastal bird ambiance")
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.75, 18.0, 0.0)
+	soundscape.step(15.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_SHORE_BIRD, 0)), 1,
+		"Stormy weather suppresses calm coastal bird ambiance")
+	# Returning to calm daytime after cooldown re-triggers cleanly!
+	Weather.set_weather(0.0, 6.0, 0.0)
+	soundscape.step(0.1)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_SHORE_BIRD, 0)), 2,
+		"Calm daytime re-triggers coastal bird call after cooldown")
+
+	# Move ship out into open ocean (far past island_radius + 150 m) -> near_island_factor drops to 0.0!
+	sloop.global_position = Vector3(-900.0, 0.0, 0.0)
+	soundscape.step(0.1)
+	check_near(soundscape.near_island_factor, 0.0, 0.001,
+		"SeaSoundscape.near_island_factor drops cleanly to 0.0 in open ocean (got %.3f)" % soundscape.near_island_factor)
+
+	# 4. Zero-leak teardown!
+	soundscape.queue_free()
+	await _end()
+	check(not is_instance_valid(soundscape), "SeaSoundscape frees cleanly with zero leaks")
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 after Q5B teardown")
+

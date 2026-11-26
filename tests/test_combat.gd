@@ -1550,3 +1550,111 @@ func test_wave35_ancient_megalodon_sculpted_boss_charge_interrupt_bite_cannon_hi
 	check(AncientMegalodon._mesh_cache.is_empty(), "AncientMegalodon._mesh_cache cleared cleanly")
 	check(AncientMegalodon._hide_mat == null and AncientMegalodon._scar_mat == null and AncientMegalodon._eye_mat == null,
 		"AncientMegalodon static materials released cleanly to null (0 leaks)")
+
+
+func test_q6a_directional_damage_signal_and_hud_arcs() -> void:
+	_begin()
+	_fast(false)
+	_ground()
+
+	var hero_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var foe_pair := _fighter(Vector3(1.5, 5.05, 0.0), &"drowned", PI * 0.5)
+	var hero: Pawn = hero_pair[0]
+	var hcc: CombatComponent = hero_pair[1]
+	var foe: Pawn = foe_pair[0]
+	var fcc: CombatComponent = foe_pair[1]
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(hero, null, null, hcc, null, null, null)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var overlay := hud.find_child("DirectionalDamageOverlay", true, false) as Control
+	check(overlay != null, "GameHUD mounts DirectionalDamageOverlay control")
+	check_eq(hud.get_directional_damage_arc_count(), 0, "directional damage overlay starts with 0 arcs")
+
+	# 1. CombatComponent emits damage_received(amount, attacker_pos) with exact attacker position
+	#    and automatically queues a directional crimson arc on bound GameHUD!
+	var recv_events: Array[Dictionary] = []
+	hcc.damage_received.connect(func(amt: float, pos: Vector3) -> void:
+		recv_events.append({"amount": amt, "pos": pos})
+	)
+	var hit_res := hcc.receive_melee_hit(fcc, 22.0, false, false)
+	check_eq(hit_res, &"hit", "enemy melee strike lands cleanly on hero")
+	check_eq(recv_events.size(), 1, "CombatComponent emits damage_received on incoming hit")
+	if not recv_events.is_empty():
+		var ev_amt := float(recv_events[0]["amount"])
+		var ev_pos := recv_events[0]["pos"] as Vector3
+		check_near(ev_amt, 22.0, 0.01, "damage_received carries exact damage amount")
+		check(ev_pos.is_finite() and ev_pos.distance_to(foe.global_position) < 0.05,
+			"damage_received carries valid attacker world position (%s)" % str(ev_pos))
+	check_eq(hud.get_directional_damage_arc_count(), 1, "bound GameHUD automatically queues directional damage arc")
+	var auto_arcs := hud.get_directional_damage_arcs()
+	check_eq(auto_arcs.size(), 1, "snapshot returns 1 active arc")
+	if not auto_arcs.is_empty():
+		# Hero faces -Z (yaw=0), foe stands at +X (right) -> relative bearing == +PI/2!
+		check_near(float(auto_arcs[0]["bearing"]), PI * 0.5, 0.03,
+			"attacker on hero's right (+X) yields +PI/2 relative bearing (got %.3f)" % float(auto_arcs[0]["bearing"]))
+
+	# 2. Verify all 4 cardinal relative bearings (front = 0, right = +PI/2, left = -PI/2, behind = PI)
+	#    plus smooth fade over 0.90 s!
+	hud.clear_directional_damage_arcs()
+	check_eq(hud.get_directional_damage_arc_count(), 0, "clear_directional_damage_arcs clears queue")
+	hero.global_position = Vector3(0.0, 5.05, 0.0)
+	hero.look_yaw = 0.0  # Facing -Z; right is +X, left is -X, behind is +Z.
+
+	hud.register_directional_damage(Vector3(0.0, 5.05, -10.0), 0.9)   # Front -> 0
+	hud.register_directional_damage(Vector3(10.0, 5.05, 0.0), 0.8)    # Right -> +PI/2
+	hud.register_directional_damage(Vector3(-10.0, 5.05, 0.0), 0.7)   # Left -> -PI/2
+	hud.register_directional_damage(Vector3(0.0, 5.05, 10.0), 1.0)    # Behind -> PI
+	check_eq(hud.get_directional_damage_arc_count(), 4, "4 distinct cardinal directional arcs queued cleanly")
+
+	var arcs := hud.get_directional_damage_arcs()
+	check_near(float(arcs[0]["bearing"]), 0.0, 0.02, "front threat bearing == 0.0")
+	check_near(float(arcs[1]["bearing"]), PI * 0.5, 0.02, "right threat bearing == +PI/2")
+	check_near(float(arcs[2]["bearing"]), -PI * 0.5, 0.02, "left threat bearing == -PI/2")
+	check_near(absf(float(arcs[3]["bearing"])), PI, 0.02, "behind threat bearing == PI")
+	check(overlay.visible, "DirectionalDamageOverlay becomes visible when arcs are active")
+
+	# Turn Captain 90 deg left (look_yaw = +PI/2, facing -X) -> old Left (-X) becomes Front (0)!
+	hero.look_yaw = PI * 0.5
+	hud._process(0.45)
+	var mid_arcs := hud.get_directional_damage_arcs()
+	check_eq(mid_arcs.size(), 4, "all 4 arcs remain active midway through 0.90 s fade")
+	check_near(float(mid_arcs[0]["remaining"]), 0.45, 0.02, "arc remaining time decays smoothly (0.90 -> 0.45 s)")
+	check_near(float(mid_arcs[2]["bearing"]), 0.0, 0.02,
+		"turning toward left threat (-X) live-tracks its bearing to front (0.0)")
+
+	# Advance past 0.90 s -> all arcs fade out and overlay hides cleanly.
+	hud._process(0.50)
+	check_eq(hud.get_directional_damage_arc_count(), 0, "directional damage arcs fade out cleanly after 0.90 s")
+	check(not overlay.visible, "DirectionalDamageOverlay hides once all arcs expire")
+
+	# 3. Timed parry emits parried -> triggers HUD golden ring & brass guard-arc flash cleanly!
+	hero.look_yaw = -PI * 0.5  # Face +X toward foe at (1.5, 5.05, 0.0)
+	hcc.state = CombatComponent.State.IDLE
+	hcc.set_blocking(true)
+	hcc._block_elapsed = 0.04
+	var parry_res := hcc.receive_melee_hit(fcc, 20.0, false, false)
+	check_eq(parry_res, &"parried", "timed block within PARRY_WINDOW parries incoming melee strike")
+	check(hud.get_parry_flash_remaining() > 0.30,
+		"parry triggers golden ring crosshair flash (rem=%.3f)" % hud.get_parry_flash_remaining())
+	hud._process(0.40)
+	check_near(hud.get_parry_flash_remaining(), 0.0, 0.001, "parry flash decays cleanly to 0")
+
+	# 4. Stamina depletion on heavy_attack / dodge_step pulses HUD stamina bar gold/red!
+	hcc.set_blocking(false)
+	hcc.state = CombatComponent.State.IDLE
+	hcc.stamina = 8.0
+	check(not hcc.heavy_attack(), "heavy_attack fails when stamina is insufficient")
+	check(hud.get_stamina_flash_remaining() > 0.35,
+		"stamina depletion pulses HUD stamina flash (rem=%.3f)" % hud.get_stamina_flash_remaining())
+	hud._process(0.50)
+	check_near(hud.get_stamina_flash_remaining(), 0.0, 0.001, "stamina depletion flash decays cleanly to 0")
+
+	# 5. Clean teardown with ZERO leaks!
+	await _end()
+	check_eq(CombatComponent._active_combatants, 0, "all CombatComponents exited cleanly with 0 leaks")
+

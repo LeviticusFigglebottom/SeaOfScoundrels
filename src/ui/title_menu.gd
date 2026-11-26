@@ -25,6 +25,15 @@ enum Page {
 
 const DEFAULT_SENS := 0.0023
 
+const CAPTAIN_CONTROLS_LINES: Array[String] = [
+	"[WASD] Move  |  [Space] Jump  |  [Shift] Sprint  |  [X] Step Off",
+	"[Q / Tab] Tools Radial (Hold or Tap)  |  [G] Crew Orders  |  [1-6] Quick Slots",
+	"[F] Use / Leave Stations & Quick-Drop Anchor  |  [Hold W] Heave Anchor",
+	"[S / W] Lower / Raise Sails  |  [A / D] Steer Wheel & Trim Sails  |  [RMB] Center Helm",
+	"[LMB / RMB] Slash / Aim / Block / Climb in Cannon  |  [R] Swap Cannon Shot (6 Types)",
+	"[T] Speaking Trumpet Crew Recall  |  [B] Shipwright (at Outpost)  |  [Esc] Pause",
+]
+
 var is_open: bool = false
 var config: SessionConfig = SessionConfig.new()
 var current_page: Page = Page.LANDING
@@ -1417,17 +1426,16 @@ func _build_settings_page() -> Control:
 
 	# 4. Controls Summary Reference Card
 	var ctl_card := _make_sub_card()
+	ctl_card.name = "ControlsReferenceCard"
 	var ctl_v := VBoxContainer.new()
+	ctl_v.name = "TitleControlsList"
 	ctl_v.add_theme_constant_override("separation", 4)
 	ctl_card.add_child(ctl_v)
 	ctl_v.add_child(_make_section_label("CAPTAIN'S CONTROLS"))
 
-	for line_txt: String in [
-		"[WASD] Move  |  [Space] Jump  |  [Shift] Sprint  |  [F] Use / Board  |  [X] Step Off",
-		"[Q/Tab] Tools Radial  |  [G] Crew Orders  |  [1-6] Slots  |  [B] Shipwright  |  [LMB/RMB] Use & Aim  |  [Esc] Pause",
-	]:
+	for line_txt: String in CAPTAIN_CONTROLS_LINES:
 		var cl := Label.new()
-		cl.text = line_txt
+		cl.text = _to_ascii(line_txt)
 		cl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		cl.add_theme_font_size_override("font_size", 13)
 		cl.add_theme_color_override("font_color", HudIcons.COL_INK)

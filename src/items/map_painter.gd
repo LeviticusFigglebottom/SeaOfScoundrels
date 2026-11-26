@@ -11,17 +11,37 @@ const DEFAULT_SIZE := 256
 
 const COL_PARCHMENT_CENTER := Color(0.91, 0.84, 0.68, 1.0)
 const COL_PARCHMENT_EDGE := Color(0.71, 0.58, 0.39, 1.0)
-const COL_SEA_RIPPLE := Color(0.50, 0.58, 0.54, 1.0)
+const COL_SEA_RIPPLE := Color(0.46, 0.56, 0.52, 1.0)
 const COL_BEACH := Color(0.84, 0.74, 0.52, 1.0)
 const COL_LOWLAND := Color(0.68, 0.70, 0.46, 1.0)
 const COL_HIGHLAND := Color(0.57, 0.53, 0.40, 1.0)
 const COL_INK_DARK := Color(0.22, 0.14, 0.09, 1.0)
 const COL_INK_MID := Color(0.42, 0.30, 0.20, 1.0)
 const COL_INK_FAINT := Color(0.60, 0.49, 0.34, 1.0)
+const COL_FOXING := Color(0.48, 0.33, 0.18, 1.0)
 const COL_CRIMSON := Color(0.76, 0.11, 0.09, 1.0)
 const COL_CRIMSON_DARK := Color(0.48, 0.06, 0.05, 1.0)
 
 static var _cached_base: Dictionary = {}  # int size -> PackedByteArray (no static Resource leak)
+
+
+## Sanitize arbitrary text to printable strict ASCII (< 128), uppercased for parchment labels.
+static func sanitize_ascii(raw: String, fallback: String = "UNCHARTED ISLE") -> String:
+	var out := ""
+	var prev_space := false
+	for i in raw.length():
+		var code := raw.unicode_at(i)
+		if code >= 32 and code <= 126:
+			var ch := char(code)
+			if ch == " ":
+				if not prev_space and not out.is_empty():
+					out += " "
+				prev_space = true
+			else:
+				out += ch
+				prev_space = false
+	var cleaned := out.strip_edges().to_upper()
+	return fallback if cleaned.is_empty() else cleaned
 
 
 ## Render a complete parchment treasure map texture for `island_name`.
@@ -47,15 +67,17 @@ static func render_treasure_map_image(
 	size: int = DEFAULT_SIZE
 ) -> Image:
 	var res := clampi(size, 128, 512)
-	var img := _get_parchment_base(res).duplicate() as Image
+	var buf := _get_parchment_base_bytes(res)
 	var r_world := maxf(island_radius, 12.0)
+	var seed_val := hash(island_name) ^ 0x4D4150
+	var s := float(res) / 256.0
 
 	var pts := contour_points
 	if pts.size() < 3:
 		pts = generate_fallback_contour(island_name, r_world)
 
-	var center := Vector2(res * 0.5, res * 0.52)
-	var scale_px := (res * 0.34) / r_world
+	var center := Vector2(res * 0.5, res * 0.53)
+	var scale_px := (res * 0.33) / r_world
 
 	# Convert island-local XZ (X right, Z south/down) to map pixel coords.
 	var poly := PackedVector2Array()
@@ -63,43 +85,49 @@ static func render_treasure_map_image(
 	for i in pts.size():
 		poly[i] = center + Vector2(pts[i].x, pts[i].y) * scale_px
 
-	# Faint nautical rhumb lines radiating from the compass rose corner.
-	var rose_pos := Vector2(res * 0.80, res * 0.21)
-	_draw_rhumb_lines(img, rose_pos, res)
+	# Compute clamped dig site & coastal landing point up front so landmarks keep clear.
+	var dig_px := center + Vector2(dig_local_pos.x, dig_local_pos.y) * scale_px
+	dig_px.x = clampf(dig_px.x, res * 0.17, res * 0.83)
+	dig_px.y = clampf(dig_px.y, res * 0.21, res * 0.83)
+	var landing_px := _nearest_contour_point(poly, dig_px + Vector2(0.0, res * 0.18))
 
-	# Outer coastal ripple rings around the island silhouette.
-	_stroke_polygon_scaled(img, poly, center, 1.13, COL_SEA_RIPPLE, 1.2, 0.35)
-	_stroke_polygon_scaled(img, poly, center, 1.06, COL_SEA_RIPPLE, 1.4, 0.50)
+	# Faint nautical rhumb lines radiating from the compass rose corner + subtle age-foxing speckles.
+	var rose_pos := Vector2(res * 0.81, res * 0.21)
+	_buf_rhumb_lines(buf, res, rose_pos)
+	_buf_age_foxing(buf, res, seed_val, dig_px)
+
+	# 17th-century coastal wave-ripple contours + hand-inked outer shoreline shading hatches!
+	_buf_coastal_wave_hatches(buf, res, poly, center, seed_val)
 
 	# Island terrain bands: sandy beach, green lowland, rocky highland crest.
-	_fill_polygon(img, poly, COL_BEACH, 0.88)
+	_buf_fill_polygon(buf, res, poly, COL_BEACH, 0.88)
 	var mid_poly := _scale_polygon(poly, center, 0.72)
-	_fill_polygon(img, mid_poly, COL_LOWLAND, 0.78)
-	var high_poly := _scale_polygon(poly, center, 0.42)
-	_fill_polygon(img, high_poly, COL_HIGHLAND, 0.65)
+	_buf_fill_polygon(buf, res, mid_poly, COL_LOWLAND, 0.78)
+	var high_poly := _scale_polygon(poly, center, 0.43)
+	_buf_fill_polygon(buf, res, high_poly, COL_HIGHLAND, 0.66)
 
-	# Hand-inked topographic contour lines + dark outer shoreline.
-	_stroke_polygon(img, mid_poly, COL_INK_MID, 1.1, 0.55)
-	_stroke_polygon(img, high_poly, COL_INK_MID, 1.0, 0.45)
-	_stroke_polygon(img, poly, COL_INK_DARK, 2.2, 0.95)
+	# Topographic elevation contour lines + delicate downhill hachure ticks + dark inked shoreline.
+	_buf_stroke_polygon(buf, res, mid_poly, COL_INK_MID, 1.05 * s, 0.56)
+	_buf_stroke_polygon(buf, res, high_poly, COL_INK_MID, 0.95 * s, 0.48)
+	_buf_topo_hachures(buf, res, mid_poly, high_poly, center)
+	_buf_stroke_polygon(buf, res, poly, COL_INK_DARK, 2.1 * s, 0.96)
 
-	# Dotted path from the southern cove toward the dig site.
-	var dig_px := center + Vector2(dig_local_pos.x, dig_local_pos.y) * scale_px
-	dig_px.x = clampf(dig_px.x, res * 0.16, res * 0.84)
-	dig_px.y = clampf(dig_px.y, res * 0.18, res * 0.84)
-	var landing_px := _nearest_contour_point(poly, dig_px + Vector2(0.0, res * 0.18))
-	_draw_dotted_trail(img, landing_px, dig_px)
+	# Tiny hand-inked palm-tree & cliff-peak landmark sketches inside the island contour.
+	_buf_island_landmarks(buf, res, poly, mid_poly, high_poly, center, dig_px, landing_px, seed_val)
+
+	# Dotted pace trail from the landing cove toward the dig site.
+	_buf_dotted_trail(buf, res, landing_px, dig_px, s)
 
 	# Bold hand-painted crimson X at the buried dig site!
-	_draw_red_x(img, dig_px, res * 0.055)
+	_buf_red_x(buf, res, dig_px, res * 0.056)
 
 	# Decorative 8-point compass rose + North marker.
-	_draw_compass_rose(img, rose_pos, res * 0.10)
+	_buf_compass_rose(buf, res, rose_pos, res * 0.095)
 
-	# Double-line sepia cartographer's border and title ribbon at top-left.
-	_draw_border_frame(img, res)
-	_draw_title_cartouche(img, island_name, res)
-	return img
+	# Weathered double-line cartographer's border with corner compass ticks & strict-ASCII title ribbon.
+	_buf_border_frame(buf, res)
+	_buf_title_cartouche(buf, res, island_name)
+	return Image.create_from_data(res, res, false, Image.FORMAT_RGBA8, buf)
 
 
 ## Generate a natural cove-shaped procedural island contour when none is provided.
@@ -124,14 +152,24 @@ static func generate_fallback_contour(island_name: String, radius: float = 120.0
 	return pts
 
 
-static func _get_parchment_base(size: int) -> Image:
+static func _get_parchment_base_bytes(size: int) -> PackedByteArray:
 	if _cached_base.has(size):
-		return Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, _cached_base[size] as PackedByteArray)
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+		return (_cached_base[size] as PackedByteArray).duplicate()
+	var buf := PackedByteArray()
+	buf.resize(size * size * 4)
 	var inv := 1.0 / float(size - 1)
+	var c0r := COL_PARCHMENT_CENTER.r
+	var c0g := COL_PARCHMENT_CENTER.g
+	var c0b := COL_PARCHMENT_CENTER.b
+	var c1r := COL_PARCHMENT_EDGE.r
+	var c1g := COL_PARCHMENT_EDGE.g
+	var c1b := COL_PARCHMENT_EDGE.b
+	var off := 0
 	for y in size:
 		var ny := float(y) * inv * 2.0 - 1.0
 		var fy := sin(float(y) * 0.37) * 0.012
+		var sty := ny - 0.34
+		var sty2 := sty * sty
 		for x in size:
 			var nx := float(x) * inv * 2.0 - 1.0
 			var edge_d := maxf(absf(nx), absf(ny))
@@ -140,16 +178,671 @@ static func _get_parchment_base(size: int) -> Image:
 			# Deterministic fibrous paper mottling + subtle tea-stain ring.
 			var h := sin(float(x) * 0.17 + float(y) * 0.13) * cos(float(x) * 0.09 - float(y) * 0.21)
 			var grain := fy + sin(float(x) * 0.53) * 0.008 + h * 0.025
-			var stain_d := Vector2(nx + 0.38, ny - 0.34).length()
+			var stx := nx + 0.38
+			var stain_d := sqrt(stx * stx + sty2)
 			var stain := smoothstep(0.46, 0.14, stain_d) * 0.07
-			var col := COL_PARCHMENT_CENTER.lerp(COL_PARCHMENT_EDGE, clampf(vig + stain, 0.0, 1.0))
-			col.r = clampf(col.r + grain, 0.0, 1.0)
-			col.g = clampf(col.g + grain * 0.9, 0.0, 1.0)
-			col.b = clampf(col.b + grain * 0.75, 0.0, 1.0)
-			img.set_pixel(x, y, col)
-	_cached_base[size] = img.get_data()
-	return img
+			var t := clampf(vig + stain, 0.0, 1.0)
+			buf[off] = int(clampf(lerpf(c0r, c1r, t) + grain, 0.0, 1.0) * 255.0)
+			buf[off + 1] = int(clampf(lerpf(c0g, c1g, t) + grain * 0.9, 0.0, 1.0) * 255.0)
+			buf[off + 2] = int(clampf(lerpf(c0b, c1b, t) + grain * 0.75, 0.0, 1.0) * 255.0)
+			buf[off + 3] = 255
+			off += 4
+	_cached_base[size] = buf
+	return buf.duplicate()
 
+
+static func _get_parchment_base(size: int) -> Image:
+	return Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, _get_parchment_base_bytes(size))
+
+
+# --- Fast direct PackedByteArray raster primitives for treasure maps ---
+
+static func _buf_line(buf: PackedByteArray, res: int, a: Vector2, b: Vector2, col: Color, width: float = 1.5, alpha: float = 1.0) -> void:
+	var a_eff := clampf(alpha * col.a, 0.0, 1.0)
+	if a_eff <= 0.003:
+		return
+	# Liang-Barsky clip to image bounds so long rhumb lines never waste work off-canvas.
+	var dx := b.x - a.x
+	var dy := b.y - a.y
+	var t0 := 0.0
+	var t1 := 1.0
+	var bound := float(res - 1)
+	for edge in 4:
+		var p := 0.0
+		var q := 0.0
+		match edge:
+			0:
+				p = -dx
+				q = a.x
+			1:
+				p = dx
+				q = bound - a.x
+			2:
+				p = -dy
+				q = a.y
+			3:
+				p = dy
+				q = bound - a.y
+		if absf(p) < 0.00001:
+			if q < 0.0:
+				return
+		else:
+			var r_clip := q / p
+			if p < 0.0:
+				if r_clip > t1:
+					return
+				if r_clip > t0:
+					t0 = r_clip
+			else:
+				if r_clip < t0:
+					return
+				if r_clip < t1:
+					t1 = r_clip
+	var x0 := a.x + dx * t0
+	var y0 := a.y + dy * t0
+	var x1 := a.x + dx * t1
+	var y1 := a.y + dy * t1
+	var sdx := x1 - x0
+	var sdy := y1 - y0
+	var dist := sqrt(sdx * sdx + sdy * sdy)
+	var sr := col.r * 255.0
+	var sg := col.g * 255.0
+	var sb := col.b * 255.0
+
+	# Fast 2-tap antialiased thin stroke for fine copperplate lines (width <= 1.35).
+	if width <= 1.35:
+		var thin_steps := maxi(1, int(ceilf(maxf(absf(sdx), absf(sdy)))))
+		var inv_s := 1.0 / float(thin_steps)
+		var steep := absf(sdy) > absf(sdx)
+		var w_boost := clampf(width, 0.55, 1.35) * a_eff
+		for i in range(thin_steps + 1):
+			var t := float(i) * inv_s
+			var fx := x0 + sdx * t
+			var fy := y0 + sdy * t
+			if steep:
+				var ix := int(floorf(fx))
+				var iy := int(roundf(fy))
+				var frac := fx - float(ix)
+				if iy >= 0 and iy < res:
+					var row_base := iy * res
+					if ix >= 0 and ix < res:
+						var w0 := minf(1.0, (1.0 - frac) * w_boost)
+						var inv0 := 1.0 - w0
+						var off0 := (row_base + ix) * 4
+						buf[off0] = int(float(buf[off0]) * inv0 + sr * w0)
+						buf[off0 + 1] = int(float(buf[off0 + 1]) * inv0 + sg * w0)
+						buf[off0 + 2] = int(float(buf[off0 + 2]) * inv0 + sb * w0)
+					var ix1 := ix + 1
+					if ix1 >= 0 and ix1 < res and frac > 0.02:
+						var w1 := minf(1.0, frac * w_boost)
+						var inv1 := 1.0 - w1
+						var off1 := (row_base + ix1) * 4
+						buf[off1] = int(float(buf[off1]) * inv1 + sr * w1)
+						buf[off1 + 1] = int(float(buf[off1 + 1]) * inv1 + sg * w1)
+						buf[off1 + 2] = int(float(buf[off1 + 2]) * inv1 + sb * w1)
+			else:
+				var ix := int(roundf(fx))
+				var iy := int(floorf(fy))
+				var frac := fy - float(iy)
+				if ix >= 0 and ix < res:
+					if iy >= 0 and iy < res:
+						var w0 := minf(1.0, (1.0 - frac) * w_boost)
+						var inv0 := 1.0 - w0
+						var off0 := (iy * res + ix) * 4
+						buf[off0] = int(float(buf[off0]) * inv0 + sr * w0)
+						buf[off0 + 1] = int(float(buf[off0 + 1]) * inv0 + sg * w0)
+						buf[off0 + 2] = int(float(buf[off0 + 2]) * inv0 + sb * w0)
+					var iy1 := iy + 1
+					if iy1 >= 0 and iy1 < res and frac > 0.02:
+						var w1 := minf(1.0, frac * w_boost)
+						var inv1 := 1.0 - w1
+						var off1 := (iy1 * res + ix) * 4
+						buf[off1] = int(float(buf[off1]) * inv1 + sr * w1)
+						buf[off1 + 1] = int(float(buf[off1 + 1]) * inv1 + sg * w1)
+						buf[off1 + 2] = int(float(buf[off1 + 2]) * inv1 + sb * w1)
+		return
+
+	# Bold brush strokes (shoreline, crimson X, borders): direct byte disc stamp.
+	var steps := maxi(1, int(ceilf(dist)))
+	var rad := width * 0.5
+	var irad := int(ceilf(rad))
+	var max_r := rad + 0.55
+	var max_r2 := max_r * max_r
+	var inv_steps := 1.0 / float(steps)
+	for i in range(steps + 1):
+		var t := float(i) * inv_steps
+		var px_f := x0 + sdx * t
+		var py_f := y0 + sdy * t
+		var cx := int(roundf(px_f))
+		var cy := int(roundf(py_f))
+		var ya := maxi(0, cy - irad)
+		var yb := mini(res - 1, cy + irad)
+		var xa := maxi(0, cx - irad)
+		var xb := mini(res - 1, cx + irad)
+		for py in range(ya, yb + 1):
+			var ddy := float(py) - py_f
+			var ddy2 := ddy * ddy
+			if ddy2 > max_r2:
+				continue
+			var row_base := py * res
+			for px in range(xa, xb + 1):
+				var ddx := float(px) - px_f
+				var d2 := ddx * ddx + ddy2
+				if d2 <= max_r2:
+					var cov := clampf((max_r - sqrt(d2)) / 1.05, 0.0, 1.0) * a_eff
+					var inv_c := 1.0 - cov
+					var off := (row_base + px) * 4
+					buf[off] = int(float(buf[off]) * inv_c + sr * cov)
+					buf[off + 1] = int(float(buf[off + 1]) * inv_c + sg * cov)
+					buf[off + 2] = int(float(buf[off + 2]) * inv_c + sb * cov)
+
+
+static func _buf_circle_outline(buf: PackedByteArray, res: int, center: Vector2, radius: float, col: Color, width: float = 1.4, alpha: float = 1.0) -> void:
+	var segs := maxi(16, int(radius * 1.4))
+	var prev := center + Vector2(radius, 0.0)
+	for i in range(1, segs + 1):
+		var a := float(i) / float(segs) * TAU
+		var cur := center + Vector2(cos(a), sin(a)) * radius
+		_buf_line(buf, res, prev, cur, col, width, alpha)
+		prev = cur
+
+
+static func _buf_stroke_polygon(buf: PackedByteArray, res: int, poly: PackedVector2Array, col: Color, width: float, alpha: float) -> void:
+	var n := poly.size()
+	if n < 2:
+		return
+	for i in n:
+		_buf_line(buf, res, poly[i], poly[(i + 1) % n], col, width, alpha)
+
+
+static func _buf_fill_polygon(buf: PackedByteArray, res: int, poly: PackedVector2Array, col: Color, alpha: float) -> void:
+	var n := poly.size()
+	if n < 3:
+		return
+	var a_eff := clampf(alpha * col.a, 0.0, 1.0)
+	if a_eff <= 0.003:
+		return
+	var min_y := res
+	var max_y := 0
+	for p in poly:
+		min_y = mini(min_y, int(floorf(p.y)))
+		max_y = maxi(max_y, int(ceilf(p.y)))
+	min_y = clampi(min_y, 0, res - 1)
+	max_y = clampi(max_y, 0, res - 1)
+	var sr := col.r * 255.0 * a_eff
+	var sg := col.g * 255.0 * a_eff
+	var sb := col.b * 255.0 * a_eff
+	var inv_a := 1.0 - a_eff
+
+	var xs: Array[float] = []
+	for y in range(min_y, max_y + 1):
+		xs.clear()
+		var fy := float(y) + 0.5
+		for i in n:
+			var a := poly[i]
+			var b := poly[(i + 1) % n]
+			if (a.y <= fy and b.y > fy) or (b.y <= fy and a.y > fy):
+				var t := (fy - a.y) / (b.y - a.y)
+				xs.append(a.x + t * (b.x - a.x))
+		if xs.size() < 2:
+			continue
+		xs.sort()
+		var row_base := y * res
+		var idx := 0
+		while idx + 1 < xs.size():
+			var x0 := clampi(int(ceilf(xs[idx])), 0, res - 1)
+			var x1 := clampi(int(floorf(xs[idx + 1])), 0, res - 1)
+			var off := (row_base + x0) * 4
+			for _x in range(x0, x1 + 1):
+				buf[off] = int(float(buf[off]) * inv_a + sr)
+				buf[off + 1] = int(float(buf[off + 1]) * inv_a + sg)
+				buf[off + 2] = int(float(buf[off + 2]) * inv_a + sb)
+				off += 4
+			idx += 2
+
+
+static func _buf_fill_rect(buf: PackedByteArray, res: int, x0: int, y0: int, x1: int, y1: int, col: Color, alpha: float) -> void:
+	var a_eff := clampf(alpha * col.a, 0.0, 1.0)
+	if a_eff <= 0.003:
+		return
+	var xa := clampi(mini(x0, x1), 0, res - 1)
+	var xb := clampi(maxi(x0, x1), 0, res - 1)
+	var ya := clampi(mini(y0, y1), 0, res - 1)
+	var yb := clampi(maxi(y0, y1), 0, res - 1)
+	var sr := col.r * 255.0 * a_eff
+	var sg := col.g * 255.0 * a_eff
+	var sb := col.b * 255.0 * a_eff
+	var inv_a := 1.0 - a_eff
+	for y in range(ya, yb + 1):
+		var off := (y * res + xa) * 4
+		for _x in range(xa, xb + 1):
+			buf[off] = int(float(buf[off]) * inv_a + sr)
+			buf[off + 1] = int(float(buf[off + 1]) * inv_a + sg)
+			buf[off + 2] = int(float(buf[off + 2]) * inv_a + sb)
+			off += 4
+
+
+static func _buf_rect_outline(buf: PackedByteArray, res: int, x0: int, y0: int, x1: int, y1: int, col: Color, width: float, alpha: float) -> void:
+	var half := maxi(0, int(floorf((width - 0.5) * 0.5)))
+	_buf_fill_rect(buf, res, x0 - half, y0 - half, x1 + half, y0 + half, col, alpha)
+	_buf_fill_rect(buf, res, x0 - half, y1 - half, x1 + half, y1 + half, col, alpha)
+	_buf_fill_rect(buf, res, x0 - half, y0 + half + 1, x0 + half, y1 - half - 1, col, alpha)
+	_buf_fill_rect(buf, res, x1 - half, y0 + half + 1, x1 + half, y1 - half - 1, col, alpha)
+
+
+static func _buf_fill_circle(buf: PackedByteArray, res: int, center: Vector2, radius: float, col: Color, alpha: float) -> void:
+	var a_eff := clampf(alpha * col.a, 0.0, 1.0)
+	if a_eff <= 0.003:
+		return
+	var ir := int(ceilf(radius + 1.0))
+	var cx := int(roundf(center.x))
+	var cy := int(roundf(center.y))
+	var max_r := radius + 0.65
+	var max_r2 := max_r * max_r
+	var sr := col.r * 255.0
+	var sg := col.g * 255.0
+	var sb := col.b * 255.0
+	var ya := maxi(0, cy - ir)
+	var yb := mini(res - 1, cy + ir)
+	var xa := maxi(0, cx - ir)
+	var xb := mini(res - 1, cx + ir)
+	for py in range(ya, yb + 1):
+		var ddy := float(py) - center.y
+		var ddy2 := ddy * ddy
+		if ddy2 > max_r2:
+			continue
+		var row_base := py * res
+		for px in range(xa, xb + 1):
+			var ddx := float(px) - center.x
+			var d2 := ddx * ddx + ddy2
+			if d2 <= max_r2:
+				var cov := clampf((max_r - sqrt(d2)) / 1.1, 0.0, 1.0) * a_eff
+				var inv_c := 1.0 - cov
+				var off := (row_base + px) * 4
+				buf[off] = int(float(buf[off]) * inv_c + sr * cov)
+				buf[off + 1] = int(float(buf[off + 1]) * inv_c + sg * cov)
+				buf[off + 2] = int(float(buf[off + 2]) * inv_c + sb * cov)
+
+
+static func _buf_diamond(buf: PackedByteArray, res: int, center: Vector2, r: float, col: Color, alpha: float) -> void:
+	_buf_fill_polygon(buf, res, PackedVector2Array([
+		center + Vector2(0.0, -r),
+		center + Vector2(r, 0.0),
+		center + Vector2(0.0, r),
+		center + Vector2(-r, 0.0),
+	]), col, alpha)
+
+
+static func _buf_text_centered(buf: PackedByteArray, res: int, text: String, center_x: int, top_y: int,
+		scale: int, col: Color, alpha: float = 0.95) -> void:
+	var adv := 6 * scale
+	var total_w := maxi(0, text.length() * adv - scale)
+	var start_x := center_x - floori(float(total_w) * 0.5)
+	var upper := text.to_upper()
+	var a_eff := clampf(alpha * col.a, 0.0, 1.0)
+	var sr := col.r * 255.0 * a_eff
+	var sg := col.g * 255.0 * a_eff
+	var sb := col.b * 255.0 * a_eff
+	var inv_a := 1.0 - a_eff
+	var pen_x := start_x
+	for i in upper.length():
+		var ch := upper.substr(i, 1)
+		var rows: Array = FONT_5X7.get(ch, FONT_5X7[" "])
+		for ry in 7:
+			var bits: int = int(rows[ry])
+			if bits == 0:
+				continue
+			for rx in 5:
+				if (bits & (1 << (4 - rx))) == 0:
+					continue
+				var px0 := pen_x + rx * scale
+				var py0 := top_y + ry * scale
+				for dy in scale:
+					var py := py0 + dy
+					if py < 0 or py >= res:
+						continue
+					var row_base := py * res
+					for dx in scale:
+						var px := px0 + dx
+						if px < 0 or px >= res:
+							continue
+						var off := (row_base + px) * 4
+						buf[off] = int(float(buf[off]) * inv_a + sr)
+						buf[off + 1] = int(float(buf[off + 1]) * inv_a + sg)
+						buf[off + 2] = int(float(buf[off + 2]) * inv_a + sb)
+		pen_x += adv
+
+
+static func _buf_coastal_wave_hatches(buf: PackedByteArray, res: int, poly: PackedVector2Array, center: Vector2, seed_val: int) -> void:
+	var n := poly.size()
+	if n < 3:
+		return
+	var s := float(res) / 256.0
+
+	# 1. Three hand-engraved broken coastal wave-ripple rings hugging the outer shoreline contour.
+	var ring_specs: Array[Array] = [
+		[1.055, COL_SEA_RIPPLE, 1.25 * s, 0.56, 0.015],
+		[1.125, COL_SEA_RIPPLE, 1.05 * s, 0.42, 0.022],
+		[1.195, COL_INK_FAINT, 0.90 * s, 0.32, 0.026],
+	]
+	for r_idx in ring_specs.size():
+		var spec: Array = ring_specs[r_idx]
+		var factor: float = float(spec[0])
+		var col: Color = spec[1]
+		var width: float = float(spec[2])
+		var alpha: float = float(spec[3])
+		var wob_amp: float = float(spec[4])
+		for i in n:
+			if r_idx >= 1 and ((i + r_idx + seed_val) % 5 == 0):
+				continue
+			var a0 := poly[i]
+			var a1 := poly[(i + 1) % n]
+			var f0 := factor + sin(float(i) * 1.9 + float(r_idx * 2 + seed_val)) * wob_amp
+			var f1 := factor + sin(float(i + 1) * 1.9 + float(r_idx * 2 + seed_val)) * wob_amp
+			var p0 := center + (a0 - center) * f0
+			var p1 := center + (a1 - center) * f1
+			if r_idx == 2:
+				p0 = p0.lerp(p1, 0.14)
+				p1 = p0.lerp(p1, 0.84)
+			_buf_line(buf, res, p0, p1, col, width, alpha)
+
+	# 2. Fine perpendicular 17th-century coastal shading hatch ticks radiating along the shoreline.
+	var hatch_step := maxf(4.5, 6.2 * s)
+	var hatch_idx := 0
+	for i in n:
+		var a := poly[i]
+		var b := poly[(i + 1) % n]
+		var seg := b - a
+		var seg_len := seg.length()
+		if seg_len < 1.0:
+			continue
+		var count := maxi(1, int(floorf(seg_len / hatch_step)))
+		var edge_n := Vector2(seg.y, -seg.x).normalized()
+		for k in count:
+			var t := (float(k) + 0.5) / float(count)
+			var p := a.lerp(b, t)
+			var rad_out := (p - center).normalized()
+			var out_dir := (edge_n if edge_n.dot(rad_out) >= 0.0 else -edge_n)
+			out_dir = (out_dir * 0.65 + rad_out * 0.35).normalized()
+			var len_var := 2.6 + (1.6 if (hatch_idx % 2 == 0) else 0.5) + sin(float(hatch_idx) * 1.7 + float(seed_val)) * 0.5
+			_buf_line(buf, res, p + out_dir * (1.2 * s), p + out_dir * (len_var * s), COL_INK_MID, 0.85 * s, 0.50)
+			hatch_idx += 1
+
+
+static func _buf_topo_hachures(buf: PackedByteArray, res: int, mid_poly: PackedVector2Array, high_poly: PackedVector2Array, center: Vector2) -> void:
+	var s := float(res) / 256.0
+	var rings: Array[Array] = [
+		[mid_poly, 7.6 * s, 3.0 * s, 0.46],
+		[high_poly, 6.4 * s, 2.7 * s, 0.52],
+	]
+	for spec in rings:
+		var ring: PackedVector2Array = spec[0]
+		var step: float = float(spec[1])
+		var hlen: float = float(spec[2])
+		var alpha: float = float(spec[3])
+		var n := ring.size()
+		if n < 3:
+			continue
+		for i in n:
+			var a := ring[i]
+			var b := ring[(i + 1) % n]
+			var seg_len := a.distance_to(b)
+			if seg_len < 2.0:
+				continue
+			var count := maxi(1, int(floorf(seg_len / step)))
+			for k in count:
+				var p := a.lerp(b, (float(k) + 0.5) / float(count))
+				var out_dir := (p - center).normalized()
+				_buf_line(buf, res, p, p + out_dir * hlen, COL_INK_MID, 0.85 * s, alpha)
+
+
+static func _buf_island_landmarks(
+	buf: PackedByteArray,
+	res: int,
+	poly: PackedVector2Array,
+	mid_poly: PackedVector2Array,
+	high_poly: PackedVector2Array,
+	center: Vector2,
+	dig_px: Vector2,
+	landing_px: Vector2,
+	seed_val: int
+) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_val ^ 0x1A4D
+	var s := float(res) / 256.0
+	var min_dig_d := float(res) * 0.145
+	var min_pair_d := float(res) * 0.085
+	var placed: Array[Vector2] = []
+
+	# 1. Tiny hand-inked cliff-peak chevron sketches near the highland crest.
+	var cliff_placed := 0
+	for _attempt in 32:
+		if cliff_placed >= 2:
+			break
+		var ang := rng.randf_range(0.0, TAU)
+		var r_frac := rng.randf_range(0.05, 0.36)
+		var pt := center + Vector2(cos(ang), sin(ang)) * (float(res) * 0.30 * r_frac)
+		if not Geometry2D.is_point_in_polygon(pt, high_poly):
+			continue
+		if not Geometry2D.is_point_in_polygon(pt + Vector2(0.0, -5.5 * s), mid_poly):
+			continue
+		if pt.distance_to(dig_px) < min_dig_d:
+			continue
+		if _dist_point_to_segment(pt, landing_px, dig_px) < float(res) * 0.055:
+			continue
+		var too_close := false
+		for prev_pt in placed:
+			if pt.distance_to(prev_pt) < min_pair_d:
+				too_close = true
+				break
+		if too_close:
+			continue
+		_buf_cliff_peak_sketch(buf, res, pt, s)
+		placed.append(pt)
+		cliff_placed += 1
+
+	# 2. Tiny hand-inked palm-tree sketches nestled cleanly inside the coastal lowland band.
+	var palm_placed := 0
+	for _attempt in 36:
+		if palm_placed >= 3:
+			break
+		var ang := rng.randf_range(0.0, TAU)
+		var r_frac := rng.randf_range(0.38, 0.70)
+		var pt := center + Vector2(cos(ang), sin(ang)) * (float(res) * 0.28 * r_frac)
+		if not Geometry2D.is_point_in_polygon(pt, mid_poly):
+			continue
+		if Geometry2D.is_point_in_polygon(pt, high_poly):
+			continue
+		if not Geometry2D.is_point_in_polygon(pt + Vector2(0.0, -9.0 * s), poly):
+			continue
+		if pt.distance_to(dig_px) < min_dig_d:
+			continue
+		if _dist_point_to_segment(pt, landing_px, dig_px) < float(res) * 0.055:
+			continue
+		var too_close := false
+		for prev_pt in placed:
+			if pt.distance_to(prev_pt) < min_pair_d:
+				too_close = true
+				break
+		if too_close:
+			continue
+		var lean := 1.0 if (palm_placed % 2 == 0) else -1.0
+		_buf_palm_sketch(buf, res, pt, s, lean)
+		placed.append(pt)
+		palm_placed += 1
+
+
+static func _buf_cliff_peak_sketch(buf: PackedByteArray, res: int, pos: Vector2, s: float) -> void:
+	var apex := pos + Vector2(0.0, -5.0 * s)
+	var base_l := pos + Vector2(-6.2 * s, 3.0 * s)
+	var base_r := pos + Vector2(6.5 * s, 3.2 * s)
+	_buf_line(buf, res, base_l, apex, COL_INK_DARK, 1.15 * s, 0.85)
+	_buf_line(buf, res, apex, base_r, COL_INK_DARK, 1.25 * s, 0.88)
+	_buf_line(buf, res, apex.lerp(base_r, 0.18), pos + Vector2(0.8 * s, 2.8 * s), COL_INK_MID, 0.85 * s, 0.68)
+	_buf_line(buf, res, apex.lerp(base_r, 0.42), pos + Vector2(3.2 * s, 3.0 * s), COL_INK_MID, 0.85 * s, 0.68)
+	_buf_line(buf, res, apex.lerp(base_r, 0.68), pos + Vector2(5.1 * s, 3.1 * s), COL_INK_MID, 0.80 * s, 0.60)
+
+
+static func _buf_palm_sketch(buf: PackedByteArray, res: int, base: Vector2, s: float, lean: float) -> void:
+	var mid := base + Vector2(lean * 1.6 * s, -3.8 * s)
+	var crown := base + Vector2(lean * 2.5 * s, -7.8 * s)
+	_buf_line(buf, res, base + Vector2(-2.2 * s, 0.4 * s), base + Vector2(2.4 * s, 0.4 * s), COL_INK_MID, 0.85 * s, 0.54)
+	_buf_line(buf, res, base, mid, COL_INK_DARK, 1.15 * s, 0.88)
+	_buf_line(buf, res, mid, crown, COL_INK_DARK, 1.05 * s, 0.88)
+	var frond_dirs: Array[Vector2] = [
+		Vector2(-4.8, -1.6),
+		Vector2(-3.6, 1.4),
+		Vector2(0.4 * lean, -3.8),
+		Vector2(4.6, -1.4),
+		Vector2(3.8, 1.6),
+	]
+	for fd in frond_dirs:
+		var tip := crown + fd * s
+		var arch := crown.lerp(tip, 0.55) + Vector2(0.0, -1.1 * s)
+		_buf_line(buf, res, crown, arch, COL_INK_DARK, 0.90 * s, 0.82)
+		_buf_line(buf, res, arch, tip, COL_INK_MID, 0.80 * s, 0.74)
+
+
+static func _buf_age_foxing(buf: PackedByteArray, res: int, seed_val: int, dig_px: Vector2) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_val ^ 0xF0C5
+	var s := float(res) / 256.0
+	var title_box := Rect2(res * 0.06, res * 0.06, res * 0.62, res * 0.14)
+	for _i in 44:
+		var p := Vector2(rng.randf_range(res * 0.05, res * 0.95), rng.randf_range(res * 0.05, res * 0.95))
+		if p.distance_to(dig_px) < res * 0.11 or title_box.has_point(p):
+			continue
+		var r := rng.randf_range(0.65, 1.55) * s
+		var alpha := rng.randf_range(0.16, 0.34)
+		var col := COL_FOXING if (rng.randi() % 2 == 0) else COL_INK_FAINT
+		_buf_fill_circle(buf, res, p, r, col, alpha)
+
+
+static func _buf_rhumb_lines(buf: PackedByteArray, res: int, origin: Vector2) -> void:
+	var reach := float(res) * 1.25
+	for i in 12:
+		var a := float(i) / 12.0 * TAU
+		_buf_line(buf, res, origin, origin + Vector2(cos(a), sin(a)) * reach, COL_INK_FAINT, 1.0, 0.22)
+
+
+static func _buf_dotted_trail(buf: PackedByteArray, res: int, start: Vector2, finish: Vector2, scale_f: float) -> void:
+	var dir := finish - start
+	var dist := dir.length()
+	if dist < 10.0 * scale_f:
+		return
+	var u := dir / dist
+	var pos := 6.0 * scale_f
+	var stop_d := dist - 10.0 * scale_f
+	while pos < stop_d:
+		var p0 := start + u * pos
+		var p1 := start + u * minf(pos + 3.4 * scale_f, stop_d)
+		_buf_line(buf, res, p0, p1, COL_INK_DARK, 1.45 * scale_f, 0.80)
+		pos += 7.5 * scale_f
+
+
+static func _buf_red_x(buf: PackedByteArray, res: int, center: Vector2, half: float) -> void:
+	var r := maxf(half, 7.0)
+	_buf_circle_outline(buf, res, center, r * 1.38, COL_CRIMSON_DARK, 1.2, 0.44)
+	var a1 := center + Vector2(-r, -r * 0.92)
+	var b1 := center + Vector2(r, r * 0.95)
+	var a2 := center + Vector2(-r * 0.94, r)
+	var b2 := center + Vector2(r * 0.96, -r * 0.94)
+	_buf_line(buf, res, a1, b1, COL_CRIMSON_DARK, r * 0.44, 0.86)
+	_buf_line(buf, res, a2, b2, COL_CRIMSON_DARK, r * 0.44, 0.86)
+	_buf_line(buf, res, a1, b1, COL_CRIMSON, r * 0.28, 0.98)
+	_buf_line(buf, res, a2, b2, COL_CRIMSON, r * 0.28, 0.98)
+
+
+static func _buf_compass_rose(buf: PackedByteArray, res: int, center: Vector2, radius: float) -> void:
+	_buf_circle_outline(buf, res, center, radius * 0.72, COL_INK_DARK, 1.2, 0.80)
+	_buf_circle_outline(buf, res, center, radius * 0.56, COL_INK_MID, 1.0, 0.56)
+	for i in 4:
+		var a := (float(i) + 0.5) * PI * 0.5
+		_buf_line(buf, res, center, center + Vector2(cos(a), sin(a)) * (radius * 0.76), COL_INK_MID, 1.5, 0.80)
+	var dirs := [Vector2(0.0, -1.0), Vector2(1.0, 0.0), Vector2(0.0, 1.0), Vector2(-1.0, 0.0)]
+	for i in 4:
+		var d: Vector2 = dirs[i]
+		var side := Vector2(-d.y, d.x)
+		var tip := center + d * radius
+		var p_l := center + side * (radius * 0.19)
+		var p_r := center - side * (radius * 0.19)
+		var col := COL_CRIMSON if i == 0 else COL_INK_DARK
+		_buf_fill_polygon(buf, res, PackedVector2Array([center, tip, p_l]), col, 0.95)
+		_buf_fill_polygon(buf, res, PackedVector2Array([center, tip, p_r]), COL_INK_MID if i != 0 else COL_CRIMSON_DARK, 0.74)
+	var ny := center.y - radius - 4.0
+	var nh := maxf(5.0, radius * 0.28)
+	var nw := nh * 0.65
+	var n0 := Vector2(center.x - nw * 0.5, ny)
+	var n1 := Vector2(center.x - nw * 0.5, ny - nh)
+	var n2 := Vector2(center.x + nw * 0.5, ny)
+	var n3 := Vector2(center.x + nw * 0.5, ny - nh)
+	_buf_line(buf, res, n0, n1, COL_CRIMSON, 1.4, 0.95)
+	_buf_line(buf, res, n1, n2, COL_CRIMSON, 1.3, 0.95)
+	_buf_line(buf, res, n2, n3, COL_CRIMSON, 1.4, 0.95)
+
+
+static func _buf_border_frame(buf: PackedByteArray, res: int) -> void:
+	var s := float(res) / 256.0
+	var m1 := maxi(8, int(roundf(res * 0.042)))
+	var m2 := m1 + maxi(4, int(roundf(res * 0.020)))
+	var m0 := maxi(3, m1 - 3)
+	_buf_rect_outline(buf, res, m0, m0, res - 1 - m0, res - 1 - m0, COL_INK_FAINT, 1.0, 0.36)
+	_buf_rect_outline(buf, res, m1, m1, res - 1 - m1, res - 1 - m1, COL_INK_DARK, 1.8 * s, 0.90)
+	_buf_rect_outline(buf, res, m2, m2, res - 1 - m2, res - 1 - m2, COL_INK_MID, 1.0, 0.68)
+	# Nautical scale ticks along all four borders.
+	var ticks := 8
+	for i in range(1, ticks):
+		var u := int(roundf(lerpf(float(m2), float(res - 1 - m2), float(i) / float(ticks))))
+		_buf_fill_rect(buf, res, u, m1, u, m2, COL_INK_DARK, 0.78)
+		_buf_fill_rect(buf, res, u, res - 1 - m2, u, res - 1 - m1, COL_INK_DARK, 0.78)
+		_buf_fill_rect(buf, res, m1, u, m2, u, COL_INK_DARK, 0.78)
+		_buf_fill_rect(buf, res, res - 1 - m2, u, res - 1 - m1, u, COL_INK_DARK, 0.78)
+
+	# Delicate corner compass-tick arcs & miter diamond studs at all four inner frame corners.
+	var corner_specs: Array[Array] = [
+		[Vector2(m2, m2), Vector2(1.0, 1.0), 0.0],
+		[Vector2(res - 1 - m2, m2), Vector2(-1.0, 1.0), PI * 0.5],
+		[Vector2(res - 1 - m2, res - 1 - m2), Vector2(-1.0, -1.0), PI],
+		[Vector2(m2, res - 1 - m2), Vector2(1.0, -1.0), PI * 1.5],
+	]
+	var tick_r := 11.5 * s
+	for c in corner_specs:
+		var pt: Vector2 = c[0]
+		var sv: Vector2 = c[1]
+		var a_start: float = float(c[2])
+		_buf_line(buf, res, pt, pt + sv * (6.2 * s), COL_INK_DARK, 1.1 * s, 0.78)
+		_buf_diamond(buf, res, pt + sv * (3.6 * s), 2.1 * s, COL_INK_DARK, 0.80)
+		for ti in 3:
+			var ang := a_start + (float(ti) + 1.0) * (PI * 0.125)
+			var dir := Vector2(cos(ang), sin(ang))
+			_buf_line(buf, res, pt + dir * (tick_r * 0.72), pt + dir * tick_r, COL_INK_MID, 0.95 * s, 0.68)
+
+
+static func _buf_title_cartouche(buf: PackedByteArray, res: int, island_name: String) -> void:
+	var s := float(res) / 256.0
+	var font_scale := 2 if res >= 384 else 1
+	var adv := 6 * font_scale
+	var x0 := int(roundf(res * 0.088))
+	var y0 := int(roundf(res * 0.086))
+	var max_w := int(roundf(res * 0.56))
+	var pad_x := 6 * font_scale
+	var max_chars := maxi(4, int(floorf(float(max_w - pad_x * 2 + font_scale) / float(adv))))
+	var title := sanitize_ascii(island_name, "UNCHARTED ISLE")
+	if title.length() > max_chars:
+		title = title.substr(0, max_chars).strip_edges()
+	var text_w := maxi(adv * 4, title.length() * adv - font_scale)
+	var w := mini(max_w, text_w + pad_x * 2)
+	var h := 7 * font_scale + 10 * font_scale
+
+	_buf_fill_rect(buf, res, x0, y0, x0 + w, y0 + h, COL_BANNER_CREAM, 0.58)
+	_buf_rect_outline(buf, res, x0, y0, x0 + w, y0 + h, COL_INK_DARK, 1.3 * s, 0.88)
+	_buf_rect_outline(buf, res, x0 + 2, y0 + 2, x0 + w - 2, y0 + h - 2, COL_INK_MID, 1.0, 0.52)
+	_buf_fill_rect(buf, res, x0 + 4, y0 + h - 2, x0 + w - 4, y0 + h - 2, COL_CRIMSON, 0.68)
+	var text_y := y0 + int(floorf(float(h - 7 * font_scale) * 0.5))
+	_buf_text_centered(buf, res, title, x0 + int(floorf(float(w) * 0.5)), text_y, font_scale, COL_INK_DARK, 0.94)
+
+
+# --- Image-based raster primitives (used by 512x512 Riddle Scrolls & Wanted Bounty Posters) ---
 
 static func _blend_pixel(img: Image, x: int, y: int, col: Color, alpha: float) -> void:
 	if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
@@ -162,22 +855,33 @@ static func _blend_pixel(img: Image, x: int, y: int, col: Color, alpha: float) -
 
 
 static func _draw_line(img: Image, a: Vector2, b: Vector2, col: Color, width: float = 1.5, alpha: float = 1.0) -> void:
-	var dist := a.distance_to(b)
-	var steps := maxi(1, int(ceilf(dist * 1.4)))
-	var rad := maxf(0.5, width * 0.5)
+	var dx_ab := b.x - a.x
+	var dy_ab := b.y - a.y
+	var dist := sqrt(dx_ab * dx_ab + dy_ab * dy_ab)
+	var steps := maxi(1, int(ceilf(dist * 1.25)))
+	var rad := maxf(0.45, width * 0.5)
 	var irad := int(ceilf(rad))
+	var max_r := rad + 0.60
+	var max_r2 := max_r * max_r
+	var inv_steps := 1.0 / float(steps)
 	for i in range(steps + 1):
-		var t := float(i) / float(steps)
-		var p := a.lerp(b, t)
-		var cx := int(roundf(p.x))
-		var cy := int(roundf(p.y))
+		var t := float(i) * inv_steps
+		var px_f := a.x + dx_ab * t
+		var py_f := a.y + dy_ab * t
+		var cx := int(roundf(px_f))
+		var cy := int(roundf(py_f))
 		for dy in range(-irad, irad + 1):
+			var py := cy + dy
+			var ddy := float(py) - py_f
+			var ddy2 := ddy * ddy
+			if ddy2 > max_r2:
+				continue
 			for dx in range(-irad, irad + 1):
 				var px := cx + dx
-				var py := cy + dy
-				var d := Vector2(float(px) - p.x, float(py) - p.y).length()
-				if d <= rad + 0.65:
-					var cov := clampf((rad + 0.65 - d) / 1.1, 0.0, 1.0)
+				var ddx := float(px) - px_f
+				var d2 := ddx * ddx + ddy2
+				if d2 <= max_r2:
+					var cov := clampf((max_r - sqrt(d2)) / 1.05, 0.0, 1.0)
 					_blend_pixel(img, px, py, col, alpha * cov)
 
 
@@ -207,8 +911,13 @@ static func _stroke_polygon(img: Image, poly: PackedVector2Array, col: Color, wi
 		_draw_line(img, poly[i], poly[(i + 1) % n], col, width, alpha)
 
 
-static func _stroke_polygon_scaled(img: Image, poly: PackedVector2Array, center: Vector2, factor: float, col: Color, width: float, alpha: float) -> void:
-	_stroke_polygon(img, _scale_polygon(poly, center, factor), col, width, alpha)
+static func _dist_point_to_segment(pt: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var l2 := ab.length_squared()
+	if l2 < 0.001:
+		return pt.distance_to(a)
+	var t := clampf((pt - a).dot(ab) / l2, 0.0, 1.0)
+	return pt.distance_to(a + ab * t)
 
 
 static func _fill_polygon(img: Image, poly: PackedVector2Array, col: Color, alpha: float) -> void:
@@ -258,42 +967,6 @@ static func _nearest_contour_point(poly: PackedVector2Array, target: Vector2) ->
 	return best
 
 
-static func _draw_dotted_trail(img: Image, start: Vector2, finish: Vector2) -> void:
-	var dir := finish - start
-	var dist := dir.length()
-	if dist < 10.0:
-		return
-	var u := dir / dist
-	var pos := 6.0
-	while pos < dist - 10.0:
-		var p0 := start + u * pos
-		var p1 := start + u * minf(pos + 3.2, dist - 10.0)
-		_draw_line(img, p0, p1, COL_INK_DARK, 1.4, 0.72)
-		pos += 7.5
-
-
-static func _draw_red_x(img: Image, center: Vector2, half: float) -> void:
-	var r := maxf(half, 7.0)
-	# Subtle inked halo behind the crimson X for immediate readability.
-	_draw_circle_outline(img, center, r * 1.38, COL_CRIMSON_DARK, 1.2, 0.42)
-	var a1 := center + Vector2(-r, -r * 0.92)
-	var b1 := center + Vector2(r, r * 0.95)
-	var a2 := center + Vector2(-r * 0.94, r)
-	var b2 := center + Vector2(r * 0.96, -r * 0.94)
-	# Dark outline pass, then rich crimson brush pass.
-	_draw_line(img, a1, b1, COL_CRIMSON_DARK, r * 0.44, 0.85)
-	_draw_line(img, a2, b2, COL_CRIMSON_DARK, r * 0.44, 0.85)
-	_draw_line(img, a1, b1, COL_CRIMSON, r * 0.28, 0.98)
-	_draw_line(img, a2, b2, COL_CRIMSON, r * 0.28, 0.98)
-
-
-static func _draw_rhumb_lines(img: Image, origin: Vector2, res: int) -> void:
-	var reach := float(res) * 1.25
-	for i in 12:
-		var a := float(i) / 12.0 * TAU
-		_draw_line(img, origin, origin + Vector2(cos(a), sin(a)) * reach, COL_INK_FAINT, 1.0, 0.22)
-
-
 static func _draw_compass_rose(img: Image, center: Vector2, radius: float) -> void:
 	_draw_circle_outline(img, center, radius * 0.72, COL_INK_DARK, 1.2, 0.78)
 	_draw_circle_outline(img, center, radius * 0.56, COL_INK_MID, 1.0, 0.55)
@@ -326,49 +999,11 @@ static func _draw_compass_rose(img: Image, center: Vector2, radius: float) -> vo
 	_draw_line(img, n2, n3, COL_CRIMSON, 1.5, 0.95)
 
 
-static func _draw_border_frame(img: Image, res: int) -> void:
-	var m1 := maxi(8, int(roundf(res * 0.042)))
-	var m2 := m1 + maxi(4, int(roundf(res * 0.018)))
-	_draw_rect_outline(img, m1, m1, res - 1 - m1, res - 1 - m1, COL_INK_DARK, 1.6, 0.85)
-	_draw_rect_outline(img, m2, m2, res - 1 - m2, res - 1 - m2, COL_INK_MID, 1.0, 0.60)
-	# Nautical scale ticks along borders.
-	var ticks := 8
-	for i in range(1, ticks):
-		var u := lerpf(float(m2), float(res - 1 - m2), float(i) / float(ticks))
-		_draw_line(img, Vector2(u, float(m1)), Vector2(u, float(m2)), COL_INK_DARK, 1.1, 0.70)
-		_draw_line(img, Vector2(u, float(res - 1 - m2)), Vector2(u, float(res - 1 - m1)), COL_INK_DARK, 1.1, 0.70)
-		_draw_line(img, Vector2(float(m1), u), Vector2(float(m2), u), COL_INK_DARK, 1.1, 0.70)
-		_draw_line(img, Vector2(float(res - 1 - m2), u), Vector2(float(res - 1 - m1), u), COL_INK_DARK, 1.1, 0.70)
-
-
 static func _draw_rect_outline(img: Image, x0: int, y0: int, x1: int, y1: int, col: Color, width: float, alpha: float) -> void:
 	_draw_line(img, Vector2(x0, y0), Vector2(x1, y0), col, width, alpha)
 	_draw_line(img, Vector2(x1, y0), Vector2(x1, y1), col, width, alpha)
 	_draw_line(img, Vector2(x1, y1), Vector2(x0, y1), col, width, alpha)
 	_draw_line(img, Vector2(x0, y1), Vector2(x0, y0), col, width, alpha)
-
-
-static func _draw_title_cartouche(img: Image, island_name: String, res: int) -> void:
-	# Small inked scroll cartouche in upper-left with stylized calligraphic stroke pattern.
-	var x0 := int(roundf(res * 0.09))
-	var y0 := int(roundf(res * 0.09))
-	var w := int(roundf(res * 0.44))
-	var h := int(roundf(res * 0.095))
-	_draw_rect_outline(img, x0, y0, x0 + w, y0 + h, COL_INK_DARK, 1.2, 0.75)
-	_draw_line(img, Vector2(x0 + 4, y0 + h - 3), Vector2(x0 + w - 4, y0 + h - 3), COL_INK_MID, 1.0, 0.50)
-	# Stylized inked script strokes proportional to island_name characters.
-	var letters := mini(maxi(island_name.length(), 4), 16)
-	var step := float(w - 14) / float(letters)
-	var cy := float(y0) + float(h) * 0.48
-	for i in letters:
-		var ch := island_name.unicode_at(i) if i < island_name.length() else 65
-		if ch == 32:
-			continue
-		var lx := float(x0 + 7) + float(i) * step
-		var tall := float(h) * (0.28 if (ch % 3 == 0) else 0.17)
-		_draw_line(img, Vector2(lx, cy + tall * 0.6), Vector2(lx + step * 0.65, cy - tall), COL_INK_DARK, 1.2, 0.78)
-		if ch % 2 == 0:
-			_draw_line(img, Vector2(lx, cy - tall * 0.4), Vector2(lx + step * 0.6, cy + tall * 0.5), COL_INK_DARK, 1.0, 0.65)
 
 
 # ==============================================================================

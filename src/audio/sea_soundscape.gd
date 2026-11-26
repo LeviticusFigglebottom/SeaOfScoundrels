@@ -9,6 +9,7 @@ extends Node
 ##   - &"rope_creak" : taut hemp rigging creak at speed under sail
 ##   - &"sail_flap"  : luffing canvas when poorly trimmed / catching headwind
 ##   - &"sail_fill"  : crisp billowing snap entering full wind catch
+##   - &"seagull"    : distant daytime coastal gull / tropical bird calls near islands
 
 signal sfx_triggered(key: StringName, volume_db: float)
 
@@ -16,6 +17,7 @@ const SFX_HULL_CREAK := &"hull_creak"
 const SFX_ROPE_CREAK := &"rope_creak"
 const SFX_SAIL_FLAP := &"sail_flap"
 const SFX_SAIL_FILL := &"sail_fill"
+const SFX_SHORE_BIRD := &"seagull"
 
 const HULL_ROLL_RAD_MIN := 0.10
 const HULL_ROLL_VEL_MIN := 0.18
@@ -37,16 +39,30 @@ const FILL_LOW_CATCH_THRESH := 0.60
 const FILL_HIGH_CATCH_THRESH := 0.84
 const SAIL_FILL_CD := 4.0
 
+const SHORE_FULL_MARGIN := 35.0
+const SHORE_FADE_SPAN := 115.0
+const SHORE_BIRD_MIN_FACTOR := 0.25
+const SHORE_BIRD_DAY_START := 6.0
+const SHORE_BIRD_DAY_END := 19.0
+const SHORE_BIRD_STORM_MAX := 0.55
+const SHORE_BIRD_CD_MIN := 7.0
+const SHORE_BIRD_CD_MAX := 14.0
+const SHORE_BIRD_VOL_DB := -12.0
+
 @export var enabled: bool = true
 
 var ship: Node3D = null
 var last_sfx_triggered: StringName = &""
+## Proximity factor to nearest island shore in 0..1 (0 in open ocean, 1 within island_radius + 35 m).
+var near_island_factor: float = 0.0
 
 var _rng := RandomNumberGenerator.new()
 var _cd_hull_creak: float = 0.0
 var _cd_rope_creak: float = 0.0
 var _cd_sail_flap: float = 0.0
 var _cd_sail_fill: float = 0.0
+var _cd_shore_bird: float = 0.0
+var _nearest_shore_pos: Vector3 = Vector3.ZERO
 var _prev_roll_rad: float = 0.0
 var _has_prev_sample: bool = false
 var _billow_armed: bool = false
@@ -55,6 +71,7 @@ var _event_counts: Dictionary = {
 	SFX_ROPE_CREAK: 0,
 	SFX_SAIL_FLAP: 0,
 	SFX_SAIL_FILL: 0,
+	SFX_SHORE_BIRD: 0,
 }
 
 
@@ -66,6 +83,8 @@ func _init() -> void:
 func _exit_tree() -> void:
 	ship = null
 	_has_prev_sample = false
+	near_island_factor = 0.0
+	_nearest_shore_pos = Vector3.ZERO
 	set_physics_process(false)
 
 
@@ -84,6 +103,9 @@ func reset_state() -> void:
 	_cd_rope_creak = 0.0
 	_cd_sail_flap = 0.0
 	_cd_sail_fill = 0.0
+	_cd_shore_bird = 0.0
+	near_island_factor = 0.0
+	_nearest_shore_pos = Vector3.ZERO
 	_prev_roll_rad = 0.0
 	_has_prev_sample = false
 	_billow_armed = false
@@ -92,6 +114,7 @@ func reset_state() -> void:
 	_event_counts[SFX_ROPE_CREAK] = 0
 	_event_counts[SFX_SAIL_FLAP] = 0
 	_event_counts[SFX_SAIL_FILL] = 0
+	_event_counts[SFX_SHORE_BIRD] = 0
 
 
 ## Return a snapshot Dictionary of triggered event counts per SFX key.
@@ -111,6 +134,7 @@ func step(delta: float) -> void:
 		return
 	if ship == null or not is_instance_valid(ship):
 		ship = null
+		near_island_factor = 0.0
 		return
 	if ship is Ship and (ship as Ship).is_sinking:
 		return
@@ -119,6 +143,7 @@ func step(delta: float) -> void:
 	_cd_rope_creak = maxf(0.0, _cd_rope_creak - delta)
 	_cd_sail_flap = maxf(0.0, _cd_sail_flap - delta)
 	_cd_sail_fill = maxf(0.0, _cd_sail_fill - delta)
+	_cd_shore_bird = maxf(0.0, _cd_shore_bird - delta)
 
 	var pos := ship.global_position if ship.is_inside_tree() else ship.position
 	var ship_up := ship.global_basis.y if ship.is_inside_tree() else ship.basis.y
@@ -169,12 +194,61 @@ func step(delta: float) -> void:
 			_cd_sail_fill = SAIL_FILL_CD
 			_trigger(SFX_SAIL_FILL, pos + ship_up * 6.0, vol_db)
 
+	# 5. Coastal island proximity awareness & daytime non-stormy tropical bird ambiance.
+	_update_island_proximity(pos)
+	if _cd_shore_bird <= 0.0 and near_island_factor > SHORE_BIRD_MIN_FACTOR:
+		var tod := Weather.time_of_day if Weather != null else 12.0
+		var storm := Weather.storminess if Weather != null else 0.0
+		if tod >= SHORE_BIRD_DAY_START and tod <= SHORE_BIRD_DAY_END and storm < SHORE_BIRD_STORM_MAX:
+			var bird_t := clampf((near_island_factor - SHORE_BIRD_MIN_FACTOR) / (1.0 - SHORE_BIRD_MIN_FACTOR), 0.0, 1.0)
+			var vol_db := lerpf(SHORE_BIRD_VOL_DB - 3.0, SHORE_BIRD_VOL_DB, bird_t)
+			var call_pos := pos.lerp(_nearest_shore_pos, 0.45) + Vector3.UP * _rng.randf_range(12.0, 20.0)
+			_cd_shore_bird = _rng.randf_range(SHORE_BIRD_CD_MIN, SHORE_BIRD_CD_MAX)
+			_trigger(SFX_SHORE_BIRD, call_pos, vol_db, 0.09)
 
-func _trigger(key: StringName, pos: Vector3, vol_db: float) -> void:
+
+func _update_island_proximity(pos: Vector3) -> void:
+	var tree := get_tree() if is_inside_tree() else (ship.get_tree() if (ship != null and ship.is_inside_tree()) else null)
+	if tree == null:
+		near_island_factor = 0.0
+		_nearest_shore_pos = pos
+		return
+	var best_factor := 0.0
+	var best_shore := pos
+	for node in tree.get_nodes_in_group(&"islands"):
+		if not (node is Node3D) or not is_instance_valid(node):
+			continue
+		var isl := node as Node3D
+		var isl_pos := isl.global_position if isl.is_inside_tree() else isl.position
+		var r_v: Variant = isl.get(&"island_radius")
+		var isl_r := maxf(float(r_v) if r_v != null else 60.0, 1.0)
+		var dx := pos.x - isl_pos.x
+		var dz := pos.z - isl_pos.z
+		var dist_xz := sqrt(dx * dx + dz * dz)
+		var inner_d := isl_r + SHORE_FULL_MARGIN
+		var outer_d := inner_d + SHORE_FADE_SPAN
+		var fac := 0.0
+		if dist_xz <= inner_d:
+			fac = 1.0
+		elif dist_xz < outer_d:
+			fac = 1.0 - smoothstep(inner_d, outer_d, dist_xz)
+		if fac > best_factor:
+			best_factor = fac
+			if dist_xz > 0.01:
+				var inv_d := 1.0 / dist_xz
+				var shore_r := minf(isl_r, dist_xz)
+				best_shore = Vector3(isl_pos.x + dx * inv_d * shore_r, pos.y, isl_pos.z + dz * inv_d * shore_r)
+			else:
+				best_shore = isl_pos
+	near_island_factor = best_factor
+	_nearest_shore_pos = best_shore
+
+
+func _trigger(key: StringName, pos: Vector3, vol_db: float, pitch_jitter: float = 0.05) -> void:
 	last_sfx_triggered = key
 	_event_counts[key] = int(_event_counts.get(key, 0)) + 1
-	if Audio != null:
-		Audio.play_sfx(key, pos, vol_db)
+	if Audio != null and Audio.has_sound(key):
+		Audio.play_sfx(key, pos, vol_db, pitch_jitter)
 	sfx_triggered.emit(key, vol_db)
 
 

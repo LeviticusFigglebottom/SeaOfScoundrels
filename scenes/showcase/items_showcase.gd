@@ -324,9 +324,9 @@ func _setup_armory_bench_shot() -> void:
 func _update_camera() -> void:
 	if _shot == "map_table" and _ship != null:
 		var xf := _ship.global_transform
-		var table_top := xf * Vector3(0.0, 0.025, 2.5)
-		var sway_x := sin(_clock * 0.7) * 0.16
-		var eye := xf * Vector3(sway_x, 0.92, 3.22)
+		var table_top := xf * _ship.ship_point(Vector3(0.0, 0.025, 2.52))
+		var sway_x := sin(_clock * 0.7) * 0.12
+		var eye := xf * _ship.ship_point(Vector3(sway_x, 0.74, 3.12))
 		_cam.look_at_from_position(eye, table_top, Vector3.UP)
 	elif _shot == "tools" or _shot == "armory":
 		var pan_x := sin(_clock * 0.55) * 0.55
