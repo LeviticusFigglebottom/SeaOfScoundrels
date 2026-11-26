@@ -31,7 +31,19 @@ func test_names_and_stations() -> void:
 		check(s.get_node_or_null(n) != null, "missing " + n)
 	check((s.get_node("Sail") as Node3D).position.distance_to(Vector3(0, 9, -1)) < 0.002, "Sail origin on the mast at the yard")
 	check((s.get_node("Yard") as Node3D).position.distance_to(Vector3(0, 9, -1)) < 0.002, "Yard origin on the mast")
-	check(absf((s.get_node("Wheel") as Node3D).position.x) < 0.001 and absf((s.get_node("Wheel") as Node3D).position.z - 5.2) < 0.001, "Wheel hub at the helm")
+	var wheel := s.get_node("Wheel") as MeshInstance3D
+	check(wheel != null and absf(wheel.position.x) < 0.001 and absf(wheel.position.z - 5.2) < 0.001, "Wheel hub at the helm")
+	if wheel != null:
+		check_near(wheel.position.y, 2.68, 0.01, "Wheel hub lowered to waist height (QDECK_Y + 0.68)")
+		var wbb := wheel.mesh.get_aabb()
+		var king_top_y := wbb.position.y + wbb.size.y
+		var reg_bot_y := absf(wbb.position.y)
+		var scaled_top_above_qdeck := (wheel.position.y - 2.0 + king_top_y) * Ship.DEFAULT_HULL_SCALE
+		check(king_top_y > reg_bot_y + 0.05, "12-o'clock King Spoke (+Y=%.3f) stands taller than regular spokes (%.3f)" % [king_top_y, reg_bot_y])
+		check(scaled_top_above_qdeck < 1.56, "Wheel top spoke sits below Captain 1.60 m eye line at 1.24x scale (%.3f m)" % scaled_top_above_qdeck)
+	var helm_lantern := s.get_node("Lantern_Helm") as Node3D
+	check(helm_lantern != null and helm_lantern.position.x <= -0.40 and helm_lantern.position.y <= 2.95,
+		"Lantern_Helm shifted outboard & lowered clear of forward sightline (%s)" % (helm_lantern.position if helm_lantern else Vector3.ZERO))
 	check((-(s.get_node("Cannon_Port") as Node3D).global_transform.basis.z).distance_to(Vector3.LEFT) < 0.01, "port cannon -Z is its muzzle")
 	s.queue_free()
 

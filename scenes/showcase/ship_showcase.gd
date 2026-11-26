@@ -244,10 +244,44 @@ func _ready() -> void:
 		var helm_pos := _ship.ship_point(Vector3(0.0, 2.25, 7.2) if _is_brig else Vector3(0.0, 2.02, 5.9))
 		_pawn.board(_ship, helm_pos)
 		_pawn.enter_station(helm_st)
+	if _shot == "helm_fp":
+		var vis := _pawn.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
+		if vis != null:
+			vis.set_first_person_hidden(true)
+		_ship.linear_velocity = Vector3.ZERO
+		_ship.set_sail_target(0.25)
+		_ship.sail_set = 0.25
+		if _args.has("rudder"):
+			var rv := clampf(float(_args["rudder"]), -1.0, 1.0)
+			_ship.set_helm_target(rv)
+			_ship.helm = rv
+	elif _shot == "foredeck_audit":
+		_ship.linear_velocity = Vector3.ZERO
+		_ship.set_sail_target(0.0)
+		_ship.sail_set = 0.0
+		_pawn.visible = false
+	elif _shot == "hold_audit":
+		_ship.linear_velocity = Vector3.ZERO
+		_ship.water_level = 0.0
+		_pawn.visible = false
+		var audit_light := OmniLight3D.new()
+		audit_light.name = "HoldAuditFill"
+		audit_light.light_color = Color(1.0, 0.90, 0.74)
+		audit_light.light_energy = 1.65
+		audit_light.omni_range = 14.0
+		_ship.add_child(audit_light)
+		audit_light.position = _ship.ship_point(Vector3(0.0, 0.85, 1.4) if _is_brig else Vector3(0.0, 0.72, 0.8))
 
 	_cam = Camera3D.new()
-	_cam.fov = 78.0 if (_shot == "harpoon" and _is_brig) else 66.0
-	_cam.near = 0.08
+	if _shot == "helm_fp":
+		_cam.fov = 80.0
+	elif _shot == "harpoon" and _is_brig:
+		_cam.fov = 78.0
+	elif _shot == "foredeck_audit" or _shot == "hold_audit":
+		_cam.fov = 72.0
+	else:
+		_cam.fov = 66.0
+	_cam.near = 0.06
 	_cam.far = 6000.0
 	add_child(_cam)
 	_cam.make_current()
@@ -277,6 +311,34 @@ func _update_camera() -> void:
 			var eye := xf * _ship.ship_point(Vector3(1.05, 3.95, 8.7) if _is_brig else Vector3(0.85, 3.65, 7.1))
 			var look := xf * _ship.ship_point(Vector3(-0.15, 2.95, -12.0))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"helm_fp":
+			# True first-person Captain eye view at Stand_Helm (80 deg FOV) for wheel clearance & King Spoke / indicator audit.
+			var eye := _pawn.eye_position()
+			var pitch_drop := float(_args.get("pitch_drop", "-0.14"))
+			var fwd := (xf.basis * Vector3(0.0, pitch_drop, -1.0)).normalized()
+			_cam.look_at_from_position(eye, eye + fwd * 12.0, Vector3.UP)
+		"foredeck_audit":
+			# High wide inspection shot looking down the entire deck from quarterdeck to bowsprit (sails furled).
+			var angle := String(_args.get("angle", "aft"))
+			if angle == "bow":
+				var eye := xf * _ship.ship_point(Vector3(2.2, 4.4, -7.2) if _is_brig else Vector3(1.9, 3.8, -5.6))
+				var look := xf * _ship.ship_point(Vector3(0.0, 1.85, 4.6) if _is_brig else Vector3(0.0, 1.75, 3.8))
+				_cam.look_at_from_position(eye, look, Vector3.UP)
+			else:
+				var eye := xf * _ship.ship_point(Vector3(1.55, 5.15, 7.8) if _is_brig else Vector3(1.35, 4.45, 6.2))
+				var look := xf * _ship.ship_point(Vector3(0.0, 1.35, -4.4) if _is_brig else Vector3(0.0, 1.25, -3.2))
+				_cam.look_at_from_position(eye, look, Vector3.UP)
+		"hold_audit":
+			# Well-lit lower-deck & cabin flush-grounding inspection shot.
+			var angle := String(_args.get("angle", "hold"))
+			if angle == "cabin":
+				var eye := xf * _ship.ship_point(Vector3(-1.35, 1.42, 4.35) if _is_brig else Vector3(-1.05, 1.48, 3.15))
+				var look := xf * _ship.ship_point(Vector3(0.45, 0.72, 6.85) if _is_brig else Vector3(0.35, 0.78, 5.45))
+				_cam.look_at_from_position(eye, look, Vector3.UP)
+			else:
+				var eye := xf * _ship.ship_point(Vector3(1.15, 0.78, 4.8) if _is_brig else Vector3(0.95, 0.76, 3.6))
+				var look := xf * _ship.ship_point(Vector3(-0.35, -0.35, -1.6) if _is_brig else Vector3(-0.25, -0.35, -1.2))
+				_cam.look_at_from_position(eye, look, Vector3.UP)
 		"hold":
 			var eye := xf * _ship.ship_point(Vector3(-0.45, 0.58, 6.1) if _is_brig else Vector3(-0.35, 0.68, 4.3))
 			var look := xf * _ship.ship_point(Vector3(0.2, -0.3, -1.8))

@@ -1297,19 +1297,57 @@ def build_decks(mb):
         y = DECK_Y - H * i / nst; z = zt + (zb - zt) * i / nst
         cbox(mb, (0, y - 0.03, z + 0.02), (hx1 - hx0 - 0.20, 0.06, 0.30), 'wood', deck_col(), 0.015, (1, 0, 0))
 
-    # Grand Helm pedestal & brass binnacle
+    # Lowered Grand Helm pedestal (top QDECK_Y + 0.80) + tilted brass binnacle compass + fixed brass lubber-line indicator arch
     hz = STATIONS['Station_Helm'][0][2]
-    cbox(mb, (0, QDECK_Y + 0.05, hz - 0.32), (0.62, 0.10, 0.54), 'wood', C_DARK, 0.025)
-    hexa(mb, [(-0.22, QDECK_Y + 0.1, hz - 0.50), (0.22, QDECK_Y + 0.1, hz - 0.50),
-              (0.22, QDECK_Y + 0.1, hz - 0.14), (-0.22, QDECK_Y + 0.1, hz - 0.14),
-              (-0.15, QDECK_Y + 1.14, hz - 0.44), (0.15, QDECK_Y + 1.14, hz - 0.44),
-              (0.15, QDECK_Y + 1.14, hz - 0.16), (-0.15, QDECK_Y + 1.14, hz - 0.16)],
+    cbox(mb, (0, QDECK_Y + 0.04, hz - 0.30), (0.52, 0.08, 0.44), 'wood', C_DARK, 0.02)
+    hexa(mb, [(-0.20, QDECK_Y + 0.08, hz - 0.46), (0.20, QDECK_Y + 0.08, hz - 0.46),
+              (0.20, QDECK_Y + 0.08, hz - 0.14), (-0.20, QDECK_Y + 0.08, hz - 0.14),
+              (-0.14, QDECK_Y + 0.76, hz - 0.40), (0.14, QDECK_Y + 0.76, hz - 0.40),
+              (0.14, QDECK_Y + 0.76, hz - 0.14), (-0.14, QDECK_Y + 0.76, hz - 0.14)],
          'wood', C_TEAL, (0, 1, 0))
-    cbox(mb, (0, QDECK_Y + 1.17, hz - 0.30), (0.40, 0.075, 0.40), 'wood', C_DARK, 0.02)
-    with xf(mb, T(0, QDECK_Y + 1.20, hz - 0.30)):
-        lathe(mb, [(0, 0), (0.14, 0), (0.14, 0.045), (0.12, 0.10), (0.065, 0.145), (0, 0.155)], 12, 'brass', C_BRASS)
-    with xf(mb, T(0, QDECK_Y + 0.95, hz - 0.15) @ M_Y2Z):
-        cyl(mb, 0.048, 0, 0.14, 8, 'brass', C_BRASS)
+    cbox(mb, (0, QDECK_Y + 0.78, hz - 0.27), (0.36, 0.04, 0.32), 'wood', C_DARK, 0.015)
+    # Waist-height wheel axle shaft connecting pedestal cleanly into Wheel hub at QDECK_Y + 0.68
+    with xf(mb, T(0, QDECK_Y + 0.68, hz - 0.15) @ M_Y2Z):
+        cyl(mb, 0.040, 0.0, 0.15, 8, 'brass', C_BRASS)
+        lathe(mb, [(0.040, 0.01), (0.060, 0.01), (0.060, 0.036), (0.046, 0.046), (0.040, 0.046)], 10, 'brass', C_BRASS)
+    # Recessed Brass Ship's Binnacle Compass Bowl tilted gently aft (+18 deg) toward the helmsman on the pedestal top
+    with xf(mb, T(0, QDECK_Y + 0.815, hz - 0.265) @ R('X', 18)):
+        lathe(mb, [(0, 0.0), (0.112, 0.0), (0.120, 0.024), (0.114, 0.058), (0.102, 0.072), (0.088, 0.072), (0.086, 0.044), (0, 0.044)], 12, 'brass', C_BRASS)
+        cyl(mb, 0.085, 0.042, 0.050, 12, 'paint', C_CREAM, False)
+        cbox(mb, (0, 0.053, -0.020), (0.015, 0.005, 0.056), 'paint', C_RED, 0.001)
+        cbox(mb, (0, 0.053, 0.020), (0.013, 0.005, 0.044), 'iron', C_IRON, 0.001)
+        ellipsoid(mb, (0, 0.055, 0), (0.013, 0.006, 0.013), 'brass', C_BRASS, 6, 3)
+    # Fixed Brass Rudder-Indicator Bridge/Arch directly behind the upper wheel rim (z = hz - 0.098, y = QDECK_Y + 0.80..1.08)
+    hub_y = QDECK_Y + 0.68
+    arch_z = hz - 0.098
+    r_arch = 0.385
+    for sg in (-1, 1):
+        ax_end = sg * r_arch * sin(radians(54))
+        ay_end = hub_y + r_arch * cos(radians(54))
+        tube(mb, [(sg * 0.145, QDECK_Y + 0.79, hz - 0.148), (sg * 0.230, QDECK_Y + 0.835, arch_z), (ax_end, ay_end, arch_z)], 0.015, 6, 'brass', C_BRASS)
+        with xf(mb, T(sg * 0.145, QDECK_Y + 0.80, hz - 0.148)):
+            cyl(mb, 0.028, 0.0, 0.024, 8, 'brass', C_BRASS)
+    arch_pts = [(r_arch * sin(radians(a)), hub_y + r_arch * cos(radians(a)), arch_z) for a in range(-54, 55, 6)]
+    tube(mb, arch_pts, 0.015, 6, 'brass', C_BRASS)
+    for deg, pip_col, is_ctr in ((-42, C_RED, False), (-21, C_RED, False), (0, C_GOLD, True), (21, C_TEAL, False), (42, C_TEAL, False)):
+        ar = radians(deg)
+        px = r_arch * sin(ar); py = hub_y + r_arch * cos(ar)
+        with xf(mb, T(px, py, arch_z + 0.014) @ R('Z', -deg)):
+            sz = (0.038, 0.028, 0.015) if is_ctr else (0.028, 0.022, 0.013)
+            cbox(mb, (0, 0, 0), sz, 'brass', C_BRASS, 0.003)
+            cbox(mb, (0, 0, 0.006), (sz[0] * 0.68, sz[1] * 0.68, 0.006), 'paint', pip_col, 0.001)
+    # Bright golden downward-pointing 12-o'clock Lubber-Line Pointer Triangle facing the King Spoke when centered (helm == 0)
+    tri_top = hub_y + r_arch + 0.018   # QDECK_Y + 1.083
+    tri_tip = hub_y + r_arch - 0.050   # QDECK_Y + 1.015
+    tz0 = arch_z - 0.011; tz1 = arch_z + 0.023
+    t_pts = [(-0.036, tri_top, tz0), (0.036, tri_top, tz0), (0.0, tri_tip, tz0),
+             (-0.036, tri_top, tz1), (0.036, tri_top, tz1), (0.0, tri_tip, tz1)]
+    tc = Vector((0.0, (tri_top * 2 + tri_tip) / 3.0, (tz0 + tz1) * 0.5))
+    mb.fp([t_pts[0], t_pts[1], t_pts[2]], 'brass', C_GOLD, None, tc)
+    mb.fp([t_pts[3], t_pts[4], t_pts[5]], 'brass', C_GOLD, None, tc)
+    mb.fp([t_pts[0], t_pts[1], t_pts[4], t_pts[3]], 'brass', C_GOLD, None, tc)
+    mb.fp([t_pts[1], t_pts[2], t_pts[5], t_pts[4]], 'brass', C_GOLD, None, tc)
+    mb.fp([t_pts[2], t_pts[0], t_pts[3], t_pts[5]], 'brass', C_GOLD, None, tc)
 
 # ---------------------------------------------------------------- RAILS & BALUSTRADES
 def rail_frame(s):
@@ -1427,7 +1465,7 @@ def build_rails(mb):
     cbox(mb, (0, yr + 0.045, zt + 0.05), (2 * wt + 0.24, 0.09, 0.22), 'brass', C_BRASS, 0.03)
     for sg in (-1, 1):
         lx = sg * (wt - 0.12); ly = yt + 1.15; lz = zt + 0.06
-        tube(mb, [(lx, yr + 0.06, zt + 0.05), (lx, ly - 0.20, lz)], 0.032, 6, 'iron', C_IRON)
+        tube(mb, [(lx, yr + 0.04, zt + 0.05), (lx, ly - 0.17, lz)], 0.032, 6, 'iron', C_IRON)
         build_lantern(mb, (lx, ly, lz), 0.95, False)
 
 # ---------------------------------------------------------------- INTERIOR HOLD & CAPTAIN'S CABIN
@@ -1517,52 +1555,56 @@ def crate(mb, c, size, M=None, tone=C_DECK):
 def rope_coil(mb, c, r=0.22, turns=4, col=C_ROPE):
     with xf(mb, T(c)):
         for i in range(turns):
-            with xf(mb, T(0, 0.035 + i * 0.055, 0)):
+            with xf(mb, T(0, 0.028 + i * 0.052, 0)):
                 torus(mb, r - (i % 2) * 0.02, 0.034, 10, 5, 'rope', mul(col, 0.9 + 0.1 * (i % 2)))
 
 def build_props_deck(mb):
-    # Forward deck supplies tucked cleanly near bow bulwarks
-    barrel(mb, (-1.25, DECK_Y, -5.6), 0.30, 0.85)
-    barrel(mb, (-0.70, DECK_Y, -6.0), 0.27, 0.78, tone=C_DARK, band=C_BRASS)
-    crate(mb, (1.20, DECK_Y, -5.65), (0.72, 0.56, 0.62), R('Y', 16))
-    crate(mb, (1.15, DECK_Y + 0.56, -5.68), (0.46, 0.36, 0.44), R('Y', -14), C_HULL)
-    rope_coil(mb, (1.65, DECK_Y, -4.45), 0.26, 3)
-    rope_coil(mb, (-1.55, QDECK_Y, 5.4), 0.25, 3)
-    barrel(mb, (1.42, QDECK_Y, 7.65), 0.26, 0.75, tone=C_DARK, band=C_BRASS)
-    barrel(mb, (-1.42, QDECK_Y, 7.65), 0.25, 0.72, tone=C_HULL)
-    # Cannonball racks beside all four deck cannons
+    # Clean, uncluttered foredeck & quarterdeck: flush-grounded against bulwarks & clear of walkways, cannons, FishingLine & EmissaryFlag
+    barrel(mb, (-1.32, DECK_Y, -5.65), 0.27, 0.78, tone=C_TAR, band=C_IRON)
+    rope_coil(mb, (1.55, DECK_Y, -4.55), 0.24, 3)
+    rope_coil(mb, (-1.52, QDECK_Y, 5.45), 0.24, 3)
+    barrel(mb, (1.32, QDECK_Y, 7.55), 0.25, 0.74, tone=C_DARK, band=C_BRASS)
+    # Recessed open-top cannonball trough racks flush at DECK_Y beside all four deck cannons
     for zc in (-1.55, 0.55):
         for sg in (-1, 1):
-            cbox(mb, (sg * 1.98, DECK_Y + 0.05, zc), (0.52, 0.10, 0.22), 'wood', C_DARK, 0.02)
+            cx = sg * 1.98
+            cbox(mb, (cx, DECK_Y + 0.02, zc), (0.54, 0.04, 0.22), 'wood', C_DARK, 0.008)
+            for sz in (-1, 1):
+                cbox(mb, (cx, DECK_Y + 0.070, zc + sz * 0.090), (0.54, 0.066, 0.038), 'wood', C_DARK, 0.008)
+            for sx in (-1, 1):
+                cbox(mb, (cx + sx * 0.252, DECK_Y + 0.070, zc), (0.038, 0.066, 0.142), 'wood', C_DARK, 0.008)
             for i in range(3):
-                ellipsoid(mb, (sg * (1.82 + 0.16 * i), DECK_Y + 0.165, zc), (0.078, 0.078, 0.078), 'iron', C_IRON, 8, 5)
-    # Aft powder kegs tucked beside the aft cannons
+                ellipsoid(mb, (sg * (1.82 + 0.16 * i), DECK_Y + 0.112, zc), (0.075, 0.075, 0.075), 'iron', C_IRON, 8, 5)
+    # Aft powder kegs tucked beside the aft cannons (flush inboard of waterway)
     for sg in (-1, 1):
         build_powder_keg(mb, (sg * 1.95, DECK_Y, 2.25))
 
 def build_props_hold(mb):
     y = HOLD_Y
-    # Fore hold cargo around foremast
-    barrel(mb, (-0.82, y, -5.05), 0.32, 0.90)
-    barrel(mb, (0.78, y, -5.05), 0.32, 0.88, tone=C_DARK, band=C_BRASS)
-    barrel(mb, (1.10, y + 0.31, -3.90), 0.30, 0.85, R('Y', 22) @ R('X', 90))
-    crate(mb, (-1.15, y, -3.95), (0.72, 0.62, 0.72), R('Y', 8))
-    crate(mb, (-1.12, y + 0.62, -3.97), (0.48, 0.40, 0.48), R('Y', -15), C_HULL)
-    barrel(mb, (1.25, y, -0.30), 0.30, 0.84, tone=C_HULL)
-    barrel(mb, (-1.28, y, -0.35), 0.29, 0.82, tone=C_DARK, band=C_BRASS)
-    rope_coil(mb, (0.95, y, 1.05), 0.26, 3)
+    # Tidy hold cargo 100% flush inside floor_in and >= 0.85 m clear of ShipSupplyBarrels, CookingStove, BilgePump, MapTable & stairs
+    barrel(mb, (-0.42, y, -5.05), 0.26, 0.84, tone=C_HULL)
+    barrel(mb, (0.42, y, -5.05), 0.25, 0.78, tone=C_DARK, band=C_BRASS)
+    crate(mb, (-0.74, y, -3.65), (0.52, 0.50, 0.52), R('Y', 6))
+    barrel(mb, (0.94, y, -0.25), 0.28, 0.82, tone=C_HULL)
+    rope_coil(mb, (-0.92, y, -0.55), 0.22, 3)
 
-    # Crew hammocks slung fore and aft in midship berthing (clear of shot=cabin), anchored to hull ribs with hemp clew ropes
+    # Crew hammocks slung fore and aft in aft-midship berthing (clear of walkways, RationsBarrel & CookingStove),
+    # with ALL 4 taut hemp clew ropes physically anchored straight into the solid inner hull ribs/planking
     for sg in (-1, 1):
-        pts = [(sg * 1.82, 0.84, 2.35), (sg * 1.78, 0.56, 2.85), (sg * 1.76, 0.45, 3.35),
-               (sg * 1.74, 0.56, 3.85), (sg * 1.66, 0.84, 4.30)]
+        pts = [(sg * 1.82, 0.86, 2.95), (sg * 1.78, 0.58, 3.38), (sg * 1.76, 0.48, 3.80),
+               (sg * 1.72, 0.58, 4.22), (sg * 1.66, 0.86, 4.65)]
         secs = [[Vector(q) + Vector((-0.24 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.10, 0)),
                  Vector(q),
                  Vector(q) + Vector((0.24 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.10, 0))]
                 for i, q in enumerate(pts)]
         loft(mb, secs, 'cloth', srgb('#e9dcb8'), False, (False, False), 'smooth', flip=False)
-        tube(mb, [pts[0], (sg * 2.15, 1.06, 1.98)], 0.017, 6, 'rope', C_ROPE)
-        tube(mb, [pts[-1], (sg * 2.02, 1.06, 4.65)], 0.017, 6, 'rope', C_ROPE)
+        for end_pt, az in ((pts[0], 2.65), (pts[-1], 4.95)):
+            ay = 1.08
+            wall_x = sg * (inner_half(az, ay) + 0.02)
+            ring_x = sg * (inner_half(az, ay) - 0.03)
+            tube(mb, [end_pt, (wall_x, ay, az)], 0.017, 6, 'rope', C_ROPE)
+            with xf(mb, T(ring_x, ay, az) @ M_Y2Z):
+                torus(mb, 0.034, 0.009, 8, 4, 'iron', C_IRON)
     build_cabin(mb)
 
 def build_cabin(mb):
@@ -1579,20 +1621,19 @@ def build_cabin(mb):
     cbox(mb, (0, y + 0.004, 5.75), (1.65, 0.008, 1.40), 'cloth', C_CREAM, 0.0)
     cbox(mb, (0, y + 0.010, 5.75), (1.42, 0.008, 1.18), 'cloth', C_INDIGO, 0.0)
     cbox(mb, (0, y + 0.016, 5.75), (0.62, 0.008, 0.56), 'cloth', C_GOLD, 0.0, None, R('Y', 45))
-    # Captain's brass-bound sea chest
-    with xf(mb, T(0.68, y, 6.20) @ R('Y', -14)):
-        cbox(mb, (0, 0.18, 0), (0.68, 0.36, 0.42), 'wood', C_DARK, 0.02, (1, 0, 0))
+    # Captain's brass-bound sea chest & navigator's stool seated 100% flush inside floor_in (zero hull clip)
+    with xf(mb, T(0.36, y, 6.08) @ R('Y', -12)):
+        cbox(mb, (0, 0.18, 0), (0.56, 0.36, 0.40), 'wood', C_DARK, 0.02, (1, 0, 0))
         with xf(mb, T(0, 0.36, 0) @ M_Y2X):
-            lathe(mb, [(0, -0.34), (0.21, -0.34), (0.21, 0.34), (0, 0.34)], 12, 'wood', C_HULL, True)
-        for sx in (-0.22, 0.22):
-            cbox(mb, (sx, 0.20, 0), (0.055, 0.42, 0.44), 'brass', C_BRASS, 0.008)
-        cbox(mb, (0, 0.31, -0.22), (0.09, 0.10, 0.03), 'brass', C_BRASS, 0.008)
-    # Navigator's stool
-    with xf(mb, T(-0.62, y, 6.15)):
+            lathe(mb, [(0, -0.28), (0.20, -0.28), (0.20, 0.28), (0, 0.28)], 12, 'wood', C_HULL, True)
+        for sx in (-0.18, 0.18):
+            cbox(mb, (sx, 0.185, 0), (0.05, 0.37, 0.42), 'brass', C_BRASS, 0.008)
+        cbox(mb, (0, 0.30, -0.21), (0.085, 0.095, 0.03), 'brass', C_BRASS, 0.008)
+    with xf(mb, T(-0.42, y, 6.08)):
         lathe(mb, [(0, 0.42), (0.18, 0.42), (0.18, 0.47), (0, 0.47)], 10, 'wood', C_HULL)
         for k in range(3):
             a = 2 * pi * k / 3
-            tube(mb, [(0.085 * cos(a), 0.42, 0.085 * sin(a)), (0.17 * cos(a), 0, 0.17 * sin(a))], 0.025, 5, 'wood', C_DARK)
+            tube(mb, [(0.085 * cos(a), 0.42, 0.085 * sin(a)), (0.165 * cos(a), 0.0, 0.165 * sin(a))], 0.025, 5, 'wood', C_DARK)
     # Velvet curtains flanking the 3 tall stern windows
     ang = math.degrees(math.atan(0.22))
     with xf(mb, T(0, DECK_Y, Z_STERN) @ R('X', ang)):
@@ -1948,21 +1989,36 @@ def rope_object(name, a, b):
 # ---------------------------------------------------------------- MOVING MECHANISMS
 def build_wheel(mb, o):
     with xf(mb, T(o) @ M_Y2Z):
-        for (r0, r1, hh, c) in ((0.44, 0.54, 0.055, C_DARK), (0.19, 0.24, 0.038, C_DARK)):
-            lathe(mb, [(r0, -hh), (r1 - 0.015, -hh), (r1, -hh + 0.015), (r1, hh - 0.015),
-                       (r1 - 0.015, hh), (r0, hh), (r0, -hh)], 24, 'wood', c)
-        # Brass rim ring accent
-        torus(mb, 0.49, 0.016, 24, 5, 'brass', C_BRASS)
+        # Sleek Captain-scale Brigantine wheel rims: outer (0.28..0.34, hh=0.038) & inner ring (0.12..0.155, hh=0.028)
+        for (r0, r1, hh, c) in ((0.28, 0.34, 0.038, C_DARK), (0.12, 0.155, 0.028, C_DARK)):
+            lathe(mb, [(r0, -hh), (r1 - 0.012, -hh), (r1, -hh + 0.012), (r1, hh - 0.012),
+                       (r1 - 0.012, hh), (r0, hh), (r0, -hh)], 24, 'wood', c)
+        # Gleaming brass inlay trim ring facing the helmsman (+Y in M_Y2Z = +Z aft)
+        with xf(mb, T(0, 0.035, 0)):
+            torus(mb, 0.310, 0.009, 24, 5, 'brass', C_BRASS)
+        # 8 turned spokes: k == 2 points straight UP (+Y, 12 o'clock) when centered (helm == 0)
         for k in range(8):
             with xf(mb, R('Y', k * 45) @ M_Y2X):
-                mat_s = 'brass' if k == 6 else 'wood'
-                col_s = C_BRASS if k == 6 else C_HULL
-                lathe(mb, [(0.032, 0.09), (0.042, 0.22), (0.032, 0.44), (0.048, 0.47), (0.048, 0.52),
-                           (0.030, 0.55), (0.042, 0.62), (0.050, 0.69), (0.032, 0.75), (0, 0.76)], 7, mat_s, col_s, True, True)
-        lathe(mb, [(0, -0.095), (0.12, -0.095), (0.135, -0.05), (0.135, 0.05), (0.10, 0.11), (0.045, 0.13), (0, 0.13)], 12, 'brass', C_BRASS)
+                if k == 2:
+                    # UNMISTAKABLE KING SPOKE (12 o'clock UP, total reach 0.520 m):
+                    lathe(mb, [(0.025, 0.065), (0.032, 0.14), (0.026, 0.28), (0.032, 0.340)], 8, 'paint', C_RED, True, True)
+                    # First wide gleaming brass collar ring seated flush outside the outer rim
+                    lathe(mb, [(0.029, 0.338), (0.039, 0.343), (0.039, 0.365), (0.029, 0.370)], 10, 'brass', C_GOLD, False)
+                    # Bold crimson-lacquered ergonomic King Spoke handle
+                    lathe(mb, [(0.027, 0.369), (0.036, 0.390), (0.038, 0.416), (0.029, 0.442)], 8, 'paint', C_RED, True, True)
+                    # Second wide gleaming brass collar ring crowning the grip
+                    lathe(mb, [(0.028, 0.440), (0.040, 0.445), (0.040, 0.461), (0.027, 0.466)], 10, 'brass', C_GOLD, False)
+                    # Oversized 8-faceted golden-brass crown finial orb + pointed gold diamond tip (0.520 m)
+                    lathe(mb, [(0.023, 0.465), (0.039, 0.478), (0.039, 0.490), (0.021, 0.499), (0.027, 0.504), (0.0, 0.520)], 8, 'brass', C_GOLD, False)
+                else:
+                    # Regular Captain-scale turned oak spoke (tip at 0.450 m -> 1.401 m at 1.24x, 20 cm below eye line)
+                    lathe(mb, [(0.023, 0.065), (0.030, 0.15), (0.024, 0.28), (0.032, 0.31), (0.032, 0.345),
+                               (0.021, 0.365), (0.029, 0.402), (0.033, 0.428), (0.019, 0.445), (0, 0.450)], 7, 'wood', C_HULL, True, True)
+        # Turned brass center hub boss
+        lathe(mb, [(0, -0.070), (0.086, -0.070), (0.098, -0.038), (0.098, 0.038), (0.072, 0.076), (0.032, 0.094), (0, 0.094)], 12, 'brass', C_BRASS)
         for k in range(8):
-            with xf(mb, R('Y', k * 45 + 22.5) @ T(0.49, 0.056, 0)):
-                ellipsoid(mb, (0, 0, 0), (0.022, 0.014, 0.022), 'brass', C_BRASS, 6, 3)
+            with xf(mb, R('Y', k * 45 + 22.5) @ T(0.310, 0.038, 0)):
+                ellipsoid(mb, (0, 0, 0), (0.016, 0.010, 0.016), 'brass', C_BRASS, 6, 3)
 
 def build_rudder(mb, o):
     z0 = Z_STERN - 0.08
@@ -2129,17 +2185,17 @@ def build_bucket(mb, o):
 def build_plank_stack(mb, o):
     rng = mb.rng
     with xf(mb, T(o)):
-        for sz in (-0.5, 0.5):
-            cbox(mb, (0, 0.03, sz), (0.62, 0.06, 0.08), 'wood', C_DARK, 0.012)
+        for sz in (-0.42, 0.42):
+            cbox(mb, (0, 0.025, sz), (0.48, 0.05, 0.075), 'wood', C_DARK, 0.01)
         for layer in range(4):
             for i in range(3 if layer < 3 else 2):
-                cbox(mb, (-0.18 + 0.18 * i + rng.uniform(-0.015, 0.015) + (0.09 if layer == 3 else 0),
-                          0.085 + layer * 0.05, rng.uniform(-0.06, 0.06)),
-                     (0.165, 0.045, 1.55 + rng.uniform(-0.1, 0.1)),
-                     'wood', jit(C_DECK, rng, 0.12), 0.01, None, R('Y', rng.uniform(-2, 2)))
-        with xf(mb, T(0.05, 0.285, 0.30) @ R('Y', 35)):
-            cbox(mb, (0, 0.04, 0), (0.10, 0.08, 0.20), 'wood', C_DARK, 0.015)
-            cbox(mb, (0.18, 0.04, 0), (0.30, 0.035, 0.035), 'wood', C_HULL, 0.008)
+                cbox(mb, (-0.15 + 0.15 * i + rng.uniform(-0.01, 0.01) + (0.075 if layer == 3 else 0),
+                          0.072 + layer * 0.044, rng.uniform(-0.04, 0.04)),
+                     (0.142, 0.042, 1.22 + rng.uniform(-0.06, 0.06)),
+                     'wood', jit(C_DECK, rng, 0.12), 0.008, None, R('Y', rng.uniform(-2, 2)))
+        with xf(mb, T(0.04, 0.248, 0.24) @ R('Y', 35)):
+            cbox(mb, (0, 0.036, 0), (0.095, 0.072, 0.19), 'wood', C_DARK, 0.012)
+            cbox(mb, (0.17, 0.036, 0), (0.28, 0.032, 0.032), 'wood', C_HULL, 0.008)
 
 def build_hatch_cover(mb, o, sg):
     hx0, hx1, hz0, hz1 = HATCH; L = hz1 - hz0 + 0.10; W = hx1 + 0.12
@@ -2240,7 +2296,7 @@ def extras(hull):
 
     o = (-0.68, 3.15, MAST_Z); b = MB('Bell', o); build_bell(b, o); build(b)
     o = (0.64, HOLD_Y, 2.25); bk = MB('Bucket', o); build_bucket(bk, o); hull.merge(bk); empty_anchor('Bucket', o)
-    o = (-1.15, HOLD_Y, 1.75); ps = MB('PlankStack', o); build_plank_stack(ps, o); hull.merge(ps); empty_anchor('PlankStack', o)
+    o = (0.86, HOLD_Y, -1.85); ps = MB('PlankStack', o); build_plank_stack(ps, o); hull.merge(ps); empty_anchor('PlankStack', o)
 
     hx0, hx1, hz0, hz1 = HATCH
     for name, sg in (('HatchCover_Starboard', 1), ('HatchCover_Port', -1)):
@@ -2480,9 +2536,9 @@ def build_lod(outdir):
         for sg in (-1, 1):
             cbox(mb, (sg * 2.25, DECK_Y + 0.64, zc), (1.6, 0.30, 0.30), 'paint', C_IRON, 0.0)
             cbox(mb, (sg * 1.85, DECK_Y + 0.30, zc), (0.95, 0.40, 0.56), 'paint', C_INDIGO, 0.0)
-    cbox(mb, (0, QDECK_Y + 0.60, 6.50), (0.36, 1.20, 0.36), 'paint', C_TEAL, 0.0)
-    with xf(mb, T(0, QDECK_Y + 0.95, 6.80) @ M_Y2Z):
-        lathe(mb, [(0, -0.04), (0.54, -0.04), (0.54, 0.04), (0, 0.04)], 8, 'paint', C_DARK, False)
+    cbox(mb, (0, QDECK_Y + 0.40, 6.50), (0.32, 0.80, 0.32), 'paint', C_TEAL, 0.0)
+    with xf(mb, T(0, QDECK_Y + 0.68, 6.80) @ M_Y2Z):
+        lathe(mb, [(0, -0.038), (0.34, -0.038), (0.34, 0.038), (0, 0.038)], 8, 'paint', C_DARK, False)
     with xf(mb, T(0, DECK_Y, -6.5)):
         lathe(mb, [(0.44, 0), (0.26, 0.52), (0.45, 0.80), (0.45, 1.08), (0, 1.12)], 6, 'paint', C_DARK, False)
     yl = yts + 1.65
@@ -2584,7 +2640,7 @@ def main():
 
     # Helm Wheel, Rudder, Capstan, Anchor
     hz = STATIONS['Station_Helm'][0][2]
-    o = (0, QDECK_Y + 0.95, hz); wheel = MB('Wheel', o); build_wheel(wheel, o); build(wheel)
+    o = (0, QDECK_Y + 0.68, hz); wheel = MB('Wheel', o); build_wheel(wheel, o); build(wheel)
     o = (0, 0, Z_STERN - 0.08); rud = MB('Rudder', o); build_rudder(rud, o); build(rud)
     o = STATIONS['Station_Anchor'][0]; cap = MB('Capstan', o); build_capstan(cap, o); build(cap)
     o = (2.06, ytop(-7.2) - 0.45, -7.2); anc = MB('Anchor', o); build_anchor(anc, o); build(anc)
@@ -2606,44 +2662,45 @@ def main():
 
     extras(hull)
 
-    # Five standard lanterns (Stern, Mast, Hold, Hold_Fore, Helm)
+    # Five standard lanterns (Stern, Mast, Hold, Hold_Fore, Helm) -- every bracket embedded solidly with zero air gap
     yts = ytop(Z_STERN); zts = zstern(yts) - 0.02
     for name, c, s, hang in (
         ('Lantern_Stern', (0, yts + 1.65, zts), 1.65, False),
         ('Lantern_Mast', (0, 3.65, MAST_Z + 0.56), 1.0, True),
         ('Lantern_Hold', (0, 1.62, 5.2), 1.0, True),
-        ('Lantern_Hold_Fore', (0.56, 0.62, -4.3), 0.95, True),
+        ('Lantern_Hold_Fore', (0.52, 0.62, MAST_FORE_Z), 0.95, True),
     ):
         l = MB(name, c); build_lantern(l, c, s, hang)
         if name == 'Lantern_Stern':
-            tube(l, [(0, yts + 0.10, zts), (0, yts + 1.28, zts)], 0.048, 6, 'iron', C_IRON)
+            tube(l, [(0, yts + 0.08, zts), (0, yts + 1.35, zts)], 0.048, 6, 'iron', C_IRON)
             cbox(l, (0, yts + 0.48, zts), (0.22, 0.96, 0.17), 'wood', C_CREAM, 0.03, (0, 1, 0))
         elif name == 'Lantern_Mast':
-            cbox(l, (0, c[1] + 0.42, MAST_Z + 0.44), (0.05, 0.05, 0.38), 'iron', C_IRON, 0.01)
+            cbox(l, (0, c[1] + 0.405, MAST_Z + 0.44), (0.05, 0.05, 0.38), 'iron', C_IRON, 0.01)
         elif name == 'Lantern_Hold':
-            tube(l, [(0, c[1] + 0.42, c[2]), (0, QDECK_Y - 0.10, c[2])], 0.013, 4, 'iron', C_IRON)
+            tube(l, [(0, c[1] + 0.39, c[2]), (0, QDECK_Y - 0.08, c[2])], 0.014, 4, 'iron', C_IRON)
         else:
-            cbox(l, (0.42, c[1] + 0.38, c[2]), (0.34, 0.05, 0.05), 'iron', C_IRON, 0.01)
+            cbox(l, (0.39, c[1] + 0.38, MAST_FORE_Z), (0.36, 0.05, 0.05), 'iron', C_IRON, 0.01)
         hull.merge(l); empty_anchor(name, c)
 
-    c = (-0.40, QDECK_Y + 1.38, hz - 0.30); l = MB('Lantern_Helm', c); build_lantern(l, c, 0.62, False)
-    tube(l, [(-0.16, QDECK_Y + 1.02, hz - 0.30), (-0.40, QDECK_Y + 1.07, hz - 0.30), (-0.40, QDECK_Y + 1.25, hz - 0.30)],
-         0.019, 5, 'iron', C_IRON)
-    with xf(l, T(-0.40, QDECK_Y + 1.08, hz - 0.30)):
-        lathe(l, [(0, -0.03), (0.036, -0.03), (0.036, 0.03), (0, 0.03)], 8, 'brass', C_BRASS)
+    # Lowered outboard helm lamp mounted solidly to the lowered pedestal side (clear of forward sightline, zero air gap)
+    c = (-0.48, QDECK_Y + 0.94, hz - 0.28); l = MB('Lantern_Helm', c); build_lantern(l, c, 0.58, False)
+    tube(l, [(-0.14, QDECK_Y + 0.62, hz - 0.28), (-0.48, QDECK_Y + 0.68, hz - 0.28), (-0.48, QDECK_Y + 0.84, hz - 0.28)],
+         0.017, 5, 'iron', C_IRON)
+    with xf(l, T(-0.48, QDECK_Y + 0.805, hz - 0.28)):
+        lathe(l, [(0, -0.026), (0.035, -0.026), (0.035, 0.026), (0, 0.026)], 8, 'brass', C_BRASS)
     hull.merge(l); empty_anchor('Lantern_Helm', c)
 
-    # Sail-control winches & deck bucket
+    # Sail-control winches & deck bucket (flush inboard of waterway)
     for name, key, band in (('Winch_SailLength', 'Station_SailLength', C_INDIGO),
                             ('Winch_SailAngle', 'Station_SailAngle', C_TEAL)):
         o = STATIONS[key][0]; o = (o[0] * 0.955, o[1], o[2]); w = MB(name, o); build_winch(w, o, band); hull.merge(w)
 
-    o = (-1.92, DECK_Y, -4.35); bd = MB('Bucket_Deck', o); build_bucket(bd, o)
-    rope_coil(bd, (-1.92, DECK_Y, -4.82), 0.18, 3)
+    o = (-1.78, DECK_Y, -4.35); bd = MB('Bucket_Deck', o); build_bucket(bd, o)
+    rope_coil(bd, (-1.68, DECK_Y, -4.78), 0.16, 3)
     rp, _ = rail_frame(s_of_z(-4.35))
-    tube(bd, [(-1.92, DECK_Y + 0.44, -4.33), (-2.05, DECK_Y + 0.62, -4.40),
-              (-(rp.x - 0.10), rp.y + 0.12, -4.46), (-(rp.x - 0.22), DECK_Y + 0.42, -4.72),
-              (-1.95, DECK_Y + 0.14, -4.82)], 0.015, 4, 'rope', C_ROPE)
+    tube(bd, [(-1.78, DECK_Y + 0.44, -4.33), (-1.96, DECK_Y + 0.62, -4.40),
+              (-(rp.x - 0.10), rp.y + 0.12, -4.46), (-(rp.x - 0.22), DECK_Y + 0.42, -4.70),
+              (-1.72, DECK_Y + 0.14, -4.78)], 0.015, 4, 'rope', C_ROPE)
     hull.merge(bd); empty_anchor('Bucket_Deck', o)
 
     mt = MB('MapTable', STATIONS['Station_MapTable'][0]); build_map_table(mt); hull.merge(mt); empty_anchor('MapTable', mt.origin)

@@ -48,6 +48,9 @@ var _cannon_cam_blend: float = 0.0
 func _init() -> void:
 	# Run before the pawn so intent is applied in the same tick.
 	process_physics_priority = -10
+	# Keep mouse look, head-bob, and camera shake 100% immediate on every render frame
+	# while still automatically inheriting the parent Pawn's physics-interpolated world position.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 
 func _ready() -> void:
 	pawn = get_parent() as Pawn
@@ -302,7 +305,7 @@ func _update_camera(delta: float) -> void:
 		var muzzle_dir: Vector3 = (cannon_pose["dir"] as Vector3).normalized()
 		var barrel_yaw := atan2(-muzzle_dir.x, -muzzle_dir.z)
 		var barrel_pitch := clampf(asin(clampf(muzzle_dir.y, -0.99, 0.99)), -PITCH_LIMIT, PITCH_LIMIT)
-		var align_k := 1.0 if delta <= 0.0 else clampf(delta * 14.0, 0.0, 1.0)
+		var align_k := 1.0 if delta <= 0.0 else (1.0 - exp(-14.0 * delta))
 		pawn.look_yaw = lerp_angle(pawn.look_yaw, barrel_yaw, align_k)
 		pawn.look_pitch = lerpf(pawn.look_pitch, barrel_pitch, align_k)
 		_cannon_cam_blend = 1.0 if delta <= 0.0 else move_toward(_cannon_cam_blend, 1.0, delta * 6.5)
@@ -317,13 +320,21 @@ func _update_camera(delta: float) -> void:
 	_bob_weight = move_toward(_bob_weight, 1.0 if walking else 0.0, delta * 5.0)
 	if walking:
 		_bob_phase = fmod(_bob_phase + speed * delta * 3.6, TAU)
-	# Landing dip: a critically damped spring.
-	_dip_vel += (-_dip * 180.0 - _dip_vel * 24.0) * delta
-	_dip = clampf(_dip + _dip_vel * delta, -0.22, 0.05)
+	# Landing dip: a critically damped spring (clamped dt prevents hitch oscillation).
+	var spring_dt := clampf(delta, 0.0, 0.033)
+	_dip_vel += (-_dip * 180.0 - _dip_vel * 24.0) * spring_dt
+	_dip = clampf(_dip + _dip_vel * spring_dt, -0.22, 0.05)
 	var bob_y := sin(_bob_phase * 2.0) * bob_amount * _bob_weight
 	var bob_x := cos(_bob_phase) * bob_amount * 0.6 * _bob_weight
-	position = Vector3(0.0, pawn.current_eye_height + pawn.visual_offset_y, 0.0)
-	var b := Basis(Vector3.UP, pawn.look_yaw) * Basis(Vector3.RIGHT, pawn.look_pitch)
+	var eye_y := pawn.interpolated_eye_offset_y() if delta > 0.0 else (pawn.current_eye_height + pawn.visual_offset_y)
+	position = Vector3(0.0, eye_y, 0.0)
+	# Mouse look is 100% immediate; only the 60 Hz ship-induced platform yaw carry is
+	# interpolated across render frames to stay locked with the turning interpolated deck.
+	var render_yaw := pawn.look_yaw
+	if pawn.platform != null and delta > 0.0 and is_inside_tree() and get_tree().physics_interpolation:
+		var frac := clampf(Engine.get_physics_interpolation_fraction(), 0.0, 1.0)
+		render_yaw = wrapf(render_yaw - pawn.platform_yaw_delta * (1.0 - frac), -PI, PI)
+	var b := Basis(Vector3.UP, render_yaw) * Basis(Vector3.RIGHT, pawn.look_pitch)
 	var cam_pos := Vector3(0.0, bob_y + _dip, 0.0) + b.x * bob_x
 	if in_cannon and _cannon_cam_blend > 0.001 and is_inside_tree():
 		var m_dir: Vector3 = (cannon_pose["dir"] as Vector3).normalized()

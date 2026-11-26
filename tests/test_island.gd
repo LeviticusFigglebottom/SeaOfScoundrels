@@ -1576,10 +1576,131 @@ func test_outpost_tavern_signboard_and_interactive_pier_fog_bell() -> void:
 	Weather.apply_state(saved_weather)
 
 
+func test_sculpted_high_detail_flora_and_rock_props() -> void:
+	# Regression guard for Pass Q2B sculpted flora & rock upgrades:
+	# verifies high-detail tri budgets, UV2 wind weights, valid MikkTSpace tangents,
+	# preserved PBR material names, and col_* collision meshes.
+	var specs: Array[Dictionary] = [
+		{
+			"file": "palm_tall.glb",
+			"min_tris": 3200, "max_tris": 5200, "cols": 2,
+			"need_uv2": true, "min_foliage_tris": 2400,
+			"mats": ["mat_foliage", "mat_bark_palm", "mat_paint"],
+		},
+		{
+			"file": "palm_curved.glb",
+			"min_tris": 3200, "max_tris": 5200, "cols": 2,
+			"need_uv2": true, "min_foliage_tris": 2200,
+			"mats": ["mat_foliage", "mat_bark_palm", "mat_paint"],
+		},
+		{
+			"file": "jungle_banyan.glb",
+			"min_tris": 4500, "max_tris": 7000, "cols": 1,
+			"need_uv2": true, "min_foliage_tris": 3000,
+			"mats": ["mat_foliage", "mat_bark_banyan"],
+		},
+		{
+			"file": "bush_fern.glb",
+			"min_tris": 1800, "max_tris": 3000, "cols": 0,
+			"need_uv2": true, "min_foliage_tris": 1400,
+			"mats": ["mat_foliage", "mat_bark_banyan", "mat_paint"],
+		},
+		{
+			"file": "rock_boulder.glb",
+			"min_tris": 350, "max_tris": 800, "cols": 1,
+			"need_uv2": false, "min_foliage_tris": 0,
+			"mats": ["mat_rock"],
+		},
+		{
+			"file": "rock_spire.glb",
+			"min_tris": 350, "max_tris": 800, "cols": 3,
+			"need_uv2": false, "min_foliage_tris": 0,
+			"mats": ["mat_rock"],
+		},
+	]
 
+	for spec in specs:
+		var fname: String = String(spec["file"])
+		var path := "res://assets/generated/props/" + fname
+		check(ResourceLoader.exists(path), "missing prop " + path)
+		var packed := load(path) as PackedScene
+		check(packed != null, "failed to load " + path)
+		if packed == null:
+			continue
+		var inst := packed.instantiate() as Node3D
+		check(inst != null, "prop root must be Node3D: " + fname)
+		if inst == null:
+			continue
 
+		var vis_tris := 0
+		var foliage_tris := 0
+		var col_count := 0
+		var found_mats: Dictionary = {}
+		var foliage_has_uv2 := false
+		var foliage_max_w := 0.0
+		var all_have_tangents := true
 
+		for node in inst.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			if mi.name.begins_with("col_"):
+				col_count += 1
+				continue
+			var mesh := mi.mesh
+			for si in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(si)
+				var raw_idx: Variant = arrays[Mesh.ARRAY_INDEX]
+				var s_tris := 0
+				if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+					s_tris = floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+				else:
+					var raw_v: Variant = arrays[Mesh.ARRAY_VERTEX]
+					if raw_v is PackedVector3Array:
+						s_tris = floori(float((raw_v as PackedVector3Array).size()) / 3.0)
+				vis_tris += s_tris
 
+				var raw_tan: Variant = arrays[Mesh.ARRAY_TANGENT]
+				if not (raw_tan is PackedFloat32Array) or (raw_tan as PackedFloat32Array).is_empty():
+					all_have_tangents = false
 
+				var mat := mesh.surface_get_material(si)
+				var mname := mat.resource_name if mat != null else ""
+				if not mname.is_empty():
+					found_mats[mname] = true
+				if mname.begins_with("mat_foliage"):
+					foliage_tris += s_tris
+					var raw_uv2: Variant = arrays[Mesh.ARRAY_TEX_UV2]
+					if raw_uv2 is PackedVector2Array and not (raw_uv2 as PackedVector2Array).is_empty():
+						foliage_has_uv2 = true
+						for uv2_pt: Vector2 in (raw_uv2 as PackedVector2Array):
+							foliage_max_w = maxf(foliage_max_w, uv2_pt.x)
 
+		var min_t: int = int(spec["min_tris"])
+		var max_t: int = int(spec["max_tris"])
+		var req_cols: int = int(spec["cols"])
+		var need_uv2: bool = bool(spec["need_uv2"])
+		var min_fol_t: int = int(spec["min_foliage_tris"])
+
+		check(vis_tris >= min_t and vis_tris <= max_t,
+			"%s visual tris %d outside sculpted budget [%d..%d]" % [fname, vis_tris, min_t, max_t])
+		check_eq(col_count, req_cols, "%s must preserve %d col_* colliders" % [fname, req_cols])
+		check(all_have_tangents, "%s visual surfaces must all carry valid MikkTSpace tangents" % fname)
+		for req_mat_v: Variant in (spec["mats"] as Array):
+			var req_mat := String(req_mat_v)
+			var matched := false
+			for fm_key: Variant in found_mats.keys():
+				if String(fm_key).begins_with(req_mat):
+					matched = true
+					break
+			check(matched, "%s missing required PBR material '%s' (found: %s)" % [fname, req_mat, str(found_mats.keys())])
+		if need_uv2:
+			check(foliage_tris >= min_fol_t,
+				"%s foliage tris %d below sculpted minimum %d" % [fname, foliage_tris, min_fol_t])
+			check(foliage_has_uv2, "%s mat_foliage surface must preserve UV2 Wind channel" % fname)
+			check(foliage_max_w >= 0.75,
+				"%s UV2 wind sway weights must reach tips (>= 0.75, got %.2f)" % [fname, foliage_max_w])
+		print("    prop %s: %d tris (foliage=%d, cols=%d, uv2_max=%.2f)" % [
+			fname, vis_tris, foliage_tris, col_count, foliage_max_w])
+		inst.free()
 

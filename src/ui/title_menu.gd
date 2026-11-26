@@ -1424,7 +1424,7 @@ func _build_settings_page() -> Control:
 
 	for line_txt: String in [
 		"[WASD] Move  |  [Space] Jump  |  [Shift] Sprint  |  [F] Use / Board  |  [X] Step Off",
-		"[Tab] Tools Radial  |  [Q] Crew Orders  |  [B] Shipwright  |  [LMB/RMB] Use & Aim  |  [Esc] Pause",
+		"[Q/Tab] Tools Radial  |  [G] Crew Orders  |  [1-6] Slots  |  [B] Shipwright  |  [LMB/RMB] Use & Aim  |  [Esc] Pause",
 	]:
 		var cl := Label.new()
 		cl.text = line_txt

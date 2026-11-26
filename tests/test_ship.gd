@@ -138,10 +138,10 @@ func test_sailing_wind_trim_and_turn() -> void:
 	# Full sail with optimal trim (0 rad for downwind).
 	s.set_sail_target(1.0)
 	s.set_trim_target(0.0)
-	await physics_frames(320)
+	await physics_frames(380)
 	var v_good := s.forward_speed()
 	print("    downwind good trim speed: %.2f m/s (%.1f kn)" % [v_good, s.speed_knots()])
-	check(v_good > 5.0, "full sail with good trim must accelerate well (got %.2f m/s)" % v_good)
+	check(v_good > 4.8, "full sail with good trim must accelerate well (got %.2f m/s)" % v_good)
 
 	# Poor trim (yard turned sideways 1.2 rad) should noticeably lose speed.
 	s.set_trim_target(1.2)
@@ -361,14 +361,14 @@ func test_brigantine_dual_masts_four_cannons_and_sailing() -> void:
 	var b2 := brig.fire_cannon(&"starboard_aft")
 	check(b1 != null and b2 != null, "brigantine fires twin broadside cannons")
 
-	# Full sails catch wind and achieve higher Brigantine top speed while staying upright.
+	# Full sails catch wind and achieve authentic weighty Brigantine top speed while staying upright.
 	brig.set_sail_target(1.0)
 	brig.set_trim_target(brig.ideal_sail_trim())
 	brig.apply_livery(Color(0.9, 0.85, 0.72), Color(0.18, 0.56, 0.64))
-	await physics_frames(220)
+	await physics_frames(360)
 	var spd := brig.forward_speed()
 	print("    brigantine downwind speed: %.2f m/s (%.1f kn) up.y=%.3f" % [spd, brig.speed_knots(), brig.global_basis.y.y])
-	check(spd > 6.0, "brigantine sails briskly downwind (got %.2f m/s)" % spd)
+	check(spd >= 6.1 and spd <= 8.2, "brigantine sails in weighty downwind speed band (got %.2f m/s)" % spd)
 	check(brig.global_basis.y.y > 0.90, "brigantine stays upright in waves")
 	await _end()
 
@@ -534,12 +534,12 @@ func test_anchor_turn_swinging_stop_rotates_hull() -> void:
 	var s_turn := _spawn_sloop(Vector3(25.0, 0.0, 0.0))
 	await physics_frames(20)
 
-	# Accelerate both sloops briskly downwind past 5 m/s.
+	# Accelerate both sloops smoothly downwind past 4.5 m/s.
 	for sh: Ship in [s_straight, s_turn]:
 		sh.set_sail_target(1.0)
 		sh.set_trim_target(0.0)
 		sh.set_helm_target(0.0)
-	await physics_frames(220)
+	await physics_frames(300)
 	check(s_turn.forward_speed() >= 4.5, "sloop reaches speed >= 4.5 m/s before anchor drop (got %.2f)" % s_turn.forward_speed())
 
 	var straight_events: Array[Array] = []
@@ -828,12 +828,12 @@ func test_interactive_ship_bell_swing_signal_and_zero_primitives() -> void:
 	check_eq(srgb_missing, 0, "ShipBell materials enable vertex_color_is_srgb = true")
 	check(total_tris >= 350, "ShipBell has sculpted flat-faceted belfry & bronze cup detail (%d >= 350 tris)" % total_tris)
 
-	# 3. Verify Brigantine cabin hammock clearance & softened candlelight polish.
+	# 3. Verify Brigantine cabin hammock & bilge-wall flush clearance + softened candlelight polish.
 	var furn := brig.cabin_furnishings
-	check(furn != null and furn.trophy_lectern.position.is_equal_approx(Vector3(-0.84, -0.95, 5.25)),
-		"Brigantine TrophyLectern shifted inboard clear of crew hammocks")
-	check(furn != null and furn.astrolabe_stand.position.is_equal_approx(Vector3(0.90, -0.95, 5.25)),
-		"Brigantine AstrolabeStand shifted inboard clear of crew hammocks")
+	check(furn != null and furn.trophy_lectern.position.is_equal_approx(Vector3(-0.56, -0.95, 5.45)),
+		"Brigantine TrophyLectern seated flush inboard clear of crew hammocks & hull wall")
+	check(furn != null and furn.astrolabe_stand.position.is_equal_approx(Vector3(0.58, -0.95, 5.45)),
+		"Brigantine AstrolabeStand seated flush inboard clear of crew hammocks & hull wall")
 	check(furn != null and furn.candle_light != null and furn.candle_light.light_energy <= 0.70 and furn.candle_light.omni_range <= 3.3,
 		"CabinCandleLight softened to prevent hammock highlight blowout")
 
@@ -1345,7 +1345,47 @@ func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons()
 				check(ap.unicode_at(ci) < 128, "active prompt is strict ASCII: '%s'" % ap)
 	check_eq(non_unit_sts, 0, "all Station nodes keep orthonormal unit basis so Pawns stay 1.0x human size")
 
-	# 2. Sea-of-Thieves Wind Speed Roles: Brigantine wins downwind, Sloop wins headwind (dummy sails)!
+	# 1b. Captain-scale Helm Wheel (< 1.56 m above quarterdeck @ 1.24x), 12-o'clock King Spoke,
+	#     fixed brass binnacle/lubber-line geometry, and stepped-back Station_Helm stand_point!
+	for hspec: Array in [[sloop, "sloop", 2.0, 5.2], [brig, "brigantine", 2.25, 6.8]]:
+		var hsh: Ship = hspec[0] as Ship
+		var hlbl: String = String(hspec[1])
+		var qdeck_y: float = float(hspec[2])
+		var helm_z: float = float(hspec[3])
+		var wmi := hsh._wheel as MeshInstance3D
+		check(wmi != null and wmi.mesh != null, "%s exposes MeshInstance3D Wheel" % hlbl)
+		if wmi != null and wmi.mesh != null:
+			var wbb := wmi.mesh.get_aabb()
+			var king_top_y := wbb.position.y + wbb.size.y
+			var reg_bot_y := absf(wbb.position.y)
+			var scaled_top := (wmi.position.y - qdeck_y + king_top_y) * hsh.hull_scale
+			check_near(wmi.position.y - qdeck_y, 0.68, 0.015,
+				"%s Wheel hub sits at waist height QDECK_Y + 0.68 (got %.3f)" % [hlbl, wmi.position.y - qdeck_y])
+			check(king_top_y > reg_bot_y + 0.05,
+				"%s 12-o'clock King Spoke (+Y=%.3f) stands taller than regular spokes (%.3f)" % [hlbl, king_top_y, reg_bot_y])
+			check(scaled_top < 1.56,
+				"%s Wheel top spoke sits below Captain 1.60 m eye height at 1.24x (%.3f m < 1.56 m)" % [hlbl, scaled_top])
+			# Verify Hull mesh includes fixed brass binnacle/lubber-line geometry directly behind the wheel!
+			var hull_mi := hsh._model.get_node_or_null(^"Hull") as MeshInstance3D
+			var brass_lubber_verts := 0
+			if hull_mi != null and hull_mi.mesh != null:
+				for si in hull_mi.mesh.get_surface_count():
+					var smat := hull_mi.mesh.surface_get_material(si)
+					if smat == null or smat.resource_name != "mat_brass":
+						continue
+					var sarr := hull_mi.mesh.surface_get_arrays(si)
+					var sverts: PackedVector3Array = sarr[Mesh.ARRAY_VERTEX]
+					for sv in sverts:
+						if absf(sv.x) <= 0.42 and sv.y >= qdeck_y + 0.78 and sv.y <= qdeck_y + 1.12 \
+								and sv.z >= helm_z - 0.36 and sv.z <= helm_z - 0.04:
+							brass_lubber_verts += 1
+			check(brass_lubber_verts >= 60,
+				"%s sculpts fixed brass binnacle & lubber-line indicator arch behind wheel (%d verts)" % [hlbl, brass_lubber_verts])
+		var helm_st := hsh.get_station(&"helm")
+		check(helm_st != null and helm_st.stand_point.origin.z >= 0.90,
+			"%s Station_Helm stand_point stepped cleanly aft (z=%.2f)" % [hlbl, helm_st.stand_point.origin.z if helm_st else 0.0])
+
+	# 2. Weighty Tall-Ship Wind Speed Roles: Brigantine wins downwind, Sloop wins headwind (dummy sails)!
 	for sh: Ship in [sloop, brig]:
 		sh.set_sail_target(1.0)
 		sh.sail_set = 1.0
@@ -1356,16 +1396,30 @@ func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons()
 	var brig_down := brig.forward_speed()
 	print("    Wave 26 downwind (10 m/s): Sloop=%.2f m/s (%.1f kt), Brigantine=%.2f m/s (%.1f kt)" % [
 		sloop_down, sloop.speed_knots(), brig_down, brig.speed_knots()])
-	check(sloop_down > 7.5, "Sloop downwind speed > 7.5 m/s (got %.2f m/s)" % sloop_down)
-	check(brig_down > 8.5 and brig_down > sloop_down + 0.5,
-		"Brigantine downwind speed (%.2f m/s) beats Sloop (%.2f m/s) and exceeds 8.5 m/s" % [brig_down, sloop_down])
+	check(sloop_down >= 4.8 and sloop_down <= 6.4,
+		"Sloop downwind speed sits in weighty tall-ship band 4.8..6.4 m/s (got %.2f m/s)" % sloop_down)
+	check(brig_down >= 6.1 and brig_down <= 7.8 and brig_down > sloop_down + 0.7,
+		"Brigantine downwind speed (%.2f m/s) sits in 6.1..7.8 m/s and beats Sloop (%.2f m/s)" % [brig_down, sloop_down])
+
+	# 2b. Graceful gliding coast momentum when furling sails into harbour (does not stop dead).
+	sloop.set_sail_target(0.0)
+	sloop.sail_set = 0.0
+	await physics_frames(180)
+	var sloop_coast := sloop.forward_speed()
+	print("    Wave 26 furled coast (3 s from %.2f m/s): %.2f m/s" % [sloop_down, sloop_coast])
+	check(sloop_coast > 2.0 and sloop_coast < sloop_down * 0.85,
+		"Sloop glides smoothly forward when sails furl instead of stopping dead (%.2f m/s)" % sloop_coast)
 
 	# Reverse wind to pure headwind (blowing toward +Z, heading = PI), keep sails squared flat forward (0 rad)!
 	Weather.set_weather(0.0, 10.0, PI)
 	sloop.linear_velocity = Vector3.ZERO
 	brig.linear_velocity = Vector3.ZERO
+	sloop.set_sail_target(1.0)
+	sloop.sail_set = 1.0
 	sloop.set_trim_target(0.0)
 	sloop.sail_trim = 0.0
+	brig.set_sail_target(1.0)
+	brig.sail_set = 1.0
 	brig.set_trim_target(0.0)
 	brig.sail_trim = 0.0
 	await physics_frames(480)
@@ -1373,12 +1427,14 @@ func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons()
 	var brig_head := brig.forward_speed()
 	print("    Wave 26 headwind dummy-sails (10 m/s): Sloop=%.2f m/s (%.1f kt), Brigantine=%.2f m/s (%.1f kt)" % [
 		sloop_head, sloop.speed_knots(), brig_head, brig.speed_knots()])
-	check(sloop_head > 3.5, "Sloop headwind dummy-sails makes crisp headway > 3.5 m/s (got %.2f m/s)" % sloop_head)
-	check(brig_head > 2.5, "Brigantine headwind avoids dead-zone > 2.5 m/s (got %.2f m/s)" % brig_head)
-	check(sloop_head > brig_head + 0.25,
+	check(sloop_head >= 2.8 and sloop_head <= 4.0,
+		"Sloop headwind dummy-sails makes steady headway 2.8..4.0 m/s (got %.2f m/s)" % sloop_head)
+	check(brig_head >= 2.0 and brig_head <= 3.1,
+		"Brigantine headwind avoids dead-zone 2.0..3.1 m/s (got %.2f m/s)" % brig_head)
+	check(sloop_head > brig_head + 0.35,
 		"Sloop is Headwind King: %.2f m/s > Brigantine %.2f m/s" % [sloop_head, brig_head])
 
-	# 3. In-place zero-sail pivot turning (sails raised, anchor up, hard helm -> bow pivots smoothly!).
+	# 3. Deliberate weighty in-place zero-sail pivot turning (sails raised, anchor up, hard helm -> gentle maritime pivot!).
 	sloop.set_sail_target(0.0)
 	sloop.sail_set = 0.0
 	sloop.linear_velocity = Vector3.ZERO
@@ -1391,7 +1447,8 @@ func test_wave26_spacious_hull_sea_of_thieves_sailing_capstan_and_wind_ribbons()
 	await physics_frames(120)
 	var pivot_dyaw := angle_difference(pivot_yaw0, sloop.rotation.y)
 	print("    Wave 26 zero-sail in-place pivot dyaw: %.2f rad (fwd=%.2f m/s)" % [pivot_dyaw, sloop.forward_speed()])
-	check(pivot_dyaw < -0.35, "zero-sail hard starboard helm pivots bow smoothly in place (dyaw=%.2f rad)" % pivot_dyaw)
+	check(pivot_dyaw < -0.18 and pivot_dyaw > -0.40,
+		"zero-sail hard starboard helm pivots bow deliberately in place (dyaw=%.2f rad)" % pivot_dyaw)
 	sloop.set_helm_target(0.0)
 	sloop.helm = 0.0
 
@@ -1909,25 +1966,25 @@ func test_wave29_ship_supply_barrels_geometry_fill_tiers_and_one_press_restock()
 	check(brig.get_node_or_null(^"SupplyBarrelsInteractable") != null,
 		"Brigantine keeps existing deck SupplyBarrelsInteractable intact")
 
-	# Exact port hold bulkhead placement scaled by ship_point + hull_scale!
+	# Exact flush-grounded port hold placement scaled by ship_point + hull_scale!
 	var sloop_expect := {
-		"CannonballBarrel": Vector3(-1.22, -0.85, -0.15),
-		"PlankBarrel": Vector3(-1.26, -0.85, 0.72),
-		"RationsBarrel": Vector3(-1.22, -0.85, 1.58),
+		"CannonballBarrel": Vector3(-0.86, -0.85, -0.15),
+		"PlankBarrel": Vector3(-0.88, -0.85, 0.72),
+		"RationsBarrel": Vector3(-0.85, -0.85, 1.58),
 	}
 	for bname: String in sloop_expect:
 		var bn := sb_sloop.get_node_or_null(bname) as Node3D
 		check(bn != null, "Sloop ShipSupplyBarrels builds %s" % bname)
 		if bn != null:
 			check(bn.position.is_equal_approx(sloop.ship_point(sloop_expect[bname] as Vector3)),
-				"Sloop %s positioned at exact port hold bulkhead coord" % bname)
+				"Sloop %s positioned at exact flush port hold coord" % bname)
 			check(bn.scale.is_equal_approx(Vector3.ONE * sloop.hull_scale),
 				"Sloop %s scales cleanly with hull_scale" % bname)
 
 	var brig_expect := {
-		"CannonballBarrel": Vector3(-1.58, -0.95, 0.72),
-		"PlankBarrel": Vector3(-1.60, -0.95, 1.62),
-		"RationsBarrel": Vector3(-1.56, -0.95, 2.52),
+		"CannonballBarrel": Vector3(-1.02, -0.95, 0.72),
+		"PlankBarrel": Vector3(-1.02, -0.95, 1.62),
+		"RationsBarrel": Vector3(-0.98, -0.95, 2.52),
 	}
 	for bname: String in brig_expect:
 		var bn := sb_brig.get_node_or_null(bname) as Node3D

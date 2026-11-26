@@ -12,7 +12,7 @@ extends CanvasLayer
 ## - Upper-sky first-launch / chapter Diegetic Voyage Title Card (`show_voyage_title`)
 ## - Quiet top-right Gold & Voyage Objective whisper slip
 ## - Circular brass Spyglass vignette + horizon sighting readout
-## - 11-wedge Item Radial (`Tab`) and 9-wedge Crew Command Wheel (`Q`)
+## - 11-wedge Item Radial (`Q`/`Tab`) and 9-wedge Crew Command Wheel (`G`)
 ## - Pause / Save / Quality Presets / Audio Sliders / LAN Co-op / Controls overlay (`Escape`)
 
 signal crew_order_issued(order: StringName)
@@ -20,6 +20,8 @@ signal pause_changed(open: bool)
 signal quality_changed(target: StringName, level: int)
 signal return_to_title_requested
 signal mode_skip_requested
+
+const RADIAL_HOLD_THRESHOLD_S := 0.22
 
 const ITEM_SLICE_HINTS := {
 	&"cutlass": "Light combo | Hold heavy | RMB parry",
@@ -81,6 +83,9 @@ var pause_overlay: Control = null
 var pause_open: bool = false
 var crew_hold_fire: bool = false
 
+var _radial_open_time: float = 0.0
+var _radial_initial_hover: int = -1
+
 var _crew_brains: Array[CrewBrain] = []
 var _root: Control = null
 var _theme: Theme = null
@@ -122,7 +127,9 @@ var _prompt_alpha: float = 0.0
 var _sailing_pill_panel: PanelContainer = null
 var _sailing_pill_label: Label = null
 
-# Active tool / supplies chip (bottom-right)
+# Active tool / supplies chip & always-visible diegetic keycap strip (bottom-right)
+var _keycap_strip: HBoxContainer = null
+var _keycap_strip_text: String = "[Q] Tools | [G] Crew | [1-6] Slots"
 var _tool_panel: PanelContainer = null
 var _tool_panel_style: StyleBoxFlat = null
 var _tool_title_label: Label = null
@@ -392,6 +399,8 @@ func open_item_radial() -> void:
 	_refresh_item_radial_entries()
 	var cur := inventory.active_item if inventory != null else &"cutlass"
 	item_radial.open_wheel(cur)
+	_radial_open_time = Time.get_ticks_msec() * 0.001
+	_radial_initial_hover = item_radial.hovered_index
 	_whisper_timer = maxf(_whisper_timer, 3.0)
 	_sync_look_pause()
 
@@ -412,6 +421,8 @@ func open_command_wheel() -> void:
 		item_radial.close_wheel(false)
 	_update_hold_fire_hint()
 	command_wheel.open_wheel()
+	_radial_open_time = Time.get_ticks_msec() * 0.001
+	_radial_initial_hover = command_wheel.hovered_index
 	_sync_look_pause()
 
 
@@ -743,6 +754,16 @@ func get_tool_title_text() -> String:
 ## Current bottom-right active tool / supplies chip subtitle text.
 func get_tool_meta_text() -> String:
 	return _tool_meta_label.text if _tool_meta_label != null else ""
+
+
+## Always-visible bottom-right keycap strip text (`[Q] Tools | [G] Crew | [1-6] Slots`).
+func get_keycap_strip_text() -> String:
+	return _keycap_strip_text
+
+
+## True while the always-legible diegetic keycap strip is visible.
+func is_keycap_strip_visible() -> bool:
+	return _keycap_strip != null and _keycap_strip.visible
 
 
 ## Current bottom-center context prompt text.
@@ -1219,22 +1240,43 @@ func _build_sailing_telemetry_pill() -> void:
 
 
 func _build_tool_chip() -> void:
+	var stack := VBoxContainer.new()
+	stack.name = "BottomRightHUDStack"
+	stack.anchor_left = 1.0
+	stack.anchor_right = 1.0
+	stack.anchor_top = 1.0
+	stack.anchor_bottom = 1.0
+	stack.offset_left = -320.0
+	stack.offset_right = -24.0
+	stack.offset_top = -132.0
+	stack.offset_bottom = -24.0
+	stack.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	stack.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	stack.alignment = BoxContainer.ALIGNMENT_END
+	stack.add_theme_constant_override("separation", 6)
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(stack)
+
+	# Crisp always-legible diegetic keycap strip right above the Tool Chip (never overwritten!).
+	_keycap_strip = HBoxContainer.new()
+	_keycap_strip.name = "KeycapStrip"
+	_keycap_strip.alignment = BoxContainer.ALIGNMENT_END
+	_keycap_strip.size_flags_horizontal = Control.SIZE_SHRINK_END
+	_keycap_strip.add_theme_constant_override("separation", 6)
+	_keycap_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(_keycap_strip)
+
+	_keycap_strip.add_child(_make_keycap_badge("KeycapTools", "Q", "Tools", true))
+	_keycap_strip.add_child(_make_keycap_badge("KeycapCrew", "G", "Crew", false))
+	_keycap_strip.add_child(_make_keycap_badge("KeycapSlots", "1-6", "Slots", false))
+
 	_tool_panel = PanelContainer.new()
 	_tool_panel.name = "ToolChip"
-	_tool_panel.anchor_left = 1.0
-	_tool_panel.anchor_right = 1.0
-	_tool_panel.anchor_top = 1.0
-	_tool_panel.anchor_bottom = 1.0
-	_tool_panel.offset_left = -240.0
-	_tool_panel.offset_right = -24.0
-	_tool_panel.offset_top = -88.0
-	_tool_panel.offset_bottom = -24.0
-	_tool_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	_tool_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_tool_panel.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_tool_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tool_panel_style = HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.88), HudIcons.COL_INK_SOFT, 2, 6, 14, 7)
 	_tool_panel.add_theme_stylebox_override("panel", _tool_panel_style)
-	_root.add_child(_tool_panel)
+	stack.add_child(_tool_panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 3)
@@ -1285,11 +1327,56 @@ func _build_tool_chip() -> void:
 	header_row.add_child(_tool_title_label)
 
 	_tool_meta_label = Label.new()
-	_tool_meta_label.text = "[Tab] Tools | [Q] Crew"
+	_tool_meta_label.text = "[Q/Tab] Tools | [G] Crew"
 	_tool_meta_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_tool_meta_label.add_theme_font_size_override("font_size", 13)
 	_tool_meta_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 	vbox.add_child(_tool_meta_label)
+
+
+func _make_keycap_badge(node_name: String, key_txt: String, action_txt: String, highlight: bool) -> PanelContainer:
+	var badge := PanelContainer.new()
+	badge.name = node_name
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := Color(0.95, 0.89, 0.74, 0.94) if highlight else Color(0.91, 0.84, 0.69, 0.90)
+	var border := HudIcons.COL_BRASS if highlight else HudIcons.COL_INK_SOFT
+	var sb := HudIcons.make_parchment_box(bg, border, 2, 5, 6, 3)
+	sb.shadow_size = 3
+	badge.add_theme_stylebox_override("panel", sb)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_child(row)
+
+	var cap := PanelContainer.new()
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cap_sb := StyleBoxFlat.new()
+	cap_sb.bg_color = Color(0.22, 0.14, 0.08, 0.96)
+	cap_sb.border_color = HudIcons.COL_GOLD if highlight else HudIcons.COL_BRASS
+	cap_sb.set_border_width_all(1)
+	cap_sb.set_corner_radius_all(3)
+	cap_sb.content_margin_left = 5
+	cap_sb.content_margin_right = 5
+	cap_sb.content_margin_top = 1
+	cap_sb.content_margin_bottom = 1
+	cap.add_theme_stylebox_override("panel", cap_sb)
+	row.add_child(cap)
+
+	var key_lbl := Label.new()
+	key_lbl.text = _to_ascii(key_txt)
+	key_lbl.add_theme_font_size_override("font_size", 12)
+	key_lbl.add_theme_color_override("font_color", Color(0.98, 0.87, 0.48, 1.0) if highlight else Color(0.94, 0.86, 0.68, 1.0))
+	key_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cap.add_child(key_lbl)
+
+	var act_lbl := Label.new()
+	act_lbl.text = _to_ascii(action_txt)
+	act_lbl.add_theme_font_size_override("font_size", 12)
+	act_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
+	act_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(act_lbl)
+	return badge
 
 
 func _build_pause_overlay() -> void:
@@ -1462,7 +1549,7 @@ func _build_pause_overlay() -> void:
 
 	var ctrl_lines: Array[String] = [
 		"[WASD] Move  [Space] Jump  [Shift] Sprint  [F] Use / Leave  [X] Step Off",
-		"[Tab] Tools  [Q] Crew Orders  [B] Shipwright  [LMB/RMB] Use & Aim  [Esc] Pause",
+		"[Q/Tab] Tools  [G] Crew Orders  [1-6] Slots  [B] Shipwright  [LMB/RMB] Use & Aim  [Esc] Pause",
 	]
 	for line_txt in ctrl_lines:
 		var ctrl_lbl := Label.new()
@@ -1510,6 +1597,7 @@ func _make_quality_row(label_text: String, out_btns: Array[Button], on_pick: Cal
 func _input(event: InputEvent) -> void:
 	if not input_enabled or not _hud_visible:
 		return
+	var vp := get_viewport()
 	if event.is_action_pressed(&"pause"):
 		if item_radial != null and item_radial.is_open:
 			close_item_radial(false)
@@ -1517,26 +1605,43 @@ func _input(event: InputEvent) -> void:
 			close_command_wheel(false)
 		else:
 			toggle_pause()
-		get_viewport().set_input_as_handled()
+		if vp != null:
+			vp.set_input_as_handled()
 		return
 
 	if pause_open:
 		return
 
-	if event.is_action_pressed(&"item_radial"):
-		open_item_radial()
-		get_viewport().set_input_as_handled()
-	elif event.is_action_released(&"item_radial"):
+	if event.is_action_pressed(&"item_radial", false):
 		if item_radial != null and item_radial.is_open:
 			close_item_radial(true)
-			get_viewport().set_input_as_handled()
-	elif event.is_action_pressed(&"command_wheel"):
-		open_command_wheel()
-		get_viewport().set_input_as_handled()
-	elif event.is_action_released(&"command_wheel"):
+		else:
+			open_item_radial()
+		if vp != null:
+			vp.set_input_as_handled()
+	elif event.is_action_released(&"item_radial"):
+		if item_radial != null and item_radial.is_open:
+			var held_s := Time.get_ticks_msec() * 0.001 - _radial_open_time
+			var moved := item_radial.hovered_index != _radial_initial_hover
+			if held_s >= RADIAL_HOLD_THRESHOLD_S or moved:
+				close_item_radial(true)
+			if vp != null:
+				vp.set_input_as_handled()
+	elif event.is_action_pressed(&"command_wheel", false):
 		if command_wheel != null and command_wheel.is_open:
 			close_command_wheel(true)
-			get_viewport().set_input_as_handled()
+		else:
+			open_command_wheel()
+		if vp != null:
+			vp.set_input_as_handled()
+	elif event.is_action_released(&"command_wheel"):
+		if command_wheel != null and command_wheel.is_open:
+			var held_s := Time.get_ticks_msec() * 0.001 - _radial_open_time
+			var moved := command_wheel.hovered_index != _radial_initial_hover
+			if held_s >= RADIAL_HOLD_THRESHOLD_S or moved:
+				close_command_wheel(true)
+			if vp != null:
+				vp.set_input_as_handled()
 
 
 func _process(delta: float) -> void:
@@ -1744,12 +1849,16 @@ func _tick_context_prompt(delta: float) -> void:
 func _tick_tool_chip(delta: float) -> void:
 	_tool_flash_timer = maxf(0.0, _tool_flash_timer - delta)
 	_refresh_tool_chip()
+	var spy_hide := inventory != null and inventory.spyglass_zoom > 0.4
 	if _tool_panel != null:
-		var spy_hide := inventory != null and inventory.spyglass_zoom > 0.4
 		var urgent := _tool_flash_timer > 0.0 or _hull_alert_active
-		var target_a := 0.0 if (spy_hide or pause_open) else (0.96 if urgent else 0.76)
+		var target_a := 0.0 if (spy_hide or pause_open) else (0.96 if urgent else 0.78)
 		_tool_panel.modulate.a = move_toward(_tool_panel.modulate.a, target_a, delta * 5.0)
 		_tool_panel.visible = _tool_panel.modulate.a > 0.02
+	if _keycap_strip != null:
+		var strip_target_a := 0.0 if (spy_hide or pause_open or is_any_overlay_open()) else 0.92
+		_keycap_strip.modulate.a = move_toward(_keycap_strip.modulate.a, strip_target_a, delta * 6.0)
+		_keycap_strip.visible = _keycap_strip.modulate.a > 0.02
 
 
 func _refresh_tool_chip() -> void:
@@ -1763,7 +1872,7 @@ func _refresh_tool_chip() -> void:
 		elif item_id == &"pistol" and inventory.get(&"ranged_weapon") != null:
 			resolved_id = StringName(inventory.get(&"ranged_weapon"))
 	var title := ToolMeshes.get_display_name(resolved_id)
-	var meta := "[Tab] Tools | [Q] Crew"
+	var meta := "[Q/Tab] Tools | [G] Crew"
 	var active_ship := _active_ship()
 	var on_cannon := false
 	var ord_kind: StringName = &"iron"
@@ -1989,7 +2098,7 @@ func _refresh_item_radial_entries() -> void:
 			"hint": String(ITEM_SLICE_HINTS.get(resolved_id, ITEM_SLICE_HINTS.get(id, ""))),
 			"icon": resolved_id,
 		})
-	item_radial.configure("Tools & Gear", slices)
+	item_radial.configure("Tools & Gear", slices, "", RadialWheel.DEFAULT_ITEM_FOOTER)
 
 
 func _update_hold_fire_hint() -> void:

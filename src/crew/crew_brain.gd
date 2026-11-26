@@ -60,6 +60,23 @@ const ESCORT_ENGAGE_RANGE := 1.85
 const ESCORT_ATTACK_REACH := 2.35
 const ESCORT_BATTLE_CRY_COOLDOWN := 9.5
 
+# Anti-jitter personal-space hysteresis, smooth turning & deck obstacle navigation tuning
+const IDLE_EVADE_ENTER_CAPTAIN := 1.85
+const IDLE_EVADE_ENTER_PEER := 1.65
+const IDLE_EVADE_EXIT_DIST := 2.30
+const IDLE_EVADE_TARGET_CLEARANCE := 2.35
+const IDLE_EVADE_SETTLE_TIME := 1.40
+const IDLE_HOME_BLOCKED_DIST := 2.75
+const IDLE_HOME_ENTER_FACTOR := 1.55
+const IDLE_HOME_ARRIVE_FACTOR := 0.90
+const TURN_RATE_IDLE := 7.5
+const TURN_RATE_WALK := 8.5
+const TURN_RATE_COMBAT := 14.0
+const TURN_SPEED_DEADBAND := 0.12
+const STUCK_CHECK_TIME := 0.65
+const STUCK_MIN_PROGRESS := 0.32
+const STUCK_BYPASS_DURATION := 0.85
+
 const BATTLE_CRY_LINES := {
 	&"helmsman": [
 		"Stand clear, Cap'n -- I've got your flank!",
@@ -151,6 +168,17 @@ var _last_wind_heading: float = NAN
 var _was_breached: bool = false
 var _was_on_fire: bool = false
 var _bound_ship: Ship = null
+var _last_delta: float = 1.0 / 60.0
+var _evading_space: bool = false
+var _space_settle_timer: float = 0.0
+var _evade_target_local: Vector3 = Vector3.ZERO
+var _returning_home: bool = false
+var _stuck_timer: float = 0.0
+var _stuck_ref_local: Vector3 = Vector3.ZERO
+var _stuck_has_ref: bool = false
+var _stuck_bypass_timer: float = 0.0
+var _stuck_bypass_local: Vector3 = Vector3.ZERO
+var _stuck_side: float = 1.0
 
 
 func _init() -> void:
@@ -302,7 +330,7 @@ func give_order(order: StringName, target: Variant = null) -> void:
 
 	current_order = order
 	order_target = target
-	_route.clear()
+	_reset_nav_state()
 	_work_timer = 0.0
 	_patch_slot = -1
 	if order != &"shanty":
@@ -343,6 +371,7 @@ func yield_to_human_player() -> void:
 
 func _physics_process(delta: float) -> void:
 	_clock += delta
+	_last_delta = delta
 	if not Net.is_host() or pawn == null or pawn.dead:
 		_clear_melee_combat()
 		if _joining_shanty:
@@ -398,7 +427,7 @@ func _physics_process(delta: float) -> void:
 		&"shanty":
 			_tick_shanty(delta)
 		_:
-			_tick_idle()
+			_tick_idle(delta)
 
 
 func _ship_scale() -> float:
@@ -572,9 +601,18 @@ func _set_task(t: StringName) -> void:
 		if not keep:
 			pawn.leave_station()
 	current_task = t
-	_route.clear()
+	_reset_nav_state()
 	_work_timer = 0.0
 	task_changed.emit(t)
+
+
+func _reset_nav_state() -> void:
+	_route.clear()
+	_evading_space = false
+	_returning_home = false
+	_stuck_timer = 0.0
+	_stuck_has_ref = false
+	_stuck_bypass_timer = 0.0
 
 
 # ------------------------------------------------------------------ task handlers
@@ -1061,8 +1099,6 @@ func _tick_escort_melee(cc: CombatComponent, delta: float) -> void:
 	var to_t := _melee_target.global_position - pawn.global_position
 	var flat_to := Vector3(to_t.x, 0.0, to_t.z)
 	var dist := flat_to.length()
-	if dist > 0.05:
-		pawn.look_yaw = atan2(-flat_to.x, -flat_to.z)
 
 	# Atmospheric persona battle-cry on engagement (generous cooldown prevents spam).
 	_speak(&"battle_cry", {}, "battle_cry", ESCORT_BATTLE_CRY_COOLDOWN)
@@ -1077,11 +1113,15 @@ func _tick_escort_melee(cc: CombatComponent, delta: float) -> void:
 			_melee_block_timer = 0.36
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
+			if dist > 0.05:
+				_turn_toward_dir(flat_to, delta, TURN_RATE_COMBAT, false)
 			return
 
 	if _melee_block_timer > 0.0:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
+		if dist > 0.05:
+			_turn_toward_dir(flat_to, delta, TURN_RATE_COMBAT, false)
 		return
 
 	# Close smoothly to cutlass engagement range (~1.85 m) and keep clean spacing.
@@ -1089,9 +1129,9 @@ func _tick_escort_melee(cc: CombatComponent, delta: float) -> void:
 		if cc.is_blocking:
 			cc.set_blocking(false)
 		if ship != null and pawn.platform == ship and _melee_target is Pawn and (_melee_target as Pawn).platform == ship:
-			_navigate_ship_local((_melee_target as Pawn).platform_local_position(), ESCORT_ENGAGE_RANGE)
+			_navigate_ship_local((_melee_target as Pawn).platform_local_position(), ESCORT_ENGAGE_RANGE, false)
 		else:
-			_move_world_towards(_melee_target.global_position, ESCORT_ENGAGE_RANGE, dist > 3.8)
+			_move_world_towards(_melee_target.global_position, ESCORT_ENGAGE_RANGE, dist > 3.8, false)
 	elif dist < 0.95 and dist > 0.05:
 		pawn.wish_dir = -(flat_to / dist) * 0.55
 		pawn.wish_sprint = false
@@ -1099,9 +1139,9 @@ func _tick_escort_melee(cc: CombatComponent, delta: float) -> void:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
 
-	# Re-aim toward the threat after movement so every strike lands squarely inside arc_cos.
+	# Smoothly aim toward the threat at responsive combat turn speed so strikes land inside arc_cos.
 	if dist > 0.05:
-		pawn.look_yaw = atan2(-flat_to.x, -flat_to.z)
+		_turn_toward_dir(flat_to, delta, TURN_RATE_COMBAT, false)
 
 	if dist <= ESCORT_ATTACK_REACH and _melee_attack_cd <= 0.0 \
 			and cc.state != CombatComponent.State.STAGGERED \
@@ -1450,110 +1490,230 @@ func _idle_watch_spot() -> Vector3:
 	var is_brig := ship != null and ship.ship_class == &"brigantine"
 	match persona_id:
 		&"helmsman":
-			return (Vector3(-1.85, 1.25, 2.25) if is_brig else Vector3(-1.55, 1.12, 1.35)) * hs
+			return (Vector3(-1.60, 1.25, 1.80) if is_brig else Vector3(-1.35, 1.12, 1.35)) * hs
 		&"lookout":
-			return (Vector3(0.0, 1.25, -6.10) if is_brig else Vector3(0.0, 1.12, -3.75)) * hs
+			return (Vector3(-1.10, 1.25, -5.45) if is_brig else Vector3(0.0, 1.12, -3.05)) * hs
 		&"carpenter":
-			return (Vector3(1.85, 1.25, -1.10) if is_brig else Vector3(1.55, 1.12, -0.95)) * hs
-	return (Vector3(-1.55, 1.25, 0.0) if is_brig else Vector3(-1.35, 1.12, 0.0)) * hs
+			return (Vector3(1.60, 1.25, -1.20) if is_brig else Vector3(1.35, 1.12, -0.80)) * hs
+	return (Vector3(-1.55, 1.25, 0.25) if is_brig else Vector3(-1.35, 1.12, 0.25)) * hs
 
 
-func _tick_idle() -> void:
-	# Stand at a spacious spread-out deck lookout spot and respect personal space (min_sep = 2.0 m).
-	if ship != null and pawn.platform == ship:
-		var hs := _ship_scale()
-		var is_brig := ship.ship_class == &"brigantine"
-		var cur_local := pawn.platform_local_position()
-		var my_band := _deck_band(cur_local.y / hs)
-		var home := _idle_watch_spot()
-		var home_band := _deck_band(home.y / hs)
+func _collect_ship_peers() -> Array[Pawn]:
+	var peers: Array[Pawn] = []
+	if ship == null or not is_instance_valid(ship):
+		return peers
+	if captain != null and is_instance_valid(captain) and not captain.dead and captain.platform == ship:
+		peers.append(captain)
+	for cb in _sibling_crew_brains():
+		if cb.pawn != null and is_instance_valid(cb.pawn) and not cb.pawn.dead and cb.pawn.platform == ship:
+			peers.append(cb.pawn)
+	return peers
 
-		var peers: Array[Pawn] = []
-		if captain != null and is_instance_valid(captain) and not captain.dead:
-			peers.append(captain)
-		for cb in _sibling_crew_brains():
-			if cb.pawn != null and is_instance_valid(cb.pawn) and not cb.pawn.dead:
-				peers.append(cb.pawn)
 
-		# If we are on a different deck than our watch post (e.g., quarterdeck), walk to our watch post first.
-		var min_sep := 2.0
-		var home_blocked := false
-		for other_p in peers:
-			if other_p.platform == ship:
-				var ol := other_p.platform_local_position()
-				if _deck_band(ol.y / hs) == home_band \
-						and Vector2(ol.x - home.x, ol.z - home.z).length() < min_sep:
-					home_blocked = true
-					break
+func _tick_idle(delta: float) -> void:
+	# Stand calmly at an unobstructed watch post and yield personal space with
+	# proper hysteresis + settle timer so crewmates never ping-pong back and forth.
+	_space_settle_timer = maxf(0.0, _space_settle_timer - delta)
+	if ship == null or pawn.platform != ship:
+		_evading_space = false
+		_returning_home = false
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+		return
 
-		if my_band != home_band and not home_blocked:
-			_navigate_ship_local(home, 0.9 * hs)
-			return
+	var hs := _ship_scale()
+	var is_brig := ship.ship_class == &"brigantine"
+	var cur_local := pawn.platform_local_position()
+	var my_band := _deck_band(cur_local.y / hs)
+	var home := _idle_watch_spot()
+	var home_band := _deck_band(home.y / hs)
+	var peers := _collect_ship_peers()
 
-		# Personal-space separation: gently sidestep away if Captain or another Pawn is within 2.0 m on our deck band.
-		var repel_local := Vector3.ZERO
-		for other_p in peers:
-			if other_p == pawn or other_p.platform != ship:
-				continue
-			var other_local := other_p.platform_local_position()
-			if _deck_band(other_local.y / hs) != my_band:
-				continue
-			var diff := Vector3(cur_local.x - other_local.x, 0.0, cur_local.z - other_local.z)
-			var d := diff.length()
-			if d < min_sep:
-				var push_dir := diff / d if d > 0.05 else Vector3(1.0 if cur_local.x >= 0.0 else -1.0, 0.0, 0.0)
-				var weight := 1.4 if other_p == captain else 1.0
-				repel_local += push_dir * ((min_sep - d) / min_sep) * weight
+	# Never walk back toward our home watch post while any peer is within 2.75 m of it.
+	var home_blocked := false
+	for other_p in peers:
+		var ol := other_p.platform_local_position()
+		if _deck_band(ol.y / hs) == home_band \
+				and Vector2(ol.x - home.x, ol.z - home.z).length() < IDLE_HOME_BLOCKED_DIST:
+			home_blocked = true
+			break
 
-		if repel_local.length_squared() > 0.002:
-			var beam_lim := (1.95 if is_brig else 1.65) * hs
-			var z_min := (-6.2 if is_brig else -3.85) * hs
-			var z_max := (3.4 if is_brig else 2.25) * hs
-			if my_band == 2:
-				z_min = (4.2 if is_brig else 3.2) * hs
-				z_max = (6.8 if is_brig else 5.0) * hs
-			elif my_band == 0:
-				z_min = (-4.2 if is_brig else -2.8) * hs
-				z_max = (4.8 if is_brig else 3.4) * hs
-			var step_dir := repel_local.normalized()
-			var target_l := Vector3(
-				clampf(cur_local.x + step_dir.x * 1.35, -beam_lim, beam_lim),
-				cur_local.y,
-				clampf(cur_local.z + step_dir.z * 1.35, z_min, z_max)
-			)
-			var move_l := Vector3(target_l.x - cur_local.x, 0.0, target_l.z - cur_local.z)
-			# If pinned against a hull rail or bulkhead, slide smoothly along the open deck walkway!
-			if move_l.length() < 0.55:
-				var rail_blocked := absf(cur_local.x + step_dir.x * 0.5) > beam_lim - 0.15
-				var z_mid := 0.5 * (z_min + z_max)
-				if rail_blocked:
-					var slide_z := 1.0 if step_dir.z > 0.1 else (-1.0 if step_dir.z < -0.1 else (1.0 if cur_local.z < z_mid else -1.0))
-					var z_try := clampf(cur_local.z + slide_z * 1.45, z_min, z_max)
-					if absf(z_try - cur_local.z) < 0.45:
-						z_try = clampf(cur_local.z - slide_z * 1.45, z_min, z_max)
-					target_l = Vector3(clampf(cur_local.x - signf(cur_local.x) * 0.25, -beam_lim, beam_lim), cur_local.y, z_try)
-				else:
-					var slide_x := 1.0 if cur_local.x < 0.0 else -1.0
-					target_l = Vector3(clampf(cur_local.x + slide_x * 1.35, -beam_lim, beam_lim), cur_local.y, target_l.z)
-				move_l = Vector3(target_l.x - cur_local.x, 0.0, target_l.z - cur_local.z)
-			if move_l.length() > 0.12:
-				var world_dir := ship.global_basis * move_l
-				world_dir.y = 0.0
-				if world_dir.length_squared() > 0.0001:
-					var wd := world_dir.normalized()
-					pawn.wish_dir = wd * 0.72
-					pawn.wish_sprint = false
-					pawn.look_yaw = atan2(-wd.x, -wd.z)
-					return
+	# If we are on a different deck than our watch post (e.g. quarterdeck), relocate first.
+	if my_band != home_band and not home_blocked:
+		_evading_space = false
+		_returning_home = true
+		_navigate_ship_local(home, IDLE_HOME_ARRIVE_FACTOR * hs, true, 0.85)
+		return
 
-		if not home_blocked and cur_local.distance_to(home) > 1.2 * hs:
-			_navigate_ship_local(home, 0.9 * hs)
-		else:
+	# Measure personal space on our current deck band with asymmetric enter/exit thresholds.
+	var min_peer_d := INF
+	var needs_enter := false
+	for other_p in peers:
+		if other_p == pawn:
+			continue
+		var other_local := other_p.platform_local_position()
+		if _deck_band(other_local.y / hs) != my_band:
+			continue
+		var d := Vector2(cur_local.x - other_local.x, cur_local.z - other_local.z).length()
+		min_peer_d = minf(min_peer_d, d)
+		var enter_d := IDLE_EVADE_ENTER_CAPTAIN if other_p == captain else IDLE_EVADE_ENTER_PEER
+		if _space_settle_timer > 0.0:
+			enter_d = minf(enter_d, 1.35)
+		if d < enter_d:
+			needs_enter = true
+
+	if not _evading_space and needs_enter:
+		_evading_space = true
+		_returning_home = false
+		_route.clear()
+		_stuck_timer = 0.0
+		_stuck_has_ref = false
+		_stuck_bypass_timer = 0.0
+		_evade_target_local = _pick_idle_evade_target(cur_local, my_band, peers, hs, is_brig)
+
+	if _evading_space:
+		# Exit separation once cleanly clear (>= 2.30 m) on unobstructed deck, then settle calmly.
+		if min_peer_d >= IDLE_EVADE_EXIT_DIST and _is_local_point_clear(cur_local, my_band, hs, is_brig, true):
+			_evading_space = false
+			_space_settle_timer = IDLE_EVADE_SETTLE_TIME
+			_route.clear()
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
+			return
+		# Only pick a fresh destination if a peer actively walked onto our committed evade spot.
+		if _min_peer_dist_to(_evade_target_local, my_band, peers, hs) < 1.55:
+			_evade_target_local = _pick_idle_evade_target(cur_local, my_band, peers, hs, is_brig)
+			_route.clear()
+		var reached := _navigate_ship_local(_evade_target_local, 0.45 * hs, true, 0.78)
+		if reached:
+			_evading_space = false
+			_space_settle_timer = IDLE_EVADE_SETTLE_TIME
+			_route.clear()
+			pawn.wish_dir = Vector3.ZERO
+			pawn.wish_sprint = false
+		return
+
+	# Stand calmly at ease during settle cooldown or while home watch post is crowded.
+	if _space_settle_timer > 0.0 or home_blocked:
+		_returning_home = false
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+		return
+
+	var home_flat := Vector2(cur_local.x - home.x, cur_local.z - home.z).length()
+	if _returning_home:
+		if home_flat <= IDLE_HOME_ARRIVE_FACTOR * hs:
+			_returning_home = false
+			_route.clear()
+			pawn.wish_dir = Vector3.ZERO
+			pawn.wish_sprint = false
+		elif _navigate_ship_local(home, IDLE_HOME_ARRIVE_FACTOR * hs, true, 0.80):
+			_returning_home = false
+			pawn.wish_dir = Vector3.ZERO
+			pawn.wish_sprint = false
+	elif home_flat > IDLE_HOME_ENTER_FACTOR * hs:
+		_returning_home = true
+		_navigate_ship_local(home, IDLE_HOME_ARRIVE_FACTOR * hs, true, 0.80)
 	else:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
+
+
+func _min_peer_dist_to(local_pos: Vector3, band: int, peers: Array[Pawn], hs: float) -> float:
+	var best := INF
+	for other_p in peers:
+		if other_p == pawn:
+			continue
+		var ol := other_p.platform_local_position()
+		if _deck_band(ol.y / hs) != band:
+			continue
+		best = minf(best, Vector2(local_pos.x - ol.x, local_pos.z - ol.z).length())
+	return best
+
+
+func _pick_idle_evade_target(cur_local: Vector3, my_band: int, peers: Array[Pawn], hs: float, is_brig: bool) -> Vector3:
+	var z_b := _deck_z_bounds(my_band, is_brig)
+	var deck_y := _deck_y_nominal(my_band, is_brig) * hs
+	var candidates: Array[Vector3] = []
+
+	# 1. Local ring of open-deck sidestep spots at 2.1 m and 2.9 m around our current position.
+	for ring_r: float in [2.1, 2.9]:
+		for k in 12:
+			var ang := float(k) * (TAU / 12.0)
+			var cx_u := (cur_local.x + cos(ang) * ring_r) / hs
+			var cz_u := clampf((cur_local.z + sin(ang) * ring_r) / hs, z_b.x, z_b.y)
+			var lim_x := _deck_half_beam(cz_u, my_band, is_brig)
+			cx_u = clampf(cx_u, -lim_x, lim_x)
+			candidates.append(Vector3(cx_u * hs, deck_y, cz_u * hs))
+
+	# 2. Canonical unobstructed deck clearings so even cornered crew always find wide space.
+	if my_band == 1:
+		var pads: Array[Vector2] = []
+		if is_brig:
+			pads = [
+				Vector2(-1.60, 1.80), Vector2(1.60, 1.80),
+				Vector2(-1.60, -1.20), Vector2(1.60, -1.20),
+				Vector2(-1.35, -3.60), Vector2(1.35, -3.60),
+				Vector2(-1.10, -5.45), Vector2(1.10, -5.45),
+			]
+		else:
+			pads = [
+				Vector2(-1.35, 1.45), Vector2(1.35, 1.45),
+				Vector2(-1.35, -0.75), Vector2(1.35, -0.75),
+				Vector2(-1.15, -2.55), Vector2(1.15, -2.55),
+				Vector2(0.0, -3.05), Vector2(0.0, 2.45),
+			]
+		for pad in pads:
+			var cz_u := clampf(pad.y, z_b.x, z_b.y)
+			var lim_x := _deck_half_beam(cz_u, my_band, is_brig)
+			candidates.append(Vector3(clampf(pad.x, -lim_x, lim_x) * hs, deck_y, cz_u * hs))
+	elif my_band == 2:
+		var qz := 5.6 if is_brig else 4.25
+		var qx := 1.45 if is_brig else 1.20
+		for sx: float in [-1.0, 1.0]:
+			candidates.append(Vector3(sx * qx * hs, deck_y, qz * hs))
+			candidates.append(Vector3(sx * qx * hs, deck_y, (qz - 0.85) * hs))
+	else:
+		var hx := 1.15 if is_brig else 0.90
+		for hz: float in [-2.4, -0.2, 1.6]:
+			for sx: float in [-1.0, 1.0]:
+				candidates.append(Vector3(sx * hx * hs, deck_y, clampf(hz, z_b.x, z_b.y) * hs))
+
+	# Nearest peer vector so we prefer stepping away/laterally instead of through them.
+	var near_peer_dir := Vector2.ZERO
+	var near_d := INF
+	for other_p in peers:
+		if other_p == pawn:
+			continue
+		var ol := other_p.platform_local_position()
+		if _deck_band(ol.y / hs) != my_band:
+			continue
+		var dv := Vector2(ol.x - cur_local.x, ol.z - cur_local.z)
+		var dl := dv.length()
+		if dl < near_d and dl > 0.02:
+			near_d = dl
+			near_peer_dir = dv / dl
+
+	var best_pt := cur_local
+	var best_score := -INF
+	for cand in candidates:
+		if not _is_local_point_clear(cand, my_band, hs, is_brig, true):
+			continue
+		var move_v := Vector2(cand.x - cur_local.x, cand.z - cur_local.z)
+		var travel := move_v.length()
+		if travel < 0.35:
+			continue
+		var min_d := _min_peer_dist_to(cand, my_band, peers, hs)
+		var score := (10.0 + minf(min_d, 4.0) * 0.6) if min_d >= IDLE_EVADE_TARGET_CLEARANCE else (min_d * 3.8)
+		score -= travel * 0.45
+		if near_peer_dir.length_squared() > 0.5:
+			var toward_peer := (move_v / travel).dot(near_peer_dir)
+			if toward_peer > 0.30:
+				score -= 2.8 * toward_peer
+		if score > best_score:
+			best_score = score
+			best_pt = cand
+	return best_pt
 
 
 # ------------------------------------------------------------------ navigation
@@ -1567,96 +1727,508 @@ func _navigate_to_station(st: Station) -> bool:
 	return _move_world_towards(stand_world, 0.9)
 
 
-## Ship-local deck-aware waypoint navigator so crew climb quarterdeck & hold stairs cleanly.
-func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65) -> bool:
+## Ship-local deck-aware waypoint navigator with obstacle routing, tangent avoidance,
+## smooth facing, and lateral stuck bypass for both Sloop and Brigantine.
+func _navigate_ship_local(goal_local: Vector3, arrive_dist: float = 0.65,
+		update_facing: bool = true, speed_scale: float = 1.0) -> bool:
 	if ship == null:
 		return false
 	var hs := _ship_scale()
+	var is_brig := ship.ship_class == &"brigantine"
 	var cur := pawn.platform_local_position()
-	var same_level := absf(cur.y - goal_local.y) < 0.65 * hs
-	if same_level and cur.distance_to(goal_local) <= arrive_dist:
+	var nav_goal := _safe_ship_local_goal(goal_local, cur, hs, is_brig)
+	var same_level := absf(cur.y - nav_goal.y) < 0.65 * hs
+	if same_level and cur.distance_to(nav_goal) <= arrive_dist:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
 		_route.clear()
+		_stuck_timer = 0.0
+		_stuck_has_ref = false
+		_stuck_bypass_timer = 0.0
 		return true
 
-	if _route.is_empty() or _route[_route.size() - 1].distance_to(goal_local) > 0.75 * hs:
-		_route = _plan_ship_route(cur, goal_local)
+	if _route.is_empty() or _route[_route.size() - 1].distance_to(nav_goal) > 0.75 * hs:
+		_route = _plan_ship_route(cur, nav_goal)
 		_route_is_local = true
+
+	var cur_band := _deck_band(cur.y / hs)
+	var goal_band := _deck_band(nav_goal.y / hs)
+	var allow_hatch := (cur_band != goal_band) and (cur_band == 0 or goal_band == 0)
+
+	# If actively executing a lateral stuck bypass, follow it until cleared or expired.
+	if _stuck_bypass_timer > 0.0:
+		_stuck_bypass_timer = maxf(0.0, _stuck_bypass_timer - _last_delta)
+		var bd := _stuck_bypass_local - cur
+		var b_flat := Vector2(bd.x, bd.z).length()
+		if b_flat <= 0.35 * hs or _stuck_bypass_timer <= 0.0:
+			_stuck_bypass_timer = 0.0
+			_route.clear()
+		else:
+			var bdir_l := _steer_around_ship_obstacles(
+				cur, _stuck_bypass_local, Vector2(bd.x, bd.z) / b_flat, cur_band, hs, is_brig, allow_hatch
+			)
+			_apply_ship_local_move(bdir_l, false, update_facing, speed_scale)
+			return false
 
 	while not _route.is_empty():
 		var wp: Vector3 = _route[0]
 		var d := wp - cur
 		var flat := Vector2(d.x, d.z).length()
-		var thresh := arrive_dist if _route.size() == 1 else (0.55 * hs)
+		var thresh := arrive_dist if _route.size() == 1 else (0.50 * hs)
 		if flat <= thresh and absf(d.y) < 0.85 * hs:
 			_route.remove_at(0)
+			_stuck_timer = 0.0
+			_stuck_ref_local = cur
+			_stuck_has_ref = true
 		else:
-			var world_dir := ship.global_basis * Vector3(d.x, 0.0, d.z)
-			world_dir.y = 0.0
-			if world_dir.length_squared() > 0.0001:
-				var wd := world_dir.normalized()
-				pawn.wish_dir = wd
-				pawn.wish_sprint = current_task == &"patch_hole" or current_task == &"bail" \
-					or current_task == &"douse_fire" or flat > 3.0 * hs
-				pawn.look_yaw = atan2(-wd.x, -wd.z)
+			var raw_dir_l := Vector2(d.x, d.z) / maxf(flat, 0.0001)
+			# Stuck detector: if progress stalls for 0.65 s, trigger a clean lateral bypass.
+			if not _stuck_has_ref:
+				_stuck_ref_local = cur
+				_stuck_has_ref = true
+				_stuck_timer = 0.0
 			else:
-				pawn.wish_dir = Vector3.ZERO
+				var moved := Vector2(cur.x - _stuck_ref_local.x, cur.z - _stuck_ref_local.z).length()
+				if moved >= STUCK_MIN_PROGRESS:
+					_stuck_ref_local = cur
+					_stuck_timer = 0.0
+				else:
+					_stuck_timer += _last_delta
+					if _stuck_timer >= STUCK_CHECK_TIME:
+						_stuck_timer = 0.0
+						_stuck_ref_local = cur
+						_stuck_bypass_local = _pick_stuck_bypass(cur, raw_dir_l, cur_band, hs, is_brig)
+						_stuck_bypass_timer = STUCK_BYPASS_DURATION
+						_stuck_side = -_stuck_side
+						_route.clear()
+						var bdir := Vector2(_stuck_bypass_local.x - cur.x, _stuck_bypass_local.z - cur.z)
+						if bdir.length_squared() > 0.001:
+							_apply_ship_local_move(bdir.normalized(), false, update_facing, speed_scale)
+						return false
+
+			var steered_l := _steer_around_ship_obstacles(
+				cur, nav_goal, raw_dir_l, cur_band, hs, is_brig, allow_hatch
+			)
+			var want_sprint := (current_task == &"patch_hole" or current_task == &"bail" \
+				or current_task == &"douse_fire" or flat > 3.0 * hs) and current_task != &"idle"
+			_apply_ship_local_move(steered_l, want_sprint, update_facing, speed_scale)
 			return false
 
 	pawn.wish_dir = Vector3.ZERO
 	pawn.wish_sprint = false
+	_stuck_timer = 0.0
+	_stuck_has_ref = false
 	return true
+
+
+func _apply_ship_local_move(dir_l: Vector2, sprint: bool, update_facing: bool, speed_scale: float) -> void:
+	var world_dir := ship.global_basis * Vector3(dir_l.x, 0.0, dir_l.y)
+	world_dir.y = 0.0
+	if world_dir.length_squared() > 0.0001:
+		var wd := world_dir.normalized()
+		pawn.wish_dir = wd * clampf(speed_scale, 0.25, 1.0)
+		pawn.wish_sprint = sprint
+		if update_facing:
+			var rate := TURN_RATE_IDLE if current_task == &"idle" else TURN_RATE_WALK
+			_turn_toward_dir(wd, _last_delta, rate, true)
+	else:
+		pawn.wish_dir = Vector3.ZERO
+		pawn.wish_sprint = false
+
+
+func _pick_stuck_bypass(cur: Vector3, blocked_dir: Vector2, band: int, hs: float, is_brig: bool) -> Vector3:
+	var perp := Vector2(-blocked_dir.y, blocked_dir.x) * _stuck_side
+	var z_b := _deck_z_bounds(band, is_brig)
+	for sgn: float in [1.0, -1.0]:
+		var side_v := perp * sgn
+		var cand_x_u := (cur.x + side_v.x * 1.15 * hs + blocked_dir.x * 0.35 * hs) / hs
+		var cand_z_u := clampf((cur.z + side_v.y * 1.15 * hs + blocked_dir.y * 0.35 * hs) / hs, z_b.x, z_b.y)
+		var lim_x := _deck_half_beam(cand_z_u, band, is_brig)
+		var cand := Vector3(clampf(cand_x_u, -lim_x, lim_x) * hs, cur.y, cand_z_u * hs)
+		if cand.distance_to(cur) > 0.35 * hs and _is_local_point_clear(cand, band, hs, is_brig, band == 1):
+			return cand
+	var back_z_u := clampf((cur.z - blocked_dir.y * 0.85 * hs) / hs, z_b.x, z_b.y)
+	var back_lim := _deck_half_beam(back_z_u, band, is_brig)
+	return Vector3(clampf((cur.x - blocked_dir.x * 0.85 * hs) / hs, -back_lim, back_lim) * hs, cur.y, back_z_u * hs)
+
+
+func _steer_around_ship_obstacles(cur: Vector3, goal_local: Vector3, dir_l: Vector2,
+		band: int, hs: float, is_brig: bool, allow_hatch: bool) -> Vector2:
+	var cur2 := Vector2(cur.x, cur.z)
+	var goal2 := Vector2(goal_local.x, goal_local.z)
+	var steer := Vector2.ZERO
+	var pref_sign := _default_aisle_sign()
+
+	# 1. Smooth tangent + outward steering around masts, capstan, and hold fixtures.
+	for cyl: Vector4 in _deck_cylinders(band, is_brig):
+		var c := Vector2(cyl.x, cyl.y) * hs
+		var solid_r := cyl.z * hs
+		var avoid_r := cyl.w * hs
+		# Do not push away from a fixture if the requested goal sits right beside it (e.g. capstan bar).
+		if goal2.distance_to(c) < avoid_r * 0.92:
+			continue
+		var off := cur2 - c
+		var d := off.length()
+		if d < avoid_r and d > 0.001:
+			var out_n := off / d
+			var approaching := dir_l.dot(-out_n)
+			if approaching > -0.25 or d < solid_r + 0.35 * hs:
+				var t_a := Vector2(-out_n.y, out_n.x)
+				var t_b := -t_a
+				var dot_a := dir_l.dot(t_a)
+				var dot_b := dir_l.dot(t_b)
+				var best_t: Vector2
+				if absf(dot_a - dot_b) < 0.25:
+					best_t = t_a if (t_a.x * pref_sign >= t_b.x * pref_sign) else t_b
+				else:
+					best_t = t_a if dot_a >= dot_b else t_b
+				var w := clampf((avoid_r - d) / maxf(avoid_r - solid_r, 0.22), 0.0, 1.0)
+				steer += (best_t * 1.25 + out_n * 0.70) * w
+
+	# 2. Keep main-deck walkers smoothly clear of the open deck hatch coaming & drop-off.
+	if band == 1 and not allow_hatch:
+		var hr := _deck_hatch_rect(band, is_brig)
+		if hr.size.x > 0.0:
+			var min_p := hr.position * hs
+			var max_p := (hr.position + hr.size) * hs
+			var closest := Vector2(clampf(cur2.x, min_p.x, max_p.x), clampf(cur2.y, min_p.y, max_p.y))
+			var off := cur2 - closest
+			var d := off.length()
+			var pad := 0.40 * hs
+			if d < pad:
+				var out_n := off / d if d > 0.001 else Vector2(1.0 if cur2.x >= 0.0 else -1.0, 0.0)
+				var t_a := Vector2(-out_n.y, out_n.x)
+				var t_b := -t_a
+				var best_t := t_a if dir_l.dot(t_a) >= dir_l.dot(t_b) else t_b
+				var w := clampf((pad - d) / pad, 0.0, 1.0)
+				steer += (best_t * 0.90 + out_n * 0.95) * w
+
+	# 3. Soft peer-avoidance tangent steering so walking crewmates curve past each other & Captain.
+	for other_p in _collect_ship_peers():
+		if other_p == pawn:
+			continue
+		var ol := other_p.platform_local_position()
+		if _deck_band(ol.y / hs) != band:
+			continue
+		var p2 := Vector2(ol.x, ol.z)
+		if goal2.distance_to(p2) < 0.75:
+			continue
+		var off := cur2 - p2
+		var d := off.length()
+		var peer_r := 1.25
+		if d < peer_r and d > 0.04:
+			var out_n := off / d
+			if dir_l.dot(-out_n) > -0.15:
+				var t_a := Vector2(-out_n.y, out_n.x)
+				var t_b := -t_a
+				var best_t := t_a if dir_l.dot(t_a) >= dir_l.dot(t_b) else t_b
+				var w := clampf((peer_r - d) / peer_r, 0.0, 1.0) * 0.85
+				steer += (best_t * 0.75 + out_n * 0.45) * w
+
+	var combined := dir_l + steer
+	var final_l := combined.normalized() if combined.length_squared() > 0.001 else dir_l
+
+	# Never let obstacle repulsion shove a crewmate outward into/over the curved bulwarks.
+	var lim_x := _deck_half_beam(cur.z / hs, band, is_brig)
+	if absf(cur.x / hs) > lim_x - 0.08 and signf(final_l.x) == signf(cur.x):
+		final_l.x = 0.0
+		if final_l.length_squared() > 0.001:
+			final_l = final_l.normalized()
+		else:
+			final_l = Vector2(-signf(cur.x), 0.0)
+	return final_l
+
+
+func _safe_ship_local_goal(goal_local: Vector3, cur_local: Vector3, hs: float, is_brig: bool) -> Vector3:
+	var cur_band := _deck_band(cur_local.y / hs)
+	var goal_band := _deck_band(goal_local.y / hs)
+	if cur_band != 1 or goal_band != 1:
+		return goal_local
+	var hr := _deck_hatch_rect(1, is_brig)
+	if hr.size.x <= 0.0:
+		return goal_local
+	var g2 := Vector2(goal_local.x, goal_local.z) / hs
+	if hr.has_point(g2):
+		# Project an unwalkable open-hatch main-deck coordinate onto the nearest solid walkway rim.
+		var side := 1.0 if cur_local.x > 0.08 else (-1.0 if cur_local.x < -0.08 else _default_aisle_sign())
+		var safe_x := side * (hr.size.x * 0.5 + 0.34)
+		var deck_y := _deck_y_nominal(1, is_brig)
+		return Vector3(safe_x * hs, deck_y * hs, goal_local.z)
+	return goal_local
 
 
 func _plan_ship_route(from_l: Vector3, to_l: Vector3) -> Array[Vector3]:
 	var hs := _ship_scale()
+	var is_brig := ship != null and ship.ship_class == &"brigantine"
 	var pts: Array[Vector3] = []
 	var from_deck := _deck_band(from_l.y / hs)
 	var to_deck := _deck_band(to_l.y / hs)
-	var from_z_u := from_l.z / hs
-	var to_z_u := to_l.z / hs
+	var main_y := _deck_y_nominal(1, is_brig) * hs
+	var q_y := _deck_y_nominal(2, is_brig) * hs
 
 	if from_deck == to_deck:
-		if from_deck == 0 and ((from_z_u > -0.7 and to_z_u < -1.1) or (from_z_u < -1.1 and to_z_u > -0.7)):
-			# Walk along the side aisle past the mast pillar at (0, -1.0) in the hold.
-			var side_x := (0.82 if from_l.x >= 0.0 else -0.82) * hs
-			if from_z_u > to_z_u:
-				pts.append(Vector3(side_x, -0.85 * hs, -0.35 * hs))
-				pts.append(Vector3(side_x, -0.85 * hs, -1.65 * hs))
-			else:
-				pts.append(Vector3(side_x, -0.85 * hs, -1.65 * hs))
-				pts.append(Vector3(side_x, -0.85 * hs, -0.35 * hs))
+		_append_same_deck_path(pts, from_l, to_l, from_deck, is_brig, hs, false)
 		pts.append(to_l)
 		return pts
 
-	# Step 1: get to main deck (band 1) first.
-	if from_deck == 2:
-		pts.append(NAV_QSTAIR_TOP_R * hs)
-		pts.append(NAV_QSTAIR_BOT_R * hs)
-	elif from_deck == 0:
-		if from_z_u < -1.1:
-			var sx := (0.82 if from_l.x >= 0.0 else -0.82) * hs
-			pts.append(Vector3(sx, -0.85 * hs, -1.65 * hs))
-			pts.append(Vector3(sx, -0.85 * hs, -0.35 * hs))
-		pts.append(NAV_HOLD_FOOT * hs)
-		pts.append(NAV_HOLD_STAIR_MID * hs)
-		pts.append(NAV_MAIN_MID * hs)
+	var q_x := (1.60 if is_brig else 1.38) * hs
+	var q_top_z := (5.30 if is_brig else 4.15) * hs
+	var q_bot_z := (3.20 if is_brig else 2.20) * hs
+	var hold_top := (Vector3(0.0, 1.25, -0.50) if is_brig else NAV_MAIN_MID) * hs
+	var hold_mid := (Vector3(0.0, 0.15, -2.15) if is_brig else NAV_HOLD_STAIR_MID) * hs
+	var hold_foot := (Vector3(0.0, -0.95, -3.85) if is_brig else NAV_HOLD_FOOT) * hs
 
-	# Step 2: move from main deck to target deck.
+	# Step 1: get onto the main deck (band 1) cleanly from quarterdeck or hold.
+	var cur_main := from_l
+	if from_deck == 2:
+		var side := -1.0 if (from_l.x + to_l.x) < 0.0 else 1.0
+		var q_top := Vector3(side * q_x, q_y, q_top_z)
+		var q_bot := Vector3(side * q_x, main_y, q_bot_z)
+		pts.append(q_top)
+		pts.append(q_bot)
+		cur_main = q_bot
+	elif from_deck == 0:
+		_append_same_deck_path(pts, from_l, hold_foot, 0, is_brig, hs, true)
+		pts.append(hold_foot)
+		pts.append(hold_mid)
+		pts.append(hold_top)
+		cur_main = hold_top
+
+	# Step 2: cross main deck (avoiding masts, capstan, and open hatch) to destination deck.
 	if to_deck == 2:
-		pts.append(NAV_QSTAIR_BOT_R * hs)
-		pts.append(NAV_QSTAIR_TOP_R * hs)
+		var side := -1.0 if (cur_main.x + to_l.x) < 0.0 else 1.0
+		var q_bot := Vector3(side * q_x, main_y, q_bot_z)
+		var q_top := Vector3(side * q_x, q_y, q_top_z)
+		_append_same_deck_path(pts, cur_main, q_bot, 1, is_brig, hs, false)
+		pts.append(q_bot)
+		pts.append(q_top)
 	elif to_deck == 0:
-		pts.append(NAV_MAIN_MID * hs)
-		pts.append(NAV_HOLD_STAIR_MID * hs)
-		pts.append(NAV_HOLD_FOOT * hs)
-		if to_z_u < -1.1:
-			pts.append(Vector3(0.82 * hs, -0.85 * hs, -0.35 * hs))
-			pts.append(Vector3(0.82 * hs, -0.85 * hs, -1.65 * hs))
+		var hr := _deck_hatch_rect(1, is_brig)
+		var already_on_stairs := from_deck == 1 and hr.has_point(Vector2(cur_main.x, cur_main.z) / hs)
+		if not already_on_stairs:
+			_append_same_deck_path(pts, cur_main, hold_top, 1, is_brig, hs, false)
+			pts.append(hold_top)
+		pts.append(hold_mid)
+		pts.append(hold_foot)
+		_append_same_deck_path(pts, hold_foot, to_l, 0, is_brig, hs, true)
+	else:
+		_append_same_deck_path(pts, cur_main, to_l, 1, is_brig, hs, false)
 
 	pts.append(to_l)
 	return pts
+
+
+func _append_same_deck_path(pts: Array[Vector3], a_l: Vector3, b_l: Vector3,
+		band: int, is_brig: bool, hs: float, allow_hatch: bool = false) -> void:
+	var a2 := Vector2(a_l.x, a_l.z) / hs
+	var b2 := Vector2(b_l.x, b_l.z) / hs
+	if a2.distance_to(b2) < 0.25:
+		return
+
+	var deck_y := _deck_y_nominal(band, is_brig) * hs
+	var z_b := _deck_z_bounds(band, is_brig)
+	var hit_any := false
+	var span_z_lo := INF
+	var span_z_hi := -INF
+
+	# Check centerline cylinder obstacles (mainmast, foremast, capstan, hold table).
+	for cyl: Vector4 in _deck_cylinders(band, is_brig):
+		var c := Vector2(cyl.x, cyl.y)
+		var r := cyl.w
+		if b2.distance_to(c) < r * 0.88:
+			continue
+		if _segment_hits_circle_2d(a2, b2, c, r):
+			hit_any = true
+			span_z_lo = minf(span_z_lo, c.y - r)
+			span_z_hi = maxf(span_z_hi, c.y + r)
+
+	# Check open main-deck hatch cutout so walkers never drop into the hold.
+	if band == 1 and not allow_hatch:
+		var hr := _deck_hatch_rect(1, is_brig)
+		if hr.size.x > 0.0:
+			var pad_hr := hr.grow(0.32)
+			if not pad_hr.has_point(b2) and _segment_hits_rect_2d(a2, b2, pad_hr):
+				hit_any = true
+				span_z_lo = minf(span_z_lo, pad_hr.position.y)
+				span_z_hi = maxf(span_z_hi, pad_hr.position.y + pad_hr.size.y)
+
+	if not hit_any:
+		return
+
+	# Case A: Port <-> Starboard cross-deck traversal blocked by the central mast/hatch spine.
+	if a2.x * b2.x < -0.15 and absf(a2.x) > 0.45 and absf(b2.x) > 0.45:
+		var z_fore := clampf(span_z_lo - 0.18, z_b.x, z_b.y)
+		var z_aft := clampf(span_z_hi + 0.18, z_b.x, z_b.y)
+		# Keep crossover clear of nearby masts/capstan along centerline.
+		var fore_clear := _is_local_point_clear(Vector3(0.0, deck_y, z_fore * hs), band, hs, is_brig, not allow_hatch)
+		var aft_clear := _is_local_point_clear(Vector3(0.0, deck_y, z_aft * hs), band, hs, is_brig, not allow_hatch)
+		var fore_cost := absf(a2.y - z_fore) + absf(b2.y - z_fore) + (0.0 if fore_clear else 20.0)
+		var aft_cost := absf(a2.y - z_aft) + absf(b2.y - z_aft) + (0.0 if aft_clear else 20.0)
+		var z_cross := z_fore if fore_cost <= aft_cost else z_aft
+		var lim_cross := _deck_half_beam(z_cross, band, is_brig)
+		var ax := clampf(signf(a2.x) * maxf(absf(a2.x), 0.95), -lim_cross, lim_cross)
+		var bx := clampf(signf(b2.x) * maxf(absf(b2.x), 0.95), -lim_cross, lim_cross)
+		pts.append(Vector3(ax * hs, deck_y, z_cross * hs))
+		pts.append(Vector3(bx * hs, deck_y, z_cross * hs))
+		return
+
+	# Case B: Fore <-> Aft traversal along/across the centerline: take the clean side walkway!
+	var side_sign: float
+	if a2.x + b2.x > 0.12:
+		side_sign = 1.0
+	elif a2.x + b2.x < -0.12:
+		side_sign = -1.0
+	else:
+		side_sign = _default_aisle_sign()
+
+	var aisle_nom := (1.38 if is_brig else 1.15) if band == 1 else (1.12 if is_brig else 0.88)
+	var z_min_travel := minf(a2.y, b2.y)
+	var z_max_travel := maxf(a2.y, b2.y)
+	var z_lo := clampf(maxf(span_z_lo, z_min_travel), z_b.x, z_b.y)
+	var z_hi := clampf(minf(span_z_hi, z_max_travel), z_b.x, z_b.y)
+	var z_first := z_lo if b2.y >= a2.y else z_hi
+	var z_second := z_hi if b2.y >= a2.y else z_lo
+
+	var x1 := side_sign * minf(aisle_nom, _deck_half_beam(z_first, band, is_brig))
+	var x2 := side_sign * minf(aisle_nom, _deck_half_beam(z_second, band, is_brig))
+	pts.append(Vector3(x1 * hs, deck_y, z_first * hs))
+	if absf(z_second - z_first) > 2.2:
+		var z_mid := 0.5 * (z_first + z_second)
+		var xm := side_sign * minf(aisle_nom, _deck_half_beam(z_mid, band, is_brig))
+		pts.append(Vector3(xm * hs, deck_y, z_mid * hs))
+	if absf(z_second - z_first) > 0.35:
+		pts.append(Vector3(x2 * hs, deck_y, z_second * hs))
+
+
+func _default_aisle_sign() -> float:
+	return -1.0 if persona_id == &"helmsman" else 1.0
+
+
+static func _deck_z_bounds(band: int, is_brig: bool) -> Vector2:
+	if band == 2:
+		return Vector2(4.25, 6.70) if is_brig else Vector2(3.20, 5.10)
+	if band == 0:
+		return Vector2(-4.40, 5.00) if is_brig else Vector2(-3.00, 3.60)
+	return Vector2(-6.10, 3.35) if is_brig else Vector2(-3.95, 2.55)
+
+
+static func _deck_half_beam(z_u: float, band: int, is_brig: bool) -> float:
+	if band == 2:
+		if is_brig:
+			return 1.50 if z_u > 6.2 else 1.85
+		return 1.20 if z_u > 4.7 else 1.45
+	if band == 0:
+		if is_brig:
+			return clampf(1.55 - maxf(0.0, -3.0 - z_u) * 0.25, 0.95, 1.55)
+		return clampf(1.22 - maxf(0.0, -1.8 - z_u) * 0.25, 0.80, 1.22)
+	if is_brig:
+		return clampf(1.95 - maxf(0.0, -3.0 - z_u) * 0.21, 0.95, 1.95)
+	return clampf(1.55 - maxf(0.0, -1.8 - z_u) * 0.22, 0.78, 1.55)
+
+
+static func _deck_y_nominal(band: int, is_brig: bool) -> float:
+	if band == 2:
+		return 2.25 if is_brig else 2.02
+	if band == 0:
+		return -0.95 if is_brig else -0.85
+	return 1.25 if is_brig else 1.12
+
+
+static func _deck_cylinders(band: int, is_brig: bool) -> Array[Vector4]:
+	# Each Vector4 is (cx, cz, solid_radius, avoid_radius) in unscaled ship-local coordinates.
+	if band == 1:
+		if is_brig:
+			return [
+				Vector4(0.0, 0.5, 0.38, 0.96),   # Mainmast
+				Vector4(0.0, -4.6, 0.32, 0.88),  # Foremast
+				Vector4(0.0, -6.5, 0.52, 0.90),  # Capstan
+			]
+		return [
+			Vector4(0.0, -1.0, 0.34, 0.92),      # Mainmast
+			Vector4(0.0, -4.6, 0.50, 0.86),      # Capstan
+		]
+	if band == 0:
+		if is_brig:
+			return [
+				Vector4(0.0, 0.5, 0.38, 0.88),   # Mainmast
+				Vector4(0.0, -4.6, 0.32, 0.82),  # Foremast
+			]
+		return [
+			Vector4(0.0, -1.0, 0.34, 0.84),      # Mainmast
+			Vector4(0.0, 2.5, 0.48, 0.82),       # Map table
+		]
+	return []
+
+
+static func _deck_hatch_rect(band: int, is_brig: bool) -> Rect2:
+	if band != 1:
+		return Rect2()
+	if is_brig:
+		return Rect2(-0.52, -3.72, 1.04, 3.04)
+	return Rect2(-0.52, -0.62, 1.04, 2.88)
+
+
+static func _is_local_point_clear(local_pos: Vector3, band: int, hs: float,
+		is_brig: bool, check_hatch: bool = true) -> bool:
+	var p2 := Vector2(local_pos.x, local_pos.z) / hs
+	var z_b := _deck_z_bounds(band, is_brig)
+	if p2.y < z_b.x - 0.15 or p2.y > z_b.y + 0.15:
+		return false
+	if absf(p2.x) > _deck_half_beam(p2.y, band, is_brig) + 0.10:
+		return false
+	for cyl: Vector4 in _deck_cylinders(band, is_brig):
+		if p2.distance_to(Vector2(cyl.x, cyl.y)) < cyl.w * 0.88:
+			return false
+	if check_hatch and band == 1:
+		var hr := _deck_hatch_rect(1, is_brig)
+		if hr.size.x > 0.0 and hr.grow(0.28).has_point(p2):
+			return false
+	return true
+
+
+static func _segment_hits_circle_2d(a: Vector2, b: Vector2, center: Vector2, radius: float) -> bool:
+	var ab := b - a
+	var ab_sq := ab.length_squared()
+	if ab_sq < 0.00001:
+		return a.distance_to(center) < radius
+	var t := clampf((center - a).dot(ab) / ab_sq, 0.0, 1.0)
+	var closest := a + ab * t
+	return closest.distance_to(center) < radius
+
+
+static func _segment_hits_rect_2d(a: Vector2, b: Vector2, rect: Rect2) -> bool:
+	if rect.has_point(a) or rect.has_point(b):
+		return true
+	var t_min := 0.0
+	var t_max := 1.0
+	var d := b - a
+	var rx0 := rect.position.x
+	var rx1 := rect.position.x + rect.size.x
+	var ry0 := rect.position.y
+	var ry1 := rect.position.y + rect.size.y
+	if absf(d.x) < 0.00001:
+		if a.x < rx0 or a.x > rx1:
+			return false
+	else:
+		var inv_x := 1.0 / d.x
+		var tx1 := (rx0 - a.x) * inv_x
+		var tx2 := (rx1 - a.x) * inv_x
+		t_min = maxf(t_min, minf(tx1, tx2))
+		t_max = minf(t_max, maxf(tx1, tx2))
+		if t_max < t_min:
+			return false
+	if absf(d.y) < 0.00001:
+		if a.y < ry0 or a.y > ry1:
+			return false
+	else:
+		var inv_y := 1.0 / d.y
+		var ty1 := (ry0 - a.y) * inv_y
+		var ty2 := (ry1 - a.y) * inv_y
+		t_min = maxf(t_min, minf(ty1, ty2))
+		t_max = minf(t_max, maxf(ty1, ty2))
+		if t_max < t_min:
+			return false
+	return t_max >= 0.0 and t_min <= 1.0
 
 
 static func _deck_band(y: float) -> int:
@@ -1667,7 +2239,26 @@ static func _deck_band(y: float) -> int:
 	return 1      # main deck
 
 
-func _move_world_towards(world_goal: Vector3, arrive_dist: float, sprint: bool = false) -> bool:
+func _turn_toward_dir(world_dir: Vector3, delta: float, turn_rate: float = TURN_RATE_WALK,
+		require_speed: bool = false) -> void:
+	if pawn == null:
+		return
+	var flat := Vector3(world_dir.x, 0.0, world_dir.z)
+	if flat.length_squared() < 0.0004:
+		return
+	if require_speed:
+		var rel := pawn.get_relative_velocity()
+		var spd := Vector2(rel.x, rel.z).length()
+		var wish_len := Vector2(pawn.wish_dir.x, pawn.wish_dir.z).length()
+		if spd < TURN_SPEED_DEADBAND and wish_len < TURN_SPEED_DEADBAND:
+			return
+	var target_yaw := atan2(-flat.x, -flat.z)
+	var alpha := clampf(delta * turn_rate, 0.0, 1.0) if delta > 0.0 else 1.0
+	pawn.look_yaw = wrapf(lerp_angle(pawn.look_yaw, target_yaw, alpha), -PI, PI)
+
+
+func _move_world_towards(world_goal: Vector3, arrive_dist: float, sprint: bool = false,
+		update_facing: bool = true) -> bool:
 	var d := world_goal - pawn.global_position
 	var flat := Vector3(d.x, 0.0, d.z)
 	if flat.length() <= arrive_dist:
@@ -1677,7 +2268,8 @@ func _move_world_towards(world_goal: Vector3, arrive_dist: float, sprint: bool =
 	var dir := flat.normalized()
 	pawn.wish_dir = dir
 	pawn.wish_sprint = sprint
-	pawn.look_yaw = atan2(-dir.x, -dir.z)
+	if update_facing:
+		_turn_toward_dir(dir, _last_delta, TURN_RATE_WALK, true)
 	return false
 
 
@@ -1704,7 +2296,7 @@ func _face_ship_local(local_target: Vector3) -> void:
 	var d := world_t - pawn.global_position
 	d.y = 0.0
 	if d.length_squared() > 0.001:
-		pawn.look_yaw = atan2(-d.x, -d.z)
+		_turn_toward_dir(d, _last_delta, TURN_RATE_WALK, false)
 
 
 # ------------------------------------------------------------------ sensors & callouts
@@ -2024,7 +2616,7 @@ func receive_trumpet_hail(caller_pos: Vector3, rally_ship: Node3D = null) -> boo
 		pawn.leave_station()
 	current_order = &"return_ship"
 	order_target = rally_ship if rally_ship != null else ship
-	_route.clear()
+	_reset_nav_state()
 	_work_timer = 0.0
 	var on_helm := pawn.station != null and StringName(pawn.station.get(&"kind")) == &"helm"
 	if not on_helm:

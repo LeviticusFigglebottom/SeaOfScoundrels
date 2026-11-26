@@ -887,5 +887,161 @@ func test_wave28_sea_soundscape_and_crew_harpoon_stealth_callouts() -> void:
 	await _end()
 
 
+func test_q1b_crew_zero_jitter_hysteresis_and_deck_obstacle_routing() -> void:
+	_begin()
+	# Enable live waves and sailing wind so the ship rolls, pitches, and moves under way!
+	Weather.set_weather(0.25, 12.0, 0.35)
+	Sea.amp_scale = 0.65
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	s.start_anchored = false
+	_root.add_child(s)
+	s.set_sail_target(0.65)
+	s.sail_set = 0.65
+	await physics_frames(20)
 
+	var hs := _ship_scale(s)
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(s, Vector3(0.0, 2.02, 4.15) * hs)
 
+	# Spawn idle crewmate at starboard main-deck clearing, let settle, then crowd closely with Captain!
+	var pip_pair := _make_crew(s, captain, &"carpenter", Vector3(1.35, 1.12, -0.80))
+	var pip_p: Pawn = pip_pair[0]
+	var pip_brain: CrewBrain = pip_pair[1]
+	# Ensure ship has no active tasks distracting Pip from idle behavior.
+	pip_brain.hold_fire = true
+	await physics_frames(20)
+
+	# Walk Captain right up next to Pip (0.55 m away) on the rolling moving ship and observe 180 ticks (3.0 s).
+	var pip_start := pip_p.platform_local_position()
+	captain.board(s, Vector3(pip_start.x - 0.55, pip_start.y, pip_start.z))
+
+	var vel_reversals := 0
+	var yaw_flips := 0
+	var last_move_dir := Vector2.ZERO
+	var have_prev_yaw := false
+	var prev_local_yaw := 0.0
+	var settled_max_speed := 0.0
+
+	for tick in 180:
+		await physics_frames(1)
+		var inv_b := s.global_basis.inverse()
+		var rel_l := inv_b * pip_p.get_relative_velocity()
+		var v2 := Vector2(rel_l.x, rel_l.z)
+		var spd := v2.length()
+		if spd > 0.35:
+			var cur_dir := v2 / spd
+			if last_move_dir.length_squared() > 0.5 and last_move_dir.dot(cur_dir) < -0.25:
+				vel_reversals += 1
+			last_move_dir = cur_dir
+		if tick >= 150:
+			settled_max_speed = maxf(settled_max_speed, spd)
+
+		var fwd_l := inv_b * pip_p.facing()
+		var cur_local_yaw := atan2(-fwd_l.x, -fwd_l.z)
+		if have_prev_yaw:
+			var dy := absf(angle_difference(prev_local_yaw, cur_local_yaw))
+			if dy > PI * 0.5:
+				yaw_flips += 1
+		prev_local_yaw = cur_local_yaw
+		have_prev_yaw = true
+
+	var pip_end := pip_p.platform_local_position()
+	var cap_end := captain.platform_local_position()
+	var final_sep := Vector2(pip_end.x - cap_end.x, pip_end.z - cap_end.z).length()
+	print("    Q1B hysteresis on rolling ship (180 ticks): final_sep=%.2f m, vel_reversals=%d, yaw_flips=%d, settled_spd=%.3f m/s" % [
+		final_sep, vel_reversals, yaw_flips, settled_max_speed
+	])
+	check(pip_p.platform == s, "crewmate stays cleanly aboard rolling moving ship while sidestepping")
+	check(final_sep >= 1.90,
+		"crewmate smoothly sidesteps to >= 1.9 m clearance from Captain (got %.2f m)" % final_sep)
+	check(vel_reversals <= 1,
+		"personal-space hysteresis must have <= 1 velocity reversal over 3 s (got %d)" % vel_reversals)
+	check_eq(yaw_flips, 0,
+		"smooth look_yaw must have zero >90 deg single-tick yaw flips (got %d)" % yaw_flips)
+	check(settled_max_speed < 0.20,
+		"crewmate settles calmly after yielding personal space (final 0.5 s max speed=%.3f m/s)" % settled_max_speed)
+
+	# 2. Order a crewmate across the Sloop main deck straight through the mainmast line:
+	#    (0, 1.1, -2.6) -> (0, 1.1, 1.2) and also straight through mast+hatch -> (0, 1.1, 2.45).
+	Sea.amp_scale = 0.0
+	s.set_sail_target(0.0)
+	s.sail_set = 0.0
+	captain.board(s, Vector3(0.0, 2.02, 4.4) * hs)
+
+	var nav_pair := _make_crew(s, captain, &"lookout", Vector3(0.0, 1.12, -2.6))
+	var nav_p: Pawn = nav_pair[0]
+	var nav_brain: CrewBrain = nav_pair[1]
+	nav_brain.set_physics_process(false)
+	nav_brain._reset_nav_state()
+	await physics_frames(4)
+
+	var mast_center := Vector2(0.0, -1.0 * hs)
+	var goal_mid := Vector3(0.0, 1.1, 1.2) * hs
+	var arrived_mid := false
+	var min_mast_dist := INF
+	var stayed_main_deck := true
+	for _i in 320:
+		nav_brain._last_delta = 1.0 / 60.0
+		if nav_brain._navigate_ship_local(goal_mid, 0.90 * hs):
+			arrived_mid = true
+			break
+		await physics_frames(1)
+		var loc := nav_p.platform_local_position()
+		min_mast_dist = minf(min_mast_dist, Vector2(loc.x, loc.z).distance_to(mast_center))
+		if CrewBrain._deck_band(loc.y / hs) != 1:
+			stayed_main_deck = false
+
+	# Also continue straight to aft centerline (0, 1.1, 2.45) and back to fore (0, 1.1, -2.6) across mast+hatch!
+	var goal_aft := Vector3(0.0, 1.1, 2.45) * hs
+	var arrived_aft := false
+	for _i in 240:
+		nav_brain._last_delta = 1.0 / 60.0
+		if nav_brain._navigate_ship_local(goal_aft, 0.65 * hs):
+			arrived_aft = true
+			break
+		await physics_frames(1)
+		var loc := nav_p.platform_local_position()
+		min_mast_dist = minf(min_mast_dist, Vector2(loc.x, loc.z).distance_to(mast_center))
+		if CrewBrain._deck_band(loc.y / hs) != 1:
+			stayed_main_deck = false
+
+	print("    Q1B Sloop mast-line route: arrived_mid=%s arrived_aft=%s min_mast_r=%.2f m stayed_main_deck=%s" % [
+		str(arrived_mid), str(arrived_aft), min_mast_dist, str(stayed_main_deck)
+	])
+	check(nav_p.platform == s, "crewmate stays aboard Sloop during main-deck mast routing")
+	check(arrived_mid, "crewmate routes cleanly across mainmast line (0,1.1,-2.6)->(0,1.1,1.2)")
+	check(arrived_aft, "crewmate routes cleanly aft past open hatch to (0,1.1,2.45)")
+	check(min_mast_dist >= 0.42,
+		"crewmate must stay clear of mainmast (min r=%.2f m, require >= 0.42 m)" % min_mast_dist)
+	check(stayed_main_deck, "crewmate stays on main deck without falling into open hatch")
+
+	# 3. Verify all 3 watch spots on BOTH Sloop and Brigantine are clear of masts, capstans, and open hatch.
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	if brig_scene != null:
+		var brig := brig_scene.instantiate() as Ship
+		brig.enable_effects = false
+		brig.start_anchored = true
+		_root.add_child(brig)
+		brig.global_position = Vector3(80.0, 0.0, 0.0)
+		await physics_frames(4)
+		var bhs := _ship_scale(brig)
+		for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+			nav_brain.persona_id = pid
+			nav_brain.ship = s
+			var sl_spot := nav_brain._idle_watch_spot()
+			check(CrewBrain._is_local_point_clear(sl_spot, 1, hs, false, true),
+				"Sloop %s watch post is clear of all deck obstacles (%s)" % [String(pid), str(sl_spot)])
+			nav_brain.ship = brig
+			var br_spot := nav_brain._idle_watch_spot()
+			check(CrewBrain._is_local_point_clear(br_spot, 1, bhs, true, true),
+				"Brigantine %s watch post is clear of masts/capstan/hatch (%s)" % [String(pid), str(br_spot)])
+		# Verify Brigantine fore-to-aft route bypasses both foremast and mainmast!
+		var b_route := nav_brain._plan_ship_route(
+			Vector3(0.0, 1.25, -5.6) * bhs,
+			Vector3(0.0, 1.25, 2.2) * bhs
+		)
+		check(b_route.size() >= 3, "Brigantine fore-to-aft route inserts clean side-aisle waypoints (got %d)" % b_route.size())
+
+	await _end()

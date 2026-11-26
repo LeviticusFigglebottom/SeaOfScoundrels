@@ -517,6 +517,9 @@ func _build_models() -> void:
 	if _anchor_node != null:
 		_anchor_base_pos = _anchor_node.position
 	_bell = _n("Bell")
+	if _bell != null:
+		# Hide the legacy floating mast-side GLB bell; player ships mount sculpted ShipBell flush on the quarterdeck rail.
+		_bell.visible = false
 	_mask_water = _n("mask_water") as MeshInstance3D
 
 	_lod_yards.clear()
@@ -575,7 +578,7 @@ func _build_collision() -> void:
 
 func _build_stations() -> void:
 	var specs: Array[Array] = [
-		["Station_Helm", &"helm", "Take the helm", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.78)), Vector3(0.0, 0.95, 0.0), 0.65, &""],
+		["Station_Helm", &"helm", "Take the helm", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.94)), Vector3(0.0, 0.85, 0.0), 0.65, &""],
 		["Station_SailLength", &"sail_length", "Raise / lower sail", Transform3D(Basis(Vector3.UP, PI * 0.5), Vector3(0.62, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
 		["Station_SailAngle", &"sail_angle", "Trim sail angle", Transform3D(Basis(Vector3.UP, -PI * 0.5), Vector3(-0.62, 0.0, 0.0)), Vector3(0.0, 0.85, 0.0), 0.6, &""],
 		["Station_Anchor", &"anchor", "Use capstan (anchor)", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.08)), Vector3(0.0, 0.85, 0.0), 0.7, &""],
@@ -731,7 +734,7 @@ func _build_lantern_station() -> void:
 		&"lantern",
 		"Douse ship lanterns" if lanterns_lit else "Light ship lanterns",
 		Transform3D.IDENTITY,
-		Vector3(0.0, 1.15, 0.0),
+		Vector3(0.0, 0.95, 0.0),
 		0.50,
 		&"",
 		2.8
@@ -4095,17 +4098,18 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 				if _helm_detent_timer > 0.0:
 					_helm_detent_timer = maxf(0.0, _helm_detent_timer - delta)
 				else:
-					var rate := 1.25 if ship_class == &"brigantine" else 1.55
+					# Deliberate wooden tall-ship wheel turn (~1.6 s Sloop / ~2.2 s Brigantine center-to-lock).
+					var rate := 0.46 if ship_class == &"brigantine" else 0.62
 					var prev_t := helm_target
 					var next_t := clampf(helm_target + axis.x * rate * delta, -1.0, 1.0)
-					# Subtle golden center-spoke detent pause when turning across 0.0.
+					# Crisp golden King-Spoke center-detent pause when turning across 0.0.
 					if (prev_t < -0.02 and next_t >= 0.0) or (prev_t > 0.02 and next_t <= 0.0):
 						next_t = 0.0
-						_helm_detent_timer = 0.07
+						_helm_detent_timer = 0.09
 					set_helm_target(next_t)
 			elif axis.y < -0.35 or secondary:
 				_helm_detent_timer = 0.0
-				set_helm_target(move_toward(helm_target, 0.0, 2.4 * delta))
+				set_helm_target(move_toward(helm_target, 0.0, 1.15 * delta))
 			else:
 				_helm_detent_timer = 0.0
 		&"sail_length":
@@ -4124,14 +4128,18 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 			elif secondary:
 				lower_delta = -1.0
 			if absf(lower_delta) > 0.05:
-				set_sail_target(sail_target + lower_delta * 0.65 * delta)
+				# Weighty physical canvas heave (~1.8 s Sloop / ~2.3 s Brigantine full hoist).
+				var hoist_rate := 0.44 if ship_class == &"brigantine" else 0.55
+				set_sail_target(sail_target + lower_delta * hoist_rate * delta)
 				_rope_sfx_accum += absf(lower_delta) * delta
 				if _rope_sfx_accum > 0.42:
 					_rope_sfx_accum = 0.0
 					Audio.play_sfx(&"rope_creak", st.global_position, -3.0)
 		&"sail_angle":
 			if absf(axis.x) > 0.05:
-				set_trim_target(trim_target + axis.x * 1.38 * delta)
+				# Weighty yard brace hauling.
+				var trim_rate := 0.95 if ship_class == &"brigantine" else 1.15
+				set_trim_target(trim_target + axis.x * trim_rate * delta)
 				_rope_sfx_accum += absf(axis.x) * delta
 				if _rope_sfx_accum > 0.45:
 					_rope_sfx_accum = 0.0
@@ -4139,7 +4147,7 @@ func _drive_station(st: Station, axis: Vector2, primary: bool, secondary: bool, 
 			elif secondary:
 				# Smoothly square sails flat forward for Sea-of-Thieves headwind dummy sails.
 				var before_trim := trim_target
-				set_trim_target(move_toward(trim_target, 0.0, 2.2 * delta))
+				set_trim_target(move_toward(trim_target, 0.0, 1.35 * delta))
 				if absf(trim_target - before_trim) > 0.001:
 					_rope_sfx_accum += delta
 					if _rope_sfx_accum > 0.45:
@@ -4242,13 +4250,14 @@ func _tick_controls(delta: float) -> void:
 	var target_ballast_blend := 1.0 if ballast_curse_timer > 0.0 else 0.0
 	_ballast_draft_blend = move_toward(_ballast_draft_blend, target_ballast_blend, delta / 0.8)
 	var prev_helm := helm
-	helm = move_toward(helm, helm_target, 2.4 * delta)
+	var wheel_rate := 0.46 if ship_class == &"brigantine" else 0.62
+	helm = move_toward(helm, helm_target, wheel_rate * delta)
 	if absf(helm - prev_helm) > 0.0005:
 		_wheel_sfx_accum += absf(helm - prev_helm)
 		var hst := get_station(&"helm")
 		var hpos := hst.global_position if hst != null else global_position
 		if absf(prev_helm) >= 0.04 and absf(helm) < 0.04:
-			# Golden center-spoke CLUNK detent cue.
+			# Golden King-Spoke 12-o'clock center CLUNK detent cue.
 			var detent_sfx := &"wood_clunk" if Audio.has_sound(&"wood_clunk") else &"wheel_creak"
 			var snd := Audio.play_sfx(detent_sfx, hpos, -1.5, 0.02)
 			if detent_sfx == &"wheel_creak" and snd is AudioStreamPlayer3D:
@@ -4263,9 +4272,10 @@ func _tick_controls(delta: float) -> void:
 			Audio.play_sfx(&"wheel_creak", hpos, -4.0)
 
 	var prev_sail := sail_set
-	sail_set = move_toward(sail_set, sail_target, 1.85 * delta)
+	var sail_move_rate := 0.50 if ship_class == &"brigantine" else 0.62
+	sail_set = move_toward(sail_set, sail_target, sail_move_rate * delta)
 	var prev_trim := sail_trim
-	sail_trim = move_toward(sail_trim, trim_target, 2.8 * delta)
+	sail_trim = move_toward(sail_trim, trim_target, 1.15 * delta)
 	if (prev_trim * sail_trim < 0.0) or (absf(prev_trim) >= 0.04 and absf(sail_trim) < 0.04):
 		var st_angle := get_station(&"sail_angle")
 		Audio.play_sfx(&"rope_creak", st_angle.global_position if st_angle != null else global_position, -5.0)
@@ -4470,19 +4480,20 @@ func _tick_hydrodynamics(delta: float) -> void:
 	var ang_local := b.inverse() * angular_velocity
 	var ang_damp_local := Vector3(
 		-ang_local.x * 64000.0 * mass_ratio,
-		-ang_local.y * 52000.0 * mass_ratio,
+		-ang_local.y * 66000.0 * mass_ratio,
 		-ang_local.z * 29000.0 * mass_ratio
 	)
 	apply_torque(b * ang_damp_local)
 
-	# 3. Anisotropic hull hydrodynamic drag (low forward resistance, strong keel resistance).
+	# 3. Anisotropic hull hydrodynamic drag (low linear resistance for graceful harbour coasting glide,
+	#    authentic Froude quadratic hull-speed resistance, strong lateral keel grip).
 	# Longer sleeker Brigantine waterline carries lower wave-making Froude drag per tonne than Sloop.
 	if _last_submerged_frac > 0.04:
 		var wet := lerpf(0.3, 1.0, _last_submerged_frac)
 		var v_loc := b.inverse() * linear_velocity
 		var flood_drag := 1.0 + water_level * 0.55
 		var hull_drag_mult := 0.78 if ship_class == &"brigantine" else 1.0
-		var f_z := -(v_loc.z * 460.0 + v_loc.z * absf(v_loc.z) * 415.0) * hull_drag_mult * flood_drag * mass_ratio
+		var f_z := -(v_loc.z * 275.0 + v_loc.z * absf(v_loc.z) * 495.0) * hull_drag_mult * flood_drag * mass_ratio
 		var f_x := -(v_loc.x * 6800.0 + v_loc.x * absf(v_loc.x) * 2900.0) * mass_ratio
 		var f_y := -v_loc.y * 5200.0 * mass_ratio
 		apply_central_force((b * Vector3(f_x, f_y, f_z)) * wet)
@@ -4499,9 +4510,9 @@ func _tick_hydrodynamics(delta: float) -> void:
 			# Headwind (blowing aft toward +Z in ship local space): Sea-of-Thieves dummy sails squared forward.
 			var square_fac := clampf(1.0 - absf(sail_trim) / 0.95, 0.0, 1.0)
 			if ship_class == &"brigantine":
-				min_headway = lerpf(0.14, 0.23, square_fac) * close_hauled_modifier
+				min_headway = lerpf(0.15, 0.27, square_fac) * close_hauled_modifier
 			else:
-				min_headway = lerpf(0.24, 0.44, square_fac) * close_hauled_modifier
+				min_headway = lerpf(0.28, 0.50, square_fac) * close_hauled_modifier
 		else:
 			# Crosswind / tailwind: poor trim noticeably loses speed vs full billow.
 			min_headway = 0.18 * close_hauled_modifier
@@ -4510,7 +4521,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var flood_slow := lerpf(1.0, 0.65, water_level)
 		var anchor_hold := 1.0 - clampf((anchor_progress - 0.92) / 0.08, 0.0, 0.94)
 		var sail_dmg_mult := 0.35 if sail_damage_timer > 0.0 else 1.0
-		var thrust := sail_set * wind_factor * drive_coeff * billow_surge * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold * sail_dmg_mult
+		var thrust := sail_set * wind_factor * drive_coeff * billow_surge * 9850.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold * sail_dmg_mult
 		var fwd_horiz := Vector3(-b.z.x, 0.0, -b.z.z)
 		if fwd_horiz.length_squared() > 0.001:
 			apply_central_force(fwd_horiz.normalized() * thrust)
@@ -4519,15 +4530,15 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var side_wind := clampf(aw_local.x / 12.0, -1.6, 1.6)
 		apply_torque(b.z * (-side_wind * sail_set * 16500.0 * mass_ratio))
 
-	# 5. Rudder torque (positive helm -> starboard turn -> negative Y torque).
+	# 5. Rudder torque (positive helm -> starboard turn -> negative Y torque) -- weighty tall-ship arcs.
 	if not is_sinking and _last_submerged_frac > 0.05:
 		var fwd := forward_speed()
 		var dir_sign := 1.0 if fwd >= -0.35 else -1.0
 		var speed_auth := clampf(absf(fwd) / 4.2, 0.0, 1.45)
-		var base_low := 0.85 if (sail_set < 0.08 and anchor_progress < 0.5) else 0.30
+		var base_low := 0.95 if (sail_set < 0.08 and anchor_progress < 0.5) else 0.30
 		var low_speed_auth := base_low * (1.0 - anchor_progress)
 		var half_sail_agility := lerpf(1.36, 1.0, smoothstep(0.42, 0.95, sail_set))
-		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * half_sail_agility * 38000.0 * (1.18 if ship_class == &"brigantine" else 1.0) * speed_modifier
+		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * half_sail_agility * 21500.0 * (1.18 if ship_class == &"brigantine" else 1.0) * speed_modifier
 		apply_torque(Vector3.UP * turn_torque)
 
 	# 6. Anchor drag and swinging stop.
@@ -4543,7 +4554,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 			apply_central_force(-hv * (21000.0 * bite_frac * mass_ratio))
 		if _anchor_swing_timer > 0.0 and anchor_progress >= 0.94:
 			var swing_env := clampf(_anchor_swing_timer / 1.95, 0.0, 1.0)
-			var swing := -_anchor_swing_dir * (0.35 + 0.65 * swing_env) * 36000.0 * mass_ratio
+			var swing := -_anchor_swing_dir * (0.35 + 0.65 * swing_env) * 44000.0 * mass_ratio
 			apply_torque(Vector3.UP * swing)
 
 	# Update hold water slosh target from local roll/pitch & angular motion.

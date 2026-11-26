@@ -104,6 +104,8 @@ var ladder: Ladder = null
 var visual_offset_y: float = 0.0
 ## Smoothed eye height above the feet (follows crouching).
 var current_eye_height: float = 1.6
+## Yaw delta (radians) carried from the ridden platform on the latest physics tick.
+var platform_yaw_delta: float = 0.0
 ## True while soaring through the air after launching out of a ship cannon.
 var cannon_launched: bool = false
 var _cannon_air_time: float = 0.0
@@ -114,6 +116,7 @@ var _anchor_local: Vector3 = Vector3.ZERO
 # left even though the deck rolled underneath in the meantime.
 var _air_h: float = 0.0
 var _y_after_carry: float = 0.0
+var _prev_eye_offset_y: float = 1.6
 var _plat_prev_basis: Basis = Basis.IDENTITY
 var _plat_point_velocity: Vector3 = Vector3.ZERO
 var _coyote: float = 0.0
@@ -135,6 +138,12 @@ const COYOTE_TIME := 0.12
 const JUMP_BUFFER := 0.14
 const LAND_SIGNAL_SPEED := 2.5
 
+func _init() -> void:
+	# Always run after Ship / MockDeck (priority 0) so _carry_with_platform()
+	# reads the freshly integrated deck transform in the same physics tick,
+	# while remaining after controllers (-10) and before TickProbe (1000).
+	process_physics_priority = 10
+
 func _ready() -> void:
 	collision_layer = LAYER_PAWN
 	collision_mask = LAYER_WORLD | LAYER_SHIP
@@ -150,6 +159,7 @@ func _ready() -> void:
 	safe_margin = 0.002
 	health = max_health
 	current_eye_height = eye_height
+	_prev_eye_offset_y = eye_height
 	_shape_node = get_node_or_null(^"CollisionShape3D")
 	if _shape_node == null:
 		_shape_node = CollisionShape3D.new()
@@ -186,6 +196,19 @@ func get_world_velocity() -> Vector3:
 func eye_position() -> Vector3:
 	return global_position + Vector3.UP * (current_eye_height + visual_offset_y)
 
+## Render-frame eye offset above feet, interpolated between physics ticks when
+## physics interpolation is active so step-ups and crouch transitions stay silky smooth.
+func interpolated_eye_offset_y() -> float:
+	var cur := current_eye_height + visual_offset_y
+	if is_inside_tree() and get_tree().physics_interpolation:
+		var frac := clampf(Engine.get_physics_interpolation_fraction(), 0.0, 1.0)
+		return lerpf(_prev_eye_offset_y, cur, frac)
+	return cur
+
+func _reset_interpolation_safe() -> void:
+	if has_method(&"reset_physics_interpolation"):
+		call(&"reset_physics_interpolation")
+
 ## Horizontal unit vector the pawn is facing.
 func facing() -> Vector3:
 	return Vector3(-sin(look_yaw), 0.0, -cos(look_yaw))
@@ -220,11 +243,15 @@ func board(body: PhysicsBody3D, local_feet: Vector3) -> void:
 		_set_mode(Mode.WALK)
 	global_position = body.global_transform * local_feet
 	velocity = Vector3.ZERO
+	visual_offset_y = 0.0
+	platform_yaw_delta = 0.0
+	_prev_eye_offset_y = current_eye_height
 	_set_platform(body)
 	velocity = Vector3.ZERO
 	_coyote = COYOTE_TIME
 	if not crouched and _headroom_blocked():
 		_crouch()
+	_reset_interpolation_safe()
 
 ## Detach from the currently ridden platform, preserving world velocity.
 func unboard() -> void:
@@ -265,12 +292,18 @@ func teleport(world_position: Vector3) -> void:
 	_set_platform(null)
 	global_position = world_position
 	velocity = Vector3.ZERO
+	visual_offset_y = 0.0
+	platform_yaw_delta = 0.0
+	_prev_eye_offset_y = current_eye_height
 	if mode == Mode.LADDER or mode == Mode.SWIM:
 		_set_mode(Mode.WALK)
+	_reset_interpolation_safe()
 
 # ---------------------------------------------------------------- main tick
 
 func _physics_process(delta: float) -> void:
+	_prev_eye_offset_y = current_eye_height + visual_offset_y
+	platform_yaw_delta = 0.0
 	if dead:
 		wish_dir = Vector3.ZERO
 		wish_sprint = false
@@ -335,6 +368,7 @@ func _carry_with_platform(delta: float) -> void:
 	if absf(f.x) + absf(f.z) > 0.001:
 		var dyaw := wrapf(atan2(-f.x, -f.z) - look_yaw, -PI, PI)
 		look_yaw = wrapf(look_yaw + dyaw, -PI, PI)
+		platform_yaw_delta = dyaw
 		velocity = velocity.rotated(Vector3.UP, dyaw)
 	_plat_prev_basis = xf.basis.orthonormalized()
 
@@ -437,6 +471,8 @@ func _tick_walk(delta: float) -> void:
 			hv += wish * (2.4 * delta)
 	elif grounded:
 		hv = hv.move_toward(wish * speed, (ground_accel if moving else ground_decel) * delta)
+		if not moving and hv.length_squared() < 0.0001:
+			hv = Vector3.ZERO
 	elif moving:
 		hv = hv.move_toward(wish * speed, air_accel * delta)
 	var vy := velocity.y
@@ -472,12 +508,18 @@ func _tick_walk(delta: float) -> void:
 	if is_on_floor() and not grounded and fall_speed > LAND_SIGNAL_SPEED:
 		var impact := minf(fall_speed * 0.45, 7.5) if was_cannon_landing else fall_speed
 		landed.emit(impact)
+	# Smooth discrete stair step-downs / coaming drops without adding lag to smooth ramps.
+	var dy_step := global_position.y - before.y
+	if grounded and is_on_floor() and not jumping and not cannon_launched and vy <= 0.0 \
+			and dy_step < -0.085 and dy_step > -(step_height + 0.08):
+		visual_offset_y = clampf(visual_offset_y - dy_step, -step_height, step_height)
 	_check_crouch_trigger(moving)
 	_refresh_platform()
 	# Dead zone: a pawn standing still on a platform keeps its stored anchor,
-	# so tiny solver corrections can never add up to drift.
+	# so tiny solver corrections on rolling storm decks can never drift or bounce.
 	if idle_anchor_lock and grounded and is_on_floor() and not moving and hv.length_squared() < 0.0004 \
-			and global_position.distance_squared_to(before) < 0.0004:
+			and global_position.distance_squared_to(before) < 0.0009:
+		velocity = Vector3.ZERO
 		_keep_anchor = true
 
 ## Step up onto ledges up to `step_height` (stairs, coamings, hatch rims).
@@ -516,7 +558,7 @@ func _try_step_up(hv: Vector3, delta: float) -> bool:
 	if rise < 0.03:
 		return false
 	global_position += Vector3.UP * (rise + 0.005)
-	visual_offset_y -= rise
+	visual_offset_y = clampf(visual_offset_y - rise, -step_height, step_height)
 	_coyote = COYOTE_TIME
 	return true
 
@@ -633,17 +675,20 @@ func grab_ladder(lad: Ladder) -> bool:
 	var rung_y := clampf(lp.y, min_y, max_y)
 	var ideal_local := Vector3(0.0, rung_y, lad.standoff)
 	var world_before := global_position
-	global_position = xf * ideal_local
-	ladder = lad
-	_ladder_t = rung_y
-	_ladder_cooldown = 0.0
-	_set_platform(lad.get_platform())
-	velocity = Vector3.ZERO
 	var raw_off := xf.affine_inverse() * world_before - ideal_local
 	raw_off.y = 0.0
 	if raw_off.length() > 0.65:
 		raw_off = raw_off.normalized() * 0.65
 	_ladder_off = raw_off
+	global_position = xf * (ideal_local + _ladder_off)
+	ladder = lad
+	_ladder_t = rung_y
+	_ladder_cooldown = 0.0
+	visual_offset_y = 0.0
+	platform_yaw_delta = 0.0
+	_prev_eye_offset_y = current_eye_height
+	_set_platform(lad.get_platform())
+	velocity = Vector3.ZERO
 	if crouched:
 		crouched = false
 		_set_shape_height(stand_height)
@@ -651,6 +696,7 @@ func grab_ladder(lad: Ladder) -> bool:
 	if absf(into.x) + absf(into.z) > 0.01:
 		look_yaw = atan2(-into.x, -into.z)
 	_set_mode(Mode.LADDER)
+	_reset_interpolation_safe()
 	Audio.play_sfx(&"rope_creak", global_position, -3.0)
 	return true
 
@@ -791,12 +837,21 @@ func _adopt_station(st: Node3D) -> void:
 		drop_carried()
 	station = st
 	ladder = null
+	var stand := station_stand_transform(st)
+	global_position = stand.origin
+	velocity = Vector3.ZERO
+	visual_offset_y = 0.0
+	platform_yaw_delta = 0.0
 	_set_platform(rideable_of(st))
 	velocity = Vector3.ZERO
 	if crouched:
 		crouched = false
 		_set_shape_height(stand_height)
+	_prev_eye_offset_y = current_eye_height
 	_set_mode(Mode.STATION)
+	if platform != null:
+		_store_anchor()
+	_reset_interpolation_safe()
 	station_changed.emit(station)
 
 ## Host only. Step away from the station being crewed.
@@ -808,6 +863,7 @@ func leave_station() -> void:
 	if is_instance_valid(st) and st.get(&"occupant") == self:
 		st.release()
 	velocity = Vector3.ZERO
+	_coyote = COYOTE_TIME
 	_set_mode(Mode.WALK)
 	station_changed.emit(null)
 
@@ -822,7 +878,7 @@ func drive_station(axis: Vector2, primary: bool, secondary: bool, delta: float) 
 		return
 	station.drive(axis, primary, secondary, delta)
 
-func _tick_station(delta: float) -> void:
+func _tick_station(_delta: float) -> void:
 	if station == null or not is_instance_valid(station) or not station.is_inside_tree():
 		station = null
 		_set_mode(Mode.WALK)
@@ -836,10 +892,11 @@ func _tick_station(delta: float) -> void:
 		station_changed.emit(null)
 		return
 	var stand := station_stand_transform(station)
-	# The platform carry already moved us with the ship; this only closes the
-	# remaining gap to the stand point.
-	global_position = global_position.lerp(stand.origin, 1.0 - exp(-16.0 * delta))
+	# Keep the pawn rock-solid locked to the station stand point with zero residual jitter
+	# against pitching, rolling, or turning ship decks.
+	global_position = stand.origin
 	velocity = Vector3.ZERO
+	visual_offset_y = 0.0
 
 # ------------------------------------------------------- interact and carry
 
@@ -967,11 +1024,13 @@ func _set_mode(m: Mode) -> void:
 	mode_changed.emit(mode)
 
 func _post_tick(delta: float) -> void:
-	visual_offset_y = lerpf(visual_offset_y, 0.0, 1.0 - exp(-14.0 * delta))
-	if absf(visual_offset_y) < 0.001:
+	visual_offset_y = lerpf(visual_offset_y, 0.0, 1.0 - exp(-18.0 * delta))
+	if absf(visual_offset_y) < 0.0005:
 		visual_offset_y = 0.0
 	var eh := eye_height - (stand_height - crouch_height) if crouched else eye_height
-	current_eye_height = lerpf(current_eye_height, eh, 1.0 - exp(-12.0 * delta))
+	current_eye_height = lerpf(current_eye_height, eh, 1.0 - exp(-14.0 * delta))
+	if absf(current_eye_height - eh) < 0.0005:
+		current_eye_height = eh
 	_place_carried()
 	if _visual != null:
 		var yaw := look_yaw

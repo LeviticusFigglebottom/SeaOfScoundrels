@@ -212,10 +212,10 @@ func _build_astrolabe_station() -> void:
 	astrolabe_stand = Node3D.new()
 	astrolabe_stand.name = "AstrolabeStand"
 	if is_brig:
-		astrolabe_stand.position = Vector3(0.90, -0.95, 5.25)
-		astrolabe_stand.scale = Vector3(0.94, 0.94, 0.94)
+		astrolabe_stand.position = Vector3(0.58, -0.95, 5.45)
+		astrolabe_stand.scale = Vector3(0.92, 0.92, 0.92)
 	else:
-		astrolabe_stand.position = Vector3(0.84, -0.85, 3.55)
+		astrolabe_stand.position = Vector3(0.62, -0.85, 3.55)
 	add_child(astrolabe_stand)
 
 	_pedestal_mi = MeshInstance3D.new()
@@ -257,12 +257,13 @@ func _build_trophy_lectern_station() -> void:
 	trophy_lectern = Node3D.new()
 	trophy_lectern.name = "TrophyLectern"
 	if is_brig:
-		trophy_lectern.position = Vector3(-0.84, -0.95, 5.25)
-		trophy_lectern.scale = Vector3(0.90, 0.88, 0.90)
-		trophy_lectern.rotation.y = 0.45
+		trophy_lectern.position = Vector3(-0.56, -0.95, 5.45)
+		trophy_lectern.scale = Vector3(0.86, 0.86, 0.86)
+		trophy_lectern.rotation.y = 0.55
 	else:
-		trophy_lectern.position = Vector3(0.84, -0.85, 4.38)
-		trophy_lectern.rotation.y = -0.95
+		trophy_lectern.position = Vector3(-0.52, -0.85, 3.55)
+		trophy_lectern.scale = Vector3(0.88, 0.88, 0.88)
+		trophy_lectern.rotation.y = 0.72
 	add_child(trophy_lectern)
 
 	_lectern_mi = MeshInstance3D.new()

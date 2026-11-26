@@ -21,15 +21,16 @@ const DEFAULT_MAX_CANNONBALLS := 40
 const DEFAULT_MAX_PLANKS := 24
 
 # Unscaled hold-bulkhead local coordinates (transformed via ship.ship_point + visual_scale).
+# Seated cleanly inside floor_in so barrel chines rest 100% flush on hold planks with zero hull-wall clipping.
 const SLOOP_POSITIONS := {
-	&"cannonball": Vector3(-1.22, -0.85, -0.15),
-	&"planks": Vector3(-1.26, -0.85, 0.72),
-	&"rations": Vector3(-1.22, -0.85, 1.58),
+	&"cannonball": Vector3(-0.86, -0.85, -0.15),
+	&"planks": Vector3(-0.88, -0.85, 0.72),
+	&"rations": Vector3(-0.85, -0.85, 1.58),
 }
 const BRIG_POSITIONS := {
-	&"cannonball": Vector3(-1.58, -0.95, 0.72),
-	&"planks": Vector3(-1.60, -0.95, 1.62),
-	&"rations": Vector3(-1.56, -0.95, 2.52),
+	&"cannonball": Vector3(-1.02, -0.95, 0.72),
+	&"planks": Vector3(-1.02, -0.95, 1.62),
+	&"rations": Vector3(-0.98, -0.95, 2.52),
 }
 
 const TEX_OAK_NORMAL := "res://assets/generated/textures/ship_oak_normal.png"

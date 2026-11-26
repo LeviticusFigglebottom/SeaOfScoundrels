@@ -26,7 +26,7 @@ const STAGES: Array[Dictionary] = [
 	{
 		"id": &"equip_compass",
 		"title": "1. Equip Your Brass Compass",
-		"hint": "Press [Tab] to open the Tool Radial or [1]-[9] and equip your Compass ([LMB] toggles Chart Pin, [RMB] counts paces).",
+		"hint": "Press [Q/Tab] to open the Tool Radial or [1]-[6] and equip your Compass ([LMB] toggles Chart Pin, [RMB] counts paces).",
 	},
 	{
 		"id": &"check_map_table",

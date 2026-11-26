@@ -191,9 +191,9 @@ func _setup_hud_shot(sky: Node) -> void:
 
 	var captain := PAWN_SCENE.instantiate() as Pawn
 	add_child(captain)
-	captain.board(_ship, Vector3(-0.35, 2.02, 4.9))
-	captain.look_yaw = 0.12
-	captain.look_pitch = -0.06
+	captain.board(_ship, _ship.ship_point(Vector3(-0.30, 1.08, -2.05)))
+	captain.look_yaw = 0.08
+	captain.look_pitch = -0.04
 	captain.health = 78.0
 
 	var pc := PlayerController.new()
@@ -219,6 +219,8 @@ func _setup_hud_shot(sky: Node) -> void:
 	_inventory.equip(_fp_item, true)
 	if _fp_item == &"compass" or _fp_item == &"map":
 		_inventory.set_secondary_held(true)
+		_inventory.set(&"_raise_blend", 1.0)
+		_inventory.call(&"_tick_viewmodel_pose", 0.0)
 
 	if Game != null and Game.profile != null:
 		Game.profile.data["gold"] = 420

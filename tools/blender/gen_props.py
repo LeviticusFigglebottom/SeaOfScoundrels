@@ -425,7 +425,7 @@ def rope_coil(mb, center, radius=0.22, turns=3, r=0.026):
         with xf(mb, T(center[0], center[1] + r * (1.0 + i * 1.7), center[2])):
             torus(mb, rr, r, 12, 6, 'rope', mul(C_ROPE, 0.92 + 0.08 * (i % 2)), True)
 
-def faceted_rock(mb, center, radii, mat, col_top, col_mid, col_bot, rng, subdiv=2, warp=0.24, strata=0.14, flat_top=0.0, rot_deg=(0, 0, 0)):
+def faceted_rock(mb, center, radii, mat, col_top, col_mid, col_bot, rng, subdiv=2, warp=0.24, strata=0.14, flat_top=0.0, rot_deg=(0, 0, 0), moss_cap=False, ledge_sharp=0.0):
     """Sculpted chunky faceted coastal rock with horizontal strata & vertex colour gradients."""
     bm = bmesh.new()
     bmesh.ops.create_icosphere(bm, subdivisions=subdiv, radius=1.0)
@@ -447,6 +447,11 @@ def faceted_rock(mb, center, radii, mat, col_top, col_mid, col_bot, rng, subdiv=
             d += warp * 0.45 * sin(n.dot(dv) * 3.1 + ph[idx])
         # Horizontal sedimentary ledges
         d += strata * sin(p.y * 5.2 + ph[5] + 0.8 * sin(p.x * 2.5 + p.z * 2.2))
+        if ledge_sharp > 0.0:
+            # Stepped coastal limestone stratification shelves & chiseled fracture ribs
+            s_ph = p.y * 6.8 + ph[5] + 0.45 * sin(p.x * 3.1 - p.z * 2.7)
+            d += ledge_sharp * (0.65 * sin(s_ph) + 0.35 * sin(s_ph * 2.0 + 0.6))
+            d -= ledge_sharp * 0.25 * abs(sin(atan2(p.z, p.x) * 3.0 + ph[7]))
         # Slightly flatten underside for solid seating
         if p.y < -0.55:
             p.y = -0.55 + (p.y + 0.55) * 0.45
@@ -469,6 +474,9 @@ def faceted_rock(mb, center, radii, mat, col_top, col_mid, col_bot, rng, subdiv=
             # Upward faces catch warm ochre/moss, steep faces mid stone, undersides dark
             if fn.y > 0.55:
                 base = mix(col_mid, col_top, smooth01((fn.y - 0.55) / 0.45))
+                if moss_cap and h01 > 0.42:
+                    m_blend = smooth01((fn.y - 0.60) / 0.35) * smooth01((h01 - 0.40) / 0.45)
+                    base = mix(base, mix(C_MOSS, C_SEA_MOSS, 0.35), m_blend * 0.72)
             elif fn.y < -0.1:
                 base = mul(col_bot, 0.78)
             else:
@@ -1264,78 +1272,237 @@ def export_glb(outdir, filename):
 
 # ================================================================ PROP GENERATORS
 
-def _add_palm_frond(mb, crown, azimuth, pitch_deg, length, width, droop, tier_tint, phase, rng):
-    """Sculpted tropical palm frond: arched midrib + folded serrated leaflet panels with UV2 wind weights 0..1."""
+def _add_palm_frond(
+    mb, crown, azimuth, pitch_deg, length, width, droop, tier_tint, phase, rng,
+    n_segs=12, n_leaflets=17, leaflet_sweep_deg=41.0, stem_width=0.048,
+    t_start=0.11, is_fern=False
+):
+    """Sculpted pinnate tropical palm/fern frond: smooth arched midrib rachis + individual curved spear leaflets with real open sky slits and UV2 wind weights."""
     mb.newoff()
     ca, sa = cos(azimuth), sin(azimuth)
     fwd = Vector((ca, 0.0, sa))
     side = Vector((-sa, 0.0, ca))
     up = Vector((0.0, 1.0, 0.0))
-    segs = 8
     pitch = radians(pitch_deg)
+    lat_sway = rng.uniform(-0.07, 0.07) * length * (0.45 if is_fern else 1.0)
+    arch_pow = 1.95 if is_fern else 2.08
 
     def spine(t):
         r = length * t
-        # Arches upward then droops cleanly toward tip
-        y = sin(pitch) * r - droop * (t ** 2.15) * length
-        h = cos(pitch) * r * (1.0 - 0.14 * t * t)
-        return crown + fwd * h + up * y
+        y = sin(pitch) * r - droop * (t ** arch_pow) * length
+        h = cos(pitch) * r * (1.0 - (0.10 if is_fern else 0.14) * t * t)
+        return crown + fwd * h + up * y + side * (lat_sway * t * t)
 
-    pts = [spine(i / float(segs)) for i in range(segs + 1)]
-    # Chunky central midrib stem (thin tapering spine)
-    for i in range(segs):
-        t0 = i / float(segs)
-        t1 = (i + 1) / float(segs)
-        p0, p1 = pts[i], pts[i + 1]
-        w0 = 0.045 * (1.0 - 0.72 * t0)
-        w1 = 0.045 * (1.0 - 0.72 * t1)
-        u0 = (pow(t0, 1.35), phase)
-        u1 = (pow(t1, 1.35), phase)
-        stem_col = mix(C_LEAF_DEEP, C_LEAF_MID, t0)
-        # V-ridge midrib strip
-        for sgn in (-1.0, 1.0):
-            q = [p0, p0 + side * (sgn * w0) - up * (w0 * 0.4), p1 + side * (sgn * w1) - up * (w1 * 0.4), p1]
-            mb.fp(q, 'foliage', stem_col, fwd, p0 - up, smooth=True, uv2=[u0, u0, u1, u1])
+    def spine_frame(t):
+        t_a = max(0.0, t - 0.012)
+        t_b = min(1.0, t + 0.012)
+        p = spine(t)
+        tan = (spine(t_b) - spine(t_a))
+        if tan.length < 1e-6:
+            tan = fwd
+        else:
+            tan.normalize()
+        ls = side - tan * side.dot(tan)
+        if ls.length < 1e-5:
+            ls = Vector((-tan.z, 0.0, tan.x))
+        ls.normalize()
+        lu = ls.cross(tan).normalized()
+        return p, tan, ls, lu
 
-    # Paired arched serrated leaflet blades along left and right sides of the midrib
-    frond_shift = rng.uniform(-0.08, 0.10)
+    # 1. Smooth arched tapering midrib rachis (12-seg V-beam on palms; slender curved stem on ferns)
+    stem_base_col = mix(C_LEAF_DEEP, C_TRUNK_LIGHT, 0.24 if not is_fern else 0.14)
+    stem_tip_col = mix(C_LEAF_MID, C_LEAF_SUN, 0.52)
+    r_left = []
+    r_mid = []
+    r_right = []
+    r_cols = []
+    r_uv2 = []
+    r_t = []
+    for i in range(n_segs + 1):
+        t = i / float(n_segs)
+        p, tan, ls, lu = spine_frame(t)
+        sw = stem_width * (1.0 - 0.88 * pow(t, 0.90))
+        r_t.append(t)
+        r_cols.append(mix(stem_base_col, stem_tip_col, pow(t, 1.05)))
+        w_wind = min(1.0, 0.05 + 0.90 * pow(t, 1.28))
+        r_uv2.append((w_wind, phase))
+        if is_fern:
+            r_left.append(mb.v(p - ls * sw))
+            r_right.append(mb.v(p + ls * sw))
+        else:
+            r_left.append(mb.v(p - ls * sw - lu * (sw * 0.42)))
+            r_mid.append(mb.v(p + lu * (sw * 0.38)))
+            r_right.append(mb.v(p + ls * sw - lu * (sw * 0.42)))
+
+    u_stem_scale = 1.6 if is_fern else 2.6
+    for i in range(n_segs):
+        u0 = r_t[i] * u_stem_scale
+        u1 = r_t[i + 1] * u_stem_scale
+        c0, c1 = r_cols[i], r_cols[i + 1]
+        w0, w1 = r_uv2[i], r_uv2[i + 1]
+        if is_fern:
+            mb.f(
+                [r_left[i], r_left[i + 1], r_right[i + 1], r_right[i]],
+                'foliage', [c0, c1, c1, c0],
+                [(u0, 0.46), (u1, 0.46), (u1, 0.54), (u0, 0.54)],
+                smooth=True, uv2=[w0, w1, w1, w0]
+            )
+        else:
+            # Left slope of V-beam rachis
+            mb.f(
+                [r_left[i], r_left[i + 1], r_mid[i + 1], r_mid[i]],
+                'foliage', [mul(c0, 0.92), mul(c1, 0.92), c1, c0],
+                [(u0, 0.44), (u1, 0.44), (u1, 0.50), (u0, 0.50)],
+                smooth=True, uv2=[w0, w1, w1, w0]
+            )
+            # Right slope of V-beam rachis
+            mb.f(
+                [r_mid[i], r_mid[i + 1], r_right[i + 1], r_right[i]],
+                'foliage', [c0, c1, mul(c1, 0.92), mul(c0, 0.92)],
+                [(u0, 0.50), (u1, 0.50), (u1, 0.56), (u0, 0.56)],
+                smooth=True, uv2=[w0, w1, w1, w0]
+            )
+
+    # 2. Individual sculpted pinnate spear leaflets along BOTH sides + forked terminal tip pair
+    frond_shift = rng.uniform(-0.07, 0.09)
     base_tier = max(0.0, min(1.0, tier_tint * 0.88 + frond_shift))
-    for i in range(segs):
-        t0 = i / float(segs)
-        t1 = (i + 1) / float(segs)
-        # Envelope: narrow at stem base, lush and wide in middle, sweeping to pointed tip
-        env0 = sin(pi * pow(max(0.03, t0), 0.72))
-        env1 = sin(pi * pow(min(0.99, t1), 0.72))
-        bw0 = width * env0
-        bw1 = width * env1
-        # Slight notch between leaflet clusters for unmistakable palm silhouette
-        notch = 0.82 if (i % 2 == 1 and 1 <= i <= segs - 2) else 1.0
-        p0, p1 = pts[i], pts[i + 1]
-        tan = (p1 - p0).normalized()
-        bn = tan.cross(side).normalized()  # local frond up
-        w_base0 = pow(t0, 1.35)
-        w_base1 = pow(t1, 1.35)
-        # Rich sunlit emerald-to-chartreuse tropical gradient from crown to drooping tips
-        c0 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, base_tier), C_LEAF_SUN, pow(t0, 1.05)), rng, 0.06, 0.03)
-        c1 = jit(mix(mix(C_LEAF_DEEP, C_LEAF_MID, base_tier), C_LEAF_SUN, pow(t1, 1.05)), rng, 0.06, 0.03)
+    t_end = 0.955
+    span_len = (t_end - t_start) * length
+    step_len = span_len / float(max(1, n_leaflets - 1))
+
+    def emit_leaflet(t_pos, sgn, l_len, hw_max, fwd_ang_rad, li_idx, frac):
+        if l_len < 0.04 or hw_max < 0.008:
+            return
+        p_r, tan, ls, lu = spine_frame(t_pos)
+        sw = stem_width * (1.0 - 0.88 * pow(t_pos, 0.90))
+        p0 = p_r + ls * (sgn * sw * 0.55)
+        dir_out = (ls * (sgn * cos(fwd_ang_rad)) + tan * sin(fwd_ang_rad)).normalized()
+        w_base = lu.cross(dir_out)
+        if w_base.length < 1e-5:
+            w_base = tan
+        else:
+            w_base.normalize()
+        # Subtle dihedral blade cant so sunlit sides & shaded edges read crisply
+        cant = radians((12.0 if is_fern else 15.0) + 6.0 * sin(li_idx * 1.15)) * (1.0 if sgn > 0 else -1.0)
+        w_vec = (w_base * cos(cant) + lu * sin(cant)).normalized()
+
+        # Graceful 3-station curved tropical arch: lifts softly off rachis, crests, then droops to spear tip
+        lift_1 = (0.10 if is_fern else 0.14) * l_len
+        crest_2 = (0.04 if is_fern else 0.02) * l_len
+        droop_loc = (0.13 if is_fern else 0.28) * l_len
+        droop_grav = (0.05 if is_fern else 0.17) * l_len * (0.65 + 0.55 * frac)
+
+        p1 = p0 + dir_out * (l_len * 0.30) + lu * lift_1
+        p2 = p0 + dir_out * (l_len * 0.66) + lu * crest_2 - up * (droop_grav * 0.28)
+        p3 = p0 + dir_out * (l_len * 1.00) - lu * droop_loc - up * droop_grav
+
+        hw1 = hw_max
+        hw2 = hw_max * (0.58 if is_fern else 0.62)
+        v0 = mb.v(p0)
+        v1a = mb.v(p1 - w_vec * hw1)
+        v1b = mb.v(p1 + w_vec * hw1)
+        v2a = mb.v(p2 - w_vec * hw2)
+        v2b = mb.v(p2 + w_vec * hw2)
+        v3 = mb.v(p3)
+
+        # Rich painterly emerald -> lush mid-green -> sunlit chartreuse tip with subtle per-leaflet hue jitter
+        c_deep = mix(C_LEAF_DEEP, C_LEAF_MID, base_tier * 0.42 + frac * 0.18)
+        c_mid = jit(mix(C_LEAF_DEEP, C_LEAF_MID, 0.52 + 0.38 * base_tier + 0.18 * frac), rng, 0.065, 0.035)
+        c_m2 = mix(c_mid, C_LEAF_SUN, 0.24 + 0.28 * frac + 0.22 * base_tier)
+        c_tip = mix(c_m2, C_LEAF_SUN, 0.50 + 0.26 * base_tier + 0.16 * frac)
+
+        # Smooth UV2 wind weights increasing from rachis base (0.05) to outer frond & leaflet tips (0.95..1.0)
+        w_r = 0.05 + 0.78 * pow(t_pos, 1.25)
+        l_ph = (phase + 0.022 * sin(li_idx * 1.7 + sgn)) % 1.0
+        u2_0 = (min(1.0, w_r), l_ph)
+        u2_1 = (min(1.0, w_r + 0.07), l_ph)
+        u2_2 = (min(1.0, w_r + 0.15), l_ph)
+        u2_3 = (min(1.0, max(0.32, w_r + 0.24)), l_ph)
+
+        # Explicit positive-area UVs aligned with pbr_foliage_palm midrib (V = 0.50) & diagonal veins
+        u_off = (li_idx * 0.137 + (0.0 if sgn > 0 else 0.07)) % 1.0
+        uv0 = (u_off, 0.50)
+        uv1a = (u_off + 0.24, 0.36)
+        uv1b = (u_off + 0.24, 0.64)
+        uv2a = (u_off + 0.52, 0.42)
+        uv2b = (u_off + 0.52, 0.58)
+        uv3 = (u_off + 0.76, 0.50)
+
+        # 4-tri smooth curved spear blade (1 base flare tri + 1 mid-belly quad + 1 drooping spear tip tri)
+        mb.f([v0, v1a, v1b], 'foliage', [c_deep, c_mid, c_mid], [uv0, uv1a, uv1b], smooth=True, uv2=[u2_0, u2_1, u2_1])
+        mb.f([v1a, v2a, v2b, v1b], 'foliage', [c_mid, c_m2, c_m2, c_mid], [uv1a, uv2a, uv2b, uv1b], smooth=True, uv2=[u2_1, u2_2, u2_2, u2_1])
+        mb.f([v2a, v3, v2b], 'foliage', [c_m2, c_tip, c_m2], [uv2a, uv3, uv2b], smooth=True, uv2=[u2_2, u2_3, u2_2])
+
+    for li in range(n_leaflets):
+        frac = li / float(max(1, n_leaflets - 1))
+        t_nom = t_start + (t_end - t_start) * frac
         for sgn in (-1.0, 1.0):
-            # Folded V-profile blade (inner rib -> arched mid -> drooping tip edge)
-            m0 = p0 + side * (sgn * bw0 * 0.54) + bn * (0.11 * bw0)
-            m1 = p1 + side * (sgn * bw1 * 0.54 * notch) + bn * (0.11 * bw1)
-            e0 = p0 + side * (sgn * bw0) - bn * (0.28 * bw0) + fwd * (0.11 * bw0)
-            e1 = p1 + side * (sgn * bw1 * notch) - bn * (0.28 * bw1) + fwd * (0.11 * bw1)
-            u_in0 = (min(1.0, w_base0), phase)
-            u_in1 = (min(1.0, w_base1), phase)
-            u_mid0 = (min(1.0, w_base0 * 0.92 + 0.08), phase)
-            u_mid1 = (min(1.0, w_base1 * 0.92 + 0.08), phase)
-            u_out0 = (min(1.0, w_base0 * 0.85 + 0.15), phase)
-            u_out1 = (min(1.0, w_base1 * 0.85 + 0.15), phase)
-            # Inner blade quad
-            mb.fp([p0, m0, m1, p1], 'foliage', [c0, c0, c1, c1], fwd, None, smooth=True, uv2=[u_in0, u_mid0, u_mid1, u_in1])
-            # Outer drooping blade quad (sunlit chartreuse-emerald edge catch)
-            c0_tip = mix(c0, C_LEAF_SUN, 0.32)
-            c1_tip = mix(c1, C_LEAF_SUN, 0.42)
-            mb.fp([m0, e0, e1, m1], 'foliage', [c0, c0_tip, c1_tip, c1], fwd, None, smooth=True, uv2=[u_mid0, u_out0, u_out1, u_mid1])
+            # Subtle botanical stagger between left and right pinnae
+            t_s = max(t_start, min(0.96, t_nom + (0.008 if sgn > 0 else -0.008)))
+            env = pow(sin(pi * pow(max(0.05, t_s), 0.68)), 0.80)
+            l_len = width * env * rng.uniform(0.92, 1.08)
+            # Lush broad spear blades with crisp ~26-32% open sky slits between adjacent leaflets!
+            hw_cap = step_len * (0.315 if is_fern else 0.305)
+            hw_max = min(l_len * (0.245 if is_fern else 0.165), hw_cap) * (0.78 + 0.28 * env)
+            fwd_deg = (26.0 if is_fern else leaflet_sweep_deg) + (16.0 if is_fern else 9.0) * frac + rng.uniform(-3.2, 3.2)
+            emit_leaflet(t_s, sgn, l_len, hw_max, radians(fwd_deg), li, frac)
+
+    # Forked terminal tip pair anchored right at the rachis tip (zero protruding stick!)
+    tip_len = min(width * 0.42, length * 0.22)
+    tip_hw = min(tip_len * 0.19, step_len * 0.24)
+    for sgn in (-1.0, 1.0):
+        emit_leaflet(0.985, sgn, tip_len * rng.uniform(0.92, 1.08), tip_hw, radians(70.0 + rng.uniform(-3.0, 3.0)), n_leaflets, 1.0)
+
+
+def _add_dried_skirt_frond(mb, crown, azimuth, length, rng):
+    """Short dried tawny palm skirt frond drooping beneath coconuts (double-sided for backface-culled bark_palm)."""
+    mb.newoff()
+    ca, sa = cos(azimuth), sin(azimuth)
+    fwd = Vector((ca, 0.0, sa))
+    side = Vector((-sa, 0.0, ca))
+    up = Vector((0.0, 1.0, 0.0))
+    pitch = radians(rng.uniform(-24.0, -10.0))
+    droop = rng.uniform(0.55, 0.72)
+    segs = 4
+
+    def sp(t):
+        r = length * t
+        return crown + fwd * (cos(pitch) * r * (1.0 - 0.22 * t * t)) + up * (sin(pitch) * r - droop * t * t * length)
+
+    pts = [sp(i / float(segs)) for i in range(segs + 1)]
+    rads = [0.025 * (1.0 - 0.68 * (i / float(segs))) for i in range(segs + 1)]
+    suv2 = [(0.11 + 0.14 * (i / float(segs)), 0.0) for i in range(segs + 1)]
+    c_stem = jit(mix(C_TRUNK_DARK, C_TRUNK_LIGHT, 0.45), rng, 0.07)
+    tube(mb, pts, rads, 4, 'bark_palm', c_stem, caps=(False, True), mode='flat', suv2=suv2)
+
+    c_dry_top = jit(mix(C_THATCH, C_DRIFT, 0.38), rng, 0.08, 0.02)
+    c_dry_bot = mul(c_dry_top, 0.72)
+    for li in range(4):
+        frac = (li + 0.5) / 4.0
+        t = 0.18 + 0.76 * frac
+        p0 = sp(t)
+        tan = (sp(min(1.0, t + 0.04)) - sp(max(0.0, t - 0.04))).normalized()
+        ls = (side - tan * side.dot(tan)).normalized()
+        lu = ls.cross(tan).normalized()
+        blen = length * 0.26 * (0.65 + 0.55 * sin(pi * frac)) * rng.uniform(0.75, 1.18)
+        bw = 0.042 * rng.uniform(0.85, 1.2)
+        u2_b = (0.12 + 0.15 * t, 0.0)
+        u2_t = (0.14 + 0.18 * t, 0.0)
+        for sgn in (-1.0, 1.0):
+            ang = radians(48.0 + 14.0 * frac + rng.uniform(-6.0, 6.0))
+            d_out = (ls * (sgn * cos(ang)) + tan * sin(ang)).normalized()
+            wv = lu.cross(d_out).normalized()
+            pm = p0 + d_out * (blen * 0.48) - up * (blen * 0.16)
+            pt = p0 + d_out * blen - up * (blen * 0.44)
+            # Double-sided 2-tri tattered tawny blade (visible from both above and below!)
+            v0, vma, vmb, vt = mb.v(p0), mb.v(pm - wv * bw), mb.v(pm + wv * bw), mb.v(pt)
+            mb.f([v0, vma, vmb], 'bark_palm', [c_stem, c_dry_top, c_dry_top], [(0.0, 0.5), (0.4, 0.35), (0.4, 0.65)], smooth=False, uv2=[u2_b, u2_t, u2_t])
+            mb.f([vma, vt, vmb], 'bark_palm', [c_dry_top, mul(c_dry_top, 0.88), c_dry_top], [(0.4, 0.35), (0.85, 0.5), (0.4, 0.65)], smooth=False, uv2=[u2_t, u2_t, u2_t])
+            # Underside backfaces (reversed winding, shaded dark tawny)
+            u0, uma, umb, ut = mb.v(p0), mb.v(pm - wv * bw), mb.v(pm + wv * bw), mb.v(pt)
+            mb.f([u0, umb, uma], 'bark_palm', [mul(c_stem, 0.72), c_dry_bot, c_dry_bot], [(0.0, 0.5), (0.4, 0.65), (0.4, 0.35)], smooth=False, uv2=[u2_b, u2_t, u2_t])
+            mb.f([uma, umb, ut], 'bark_palm', [c_dry_bot, c_dry_bot, mul(c_dry_bot, 0.85)], [(0.4, 0.35), (0.4, 0.65), (0.85, 0.5)], smooth=False, uv2=[u2_t, u2_t, u2_t])
+
 
 def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count, seed_off):
     clear_scene()
@@ -1345,37 +1512,43 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
     mb_fronds = MB('Fronds', seed=seed_off + 100)
 
     def trunk_pt(t):
-        # Smooth sweeping tropical trunk curve; starts at y=-0.85 so base embeds cleanly on slopes
-        y = -0.85 + (height + 0.85) * t
+        # Smooth sweeping tropical trunk curve; embeds deeply to y = -0.95 so zero floating on steep slopes
+        y = -0.95 + (height + 0.95) * t
         bend = (t ** 1.65)
         sw = sin(t * pi * 1.15) * s_curve
         return Vector((lean_x * bend + sw, y, lean_z * bend + sw * 0.35))
 
-    # Ringed segmented coconut-palm trunk (chunky overlapping bark collars!)
-    sides = 8
+    # 1. 12-sided ringed coconut-palm trunk with pronounced watertight overlapping bark collars & 5-lobed root buttress!
+    sides = 12
     col_pts_a = []
     col_pts_b = []
+    prev_lip_sec = None
     for i in range(n_rings):
         t0 = i / float(n_rings)
         t1 = (i + 1) / float(n_rings)
         tm = 0.5 * (t0 + t1)
         p0 = trunk_pt(t0)
         p1 = trunk_pt(t1)
-        # Flared root buttress at bottom, tapering gently to crown
-        r_base = (0.44 if i == 0 else (0.35 if i == 1 else 0.30 * (1.0 - 0.44 * t0)))
-        r_top = 0.30 * (1.0 - 0.44 * t1) * 1.12  # characteristic palm bark ring lip!
+        # Flared 5-lobed root buttress over lower 26% of trunk, tapering cleanly to crown
+        root_k0 = pow(max(0.0, 1.0 - t0 / 0.26), 1.45)
+        root_k1 = pow(max(0.0, 1.0 - t1 / 0.26), 1.45)
+        r_base = (0.31 * (1.0 - 0.45 * t0)) + 0.19 * root_k0
+        r_lip = ((0.31 * (1.0 - 0.45 * t1)) + 0.16 * root_k1) * (1.105 if i > 0 else 1.05)
         tan = (p1 - p0).normalized()
         ref = Vector((1, 0, 0)) if abs(tan.x) < 0.8 else Vector((0, 0, 1))
         nx = (ref - tan * ref.dot(tan)).normalized()
         nz = tan.cross(nx)
         sec0 = []
         sec1 = []
+        ring_twist = i * 0.11
         for k in range(sides):
-            ang = 2.0 * pi * k / sides + i * 0.14
-            fl = 1.0 + (0.14 * sin(ang * 4.0) if i <= 1 else 0.0)
+            ang = 2.0 * pi * k / sides + ring_twist
+            # 5-lobed flared root buttress gripping into beach slopes + subtle organic bark asymmetry
+            lobe0 = 1.0 + 0.25 * root_k0 * (0.45 + 0.55 * cos(ang * 5.0 + 0.35)) + 0.025 * sin(ang * 3.0 + i * 0.7)
+            lobe1 = 1.0 + 0.22 * root_k1 * (0.45 + 0.55 * cos(ang * 5.0 + 0.35)) + 0.030 * sin(ang * 3.0 + i * 0.7)
             off = nx * cos(ang) + nz * sin(ang)
-            v0 = p0 + off * (r_base * fl)
-            v1 = p1 + off * (r_top * fl)
+            v0 = p0 + off * (r_base * lobe0)
+            v1 = p1 + off * (r_lip * lobe1)
             sec0.append(v0)
             sec1.append(v1)
             if t0 < 0.55:
@@ -1384,57 +1557,115 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
                 col_pts_b.extend([v0, v1])
         c_ring = jit(mix(C_TRUNK_DARK, C_TRUNK_LIGHT, smooth01(tm)), rng, 0.07, 0.02)
         if i % 2 == 1:
-            c_ring = mul(c_ring, 0.91)
+            c_ring = mul(c_ring, 0.90)
         w0 = (0.12 * t0 * t0, 0.0)
         w1 = (0.12 * t1 * t1, 0.0)
-        loft(mb_trunk, [sec0, sec1], 'bark_palm', c_ring, closed=True, caps=(i == 0, i == n_rings - 1), mode='flat', suv2=[w0, w1])
+        # Watertight darkened underside collar lip return so looking up from below shows crisp bark shadow rings
+        if prev_lip_sec is not None:
+            loft(mb_trunk, [prev_lip_sec, sec0], 'bark_palm', mul(c_ring, 0.68), closed=True, caps=(False, False), mode='flat', suv2=[w0, w0])
+        loft(mb_trunk, [sec0, sec1], 'bark_palm', c_ring, closed=True, caps=(i == 0, i == n_rings - 1), mode='smooth', suv2=[w0, w1])
+        prev_lip_sec = sec1
 
     crown = trunk_pt(1.0)
-    # Chunky palm heart bulb at crown
-    ellipsoid(mb_trunk, crown + Vector((0, 0.05, 0)), (0.28, 0.24, 0.28), 'bark_palm', C_TRUNK_DARK, 8, 5)
+    # 2. Sculpted fibrous diamond-patterned palm crown shaft wrapping the frond bases
+    crown_rings = []
+    crown_cols = []
+    crown_specs = [
+        (-0.26, 0.22, 0.04, C_TRUNK_DARK),
+        (-0.08, 0.30, 0.09, mul(C_TRUNK_DARK, 0.92)),
+        ( 0.10, 0.32, 0.08, mix(C_TRUNK_DARK, C_LEAF_DEEP, 0.22)),
+        ( 0.26, 0.24, 0.05, mix(C_TRUNK_DARK, C_LEAF_DEEP, 0.38)),
+        ( 0.38, 0.11, 0.02, mix(C_TRUNK_DARK, C_LEAF_DEEP, 0.45)),
+    ]
+    for ri, (dy, rad, diam_amp, ccol) in enumerate(crown_specs):
+        ring = []
+        for k in range(sides):
+            ang = 2.0 * pi * k / sides + (ri % 2) * (pi / sides)
+            sc = 1.0 + diam_amp * (1.0 if (k + ri) % 2 == 0 else -0.5)
+            ring.append(crown + Vector((cos(ang) * rad * sc, dy, sin(ang) * rad * sc)))
+        crown_rings.append(ring)
+        crown_cols.append(jit(ccol, rng, 0.06, 0.02))
+    loft(mb_trunk, crown_rings, 'bark_palm', C_TRUNK_DARK, closed=True, caps=(True, True), mode='flat', scols=crown_cols, suv2=[(0.12, 0.0)] * len(crown_rings))
 
-    # Cluster of 6 chunky tropical coconuts tucked beneath crown
-    for ci in range(6):
-        ang = ci * (2.0 * pi / 6.0) + rng.uniform(-0.18, 0.18)
-        cr = 0.24 + rng.uniform(-0.02, 0.04)
-        cy = -0.22 - (ci % 2) * 0.11
+    # 3. Four short dried tawny skirt fronds drooping underneath the coconuts
+    for si in range(4):
+        s_az = si * (2.0 * pi / 4.0) + rng.uniform(-0.34, 0.34) + 0.4
+        _add_dried_skirt_frond(mb_trunk, crown + Vector((0.0, -0.16, 0.0)), s_az, rng.uniform(1.15, 1.50), rng)
+
+    # 4. Seven irregular coconuts clustered snugly under the palm crown shaft
+    for ci in range(7):
+        ang = ci * (2.0 * pi / 7.0) + rng.uniform(-0.20, 0.20)
+        cr = 0.25 + rng.uniform(-0.03, 0.05) + (0.04 if ci % 3 == 0 else 0.0)
+        cy = -0.20 - (ci % 3) * 0.085 + rng.uniform(-0.02, 0.02)
         cpos = crown + Vector((cos(ang) * cr, cy, sin(ang) * cr))
-        ccol = jit(mix(C_COCONUT, C_LEAF_DEEP, 0.15 if ci % 3 == 0 else 0.0), rng, 0.08, 0.02)
-        ellipsoid(mb_trunk, cpos, (0.14, 0.17, 0.14), 'paint', ccol, 7, 5, R('Z', rng.uniform(-25, 25)))
+        ccol = jit(mix(C_COCONUT, C_LEAF_DEEP, 0.30 if ci in (1, 5) else 0.0), rng, 0.09, 0.025)
+        rx = rng.uniform(0.12, 0.155)
+        ry = rng.uniform(0.15, 0.195)
+        rz = rng.uniform(0.12, 0.155)
+        rot_m = R('Y', rng.uniform(0, 360)) @ R('Z', rng.uniform(-28, 28))
+        ellipsoid(mb_trunk, cpos, (rx, ry, rz), 'paint', ccol, 6, 4, rot_m)
 
-    # Lush 3-tier tropical palm crown (~35% wider reach & fuller drooping silhouette)
-    lower_n = frond_count // 2 + 1
-    upper_n = frond_count - lower_n
-    for i in range(lower_n):
-        az = i * (2.0 * pi / lower_n) + rng.uniform(-0.18, 0.18)
+    # 5. Lush 3-tier pinnate palm crown (14-15 full fronds with 16-17 leaflets/side + 3 upright young crown spear shoots)
+    if frond_count == 15:
+        tier_counts = (6, 5, 4)
+    elif frond_count == 14:
+        tier_counts = (5, 5, 4)
+    else:
+        t1 = max(4, frond_count // 3 + 1)
+        t2 = max(4, frond_count // 3)
+        t3 = max(3, frond_count - t1 - t2)
+        tier_counts = (t1, t2, t3)
+
+    # Tier 1: Lower lush drooping umbrella skirt
+    n1 = tier_counts[0]
+    for i in range(n1):
+        az = i * (2.0 * pi / n1) + rng.uniform(-0.18, 0.18)
         _add_palm_frond(
-            mb_fronds, crown + Vector((0, 0.02, 0)), az,
-            pitch_deg=rng.uniform(14.0, 26.0),
-            length=rng.uniform(4.35, 5.25),
-            width=rng.uniform(1.04, 1.26),
-            droop=rng.uniform(0.50, 0.62),
-            tier_tint=0.22, phase=rng.random(), rng=rng
+            mb_fronds, crown + Vector((0.0, 0.02, 0.0)), az,
+            pitch_deg=rng.uniform(10.0, 22.0),
+            length=rng.uniform(4.40, 5.25),
+            width=rng.uniform(1.06, 1.26),
+            droop=rng.uniform(0.54, 0.65),
+            tier_tint=0.18, phase=rng.random(), rng=rng,
+            n_segs=12, n_leaflets=17, leaflet_sweep_deg=40.0
         )
-    for i in range(upper_n):
-        az = (i + 0.5) * (2.0 * pi / upper_n) + rng.uniform(-0.20, 0.20)
+    # Tier 2: Mid spreading sunlit canopy ring
+    n2 = tier_counts[1]
+    for i in range(n2):
+        az = (i + 0.45) * (2.0 * pi / n2) + rng.uniform(-0.18, 0.18)
         _add_palm_frond(
-            mb_fronds, crown + Vector((0, 0.16, 0)), az,
-            pitch_deg=rng.uniform(35.0, 50.0),
-            length=rng.uniform(3.45, 4.30),
-            width=rng.uniform(0.92, 1.14),
-            droop=rng.uniform(0.40, 0.50),
-            tier_tint=0.78, phase=rng.random(), rng=rng
+            mb_fronds, crown + Vector((0.0, 0.12, 0.0)), az,
+            pitch_deg=rng.uniform(26.0, 38.0),
+            length=rng.uniform(3.95, 4.65),
+            width=rng.uniform(0.96, 1.15),
+            droop=rng.uniform(0.45, 0.55),
+            tier_tint=0.52, phase=rng.random(), rng=rng,
+            n_segs=12, n_leaflets=16, leaflet_sweep_deg=42.0
         )
-    # Sunlit chartreuse-emerald young crown shoots for a rich, full canopy heart
+    # Tier 3: Upper arching golden-lime crown
+    n3 = tier_counts[2]
+    for i in range(n3):
+        az = (i + 0.85) * (2.0 * pi / n3) + rng.uniform(-0.20, 0.20)
+        _add_palm_frond(
+            mb_fronds, crown + Vector((0.0, 0.20, 0.0)), az,
+            pitch_deg=rng.uniform(42.0, 55.0),
+            length=rng.uniform(3.20, 3.90),
+            width=rng.uniform(0.84, 1.02),
+            droop=rng.uniform(0.35, 0.45),
+            tier_tint=0.82, phase=rng.random(), rng=rng,
+            n_segs=11, n_leaflets=16, leaflet_sweep_deg=44.0
+        )
+    # 3 upright young crown spear shoots catching sunlit chartreuse highlights
     for i in range(3):
         az = i * (2.0 * pi / 3.0) + rng.uniform(-0.35, 0.35)
         _add_palm_frond(
-            mb_fronds, crown + Vector((0, 0.24, 0)), az,
-            pitch_deg=rng.uniform(58.0, 74.0),
-            length=rng.uniform(2.15, 2.85),
-            width=rng.uniform(0.66, 0.84),
-            droop=rng.uniform(0.26, 0.35),
-            tier_tint=1.0, phase=rng.random(), rng=rng
+            mb_fronds, crown + Vector((0.0, 0.26, 0.0)), az,
+            pitch_deg=rng.uniform(62.0, 76.0),
+            length=rng.uniform(2.05, 2.75),
+            width=rng.uniform(0.56, 0.72),
+            droop=rng.uniform(0.22, 0.32),
+            tier_tint=1.0, phase=rng.random(), rng=rng,
+            n_segs=8, n_leaflets=10, leaflet_sweep_deg=46.0, stem_width=0.036
         )
 
     build(mb_trunk)
@@ -1442,53 +1673,180 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
     col_piece('col_trunk_lower', col_pts_a)
     col_piece('col_trunk_upper', col_pts_b)
 
+
 def gen_palm_tall(outdir):
-    _build_palm_tree('palm_tall', height=11.4, lean_x=1.15, lean_z=-0.55, s_curve=0.32, n_rings=14, frond_count=13, seed_off=11)
+    _build_palm_tree('palm_tall', height=11.4, lean_x=1.15, lean_z=-0.55, s_curve=0.32, n_rings=20, frond_count=15, seed_off=11)
     export_glb(outdir, 'palm_tall.glb')
 
+
 def gen_palm_curved(outdir):
-    _build_palm_tree('palm_curved', height=9.0, lean_x=3.15, lean_z=-1.05, s_curve=0.68, n_rings=13, frond_count=12, seed_off=23)
+    _build_palm_tree('palm_curved', height=9.0, lean_x=3.15, lean_z=-1.05, s_curve=0.68, n_rings=18, frond_count=14, seed_off=23)
     export_glb(outdir, 'palm_curved.glb')
+
+
+def _add_fiddlehead(mb, root, azimuth, height, curl_r, phase, rng):
+    """Sculpted coiled tropical fern fiddlehead crozier shoot curling upward in the mossy root heart."""
+    ca, sa = cos(azimuth), sin(azimuth)
+    fwd = Vector((ca, 0.0, sa))
+    side = Vector((-sa, 0.0, ca))
+    up = Vector((0.0, 1.0, 0.0))
+    pts = []
+    rads = []
+    scols = []
+    suv2 = []
+    # Rising stem (4 stations) + tight inward logarithmic spiral crozier (6 stations)
+    stem_top = Vector(root) + fwd * (height * 0.26) + up * height
+    for i in range(4):
+        t = i / 3.0
+        p = Vector(root) + fwd * (height * 0.26 * (t ** 1.3)) + up * (height * t)
+        pts.append(p)
+        rads.append(0.024 * (1.0 - 0.30 * t))
+        scols.append(mix(C_LEAF_MID, C_LEAF_SUN, 0.28 + 0.45 * t))
+        suv2.append((0.05 + 0.32 * t, phase))
+    curl_center = stem_top - fwd * curl_r
+    for i in range(1, 7):
+        u = i / 6.0
+        ang = u * 2.0 * pi * 1.18  # > 1 full spiral turn!
+        rad_s = curl_r * (1.0 - 0.72 * u)
+        p = curl_center + fwd * (cos(ang) * rad_s) + up * (sin(ang) * rad_s)
+        pts.append(p)
+        rads.append(0.017 * (1.0 - 0.52 * u))
+        scols.append(jit(mix(C_LEAF_MID, C_LEAF_SUN, 0.72 + 0.26 * u), rng, 0.05))
+        suv2.append((0.38 + 0.30 * u, phase))
+    # Build singularity-free loft using constant plane normal `side` perpendicular to the (fwd, up) spiral plane
+    secs = []
+    n_p = len(pts)
+    for i in range(n_p):
+        tan = (pts[min(i + 1, n_p - 1)] - pts[max(i - 1, 0)]).normalized()
+        bn = side.cross(tan).normalized()
+        r_i = rads[i]
+        secs.append([pts[i] + (side * cos(2 * pi * k / 4.0) + bn * sin(2 * pi * k / 4.0)) * r_i for k in range(4)])
+    loft(mb, secs, 'foliage', C_LEAF_SUN, closed=True, caps=(False, True), mode='smooth', scols=scols, suv2=suv2)
+
+
+def _add_hibiscus_blossom(mb, stem_base, head_pos, tilt_dir, scale, phase, rng):
+    """Multi-petal sculpted tropical hibiscus: arched stem, calyx, 5 curved overlapping crimson/coral petals & projecting golden stamen spike."""
+    base_v = Vector(stem_base)
+    head_v = Vector(head_pos)
+    mid_v = base_v.lerp(head_v, 0.52) + Vector(tilt_dir).normalized() * (0.06 * scale) + Vector((0.0, 0.04 * scale, 0.0))
+    tube(mb, [base_v, mid_v, head_v], [0.020 * scale, 0.015 * scale, 0.012 * scale], 4, 'foliage', C_LEAF_MID, caps=(False, True), mode='smooth', suv2=[(0.02, phase), (0.28, phase), (0.52, phase)])
+
+    # Blossom orientation frame: flower faces upward & gently outward along tilt_dir
+    f_up = (Vector((0.0, 1.0, 0.0)) * 0.78 + Vector(tilt_dir).normalized() * 0.62).normalized()
+    ref = Vector((1.0, 0.0, 0.0)) if abs(f_up.x) < 0.8 else Vector((0.0, 0.0, 1.0))
+    f_x = (ref - f_up * ref.dot(f_up)).normalized()
+    f_z = f_up.cross(f_x).normalized()
+
+    # Small green 5-sided calyx cup cradling the petals
+    c_bot = [head_v - f_up * (0.045 * scale) + (f_x * cos(2 * pi * k / 5.0) + f_z * sin(2 * pi * k / 5.0)) * (0.018 * scale) for k in range(5)]
+    c_top = [head_v + f_up * (0.012 * scale) + (f_x * cos(2 * pi * k / 5.0) + f_z * sin(2 * pi * k / 5.0)) * (0.046 * scale) for k in range(5)]
+    loft(mb, [c_bot, c_top], 'foliage', C_LEAF_DEEP, closed=True, caps=(True, False), mode='flat', suv2=[(0.50, phase), (0.54, phase)])
+
+    # 5 overlapping curved & cupped crimson/coral hibiscus petals (double-sided so visible from all angles on culled 'paint')
+    base_rot = rng.uniform(0.0, 2.0 * pi)
+    p_len = 0.165 * scale
+    p_hw = 0.068 * scale
+    c_throat = mul(C_FLOWER, 0.44)
+    c_body = jit(C_FLOWER, rng, 0.09, 0.04)
+    c_rim = mix(c_body, C_CREAM, 0.26)
+    c_back = mul(c_body, 0.78)
+    for pi_idx in range(5):
+        ang = base_rot + pi_idx * (2.0 * pi / 5.0)
+        p_dir = (f_x * cos(ang) + f_z * sin(ang)).normalized()
+        p_tan = f_up.cross(p_dir).normalized()
+        # Slight pinwheel overlap twist so adjacent petals nestle over each other cleanly
+        twist = radians(12.0)
+        w_vec = (p_tan * cos(twist) + f_up * sin(twist)).normalized()
+
+        p0 = head_v + f_up * (0.008 * scale) + p_dir * (0.012 * scale)
+        p1 = p0 + p_dir * (p_len * 0.42) + f_up * (p_len * 0.34)
+        p2 = p0 + p_dir * (p_len * 0.80) + f_up * (p_len * 0.40)
+        p3 = p0 + p_dir * (p_len * 1.00) + f_up * (p_len * 0.26)
+
+        # Front (inner cup) face: normal points toward +f_up
+        v0 = mb.v(p0)
+        v1a = mb.v(p1 - w_vec * (p_hw * 0.78))
+        v1b = mb.v(p1 + w_vec * (p_hw * 0.78))
+        v2a = mb.v(p2 - w_vec * p_hw)
+        v2b = mb.v(p2 + w_vec * p_hw)
+        v3 = mb.v(p3)
+        uv0, uv1a, uv1b, uv2a, uv2b, uv3 = (0.0, 0.5), (0.38, 0.20), (0.38, 0.80), (0.76, 0.12), (0.76, 0.88), (1.0, 0.5)
+        mb.f([v0, v1a, v1b], 'paint', [c_throat, c_body, c_body], [uv0, uv1a, uv1b], smooth=True)
+        mb.f([v1a, v2a, v2b, v1b], 'paint', [c_body, c_rim, c_rim, c_body], [uv1a, uv2a, uv2b, uv1b], smooth=True)
+        mb.f([v2a, v3, v2b], 'paint', [c_rim, mix(c_rim, C_CREAM, 0.20), c_rim], [uv2a, uv3, uv2b], smooth=True)
+        # Back (outer cup) face: reversed winding for 100% solid silhouette from beneath
+        b0, b1a, b1b, b2a, b2b, b3 = mb.v(p0), mb.v(p1 - w_vec * (p_hw * 0.78)), mb.v(p1 + w_vec * (p_hw * 0.78)), mb.v(p2 - w_vec * p_hw), mb.v(p2 + w_vec * p_hw), mb.v(p3)
+        mb.f([b0, b1b, b1a], 'paint', [mul(c_throat, 0.8), c_back, c_back], [uv0, uv1b, uv1a], smooth=True)
+        mb.f([b1b, b2b, b2a, b1a], 'paint', [c_back, mul(c_rim, 0.82), mul(c_rim, 0.82), c_back], [uv1b, uv2b, uv2a, uv1a], smooth=True)
+        mb.f([b2b, b3, b2a], 'paint', [mul(c_rim, 0.82), mul(c_rim, 0.78), mul(c_rim, 0.82)], [uv2b, uv3, uv2a], smooth=True)
+
+    # Projecting golden stamen column & pollen anther buds rising cleanly out of the hibiscus throat
+    st0 = head_v + f_up * (0.012 * scale)
+    st1 = st0 + f_up * (0.095 * scale) + f_x * (0.012 * scale)
+    st2 = st0 + f_up * (0.185 * scale) + f_x * (0.024 * scale)
+    tube(mb, [st0, st1, st2], [0.013 * scale, 0.009 * scale, 0.006 * scale], 4, 'paint', C_GOLD, caps=(False, True), mode='smooth', scols=[mix(C_FLOWER, C_GOLD, 0.45), C_GOLD, C_CREAM])
+    for ai in range(3):
+        a_ang = ai * (2.0 * pi / 3.0) + base_rot
+        apos = st2 + (f_x * cos(a_ang) + f_z * sin(a_ang)) * (0.016 * scale) + f_up * (0.010 * scale)
+        ellipsoid(mb, apos, (0.014 * scale, 0.014 * scale, 0.014 * scale), 'paint', C_GOLD if ai % 2 == 0 else C_CREAM, 5, 3)
+
 
 def gen_bush_fern(outdir):
     clear_scene()
     set_foliage_style('palm')
     rng = random.Random(SEED + 37)
     mb = MB('BushFern', seed=37)
-    # Earthy root heart mound
-    ellipsoid(mb, (0, 0.08, 0), (0.34, 0.22, 0.34), 'bark_banyan', C_TRUNK_DARK, 8, 4)
 
-    # Outer & inner layered tropical fern fronds with UV2 wind weights
-    tiers = [(9, 14.0, 26.0, 1.15, 1.45, 0.42, 0.36, 0.2), (6, 38.0, 56.0, 0.78, 1.08, 0.34, 0.28, 0.85)]
-    for count, pmin, pmax, lmin, lmax, w0, drp, tint in tiers:
+    # 1. Earthy mossy root heart mound (embedded cleanly below y = 0 for sloped ground)
+    ellipsoid(mb, (0.0, 0.05, 0.0), (0.38, 0.24, 0.38), 'bark_banyan', mix(C_TRUNK_DARK, C_MOSS, 0.22), 10, 5)
+
+    # 2. Three lush rosette tiers (10 outer + 7 mid + 5 upright inner = 22 pinnate fern fronds!)
+    tiers = [
+        # (count, pmin, pmax, lmin, lmax, width, droop, tint, n_segs, n_leaflets, stem_w)
+        (10, 12.0, 23.0, 1.18, 1.52, 0.46, 0.37, 0.16, 7, 9, 0.022),
+        ( 7, 32.0, 46.0, 0.88, 1.16, 0.38, 0.30, 0.56, 6, 8, 0.019),
+        ( 5, 52.0, 68.0, 0.58, 0.82, 0.29, 0.22, 0.96, 5, 6, 0.016),
+    ]
+    for count, pmin, pmax, lmin, lmax, w0, drp, tint, segs, n_leaf, stw in tiers:
         for i in range(count):
-            az = i * (2.0 * pi / count) + rng.uniform(-0.22, 0.22) + tint * 0.4
+            az = i * (2.0 * pi / count) + rng.uniform(-0.18, 0.18) + tint * 0.55
             _add_palm_frond(
-                mb, Vector((0, 0.12, 0)), az,
+                mb, Vector((cos(az) * 0.06, 0.10 + tint * 0.04, sin(az) * 0.06)), az,
                 pitch_deg=rng.uniform(pmin, pmax),
                 length=rng.uniform(lmin, lmax),
-                width=w0 * rng.uniform(0.88, 1.14),
-                droop=drp, tier_tint=tint, phase=rng.random(), rng=rng
+                width=w0 * rng.uniform(0.90, 1.12),
+                droop=drp, tier_tint=tint, phase=rng.random(), rng=rng,
+                n_segs=segs, n_leaflets=n_leaf, stem_width=stw, t_start=0.07, is_fern=True
             )
 
-    # 3 bright tropical blossom buds for painterly colour contrast
-    for i in range(3):
-        az = i * 2.1 + 0.4
-        bp = Vector((cos(az) * 0.26, 0.56 + 0.08 * i, sin(az) * 0.26))
-        tube(mb, [(cos(az) * 0.1, 0.14, sin(az) * 0.1), bp], [0.022, 0.015], 4, 'foliage', C_LEAF_MID, suv2=[(0.0, 0.3), (0.55, 0.3)])
-        ellipsoid(mb, bp, (0.09, 0.12, 0.09), 'paint', jit(C_FLOWER, rng, 0.08), 6, 4)
+    # 3. Three sculpted coiled fiddlehead shoots curling prominently upward in the mossy root heart
+    for fi in range(3):
+        faz = fi * (2.0 * pi / 3.0) + 0.65 + rng.uniform(-0.20, 0.20)
+        froot = (cos(faz) * 0.12, 0.12, sin(faz) * 0.12)
+        _add_fiddlehead(mb, froot, faz, rng.uniform(0.39, 0.52), rng.uniform(0.066, 0.082), rng.random(), rng)
+
+    # 4. Four multi-petal sculpted tropical hibiscus blossoms for vibrant painterly colour accents
+    for bi in range(4):
+        baz = bi * (2.0 * pi / 4.0) + 0.35 + rng.uniform(-0.24, 0.24)
+        s_base = (cos(baz) * 0.12, 0.14, sin(baz) * 0.12)
+        h_rad = rng.uniform(0.30, 0.44)
+        h_pos = (cos(baz) * h_rad, rng.uniform(0.56, 0.78), sin(baz) * h_rad)
+        _add_hibiscus_blossom(mb, s_base, h_pos, (cos(baz), 0.15, sin(baz)), rng.uniform(0.92, 1.15), rng.random(), rng)
 
     build(mb)
     export_glb(outdir, 'bush_fern.glb')
+
 
 def gen_rock_boulder(outdir):
     clear_scene()
     rng = random.Random(SEED + 51)
     mb = MB('RockBoulder', seed=51)
     pts = []
-    pts += faceted_rock(mb, (0.0, 0.55, 0.0), (1.75, 1.35, 1.55), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.26, strata=0.14)
-    pts += faceted_rock(mb, (1.25, 0.12, 0.72), (0.95, 0.78, 0.86), 'rock', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.10, rot_deg=(8, 42, -5))
-    pts += faceted_rock(mb, (-1.10, -0.05, -0.68), (0.88, 0.65, 0.80), 'rock', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(-6, -30, 9))
+    # Sculpted coastal-limestone boulder cluster (zero subdiv=1 dice; crisp stratification ledges & moss cap!)
+    pts += faceted_rock(mb, (0.0, 0.56, 0.0), (1.78, 1.38, 1.58), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=3, warp=0.25, strata=0.14, moss_cap=True, ledge_sharp=0.13)
+    pts += faceted_rock(mb, (1.26, 0.14, 0.72), (0.96, 0.80, 0.88), 'rock', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.12, rot_deg=(8, 42, -5), ledge_sharp=0.10)
+    pts += faceted_rock(mb, (-1.12, -0.04, -0.68), (0.90, 0.68, 0.82), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.10, rot_deg=(-6, -30, 9), moss_cap=True, ledge_sharp=0.10)
+    pts += faceted_rock(mb, (0.32, -0.14, -1.16), (0.64, 0.44, 0.56), 'rock', C_STONE_WARM, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.20, strata=0.09, rot_deg=(5, 118, -7), ledge_sharp=0.08)
     build(mb)
     col_piece('col_rock_boulder', pts)
     export_glb(outdir, 'rock_boulder.glb')
@@ -1586,7 +1944,7 @@ def gen_rock_spire(outdir):
         (16.4, 0.92, 0.76, -0.76, -0.32),
         (18.2, 0.42, 0.30, -0.88, -0.35),
     ]
-    all_pts = _limestone_monolith(mb, main_rings, sides=7, rng=rng, rot_y=0.22, twist=0.26, apex_y=19.2, apex_off=(-0.10, -0.04))
+    all_pts = _limestone_monolith(mb, main_rings, sides=12, rng=rng, rot_y=0.22, twist=0.26, apex_y=19.2, apex_off=(-0.10, -0.04))
 
     # Fused secondary limestone shoulder fin for an iconic asymmetric horizon silhouette
     fin_rings = [
@@ -1597,7 +1955,7 @@ def gen_rock_spire(outdir):
         ( 8.4, 0.95, 0.78, 2.38, -0.76),
         (10.4, 0.44, 0.34, 2.50, -0.82),
     ]
-    all_pts += _limestone_monolith(mb, fin_rings, sides=6, rng=rng, rot_y=-0.45, twist=-0.18, apex_y=11.3, apex_off=(0.08, -0.04))
+    all_pts += _limestone_monolith(mb, fin_rings, sides=9, rng=rng, rot_y=-0.45, twist=-0.18, apex_y=11.3, apex_off=(0.08, -0.04))
 
     # Wave-cut limestone base buttress anchoring the opposite flank into the surf
     spur_rings = [
@@ -1606,7 +1964,7 @@ def gen_rock_spire(outdir):
         ( 1.6, 1.42, 1.22, -1.70, 0.98),
         ( 3.6, 0.78, 0.66, -1.52, 0.85),
     ]
-    all_pts += _limestone_monolith(mb, spur_rings, sides=6, rng=rng, rot_y=0.85, twist=0.12, apex_y=4.4, apex_off=(0.12, -0.06))
+    all_pts += _limestone_monolith(mb, spur_rings, sides=9, rng=rng, rot_y=0.85, twist=0.12, apex_y=4.4, apex_off=(0.12, -0.06))
 
     pts_bot = [p for p in all_pts if p.y <= 5.0]
     pts_mid = [p for p in all_pts if 3.5 <= p.y <= 12.2]
@@ -2462,6 +2820,254 @@ def _add_ivy_drape(mb, anchor, length, width, out_dir, rng, phase):
         u1 = (pow(t1, 1.25) * 0.90, phase)
         mb.fp([pts_l[i], pts_r[i], pts_r[i + 1], pts_l[i + 1]], 'foliage', [c0, c0, c1, c1], (0, 1, 0), None, smooth=False, uv2=[u0, u0, u1, u1])
 
+def _add_broad_leaf_blade(
+    mb, root, dir_out, up_hint, length, width, droop,
+    c_base, c_mid, c_tip, w_base, w_tip, phase, rng, rounded=True
+):
+    """Smooth 4-tri curved rounded-ovate tropical broad-leaf blade with explicit positive-area UVs & UV2 wind weights."""
+    d = Vector(dir_out)
+    if d.length < 1e-6:
+        return
+    d.normalize()
+    uh = Vector(up_hint)
+    if uh.length < 1e-6:
+        uh = Vector((0.0, 1.0, 0.0))
+    else:
+        uh.normalize()
+    w_axis = uh.cross(d)
+    if w_axis.length < 1e-4:
+        ref = Vector((0.0, 0.0, 1.0)) if abs(d.z) < 0.8 else Vector((1.0, 0.0, 0.0))
+        w_axis = ref.cross(d)
+    w_axis.normalize()
+    u_axis = d.cross(w_axis).normalized()
+
+    # Subtle organic leaf roll so shingled overlapping broad leaves catch varied sunlight planes
+    roll = rng.uniform(-0.34, 0.34)
+    wv = (w_axis * cos(roll) + u_axis * sin(roll)).normalized()
+    uv_n = d.cross(wv).normalized()
+    up_w = Vector((0.0, 1.0, 0.0))
+
+    p0 = Vector(root)
+    if rounded:
+        # Smooth quadratic arch for plump tropical banyan/ficus broadleaf (zero sharp mid-blade kink)
+        p1 = p0 + d * (length * 0.30) + uv_n * (length * 0.10) - up_w * (droop * length * 0.09)
+        p2 = p0 + d * (length * 0.68) + uv_n * (length * 0.04) - up_w * (droop * length * 0.44)
+        p3 = p0 + d * length - uv_n * (length * 0.08) - up_w * (droop * length)
+        hw1 = width * 0.46
+        hw2 = width * 0.42
+    else:
+        # Pointed trailing jungle vine leaf
+        p1 = p0 + d * (length * 0.32) + uv_n * (length * 0.10) - up_w * (droop * length * 0.10)
+        p2 = p0 + d * (length * 0.68) + uv_n * (length * 0.03) - up_w * (droop * length * 0.45)
+        p3 = p0 + d * length - uv_n * (length * 0.10) - up_w * (droop * length)
+        hw1 = width * 0.48
+        hw2 = width * 0.34
+
+    cup = uv_n * (width * 0.075)
+    v0 = mb.v(p0)
+    v1a = mb.v(p1 - wv * hw1 + cup)
+    v1b = mb.v(p1 + wv * hw1 + cup)
+    v2a = mb.v(p2 - wv * hw2 + cup * 0.45)
+    v2b = mb.v(p2 + wv * hw2 + cup * 0.45)
+    v3 = mb.v(p3)
+
+    c_m2 = mix(c_mid, c_tip, 0.56)
+    w1 = w_base + (w_tip - w_base) * 0.32
+    w2 = w_base + (w_tip - w_base) * 0.70
+    u2_0 = (max(0.0, min(1.0, w_base)), phase)
+    u2_1 = (max(0.0, min(1.0, w1)), phase)
+    u2_2 = (max(0.0, min(1.0, w2)), phase)
+    u2_3 = (max(0.0, min(1.0, w_tip)), phase)
+
+    ou, ov = rng.random(), rng.random()
+    uv0 = (ou, ov + 0.12)
+    uv1a = (ou + 0.11, ov)
+    uv1b = (ou + 0.11, ov + 0.24)
+    uv2a = (ou + 0.26, ov + 0.02)
+    uv2b = (ou + 0.26, ov + 0.22)
+    uv3 = (ou + 0.38, ov + 0.12)
+
+    mb.f([v0, v1a, v1b], 'foliage', [c_base, c_mid, c_mid], [uv0, uv1a, uv1b], smooth=True, uv2=[u2_0, u2_1, u2_1])
+    mb.f([v1a, v2a, v2b, v1b], 'foliage', [c_mid, c_m2, c_m2, c_mid], [uv1a, uv2a, uv2b, uv1b], smooth=True, uv2=[u2_1, u2_2, u2_2, u2_1])
+    mb.f([v2a, v3, v2b], 'foliage', [c_m2, c_tip, c_m2], [uv2a, uv3, uv2b], smooth=True, uv2=[u2_2, u2_3, u2_2])
+
+
+def _add_sculpted_canopy_cluster(mb, center, radii, rng, phase, base_w=0.18, tip_w=0.94, tint=0.5, leaf_count=26):
+    """Layered tropical leaf-sprig canopy cluster: deep shaded subdiv=2 heart shrouded by dense shingled rounded broad leaves."""
+    cx, cy, cz = center
+    rx, ry, rz = radii
+    c_vec = Vector(center)
+    avg_r = (rx + rz) * 0.5
+    mb.newoff()
+
+    # 1. Inner shaded foliage heart (smooth subdiv=2 deep interior shadow core — completely veiled by outer leaf shingles!)
+    bm = bmesh.new()
+    bmesh.ops.create_icosphere(bm, subdivisions=2, radius=1.0)
+    ph = [rng.uniform(0.0, 6.28) for _ in range(4)]
+    heart_scale = 0.68
+    v_ids = []
+    v_pos = []
+    for v in bm.verts:
+        p = v.co.copy()
+        wob = 1.0 + 0.15 * sin(p.x * 3.2 + ph[0]) * cos(p.z * 2.9 + ph[1]) + 0.10 * sin(p.y * 4.1 + ph[2])
+        py = p.y * (0.48 if p.y < 0.0 else 0.98)
+        wp = Vector((cx + p.x * rx * heart_scale * wob, cy + py * ry * heart_scale * wob, cz + p.z * rz * heart_scale * wob))
+        v.co = wp
+        v_ids.append(mb.v(wp))
+        v_pos.append(wp)
+
+    bm.faces.ensure_lookup_table()
+    o = mb.off
+    deep_shadow = mix(C_LEAF_DEEP, C_TEAL, 0.16)
+    for f in bm.faces:
+        idxs = [v.index for v in f.verts]
+        pts = [v_pos[vi] for vi in idxs]
+        fn = newell(pts)
+        if fn.length < 1e-8:
+            continue
+        fn.normalize()
+        fc = sum(pts, Vector()) / len(pts)
+        if fn.dot(fc - c_vec) < 0.0:
+            idxs.reverse()
+            pts.reverse()
+            fn = -fn
+        ref = Vector((1.0, 0.0, 0.0)) if abs(fn.x) < 0.8 else Vector((0.0, 1.0, 0.0))
+        gu = (ref - fn * ref.dot(fn)).normalized()
+        gv = fn.cross(gu)
+        uvs = [(p.dot(gu) * SU + o[0], p.dot(gv) * SV + o[1]) for p in pts]
+
+        cols = []
+        uv2s = []
+        for p in pts:
+            ny = max(-1.0, min(1.0, (p.y - cy) / max(0.2, ry * heart_scale)))
+            if ny < 0.0:
+                cc = mul(deep_shadow, 0.62 + 0.16 * max(0.0, 1.0 + ny))
+            else:
+                h_k = smooth01(ny * 0.78 + (tint - 0.5) * 0.22)
+                cc = mul(mix(C_LEAF_DEEP, C_LEAF_MID, 0.15 + 0.45 * h_k), 0.84)
+            cols.append(jit(cc, rng, 0.04, 0.02))
+            r_out = sqrt((p.x - cx) ** 2 + (p.z - cz) ** 2) / max(0.1, max(rx, rz))
+            w = base_w + (tip_w - base_w) * min(0.54, r_out * 0.48 + max(0.0, ny) * 0.16)
+            uv2s.append((max(0.0, min(1.0, w)), phase))
+        mb.f([v_ids[vi] for vi in idxs], 'foliage', cols, uvs, smooth=True, uv2=uv2s)
+    bm.free()
+
+    # 2. Dense 4-band shingled rounded-ovate tropical leaf cloud shrouding 100% of the outer dome & underside rim!
+    golden = 2.39996323
+    az_off = rng.uniform(0.0, 2.0 * pi)
+    n_eave = max(5, int(round(leaf_count * 0.24)))
+    n_rim = max(7, int(round(leaf_count * 0.32)))
+    n_mid = max(6, int(round(leaf_count * 0.26)))
+    n_cap = max(4, leaf_count - n_eave - n_rim - n_mid)
+
+    def spawn_band(n_items, band_idx, el_min, el_max, pitch_min, pitch_max, len_mul, wid_ratio, droop_rng, sun_bias):
+        for li in range(n_items):
+            frac = (li + 0.5) / float(max(1, n_items))
+            az = az_off + (li + band_idx * 4.3) * golden + rng.uniform(-0.24, 0.24)
+            ca, sa = cos(az), sin(az)
+            el = el_min + (el_max - el_min) * frac + rng.uniform(-0.07, 0.07)
+            # Root snugly inside outer edge of inner heart shell so leaves drape outward smoothly over the core
+            r_h = cos(el) * rng.uniform(0.52, 0.68)
+            y_h = sin(el) * (0.42 if el < 0.0 else 0.72)
+            root = Vector((cx + ca * rx * r_h, cy + ry * y_h, cz + sa * rz * r_h))
+
+            # Shingled tangential sweep (gently arching outward & drooping — never vertical porcupine spikes!)
+            p_ang = radians(rng.uniform(pitch_min, pitch_max))
+            # Slight tangential yaw fan so adjacent broad leaves overlap like real banyan bough sprays
+            yaw_fan = rng.uniform(-0.26, 0.26)
+            laz = az + yaw_fan
+            dir_out = Vector((cos(laz) * cos(p_ang), sin(p_ang), sin(laz) * cos(p_ang))).normalized()
+
+            l_len = avg_r * len_mul * rng.uniform(0.86, 1.15)
+            l_wid = l_len * wid_ratio * rng.uniform(0.90, 1.12)
+            droop = rng.uniform(droop_rng[0], droop_rng[1])
+
+            sun_k = max(0.0, min(1.0, sun_bias + (tint - 0.5) * 0.38 + rng.uniform(-0.10, 0.12)))
+            if band_idx == 0:
+                # Shaded teal-emerald underside eaves
+                c_b = mul(deep_shadow, 0.72)
+                c_m = jit(mix(deep_shadow, C_LEAF_DEEP, 0.55 + 0.35 * sun_k), rng, 0.07, 0.03)
+                c_t = mix(c_m, C_LEAF_MID, 0.38 + 0.35 * sun_k)
+            elif band_idx == 1:
+                # Lush mid-emerald equatorial umbrella rim
+                c_b = mix(deep_shadow, C_LEAF_DEEP, 0.65)
+                c_m = jit(mix(C_LEAF_DEEP, C_LEAF_MID, 0.55 + 0.38 * sun_k), rng, 0.07, 0.035)
+                c_t = mix(c_m, C_LEAF_SUN, 0.20 + 0.35 * sun_k)
+            else:
+                # Sunlit layered dome crown catching golden-lime highlights!
+                c_b = mix(C_LEAF_DEEP, C_LEAF_MID, 0.42 + 0.35 * sun_k)
+                c_m = jit(mix(C_LEAF_MID, C_LEAF_SUN, 0.20 + 0.42 * sun_k), rng, 0.07, 0.035)
+                c_t = mix(c_m, C_LEAF_SUN, 0.46 + 0.42 * sun_k)
+
+            l_ph = (phase + 0.04 * sin(li * 2.1 + band_idx)) % 1.0
+            w_b = min(0.84, base_w + (tip_w - base_w) * (0.24 + 0.16 * band_idx))
+            w_t = min(0.98, max(0.56, tip_w - rng.uniform(0.0, 0.08)))
+            _add_broad_leaf_blade(mb, root, dir_out, Vector((0.0, 1.0, 0.0)), l_len, l_wid, droop, c_b, c_m, c_t, w_b, w_t, l_ph, rng, rounded=True)
+
+    # Band 0: Under-rim drooping eaves veiling the cluster underside & bough joins
+    spawn_band(n_eave, 0, -0.36, -0.02, -24.0, -4.0, 0.46, 0.68, (0.34, 0.48), 0.12)
+    # Band 1: Outer equatorial umbrella rim breaking up the entire horizontal silhouette
+    spawn_band(n_rim,  1,  0.00,  0.34,  -6.0, 14.0, 0.48, 0.66, (0.26, 0.38), 0.38)
+    # Band 2: Upper-mid shingled shoulder hugging the dome contour smoothly
+    spawn_band(n_mid,  2,  0.36,  0.76,   8.0, 26.0, 0.44, 0.68, (0.22, 0.34), 0.70)
+    # Band 3: Sunlit billowing crown cap fanning gently across the apex (zero vertical horns!)
+    spawn_band(n_cap,  3,  0.76,  1.24,   2.0, 18.0, 0.40, 0.72, (0.20, 0.30), 0.94)
+
+
+def _add_leafy_jungle_vine(mb, anchor, length, out_dir, rng, phase, n_leaves=12):
+    """Lush hanging jungle vine: sinuous swaying stem adorned with alternating sculpted pointed jungle leaves."""
+    mb.newoff()
+    od = Vector(out_dir)
+    od.y = 0.0
+    od = od.normalized() if od.length > 1e-5 else Vector((1.0, 0.0, 0.0))
+    side = Vector((-od.z, 0.0, od.x)).normalized()
+    segs = 8
+
+    def v_pos(t):
+        sway_s = sin(t * pi * 1.85 + phase * 6.28) * 0.14
+        sway_o = 0.06 * sin(t * pi * 1.15)
+        return Vector(anchor) + od * sway_o + side * sway_s + Vector((0.0, -length * t, 0.0))
+
+    # 1. Slender sinuous hanging vine stem anchored cleanly inside bough/canopy (t=0 -> UV2.x = 0.04)
+    v_l = []
+    v_r = []
+    v_c = []
+    v_u2 = []
+    for i in range(segs + 1):
+        t = i / float(segs)
+        c = v_pos(t)
+        sw = 0.024 * (1.0 - 0.55 * t)
+        v_l.append(mb.v(c - side * sw))
+        v_r.append(mb.v(c + side * sw))
+        v_c.append(mix(C_LEAF_DEEP, C_LEAF_MID, 0.25 + 0.45 * t))
+        v_u2.append((min(0.95, 0.04 + 0.90 * pow(t, 1.20)), phase))
+    for i in range(segs):
+        t0, t1 = i / float(segs), (i + 1) / float(segs)
+        mb.f(
+            [v_l[i], v_r[i], v_r[i + 1], v_l[i + 1]],
+            'foliage', [v_c[i], v_c[i], v_c[i + 1], v_c[i + 1]],
+            [(0.45, t0 * 2.0), (0.55, t0 * 2.0), (0.55, t1 * 2.0), (0.45, t1 * 2.0)],
+            smooth=True, uv2=[v_u2[i], v_u2[i], v_u2[i + 1], v_u2[i + 1]]
+        )
+
+    # 2. Alternating pairs of sculpted pointed jungle leaves sprouting outward along the vine
+    for li in range(n_leaves):
+        frac = (li + 0.5) / float(n_leaves)
+        t = 0.10 + 0.86 * frac
+        sgn = 1.0 if li % 2 == 0 else -1.0
+        root = v_pos(t)
+        out_ang = radians(rng.uniform(-22.0, 26.0))
+        d_leaf = (side * (sgn * 0.72) + od * (0.55 + 0.25 * cos(out_ang)) + Vector((0.0, -0.35 + 0.18 * sin(li), 0.0))).normalized()
+        l_len = rng.uniform(0.28, 0.44) * (1.05 - 0.35 * frac)
+        l_wid = l_len * rng.uniform(0.56, 0.70)
+        w_b = min(0.92, 0.06 + 0.84 * pow(t, 1.20))
+        w_t = min(0.98, w_b + 0.10)
+        c_b = C_LEAF_DEEP
+        c_m = jit(mix(C_LEAF_DEEP, C_LEAF_MID, 0.48 + 0.34 * frac), rng, 0.07, 0.03)
+        c_t = mix(c_m, C_LEAF_SUN, 0.26 + 0.44 * frac)
+        _add_broad_leaf_blade(mb, root, d_leaf, Vector((0.0, 1.0, 0.0)), l_len, l_wid, 0.28, c_b, c_m, c_t, w_b, w_t, phase, rng, rounded=False)
+
+
 def gen_jungle_banyan(outdir):
     clear_scene()
     set_foliage_style('broad')
@@ -2469,16 +3075,18 @@ def gen_jungle_banyan(outdir):
     mb_wood = MB('BanyanWood', seed=431)
     mb_leaf = MB('BanyanCanopy', seed=531)
 
-    # 1. Twisted furrowed dark-bark main trunk (y = -0.85..+4.65 m) with subtle root fluting!
+    # 1. Twisted 12-sided deeply fluted dark-bark main trunk (y = -0.95..+4.75 m, smooth-shaded organic bark!)
     trunk_pts = [
-        (0.00, -0.85, 0.00, 0.92),
-        (0.04,  0.10, -0.02, 0.78),
-        (0.10,  1.25, -0.06, 0.64),
-        (0.06,  2.45,  0.02, 0.56),
-        (-0.04, 3.55,  0.08, 0.58),
-        (-0.02, 4.65,  0.04, 0.68),
+        ( 0.00, -0.95,  0.00, 1.04),
+        ( 0.03, -0.15, -0.02, 0.90),
+        ( 0.07,  0.70, -0.05, 0.76),
+        ( 0.11,  1.55, -0.06, 0.67),
+        ( 0.08,  2.40,  0.00, 0.60),
+        ( 0.01,  3.20,  0.06, 0.60),
+        (-0.04,  4.00,  0.07, 0.65),
+        (-0.02,  4.75,  0.04, 0.72),
     ]
-    sides = 8
+    sides = 12
     secs = []
     scols = []
     col_pts = []
@@ -2486,94 +3094,124 @@ def gen_jungle_banyan(outdir):
         t = i / float(len(trunk_pts) - 1)
         ring = []
         for k in range(sides):
-            ang = 2.0 * pi * k / sides + t * 0.55
-            flute = 1.0 + (0.16 * sin(ang * 5.0) * (1.0 - 0.6 * t))
+            ang = 2.0 * pi * k / sides + t * 0.62
+            # Deep 6-lobe organic root fluting aligning with the 6 splayed buttress roots
+            flute = 1.0 + 0.22 * sin(ang * 6.0 + 0.4) * (1.0 - 0.55 * t) + 0.06 * cos(ang * 3.0 - t * 2.5)
             v = Vector((tx + cos(ang) * tr * flute, ty, tz + sin(ang) * tr * flute))
             ring.append(v)
             col_pts.append(v)
         secs.append(ring)
-        scols.append(jit(mix(C_TRUNK_DARK, C_DARK, 0.35 + 0.30 * t), rng, 0.06, 0.02))
-    loft(mb_wood, secs, 'bark_banyan', C_TRUNK_DARK, closed=True, caps=(True, True), mode='flat', scols=scols)
+        scols.append(jit(mix(C_TRUNK_DARK, C_DARK, 0.30 + 0.35 * t), rng, 0.06, 0.02))
+    loft(mb_wood, secs, 'bark_banyan', C_TRUNK_DARK, closed=True, caps=(True, True), mode='smooth', scols=scols)
 
-    # 2. Five dramatic splayed buttress roots plunging cleanly down to y = -0.85 m for sloped terrain!
-    for ri in range(5):
-        ang = ri * (2.0 * pi / 5.0) + rng.uniform(-0.16, 0.16)
+    # 2. Six dramatic splayed curling buttress roots seamlessly emerging from trunk core & plunging to y = -0.95 m!
+    for ri in range(6):
+        ang = ri * (2.0 * pi / 6.0) + rng.uniform(-0.14, 0.14)
         ca, sa = cos(ang), sin(ang)
-        reach = rng.uniform(1.95, 2.45)
+        sx, sz = -sa, ca
+        curl = rng.uniform(-0.30, 0.30)
+        reach = rng.uniform(2.05, 2.65)
         r_path = [
-            Vector((ca * 0.42, 2.35 + rng.uniform(-0.2, 0.25), sa * 0.42)),
-            Vector((ca * (reach * 0.46), 1.05, sa * (reach * 0.46))),
-            Vector((ca * (reach * 0.82), 0.12, sa * (reach * 0.82))),
-            Vector((ca * reach, -0.85, sa * reach)),
+            Vector((ca * 0.14, 2.75 + rng.uniform(-0.18, 0.22), sa * 0.14)),
+            Vector((ca * (reach * 0.34) + sx * curl * 0.35, 1.55, sa * (reach * 0.34) + sz * curl * 0.35)),
+            Vector((ca * (reach * 0.66) + sx * curl * 0.75, 0.62, sa * (reach * 0.66) + sz * curl * 0.75)),
+            Vector((ca * (reach * 0.89) + sx * curl, -0.15, sa * (reach * 0.89) + sz * curl)),
+            Vector((ca * reach + sx * curl * 0.85, -0.95, sa * reach + sz * curl * 0.85)),
         ]
-        tube(mb_wood, r_path, [0.34, 0.28, 0.23, 0.16], 6, 'bark_banyan', jit(C_TRUNK_DARK, rng, 0.07), mode='flat')
+        tube(mb_wood, r_path, [0.34, 0.31, 0.26, 0.21, 0.15], 7, 'bark_banyan', jit(C_TRUNK_DARK, rng, 0.07), caps=(False, True), mode='smooth')
         for p in r_path[:3]:
             col_pts.append(p)
 
-    # 3. Four heavy gnarled spreading boughs + central crown limb!
+    # 3. Five heavy gnarled spreading primary boughs (8-sided smooth) splitting into secondary & tertiary limbs!
     bough_specs = [
-        (0.25,  3.55, 6.85, 0.42, 0.18),
-        (1.75,  3.25, 7.25, 0.40, 0.17),
-        (3.35,  3.45, 6.55, 0.40, 0.18),
-        (4.90,  3.15, 7.45, 0.38, 0.16),
+        (0.18, 3.65, 6.75, 0.42, 0.17),
+        (1.42, 3.40, 7.20, 0.40, 0.16),
+        (2.68, 3.55, 6.55, 0.41, 0.17),
+        (3.94, 3.35, 7.30, 0.39, 0.16),
+        (5.20, 3.45, 6.95, 0.40, 0.17),
     ]
-    bough_tips = []
+    primary_tips = []
+    secondary_tips = []
+    aerial_anchors = []
+    vine_anchors = []
     for bi, (az, reach, top_y, r0, r1) in enumerate(bough_specs):
         ca, sa = cos(az), sin(az)
         sx, sz = -sa, ca
-        sw = rng.uniform(-0.35, 0.35)
+        sw = rng.uniform(-0.36, 0.36)
         b_path = [
-            Vector((ca * 0.22, 4.15 + 0.12 * (bi % 2), sa * 0.22)),
-            Vector((ca * (reach * 0.42) + sx * sw * 0.5, 5.25, sa * (reach * 0.42) + sz * sw * 0.5)),
-            Vector((ca * (reach * 0.78) + sx * sw, top_y - 0.55, sa * (reach * 0.78) + sz * sw)),
+            Vector((ca * 0.16, 4.10 + 0.14 * (bi % 2), sa * 0.16)),
+            Vector((ca * (reach * 0.30) + sx * sw * 0.4, 4.95, sa * (reach * 0.30) + sz * sw * 0.4)),
+            Vector((ca * (reach * 0.62) + sx * sw * 0.9, 5.85 + 0.15 * (bi % 2), sa * (reach * 0.62) + sz * sw * 0.9)),
+            Vector((ca * (reach * 0.86) + sx * sw * 0.6, top_y - 0.36, sa * (reach * 0.86) + sz * sw * 0.6)),
             Vector((ca * reach, top_y, sa * reach)),
         ]
-        tube(mb_wood, b_path, [r0, r0 * 0.78, r0 * 0.56, r1], 6, 'bark_banyan', jit(C_DARK, rng, 0.07), mode='flat')
-        bough_tips.append(b_path[-1])
-        # Forked secondary sub-branch for rich broad-canopy structure
+        tube(mb_wood, b_path, [r0, r0 * 0.84, r0 * 0.68, r0 * 0.50, r1], 8, 'bark_banyan', jit(C_DARK, rng, 0.07), mode='smooth')
+        primary_tips.append(b_path[-1])
+        aerial_anchors.append((b_path[1].lerp(b_path[2], 0.65), True))
+        if bi < 4:
+            aerial_anchors.append((b_path[2].lerp(b_path[3], 0.55), False))
+        # Anchor a leafy hanging vine right inside the outer bough canopy underside!
+        vine_anchors.append((b_path[3].lerp(b_path[4], 0.55) + Vector((0.0, 0.15, 0.0)), Vector((ca, 0.0, sa))))
+
+        # Two forked secondary limbs per primary bough
         for sgn in (-1.0, 1.0):
-            fork_az = az + sgn * 0.58
+            fork_az = az + sgn * 0.54 + rng.uniform(-0.07, 0.07)
             fca, fsa = cos(fork_az), sin(fork_az)
             f_start = b_path[2]
-            f_end = f_start + Vector((fca * 1.45, 0.85 + rng.uniform(-0.15, 0.25), fsa * 1.45))
-            tube(mb_wood, [f_start, f_end], [r0 * 0.42, r1 * 0.65], 5, 'bark_banyan', jit(C_TRUNK_LIGHT, rng, 0.07), mode='flat')
-            bough_tips.append(f_end)
+            f_mid = f_start + Vector((fca * 0.72, 0.45 + rng.uniform(-0.08, 0.14), fsa * 0.72))
+            f_end = f_start + Vector((fca * 1.44, 0.96 + rng.uniform(-0.14, 0.22), fsa * 1.44))
+            tube(mb_wood, [f_start, f_mid, f_end], [r0 * 0.44, r0 * 0.30, r1 * 0.60], 6, 'bark_banyan', jit(C_TRUNK_LIGHT, rng, 0.07), mode='smooth')
+            secondary_tips.append(f_end)
+            if sgn > 0 and bi < 3:
+                vine_anchors.append((f_mid.lerp(f_end, 0.65) + Vector((0.0, 0.12, 0.0)), Vector((fca, 0.0, fsa))))
 
-        # Hanging banyan aerial root tendrils draping down from the heavy bough!
-        a_anchor = b_path[1].lerp(b_path[2], 0.55)
-        a_end_y = -0.65 if bi % 2 == 0 else rng.uniform(1.4, 2.6)
-        a_mid = Vector((a_anchor.x * 1.06, 0.5 * (a_anchor.y + a_end_y), a_anchor.z * 1.06))
-        a_bot = Vector((a_anchor.x * 1.04, a_end_y, a_anchor.z * 1.04))
-        tube(mb_wood, [a_anchor, a_mid, a_bot], [0.065, 0.050, 0.042], 5, 'bark_banyan', jit(C_WEATH, rng, 0.08), mode='flat')
+        # Tertiary upward canopy spur rising off bough elbow
+        t_start = b_path[3]
+        t_end = t_start + Vector((ca * 0.50 + sx * 0.22, 1.02 + rng.uniform(-0.1, 0.18), sa * 0.50 + sz * 0.22))
+        tube(mb_wood, [t_start, t_end], [r1 * 0.75, r1 * 0.42], 5, 'bark_banyan', jit(C_TRUNK_DARK, rng, 0.06), mode='smooth')
 
-    # Towering central crown bough reaching up into the sunlit canopy apex (~10.5 m!)
-    crown_limb = [Vector((-0.02, 4.50, 0.04)), Vector((0.18, 6.45, -0.12)), Vector((0.08, 8.25, -0.06))]
-    tube(mb_wood, crown_limb, [0.42, 0.28, 0.16], 6, 'bark_banyan', C_TRUNK_DARK, mode='flat')
+    # Nine hanging banyan aerial root tendrils (5 rooted cleanly into ground y=-0.85, 4 swaying mid-air!)
+    for ai, (a_anc, rooted) in enumerate(aerial_anchors[:9]):
+        a_end_y = -0.85 if rooted else rng.uniform(1.15, 2.65)
+        wob_x = rng.uniform(-0.14, 0.14)
+        wob_z = rng.uniform(-0.14, 0.14)
+        a_p1 = Vector((a_anc.x * 1.03 + wob_x * 0.5, a_anc.y * 0.68 + a_end_y * 0.32, a_anc.z * 1.03 + wob_z * 0.5))
+        a_p2 = Vector((a_anc.x * 1.06 + wob_x, a_anc.y * 0.34 + a_end_y * 0.66, a_anc.z * 1.06 + wob_z))
+        a_bot = Vector((a_anc.x * 1.04 + wob_x * 0.6, a_end_y, a_anc.z * 1.04 + wob_z * 0.6))
+        r_top = 0.072 if rooted else 0.054
+        r_bot = 0.048 if rooted else 0.026
+        tube(mb_wood, [a_anc, a_p1, a_p2, a_bot], [r_top, r_top * 0.85, r_top * 0.74, r_bot], 5, 'bark_banyan', jit(C_WEATH, rng, 0.08), mode='smooth')
 
-    # 4. Lush multi-tiered emerald-to-sunlit-gold layered leaf-frond dome canopy ('foliage' -> wind shader!)
-    # Outer broad bough leaf domes + forked mid-canopy tiers
-    for idx, tip in enumerate(bough_tips):
-        is_primary = (idx % 3 == 0)
-        rx = rng.uniform(2.05, 2.55) if is_primary else rng.uniform(1.55, 1.95)
-        ry = rng.uniform(1.30, 1.65) if is_primary else rng.uniform(1.05, 1.35)
-        rz = rng.uniform(1.95, 2.45) if is_primary else rng.uniform(1.48, 1.88)
-        _add_faceted_canopy_dome(
+    # Towering central crown trunk limb splitting into twin sunlit crown forks (~10.5 m apex!)
+    crown_limb = [Vector((-0.02, 4.50, 0.04)), Vector((0.16, 6.20, -0.10)), Vector((0.08, 7.95, -0.05))]
+    tube(mb_wood, crown_limb, [0.44, 0.30, 0.18], 7, 'bark_banyan', C_TRUNK_DARK, mode='smooth')
+    tube(mb_wood, [crown_limb[1], Vector((-0.95, 7.65, 0.72))], [0.24, 0.13], 6, 'bark_banyan', C_TRUNK_DARK, mode='smooth')
+    tube(mb_wood, [crown_limb[1], Vector((0.95, 7.58, -0.78))], [0.24, 0.13], 6, 'bark_banyan', C_TRUNK_DARK, mode='smooth')
+
+    # 4. Lush sculpted shingled multi-leaf canopy clusters ('foliage' -> wind shader, ZERO subdiv=1 icospheres!)
+    # Seated directly around each bough tip (+0.26..+0.30 y) so zero bare wooden branch tips poke underneath!
+    for tip in primary_tips:
+        _add_sculpted_canopy_cluster(
             mb_leaf,
-            (tip.x, tip.y + 0.55, tip.z),
-            (rx, ry, rz),
-            rng, phase=rng.random(), base_w=0.16, tip_w=0.86, tint=0.45 if is_primary else 0.62
+            (tip.x, tip.y + 0.28, tip.z),
+            (rng.uniform(2.10, 2.52), rng.uniform(1.28, 1.56), rng.uniform(2.04, 2.46)),
+            rng, phase=rng.random(), base_w=0.18, tip_w=0.90, tint=0.48, leaf_count=30
         )
-    # Upper crowning sunlit umbrella dome pushing tree silhouette cleanly to ~10.5 m!
-    _add_faceted_canopy_dome(mb_leaf, (0.05, 8.95, -0.05), (2.75, 1.60, 2.65), rng, phase=rng.random(), base_w=0.22, tip_w=0.92, tint=0.92)
-    _add_faceted_canopy_dome(mb_leaf, (-1.15, 8.35, 0.85), (1.95, 1.25, 1.85), rng, phase=rng.random(), base_w=0.20, tip_w=0.88, tint=0.78)
-    _add_faceted_canopy_dome(mb_leaf, (1.10, 8.25, -0.90), (1.90, 1.22, 1.80), rng, phase=rng.random(), base_w=0.20, tip_w=0.88, tint=0.82)
+    for tip in secondary_tips:
+        _add_sculpted_canopy_cluster(
+            mb_leaf,
+            (tip.x, tip.y + 0.26, tip.z),
+            (rng.uniform(1.62, 1.98), rng.uniform(1.06, 1.32), rng.uniform(1.56, 1.92)),
+            rng, phase=rng.random(), base_w=0.20, tip_w=0.92, tint=0.64, leaf_count=24
+        )
+    # Upper crowning sunlit umbrella clusters pushing tree silhouette cleanly to ~10.6 m!
+    _add_sculpted_canopy_cluster(mb_leaf, ( 0.06, 8.75, -0.05), (2.80, 1.62, 2.72), rng, phase=rng.random(), base_w=0.24, tip_w=0.96, tint=0.94, leaf_count=36)
+    _add_sculpted_canopy_cluster(mb_leaf, (-1.15, 8.15,  0.84), (2.02, 1.26, 1.92), rng, phase=rng.random(), base_w=0.22, tip_w=0.92, tint=0.80, leaf_count=30)
+    _add_sculpted_canopy_cluster(mb_leaf, ( 1.10, 8.08, -0.88), (1.98, 1.24, 1.88), rng, phase=rng.random(), base_w=0.22, tip_w=0.92, tint=0.84, leaf_count=30)
 
-    # Hanging lush jungle vine ribbons trailing from outer boughs
-    for vi in range(5):
-        vaz = vi * (2.0 * pi / 5.0) + 0.45
-        vr = rng.uniform(2.6, 3.4)
-        v_anc = (cos(vaz) * vr, rng.uniform(5.7, 6.5), sin(vaz) * vr)
-        _add_ivy_drape(mb_leaf, v_anc, rng.uniform(1.8, 2.8), 0.24, (cos(vaz), 0.0, sin(vaz)), rng, phase=rng.random())
+    # 5. Eight lush leaf-bearing hanging jungle vines anchored directly inside real outer boughs & canopy!
+    for v_anc, v_dir in vine_anchors[:8]:
+        _add_leafy_jungle_vine(mb_leaf, v_anc, rng.uniform(2.05, 3.15), v_dir, rng, phase=rng.random(), n_leaves=12)
 
     build(mb_wood)
     build(mb_leaf)
@@ -3240,7 +3878,21 @@ def gen_watchtower_wood(outdir):
 # ================================================================ main
 def main():
     argv = sys.argv
-    outdir = argv[-1] if '--' in argv else os.path.join(os.getcwd(), 'assets', 'generated')
+    user_args = argv[argv.index('--') + 1:] if '--' in argv else []
+    outdir = os.path.join(os.getcwd(), 'assets', 'generated')
+    only_filter = None
+    i = 0
+    while i < len(user_args):
+        arg = user_args[i]
+        if arg.startswith('--only='):
+            only_filter = {s.strip().removesuffix('.glb').removeprefix('gen_') for s in arg.split('=', 1)[1].split(',') if s.strip()}
+        elif arg == '--only' and i + 1 < len(user_args):
+            i += 1
+            only_filter = {s.strip().removesuffix('.glb').removeprefix('gen_') for s in user_args[i].split(',') if s.strip()}
+        else:
+            outdir = arg
+        i += 1
+
     random.seed(SEED)
     np.random.seed(SEED)
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -3274,6 +3926,8 @@ def main():
         gen_seawall_bastion,
         gen_watchtower_wood,
     ]
+    if only_filter is not None:
+        generators = [fn for fn in generators if fn.__name__.removeprefix('gen_') in only_filter]
     for fn in generators:
         fn(outdir)
     print('gen_props: exported %d props cleanly.' % len(generators))

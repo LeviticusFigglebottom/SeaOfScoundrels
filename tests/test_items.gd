@@ -2362,14 +2362,302 @@ func test_wave36_location_banner_and_speaking_trumpet_hail() -> void:
 	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes shared PBR cache clears cleanly")
 
 
+# ---------------------------------------------------------------------------
+# 18. Pass Q2A: Sculpted FP Pirate Hands, Expressive Animations & Item Radial
+# ---------------------------------------------------------------------------
 
+func test_q2a_fp_hands_animations_and_discoverable_item_radial() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
 
+	# 1. Verify InputMap has KEY_Q and KEY_TAB on &"item_radial", and KEY_G on &"command_wheel".
+	check(InputMap.has_action(&"item_radial"), "InputMap defines &'item_radial'")
+	check(InputMap.has_action(&"command_wheel"), "InputMap defines &'command_wheel'")
+	var radial_keys: Array[int] = []
+	for ev in InputMap.action_get_events(&"item_radial"):
+		if ev is InputEventKey:
+			radial_keys.append(int((ev as InputEventKey).physical_keycode))
+	check(radial_keys.has(KEY_Q), "&'item_radial' binds KEY_Q")
+	check(radial_keys.has(KEY_TAB), "&'item_radial' binds KEY_TAB")
 
+	var cmd_keys: Array[int] = []
+	for ev in InputMap.action_get_events(&"command_wheel"):
+		if ev is InputEventKey:
+			cmd_keys.append(int((ev as InputEventKey).physical_keycode))
+	check(cmd_keys.has(KEY_G), "&'command_wheel' binds KEY_G")
+	check(not cmd_keys.has(KEY_Q), "&'command_wheel' no longer occupies KEY_Q")
 
+	# 2. Verify sculpted FPHands geometry across ALL 16 tools (11 canonical + 5 variants/specials).
+	var all_16: Array[StringName] = ToolMeshes.ALL_TOOLS.duplicate()
+	for extra: StringName in [&"boarding_axe", &"blunderbuss", &"hurdy_gurdy", &"whistle", &"speaking_trumpet"]:
+		all_16.append(extra)
+	var two_handed: Array[StringName] = [
+		&"map", &"shovel", &"bucket", &"planks", &"spyglass", &"blunderbuss", &"instrument", &"hurdy_gurdy",
+	]
+	var min_hand_tris := 999999
+	var max_hand_tris := 0
+	var two_handed_verified := 0
 
+	for tid: StringName in all_16:
+		var hands := ToolMeshes.build_fp_hands_for_tool(tid)
+		check(hands != null and hands.name == "FPHands", "build_fp_hands_for_tool(%s) returns FPHands" % tid)
+		var rh := hands.get_node_or_null(^"RightHand") as Node3D
+		var lh := hands.get_node_or_null(^"LeftHand") as Node3D
+		check(rh != null, "tool %s FPHands includes RightHand" % tid)
+		if two_handed.has(tid):
+			check(lh != null, "two-handed tool %s FPHands includes LeftHand" % tid)
+			if lh != null and rh != null:
+				two_handed_verified += 1
+		else:
+			check(lh == null, "one-handed tool %s FPHands has RightHand only" % tid)
 
+		var hand_units: Array[Node3D] = []
+		if rh != null:
+			hand_units.append(rh)
+		if lh != null:
+			hand_units.append(lh)
+		for hu: Node3D in hand_units:
+			var meshes := hu.find_children("*", "MeshInstance3D", true, false)
+			check(meshes.size() >= 4, "%s/%s has HandSkin, LeatherBracer, BrassAccents, CoatSleeve" % [tid, hu.name])
+			var hand_tris := 0
+			for m_node in meshes:
+				var mi := m_node as MeshInstance3D
+				check(mi.mesh != null, "%s/%s/%s has mesh" % [tid, hu.name, mi.name])
+				check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+					"%s/%s/%s uses sculpted ArrayMesh (zero primitives)" % [tid, hu.name, mi.name])
+				if mi.mesh != null:
+					hand_tris += int(roundf(float(mi.mesh.get_faces().size()) / 3.0))
+				var mat := mi.material_override as StandardMaterial3D
+				check(mat != null, "%s/%s/%s has StandardMaterial3D" % [tid, hu.name, mi.name])
+				if mat != null:
+					check(mat.vertex_color_is_srgb, "%s/%s/%s has vertex_color_is_srgb == true" % [tid, hu.name, mi.name])
+					check(not mat.uv1_world_triplanar, "%s/%s/%s has uv1_world_triplanar == false" % [tid, hu.name, mi.name])
+					check(mat.vertex_color_use_as_albedo, "%s/%s/%s uses vertex_color_use_as_albedo" % [tid, hu.name, mi.name])
+			check(hand_tris >= 60, "%s/%s has >= 60 sculpted triangles (got %d)" % [tid, hu.name, hand_tris])
+			min_hand_tris = mini(min_hand_tris, hand_tris)
+			max_hand_tris = maxi(max_hand_tris, hand_tris)
+		hands.free()
 
+	check_eq(two_handed_verified, 8, "all 8 two-handed tools include both LeftHand and RightHand")
+	print("Q2A sculpted FP hand triangles per hand: min=%d max=%d (two-handed=%d/8)" % [
+		min_hand_tris, max_hand_tris, two_handed_verified])
 
+	# Verify Concertina bellows stretch symmetrically moves FPHands/LeftHand and FPHands/RightHand!
+	var conc := ToolMeshes.build_tool(&"instrument")
+	conc.add_child(ToolMeshes.build_fp_hands_for_tool(&"instrument"))
+	ToolMeshes.set_concertina_stretch(conc, 0.0)
+	var conc_lh := conc.get_node(^"FPHands/LeftHand") as Node3D
+	var conc_rh := conc.get_node(^"FPHands/RightHand") as Node3D
+	var squeezed_span := conc_rh.position.x - conc_lh.position.x
+	ToolMeshes.set_concertina_stretch(conc, 1.0)
+	var expanded_span := conc_rh.position.x - conc_lh.position.x
+	check(expanded_span > squeezed_span + 0.10,
+		"Concertina bellows stretch expands FPHands symmetrically (%.3f -> %.3f)" % [squeezed_span, expanded_span])
+	check_near(conc_lh.position.x, -conc_rh.position.x, 0.0005, "Concertina FPHands stay symmetric around X=0")
+	conc.free()
 
+	# 3. Verify Inventory attaches FPHands to fp_tool_node (NEVER tp_tool_node) and animations produce
+	#    distinct, finite, non-zero offsets!
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
 
+	for eq_id: StringName in [&"cutlass", &"pistol", &"map", &"shovel", &"instrument"]:
+		inv.equip(eq_id, true)
+		check(inv.fp_tool_node != null, "fp_tool_node built for %s" % eq_id)
+		var fp_h := inv.fp_tool_node.get_node_or_null(^"FPHands") as Node3D if inv.fp_tool_node != null else null
+		check(fp_h != null, "Inventory attaches FPHands onto fp_tool_node for %s" % eq_id)
+		if fp_h != null:
+			for gi_node in fp_h.find_children("*", "GeometryInstance3D", true, false):
+				check_eq((gi_node as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+					"FPHands mesh '%s' disables shadow casting on FP viewmodel" % gi_node.name)
+		if inv.tp_tool_node != null:
+			check(inv.tp_tool_node.get_node_or_null(^"FPHands") == null,
+				"Inventory NEVER attaches FPHands onto tp_tool_node for %s" % eq_id)
 
+	# Verify Speaking Trumpet brief FP node also includes FPHands!
+	inv.hail_with_speaking_trumpet()
+	check(inv._fp_trumpet_node != null and inv._fp_trumpet_node.get_node_or_null(^"FPHands") != null,
+		"brief FP SpeakingTrumpet includes sculpted FPHands")
+	inv._clear_speaking_trumpet_fx(true)
+
+	# Verify bespoke multi-phase animations: slash_1, slash_2, pistol (+ reload), dig, drink + mouse look sway!
+	inv.equip(&"cutlass", true)
+	inv._equip_dip = 0.0
+	inv._raise_blend = 0.0
+	inv._swing_timer = 0.0
+	inv._tick_viewmodel_pose(0.016)
+	var rest_pos := inv.fp_tool_node.position
+	var rest_rot := inv.fp_tool_node.rotation_degrees
+
+	# slash_1 mid-cleave vs slash_2 mid-backhand sweep (distinct & opposite-handed!).
+	inv._start_swing(&"slash_1", 0.40)
+	inv._tick_viewmodel_pose(0.02)
+	inv._swing_timer = 0.21  # u ~= 0.475 (peak cleave)
+	inv._tick_viewmodel_pose(0.016)
+	var s1_pos := inv.fp_tool_node.position
+	var s1_rot := inv.fp_tool_node.rotation_degrees
+	check(s1_pos.is_finite() and s1_rot.is_finite(), "slash_1 pose is finite")
+	check(s1_pos.distance_to(rest_pos) > 0.12 and s1_rot.distance_to(rest_rot) > 20.0,
+		"slash_1 produces strong distinct cleave offset")
+
+	inv._start_swing(&"slash_2", 0.40)
+	inv._swing_timer = 0.21
+	inv._tick_viewmodel_pose(0.016)
+	var s2_pos := inv.fp_tool_node.position
+	var s2_rot := inv.fp_tool_node.rotation_degrees
+	check(s2_pos.is_finite() and s2_rot.is_finite(), "slash_2 pose is finite")
+	check(s2_pos.distance_to(s1_pos) > 0.20 and s2_rot.distance_to(s1_rot) > 35.0,
+		"slash_2 backhand sweep is unmistakably distinct from slash_1 cleave")
+
+	# pistol recoil kick + post-shot reload dip cycle.
+	inv.equip(&"pistol", true)
+	inv._equip_dip = 0.0
+	inv._swing_timer = 0.0
+	inv._reload_timer = 0.0
+	inv._tick_viewmodel_pose(0.016)
+	var pist_rest_pos := inv.fp_tool_node.position
+	var pist_rest_rot := inv.fp_tool_node.rotation_degrees
+	inv._on_combat_attack_started(&"pistol")
+	inv._swing_timer = inv._swing_dur * 0.86  # right at peak recoil snap-back
+	inv._tick_viewmodel_pose(0.016)
+	var pist_kick_pos := inv.fp_tool_node.position
+	var pist_kick_rot := inv.fp_tool_node.rotation_degrees
+	check(pist_kick_pos.is_finite() and pist_kick_rot.is_finite(), "pistol recoil pose is finite")
+	check(pist_kick_pos.z > pist_rest_pos.z + 0.04 and pist_kick_rot.x > pist_rest_rot.x + 15.0,
+		"pistol recoil snaps backward (+Z) and flips muzzle up (+rot.x)")
+	inv._swing_timer = 0.0
+	inv._reload_timer = inv._reload_dur * 0.55  # mid reload dip
+	inv._tick_viewmodel_pose(0.016)
+	check(inv.fp_tool_node.position.y < pist_rest_pos.y - 0.08,
+		"pistol post-shot reload cycle dips cleanly downward")
+
+	# shovel dig plunge.
+	inv.equip(&"shovel", true)
+	inv._equip_dip = 0.0
+	inv._swing_timer = 0.0
+	inv._tick_viewmodel_pose(0.016)
+	var shv_rest_pos := inv.fp_tool_node.position
+	inv._start_swing(&"dig", 0.56)
+	inv._swing_timer = 0.28  # u = 0.50 (forceful downward plunge)
+	inv._tick_viewmodel_pose(0.016)
+	check(inv.fp_tool_node.position.is_finite() and inv.fp_tool_node.position.y < shv_rest_pos.y - 0.14,
+		"shovel dig plunges forcefully downward")
+
+	# tankard drink raise & chug tilt.
+	inv.equip(&"tankard", true)
+	inv._equip_dip = 0.0
+	inv._swing_timer = 0.0
+	inv._tick_viewmodel_pose(0.016)
+	var tnk_rest_rot := inv.fp_tool_node.rotation_degrees
+	inv._start_swing(&"drink", 0.95)
+	inv._swing_timer = 0.50  # mid chug
+	inv._tick_viewmodel_pose(0.016)
+	check(inv.fp_tool_node.rotation_degrees.is_finite() and inv.fp_tool_node.rotation_degrees.x > tnk_rest_rot.x + 30.0,
+		"tankard drink tilts steeply for hearty chug")
+
+	# inertial mouse-look sway responds crisply to yaw turn!
+	inv.equip(&"cutlass", true)
+	inv._equip_dip = 0.0
+	inv._swing_timer = 0.0
+	inv._sway_yaw = 0.0
+	inv._sway_pitch = 0.0
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	inv._prev_look_yaw = 0.0
+	inv._prev_look_pitch = 0.0
+	inv._look_tracking_init = true
+	inv._tick_viewmodel_pose(0.016)
+	var before_sway_pos := inv.fp_tool_node.position
+	captain.look_yaw = 0.45
+	inv._tick_viewmodel_pose(0.016)
+	var after_sway_pos := inv.fp_tool_node.position
+	check(after_sway_pos.is_finite() and absf(inv._sway_yaw) > 0.08 and before_sway_pos.distance_to(after_sway_pos) > 0.003,
+		"inertial mouse-look sway produces finite non-zero pose lag on turn")
+
+	# 4. Verify GameHUD quick-tap toggle keeps item_radial open, hold-and-release (>= 0.25 s)
+	#    confirms & closes cleanly, keycap strip is always visible & strict ASCII, and footer pill is clean.
+	var hud := GameHUD.new()
+	hud.input_enabled = true
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, null, null, null)
+	await get_tree().process_frame
+
+	var keycap_txt := hud.get_keycap_strip_text()
+	check(keycap_txt.contains("[Q] Tools") and keycap_txt.contains("[G] Crew") and keycap_txt.contains("[1-6] Slots"),
+		"HUD keycap strip displays [Q] Tools, [G] Crew, and [1-6] Slots (got '%s')" % keycap_txt)
+	for ci in keycap_txt.length():
+		check(keycap_txt.unicode_at(ci) < 128, "HUD keycap strip text is strictly ASCII")
+	hud._process(0.1)
+	check(hud.is_keycap_strip_visible(), "HUD keycap strip is immediately visible on spawn")
+
+	var footer_txt := hud.item_radial.get_footer_pill_text()
+	check_eq(footer_txt, "Click or release [Q] to equip  |  [Esc] Cancel",
+		"Item Radial exposes clean default footer pill when secondary_hint is empty")
+	for ci in footer_txt.length():
+		check(footer_txt.unicode_at(ci) < 128, "Item Radial footer pill text is strictly ASCII")
+
+	# 4a. Quick-tap [Q] press + immediate release (< 0.22 s, hover unchanged) KEEPS Item Radial OPEN!
+	hud.item_radial.size = Vector2(1280.0, 720.0)
+	var ev_q_down := InputEventKey.new()
+	ev_q_down.physical_keycode = KEY_Q
+	ev_q_down.pressed = true
+	hud._input(ev_q_down)
+	check(hud.item_radial.is_open, "pressing [Q] opens Item Radial")
+	await get_tree().process_frame  # exercise full RadialWheel._draw() with labels, pointer chevron & footer pill
+
+	var ev_q_up := InputEventKey.new()
+	ev_q_up.physical_keycode = KEY_Q
+	ev_q_up.pressed = false
+	hud._input(ev_q_up)
+	check(hud.item_radial.is_open, "quick-tap release (< 0.22 s) keeps Item Radial OPEN in toggle mode")
+
+	# Tapping [Q] a second time while already open closes & confirms cleanly!
+	hud._input(ev_q_down)
+	check(not hud.item_radial.is_open, "second [Q] press toggles Item Radial closed cleanly")
+	hud._input(ev_q_up)
+	check(not hud.item_radial.is_open, "release after toggle-close leaves Item Radial closed")
+
+	# 4b. Hold-and-release (>= 0.25 s) confirms & closes cleanly!
+	var ev_tab_down := InputEventKey.new()
+	ev_tab_down.physical_keycode = KEY_TAB
+	ev_tab_down.pressed = true
+	hud._input(ev_tab_down)
+	check(hud.item_radial.is_open, "pressing [Tab] also opens Item Radial")
+	hud.item_radial.set_hover_index(3, false)  # spyglass
+	hud._radial_open_time -= 0.30  # simulate >= 0.25 s hold duration
+	var ev_tab_up := InputEventKey.new()
+	ev_tab_up.physical_keycode = KEY_TAB
+	ev_tab_up.pressed = false
+	hud._input(ev_tab_up)
+	check(not hud.item_radial.is_open, "hold-and-release (>= 0.25 s) confirms and closes Item Radial")
+	check_eq(inv.active_item, &"spyglass", "hold-and-release equips hovered slice (spyglass)")
+
+	# 4c. Crew Command Wheel [G] supports quick-tap toggle AND hold-and-release!
+	var ev_g_down := InputEventKey.new()
+	ev_g_down.physical_keycode = KEY_G
+	ev_g_down.pressed = true
+	var ev_g_up := InputEventKey.new()
+	ev_g_up.physical_keycode = KEY_G
+	ev_g_up.pressed = false
+	hud._input(ev_g_down)
+	check(hud.command_wheel.is_open, "pressing [G] opens Crew Command Wheel")
+	hud._input(ev_g_up)
+	check(hud.command_wheel.is_open, "quick-tap [G] keeps Crew Command Wheel open")
+	hud._radial_open_time -= 0.30
+	hud._input(ev_g_up)
+	check(not hud.command_wheel.is_open, "hold-and-release closes Crew Command Wheel cleanly")
+
+	hud.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(hud), "GameHUD frees cleanly")
+	await _end()
+
+	# 5. Zero-leak cache teardown!
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes._pbr_tex_cache clears cleanly")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "ToolMeshes._fp_hand_mesh_cache clears cleanly")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "ToolMeshes._fp_hand_mat_cache clears cleanly")

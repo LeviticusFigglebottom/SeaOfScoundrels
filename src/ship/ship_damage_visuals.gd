@@ -553,9 +553,9 @@ static func _build_pump_oak_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# Heavy chamfered oak stand plinth straddling the bilge sump grating.
-	_add_box(st, Vector3(0.0, 0.055, -0.06), Vector3(0.56, 0.09, 0.44), COL_OAK_HI, COL_OAK_MID, COL_OAK_LO)
-	_add_box(st, Vector3(0.0, 0.115, -0.06), Vector3(0.42, 0.045, 0.36), COL_OAK_HI, COL_OAK_MID, COL_OAK_LO)
+	# Heavy chamfered oak stand plinth straddling the bilge sump grating, seated dead-flush at y = 0.000.
+	_add_box(st, Vector3(0.0, 0.045, -0.06), Vector3(0.56, 0.09, 0.44), COL_OAK_HI, COL_OAK_MID, COL_OAK_LO)
+	_add_box(st, Vector3(0.0, 0.110, -0.06), Vector3(0.42, 0.048, 0.36), COL_OAK_HI, COL_OAK_MID, COL_OAK_LO)
 
 	# Coopered 10-sided oak pump barrel jacket rising from plinth to upper collar.
 	_add_lathe_at(st, Vector3(0.0, 0.0, -0.06), [

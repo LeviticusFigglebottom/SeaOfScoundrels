@@ -111,11 +111,17 @@ const _PBR_FAMILY_SPECS := {
 
 ## Lazy WeakRef cache of shared ship PBR Texture2D references (zero shutdown leaks).
 static var _pbr_tex_cache: Dictionary = {}
+## Lazy WeakRef cache of sculpted first-person hand ArrayMeshes (zero shutdown leaks).
+static var _fp_hand_mesh_cache: Dictionary = {}
+## Lazy WeakRef cache of sculpted first-person hand StandardMaterial3Ds (zero shutdown leaks).
+static var _fp_hand_mat_cache: Dictionary = {}
 
 
-## Clear cached shared PBR texture references cleanly on scene teardown.
+## Clear cached shared PBR texture and first-person hand mesh caches cleanly on teardown.
 static func clear_shared_cache() -> void:
 	_pbr_tex_cache.clear()
+	_fp_hand_mesh_cache.clear()
+	_fp_hand_mat_cache.clear()
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -236,6 +242,7 @@ static func set_bucket_full(bucket_node: Node3D, full: bool) -> void:
 
 
 ## Expand or squeeze a Concertina node's bellows (`stretch_01` in 0..1, 0.5 = rest).
+## Also expands & squeezes attached first-person hands (`FPHands/LeftHand`, `FPHands/RightHand`).
 static func set_concertina_stretch(inst_node: Node3D, stretch_01: float) -> void:
 	if inst_node == null:
 		return
@@ -251,15 +258,30 @@ static func set_concertina_stretch(inst_node: Node3D, stretch_01: float) -> void
 		left_end.position.x = -half_span
 	if right_end != null:
 		right_end.position.x = half_span
+	var fp_hands := inst_node.get_node_or_null(^"FPHands") as Node3D
+	if fp_hands != null:
+		var lh := fp_hands.get_node_or_null(^"LeftHand") as Node3D
+		var rh := fp_hands.get_node_or_null(^"RightHand") as Node3D
+		var hand_span := half_span + 0.043
+		if lh != null:
+			lh.position.x = -hand_span
+		if rh != null:
+			rh.position.x = hand_span
 
 
-## Rotate a Hurdy-Gurdy node's `"CrankHandle"` around its drive axle (`angle_rad`).
+## Rotate a Hurdy-Gurdy node's `"CrankHandle"` around its drive axle (`angle_rad`)
+## and orbit attached first-person `FPHands/RightHand` cleanly with the crank knob.
 static func set_hurdy_gurdy_crank(inst_node: Node3D, angle_rad: float) -> void:
 	if inst_node == null:
 		return
 	var crank := inst_node.get_node_or_null(^"CrankHandle") as Node3D
 	if crank != null:
 		crank.rotation.x = angle_rad
+	var fp_hands := inst_node.get_node_or_null(^"FPHands") as Node3D
+	if fp_hands != null:
+		var rh := fp_hands.get_node_or_null(^"RightHand") as Node3D
+		if rh != null:
+			rh.position = Vector3(0.232, 0.004 + cos(angle_rad) * 0.082, 0.006 + sin(angle_rad) * 0.082)
 
 
 ## Extend or retract a Spyglass node's telescoping draw tubes (`ext_01` in 0..1).
@@ -2316,3 +2338,762 @@ static func _build_parchment_sheet_mesh(width: float, height: float, bow: float,
 					Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1))
 	st.generate_normals()
 	return st.commit()
+
+
+# ==============================================================================
+# Sculpted First-Person Pirate Hands & Forearms (Zero Primitives, Zero Extra VRAM)
+# ==============================================================================
+
+const _COL_SKIN_LIT := Color(0.86, 0.65, 0.49)
+const _COL_SKIN_BASE := Color(0.84, 0.63, 0.47)
+const _COL_SKIN_MID := Color(0.75, 0.54, 0.39)
+const _COL_SKIN_CREASE := Color(0.64, 0.44, 0.31)
+const _COL_SKIN_NAIL := Color(0.90, 0.77, 0.64)
+const _COL_BRACER_DARK := Color(0.28, 0.15, 0.08)
+const _COL_BRACER_EDGE := Color(0.45, 0.25, 0.14)
+const _COL_BRACER_SEAM := Color(0.17, 0.09, 0.05)
+const _COL_CUFF_LINEN_LIT := Color(0.93, 0.88, 0.75)
+const _COL_CUFF_LINEN_SHADE := Color(0.70, 0.62, 0.48)
+const _COL_COAT_CRIMSON_LIT := Color(0.68, 0.14, 0.12)
+const _COL_COAT_CRIMSON_SHADE := Color(0.40, 0.08, 0.08)
+const _COL_COAT_NAVY_LIT := Color(0.15, 0.21, 0.33)
+const _COL_COAT_NAVY_SHADE := Color(0.08, 0.11, 0.19)
+const _COL_COAT_TRIM := Color(0.86, 0.66, 0.22)
+
+const _FP_WRIST_ORIGIN := Vector3(0.022, -0.015, 0.064)
+const _FP_FOREARM_VEC := Vector3(0.068, -0.112, 0.352)
+
+
+## Build sculpted stylized first-person pirate hands & coat forearms gripping `tool_id`.
+## Returns a Node3D named `"FPHands"` containing `"RightHand"` (and `"LeftHand"` for all 8
+## two-handed tools: map, shovel, bucket, planks, spyglass, blunderbuss, instrument, hurdy_gurdy).
+static func build_fp_hands_for_tool(tool_id: StringName) -> Node3D:
+	var root := Node3D.new()
+	root.name = "FPHands"
+	match tool_id:
+		&"cutlass":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.004, -0.004, 0.004), Vector3(-6.0, 0.0, 0.0))
+		&"boarding_axe":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.004, -0.008, 0.004), Vector3(-4.0, 0.0, 0.0))
+		&"pistol":
+			_attach_fp_hand(root, false, &"pistol_grip", Vector3(0.002, -0.028, 0.028), Vector3(-16.0, 0.0, 0.0))
+		&"blunderbuss":
+			_attach_fp_hand(root, false, &"pistol_grip", Vector3(0.004, -0.022, 0.024), Vector3(-12.0, 0.0, 0.0))
+			_attach_fp_hand(root, true, &"palm_cradle", Vector3(-0.014, -0.012, -0.225), Vector3(12.0, 16.0, 76.0))
+		&"compass":
+			_attach_fp_hand(root, false, &"palm_cradle", Vector3(0.012, -0.044, 0.010), Vector3(4.0, -6.0, -88.0))
+		&"spyglass":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.016, -0.022, 0.005), Vector3(16.0, -8.0, -52.0))
+			_attach_fp_hand(root, true, &"palm_cradle", Vector3(-0.016, -0.044, -0.185), Vector3(14.0, 14.0, 74.0))
+		&"lantern":
+			_attach_fp_hand(root, false, &"bail_hook", Vector3(0.008, 0.032, 0.006), Vector3(22.0, 8.0, 68.0))
+		&"map":
+			_attach_fp_hand(root, true, &"pinch", Vector3(-0.188, -0.068, 0.012), Vector3(24.0, 14.0, 14.0))
+			_attach_fp_hand(root, false, &"pinch", Vector3(0.188, -0.068, 0.012), Vector3(24.0, -14.0, -14.0))
+		&"shovel":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.005, -0.140, 0.005), Vector3(12.0, -4.0, 0.0))
+			_attach_fp_hand(root, true, &"fist_grip", Vector3(-0.005, 0.150, 0.005), Vector3(18.0, 14.0, -14.0))
+		&"bucket":
+			_attach_fp_hand(root, false, &"bail_hook", Vector3(0.006, 0.018, 0.006), Vector3(20.0, 8.0, 74.0))
+			_attach_fp_hand(root, true, &"palm_cradle", Vector3(-0.132, -0.215, 0.032), Vector3(18.0, 26.0, 22.0))
+		&"planks":
+			_attach_fp_hand(root, true, &"plank_flat", Vector3(-0.082, -0.085, 0.016), Vector3(18.0, 14.0, -12.0))
+			_attach_fp_hand(root, false, &"plank_flat", Vector3(0.084, -0.015, 0.014), Vector3(12.0, -10.0, 0.0))
+		&"tankard":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.005, -0.002, 0.016), Vector3(8.0, -4.0, 0.0))
+		&"instrument":
+			_attach_fp_hand(root, true, &"plank_flat", Vector3(-0.135, -0.012, 0.010), Vector3(18.0, 12.0, -8.0))
+			_attach_fp_hand(root, false, &"plank_flat", Vector3(0.135, -0.012, 0.010), Vector3(18.0, -12.0, 8.0))
+		&"hurdy_gurdy":
+			_attach_fp_hand(root, true, &"palm_cradle", Vector3(-0.118, 0.042, 0.074), Vector3(24.0, 22.0, 56.0))
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.232, 0.086, 0.006), Vector3(14.0, -18.0, -24.0))
+		&"whistle":
+			_attach_fp_hand(root, false, &"pinch", Vector3(0.016, -0.014, -0.015), Vector3(14.0, -18.0, -28.0))
+		&"speaking_trumpet":
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.012, 0.006, -0.008), Vector3(16.0, -8.0, -18.0))
+		_:
+			_attach_fp_hand(root, false, &"fist_grip", Vector3(0.004, -0.004, 0.004), Vector3(-6.0, 0.0, 0.0))
+	return root
+
+
+static func _attach_fp_hand(
+	parent: Node3D,
+	is_left: bool,
+	grip_style: StringName,
+	pos: Vector3,
+	rot_deg: Vector3
+) -> Node3D:
+	var hand := _build_fp_hand(is_left, grip_style)
+	hand.position = pos
+	hand.rotation_degrees = rot_deg
+	parent.add_child(hand)
+	return hand
+
+
+## Build one sculpted stylized first-person pirate hand + leather bracer + ruffled cuff + captain sleeve.
+static func _build_fp_hand(is_left: bool, grip_style: StringName) -> Node3D:
+	var hand := Node3D.new()
+	hand.name = "LeftHand" if is_left else "RightHand"
+
+	var side_key := "L" if is_left else "R"
+	var style_key := String(grip_style)
+
+	var skin_mesh := _get_or_build_fp_hand_mesh("skin_%s_%s" % [side_key, style_key], is_left, grip_style, &"skin")
+	var bracer_mesh := _get_or_build_fp_hand_mesh("bracer_%s" % side_key, is_left, grip_style, &"bracer")
+	var brass_mesh := _get_or_build_fp_hand_mesh("brass_%s_%s" % [side_key, style_key], is_left, grip_style, &"brass")
+	var sleeve_mesh := _get_or_build_fp_hand_mesh("sleeve_%s" % side_key, is_left, grip_style, &"sleeve")
+
+	hand.add_child(_make_mesh_node("HandSkin", skin_mesh, _get_fp_hand_mat(&"skin")))
+	hand.add_child(_make_mesh_node("LeatherBracer", bracer_mesh, _get_fp_hand_mat(&"leather")))
+	hand.add_child(_make_mesh_node("BrassAccents", brass_mesh, _get_fp_hand_mat(&"brass")))
+	hand.add_child(_make_mesh_node("CoatSleeve", sleeve_mesh, _get_fp_hand_mat(&"cloth")))
+	return hand
+
+
+static func _get_or_build_fp_hand_mesh(
+	cache_key: String,
+	is_left: bool,
+	grip_style: StringName,
+	part: StringName
+) -> ArrayMesh:
+	if _fp_hand_mesh_cache.has(cache_key):
+		var wr: Variant = _fp_hand_mesh_cache[cache_key]
+		if wr is WeakRef:
+			var obj: Variant = (wr as WeakRef).get_ref()
+			if obj is ArrayMesh:
+				return obj as ArrayMesh
+	var built: ArrayMesh
+	match part:
+		&"skin":
+			built = _build_fp_hand_skin_mesh(is_left, grip_style)
+		&"bracer":
+			built = _build_fp_hand_bracer_mesh(is_left)
+		&"brass":
+			built = _build_fp_hand_brass_mesh(is_left, grip_style)
+		_:
+			built = _build_fp_hand_sleeve_mesh(is_left)
+	_fp_hand_mesh_cache[cache_key] = weakref(built)
+	return built
+
+
+static func _get_fp_hand_mat(role: StringName) -> StandardMaterial3D:
+	if _fp_hand_mat_cache.has(role):
+		var wr: Variant = _fp_hand_mat_cache[role]
+		if wr is WeakRef:
+			var obj: Variant = (wr as WeakRef).get_ref()
+			if obj is StandardMaterial3D:
+				return obj as StandardMaterial3D
+	var mat: StandardMaterial3D
+	match role:
+		&"skin":
+			mat = _make_mat(Color.WHITE, 0.72, 0.0, Color.BLACK, 0.0, false, &"none")
+		&"leather":
+			mat = _make_mat(Color.WHITE, 0.70, 0.06, Color.BLACK, 0.0, false, &"leather")
+		&"brass":
+			mat = _make_mat(Color.WHITE, 0.24, 0.88, Color.BLACK, 0.0, false, &"brass")
+		_:
+			mat = _make_mat(Color.WHITE, 0.84, 0.02, Color.BLACK, 0.0, false, &"cloth")
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.uv1_world_triplanar = false
+	_fp_hand_mat_cache[role] = weakref(mat)
+	return mat
+
+
+## Compute anatomical centerline points for finger `fi` (0=index..3=pinky) in canonical right-hand space.
+static func _fp_finger_points(fi: int, grip_style: StringName) -> Array[Vector3]:
+	var root_ys: PackedFloat32Array = PackedFloat32Array([0.034, 0.011, -0.012, -0.033])
+	var len_scales: PackedFloat32Array = PackedFloat32Array([0.96, 1.05, 0.96, 0.78])
+	var root_y := root_ys[fi]
+	var ls := len_scales[fi]
+	var a1_deg := 58.0 + float(fi) * 3.0
+	var a2_deg := 72.0 + float(fi) * 2.5
+	var a3_deg := 64.0
+	var splay_deg := 0.0
+
+	match grip_style:
+		&"pistol_grip":
+			if fi == 0:
+				a1_deg = 12.0
+				a2_deg = 28.0
+				a3_deg = 40.0
+				splay_deg = 4.0
+			else:
+				a1_deg = 56.0 + float(fi) * 3.0
+				a2_deg = 74.0 + float(fi) * 2.0
+				a3_deg = 64.0
+		&"palm_cradle":
+			a1_deg = 16.0 + float(fi) * 2.0
+			a2_deg = 28.0 + float(fi) * 2.5
+			a3_deg = 24.0
+			splay_deg = lerpf(7.0, -9.0, float(fi) / 3.0)
+		&"pinch":
+			if fi <= 1:
+				a1_deg = 22.0 + float(fi) * 5.0
+				a2_deg = 44.0 + float(fi) * 4.0
+				a3_deg = 38.0
+				splay_deg = -4.0 if fi == 0 else -1.0
+			else:
+				a1_deg = 62.0 + float(fi) * 2.5
+				a2_deg = 78.0
+				a3_deg = 66.0
+		&"bail_hook":
+			a1_deg = 34.0 + float(fi) * 2.0
+			a2_deg = 84.0
+			a3_deg = 72.0
+		&"plank_flat":
+			a1_deg = 8.0 + float(fi) * 1.5
+			a2_deg = 18.0 + float(fi) * 2.0
+			a3_deg = 18.0
+			splay_deg = lerpf(9.0, -9.0, float(fi) / 3.0)
+
+	var p0 := Vector3(0.018, root_y, -0.028)
+	var l1 := 0.036 * ls
+	var l2 := 0.026 * ls
+	var l3 := 0.020 * ls
+	var r1 := deg_to_rad(a1_deg)
+	var r2 := deg_to_rad(a1_deg + a2_deg)
+	var r3 := deg_to_rad(a1_deg + a2_deg + a3_deg)
+	var sy := sin(deg_to_rad(splay_deg))
+
+	var d1 := Vector3(-sin(r1), sy * 0.55, -cos(r1)).normalized()
+	var d2 := Vector3(-sin(r2), sy * 0.35, -cos(r2)).normalized()
+	var d3 := Vector3(-sin(r3), sy * 0.20, -cos(r3)).normalized()
+
+	var p1 := p0 + d1 * l1
+	var p2 := p1 + d2 * l2
+	var p3 := p2 + d3 * l3
+	return [p0, p0.lerp(p1, 0.55), p1, p1.lerp(p2, 0.55), p2, p3]
+
+
+static func _fp_thumb_points(grip_style: StringName) -> Array[Vector3]:
+	match grip_style:
+		&"pistol_grip":
+			return [
+				Vector3(0.015, 0.020, 0.022),
+				Vector3(0.008, 0.036, 0.002),
+				Vector3(-0.004, 0.045, -0.024),
+				Vector3(-0.012, 0.044, -0.048),
+				Vector3(-0.016, 0.039, -0.062),
+			]
+		&"palm_cradle":
+			return [
+				Vector3(0.015, 0.022, 0.020),
+				Vector3(0.009, 0.042, 0.002),
+				Vector3(-0.001, 0.056, -0.020),
+				Vector3(-0.010, 0.062, -0.040),
+				Vector3(-0.016, 0.061, -0.052),
+			]
+		&"pinch":
+			return [
+				Vector3(0.015, 0.022, 0.020),
+				Vector3(0.006, 0.038, -0.002),
+				Vector3(-0.008, 0.042, -0.028),
+				Vector3(-0.018, 0.036, -0.048),
+				Vector3(-0.022, 0.030, -0.058),
+			]
+		&"plank_flat":
+			return [
+				Vector3(0.015, 0.022, 0.020),
+				Vector3(0.008, 0.042, 0.000),
+				Vector3(0.000, 0.056, -0.024),
+				Vector3(-0.008, 0.060, -0.044),
+				Vector3(-0.014, 0.058, -0.056),
+			]
+		_:
+			# fist_grip & bail_hook: thumb clasps tightly over index/middle knuckles.
+			return [
+				Vector3(0.015, 0.022, 0.020),
+				Vector3(0.008, 0.042, -0.004),
+				Vector3(-0.008, 0.046, -0.026),
+				Vector3(-0.022, 0.036, -0.034),
+				Vector3(-0.028, 0.024, -0.032),
+			]
+
+
+static func _build_fp_hand_skin_mesh(is_left: bool, grip_style: StringName) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mx := -1.0 if is_left else 1.0
+	var flip_w := is_left
+
+	# 1. Sculpted tapered palm + prominent 4-knuckle ridge + shaded hollow palm crease.
+	var palm_specs := [
+		[Vector3(0.023, -0.014, 0.078), 0.021, 0.031, 0.0, 0.0],
+		[Vector3(0.022, -0.009, 0.054), 0.022, 0.036, 0.0, 0.0],
+		[Vector3(0.024, -0.004, 0.028), 0.023, 0.043, 0.002, 0.0],
+		[Vector3(0.025, -0.001, 0.002), 0.020, 0.045, 0.005, 0.0],
+		[Vector3(0.022, 0.000, -0.018), 0.021, 0.047, 0.003, 0.45],
+		[Vector3(0.019, 0.000, -0.031), 0.022, 0.048, 0.001, 1.00],
+		[Vector3(0.015, 0.000, -0.039), 0.012, 0.041, 0.0, 0.35],
+	]
+	var segs := 12
+	var palm_rings: Array = []
+	var palm_cols: Array = []
+	for spec: Array in palm_specs:
+		var c: Vector3 = spec[0]
+		var hx: float = float(spec[1])
+		var hy: float = float(spec[2])
+		var crease: float = float(spec[3])
+		var knuckle_w: float = float(spec[4])
+		var ring: Array[Vector3] = []
+		var cols: Array[Color] = []
+		for k in segs:
+			var ang := float(k) / float(segs) * TAU
+			var sx := cos(ang)
+			var sy := sin(ang)
+			var px := c.x + sx * hx
+			var py := c.y + sy * hy
+			var pz := c.z
+			var col := _COL_SKIN_BASE
+			if sx < 0.0:
+				# Inner palm face: concave palm hollow & warm shaded crease.
+				var inner_f := -sx
+				px += crease * inner_f
+				col = _COL_SKIN_MID.lerp(_COL_SKIN_CREASE, inner_f * (0.65 + crease * 65.0))
+			else:
+				# Outer dorsum: weathered sun-tan + sculpted 4-knuckle ridge highlights!
+				var kn_bump := 0.0
+				if knuckle_w > 0.01:
+					var wave := pow(absf(sin((sy + 1.0) * 2.0 * PI)), 0.72)
+					kn_bump = 0.0048 * knuckle_w * sx * wave
+					px += kn_bump
+					pz -= 0.0032 * knuckle_w * sx * wave
+				col = _COL_SKIN_BASE.lerp(_COL_SKIN_LIT, clampf(sx * 0.75 + kn_bump * 80.0, 0.0, 1.0))
+			# Slight bottom ulnar AO shading for chunky painterly contrast.
+			if sy < -0.3:
+				col = col.lerp(_COL_SKIN_CREASE, (-sy - 0.3) * 0.35)
+			ring.append(Vector3(px * mx, py, pz))
+			cols.append(col)
+		palm_rings.append(ring)
+		palm_cols.append(cols)
+	_append_colored_loft(st, palm_rings, palm_cols, true, flip_w)
+
+	# 2. Four sculpted articulated curved fingers (proximal -> PIP -> middle -> DIP -> fingertip).
+	var thick_scales: PackedFloat32Array = PackedFloat32Array([0.98, 1.03, 0.96, 0.84])
+	for fi in 4:
+		var pts := _fp_finger_points(fi, grip_style)
+		var ts := thick_scales[fi]
+		var radii: Array[Vector2] = [
+			Vector2(0.0110 * ts, 0.0115 * ts),
+			Vector2(0.0098 * ts, 0.0102 * ts),
+			Vector2(0.0105 * ts, 0.0106 * ts),  # sculpted PIP knuckle swell
+			Vector2(0.0088 * ts, 0.0090 * ts),
+			Vector2(0.0090 * ts, 0.0090 * ts),  # sculpted DIP knuckle swell
+			Vector2(0.0068 * ts, 0.0062 * ts),  # tapered fingertip pad
+		]
+		var top_cols: Array[Color] = [
+			_COL_SKIN_LIT,
+			_COL_SKIN_BASE,
+			_COL_SKIN_LIT,
+			_COL_SKIN_BASE,
+			_COL_SKIN_LIT,
+			_COL_SKIN_NAIL,
+		]
+		var bot_cols: Array[Color] = [
+			_COL_SKIN_CREASE,
+			_COL_SKIN_MID,
+			_COL_SKIN_CREASE,
+			_COL_SKIN_MID,
+			_COL_SKIN_CREASE,
+			_COL_SKIN_MID,
+		]
+		_append_sculpted_limb_tube(st, pts, radii, top_cols, bot_cols, 7, mx, flip_w)
+
+	# 3. Sculpted opposable curved thumb + meaty thenar base.
+	var t_pts := _fp_thumb_points(grip_style)
+	var t_radii: Array[Vector2] = [
+		Vector2(0.0165, 0.0155),
+		Vector2(0.0138, 0.0132),
+		Vector2(0.0128, 0.0120),
+		Vector2(0.0112, 0.0104),
+		Vector2(0.0086, 0.0076),
+	]
+	var t_top: Array[Color] = [_COL_SKIN_BASE, _COL_SKIN_LIT, _COL_SKIN_LIT, _COL_SKIN_BASE, _COL_SKIN_NAIL]
+	var t_bot: Array[Color] = [_COL_SKIN_CREASE, _COL_SKIN_MID, _COL_SKIN_CREASE, _COL_SKIN_MID, _COL_SKIN_MID]
+	_append_sculpted_limb_tube(st, t_pts, t_radii, t_top, t_bot, 7, mx, flip_w)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fp_hand_bracer_mesh(is_left: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mx := -1.0 if is_left else 1.0
+	var flip_w := is_left
+
+	# Tapered stitched dark-leather wrist bracer along the forearm axis (s = 0.00..0.098 m).
+	var dir := _FP_FOREARM_VEC.normalized()
+	var bracer_profile := [
+		[0.000, 0.025, 0.034, _COL_BRACER_EDGE],
+		[0.008, 0.029, 0.038, _COL_BRACER_EDGE],
+		[0.018, 0.028, 0.037, _COL_BRACER_DARK],
+		[0.032, 0.030, 0.039, _COL_BRACER_SEAM],
+		[0.039, 0.034, 0.043, _COL_BRACER_EDGE],  # front leather cinch strap
+		[0.052, 0.034, 0.043, _COL_BRACER_EDGE],
+		[0.057, 0.031, 0.040, _COL_BRACER_SEAM],
+		[0.072, 0.035, 0.044, _COL_BRACER_EDGE],  # rear leather cinch strap
+		[0.084, 0.035, 0.044, _COL_BRACER_EDGE],
+		[0.091, 0.033, 0.042, _COL_BRACER_DARK],
+		[0.098, 0.030, 0.039, _COL_BRACER_SEAM],
+	]
+	var pts: Array[Vector3] = []
+	var radii: Array[Vector2] = []
+	var top_cols: Array[Color] = []
+	var bot_cols: Array[Color] = []
+	for row: Array in bracer_profile:
+		pts.append(_FP_WRIST_ORIGIN + dir * float(row[0]))
+		radii.append(Vector2(float(row[1]), float(row[2])))
+		var c: Color = row[3]
+		top_cols.append(c)
+		bot_cols.append(c.darkened(0.32))
+	_append_sculpted_limb_tube(st, pts, radii, top_cols, bot_cols, 12, mx, flip_w)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fp_hand_brass_mesh(is_left: bool, grip_style: StringName) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mx := -1.0 if is_left else 1.0
+	var flip_w := is_left
+
+	# 1. Gleaming brass captain signet ring fitted cleanly around the ring finger's proximal phalanx!
+	var rf_pts := _fp_finger_points(2, grip_style)
+	var r_p0 := rf_pts[0]
+	var r_p1 := rf_pts[2]
+	var r_axis := (r_p1 - r_p0).normalized()
+	var r_mid := r_p0.lerp(r_p1, 0.44)
+	var ring_band_pts: Array[Vector3] = [
+		r_mid - r_axis * 0.0052,
+		r_mid - r_axis * 0.0022,
+		r_mid + r_axis * 0.0022,
+		r_mid + r_axis * 0.0052,
+	]
+	var ring_rad: Array[Vector2] = [
+		Vector2(0.0108, 0.0110),
+		Vector2(0.0124, 0.0126),
+		Vector2(0.0124, 0.0126),
+		Vector2(0.0108, 0.0110),
+	]
+	var ring_lit: Array[Color] = [COL_BRASS, COL_GOLD_BRIGHT, COL_GOLD_BRIGHT, COL_BRASS]
+	var ring_shd: Array[Color] = [COL_BRONZE, COL_BRASS, COL_BRASS, COL_BRONZE]
+	_append_sculpted_limb_tube(st, ring_band_pts, ring_rad, ring_lit, ring_shd, 10, mx, flip_w)
+
+	# Raised captain signet crest seated on the outer dorsum of the brass ring.
+	var signet_c := r_mid + Vector3(0.0125, 0.0, -0.002)
+	_append_colored_beveled_box(st, Vector3(0.0042, 0.0078, 0.0082), 0.0014,
+		Transform3D(Basis.IDENTITY, signet_c), COL_GOLD_BRIGHT, COL_BRASS, mx, flip_w)
+
+	# 2. Small sculpted brass buckle frame & tongue seated on the leather wrist bracer strap.
+	var fdir := _FP_FOREARM_VEC.normalized()
+	var buckle_pos := _FP_WRIST_ORIGIN + fdir * 0.045 + Vector3(0.034, 0.005, 0.0)
+	var f_right := Vector3.UP.cross(fdir).normalized()
+	var f_up := fdir.cross(f_right).normalized()
+	var b_basis := Basis(f_right, f_up, fdir)
+	var b_xf := Transform3D(b_basis, buckle_pos)
+	_append_colored_beveled_box(st, Vector3(0.006, 0.022, 0.005), 0.0012,
+		b_xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -0.007)), COL_GOLD_BRIGHT, COL_BRONZE, mx, flip_w)
+	_append_colored_beveled_box(st, Vector3(0.006, 0.022, 0.005), 0.0012,
+		b_xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.007)), COL_GOLD_BRIGHT, COL_BRONZE, mx, flip_w)
+	_append_colored_beveled_box(st, Vector3(0.006, 0.0045, 0.018), 0.0010,
+		b_xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.009, 0.0)), COL_GOLD_BRIGHT, COL_BRONZE, mx, flip_w)
+	_append_colored_beveled_box(st, Vector3(0.006, 0.0045, 0.018), 0.0010,
+		b_xf * Transform3D(Basis.IDENTITY, Vector3(0.0, -0.009, 0.0)), COL_GOLD_BRIGHT, COL_BRONZE, mx, flip_w)
+	_append_colored_beveled_box(st, Vector3(0.005, 0.0032, 0.014), 0.0008,
+		b_xf * Transform3D(Basis.IDENTITY, Vector3(0.002, 0.0, 0.0)), COL_GOLD_BRIGHT, COL_BRASS, mx, flip_w)
+
+	# 3. Two gleaming brass captain-coat cuff buttons on the outer crimson turnback cuff!
+	for btn_s: float in [0.156, 0.184]:
+		var btn_pos := _FP_WRIST_ORIGIN + fdir * btn_s + Vector3(0.052, 0.004, 0.0)
+		_append_colored_beveled_box(st, Vector3(0.007, 0.011, 0.011), 0.0024,
+			Transform3D(b_basis, btn_pos), COL_GOLD_BRIGHT, COL_BRONZE, mx, flip_w)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fp_hand_sleeve_mesh(is_left: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mx := -1.0 if is_left else 1.0
+	var flip_w := is_left
+	var fdir := _FP_FOREARM_VEC.normalized()
+	# Left-handed (f_right, f_up, fdir) matches _append_colored_loft outward CW winding.
+	var f_right := fdir.cross(Vector3.UP).normalized()
+	var f_up := f_right.cross(fdir).normalized()
+	var segs := 14
+
+	# 1. Ruffled cream linen shirt cuff emerging between leather bracer and coat turnback.
+	var linen_specs := [
+		[0.086, 0.032, 0.041, 0.02],
+		[0.100, 0.040, 0.049, 0.10],
+		[0.118, 0.045, 0.054, 0.13],
+		[0.135, 0.043, 0.052, 0.08],
+		[0.146, 0.037, 0.045, 0.02],
+	]
+	var l_rings: Array = []
+	var l_cols: Array = []
+	for sp: Array in linen_specs:
+		var c := _FP_WRIST_ORIGIN + fdir * float(sp[0])
+		var rx: float = float(sp[1])
+		var ry: float = float(sp[2])
+		var flute_amp: float = float(sp[3])
+		var ring: Array[Vector3] = []
+		var cols: Array[Color] = []
+		for k in segs:
+			var a := float(k) / float(segs) * TAU
+			var pleat := sin(a * 7.0)
+			var mult := 1.0 + flute_amp * pleat
+			var p := c + f_right * (cos(a) * rx * mult) + f_up * (sin(a) * ry * mult)
+			ring.append(Vector3(p.x * mx, p.y, p.z))
+			var shade_t := clampf(0.5 - pleat * 0.38 - sin(a) * 0.25, 0.0, 1.0)
+			cols.append(_COL_CUFF_LINEN_LIT.lerp(_COL_CUFF_LINEN_SHADE, shade_t))
+		l_rings.append(ring)
+		l_cols.append(cols)
+	_append_colored_loft(st, l_rings, l_cols, true, flip_w)
+
+	# 2. Flared crimson captain turnback cuff + gold piping + deep navy coat sleeve (~0.36 m back!).
+	var coat_specs := [
+		[0.132, 0.046, 0.055, _COL_COAT_TRIM, _COL_COAT_TRIM.darkened(0.28)],
+		[0.142, 0.052, 0.062, _COL_COAT_CRIMSON_LIT, _COL_COAT_CRIMSON_SHADE],
+		[0.168, 0.055, 0.065, _COL_COAT_CRIMSON_LIT, _COL_COAT_CRIMSON_SHADE],
+		[0.196, 0.054, 0.064, _COL_COAT_CRIMSON_LIT.darkened(0.08), _COL_COAT_CRIMSON_SHADE],
+		[0.204, 0.052, 0.061, _COL_COAT_TRIM, _COL_COAT_TRIM.darkened(0.30)],
+		[0.214, 0.049, 0.058, _COL_COAT_NAVY_LIT, _COL_COAT_NAVY_SHADE],
+		[0.260, 0.053, 0.062, _COL_COAT_NAVY_LIT, _COL_COAT_NAVY_SHADE],
+		[0.315, 0.057, 0.066, _COL_COAT_NAVY_LIT.darkened(0.06), _COL_COAT_NAVY_SHADE],
+		[0.372, 0.061, 0.070, _COL_COAT_NAVY_SHADE, _COL_COAT_NAVY_SHADE.darkened(0.25)],
+	]
+	var c_rings: Array = []
+	var c_cols: Array = []
+	for sp: Array in coat_specs:
+		var c := _FP_WRIST_ORIGIN + fdir * float(sp[0])
+		var rx: float = float(sp[1])
+		var ry: float = float(sp[2])
+		var col_top: Color = sp[3]
+		var col_bot: Color = sp[4]
+		var ring: Array[Vector3] = []
+		var cols: Array[Color] = []
+		for k in segs:
+			var a := float(k) / float(segs) * TAU
+			# Gentle organic wool fold wrinkle along the sleeve.
+			var fold := 1.0 + 0.025 * sin(a * 3.0 + float(sp[0]) * 18.0)
+			var p := c + f_right * (cos(a) * rx * fold) + f_up * (sin(a) * ry * fold)
+			ring.append(Vector3(p.x * mx, p.y, p.z))
+			var shade_t := clampf(0.5 - sin(a) * 0.45 + cos(a) * 0.20, 0.0, 1.0)
+			cols.append(col_top.lerp(col_bot, shade_t))
+		c_rings.append(ring)
+		c_cols.append(cols)
+	_append_colored_loft(st, c_rings, c_cols, true, flip_w)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_sculpted_limb_tube(
+	st: SurfaceTool,
+	points: Array[Vector3],
+	radii: Array[Vector2],
+	top_cols: Array[Color],
+	bot_cols: Array[Color],
+	segs: int,
+	mirror_x: float,
+	flip_winding: bool
+) -> void:
+	if points.size() < 2:
+		return
+	var rings: Array = []
+	var ring_cols: Array = []
+	var prev_right := Vector3.ZERO
+	for i in points.size():
+		var p := points[i]
+		var tang: Vector3
+		if i == 0:
+			tang = (points[1] - p).normalized()
+		elif i == points.size() - 1:
+			tang = (p - points[i - 1]).normalized()
+		else:
+			tang = (points[i + 1] - points[i - 1]).normalized()
+		if tang.length_squared() < 0.0001:
+			tang = Vector3.FORWARD
+		var right: Vector3
+		if i == 0:
+			var ref := Vector3.UP if absf(tang.dot(Vector3.UP)) < 0.85 else Vector3.RIGHT
+			right = tang.cross(ref).normalized()
+		else:
+			var proj := prev_right - tang * prev_right.dot(tang)
+			if proj.length_squared() < 0.0001:
+				var ref2 := Vector3.UP if absf(tang.dot(Vector3.UP)) < 0.85 else Vector3.RIGHT
+				right = tang.cross(ref2).normalized()
+			else:
+				right = proj.normalized()
+		prev_right = right
+		var up := right.cross(tang).normalized()
+		var rad := radii[mini(i, radii.size() - 1)]
+		var c_top := top_cols[mini(i, top_cols.size() - 1)]
+		var c_bot := bot_cols[mini(i, bot_cols.size() - 1)]
+		var ring: Array[Vector3] = []
+		var cols: Array[Color] = []
+		for k in segs:
+			var a := float(k) / float(segs) * TAU
+			var ca := cos(a)
+			var sa := sin(a)
+			var vp := p + right * (ca * rad.x) + up * (sa * rad.y)
+			ring.append(Vector3(vp.x * mirror_x, vp.y, vp.z))
+			var shade_t := clampf(0.5 - sa * 0.42 - ca * 0.25, 0.0, 1.0)
+			cols.append(c_top.lerp(c_bot, shade_t))
+		rings.append(ring)
+		ring_cols.append(cols)
+	_append_colored_loft(st, rings, ring_cols, true, flip_winding)
+
+
+static func _append_colored_beveled_box(
+	st: SurfaceTool,
+	size: Vector3,
+	bevel: float,
+	xform: Transform3D,
+	col_top: Color,
+	col_bot: Color,
+	mirror_x: float,
+	flip_winding: bool
+) -> void:
+	var hx := size.x * 0.5
+	var hy := size.y * 0.5
+	var hz := size.z * 0.5
+	var b := minf(bevel, minf(hx, minf(hy, hz)) * 0.42)
+	var ix := maxf(hx - b, 0.0001)
+	var iy := maxf(hy - b, 0.0001)
+	var iz := maxf(hz - b, 0.0001)
+	var ys: PackedFloat32Array = PackedFloat32Array([-hy, -iy, iy, hy])
+	var xs: PackedFloat32Array = PackedFloat32Array([ix, hx, hx, ix])
+	var zs: PackedFloat32Array = PackedFloat32Array([iz, hz, hz, iz])
+	var rings: Array = []
+	var ring_cols: Array = []
+	for k in 4:
+		var y: float = ys[k]
+		var rx: float = xs[k]
+		var rz: float = zs[k]
+		var bx: float = maxf(rx - b * 0.55, rx * 0.72) if (k == 1 or k == 2) else maxf(rx - b * 0.35, rx * 0.80)
+		var bz: float = maxf(rz - b * 0.55, rz * 0.72) if (k == 1 or k == 2) else maxf(rz - b * 0.35, rz * 0.80)
+		var raw: Array[Vector3] = [
+			xform * Vector3(bx, y, -rz),
+			xform * Vector3(rx, y, -bz),
+			xform * Vector3(rx, y, bz),
+			xform * Vector3(bx, y, rz),
+			xform * Vector3(-bx, y, rz),
+			xform * Vector3(-rx, y, bz),
+			xform * Vector3(-rx, y, -bz),
+			xform * Vector3(-bx, y, -rz),
+		]
+		var ring: Array[Vector3] = []
+		var cols: Array[Color] = []
+		var c := col_bot.lerp(col_top, float(k) / 3.0)
+		for vp: Vector3 in raw:
+			ring.append(Vector3(vp.x * mirror_x, vp.y, vp.z))
+			cols.append(c)
+		rings.append(ring)
+		ring_cols.append(cols)
+	_append_colored_loft(st, rings, ring_cols, true, flip_winding)
+
+
+static func _add_colored_quad(
+	st: SurfaceTool,
+	p0: Vector3, c0: Color,
+	p1: Vector3, c1: Color,
+	p2: Vector3, c2: Color,
+	p3: Vector3, c3: Color,
+	uv0: Vector2, uv1: Vector2, uv2: Vector2, uv3: Vector2,
+	flip_winding: bool = false
+) -> void:
+	if flip_winding:
+		st.set_color(c0); st.set_uv(uv0); st.add_vertex(p0)
+		st.set_color(c2); st.set_uv(uv2); st.add_vertex(p2)
+		st.set_color(c1); st.set_uv(uv1); st.add_vertex(p1)
+		st.set_color(c0); st.set_uv(uv0); st.add_vertex(p0)
+		st.set_color(c3); st.set_uv(uv3); st.add_vertex(p3)
+		st.set_color(c2); st.set_uv(uv2); st.add_vertex(p2)
+	else:
+		st.set_color(c0); st.set_uv(uv0); st.add_vertex(p0)
+		st.set_color(c1); st.set_uv(uv1); st.add_vertex(p1)
+		st.set_color(c2); st.set_uv(uv2); st.add_vertex(p2)
+		st.set_color(c0); st.set_uv(uv0); st.add_vertex(p0)
+		st.set_color(c2); st.set_uv(uv2); st.add_vertex(p2)
+		st.set_color(c3); st.set_uv(uv3); st.add_vertex(p3)
+
+
+static func _append_colored_loft(
+	st: SurfaceTool,
+	rings: Array,
+	ring_cols: Array,
+	close_caps: bool = true,
+	flip_winding: bool = false
+) -> void:
+	if rings.size() < 2:
+		return
+	var ring_len := (rings[0] as Array).size()
+	if ring_len < 3:
+		return
+	for j in range(rings.size() - 1):
+		var r0: Array = rings[j]
+		var r1: Array = rings[j + 1]
+		var rc0: Array = ring_cols[j]
+		var rc1: Array = ring_cols[j + 1]
+		var v0 := float(j) / float(rings.size() - 1)
+		var v1 := float(j + 1) / float(rings.size() - 1)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			var u0 := float(i) / float(ring_len)
+			var u1 := float(i + 1) / float(ring_len)
+			_add_colored_quad(
+				st,
+				r1[ni] as Vector3, rc1[ni] as Color,
+				r1[i] as Vector3, rc1[i] as Color,
+				r0[i] as Vector3, rc0[i] as Color,
+				r0[ni] as Vector3, rc0[ni] as Color,
+				Vector2(u1, v1), Vector2(u0, v1), Vector2(u0, v0), Vector2(u1, v0),
+				flip_winding
+			)
+	if close_caps:
+		var first: Array = rings[0]
+		var first_c: Array = ring_cols[0]
+		var c0 := Vector3.ZERO
+		var avg0 := Color(0.0, 0.0, 0.0, 0.0)
+		for k in ring_len:
+			c0 += first[k] as Vector3
+			avg0 += first_c[k] as Color
+		c0 /= float(ring_len)
+		avg0 /= float(ring_len)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			if flip_winding:
+				st.set_color(avg0); st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c0)
+				st.set_color(first_c[i] as Color); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(first[i] as Vector3)
+				st.set_color(first_c[ni] as Color); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(first[ni] as Vector3)
+			else:
+				st.set_color(avg0); st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c0)
+				st.set_color(first_c[ni] as Color); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(first[ni] as Vector3)
+				st.set_color(first_c[i] as Color); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(first[i] as Vector3)
+
+		var last: Array = rings[rings.size() - 1]
+		var last_c: Array = ring_cols[ring_cols.size() - 1]
+		var c1 := Vector3.ZERO
+		var avg1 := Color(0.0, 0.0, 0.0, 0.0)
+		for k in ring_len:
+			c1 += last[k] as Vector3
+			avg1 += last_c[k] as Color
+		c1 /= float(ring_len)
+		avg1 /= float(ring_len)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			if flip_winding:
+				st.set_color(avg1); st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c1)
+				st.set_color(last_c[ni] as Color); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni] as Vector3)
+				st.set_color(last_c[i] as Color); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(last[i] as Vector3)
+			else:
+				st.set_color(avg1); st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c1)
+				st.set_color(last_c[i] as Color); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(last[i] as Vector3)
+				st.set_color(last_c[ni] as Color); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni] as Vector3)
+

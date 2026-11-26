@@ -71,22 +71,22 @@ const COMPASS_16: PackedStringArray = [
 ## First-person rest & secondary-raised poses relative to Camera3D:
 ## [rest_pos, rest_rot_deg, raise_pos, raise_rot_deg, scale].
 const FP_POSES := {
-	&"cutlass": [Vector3(0.32, -0.34, -0.52), Vector3(-16.0, 14.0, 12.0), Vector3(0.08, -0.18, -0.44), Vector3(-14.0, 62.0, 68.0), 0.85],
-	&"boarding_axe": [Vector3(0.35, -0.38, -0.54), Vector3(-14.0, 12.0, 10.0), Vector3(0.06, -0.20, -0.44), Vector3(-10.0, 68.0, 74.0), 0.86],
-	&"pistol": [Vector3(0.28, -0.26, -0.46), Vector3(2.0, 4.0, 0.0), Vector3(0.0, -0.145, -0.40), Vector3(0.0, 0.0, 0.0), 0.92],
-	&"blunderbuss": [Vector3(0.30, -0.28, -0.48), Vector3(3.0, 6.0, -2.0), Vector3(0.0, -0.155, -0.42), Vector3(0.0, 0.0, 0.0), 0.90],
-	&"compass": [Vector3(0.23, -0.23, -0.40), Vector3(26.0, -14.0, -8.0), Vector3(0.0, -0.17, -0.35), Vector3(56.0, 0.0, 0.0), 0.72],
-	&"spyglass": [Vector3(0.26, -0.24, -0.44), Vector3(8.0, 16.0, -6.0), Vector3(0.0, -0.02, -0.18), Vector3(0.0, 0.0, 0.0), 0.95],
-	&"lantern": [Vector3(0.34, 0.04, -0.48), Vector3(4.0, -10.0, -4.0), Vector3(0.18, 0.22, -0.56), Vector3(-8.0, -6.0, 2.0), 0.92],
-	&"map": [Vector3(0.26, -0.30, -0.46), Vector3(-18.0, -18.0, 6.0), Vector3(0.0, -0.04, -0.36), Vector3(-4.0, 0.0, 0.0), 1.0],
-	&"shovel": [Vector3(0.34, -0.38, -0.56), Vector3(-24.0, 12.0, 10.0), Vector3(0.22, -0.24, -0.50), Vector3(-34.0, 18.0, 16.0), 0.85],
-	&"bucket": [Vector3(0.32, 0.02, -0.48), Vector3(8.0, -18.0, 6.0), Vector3(0.14, 0.06, -0.44), Vector3(20.0, -8.0, 0.0), 0.88],
-	&"planks": [Vector3(0.30, -0.30, -0.50), Vector3(-12.0, -24.0, 10.0), Vector3(0.08, -0.16, -0.44), Vector3(-6.0, -10.0, 4.0), 0.86],
-	&"tankard": [Vector3(0.28, -0.22, -0.40), Vector3(6.0, -14.0, 4.0), Vector3(0.06, -0.08, -0.26), Vector3(26.0, -8.0, -10.0), 0.95],
-	&"instrument": [Vector3(0.0, -0.26, -0.42), Vector3(14.0, 0.0, 0.0), Vector3(0.0, -0.16, -0.36), Vector3(6.0, 0.0, 0.0), 0.95],
-	&"hurdy_gurdy": [Vector3(0.04, -0.28, -0.46), Vector3(12.0, -14.0, 4.0), Vector3(0.02, -0.19, -0.40), Vector3(6.0, -8.0, 2.0), 0.92],
-	&"whistle": [Vector3(0.14, -0.22, -0.38), Vector3(8.0, -12.0, 6.0), Vector3(0.02, -0.11, -0.28), Vector3(-4.0, 0.0, 0.0), 0.95],
-	&"speaking_trumpet": [Vector3(0.22, -0.22, -0.38), Vector3(8.0, -10.0, 4.0), Vector3(0.0, -0.11, -0.26), Vector3(-3.0, 0.0, 0.0), 0.92],
+	&"cutlass": [Vector3(0.30, -0.26, -0.50), Vector3(-14.0, 14.0, 10.0), Vector3(0.06, -0.16, -0.44), Vector3(-14.0, 64.0, 70.0), 0.86],
+	&"boarding_axe": [Vector3(0.32, -0.29, -0.52), Vector3(-12.0, 12.0, 8.0), Vector3(0.05, -0.17, -0.44), Vector3(-10.0, 68.0, 74.0), 0.86],
+	&"pistol": [Vector3(0.26, -0.23, -0.46), Vector3(2.0, 4.0, 0.0), Vector3(0.0, -0.145, -0.40), Vector3(0.0, 0.0, 0.0), 0.92],
+	&"blunderbuss": [Vector3(0.24, -0.25, -0.50), Vector3(3.0, 6.0, -2.0), Vector3(0.0, -0.155, -0.44), Vector3(0.0, 0.0, 0.0), 0.90],
+	&"compass": [Vector3(0.22, -0.21, -0.42), Vector3(26.0, -14.0, -8.0), Vector3(0.0, -0.16, -0.36), Vector3(56.0, 0.0, 0.0), 0.74],
+	&"spyglass": [Vector3(0.20, -0.23, -0.46), Vector3(8.0, 16.0, -6.0), Vector3(0.0, -0.02, -0.24), Vector3(0.0, 0.0, 0.0), 0.95],
+	&"lantern": [Vector3(0.32, 0.02, -0.50), Vector3(4.0, -10.0, -4.0), Vector3(0.18, 0.20, -0.56), Vector3(-8.0, -6.0, 2.0), 0.92],
+	&"map": [Vector3(0.08, -0.26, -0.48), Vector3(-14.0, -8.0, 2.0), Vector3(0.0, -0.04, -0.40), Vector3(-4.0, 0.0, 0.0), 0.96],
+	&"shovel": [Vector3(0.24, -0.28, -0.54), Vector3(-22.0, 14.0, 10.0), Vector3(0.18, -0.20, -0.50), Vector3(-34.0, 18.0, 16.0), 0.85],
+	&"bucket": [Vector3(0.22, 0.02, -0.50), Vector3(8.0, -14.0, 4.0), Vector3(0.12, 0.06, -0.44), Vector3(20.0, -8.0, 0.0), 0.88],
+	&"planks": [Vector3(0.22, -0.28, -0.50), Vector3(-10.0, -16.0, 8.0), Vector3(0.06, -0.16, -0.44), Vector3(-6.0, -10.0, 4.0), 0.86],
+	&"tankard": [Vector3(0.26, -0.21, -0.42), Vector3(6.0, -14.0, 4.0), Vector3(0.05, -0.08, -0.30), Vector3(26.0, -8.0, -10.0), 0.95],
+	&"instrument": [Vector3(0.0, -0.25, -0.44), Vector3(14.0, 0.0, 0.0), Vector3(0.0, -0.16, -0.38), Vector3(6.0, 0.0, 0.0), 0.95],
+	&"hurdy_gurdy": [Vector3(0.03, -0.27, -0.48), Vector3(12.0, -14.0, 4.0), Vector3(0.01, -0.18, -0.42), Vector3(6.0, -8.0, 2.0), 0.92],
+	&"whistle": [Vector3(0.14, -0.21, -0.40), Vector3(8.0, -12.0, 6.0), Vector3(0.02, -0.11, -0.30), Vector3(-4.0, 0.0, 0.0), 0.95],
+	&"speaking_trumpet": [Vector3(0.20, -0.21, -0.40), Vector3(8.0, -10.0, 4.0), Vector3(0.0, -0.10, -0.28), Vector3(-3.0, 0.0, 0.0), 0.92],
 }
 
 ## Ordered tool/weapon slots in the player's belt.
@@ -153,7 +153,20 @@ var _equip_dip: float = 0.0
 var _swing_timer: float = 0.0
 var _swing_dur: float = 0.35
 var _swing_kind: StringName = &""
+var _reload_timer: float = 0.0
+var _reload_dur: float = 1.45
 var _bob_phase: float = 0.0
+var _sprint_blend: float = 0.0
+var _prev_look_yaw: float = 0.0
+var _prev_look_pitch: float = 0.0
+var _look_tracking_init: bool = false
+var _sway_yaw: float = 0.0
+var _sway_pitch: float = 0.0
+var _ship_roll_lag: float = 0.0
+var _lantern_pendulum_x: float = 0.0
+var _lantern_pendulum_z: float = 0.0
+var _lantern_pendulum_vx: float = 0.0
+var _lantern_pendulum_vz: float = 0.0
 var _clock: float = 0.0
 var _needle_angle: float = 0.0
 var _needle_vel: float = 0.0
@@ -306,8 +319,11 @@ func _discover_siblings() -> void:
 
 
 func _connect_bindings() -> void:
-	if combat != null and not combat.attack_started.is_connected(_on_combat_attack_started):
-		combat.attack_started.connect(_on_combat_attack_started)
+	if combat != null:
+		if not combat.attack_started.is_connected(_on_combat_attack_started):
+			combat.attack_started.connect(_on_combat_attack_started)
+		if not combat.parried.is_connected(_on_combat_parried):
+			combat.parried.connect(_on_combat_parried)
 	if visual != null and not visual.rig_changed.is_connected(_on_visual_rig_changed):
 		visual.rig_changed.connect(_on_visual_rig_changed)
 
@@ -406,7 +422,8 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 
 	active_index = idx
 	active_item = item_id
-	_equip_dip = 1.0
+	_equip_dip = 0.0 if silent else 1.0
+	_reload_timer = 0.0
 	_primary_hold_time = 0.0
 	_heavy_fired_this_hold = false
 	if item_id != &"compass" and (_compass_pace_active or compass_paces != 0):
@@ -423,6 +440,7 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 		_rebuild_tool_meshes()
 		if not silent:
 			Audio.play_sfx(&"ui_tick", Vector3.INF, -5.0, 0.06)
+	_tick_viewmodel_pose(0.0)
 	item_equipped.emit(active_item)
 	return true
 
@@ -465,6 +483,9 @@ func _rebuild_tool_meshes() -> void:
 	var mesh_id := get_resolved_tool_id(active_item)
 	if viewmodel_root != null and is_instance_valid(viewmodel_root):
 		fp_tool_node = ToolMeshes.build_tool(mesh_id)
+		var fp_hands := ToolMeshes.build_fp_hands_for_tool(mesh_id)
+		fp_hands.name = "FPHands"
+		fp_tool_node.add_child(fp_hands)
 		_configure_fp_node(fp_tool_node)
 		viewmodel_root.add_child(fp_tool_node)
 		_sync_tool_visual_state(fp_tool_node)
@@ -1086,9 +1107,9 @@ func _cool_nearby_rage_chests(splash_pos: Vector3, radius: float = 4.8) -> int:
 
 ## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.8 m).
 func use_planks() -> bool:
-	_use_cooldown = 0.55
-	_start_swing(&"hammer", 0.48)
-	_play_anim(&"hammer", 0.50)
+	_use_cooldown = 0.56
+	_start_swing(&"hammer", 0.56)
+	_play_anim(&"hammer", 0.56)
 	if pawn == null:
 		return false
 	var ship := _find_nearby_ship(6.5)
@@ -1356,6 +1377,9 @@ func _show_speaking_trumpet_briefly(duration: float) -> void:
 	if _fp_trumpet_node == null or not is_instance_valid(_fp_trumpet_node):
 		_fp_trumpet_node = ToolMeshes.build_tool(&"speaking_trumpet")
 		_fp_trumpet_node.name = "BriefSpeakingTrumpet"
+		var trumpet_hands := ToolMeshes.build_fp_hands_for_tool(&"speaking_trumpet")
+		trumpet_hands.name = "FPHands"
+		_fp_trumpet_node.add_child(trumpet_hands)
 		_configure_fp_node(_fp_trumpet_node)
 		viewmodel_root.add_child(_fp_trumpet_node)
 	var pose: Array = FP_POSES[&"speaking_trumpet"]
@@ -2104,6 +2128,7 @@ func _tick_lantern_flicker(delta: float = 0.0) -> void:
 func _tick_viewmodel_pose(delta: float) -> void:
 	if fp_tool_node == null or not is_instance_valid(fp_tool_node):
 		return
+	var dt := clampf(delta, 0.0001, 0.05)
 	var pose_id := get_resolved_tool_id(active_item)
 	var pose: Array = FP_POSES.get(pose_id, FP_POSES.get(active_item, FP_POSES[&"cutlass"]))
 	var rest_pos: Vector3 = pose[0]
@@ -2113,79 +2138,381 @@ func _tick_viewmodel_pose(delta: float) -> void:
 	var sc: float = float(pose[4])
 
 	var want_raise := playing_shanty if active_item == &"instrument" else _secondary_held
-	_raise_blend = lerpf(_raise_blend, 1.0 if want_raise else 0.0, 1.0 - exp(-11.0 * delta))
-	_equip_dip = move_toward(_equip_dip, 0.0, delta * 3.8)
+	# Snappy parry guard raise for melee; smooth deliberate lift for ADS/spyglass/map/lantern.
+	var raise_rate := 18.0 if (active_item == &"cutlass" and want_raise) else 11.5
+	_raise_blend = lerpf(_raise_blend, 1.0 if want_raise else 0.0, 1.0 - exp(-raise_rate * dt))
+	_equip_dip = move_toward(_equip_dip, 0.0, dt * 3.1)
 
-	# Walk / breathing bob.
+	# 1. Inertial Mouse-Look Sway (angle_difference wrapped) & Ship-Roll Lean!
+	if pawn != null and is_instance_valid(pawn):
+		if not _look_tracking_init:
+			_prev_look_yaw = pawn.look_yaw
+			_prev_look_pitch = pawn.look_pitch
+			_look_tracking_init = true
+		var dyaw := angle_difference(_prev_look_yaw, pawn.look_yaw)
+		var dpitch := pawn.look_pitch - _prev_look_pitch
+		_prev_look_yaw = pawn.look_yaw
+		_prev_look_pitch = pawn.look_pitch
+		var target_sway_y := clampf(dyaw / dt * 0.14, -1.0, 1.0)
+		var target_sway_p := clampf(dpitch / dt * 0.14, -1.0, 1.0)
+		var sway_k := 1.0 - exp(-11.5 * dt)
+		_sway_yaw = lerpf(_sway_yaw, target_sway_y, sway_k)
+		_sway_pitch = lerpf(_sway_pitch, target_sway_p, sway_k)
+	else:
+		var decay_k := 1.0 - exp(-10.0 * dt)
+		_sway_yaw = lerpf(_sway_yaw, 0.0, decay_k)
+		_sway_pitch = lerpf(_sway_pitch, 0.0, decay_k)
+
+	var target_ship_roll := 0.0
+	if pawn != null and is_instance_valid(pawn) and pawn.platform is Ship and is_instance_valid(pawn.platform):
+		var ship_node := pawn.platform as Node3D
+		var ship_up := ship_node.global_basis.y.normalized()
+		var cam_right := Basis(Vector3.UP, pawn.look_yaw).x
+		var deck_tilt := clampf(ship_up.dot(cam_right), -0.45, 0.45)
+		var z_roll := clampf(ship_node.rotation.z, -0.45, 0.45)
+		target_ship_roll = deck_tilt if absf(deck_tilt) > 0.005 else z_roll
+	_ship_roll_lag = lerpf(_ship_roll_lag, target_ship_roll, 1.0 - exp(-6.5 * dt))
+
+	# 2. Organic 2-Harmonic Idle Breathing, Classic Figure-8 Walk/Sprint Stride & Sprint Cant.
 	var move_spd := 0.0
-	if pawn != null:
+	var grounded := false
+	if pawn != null and is_instance_valid(pawn):
 		var rv := pawn.get_relative_velocity()
 		move_spd = Vector2(rv.x, rv.z).length()
-	if move_spd > 0.35 and pawn != null and pawn.is_grounded():
-		_bob_phase = fmod(_bob_phase + move_spd * delta * 3.4, TAU)
-	var bob_amp := lerpf(1.0, 0.18, _raise_blend)
-	var idle_breath := sin(_clock * 2.1) * 0.005 * bob_amp
-	var walk_x := cos(_bob_phase) * 0.014 * clampf(move_spd / 4.0, 0.0, 1.0) * bob_amp
-	var walk_y := absf(sin(_bob_phase)) * 0.014 * clampf(move_spd / 4.0, 0.0, 1.0) * bob_amp
+		grounded = pawn.is_grounded()
+	var is_moving := move_spd > 0.35 and grounded
+	if is_moving:
+		var stride_freq := lerpf(3.2, 4.1, clampf((move_spd - 3.0) / 3.5, 0.0, 1.0))
+		_bob_phase = fmod(_bob_phase + move_spd * dt * stride_freq, TAU)
+	var want_sprint := (move_spd > 4.6 and is_moving and _raise_blend < 0.15 and _swing_timer <= 0.0)
+	_sprint_blend = lerpf(_sprint_blend, 1.0 if want_sprint else 0.0, 1.0 - exp(-8.0 * dt))
 
-	var pos := rest_pos.lerp(raise_pos, _raise_blend)
-	var rot_deg := rest_rot.lerp(raise_rot, _raise_blend)
-	pos += Vector3(walk_x, idle_breath - walk_y - _equip_dip * 0.24, _equip_dip * 0.08)
-	rot_deg.x -= _equip_dip * 38.0
-	if active_item == &"compass" and _compass_pace_dip > 0.001:
-		var dip_pulse := sin(_compass_pace_dip * PI)
-		pos += Vector3(0.0, -0.018 * dip_pulse, 0.006 * dip_pulse)
-		rot_deg += Vector3(-5.5 * dip_pulse, 0.0, 0.0)
-	if active_item == &"instrument" and shanty_instrument == &"whistle":
-		rot_deg += _whistle_rot_deg
+	var is_aim_tool := active_item == &"pistol" or active_item == &"spyglass" or active_item == &"map"
+	var bob_amp := lerpf(1.0, 0.12 if is_aim_tool else 0.24, _raise_blend)
+	var sway_amp := lerpf(1.0, 0.20 if is_aim_tool else 0.48, _raise_blend)
 
-	# Active swing / dig / recoil / drink offset!
+	var breath_wave := sin(_clock * 1.9) + 0.35 * sin(_clock * 3.8 + 0.4)
+	var move_w := clampf(move_spd / 4.2, 0.0, 1.25) if is_moving else 0.0
+	var fig8_x := cos(_bob_phase) * 0.016 * move_w * bob_amp
+	var fig8_y := sin(_bob_phase * 2.0) * 0.011 * move_w * bob_amp
+	var fig8_roll := -cos(_bob_phase) * 2.3 * move_w * bob_amp
+	var fig8_pitch := sin(_bob_phase * 2.0) * 1.4 * move_w * bob_amp
+
+	# Base rest-to-raise S-curve blend.
+	var raise_s := smoothstep(0.0, 1.0, _raise_blend)
+	var pos := rest_pos.lerp(raise_pos, raise_s)
+	var rot_deg := rest_rot.lerp(raise_rot, raise_s)
+	var scale_vec := Vector3.ONE * sc
+
+	# Layer breathing, figure-8 stride, sprint cant, inertial mouse sway, and ship-roll lean!
+	pos += Vector3(
+		cos(_clock * 0.95) * 0.0022 * bob_amp + fig8_x + _sway_yaw * 0.032 * sway_amp + _ship_roll_lag * 0.048 * bob_amp,
+		breath_wave * 0.0042 * bob_amp + fig8_y - _sway_pitch * 0.024 * sway_amp - absf(_ship_roll_lag) * 0.014 * bob_amp,
+		0.0
+	)
+	rot_deg += Vector3(
+		breath_wave * 0.65 * bob_amp + fig8_pitch - _sway_pitch * 5.5 * sway_amp,
+		_sway_yaw * 6.5 * sway_amp,
+		fig8_roll - _sway_yaw * 5.2 * sway_amp - _ship_roll_lag * 11.5 * bob_amp
+	)
+	if _sprint_blend > 0.001:
+		pos += Vector3(-0.046, -0.042, 0.020) * _sprint_blend
+		rot_deg += Vector3(-11.0, 14.0, 13.0) * _sprint_blend
+
+	# 3. Elastic Overshoot Equip Draw-Up (_equip_dip 1 -> 0).
+	if _equip_dip > 0.0005:
+		var draw_t := 1.0 - clampf(_equip_dip, 0.0, 1.0)
+		var drop := 1.0 - smoothstep(0.0, 0.84, draw_t)
+		var settle_u := clampf((draw_t - 0.52) / 0.48, 0.0, 1.0)
+		var overshoot := sin(settle_u * PI) * 0.022
+		pos += Vector3(0.042 * drop, -0.26 * drop + overshoot, 0.095 * drop)
+		rot_deg += Vector3(-44.0 * drop + overshoot * 155.0, -14.0 * drop, -12.0 * drop)
+
+	# 4. Bespoke Continuous Per-Tool Polish (Spyglass twist, Compass tilt/pace, Map flutter, Lantern pendulum, Shanty sway).
+	match active_item:
+		&"cutlass":
+			if _raise_blend > 0.02:
+				var guard_snap := sin(clampf(_raise_blend, 0.0, 1.0) * PI)
+				rot_deg.z += guard_snap * 6.5
+		&"spyglass":
+			var twist := sin(clampf(_raise_blend, 0.0, 1.0) * PI)
+			rot_deg.z += twist * 18.0
+			pos.z -= twist * 0.025
+		&"compass":
+			rot_deg.z -= sin(clampf(_raise_blend, 0.0, 1.0) * PI) * 8.5
+			if _compass_pace_dip > 0.001:
+				var pu := 1.0 - clampf(_compass_pace_dip, 0.0, 1.0)
+				var dip := sin(pu * PI) - 0.25 * sin(pu * TAU) * (1.0 - pu)
+				pos += Vector3(0.0, -0.022 * dip, 0.008 * dip)
+				rot_deg += Vector3(-7.0 * dip, 0.0, 2.2 * dip)
+		&"map":
+			var wind_f := 1.0
+			if Weather != null:
+				wind_f = clampf(Weather.wind_speed / 8.0, 0.65, 2.1)
+			var flutter := (sin(_clock * 4.7) * 0.95 + sin(_clock * 8.3 + 0.8) * 0.42) * wind_f
+			rot_deg.x += flutter
+			rot_deg.z += cos(_clock * 3.9) * 0.65 * wind_f
+			scale_vec.x = sc * lerpf(0.95, 1.04, raise_s)
+		&"lantern":
+			_tick_lantern_pendulum(dt, move_w)
+			rot_deg.z += _lantern_pendulum_z
+			rot_deg.x += _lantern_pendulum_x
+		&"instrument":
+			if playing_shanty:
+				var beat_sway := sin(_shanty_phase * PI * 0.5)
+				var beat_bounce := absf(sin(_shanty_phase * PI))
+				pos += Vector3(beat_sway * 0.024, beat_bounce * 0.014, 0.0)
+				rot_deg += Vector3(sin(_shanty_phase * PI) * 3.5, cos(_shanty_phase * PI * 0.5) * 4.8, beat_sway * 7.2)
+			if shanty_instrument == &"whistle":
+				rot_deg += _whistle_rot_deg
+
+	# 5. Smooth Post-Shot Reload Dip Cycle for Flintlock Pistol / Blunderbuss.
+	if _reload_timer > 0.0:
+		_reload_timer = maxf(0.0, _reload_timer - dt)
+		if active_item == &"pistol":
+			var r_elapsed := _reload_dur - _reload_timer
+			var dip_delay := 0.26 if pose_id == &"blunderbuss" else 0.20
+			if r_elapsed > dip_delay and _reload_dur > dip_delay + 0.05:
+				var ru := clampf((r_elapsed - dip_delay) / (_reload_dur - dip_delay), 0.0, 1.0)
+				var rel_off := _eval_reload_pose(ru, pose_id == &"blunderbuss")
+				pos += rel_off[0] as Vector3
+				rot_deg += rel_off[1] as Vector3
+
+	# 6. Multi-Phase Bespoke Per-Tool Action Curves (Anticipation -> Snap -> Follow-Through -> Elastic Settle).
 	if _swing_timer > 0.0:
-		_swing_timer = maxf(0.0, _swing_timer - delta)
-		var u := 1.0 - (_swing_timer / maxf(_swing_dur, 0.001))
-		var pulse := sin(u * PI)
-		match _swing_kind:
-			&"slash", &"slash_1", &"slash_2", &"slash_3":
-				var side_dir := -1.0 if _swing_kind == &"slash_2" else 1.0
-				pos += Vector3(-0.22 * side_dir * pulse, -0.06 * pulse, -0.14 * pulse)
-				rot_deg += Vector3(-48.0 * pulse, 42.0 * side_dir * pulse, 36.0 * side_dir * pulse)
-			&"heavy":
-				pos += Vector3(-0.26 * pulse, 0.04 * pulse, -0.22 * pulse)
-				rot_deg += Vector3(-68.0 * pulse, 58.0 * pulse, 52.0 * pulse)
-			&"pistol":
-				pos += Vector3(0.0, 0.055 * pulse, 0.095 * pulse)
-				rot_deg += Vector3(28.0 * pulse, 0.0, 0.0)
-			&"blunderbuss":
-				pos += Vector3(0.0, 0.085 * pulse, 0.145 * pulse)
-				rot_deg += Vector3(40.0 * pulse, 0.0, -5.0 * pulse)
-			&"dig":
-				pos += Vector3(-0.08 * pulse, -0.18 * pulse, -0.18 * pulse)
-				rot_deg += Vector3(-52.0 * pulse, 12.0 * pulse, 8.0 * pulse)
-			&"scoop", &"splash":
-				pos += Vector3(-0.08 * pulse, -0.12 * pulse, -0.16 * pulse)
-				rot_deg += Vector3(-45.0 * pulse if _swing_kind == &"splash" else 34.0 * pulse, 0.0, 0.0)
-			&"hammer":
-				var double_tap := absf(sin(u * PI * 2.0))
-				pos += Vector3(-0.06 * double_tap, -0.05 * double_tap, -0.16 * double_tap)
-				rot_deg += Vector3(-34.0 * double_tap, 8.0 * double_tap, 0.0)
-			&"drink":
-				pos = pos.lerp(Vector3(0.04, -0.02, -0.20), pulse)
-				rot_deg = rot_deg.lerp(Vector3(56.0, -8.0, -14.0), pulse)
-			&"toast":
-				pos += Vector3(-0.04 * pulse, 0.08 * pulse, -0.10 * pulse)
-				rot_deg += Vector3(-16.0 * pulse, -6.0 * pulse, -14.0 * pulse)
-			_:
-				pos += Vector3(0.0, 0.03 * pulse, -0.04 * pulse)
+		_swing_timer = maxf(0.0, _swing_timer - dt)
+		var u := clampf(1.0 - (_swing_timer / maxf(_swing_dur, 0.001)), 0.0, 1.0)
+		var sw := _eval_tool_swing(_swing_kind, u, pose_id, pos, rot_deg)
+		pos = sw[0] as Vector3
+		rot_deg = sw[1] as Vector3
 
-	# Charge windup feedback when holding primary with melee weapon.
-	if active_item == &"cutlass" and _primary_was_down and not _heavy_fired_this_hold and _primary_hold_time > 0.08:
-		var ch := clampf((_primary_hold_time - 0.08) / (HEAVY_HOLD_TIME - 0.08), 0.0, 1.0)
-		pos += Vector3(0.10 * ch, 0.06 * ch, 0.08 * ch)
-		rot_deg += Vector3(22.0 * ch, -24.0 * ch, -18.0 * ch)
+	# 7. Coiled-Back Heavy Lunge Charge Windup with Muscular Tension Tremble!
+	if active_item == &"cutlass" and _primary_was_down and not _heavy_fired_this_hold and _primary_hold_time > 0.06:
+		var ch := clampf((_primary_hold_time - 0.06) / (HEAVY_HOLD_TIME - 0.06), 0.0, 1.0)
+		var ch_e := smoothstep(0.0, 1.0, ch)
+		var tremble := sin(_clock * 58.0) * 0.0055 * ch_e * ch_e
+		pos += Vector3(0.12 * ch_e + tremble, 0.055 * ch_e + tremble * 0.6, 0.13 * ch_e)
+		rot_deg += Vector3(22.0 * ch_e, -32.0 * ch_e, -26.0 * ch_e + tremble * 220.0)
 
 	fp_tool_node.position = pos
 	fp_tool_node.rotation_degrees = rot_deg
-	fp_tool_node.scale = Vector3.ONE * sc
+	fp_tool_node.scale = scale_vec
+
+
+func _tick_lantern_pendulum(dt: float, move_w: float) -> void:
+	var target_z := clampf(-_sway_yaw * 16.0 - cos(_bob_phase) * 7.5 * move_w - _ship_roll_lag * 22.0, -24.0, 24.0)
+	var target_x := clampf(-_sway_pitch * 11.0 + sin(_bob_phase * 2.0) * 4.5 * move_w, -18.0, 18.0)
+	var acc_z := (target_z - _lantern_pendulum_z) * 28.0 - _lantern_pendulum_vz * 5.2
+	var acc_x := (target_x - _lantern_pendulum_x) * 28.0 - _lantern_pendulum_vx * 5.2
+	_lantern_pendulum_vz += acc_z * dt
+	_lantern_pendulum_vx += acc_x * dt
+	_lantern_pendulum_z = clampf(_lantern_pendulum_z + _lantern_pendulum_vz * dt, -28.0, 28.0)
+	_lantern_pendulum_x = clampf(_lantern_pendulum_x + _lantern_pendulum_vx * dt, -22.0, 22.0)
+
+
+static func _eval_reload_pose(ru: float, is_blunderbuss: bool) -> Array:
+	var heavy := 1.20 if is_blunderbuss else 1.0
+	var dip_p := Vector3(-0.085, -0.175, 0.060) * heavy
+	var dip_r := Vector3(-28.0, 24.0, 28.0) * heavy
+	var p := Vector3.ZERO
+	var r := Vector3.ZERO
+	if ru < 0.22:
+		var t := smoothstep(0.0, 1.0, ru / 0.22)
+		p = Vector3.ZERO.lerp(dip_p, t)
+		r = Vector3.ZERO.lerp(dip_r, t)
+	elif ru < 0.72:
+		var t := (ru - 0.22) / 0.50
+		# Two tactile ramrod/powder-tamp nods plus subtle flint-cock twist.
+		var tamp := sin(t * PI * 2.0)
+		var cock := sin(clampf((t - 0.62) / 0.38, 0.0, 1.0) * PI)
+		p = dip_p + Vector3(0.012 * cock, -0.028 * absf(tamp) + 0.016 * cock, 0.018 * tamp)
+		r = dip_r + Vector3(-10.0 * absf(tamp) + 12.0 * cock, -6.0 * cock, -8.0 * cock)
+	elif ru < 0.89:
+		var t := smoothstep(0.0, 1.0, (ru - 0.72) / 0.17)
+		var over_p := Vector3(0.0, 0.018, -0.012)
+		var over_r := Vector3(4.5, -2.0, -3.0)
+		p = dip_p.lerp(over_p, t)
+		r = dip_r.lerp(over_r, t)
+	else:
+		var t := smoothstep(0.0, 1.0, (ru - 0.89) / 0.11)
+		p = Vector3(0.0, 0.018, -0.012).lerp(Vector3.ZERO, t)
+		r = Vector3(4.5, -2.0, -3.0).lerp(Vector3.ZERO, t)
+	return [p, r]
+
+
+static func _eval_keyed_curve(
+	u: float,
+	t1: float, p1: Vector3, r1: Vector3,
+	t2: float, p2: Vector3, r2: Vector3,
+	t3: float, p3: Vector3, r3: Vector3
+) -> Array:
+	if u < t1:
+		var k1 := smoothstep(0.0, 1.0, u / maxf(t1, 0.001))
+		return [Vector3.ZERO.lerp(p1, k1), Vector3.ZERO.lerp(r1, k1)]
+	if u < t2:
+		# Fast explosive strike transition!
+		var k2 := pow(clampf((u - t1) / maxf(t2 - t1, 0.001), 0.0, 1.0), 0.56)
+		return [p1.lerp(p2, k2), r1.lerp(r2, k2)]
+	if u < t3:
+		var k3 := smoothstep(0.0, 1.0, (u - t2) / maxf(t3 - t2, 0.001))
+		return [p2.lerp(p3, k3), r2.lerp(r3, k3)]
+	var k4 := smoothstep(0.0, 1.0, (u - t3) / maxf(1.0 - t3, 0.001))
+	return [p3.lerp(Vector3.ZERO, k4), r3.lerp(Vector3.ZERO, k4)]
+
+
+static func _eval_tool_swing(
+	kind: StringName,
+	u: float,
+	pose_id: StringName,
+	base_pos: Vector3,
+	base_rot: Vector3
+) -> Array:
+	var pos := base_pos
+	var rot := base_rot
+	var axe_w := 1.22 if pose_id == &"boarding_axe" else 1.0
+
+	match kind:
+		&"slash", &"slash_1":
+			# High-right diagonal cleave: windup up-right -> explosive cleave down-left -> heavy drag -> settle.
+			var res := _eval_keyed_curve(
+				u,
+				0.24, Vector3(0.11, 0.11, 0.06) * axe_w, Vector3(26.0, -24.0, -28.0) * axe_w,
+				0.52, Vector3(-0.34, -0.13, -0.18) * axe_w, Vector3(-60.0, 54.0, 48.0) * axe_w,
+				0.74, Vector3(-0.26, -0.17, -0.10) * axe_w, Vector3(-48.0, 44.0, 36.0) * axe_w
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"slash_2":
+			# Snappy low-left backhand sweep: coil low-left -> whip diagonally up-right -> flourish -> settle.
+			var res := _eval_keyed_curve(
+				u,
+				0.22, Vector3(-0.24, -0.10, 0.04) * axe_w, Vector3(-14.0, 48.0, 44.0) * axe_w,
+				0.50, Vector3(0.16, 0.07, -0.18) * axe_w, Vector3(-34.0, -52.0, -46.0) * axe_w,
+				0.72, Vector3(0.11, 0.04, -0.09) * axe_w, Vector3(-22.0, -38.0, -32.0) * axe_w
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"slash_3":
+			# Wide cross-cut finisher: deep horizontal windup -> tearing cross-screen cut -> dramatic hold -> settle.
+			var res := _eval_keyed_curve(
+				u,
+				0.28, Vector3(0.16, 0.07, 0.09) * axe_w, Vector3(16.0, -44.0, -58.0) * axe_w,
+				0.58, Vector3(-0.42, -0.02, -0.24) * axe_w, Vector3(-36.0, 78.0, 76.0) * axe_w,
+				0.78, Vector3(-0.33, -0.06, -0.14) * axe_w, Vector3(-28.0, 64.0, 60.0) * axe_w
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"heavy":
+			# Coiled heavy lunge: deep pull-back -> explosive forward thrust/cleave -> extended follow -> breath recovery.
+			var strike_p := Vector3(-0.14, -0.04, -0.32) if pose_id == &"boarding_axe" else Vector3(-0.18, 0.03, -0.34)
+			var strike_r := Vector3(-84.0, 32.0, 26.0) if pose_id == &"boarding_axe" else Vector3(-74.0, 24.0, 18.0)
+			var res := _eval_keyed_curve(
+				u,
+				0.22, Vector3(0.14, 0.07, 0.14) * axe_w, Vector3(26.0, -36.0, -30.0) * axe_w,
+				0.48, strike_p, strike_r,
+				0.72, Vector3(-0.22, -0.06, -0.22), Vector3(-62.0, 34.0, 28.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"parry_clang":
+			var res := _eval_keyed_curve(
+				u,
+				0.18, Vector3(0.05, 0.04, 0.08), Vector3(16.0, -14.0, -18.0),
+				0.52, Vector3(-0.02, 0.01, -0.03), Vector3(-6.0, 6.0, 8.0),
+				0.78, Vector3(0.01, 0.0, 0.01), Vector3(2.0, -2.0, -2.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"pistol", &"blunderbuss":
+			# Sharp recoil snap-back + muzzle flip + controlled spring dip settle.
+			var kick := 1.45 if kind == &"blunderbuss" else 1.0
+			var res := _eval_keyed_curve(
+				u,
+				0.15, Vector3(0.008 * kick, 0.062 * kick, 0.105 * kick), Vector3(34.0 * kick, 0.0, -5.0 * kick),
+				0.56, Vector3(0.0, -0.012 * kick, 0.018 * kick), Vector3(-4.5 * kick, 0.0, 2.0 * kick),
+				0.82, Vector3(0.0, 0.004 * kick, -0.004), Vector3(1.5, 0.0, 0.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"dig":
+			# Deep back-swing anticipation -> forceful downward plunge -> upward dirt-heave flick!
+			var res := _eval_keyed_curve(
+				u,
+				0.24, Vector3(0.08, 0.11, 0.12), Vector3(26.0, -16.0, -14.0),
+				0.52, Vector3(-0.11, -0.24, -0.24), Vector3(-66.0, 14.0, 12.0),
+				0.78, Vector3(-0.15, 0.07, -0.14), Vector3(22.0, 28.0, 22.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"scoop":
+			# Low scoop dip -> heavy water-laden lift -> sloshing settle.
+			var res := _eval_keyed_curve(
+				u,
+				0.36, Vector3(-0.07, -0.22, -0.16), Vector3(42.0, 4.0, 6.0),
+				0.70, Vector3(-0.02, 0.05, -0.04), Vector3(-12.0, -4.0, -5.0),
+				0.88, Vector3(0.0, -0.02, 0.0), Vector3(5.0, 0.0, 2.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"splash":
+			# Back coil -> snappy forward water-throw arc -> follow-through.
+			var res := _eval_keyed_curve(
+				u,
+				0.22, Vector3(0.04, -0.06, 0.10), Vector3(22.0, -6.0, 4.0),
+				0.54, Vector3(-0.10, 0.04, -0.24), Vector3(-58.0, 6.0, -6.0),
+				0.78, Vector3(-0.08, -0.04, -0.14), Vector3(-36.0, 4.0, -4.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"hammer":
+			# Two-handed board-press + rhythmic 3-beat hammering recoil!
+			var press_env := smoothstep(0.0, 0.14, u) * (1.0 - smoothstep(0.84, 1.0, u))
+			var beat_u := clampf((u - 0.10) / 0.74, 0.0, 1.0) * 3.0
+			var frac := fmod(beat_u, 1.0)
+			# Asymmetric strike-and-recoil spike per hammer beat!
+			var strike := pow(sin(clampf(frac / 0.45, 0.0, 1.0) * PI), 1.6) if frac < 0.45 else -sin((frac - 0.45) / 0.55 * PI) * 0.22
+			pos += Vector3(-0.06 * press_env, -0.02 * press_env - 0.045 * strike * press_env, -0.14 * press_env - 0.075 * strike * press_env)
+			rot += Vector3(-12.0 * press_env - 26.0 * strike * press_env, 8.0 * press_env, -5.0 * strike * press_env)
+		&"drink":
+			# Hearty raise-and-tilt chug with rhythmic gulp nods!
+			var target_p := Vector3(0.04, -0.01, -0.24)
+			var target_r := Vector3(60.0, -8.0, -16.0)
+			var lift := smoothstep(0.0, 0.24, u) * (1.0 - smoothstep(0.74, 1.0, u))
+			var gulp := 0.0
+			if u > 0.24 and u < 0.74:
+				gulp = sin((u - 0.24) / 0.50 * TAU * 1.5)
+			pos = pos.lerp(target_p + Vector3(0.0, 0.010 * gulp, -0.008 * gulp), lift)
+			rot = rot.lerp(target_r + Vector3(5.5 * gulp, 0.0, -3.5 * gulp), lift)
+		&"toast":
+			# Quick dip -> celebratory high toast thrust -> proud cheer hold -> settle.
+			var res := _eval_keyed_curve(
+				u,
+				0.20, Vector3(0.02, -0.05, 0.04), Vector3(10.0, 2.0, 4.0),
+				0.52, Vector3(-0.09, 0.12, -0.16), Vector3(-20.0, -10.0, -18.0),
+				0.76, Vector3(-0.08, 0.11, -0.14), Vector3(-16.0, -8.0, -15.0)
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		&"click":
+			var res := _eval_keyed_curve(
+				u,
+				0.25, Vector3(0.0, 0.026, -0.020), Vector3(14.0, -4.0, -6.0),
+				0.60, Vector3(0.0, -0.010, 0.006), Vector3(-5.0, 2.0, 3.0),
+				0.82, Vector3.ZERO, Vector3.ZERO
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+		_:
+			# Inspect / glance lift (compass pin toggle, map glance, trumpet hail).
+			var res := _eval_keyed_curve(
+				u,
+				0.32, Vector3(-0.03, 0.055, -0.055), Vector3(14.0, -6.0, -5.0),
+				0.68, Vector3(-0.02, 0.040, -0.040), Vector3(10.0, -4.0, -3.0),
+				0.86, Vector3.ZERO, Vector3.ZERO
+			)
+			pos += res[0] as Vector3
+			rot += res[1] as Vector3
+	return [pos, rot]
 
 
 func _sync_visibility() -> void:
@@ -2208,13 +2535,22 @@ func _sync_visibility() -> void:
 
 func _on_combat_attack_started(kind: StringName) -> void:
 	if kind == &"heavy":
-		_start_swing(&"heavy", 0.58)
+		_start_swing(&"heavy", 0.76 if melee_weapon == &"boarding_axe" else 0.64)
 	elif kind == &"blunderbuss":
-		_start_swing(&"blunderbuss", 0.42)
+		_start_swing(&"blunderbuss", 0.46)
+		_reload_dur = 1.85
+		_reload_timer = _reload_dur
 	elif kind == &"pistol":
-		_start_swing(&"pistol", 0.30)
+		_start_swing(&"pistol", 0.34)
+		_reload_dur = 1.45
+		_reload_timer = _reload_dur
 	else:
-		_start_swing(kind, 0.36)
+		_start_swing(kind, 0.50 if melee_weapon == &"boarding_axe" else 0.40)
+
+
+func _on_combat_parried(_attacker: Pawn) -> void:
+	if active_item == &"cutlass":
+		_start_swing(&"parry_clang", 0.26)
 
 
 func _start_swing(kind: StringName, dur: float) -> void:

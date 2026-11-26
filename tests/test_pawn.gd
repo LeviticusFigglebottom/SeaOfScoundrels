@@ -786,3 +786,79 @@ func test_f_key_station_toggle_quick_use_dynamic_prompts_and_cannon_mouse_aim() 
 	await _end()
 
 
+func test_q1b_physics_priority_interpolation_and_station_zero_jitter() -> void:
+	_begin()
+	Net.start_single_player()
+
+	# 1. Native 3D physics interpolation must be enabled in project.godot and active in SceneTree.
+	check(bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)),
+		"project.godot must enable physics/common/physics_interpolation=true")
+	check(get_tree().physics_interpolation, "SceneTree physics_interpolation must be active")
+
+	# 2. Pawn must tick strictly AFTER Ship / MockDeck (priority 0) and BEFORE TickProbe (1000).
+	var deck := _storm_deck(Vector3(600, 0, -600))
+	deck.roll_deg = 22.0
+	deck.pitch_deg = 10.0
+	deck.yaw_rate = 0.35
+	deck.speed = 11.0
+	deck.heave = 0.9
+
+	var st := MockStation.new()
+	deck.add_child(st)
+	st.position = Vector3(0.0, 2.0, 5.0)
+
+	var p := _pawn_on(deck, Vector3(-1.0, 2.0, 4.2))
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.input_enabled = false
+	p.add_child(pc)
+
+	check(p.process_physics_priority > deck.process_physics_priority,
+		"Pawn process_physics_priority (%d) must run after Ship/MockDeck (%d)" % [
+			p.process_physics_priority, deck.process_physics_priority
+		])
+	check(p.process_physics_priority > 0 and p.process_physics_priority < 1000,
+		"Pawn process_physics_priority (%d) must sit cleanly between Ship (0) and TickProbe (1000)" % p.process_physics_priority)
+	check(pc.process_physics_priority < deck.process_physics_priority,
+		"PlayerController (%d) writes intent before Ship (0) and Pawn (%d)" % [
+			pc.process_physics_priority, p.process_physics_priority
+		])
+	check_eq(pc.physics_interpolation_mode, Node.PHYSICS_INTERPOLATION_MODE_OFF,
+		"PlayerController uses PHYSICS_INTERPOLATION_MODE_OFF for instant mouse look on interpolated Pawn")
+
+	# 3. Station-locked pawn on a wildly pitching/rolling/turning storm deck must have < 1 mm jitter from tick 1.
+	await physics_frames(6)
+	check(p.enter_station(st), "pawn occupies storm-deck station cleanly")
+	var metrics := {"max_stand_err": 0.0, "max_tick_jitter": 0.0, "prev_local": Vector3.INF, "ticks": 0}
+	var probe := TickProbe.new(func(d: float) -> void:
+		p.drive_station(Vector2(0.5, 0.0), true, false, d)
+		metrics.ticks += 1
+		var stand_pos := Pawn.station_stand_transform(st).origin
+		metrics.max_stand_err = maxf(metrics.max_stand_err, p.global_position.distance_to(stand_pos))
+		var loc := deck.global_transform.affine_inverse() * p.global_position
+		if metrics.prev_local != Vector3.INF:
+			metrics.max_tick_jitter = maxf(metrics.max_tick_jitter, loc.distance_to(metrics.prev_local))
+		metrics.prev_local = loc
+	)
+	_root.add_child(probe)
+	await physics_frames(180)
+	probe.queue_free()
+
+	print("    Q1B storm station lock (%d ticks): max stand err %.4f mm, max tick-to-tick local jitter %.4f mm" % [
+		metrics.ticks, metrics.max_stand_err * 1000.0, metrics.max_tick_jitter * 1000.0
+	])
+	check(metrics.ticks >= 170, "sampled full 3 s storm station window")
+	check(metrics.max_stand_err < 0.001,
+		"station-locked pawn stand error must be < 1 mm (got %.4f mm)" % (metrics.max_stand_err * 1000.0))
+	check(metrics.max_tick_jitter < 0.001,
+		"station-locked pawn tick-to-tick local jitter must be < 1 mm (got %.4f mm)" % (metrics.max_tick_jitter * 1000.0))
+
+	# 4. Leaving station & snapping via teleport/board cleanly resets interpolation offsets without errors.
+	p.leave_station()
+	p.visual_offset_y = -0.25
+	p.teleport(Vector3(10.0, 50.0, 10.0))
+	check_near(p.visual_offset_y, 0.0, 0.0001, "teleport clears visual_offset_y cleanly")
+	p.board(deck, Vector3(0.0, 1.12, -2.0))
+	check_near(p.visual_offset_y, 0.0, 0.0001, "board clears visual_offset_y cleanly")
+	await _end()
