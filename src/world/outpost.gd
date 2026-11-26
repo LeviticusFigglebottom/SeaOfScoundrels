@@ -20,6 +20,7 @@ const CAMPFIRE_SCENE: PackedScene = preload("res://assets/generated/props/campfi
 const BARREL_SCENE: PackedScene = preload("res://assets/generated/props/barrel_prop.glb")
 const CRATE_SCENE: PackedScene = preload("res://assets/generated/props/crate_supply.glb")
 const BUNTING_SHADER: Shader = preload("res://src/world/bunting_wind.gdshader")
+const LIGHTHOUSE_BEAM_SHADER: Shader = preload("res://src/world/lighthouse_beam.gdshader")
 
 ## Pier local geometry constants (must match tools/blender/gen_props.py).
 const PIER_LENGTH := 16.0
@@ -74,6 +75,8 @@ static var _keg_mesh: ArrayMesh = null
 static var _keg_mat: StandardMaterial3D = null
 static var _beacon_halo_mesh: ArrayMesh = null
 static var _beacon_halo_mat: StandardMaterial3D = null
+static var _beacon_beam_mesh: ArrayMesh = null
+static var _beacon_beam_mat: ShaderMaterial = null
 
 var dock_yaw: float = 0.0
 var dock_node: Node3D = null
@@ -83,6 +86,7 @@ var tavern_node: Node3D = null
 var tavern_shelter: Area3D = null
 var beacon_node: Node3D = null
 var beacon_light: OmniLight3D = null
+var beacon_beam: MeshInstance3D = null
 var merchant_stall: MerchantStall = null
 var notice_board_node: Node3D = null
 var voyage_board_interactable: Interactable = null
@@ -133,6 +137,9 @@ func _process(delta: float) -> void:
 			_bunting_mat.set_shader_parameter(&"wind_dir", dir2)
 			_bunting_mat.set_shader_parameter(&"wind_speed", spd)
 
+	# Rotating volumetric lighthouse beacon beam (active at dusk/night or heavy storm mist; 0 ms in clear midday!).
+	_update_beacon_beam(delta)
+
 	if _harbour_npcs.is_empty():
 		return
 	if cam != null and dist_sq > 95.0 * 95.0:
@@ -181,6 +188,10 @@ func _exit_tree() -> void:
 		harbour_bunting.mesh = null
 	harbour_bunting = null
 	_bunting_mat = null
+	if beacon_beam != null and is_instance_valid(beacon_beam):
+		beacon_beam.material_override = null
+		beacon_beam.mesh = null
+	beacon_beam = null
 	tavern_keg_node = null
 	tavern_keg_interactable = null
 	tavern_bard_node = null
@@ -199,6 +210,8 @@ static func clear_shared_cache() -> void:
 	_keg_mat = null
 	_beacon_halo_mesh = null
 	_beacon_halo_mat = null
+	_beacon_beam_mesh = null
+	_beacon_beam_mat = null
 
 
 ## Build all outpost structures on the sculpted harbour terrain.
@@ -530,6 +543,37 @@ func _build_beacon_halo(beacon_root: Node3D) -> void:
 	halo.material_override = _beacon_halo_mat
 	beacon_root.add_child(halo)
 
+	# Rotating opposing dual-cone volumetric lighthouse beam mounted right at the Fresnel lantern aperture!
+	beacon_beam = MeshInstance3D.new()
+	beacon_beam.name = "LighthouseBeam"
+	beacon_beam.mesh = _beacon_beam_mesh
+	beacon_beam.position = local_pos
+	beacon_beam.rotation.y = fposmod(absf(dock_yaw) * 2.1 + 0.65, TAU)
+	beacon_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beacon_beam.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	beacon_beam.extra_cull_margin = 80.0
+	beacon_beam.material_override = _beacon_beam_mat
+	beacon_beam.visible = false
+	beacon_root.add_child(beacon_beam)
+	_update_beacon_beam(0.0)
+
+
+func _update_beacon_beam(delta: float) -> void:
+	if beacon_beam == null or not is_instance_valid(beacon_beam):
+		return
+	var night := 1.0 - Weather.daylight()
+	var storm_mist := smoothstep(0.32, 0.82, Weather.storminess)
+	var target_beam := clampf(maxf(night * 1.15, storm_mist * 0.85), 0.0, 1.15)
+	if target_beam > 0.02:
+		beacon_beam.visible = true
+		beacon_beam.rotation.y = wrapf(beacon_beam.rotation.y + delta * 0.42, 0.0, TAU)
+		if _beacon_beam_mat != null:
+			_beacon_beam_mat.set_shader_parameter(&"beam_intensity", target_beam)
+	else:
+		beacon_beam.visible = false
+		if _beacon_beam_mat != null:
+			_beacon_beam_mat.set_shader_parameter(&"beam_intensity", 0.0)
+
 
 # ------------------------------------------------------------------ Interactive Tavern Grog Keg
 
@@ -772,6 +816,13 @@ static func _ensure_shared_outpost_assets() -> void:
 		_beacon_halo_mat.emission_energy_multiplier = 4.5
 	if _beacon_halo_mesh == null:
 		_beacon_halo_mesh = _build_beacon_halo_mesh()
+	if _beacon_beam_mat == null:
+		_beacon_beam_mat = ShaderMaterial.new()
+		_beacon_beam_mat.shader = LIGHTHOUSE_BEAM_SHADER
+		_beacon_beam_mat.set_shader_parameter(&"beam_color", Color(1.0, 0.80, 0.38))
+		_beacon_beam_mat.set_shader_parameter(&"beam_intensity", 0.0)
+	if _beacon_beam_mesh == null:
+		_beacon_beam_mesh = _build_beacon_beam_mesh()
 
 
 static func _build_tavern_grog_keg_mesh() -> ArrayMesh:
@@ -974,6 +1025,79 @@ static func _build_beacon_halo_mesh() -> ArrayMesh:
 		_add_outward_tri(st, ab * radius, bc * radius, ca * radius, Vector3.ZERO, col, col, col)
 
 	st.generate_normals()
+	return st.commit()
+
+
+static func _build_beacon_beam_mesh() -> ArrayMesh:
+	# Dual opposing open 16-sided volumetric cones shooting along +Z and -Z, pitched -3.5 deg toward the horizon!
+	# Uses explicit smooth radial normals & axial UV.y (0.0 at aperture -> 1.0 at 74 m far cone tip) for silky Fresnel edges.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const SEGS := 16
+	const NEAR_DIST := 0.45
+	const FAR_DIST := 74.0
+	const NEAR_R := 0.55
+	const FAR_R := 6.80
+	const PITCH_RAD := deg_to_rad(-3.5)
+	const RING_TS: Array[float] = [0.0, 0.08, 0.35, 1.0]
+
+	var cos_p := cos(PITCH_RAD)
+	var sin_p := sin(PITCH_RAD)
+	var slope_tan := (FAR_R - NEAR_R) / (FAR_DIST - NEAR_DIST)
+	var cone_cos := 1.0 / sqrt(1.0 + slope_tan * slope_tan)
+	var cone_sin := slope_tan * cone_cos
+
+	for sgn: float in [-1.0, 1.0]:
+		var axis := Vector3(0.0, sin_p, sgn * cos_p).normalized()
+		var right := Vector3(sgn, 0.0, 0.0)
+		var up := axis.cross(right).normalized()
+
+		for ri in range(RING_TS.size() - 1):
+			var t0: float = RING_TS[ri]
+			var t1: float = RING_TS[ri + 1]
+			var d0 := lerpf(NEAR_DIST, FAR_DIST, t0)
+			var d1 := lerpf(NEAR_DIST, FAR_DIST, t1)
+			var r0 := lerpf(NEAR_R, FAR_R, t0)
+			var r1 := lerpf(NEAR_R, FAR_R, t1)
+			var c0 := axis * d0
+			var c1 := axis * d1
+
+			for k in SEGS:
+				var u0 := float(k) / float(SEGS)
+				var u1 := float(k + 1) / float(SEGS)
+				var a0 := u0 * TAU
+				var a1 := u1 * TAU
+				var rad0 := right * cos(a0) + up * sin(a0)
+				var rad1 := right * cos(a1) + up * sin(a1)
+				var n0 := (rad0 * cone_cos - axis * cone_sin).normalized()
+				var n1 := (rad1 * cone_cos - axis * cone_sin).normalized()
+
+				var p00 := c0 + rad0 * r0
+				var p01 := c0 + rad1 * r0
+				var p10 := c1 + rad0 * r1
+				var p11 := c1 + rad1 * r1
+
+				st.set_normal(n0)
+				st.set_uv(Vector2(u0, t0))
+				st.add_vertex(p00)
+				st.set_normal(n0)
+				st.set_uv(Vector2(u0, t1))
+				st.add_vertex(p10)
+				st.set_normal(n1)
+				st.set_uv(Vector2(u1, t1))
+				st.add_vertex(p11)
+
+				st.set_normal(n0)
+				st.set_uv(Vector2(u0, t0))
+				st.add_vertex(p00)
+				st.set_normal(n1)
+				st.set_uv(Vector2(u1, t1))
+				st.add_vertex(p11)
+				st.set_normal(n1)
+				st.set_uv(Vector2(u1, t0))
+				st.add_vertex(p01)
+
 	return st.commit()
 
 

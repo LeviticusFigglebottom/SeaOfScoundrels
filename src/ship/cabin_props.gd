@@ -172,8 +172,8 @@ func _process(delta: float) -> void:
 		else:
 			candle_light.visible = visible
 		if candle_light.visible:
-			var flick := sin(_clock * 6.8) * 0.09 + sin(_clock * 14.3 + 1.1) * 0.05
-			candle_light.light_energy = 1.42 + flick
+			var flick := sin(_clock * 6.8) * 0.05 + sin(_clock * 14.3 + 1.1) * 0.028
+			candle_light.light_energy = 0.56 + flick
 
 
 ## Toggle and polish the 3 sculpted Trading Company Renown medallions from `profile`.
@@ -211,7 +211,11 @@ func _build_astrolabe_station() -> void:
 	var is_brig := ship_class == &"brigantine"
 	astrolabe_stand = Node3D.new()
 	astrolabe_stand.name = "AstrolabeStand"
-	astrolabe_stand.position = Vector3(1.02, -0.95, 5.18) if is_brig else Vector3(0.84, -0.85, 3.55)
+	if is_brig:
+		astrolabe_stand.position = Vector3(0.90, -0.95, 5.25)
+		astrolabe_stand.scale = Vector3(0.94, 0.94, 0.94)
+	else:
+		astrolabe_stand.position = Vector3(0.84, -0.85, 3.55)
 	add_child(astrolabe_stand)
 
 	_pedestal_mi = MeshInstance3D.new()
@@ -253,8 +257,9 @@ func _build_trophy_lectern_station() -> void:
 	trophy_lectern = Node3D.new()
 	trophy_lectern.name = "TrophyLectern"
 	if is_brig:
-		trophy_lectern.position = Vector3(-0.98, -0.95, 5.18)
-		trophy_lectern.rotation.y = 0.42
+		trophy_lectern.position = Vector3(-0.84, -0.95, 5.25)
+		trophy_lectern.scale = Vector3(0.90, 0.88, 0.90)
+		trophy_lectern.rotation.y = 0.45
 	else:
 		trophy_lectern.position = Vector3(0.84, -0.85, 4.38)
 		trophy_lectern.rotation.y = -0.95
@@ -272,11 +277,11 @@ func _build_trophy_lectern_station() -> void:
 
 	candle_light = OmniLight3D.new()
 	candle_light.name = "CabinCandleLight"
-	candle_light.position = Vector3(-0.22, 1.15, 0.08)
+	candle_light.position = Vector3(-0.18, 1.04, 0.04)
 	candle_light.light_color = Color(1.0, 0.76, 0.42)
-	candle_light.light_energy = 1.42
-	candle_light.omni_range = 4.8
-	candle_light.omni_attenuation = 1.45
+	candle_light.light_energy = 0.56
+	candle_light.omni_range = 3.2
+	candle_light.omni_attenuation = 1.85
 	candle_light.shadow_enabled = false
 	trophy_lectern.add_child(candle_light)
 

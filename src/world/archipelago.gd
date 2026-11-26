@@ -195,6 +195,13 @@ func build_archipelago() -> void:
 		if isl.archetype != &"volcano_crag":
 			var reef_density := 1.15 if isl.archetype in [&"crescent_lagoon", &"wreck_shoal", &"palm_atoll"] else 0.80
 			CoralReef.populate_for_island(isl, int(spec.get("seed", 1000)) + 77, reef_density)
+		# Populate 1-DC tropical reef fish schools hovering over shallow turquoise coral gardens (culled > 75 m).
+		if isl.archetype in [
+			&"crescent_lagoon", &"wreck_shoal", &"palm_atoll",
+			&"treasure_peak", &"treasure_cove", &"smuggler_cove",
+			&"outpost", &"outpost_harbour", &"sea_arch",
+		]:
+			ReefFishSchool.populate_for_island(isl, int(spec.get("seed", 1000)) + 131)
 		islands.append(isl)
 		_by_id[isl.island_id] = isl
 		if isl is Outpost:

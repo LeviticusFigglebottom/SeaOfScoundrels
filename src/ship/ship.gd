@@ -16,6 +16,7 @@ signal bailed(amount: float)
 signal sunk
 signal cannon_fired(side: StringName, cannonball: Cannonball)
 signal bell_rung(pawn: Node)
+signal ship_bell_rung(by_pawn: Node)
 signal supplies_taken(pawn: Node)
 signal wind_caught(efficiency: float)
 signal anchor_turn_triggered(speed: float, yaw_dir: float)
@@ -199,6 +200,11 @@ var _spray_tex: GradientTexture2D = null
 var _active_muzzle_vfx: Array[Node] = []
 
 var cabin_furnishings: CaptainCabinFurnishings = null
+var ship_bell_node: Node3D = null
+var ship_bell_interactable: Interactable = null
+var _bell_frame_mi: MeshInstance3D = null
+var _bell_cup_pivot: Node3D = null
+var _bell_cup_mi: MeshInstance3D = null
 var _lookout_glint: MeshInstance3D = null
 var _lookout_glint_mat: ShaderMaterial = null
 var _lookout_glint_phase: float = 0.0
@@ -211,6 +217,10 @@ static var _streamer_mesh_sloop: ArrayMesh = null
 static var _streamer_mesh_brig: ArrayMesh = null
 static var _lookout_glint_mesh: ArrayMesh = null
 static var _lookout_glint_shader: Shader = null
+static var _bell_frame_mesh: ArrayMesh = null
+static var _bell_cup_mesh: ArrayMesh = null
+static var _bell_iron_mat: StandardMaterial3D = null
+static var _bell_bronze_mat: StandardMaterial3D = null
 
 
 func _init() -> void:
@@ -256,6 +266,7 @@ func _ready() -> void:
 	_build_shelters()
 	_build_damage_slots()
 	_build_hold_water()
+	_setup_ship_bell()
 	_build_deck_extras()
 	_setup_cabin_furnishings()
 	if enable_effects:
@@ -311,6 +322,17 @@ func _exit_tree() -> void:
 		_lookout_glint.mesh = null
 	_lookout_glint = null
 	_lookout_glint_mat = null
+	if _bell_frame_mi != null and is_instance_valid(_bell_frame_mi):
+		_bell_frame_mi.material_override = null
+		_bell_frame_mi.mesh = null
+	if _bell_cup_mi != null and is_instance_valid(_bell_cup_mi):
+		_bell_cup_mi.material_override = null
+		_bell_cup_mi.mesh = null
+	_bell_frame_mi = null
+	_bell_cup_mi = null
+	_bell_cup_pivot = null
+	ship_bell_interactable = null
+	ship_bell_node = null
 	cabin_furnishings = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
@@ -322,6 +344,10 @@ func _exit_tree() -> void:
 		_streamer_mesh_brig = null
 		_lookout_glint_mesh = null
 		_lookout_glint_shader = null
+		_bell_frame_mesh = null
+		_bell_cup_mesh = null
+		_bell_iron_mat = null
+		_bell_bronze_mat = null
 
 
 # ------------------------------------------------------------------ construction
@@ -775,8 +801,8 @@ func _build_hold_water() -> void:
 
 
 func _build_deck_extras() -> void:
-	# Ship's bell interactable.
-	if _bell != null:
+	# Ship's bell interactable (fallback only if sculpted player ShipBell was not mounted).
+	if ship_bell_interactable == null and _bell != null:
 		var bell_it := Interactable.create("Ring ship's bell", 0.55)
 		bell_it.name = "BellInteractable"
 		bell_it.position = _local_to_ship(_bell).origin
@@ -1040,6 +1066,283 @@ static func _emit_streamer_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vecto
 	st.set_uv(uvc)
 	st.set_uv2(uv2c)
 	st.add_vertex(c)
+
+
+func _setup_ship_bell() -> void:
+	if faction != &"player":
+		return
+	_ensure_ship_bell_assets()
+
+	var root := Node3D.new()
+	root.name = "ShipBell"
+	root.position = Vector3(0.0, 3.08, 3.98) if ship_class == &"brigantine" else Vector3(0.0, 2.86, 2.98)
+	add_child(root)
+	ship_bell_node = root
+
+	_bell_frame_mi = MeshInstance3D.new()
+	_bell_frame_mi.name = "ShipBellFrame"
+	_bell_frame_mi.mesh = _bell_frame_mesh
+	_bell_frame_mi.material_override = _bell_iron_mat
+	root.add_child(_bell_frame_mi)
+
+	_bell_cup_pivot = Node3D.new()
+	_bell_cup_pivot.name = "ShipBellPivot"
+	_bell_cup_pivot.position = Vector3(0.0, 0.36, 0.0)
+	root.add_child(_bell_cup_pivot)
+
+	_bell_cup_mi = MeshInstance3D.new()
+	_bell_cup_mi.name = "ShipBellCup"
+	_bell_cup_mi.mesh = _bell_cup_mesh
+	_bell_cup_mi.material_override = _bell_bronze_mat
+	_bell_cup_pivot.add_child(_bell_cup_mi)
+
+	ship_bell_interactable = Interactable.create("Ring ship's bell", 0.7)
+	ship_bell_interactable.name = "ShipBellInteractable"
+	ship_bell_interactable.reach = 2.6
+	ship_bell_interactable.position = Vector3(0.0, 0.22, 0.0)
+	ship_bell_interactable.interacted.connect(func(p: Node) -> void:
+		ring_bell(p)
+	)
+	root.add_child(ship_bell_interactable)
+
+
+static func _ensure_ship_bell_assets() -> void:
+	if _bell_iron_mat == null:
+		_bell_iron_mat = StandardMaterial3D.new()
+		_bell_iron_mat.vertex_color_use_as_albedo = true
+		_bell_iron_mat.vertex_color_is_srgb = true
+		_bell_iron_mat.roughness = 0.44
+		_bell_iron_mat.metallic = 0.78
+	if _bell_bronze_mat == null:
+		_bell_bronze_mat = StandardMaterial3D.new()
+		_bell_bronze_mat.vertex_color_use_as_albedo = true
+		_bell_bronze_mat.vertex_color_is_srgb = true
+		_bell_bronze_mat.roughness = 0.24
+		_bell_bronze_mat.metallic = 0.86
+	if _bell_frame_mesh == null:
+		_bell_frame_mesh = _build_ship_bell_frame_mesh()
+	if _bell_cup_mesh == null:
+		_bell_cup_mesh = _build_ship_bell_cup_mesh()
+
+
+static func _build_ship_bell_frame_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	var col_hi := Color(0.24, 0.24, 0.27)
+	var col_mid := Color(0.14, 0.14, 0.17)
+	var col_lo := Color(0.08, 0.08, 0.10)
+	var col_brass := Color(0.86, 0.66, 0.22)
+
+	# Heavy riveted iron rail-mounting flange flush at y = 0.0.
+	_bell_add_box(st, Vector3(0.0, 0.018, 0.0), Vector3(0.30, 0.036, 0.13), 0.006, col_hi, col_mid, col_lo)
+	for sx: float in [-0.115, 0.115]:
+		_bell_add_box(st, Vector3(sx, 0.040, 0.0), Vector3(0.038, 0.016, 0.044), 0.004, col_brass, col_brass, col_lo)
+
+	# Sculpted arched forged-iron belfry yoke curving smoothly over the bell crown.
+	var arch_pts: Array[Vector3] = []
+	var arch_segs := 10
+	for i in arch_segs + 1:
+		var u := float(i) / float(arch_segs)
+		var ang := lerpf(PI, 0.0, u)
+		var ax := cos(ang) * 0.132
+		var ay := 0.29 + sin(ang) * 0.145
+		arch_pts.append(Vector3(ax, ay, 0.0))
+	for sgn: float in [-1.0, 1.0]:
+		_bell_add_tube(st, Vector3(sgn * 0.132, 0.034, 0.0), Vector3(sgn * 0.132, 0.295, 0.0), 0.017, 0.016, 8, col_hi, col_lo)
+		_bell_add_box(st, Vector3(sgn * 0.132, 0.356, 0.0), Vector3(0.042, 0.038, 0.042), 0.005, col_hi, col_mid, col_lo)
+	for i in arch_segs:
+		_bell_add_tube(st, arch_pts[i], arch_pts[i + 1], 0.016, 0.016, 8, col_hi, col_mid)
+
+	# Horizontal trunnion axle rod supporting the hanging bell pivot at y = 0.36.
+	_bell_add_tube(st, Vector3(-0.145, 0.36, 0.0), Vector3(0.145, 0.36, 0.0), 0.011, 0.011, 8, col_brass, col_mid)
+	# Crown finial spike atop the arch.
+	_bell_add_lathe(st, [
+		Vector2(0.0, 0.43),
+		Vector2(0.028, 0.43),
+		Vector2(0.022, 0.455),
+		Vector2(0.010, 0.49),
+		Vector2(0.0, 0.515),
+	], 8, col_brass, col_hi)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_ship_bell_cup_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	var col_hi := Color(0.96, 0.78, 0.32)
+	var col_mid := Color(0.78, 0.57, 0.18)
+	var col_lo := Color(0.46, 0.32, 0.10)
+	var col_iron := Color(0.16, 0.16, 0.19)
+	var col_rope := Color(0.74, 0.60, 0.38)
+
+	# Lathed flared burnished-bronze maritime bell cup hanging from pivot y = 0.0 down to y = -0.26.
+	_bell_add_lathe(st, [
+		Vector2(0.0, 0.012),
+		Vector2(0.024, 0.012),
+		Vector2(0.030, -0.018),
+		Vector2(0.048, -0.034),
+		Vector2(0.062, -0.064),
+		Vector2(0.072, -0.072),
+		Vector2(0.066, -0.080),
+		Vector2(0.076, -0.145),
+		Vector2(0.092, -0.180),
+		Vector2(0.098, -0.188),
+		Vector2(0.094, -0.196),
+		Vector2(0.118, -0.238),
+		Vector2(0.126, -0.256),
+		Vector2(0.114, -0.262),
+		Vector2(0.096, -0.252),
+		Vector2(0.068, -0.185),
+		Vector2(0.046, -0.080),
+		Vector2(0.0, -0.055),
+	], 14, col_hi, col_lo)
+
+	# Hanging forged-iron clapper stem & strike ball inside the sound bow.
+	_bell_add_tube(st, Vector3(0.0, -0.055, 0.0), Vector3(0.0, -0.245, 0.0), 0.008, 0.009, 6, col_iron, col_iron)
+	_bell_add_lathe(st, [
+		Vector2(0.0, -0.215),
+		Vector2(0.022, -0.228),
+		Vector2(0.026, -0.248),
+		Vector2(0.018, -0.266),
+		Vector2(0.0, -0.272),
+	], 8, col_mid, col_iron)
+
+	# Braided hemp bell-pull lanyard & monkey's-fist pull knot hanging below the clapper.
+	_bell_add_tube(st, Vector3(0.0, -0.268, 0.0), Vector3(0.0, -0.395, 0.0), 0.009, 0.008, 6, col_rope, col_lo)
+	_bell_add_lathe(st, [
+		Vector2(0.0, -0.382),
+		Vector2(0.020, -0.394),
+		Vector2(0.022, -0.410),
+		Vector2(0.014, -0.424),
+		Vector2(0.0, -0.428),
+	], 8, col_rope, col_lo)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _bell_add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, col: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-10:
+		return
+	n = n.normalized()
+	st.set_normal(n)
+	st.set_color(col)
+	st.add_vertex(a)
+	st.set_normal(n)
+	st.set_color(col)
+	st.add_vertex(b)
+	st.set_normal(n)
+	st.set_color(col)
+	st.add_vertex(c)
+
+
+static func _bell_add_lathe(
+	st: SurfaceTool,
+	profile: Array[Vector2],
+	segs: int,
+	col_top: Color,
+	col_bot: Color
+) -> void:
+	for pi in range(profile.size() - 1):
+		var r0 := profile[pi].x
+		var y0 := profile[pi].y
+		var r1 := profile[pi + 1].x
+		var y1 := profile[pi + 1].y
+		var t := float(pi) / maxf(float(profile.size() - 2), 1.0)
+		var col := col_top.lerp(col_bot, t)
+		var going_up := y1 >= y0
+		for s in segs:
+			var a0 := float(s) / float(segs) * TAU
+			var a1 := float(s + 1) / float(segs) * TAU
+			var p00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var p10 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var p01 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var p11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			if going_up:
+				if r0 > 0.0004:
+					_bell_add_tri(st, p00, p10, p01, col)
+				if r1 > 0.0004:
+					_bell_add_tri(st, p10, p11, p01, col)
+			else:
+				if r0 > 0.0004:
+					_bell_add_tri(st, p00, p01, p10, col)
+				if r1 > 0.0004:
+					_bell_add_tri(st, p10, p01, p11, col)
+
+
+static func _bell_add_tube(
+	st: SurfaceTool,
+	p0: Vector3,
+	p1: Vector3,
+	r0: float,
+	r1: float,
+	segs: int,
+	col0: Color,
+	col1: Color
+) -> void:
+	var axis := p1 - p0
+	if axis.length_squared() < 1e-8:
+		return
+	var dir := axis.normalized()
+	var up_ref := Vector3.UP if absf(dir.y) < 0.92 else Vector3.RIGHT
+	var side_x := dir.cross(up_ref).normalized()
+	var side_z := side_x.cross(dir).normalized()
+	var col := col0.lerp(col1, 0.5)
+	for s in segs:
+		var a0 := float(s) / float(segs) * TAU
+		var a1 := float(s + 1) / float(segs) * TAU
+		var d0 := side_x * cos(a0) + side_z * sin(a0)
+		var d1 := side_x * cos(a1) + side_z * sin(a1)
+		var v00 := p0 + d0 * r0
+		var v10 := p0 + d1 * r0
+		var v01 := p1 + d0 * r1
+		var v11 := p1 + d1 * r1
+		_bell_add_tri(st, v00, v10, v01, col)
+		_bell_add_tri(st, v10, v11, v01, col)
+
+
+static func _bell_add_box(
+	st: SurfaceTool,
+	center: Vector3,
+	dims: Vector3,
+	bevel: float,
+	col_top: Color,
+	col_side: Color,
+	col_bot: Color
+) -> void:
+	var hx := dims.x * 0.5
+	var hy := dims.y * 0.5
+	var hz := dims.z * 0.5
+	var bx := maxf(0.001, hx - bevel)
+	var bz := maxf(0.001, hz - bevel)
+	var ty := center.y + hy
+	var by := center.y - hy
+	var t0 := Vector3(center.x - bx, ty, center.z - bz)
+	var t1 := Vector3(center.x + bx, ty, center.z - bz)
+	var t2 := Vector3(center.x + bx, ty, center.z + bz)
+	var t3 := Vector3(center.x - bx, ty, center.z + bz)
+	var b0 := Vector3(center.x - hx, by, center.z - hz)
+	var b1 := Vector3(center.x + hx, by, center.z - hz)
+	var b2 := Vector3(center.x + hx, by, center.z + hz)
+	var b3 := Vector3(center.x - hx, by, center.z + hz)
+	_bell_add_tri(st, t0, t1, t2, col_top)
+	_bell_add_tri(st, t0, t2, t3, col_top)
+	_bell_add_tri(st, b0, b2, b1, col_bot)
+	_bell_add_tri(st, b0, b3, b2, col_bot)
+	var quads: Array[Array] = [
+		[b0, b1, t1, t0],
+		[b1, b2, t2, t1],
+		[b2, b3, t3, t2],
+		[b3, b0, t0, t3],
+	]
+	for q in quads:
+		_bell_add_tri(st, q[0] as Vector3, q[1] as Vector3, q[2] as Vector3, col_side)
+		_bell_add_tri(st, q[0] as Vector3, q[2] as Vector3, q[3] as Vector3, col_side)
 
 
 func _setup_cabin_furnishings() -> void:
@@ -1740,11 +2043,20 @@ static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringN
 	return &""
 
 
-## Ring the ship's bell (swing + cue).
-func ring_bell(pawn: Node = null) -> void:
-	_bell_vel += 7.5
-	Audio.play_sfx(&"parry_ring", _bell.global_position if _bell != null else global_position, -4.0, 0.03)
-	bell_rung.emit(pawn)
+## Ring the ship's bell (pendulum impulse, maritime bronze bell cue & signals).
+func ring_bell(by_pawn: Node = null) -> void:
+	_bell_vel += 9.5
+	var sfx_pos := global_position
+	if ship_bell_node != null and is_instance_valid(ship_bell_node) and ship_bell_node.is_inside_tree():
+		sfx_pos = ship_bell_node.global_position
+	elif _bell != null and is_instance_valid(_bell) and _bell.is_inside_tree():
+		sfx_pos = _bell.global_position
+	var sfx_id := &"ship_bell" if Audio.has_sound(&"ship_bell") else &"parry_ring"
+	Audio.play_sfx(sfx_id, sfx_pos, -1.0 if sfx_id == &"ship_bell" else -4.0, 0.03)
+	if Game != null:
+		Game.post_notice("Clang! The ship's bell rings across the deck!")
+	bell_rung.emit(by_pawn)
+	ship_bell_rung.emit(by_pawn)
 
 
 # ------------------------------------------------------------------ damage & flooding
@@ -2751,6 +3063,8 @@ func _update_lod() -> void:
 		_lod_model.visible = want_lod
 		if cabin_furnishings != null and is_instance_valid(cabin_furnishings):
 			cabin_furnishings.visible = not want_lod
+		if ship_bell_node != null and is_instance_valid(ship_bell_node):
+			ship_bell_node.visible = not want_lod
 
 
 func _update_visuals(delta: float) -> void:
@@ -2852,11 +3166,14 @@ func _update_visuals(delta: float) -> void:
 		if barrel != null:
 			barrel.rotation.x = float(c["base_barrel_rot_x"]) + float(c["pitch"])
 
-	# Ship's bell damped pendulum.
-	if _bell != null and (absf(_bell_swing) > 0.001 or absf(_bell_vel) > 0.001):
+	# Ship's bell damped pendulum (drives both sculpted ShipBellPivot and any GLB Bell).
+	if (_bell_cup_pivot != null or _bell != null) and (absf(_bell_swing) > 0.001 or absf(_bell_vel) > 0.001):
 		_bell_vel += (-_bell_swing * 36.0 - _bell_vel * 2.4) * delta
-		_bell_swing = clampf(_bell_swing + _bell_vel * delta, -0.7, 0.7)
-		_bell.rotation.x = _bell_swing
+		_bell_swing = clampf(_bell_swing + _bell_vel * delta, -0.78, 0.78)
+		if _bell_cup_pivot != null and is_instance_valid(_bell_cup_pivot):
+			_bell_cup_pivot.rotation.x = _bell_swing
+		if _bell != null and is_instance_valid(_bell):
+			_bell.rotation.x = _bell_swing
 
 	# Running rigging ropes (SHIP_ART.md contract).
 	if not _using_lod:

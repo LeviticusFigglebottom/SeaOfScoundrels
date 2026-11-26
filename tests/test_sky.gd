@@ -195,3 +195,82 @@ func _count_mesh_triangles(mesh: Mesh) -> int:
 			if raw_verts is PackedVector3Array:
 				total += floori(float((raw_verts as PackedVector3Array).size()) / 3.0)
 	return total
+
+
+func test_post_storm_sunbreak_and_sunshower_rainbow_lifecycle() -> void:
+	_save_weather()
+	Net.start_single_player()
+	Weather.set_focus(Vector3.ZERO)
+
+	# 1. Verify sky_body.gdshaderinc defines rainbow uniform, anti-solar angle & dual optical bows.
+	var inc_text := FileAccess.get_file_as_string("res://src/sky/sky_body.gdshaderinc")
+	check(inc_text.contains("uniform float rainbow_strength"),
+		"sky_body.gdshaderinc declares uniform float rainbow_strength")
+	check(inc_text.contains("anti_ang") and inc_text.contains("bow_prim") and inc_text.contains("bow_sec"),
+		"sky_body.gdshaderinc implements anti-solar primary 42-deg & secondary 51-deg bow optics")
+	for sh_path: String in ["res://src/sky/sky_low.gdshader", "res://src/sky/sky_medium.gdshader", "res://src/sky/sky_high.gdshader"]:
+		check(load(sh_path) is Shader, "sky shader %s loads cleanly with rainbow include" % sh_path)
+
+	var rig := SKY_RIG_SCENE.instantiate() as Node3D
+	rig.set(&"track_camera_focus", false)
+	add_child(rig)
+	await physics_frames(1)
+	var sky_mat := rig.get(&"sky_material") as ShaderMaterial
+	check(sky_mat != null, "SkyRig exposes sky_material")
+
+	# 2. Midnight must keep rainbow_strength strictly 0.0 even during rain.
+	Weather.time_of_day = 0.0
+	Weather.set_weather(0.54, 12.0, 0.0, 0.0, 0.6)
+	rig.call(&"_process", 0.05)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.0, 0.001, "midnight suppresses rainbow")
+	check_near(float(sky_mat.get_shader_parameter(&"rainbow_strength")), 0.0, 0.001, "midnight shader rainbow_strength == 0")
+
+	# 3. Clear dry midday must also keep rainbow_strength == 0.0.
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 6.0, 0.0, 0.0, 0.15)
+	rig.call(&"_process", 0.05)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.0, 0.001, "clear dry midday has 0 rainbow")
+
+	# 4. Afternoon coastal sun-shower (time_of_day = 16.5, moderate rain/storm) activates rainbow > 0.15!
+	Weather.time_of_day = 16.5
+	Weather.set_weather(0.54, 11.0, 0.0, 0.0, 0.55)
+	rig.call(&"_process", 0.05)
+	var shower_str := float(rig.get(&"current_rainbow_strength"))
+	check(shower_str > 0.15, "afternoon coastal sun-shower activates rainbow (got %.3f)" % shower_str)
+	check_near(float(sky_mat.get_shader_parameter(&"rainbow_strength")), shower_str, 0.001,
+		"sky shader rainbow_strength matches SkyRig.current_rainbow_strength")
+
+	# 5. Post-storm sunbreak: heavy storm (0.85) clears to sunny 0.18 -> triggers 75s clearing rainbow!
+	Weather.set_weather(0.85, 20.0, 0.0, 0.0, 1.0)
+	rig.call(&"_process", 0.10)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.0, 0.001, "heavy overcast storm suppresses rainbow")
+
+	Weather.set_weather(0.18, 9.0, 0.0, 0.0, 0.35)
+	rig.call(&"_process", 0.10)
+	var sunbreak_str := float(rig.get(&"current_rainbow_strength"))
+	check(sunbreak_str > 0.70, "post-storm sunbreak triggers vivid rainbow (got %.3f)" % sunbreak_str)
+
+	# Advance 68 s into the 75 s window -> smoothly fading in final 15 s; then past 75 s -> 0.0!
+	rig.call(&"_process", 68.0)
+	var fading_str := float(rig.get(&"current_rainbow_strength"))
+	check(fading_str > 0.05 and fading_str < sunbreak_str * 0.75,
+		"post-storm rainbow fades smoothly over final 15 s (%.3f < %.3f)" % [fading_str, sunbreak_str])
+	rig.call(&"_process", 10.0)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.0, 0.001,
+		"post-storm rainbow clears cleanly after 75 s window")
+
+	# 6. rainbow_override overrides deterministically and resets cleanly when set back to -1.0!
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 6.0, 0.0, 0.0, 0.15)
+	rig.set(&"rainbow_override", 0.85)
+	rig.call(&"_process", 0.05)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.85, 0.001, "rainbow_override forces 0.85 cleanly")
+	check_near(float(sky_mat.get_shader_parameter(&"rainbow_strength")), 0.85, 0.001, "shader receives rainbow_override")
+	rig.set(&"rainbow_override", -1.0)
+	rig.call(&"_process", 0.05)
+	check_near(float(rig.get(&"current_rainbow_strength")), 0.0, 0.001, "rainbow_override = -1.0 restores automatic mode")
+
+	rig.queue_free()
+	await physics_frames(2)
+	_restore_weather()
+

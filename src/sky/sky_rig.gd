@@ -66,6 +66,8 @@ const IMPACT_DURATION := 0.95
 @export var track_camera_focus: bool = true
 ## Rain splashes ride the `Sea` wave surface. Turn off over a flat test sea.
 @export var splashes_follow_sea: bool = true
+## Optional override for coastal rainbow strength (set >= 0.0 for showcase captures; -1 = automatic).
+@export var rainbow_override: float = -1.0
 
 var environment: Environment
 var sun: DirectionalLight3D
@@ -77,6 +79,8 @@ var palette: Dictionary = {}
 var camera_sheltered: bool = false
 ## Fraction of the key light reaching the camera through the clouds this frame.
 var light_at_camera: float = 1.0
+## Current computed or overridden coastal rainbow strength (0..1) sent to the sky shader.
+var current_rainbow_strength: float = 0.0
 ## The clouds as a CPU-side function, for `cloud_light_at()`.
 var cloud_field: RefCounted = CloudField.new()
 
@@ -105,6 +109,8 @@ var _impact_intensity: float = 0.0
 var _shadow_viewport: SubViewport
 var _shadow_material: ShaderMaterial
 var _rng := RandomNumberGenerator.new()
+var _peak_recent_storm: float = 0.0
+var _post_storm_rainbow_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -439,6 +445,7 @@ func _update(first: bool, delta: float = 0.0) -> void:
 	environment.fog_height = 14.0
 	environment.fog_height_density = rain * 0.012
 
+	current_rainbow_strength = _compute_rainbow_strength(sun_dir, storm, rain, delta)
 	_update_sky(p, sun_dir, moon_dir, sun_is_key, storm, cover, rain, flash)
 	_update_shadow_bake(cam_pos, key_dir)
 
@@ -460,6 +467,37 @@ func _update(first: bool, delta: float = 0.0) -> void:
 	if _bolt.visible and flash <= 0.01:
 		_bolt.visible = false
 	_update_impact(delta, flash)
+
+
+func _compute_rainbow_strength(sun_dir: Vector3, storm: float, rain: float, delta: float) -> float:
+	if _post_storm_rainbow_timer > 0.0 and delta > 0.0:
+		_post_storm_rainbow_timer = maxf(0.0, _post_storm_rainbow_timer - delta)
+	if storm >= 0.55:
+		_peak_recent_storm = maxf(_peak_recent_storm, storm)
+	elif _peak_recent_storm >= 0.55:
+		_post_storm_rainbow_timer = 75.0
+		_peak_recent_storm = 0.0
+
+	if rainbow_override >= 0.0:
+		return clampf(rainbow_override, 0.0, 1.5)
+
+	# Low-to-mid sun window (0.04..0.64), peaking around 0.15..0.44 golden sun; 0 at night or overhead noon.
+	var sun_elev := smoothstep(0.04, 0.16, sun_dir.y) * smoothstep(0.66, 0.44, sun_dir.y)
+	if sun_elev <= 0.001:
+		return 0.0
+
+	var sunshower := 0.0
+	if rain > 0.06 and storm < 0.68:
+		sunshower = smoothstep(0.06, 0.24, rain) * smoothstep(0.68, 0.44, storm) * 0.92
+
+	var post_storm := 0.0
+	if _post_storm_rainbow_timer > 0.0 and storm < 0.62:
+		var time_fade := smoothstep(0.0, 15.0, _post_storm_rainbow_timer)
+		var clear_gate := smoothstep(0.62, 0.28, storm)
+		post_storm = time_fade * clear_gate
+
+	return clampf(maxf(sunshower, post_storm) * sun_elev, 0.0, 1.0)
+
 
 func _update_sky(p: Dictionary, sun_dir: Vector3, moon_dir: Vector3,
 		sun_is_key: bool, storm: float, cover: float, rain: float, flash: float) -> void:
@@ -506,6 +544,7 @@ func _update_sky(p: Dictionary, sun_dir: Vector3, moon_dir: Vector3,
 	m.set_shader_parameter(&"cirrus_scroll", _wrap(
 			Vector2(drift.x * 0.8 + drift.y * 0.6, drift.y * 0.8 - drift.x * 0.6) / 90000.0))
 	m.set_shader_parameter(&"ray_strength", float(p["ray_strength"]))
+	m.set_shader_parameter(&"rainbow_strength", current_rainbow_strength)
 	# Altitudes the march must cover: lower and deeper when anything is stormy.
 	var in_front: bool = Weather.front_progress < 1.0
 	var any_storm: float = maxf(maxf(Weather.base_storminess, Weather.storm_intensity),

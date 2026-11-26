@@ -443,6 +443,17 @@
 			"max_distance": 200,
 			"unit_size": 12
 		},
+		"ship_bell": {
+			"bus": "SFX",
+			"files": [
+				"sfx/ship_bell_1.wav",
+				"sfx/ship_bell_2.wav",
+				"sfx/ship_bell_3.wav"
+			],
+			"lufs": -17,
+			"max_distance": 140,
+			"unit_size": 10
+		},
 		"skeleton_rattle": {
 			"bus": "SFX",
 			"files": [

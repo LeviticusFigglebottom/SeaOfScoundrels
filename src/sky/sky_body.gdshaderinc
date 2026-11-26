@@ -62,6 +62,8 @@ uniform float rain_slant = 0.0;
 uniform float flash = 0.0;
 uniform vec3 flash_pos = vec3(0.0, 900.0, -1000.0);
 uniform vec3 flash_color = vec3(0.6, 0.7, 1.0);
+// Post-storm sun-break & coastal sun-shower rainbow intensity (0..1; 0 = 0.00 ms).
+uniform float rainbow_strength = 0.0;
 
 // Baked ground shadow of the clouds (see cloud_shadow.gdshaderinc), for light shafts.
 uniform sampler2D shadow_map : repeat_disable, filter_linear;
@@ -530,6 +532,44 @@ void sky() {
 		layer = weather_layer(eye, d, FRAGCOORD.xy, TIME, AT_CUBEMAP_PASS);
 #endif
 		col = col * (1.0 - layer.a) + layer.rgb;
+
+		// Post-storm sun-break & coastal sun-shower 42-deg primary + 51-deg secondary rainbow
+		// (0 extra texture taps, 0.00 ms when rainbow_strength == 0.0).
+		if (rainbow_strength > 0.002 && !AT_CUBEMAP_PASS && d.y > 0.0 && sun_dir.y > 0.02) {
+			float anti_ang = acos(clamp(dot(d, -sun_dir), -1.0, 1.0));
+			// Primary 42-deg rainbow (0.733 rad center; red outer ~0.742 -> violet inner ~0.707).
+			float u1 = (anti_ang - 0.689) / 0.088;
+			float d1_r = (u1 - 0.82) / 0.19;
+			float d1_v = (u1 - 0.14) / 0.15;
+			float d1_g = (u1 - 0.54) / 0.21;
+			float d1_b = (u1 - 0.24) / 0.19;
+			float env1 = smoothstep(0.0, 0.14, u1) * smoothstep(1.0, 0.86, u1);
+			vec3 bow_prim = vec3(
+				exp(-d1_r * d1_r) * 1.05 + exp(-d1_v * d1_v) * 0.36,
+				exp(-d1_g * d1_g) * 0.96,
+				exp(-d1_b * d1_b) * 1.00
+			) * env1;
+
+			// Faint reversed-order 51-deg secondary rainbow (0.890 rad center, ~0.24x strength).
+			float u2 = 1.0 - (anti_ang - 0.834) / 0.112;
+			float d2_r = (u2 - 0.82) / 0.19;
+			float d2_v = (u2 - 0.14) / 0.15;
+			float d2_g = (u2 - 0.54) / 0.21;
+			float d2_b = (u2 - 0.24) / 0.19;
+			float env2 = smoothstep(0.0, 0.14, u2) * smoothstep(1.0, 0.86, u2);
+			vec3 bow_sec = vec3(
+				exp(-d2_r * d2_r) * 1.05 + exp(-d2_v * d2_v) * 0.36,
+				exp(-d2_g * d2_g) * 0.96,
+				exp(-d2_b * d2_b) * 1.00
+			) * (env2 * 0.24);
+
+			// Subtle bright inner-bow atmospheric scatter contrasting against Alexander's band.
+			float inner_shimmer = smoothstep(0.732, 0.640, anti_ang) * 0.055;
+			vec3 bow_col = bow_prim + bow_sec + vec3(0.95, 0.93, 0.88) * inner_shimmer;
+			float horizon_mask = smoothstep(0.0, 0.055, d.y) * smoothstep(0.68, 0.28, d.y);
+			float backdrop_boost = mix(0.75, 1.35, layer.a);
+			col += bow_col * (rainbow_strength * 0.42 * horizon_mask * backdrop_boost);
+		}
 
 		if (!AT_CUBEMAP_PASS) {
 			// Break up 8-bit banding in the smooth gradient.

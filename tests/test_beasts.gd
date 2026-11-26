@@ -730,12 +730,18 @@ func test_flotsam_cluster_sculpted_debris_and_salvage() -> void:
 	var raw_prims := 0
 	var bad_normals := 0
 	var debris_tris := 0
+	var col_meshes: Array[String] = []
 	for n in c1.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
-		if mi == null or mi.mesh == null:
+		if mi == null:
+			continue
+		if mi.name.begins_with("col_"):
+			col_meshes.append(mi.name)
+		if mi.mesh == null:
 			continue
 		if mi.mesh is PrimitiveMesh:
 			raw_prims += 1
+	check(col_meshes.is_empty(), "FlotsamCluster strips all col_* collision helper meshes (found: %s)" % str(col_meshes))
 	if dmi1 != null and dmi1.mesh is ArrayMesh:
 		var am := dmi1.mesh as ArrayMesh
 		check(am.get_surface_count() >= 2, "ShipwreckDebrisMesh has timber/hemp + painted float/iron surfaces")
@@ -798,6 +804,108 @@ func test_flotsam_cluster_sculpted_debris_and_salvage() -> void:
 	check(not is_instance_valid(c1) and not is_instance_valid(c2), "FlotsamClusters freed cleanly")
 	check(flotsam_gd.get(&"_debris_mesh") == null and flotsam_gd.get(&"_wood_mat") == null and flotsam_gd.get(&"_accent_mat") == null,
 		"FlotsamCluster releases static mesh & material caches cleanly with zero leaks")
+
+
+func test_reef_fish_school_single_dc_orbit_scatter_and_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Populate a Crescent Lagoon island with CoralReef + ReefFishSchool and verify island placement.
+	var isl := IslandGenerator.build_island({
+		"id": "test_crescent_fish",
+		"name": "Test Crescent Fish",
+		"archetype": &"crescent_lagoon",
+		"radius": 62.0,
+		"peak_height": 34.0,
+		"landing_yaw": 0.72,
+		"seed": 8803,
+	})
+	_root.add_child(isl)
+	CoralReef.populate_for_island(isl, 8880, 1.15)
+	var school := ReefFishSchool.populate_for_island(isl, 8934)
+	check(school != null, "ReefFishSchool.populate_for_island spawns school on crescent_lagoon")
+	check(school.is_in_group(ReefFishSchool.GROUP), "ReefFishSchool registers in reef_fish group")
+
+	# Spawn a second school to confirm static ArrayMesh & material sharing.
+	var school2 := ReefFishSchool.new()
+	school2.position = Vector3(20.0, -2.8, 0.0)
+	school2.fish_count = 22
+	_root.add_child(school2)
+	await physics_frames(1)
+
+	# 2. Verify strictly 1 MultiMeshInstance3D draw call, zero raw primitives, sRGB material & distance cull.
+	var mmis := school.find_children("*", "MultiMeshInstance3D", true, false)
+	var mis := school.find_children("*", "MeshInstance3D", true, false)
+	check_eq(mmis.size(), 1, "ReefFishSchool renders in strictly 1 MultiMeshInstance3D draw call")
+	check_eq(mis.size(), 0, "ReefFishSchool adds zero extra MeshInstance3D draw calls")
+
+	var mmi := school.get_multimesh_instance()
+	var mmi2 := school2.get_multimesh_instance()
+	check(mmi != null and mmi.name == "FishSchoolMultiMesh", "MultiMeshInstance3D named FishSchoolMultiMesh")
+	check_eq(mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "ReefFishSchool disables shadows")
+	check(mmi.visibility_range_end > 0.0 and mmi.visibility_range_end <= 80.0,
+		"ReefFishSchool visibility_range_end <= 80 m (got %.1f)" % mmi.visibility_range_end)
+	check_eq(mmi.visibility_range_fade_mode, GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF,
+		"ReefFishSchool uses self fade mode")
+
+	var mm := mmi.multimesh
+	check(mm != null and mm.use_colors, "MultiMesh enables per-instance tropical species colors")
+	check(mm.instance_count >= 20 and mm.instance_count <= 26,
+		"ReefFishSchool spawns 20..26 tropical fish (got %d)" % mm.instance_count)
+	check(mm.mesh is ArrayMesh and not (mm.mesh is PrimitiveMesh),
+		"ReefFishSchool uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(mm.mesh, mmi2.multimesh.mesh, "ReefFishSchools share statically cached fish ArrayMesh")
+
+	var mat := mmi.material_override as StandardMaterial3D
+	check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+		"ReefFishSchool uses sRGB vertex-colored material")
+
+	var arr := (mm.mesh as ArrayMesh).surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var fish_tris := floori(float(verts.size()) / 3.0)
+	var bad_norms := 0
+	for nv in norms:
+		if not nv.is_finite() or nv.length_squared() < 0.5:
+			bad_norms += 1
+	check_eq(bad_norms, 0, "all sculpted reef fish normals are finite unit vectors")
+	check(fish_tris >= 100, "sculpted tropical reef fish has body, fins & tail (%d tris)" % fish_tris)
+	print("    ReefFishSchool: 1 DC, %d fish, %d tris/fish, center=%s" % [mm.instance_count, fish_tris, str(school.position)])
+
+	# 3. Verify all fish stay strictly submerged (y <= -0.95 m) and advance smoothly along swim loop.
+	var pos0 := school.get_fish_world_positions()
+	for p in pos0:
+		check(p.y <= -0.95, "initial reef fish strictly submerged (y=%.2f <= -0.95)" % p.y)
+
+	for _step in 4:
+		school.step_school(0.25)
+	var pos1 := school.get_fish_world_positions()
+	var moved_sum := 0.0
+	for i in pos1.size():
+		check(pos1[i].y <= -0.95, "swimming reef fish strictly submerged (y=%.2f <= -0.95)" % pos1[i].y)
+		moved_sum += pos1[i].distance_to(pos0[i])
+	var avg_move := moved_sum / float(maxi(1, pos1.size()))
+	check(avg_move > 0.35, "reef fish advance smoothly along curving reef loops (avg_move=%.2f m)" % avg_move)
+
+	# 4. Verify playful scatter away from a nearby swimming threat within 4.5 m while staying submerged!
+	var threat := pos1[0] + Vector3(0.2, 0.0, 0.2)
+	var dist_before := pos1[0].distance_to(threat)
+	for _s in 6:
+		school.step_school(0.15, threat)
+	var pos_after := school.get_fish_world_positions()
+	var dist_after := pos_after[0].distance_to(threat)
+	check(dist_after > dist_before + 1.4,
+		"fish scatters briskly away from nearby swimmer (%.2f -> %.2f m)" % [dist_before, dist_after])
+	for p in pos_after:
+		check(p.y <= -0.95, "scattering fish never pokes above sea surface (y=%.2f <= -0.95)" % p.y)
+
+	# 5. Zero-leak teardown releases all static caches cleanly when last school exits tree!
+	await _end()
+	check_eq(ReefFishSchool._active_schools, 0, "all ReefFishSchools exited cleanly")
+	check(ReefFishSchool._fish_mesh == null and ReefFishSchool._fish_mat == null,
+		"ReefFishSchool releases static fish mesh & material caches cleanly to null")
+
 
 
 

@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|helm|map_table|hold|cabin|flotsam|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|rainbow|helm|map_table|hold|cabin|flotsam|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -1031,6 +1031,7 @@ func _wire_world_signals() -> void:
 	# Ship sinking -> zero-wipe salvage wreck & restore at last outpost.
 	player_ship.sunk.connect(_on_player_ship_sunk)
 	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
+	_wire_ship_bell(player_ship)
 
 	# Autoload signals (cleaned up in _exit_tree).
 	if not Weather.thunder_heard.is_connected(_on_thunder_heard):
@@ -2485,6 +2486,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 	player_ship.sunk.connect(_on_player_ship_sunk)
 	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
+	_wire_ship_bell(player_ship)
 
 	if player_pawn != null and is_instance_valid(player_pawn):
 		if player_pawn.station != null:
@@ -2517,6 +2519,22 @@ func _swap_player_ship_class(cls: StringName) -> void:
 	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
 	_apply_inventory_tool_modifiers()
 	old_ship.queue_free()
+
+
+func _wire_ship_bell(target_ship: Ship) -> void:
+	if target_ship == null or not is_instance_valid(target_ship):
+		return
+	if not target_ship.ship_bell_rung.is_connected(_on_player_ship_bell_rung):
+		target_ship.ship_bell_rung.connect(_on_player_ship_bell_rung)
+
+
+func _on_player_ship_bell_rung(_by_pawn: Node) -> void:
+	if not Net.is_host():
+		return
+	for br in crew_brains:
+		if br != null and is_instance_valid(br) and br.current_task == &"idle":
+			br._speak(&"banter", {}, "bell_cheer", 10.0)
+			return
 
 
 func _on_settings_changed() -> void:
@@ -2783,7 +2801,7 @@ func _apply_hero_shot(mode: String) -> void:
 	if p_cv != null:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
-			"storm", "sunset", "night", "night_sail", "leviathan", "fleet",
+			"storm", "sunset", "night", "night_sail", "rainbow", "leviathan", "fleet",
 			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
@@ -2818,6 +2836,24 @@ func _apply_hero_shot(mode: String) -> void:
 			if pod != null and pod.has_method(&"force_leap_phase"):
 				pod.call(&"force_leap_phase", 1.25)
 			_enable_ship_track_shot(Vector3(12.4 * sc, 3.2 * sc, -17.2 * sc), Vector3(2.8 * sc, 2.0 * sc, -6.8 * sc), 52.0)
+
+		"rainbow":
+			# Late-afternoon coastal sunbreak looking cleanly anti-solar past our sunlit ship into the 42-deg rainbow arch!
+			Weather.time_of_day = 16.45 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.32, 11.4, -0.36, 0.0, 0.62)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.28)
+			if sky_rig != null and sky_rig.get(&"rainbow_override") != null:
+				sky_rig.set(&"rainbow_override", 0.92)
+			var ship_yaw_rb := -0.25
+			_place_sailing_ship(Vector3(42.0, 0.0, -215.0), ship_yaw_rb, 0.92, 5.8)
+			var sun_d := Weather.sun_direction()
+			var anti_h := Vector3(-sun_d.x, 0.0, -sun_d.z)
+			anti_h = anti_h.normalized() if anti_h.length_squared() > 0.001 else Vector3(0.934, 0.0, -0.356)
+			var anti_right := anti_h.cross(Vector3.UP).normalized()
+			var rb_yaw_inv := Basis(Vector3.UP, ship_yaw_rb).inverse()
+			var rb_cam_off := -anti_h * (27.5 * sc) + anti_right * (7.5 * sc) + Vector3(0.0, 4.4 * sc, 0.0)
+			var rb_look_off := anti_h * (24.0 * sc) + anti_right * (7.5 * sc) + Vector3(0.0, 11.5 * sc, 0.0)
+			_enable_ship_track_shot(rb_yaw_inv * rb_cam_off, rb_yaw_inv * rb_look_off, 60.0)
 
 		"island_approach":
 			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time

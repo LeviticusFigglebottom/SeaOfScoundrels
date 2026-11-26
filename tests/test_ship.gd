@@ -765,6 +765,111 @@ func test_livery_net_state_replication_roundtrip() -> void:
 	await _end()
 
 
+func test_interactive_ship_bell_swing_signal_and_zero_primitives() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(28.0, 0.0, 0.0)
+
+	var corsair := SLOOP_SCENE.instantiate() as Ship
+	corsair.faction = &"corsair"
+	corsair.enable_effects = false
+	_root.add_child(corsair)
+	corsair.global_position = Vector3(-28.0, 0.0, 0.0)
+	await physics_frames(4)
+
+	# 1. Verify ShipBell mounts on player Sloop & Brigantine rail positions, NOT on rival ships.
+	check(sloop.ship_bell_node != null and sloop.ship_bell_interactable != null,
+		"player Sloop mounts sculpted ShipBell and ShipBellInteractable")
+	check(brig.ship_bell_node != null and brig.ship_bell_interactable != null,
+		"player Brigantine mounts sculpted ShipBell and ShipBellInteractable")
+	check(corsair.ship_bell_node == null, "rival Corsair ship does not mount player ShipBell")
+	check(sloop.ship_bell_node.position.is_equal_approx(Vector3(0.0, 2.86, 2.98)),
+		"Sloop ShipBell mounts atop quarterdeck front balustrade rail")
+	check(brig.ship_bell_node.position.is_equal_approx(Vector3(0.0, 3.08, 3.98)),
+		"Brigantine ShipBell mounts atop quarterdeck front balustrade rail")
+	check_eq(sloop.ship_bell_interactable.prompt, "Ring ship's bell", "ShipBell interactable prompt matches")
+	check_near(sloop.ship_bell_interactable.reach, 2.6, 0.01, "ShipBell interactable reach is 2.6 m")
+	check(Audio.has_sound(&"ship_bell"), "Audio catalogue registers synthesized maritime ship_bell SFX")
+
+	# 2. Verify zero raw PrimitiveMeshes, finite unit normals, and vertex_color_is_srgb = true!
+	var raw_prims := 0
+	var bad_normals := 0
+	var srgb_missing := 0
+	var total_tris := 0
+	for n in brig.ship_bell_node.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				total_tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+				var mat := mi.material_override as StandardMaterial3D
+				if mat != null and mat.vertex_color_use_as_albedo and not mat.vertex_color_is_srgb:
+					srgb_missing += 1
+	print("    ShipBell sculpted tris: %d" % total_tris)
+	check_eq(raw_prims, 0, "ShipBell contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "ShipBell normals are finite unit vectors")
+	check_eq(srgb_missing, 0, "ShipBell materials enable vertex_color_is_srgb = true")
+	check(total_tris >= 350, "ShipBell has sculpted flat-faceted belfry & bronze cup detail (%d >= 350 tris)" % total_tris)
+
+	# 3. Verify Brigantine cabin hammock clearance & softened candlelight polish.
+	var furn := brig.cabin_furnishings
+	check(furn != null and furn.trophy_lectern.position.is_equal_approx(Vector3(-0.84, -0.95, 5.25)),
+		"Brigantine TrophyLectern shifted inboard clear of crew hammocks")
+	check(furn != null and furn.astrolabe_stand.position.is_equal_approx(Vector3(0.90, -0.95, 5.25)),
+		"Brigantine AstrolabeStand shifted inboard clear of crew hammocks")
+	check(furn != null and furn.candle_light != null and furn.candle_light.light_energy <= 0.70 and furn.candle_light.omni_range <= 3.3,
+		"CabinCandleLight softened to prevent hammock highlight blowout")
+
+	# 4. Verify ring_bell() emits ship_bell_rung & drives damped pendulum oscillation on ShipBellPivot.
+	var rung_pawns: Array[Node] = []
+	brig.ship_bell_rung.connect(func(by_p: Node) -> void: rung_pawns.append(by_p))
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.global_position = brig.ship_bell_node.global_position + Vector3(0.0, -0.5, 0.9)
+	brig.ship_bell_interactable.interact(captain)
+	check_eq(rung_pawns.size(), 1, "ShipBell interact emits ship_bell_rung once")
+	if not rung_pawns.is_empty():
+		check_eq(rung_pawns[0], captain, "ship_bell_rung passes ringing pawn")
+
+	var pivot := brig.ship_bell_node.get_node_or_null(^"ShipBellPivot") as Node3D
+	check(pivot != null, "ShipBell exposes ShipBellPivot for pendulum swing")
+	var peak_pos := 0.0
+	var peak_neg := 0.0
+	for _i in 45:
+		brig._update_visuals(1.0 / 30.0)
+		if pivot != null:
+			peak_pos = maxf(peak_pos, pivot.rotation.x)
+			peak_neg = minf(peak_neg, pivot.rotation.x)
+	check(peak_pos > 0.25 and peak_neg < -0.10,
+		"ShipBell swings back and forth with damped harmonic pendulum (pos=%.2f, neg=%.2f)" % [peak_pos, peak_neg])
+	for _i in 75:
+		brig._update_visuals(1.0 / 30.0)
+	check(pivot != null and absf(pivot.rotation.x) < 0.12,
+		"ShipBell pendulum damps cleanly toward rest (rot=%.3f)" % (pivot.rotation.x if pivot != null else 99.0))
+
+	# 5. Clean teardown releases all static ShipBell meshes & materials with zero leaks.
+	await _end()
+	check(Ship._bell_frame_mesh == null and Ship._bell_cup_mesh == null \
+		and Ship._bell_iron_mat == null and Ship._bell_bronze_mat == null,
+		"Ship releases static ShipBell mesh & material caches cleanly when last ship exits tree")
+
+
+
 
 
 

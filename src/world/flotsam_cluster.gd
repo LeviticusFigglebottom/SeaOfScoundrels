@@ -188,6 +188,10 @@ func _build_visuals() -> void:
 			var inst := barrel_scene.instantiate() as Node3D
 			if inst != null:
 				inst.name = "BarrelModel"
+				for col_node in inst.find_children("col_*", "MeshInstance3D", true, false):
+					if col_node.get_parent() != null:
+						col_node.get_parent().remove_child(col_node)
+					col_node.free()
 				_barrel_root.add_child(inst)
 				return
 

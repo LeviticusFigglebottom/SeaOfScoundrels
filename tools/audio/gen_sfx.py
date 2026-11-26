@@ -346,6 +346,26 @@ def parry_ring(rng, v):
 	return out
 
 
+def ship_bell(rng, v):
+	"""Cast-bronze maritime ship's bell: rich minor-third bell partials, crisp
+	brass clapper strike click, gentle bronze beating shimmer, and sea-air tail."""
+	dur = 2.65
+	out = buf(dur)
+	f0 = rng.uniform(620.0, 690.0)
+	ratios = np.array([0.50, 1.00, 1.188, 1.50, 2.00, 2.51, 3.01]) * rng.uniform(0.996, 1.004, 7)
+	t60 = np.array([2.45, 2.15, 1.75, 1.25, 1.55, 0.72, 0.45]) * rng.uniform(0.92, 1.08, 7)
+	amps = np.array([0.52, 1.00, 0.74, 0.46, 0.82, 0.34, 0.22])
+	fr = f0 * ratios
+	# Pair slightly detuned cast-bronze doublets for authentic maritime shimmer beating.
+	fr_pair = np.concatenate([fr, fr * rng.uniform(1.0012, 1.0032, len(fr))])
+	td_pair = np.concatenate([t60, t60 * 0.88])
+	am_pair = np.concatenate([amps, amps * 0.42])
+	S.place(out, S.modal(fr_pair, td_pair, am_pair, dur - 0.05, rng), 0.0, 0.92)
+	S.place(out, click(rng, 0.0022, 1800, 7500), 0.0, 0.65)
+	S.place(out, thump(520.0, 220.0, 0.04, 0.025), 0.0, 0.22)
+	return room(out, 0.14, 0.65)
+
+
 def hit_flesh(rng, v):
 	out = buf(0.4)
 	S.place(out, thump(rng.uniform(130, 170), rng.uniform(55, 70), 0.3, 0.14, 0.025), 0.0, 1.2)
@@ -650,6 +670,7 @@ SOUNDS = {
 	"sword_swing": (sword_swing, 4, -23, 3, 25, "SFX"),
 	"sword_clash": (sword_clash, 4, -20, 5, 60, "SFX"),
 	"parry_ring": (parry_ring, 2, -17, 5, 60, "SFX"),
+	"ship_bell": (ship_bell, 3, -17, 10, 140, "SFX"),
 	"hit_flesh": (hit_flesh, 4, -24, 4, 35, "SFX"),
 	"skeleton_rattle": (skeleton_rattle, 4, -21, 4, 35, "SFX"),
 	"pistol_shot": (pistol_shot, 3, -13, 20, 400, "SFX"),

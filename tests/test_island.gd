@@ -1215,6 +1215,73 @@ func test_night_island_fireflies_daylight_and_distance_gating() -> void:
 	Weather.apply_state(saved_weather)
 
 
+func test_outpost_lighthouse_rotating_beacon_beam() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	var outpost := IslandGenerator.build_island(Archipelago.ISLAND_SPECS[0]) as Outpost
+	add_child(outpost)
+	await physics_frames(2)
+
+	# 1. Verify LighthouseBeam mounted under BeaconTower using sculpted ArrayMesh (0 primitives) + shader.
+	var beam := outpost.beacon_beam
+	check(beam != null and beam.name == "LighthouseBeam", "Outpost mounts LighthouseBeam MeshInstance3D")
+	check(outpost.beacon_node != null and beam != null and beam.get_parent() == outpost.beacon_node,
+		"LighthouseBeam is mounted cleanly on Outpost's BeaconTower")
+	if beam != null:
+		check(beam.mesh is ArrayMesh and not (beam.mesh is PrimitiveMesh),
+			"LighthouseBeam uses sculpted dual-cone ArrayMesh (zero raw PrimitiveMeshes)")
+		var beam_tris := _count_array_mesh_tris(beam.mesh)
+		print("    lighthouse volumetric beam: %d tris (dual opposing 74 m Fresnel cones)" % beam_tris)
+		check(beam_tris >= 128, "LighthouseBeam dual-cone ArrayMesh has smooth volumetric rings (%d tris)" % beam_tris)
+		check_eq(beam.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"LighthouseBeam disables shadow casting")
+		check_eq(beam.gi_mode, GeometryInstance3D.GI_MODE_DISABLED, "LighthouseBeam disables GI")
+		check(beam.extra_cull_margin >= 75.0, "LighthouseBeam sets generous extra_cull_margin for 74 m cones")
+		var smat := beam.material_override as ShaderMaterial
+		check(smat != null and smat.shader == Outpost.LIGHTHOUSE_BEAM_SHADER,
+			"LighthouseBeam uses lighthouse_beam.gdshader")
+
+		# 2. Clear midday sun -> hidden (0.00 ms GPU cost!).
+		Weather.time_of_day = 12.0
+		Weather.set_weather(0.0, 8.0, 0.0)
+		await get_tree().process_frame
+		check(not beam.visible, "LighthouseBeam stays hidden in clear midday sun")
+
+		# 3. Midnight -> activates smoothly and rotates continuously across frames!
+		Weather.time_of_day = 23.0
+		Weather.set_weather(0.0, 8.0, 0.0)
+		await get_tree().process_frame
+		check(beam.visible, "LighthouseBeam activates cleanly at midnight")
+		var night_intensity := float(smat.get_shader_parameter(&"beam_intensity")) if smat != null else 0.0
+		check(night_intensity > 0.5, "LighthouseBeam intensity > 0.5 at midnight (got %.2f)" % night_intensity)
+		var yaw_before := beam.rotation.y
+		for _i in 12:
+			await get_tree().process_frame
+		var rot_delta := absf(wrapf(beam.rotation.y - yaw_before, -PI, PI))
+		check(rot_delta > 0.02, "LighthouseBeam rotates smoothly across frames (delta=%.3f rad)" % rot_delta)
+
+		# 4. Daytime heavy storm mist -> activates cleanly as a storm navigation guide!
+		Weather.time_of_day = 12.0
+		Weather.set_weather(0.85, 19.0, 0.0)
+		await get_tree().process_frame
+		check(beam.visible, "LighthouseBeam activates during a heavy daytime storm")
+		var storm_intensity := float(smat.get_shader_parameter(&"beam_intensity")) if smat != null else 0.0
+		check(storm_intensity > 0.5, "LighthouseBeam intensity > 0.5 in daytime storm (got %.2f)" % storm_intensity)
+
+	# 5. Zero-leak teardown releases static _beacon_beam_mesh & _beacon_beam_mat cleanly!
+	outpost.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(beam), "LighthouseBeam freed cleanly with Outpost")
+	check(Outpost._beacon_beam_mesh == null and Outpost._beacon_beam_mat == null,
+		"Outpost releases static _beacon_beam_mesh and _beacon_beam_mat cleanly on teardown")
+	Weather.apply_state(saved_weather)
+
+
+
 
 
 
