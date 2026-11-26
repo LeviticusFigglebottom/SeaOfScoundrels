@@ -11,6 +11,7 @@ signal menu_closed
 signal voyage_accepted(voyage: Dictionary)
 signal loadout_changed(slot: StringName, unlock_id: StringName)
 signal ship_class_selected(cls: StringName)
+signal armory_loadout_changed(melee_id: StringName, ranged_id: StringName)
 signal settings_changed
 
 const TAB_VOYAGES := &"voyages"
@@ -39,6 +40,8 @@ const SHAPE_LABELS := {
 var is_open: bool = false
 var active_tab: StringName = TAB_VOYAGES
 var selected_ship_class: StringName = &"sloop"
+var selected_melee_weapon: StringName = &"cutlass"
+var selected_ranged_weapon: StringName = &"pistol"
 var selected_story_chapter: int = 1
 var origin_outpost_id: StringName = &"port_scoundrel"
 
@@ -74,6 +77,12 @@ func _ready() -> void:
 		var saved_cls := String(Game.profile.data.get("ship_class", "sloop"))
 		if saved_cls == "brigantine" or saved_cls == "sloop":
 			selected_ship_class = StringName(saved_cls)
+		var saved_melee := StringName(String(Game.profile.data.get("melee_weapon", "cutlass")))
+		if saved_melee == &"cutlass" or saved_melee == &"boarding_axe":
+			selected_melee_weapon = saved_melee
+		var saved_ranged := StringName(String(Game.profile.data.get("ranged_weapon", "pistol")))
+		if saved_ranged == &"pistol" or saved_ranged == &"blunderbuss":
+			selected_ranged_weapon = saved_ranged
 	_build_ui()
 	_backdrop.visible = false
 
@@ -102,6 +111,9 @@ func bind(
 	_crew_brains = p_crew_brains.duplicate()
 	world_director = p_world_director
 	scene_root = p_scene_root
+	if inventory != null and is_instance_valid(inventory):
+		selected_melee_weapon = inventory.melee_weapon
+		selected_ranged_weapon = inventory.ranged_weapon
 	if is_open:
 		refresh()
 
@@ -265,6 +277,28 @@ func select_ship_class(cls: StringName) -> void:
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	_set_status("Ship class selected: %s" % String(cls).capitalize())
 	ship_class_selected.emit(cls)
+	refresh()
+
+
+## Switch preferred captain armory weapons (&"cutlass"/&"boarding_axe" and &"pistol"/&"blunderbuss"),
+## immediately updating Inventory + CombatComponent and saving to Game.profile.
+func select_armory_loadout(melee_id: StringName, ranged_id: StringName) -> void:
+	if melee_id == &"cutlass" or melee_id == &"boarding_axe":
+		selected_melee_weapon = melee_id
+	if ranged_id == &"pistol" or ranged_id == &"blunderbuss":
+		selected_ranged_weapon = ranged_id
+	if inventory != null and is_instance_valid(inventory):
+		inventory.set_weapon_loadout(selected_melee_weapon, selected_ranged_weapon)
+	if Game != null and Game.profile != null:
+		Game.profile.data["melee_weapon"] = String(selected_melee_weapon)
+		Game.profile.data["ranged_weapon"] = String(selected_ranged_weapon)
+		Game.save()
+	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+	_set_status("Armory loadout: %s + %s" % [
+		ToolMeshes.get_display_name(selected_melee_weapon),
+		ToolMeshes.get_display_name(selected_ranged_weapon),
+	])
+	armory_loadout_changed.emit(selected_melee_weapon, selected_ranged_weapon)
 	refresh()
 
 
@@ -700,6 +734,60 @@ func _rebuild_shipwright_tab() -> void:
 		btn.pressed.connect(func() -> void: select_ship_class(cid))
 		cls_row.add_child(btn)
 	_shipwright_box.add_child(cls_card)
+
+	# 2b. Armory Loadout Selector (Melee & Firearm)
+	if inventory != null and is_instance_valid(inventory):
+		selected_melee_weapon = inventory.melee_weapon
+		selected_ranged_weapon = inventory.ranged_weapon
+	var armory_card := _make_card_panel(Color(0.91, 0.84, 0.70, 0.96), HudIcons.COL_BRASS)
+	var armory_row := HBoxContainer.new()
+	armory_row.add_theme_constant_override("separation", 10)
+	armory_card.add_child(armory_row)
+
+	var armory_lbl := Label.new()
+	armory_lbl.text = "ARMORY LOADOUT"
+	armory_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	armory_lbl.add_theme_font_size_override("font_size", 16)
+	armory_row.add_child(armory_lbl)
+
+	var melee_lbl := Label.new()
+	melee_lbl.text = "Melee:"
+	melee_lbl.add_theme_font_size_override("font_size", 14)
+	melee_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	armory_row.add_child(melee_lbl)
+
+	for m_spec: Array in [[&"cutlass", "Cutlass"], [&"boarding_axe", "Boarding Axe"]]:
+		var mid: StringName = m_spec[0]
+		var mlabel: String = m_spec[1]
+		var mbtn := Button.new()
+		mbtn.name = "ArmoryMelee_" + String(mid)
+		mbtn.text = mlabel
+		_style_highlight_button(mbtn, selected_melee_weapon == mid)
+		mbtn.pressed.connect(func() -> void: select_armory_loadout(mid, selected_ranged_weapon))
+		armory_row.add_child(mbtn)
+
+	var sep_lbl := Label.new()
+	sep_lbl.text = "|"
+	sep_lbl.add_theme_font_size_override("font_size", 15)
+	sep_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	armory_row.add_child(sep_lbl)
+
+	var ranged_lbl := Label.new()
+	ranged_lbl.text = "Firearm:"
+	ranged_lbl.add_theme_font_size_override("font_size", 14)
+	ranged_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	armory_row.add_child(ranged_lbl)
+
+	for r_spec: Array in [[&"pistol", "Flintlock Pistol"], [&"blunderbuss", "Blunderbuss"]]:
+		var rid: StringName = r_spec[0]
+		var rlabel: String = r_spec[1]
+		var rbtn := Button.new()
+		rbtn.name = "ArmoryRanged_" + String(rid)
+		rbtn.text = rlabel
+		_style_highlight_button(rbtn, selected_ranged_weapon == rid)
+		rbtn.pressed.connect(func() -> void: select_armory_loadout(selected_melee_weapon, rid))
+		armory_row.add_child(rbtn)
+	_shipwright_box.add_child(armory_card)
 
 	# 3. Sidegrade Fittings & Ship Liveries by slot
 	for sec in SLOT_SECTIONS:

@@ -13,6 +13,7 @@ signal tipsy_changed(amount: float)
 signal sighting_updated(label: String, distance_m: float)
 signal bucket_changed(full: bool)
 signal shanty_playing_changed(playing: bool)
+signal weapon_loadout_changed(melee_id: StringName, ranged_id: StringName)
 
 const DEFAULT_SLOTS: Array[StringName] = [
 	&"cutlass",
@@ -28,9 +29,13 @@ const DEFAULT_SLOTS: Array[StringName] = [
 	&"instrument",
 ]
 
+const VALID_MELEE_WEAPONS: Array[StringName] = [&"cutlass", &"boarding_axe"]
+const VALID_RANGED_WEAPONS: Array[StringName] = [&"pistol", &"blunderbuss"]
+
 const BASE_FOV := 80.0
 const SPYGLASS_FOV := 18.0
 const PISTOL_ADS_FOV := 62.0
+const BLUNDERBUSS_ADS_FOV := 68.0
 const HEAVY_HOLD_TIME := 0.30
 const SHOVEL_REACH := 2.6
 const PLANK_REACH := 3.2
@@ -41,7 +46,9 @@ const GROG_HEAL := 15.0
 ## [rest_pos, rest_rot_deg, raise_pos, raise_rot_deg, scale].
 const FP_POSES := {
 	&"cutlass": [Vector3(0.32, -0.34, -0.52), Vector3(-16.0, 14.0, 12.0), Vector3(0.08, -0.18, -0.44), Vector3(-14.0, 62.0, 68.0), 0.85],
+	&"boarding_axe": [Vector3(0.35, -0.38, -0.54), Vector3(-14.0, 12.0, 10.0), Vector3(0.06, -0.20, -0.44), Vector3(-10.0, 68.0, 74.0), 0.86],
 	&"pistol": [Vector3(0.28, -0.26, -0.46), Vector3(2.0, 4.0, 0.0), Vector3(0.0, -0.145, -0.40), Vector3(0.0, 0.0, 0.0), 0.92],
+	&"blunderbuss": [Vector3(0.30, -0.28, -0.48), Vector3(3.0, 6.0, -2.0), Vector3(0.0, -0.155, -0.42), Vector3(0.0, 0.0, 0.0), 0.90],
 	&"compass": [Vector3(0.23, -0.23, -0.40), Vector3(26.0, -14.0, -8.0), Vector3(0.0, -0.17, -0.35), Vector3(56.0, 0.0, 0.0), 0.72],
 	&"spyglass": [Vector3(0.26, -0.24, -0.44), Vector3(8.0, 16.0, -6.0), Vector3(0.0, -0.02, -0.18), Vector3(0.0, 0.0, 0.0), 0.95],
 	&"lantern": [Vector3(0.34, 0.04, -0.48), Vector3(4.0, -10.0, -4.0), Vector3(0.18, 0.22, -0.56), Vector3(-8.0, -6.0, 2.0), 0.92],
@@ -57,6 +64,9 @@ const FP_POSES := {
 var slots: Array[StringName] = DEFAULT_SLOTS.duplicate()
 var active_index: int = 0
 var active_item: StringName = &"cutlass"
+## Selected armory weapons mapped to the melee (&"cutlass") and ranged (&"pistol") slots.
+var melee_weapon: StringName = &"cutlass"
+var ranged_weapon: StringName = &"pistol"
 
 ## Read keyboard/mouse input directly. Set false for AI or scripted showcases/tests.
 @export var input_enabled: bool = true
@@ -117,11 +127,23 @@ func _init() -> void:
 
 func _ready() -> void:
 	_rng.randomize()
+	_load_weapon_loadout_from_profile()
 	_discover_siblings()
 	if treasure_map_texture == null:
 		treasure_map_texture = MapPainter.render_treasure_map(
 			map_island_name, map_contour, map_dig_local, map_island_radius)
 	equip(slots[active_index] if not slots.is_empty() else &"cutlass", true)
+
+
+func _load_weapon_loadout_from_profile() -> void:
+	if Game == null or Game.profile == null:
+		return
+	var saved_melee := StringName(String(Game.profile.data.get("melee_weapon", "cutlass")))
+	if VALID_MELEE_WEAPONS.has(saved_melee):
+		melee_weapon = saved_melee
+	var saved_ranged := StringName(String(Game.profile.data.get("ranged_weapon", "pistol")))
+	if VALID_RANGED_WEAPONS.has(saved_ranged):
+		ranged_weapon = saved_ranged
 
 
 func _exit_tree() -> void:
@@ -212,8 +234,48 @@ func _ensure_mounts() -> void:
 # Slot selection & equipment
 # ==============================================================================
 
+## Resolve a slot ID (`&"cutlass"` / `&"pistol"`) to the captain's active armory weapon ID.
+func get_resolved_tool_id(slot_id: StringName = &"") -> StringName:
+	var target := active_item if slot_id == &"" else slot_id
+	if target == &"cutlass":
+		return melee_weapon
+	if target == &"pistol":
+		return ranged_weapon
+	return target
+
+
+## Switch the captain's armory melee (`&"cutlass"` / `&"boarding_axe"`) and ranged
+## (`&"pistol"` / `&"blunderbuss"`) weapons, persisting to `Game.profile` and updating live meshes.
+func set_weapon_loadout(melee_id: StringName, ranged_id: StringName) -> void:
+	var next_melee := melee_id if VALID_MELEE_WEAPONS.has(melee_id) else melee_weapon
+	var next_ranged := ranged_id if VALID_RANGED_WEAPONS.has(ranged_id) else ranged_weapon
+	var changed := (next_melee != melee_weapon) or (next_ranged != ranged_weapon)
+	melee_weapon = next_melee
+	ranged_weapon = next_ranged
+	if Game != null and Game.profile != null:
+		Game.profile.data["melee_weapon"] = String(melee_weapon)
+		Game.profile.data["ranged_weapon"] = String(ranged_weapon)
+
+	_discover_siblings()
+	if active_item == &"cutlass" or active_item == &"pistol":
+		if combat != null:
+			combat.equip_weapon(get_resolved_tool_id(active_item))
+		_rebuild_tool_meshes()
+		_equip_dip = 0.65
+		item_equipped.emit(active_item)
+	if changed:
+		weapon_loadout_changed.emit(melee_weapon, ranged_weapon)
+
+
 ## Equip a specific tool by ID (returns true if valid and equipped).
 func equip(item_id: StringName, silent: bool = false) -> bool:
+	if item_id == &"boarding_axe":
+		set_weapon_loadout(&"boarding_axe", ranged_weapon)
+		item_id = &"cutlass"
+	elif item_id == &"blunderbuss":
+		set_weapon_loadout(melee_weapon, &"blunderbuss")
+		item_id = &"pistol"
+
 	var idx := slots.find(item_id)
 	if idx < 0:
 		if ToolMeshes.ALL_TOOLS.has(item_id):
@@ -239,7 +301,7 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 
 	_discover_siblings()
 	if (item_id == &"cutlass" or item_id == &"pistol") and combat != null:
-		combat.equip_weapon(item_id)
+		combat.equip_weapon(get_resolved_tool_id(item_id))
 
 	if changed:
 		_rebuild_tool_meshes()
@@ -284,14 +346,15 @@ func _rebuild_tool_meshes() -> void:
 		tp_tool_node.queue_free()
 		tp_tool_node = null
 
+	var mesh_id := get_resolved_tool_id(active_item)
 	if viewmodel_root != null and is_instance_valid(viewmodel_root):
-		fp_tool_node = ToolMeshes.build_tool(active_item)
+		fp_tool_node = ToolMeshes.build_tool(mesh_id)
 		_configure_fp_node(fp_tool_node)
 		viewmodel_root.add_child(fp_tool_node)
 		_sync_tool_visual_state(fp_tool_node)
 
 	if tp_mount != null and is_instance_valid(tp_mount):
-		tp_tool_node = ToolMeshes.build_tool(active_item)
+		tp_tool_node = ToolMeshes.build_tool(mesh_id)
 		# Avoid double OmniLight3D when both FP and TP lanterns exist on the local player.
 		if fp_tool_node != null and active_item == &"lantern":
 			var tp_light := tp_tool_node.get_node_or_null(^"LanternLight") as OmniLight3D
@@ -379,7 +442,7 @@ func use_primary() -> Variant:
 	match active_item:
 		&"cutlass", &"pistol":
 			if combat != null:
-				combat.equip_weapon(active_item)
+				combat.equip_weapon(get_resolved_tool_id(active_item))
 				return combat.primary_attack()
 			_start_swing(&"slash", 0.34)
 			return true
@@ -405,12 +468,12 @@ func use_primary() -> Variant:
 	return false
 
 
-## Trigger a heavy melee strike (cutlass).
+## Trigger a heavy melee strike (cutlass or boarding axe).
 func use_heavy() -> bool:
 	if pawn == null or pawn.dead or pawn.station != null or combat == null:
 		return false
 	if active_item == &"cutlass":
-		combat.equip_weapon(&"cutlass")
+		combat.equip_weapon(melee_weapon)
 		return combat.heavy_attack()
 	return false
 
@@ -722,7 +785,8 @@ func _tick_spyglass(delta: float) -> void:
 		if spyglass_zoom > 0.002 or active_item == &"spyglass":
 			player_controller.camera.fov = lerpf(base, SPYGLASS_FOV, spyglass_zoom)
 		else:
-			var target_fov := PISTOL_ADS_FOV if (active_item == &"pistol" and _secondary_held) else base
+			var ads_fov := BLUNDERBUSS_ADS_FOV if ranged_weapon == &"blunderbuss" else PISTOL_ADS_FOV
+			var target_fov := ads_fov if (active_item == &"pistol" and _secondary_held) else base
 			player_controller.camera.fov = lerpf(player_controller.camera.fov, target_fov, 1.0 - exp(-12.0 * delta))
 
 	if active_item == &"spyglass":
@@ -852,7 +916,8 @@ func _tick_lantern_flicker() -> void:
 func _tick_viewmodel_pose(delta: float) -> void:
 	if fp_tool_node == null or not is_instance_valid(fp_tool_node):
 		return
-	var pose: Array = FP_POSES.get(active_item, FP_POSES[&"cutlass"])
+	var pose_id := get_resolved_tool_id(active_item)
+	var pose: Array = FP_POSES.get(pose_id, FP_POSES.get(active_item, FP_POSES[&"cutlass"]))
 	var rest_pos: Vector3 = pose[0]
 	var rest_rot: Vector3 = pose[1]
 	var raise_pos: Vector3 = pose[2]
@@ -898,6 +963,9 @@ func _tick_viewmodel_pose(delta: float) -> void:
 			&"pistol":
 				pos += Vector3(0.0, 0.055 * pulse, 0.095 * pulse)
 				rot_deg += Vector3(28.0 * pulse, 0.0, 0.0)
+			&"blunderbuss":
+				pos += Vector3(0.0, 0.085 * pulse, 0.145 * pulse)
+				rot_deg += Vector3(40.0 * pulse, 0.0, -5.0 * pulse)
 			&"dig":
 				pos += Vector3(-0.08 * pulse, -0.18 * pulse, -0.18 * pulse)
 				rot_deg += Vector3(-52.0 * pulse, 12.0 * pulse, 8.0 * pulse)
@@ -914,7 +982,7 @@ func _tick_viewmodel_pose(delta: float) -> void:
 			_:
 				pos += Vector3(0.0, 0.03 * pulse, -0.04 * pulse)
 
-	# Charge windup feedback when holding primary with cutlass.
+	# Charge windup feedback when holding primary with melee weapon.
 	if active_item == &"cutlass" and _primary_was_down and not _heavy_fired_this_hold and _primary_hold_time > 0.08:
 		var ch := clampf((_primary_hold_time - 0.08) / (HEAVY_HOLD_TIME - 0.08), 0.0, 1.0)
 		pos += Vector3(0.10 * ch, 0.06 * ch, 0.08 * ch)
@@ -942,7 +1010,9 @@ func _sync_visibility() -> void:
 func _on_combat_attack_started(kind: StringName) -> void:
 	if kind == &"heavy":
 		_start_swing(&"heavy", 0.58)
-	elif kind == &"pistol" or kind == &"blunderbuss":
+	elif kind == &"blunderbuss":
+		_start_swing(&"blunderbuss", 0.42)
+	elif kind == &"pistol":
 		_start_swing(&"pistol", 0.30)
 	else:
 		_start_swing(kind, 0.36)

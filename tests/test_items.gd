@@ -459,3 +459,47 @@ func test_hud_radials_crew_orders_banners_and_quality_presets() -> void:
 	hud.set_pause_open(false)
 	check(not hud.pause_open and not pc.look_paused, "closing Pause overlay resumes look")
 	await _end()
+
+
+# ---------------------------------------------------------------------------
+# 6. Armory Weapon Meshes (Boarding Axe & Blunderbuss) & Loadout Switching
+# ---------------------------------------------------------------------------
+
+func test_armory_weapon_loadouts_and_meshes() -> void:
+	_begin()
+	for wid: StringName in [&"boarding_axe", &"blunderbuss"]:
+		var node := ToolMeshes.build_tool(wid)
+		check(node != null, "ToolMeshes.build_tool(%s) returns valid node" % wid)
+		var meshes := node.find_children("*", "MeshInstance3D", true, false)
+		check(meshes.size() >= 1, "armory weapon %s has MeshInstance3D children" % wid)
+		var verts := 0
+		for m_node in meshes:
+			var mi := m_node as MeshInstance3D
+			if mi.mesh != null:
+				verts += mi.mesh.get_faces().size()
+		check(verts >= 36, "armory weapon %s has sculpted geometry (got %d verts)" % [wid, verts])
+		node.free()
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+
+	inv.set_weapon_loadout(&"boarding_axe", &"blunderbuss")
+	check_eq(inv.melee_weapon, &"boarding_axe", "Inventory switches melee loadout to boarding_axe")
+	check_eq(inv.ranged_weapon, &"blunderbuss", "Inventory switches ranged loadout to blunderbuss")
+
+	inv.equip(&"cutlass", true)
+	check_eq(cc.equipped_weapon, &"boarding_axe", "equipping melee slot activates boarding_axe on CombatComponent")
+	inv.equip(&"pistol", true)
+	check_eq(cc.equipped_weapon, &"blunderbuss", "equipping ranged slot activates blunderbuss on CombatComponent")
+
+	var menu := ShipwrightMenu.new()
+	_root.add_child(menu)
+	menu.inventory = inv
+	menu.select_armory_loadout(&"cutlass", &"pistol")
+	check_eq(inv.melee_weapon, &"cutlass", "ShipwrightMenu restores cutlass loadout")
+	check_eq(inv.ranged_weapon, &"pistol", "ShipwrightMenu restores pistol loadout")
+	check_eq(cc.equipped_weapon, &"pistol", "CombatComponent updates live from ShipwrightMenu Armory")
+	await _end()
+

@@ -643,9 +643,9 @@ func _tick_boss_hud() -> void:
 		return
 	var origin := player_pawn.global_position if (player_pawn != null and is_instance_valid(player_pawn)) else player_ship.global_position
 	for lev in active_leviathans:
-		if lev != null and is_instance_valid(lev) and not lev.defeated:
+		if lev != null and is_instance_valid(lev) and not lev.is_defeated():
 			if lev.global_position.distance_to(origin) < 130.0:
-				var ratio := clampf(lev.get_health_ratio() if lev.has_method(&"get_health_ratio") else float(lev.active_tentacle_count()) / 4.0, 0.0, 1.0)
+				var ratio := lev.get_health_ratio()
 				hud.set_boss_encounter("ABYSSAL LEVIATHAN", ratio, true)
 				return
 	for foe in active_enemies:

@@ -24,7 +24,9 @@ const ALL_TOOLS: Array[StringName] = [
 
 const DISPLAY_NAMES := {
 	&"cutlass": "Cutlass",
+	&"boarding_axe": "Boarding Axe",
 	&"pistol": "Flintlock Pistol",
+	&"blunderbuss": "Blunderbuss",
 	&"compass": "Brass Compass",
 	&"spyglass": "Spyglass",
 	&"lantern": "Oil Lantern",
@@ -80,8 +82,12 @@ static func build_tool(tool_id: StringName) -> Node3D:
 	match tool_id:
 		&"cutlass":
 			return _build_cutlass()
+		&"boarding_axe":
+			return _build_boarding_axe()
 		&"pistol":
 			return _build_pistol()
+		&"blunderbuss":
+			return _build_blunderbuss()
 		&"compass":
 			return _build_compass()
 		&"spyglass":
@@ -341,6 +347,289 @@ static func _build_pistol() -> Node3D:
 	_append_beveled_box(st_brass, Vector3(0.005, 0.024, 0.007), 0.001, Transform3D(Basis(Vector3.RIGHT, -0.3), Vector3(0.0, 0.006, -0.048)))
 	st_brass.generate_normals()
 	root.add_child(_make_mesh_node("BrassTrim", st_brass.commit(), _make_mat(COL_BRASS, 0.26, 0.86)))
+	return root
+
+
+## 2b. Boarding Axe: chunky crescent forged-steel chopping blade with riveted iron collar,
+## rear armor-piercing boarding spike, long wrapped oak haft with leather bands, & brass pommel.
+static func _build_boarding_axe() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_BoardingAxe"
+
+	# Long turned oak haft passing through grip origin (0, 0, 0) up into the axe eye finial.
+	var haft_prof: Array[Vector2] = [
+		Vector2(0.0, -0.215),
+		Vector2(0.018, -0.208),
+		Vector2(0.022, -0.155),
+		Vector2(0.019, -0.070),
+		Vector2(0.020, 0.040),
+		Vector2(0.019, 0.190),
+		Vector2(0.022, 0.365),
+		Vector2(0.024, 0.560),
+		Vector2(0.018, 0.602),
+		Vector2(0.0, 0.615),
+	]
+	root.add_child(_make_mesh_node("TimberHaft", _lathe_mesh(haft_prof, 10), _make_mat(COL_OAK_WARM, 0.78, 0.03)))
+
+	# Stitched dark leather grip wrap centered at origin plus upper choking-grip band.
+	var st_leather := SurfaceTool.new()
+	st_leather.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_leather, [
+		Vector2(0.019, -0.116),
+		Vector2(0.0235, -0.106),
+		Vector2(0.0215, -0.072),
+		Vector2(0.0245, -0.038),
+		Vector2(0.0215, 0.0),
+		Vector2(0.0245, 0.038),
+		Vector2(0.0215, 0.072),
+		Vector2(0.0235, 0.102),
+		Vector2(0.019, 0.112),
+	], 10)
+	_append_lathe(st_leather, [
+		Vector2(0.0195, 0.215),
+		Vector2(0.0240, 0.224),
+		Vector2(0.0222, 0.252),
+		Vector2(0.0245, 0.280),
+		Vector2(0.0205, 0.292),
+	], 10)
+	st_leather.generate_normals()
+	root.add_child(_make_mesh_node("LeatherWrap", st_leather.commit(), _make_mat(COL_LEATHER, 0.74, 0.05)))
+
+	# Turned brass pommel cap, lanyard loop, and bolster ferrule bands.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.268),
+		Vector2(0.026, -0.258),
+		Vector2(0.032, -0.236),
+		Vector2(0.027, -0.212),
+		Vector2(0.020, -0.202),
+	], 10)
+	var ring_pts: Array[Vector3] = []
+	for i in 11:
+		var a := float(i) / 10.0 * TAU
+		ring_pts.append(Vector3(cos(a) * 0.014, -0.278 + sin(a) * 0.014, 0.0))
+	_append_tube(st_brass, ring_pts, 0.0038, 6, false)
+	# Bolster rings framing leather grip and seated beneath the iron collar.
+	_append_lathe(st_brass, [
+		Vector2(0.020, -0.130), Vector2(0.025, -0.126), Vector2(0.025, -0.114), Vector2(0.020, -0.110),
+	], 10)
+	_append_lathe(st_brass, [
+		Vector2(0.020, 0.106), Vector2(0.025, 0.110), Vector2(0.025, 0.122), Vector2(0.020, 0.126),
+	], 10)
+	_append_lathe(st_brass, [
+		Vector2(0.022, 0.376), Vector2(0.028, 0.382), Vector2(0.028, 0.402), Vector2(0.023, 0.408),
+	], 10)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassFittings", st_brass.commit(), _make_mat(COL_BRASS, 0.28, 0.86)))
+
+	# Riveted forged-iron eye collar, cheek plates, reinforcement langets, and proud domed rivets.
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_beveled_box(st_iron, Vector3(0.056, 0.148, 0.078), 0.009,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.485, 0.0)))
+	_append_beveled_box(st_iron, Vector3(0.050, 0.022, 0.070), 0.005,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.566, 0.0)))
+	# Front & rear langet straps bolted down the oak haft.
+	_append_beveled_box(st_iron, Vector3(0.022, 0.155, 0.012), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.345, -0.024)))
+	_append_beveled_box(st_iron, Vector3(0.022, 0.155, 0.012), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.345, 0.024)))
+	var rivet_prof: Array[Vector2] = [
+		Vector2(0.007, 0.0),
+		Vector2(0.007, 0.004),
+		Vector2(0.0045, 0.007),
+		Vector2(0.0, 0.008),
+	]
+	for sx: float in [-1.0, 1.0]:
+		var cheek_rot := Basis(Vector3.BACK, -sx * PI * 0.5)
+		for ry: float in [0.445, 0.525]:
+			for rz: float in [-0.018, 0.018]:
+				_append_lathe(st_iron, rivet_prof, 6, Transform3D(cheek_rot, Vector3(sx * 0.026, ry, rz)))
+	for sz: float in [-1.0, 1.0]:
+		var lang_rot := Basis(Vector3.RIGHT, sz * PI * 0.5)
+		for ry: float in [0.295, 0.355]:
+			_append_lathe(st_iron, rivet_prof, 6, Transform3D(lang_rot, Vector3(0.0, ry, sz * 0.028)))
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("IronCollar", st_iron.commit(), _make_mat(COL_IRON, 0.40, 0.80)))
+
+	# Chunky crescent forged-steel chopping blade (-Z) + rear armor-piercing boarding spike (+Z).
+	var st_steel := SurfaceTool.new()
+	st_steel.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var blade_rings: Array = []
+	var blade_steps := 12
+	for i in range(blade_steps + 1):
+		var t := float(i) / float(blade_steps)
+		var y := lerpf(0.335, 0.635, t)
+		var u_mid := (t - 0.50) * 2.0
+		var abs_u := absf(u_mid)
+		# Concave bearded neck & dramatic convex crescent cutting edge facing -Z.
+		var back_z := -0.026 - 0.105 * pow(abs_u, 1.85)
+		var front_z := -0.242 + 0.072 * (u_mid * u_mid)
+		var bevel_z := lerpf(front_z, back_z, 0.26)
+		var cheek_x := lerpf(0.018, 0.0085, abs_u)
+		var bevel_x := cheek_x * 0.66
+		# CW from +Y so dT (+Y) x dU points strictly outward on every face & end cap.
+		blade_rings.append([
+			Vector3(0.0, y, front_z),
+			Vector3(bevel_x, y, bevel_z),
+			Vector3(cheek_x, y, back_z),
+			Vector3(-cheek_x, y, back_z),
+			Vector3(-bevel_x, y, bevel_z),
+		])
+	_append_loft(st_steel, blade_rings, true)
+
+	# Rear curved diamond-section armor-piercing boarding spike extending along +Z.
+	var spike_rings: Array = []
+	var spike_steps := 7
+	for i in range(spike_steps + 1):
+		var t := float(i) / float(spike_steps)
+		var z := lerpf(0.030, 0.202, t)
+		var yc := 0.502 - 0.052 * pow(t, 1.75)
+		var rx := lerpf(0.017, 0.0022, pow(t, 0.85))
+		var ry := lerpf(0.024, 0.0025, pow(t, 0.85))
+		# Wound top -> right -> bottom -> left so dT (+Z) x dU points strictly outward.
+		spike_rings.append([
+			Vector3(0.0, yc + ry, z),
+			Vector3(rx, yc, z),
+			Vector3(0.0, yc - ry, z),
+			Vector3(-rx, yc, z),
+		])
+	_append_loft(st_steel, spike_rings, true)
+	st_steel.generate_normals()
+	root.add_child(_make_mesh_node("AxeBlade", st_steel.commit(), _make_mat(COL_STEEL, 0.24, 0.90)))
+	return root
+
+
+## 2c. Blunderbuss: iconic flared bell-mouth brass barrel with octagonal breech,
+## carved walnut stock, brass trigger guard, and starboard flintlock hammer & lockplate (-Z aim).
+static func _build_blunderbuss() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Blunderbuss"
+
+	# Carved walnut shoulder buttstock, slender wrist at origin, and chunky forearm bed (-Z).
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stock_rings: Array = []
+	var stock_path: Array = [
+		[Vector3(0.0, -0.090, 0.220), 0.024, 0.058],
+		[Vector3(0.0, -0.068, 0.145), 0.022, 0.044],
+		[Vector3(0.0, -0.028, 0.068), 0.020, 0.028],
+		[Vector3(0.0, -0.004, 0.008), 0.019, 0.023],
+		[Vector3(0.0, 0.036, -0.048), 0.025, 0.030],
+		[Vector3(0.0, 0.038, -0.185), 0.024, 0.024],
+		[Vector3(0.0, 0.040, -0.295), 0.020, 0.019],
+	]
+	for s in stock_path:
+		var c: Vector3 = s[0]
+		var rx: float = s[1]
+		var ry: float = s[2]
+		# Ring wound so dT (-Z) x dU points strictly outward on all side walls & end caps.
+		stock_rings.append([
+			c + Vector3(0.0, ry, 0.0),
+			c + Vector3(-rx, ry * 0.45, 0.0),
+			c + Vector3(-rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(0.0, -ry, 0.0),
+			c + Vector3(rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(rx, ry * 0.45, 0.0),
+		])
+	_append_loft(st_wood, stock_rings, true)
+	# Under-barrel wooden ramrod tucked cleanly beneath the forearm.
+	var ram_xf := Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, 0.020, -0.175))
+	_append_lathe(st_wood, [
+		Vector2(0.0, 0.0),
+		Vector2(0.0065, 0.002),
+		Vector2(0.0065, 0.205),
+		Vector2(0.0, 0.208),
+	], 8, ram_xf)
+	st_wood.generate_normals()
+	root.add_child(_make_mesh_node("Stock", st_wood.commit(), _make_mat(COL_WALNUT, 0.60, 0.04)))
+
+	# Iconic octagonal-breech flared bell-mouth brass barrel, clamping bands, buttplate,
+	# starboard lockplate, and sweeping brass trigger guard.
+	var barrel_xf := Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, 0.070, -0.035))
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Octagonal heavy breech section (8 segments).
+	_append_lathe(st_brass, [
+		Vector2(0.0, 0.0),
+		Vector2(0.031, 0.002),
+		Vector2(0.030, 0.155),
+		Vector2(0.027, 0.168),
+	], 8, barrel_xf)
+	# Turned stepped collar moulding & dramatic flared trumpet bell-mouth muzzle (16 segments).
+	_append_lathe(st_brass, [
+		Vector2(0.0265, 0.160),
+		Vector2(0.0315, 0.168),
+		Vector2(0.0315, 0.184),
+		Vector2(0.0260, 0.192),
+		Vector2(0.0245, 0.265),
+		Vector2(0.0310, 0.315),
+		Vector2(0.0425, 0.365),
+		Vector2(0.0560, 0.402),
+		Vector2(0.0640, 0.418),
+		Vector2(0.0600, 0.428),
+		Vector2(0.0500, 0.424),
+		Vector2(0.0460, 0.414),
+	], 16, barrel_xf)
+	# Decorative brass barrel clamping bands & ramrod tip cap.
+	_append_lathe(st_brass, [
+		Vector2(0.030, 0.108), Vector2(0.0335, 0.112), Vector2(0.0335, 0.132), Vector2(0.030, 0.136),
+	], 10, barrel_xf)
+	_append_lathe(st_brass, [
+		Vector2(0.0255, 0.232), Vector2(0.0295, 0.236), Vector2(0.0295, 0.258), Vector2(0.0255, 0.262),
+	], 12, barrel_xf)
+	_append_lathe(st_brass, [
+		Vector2(0.007, 0.195), Vector2(0.009, 0.200), Vector2(0.009, 0.218), Vector2(0.0, 0.220),
+	], 8, ram_xf)
+	# Heavy brass shoulder buttplate.
+	_append_beveled_box(st_brass, Vector3(0.050, 0.120, 0.015), 0.004,
+		Transform3D(Basis(Vector3.RIGHT, 0.16), Vector3(0.0, -0.090, 0.226)))
+	# Starboard brass flintlock lockplate.
+	_append_beveled_box(st_brass, Vector3(0.009, 0.034, 0.092), 0.0025,
+		Transform3D(Basis.IDENTITY, Vector3(0.026, 0.044, -0.065)))
+	# Sweeping brass trigger guard bow beneath wrist/breech.
+	_append_tube(st_brass, [
+		Vector3(0.0, 0.014, 0.004),
+		Vector3(0.0, -0.022, -0.028),
+		Vector3(0.0, -0.020, -0.086),
+		Vector3(0.0, 0.018, -0.114),
+	], 0.0052, 6, true)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassBarrel", st_brass.commit(), _make_mat(COL_BRASS, 0.25, 0.88)))
+
+	# Deep soot-darkened inner bell funnel bore (wound downward along -Y so normals face out the muzzle).
+	var bore_mesh := _lathe_mesh([
+		Vector2(0.049, 0.422),
+		Vector2(0.033, 0.386),
+		Vector2(0.020, 0.340),
+		Vector2(0.0, 0.330),
+	], 14, barrel_xf)
+	root.add_child(_make_mesh_node("BarrelBore", bore_mesh, _make_mat(Color(0.06, 0.06, 0.07), 0.92, 0.15)))
+
+	# Forged-iron flintlock hammer/cock, flint clamp, flash pan, upright steel frizzen & trigger.
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_tube(st_iron, [
+		Vector3(0.031, 0.050, -0.044),
+		Vector3(0.036, 0.094, -0.038),
+		Vector3(0.031, 0.108, -0.064),
+	], 0.0072, 6, true)
+	_append_beveled_box(st_iron, Vector3(0.012, 0.014, 0.018), 0.002,
+		Transform3D(Basis(Vector3.RIGHT, 0.35), Vector3(0.031, 0.104, -0.072)))
+	# Flash pan & upright steel frizzen ahead of the hammer.
+	_append_beveled_box(st_iron, Vector3(0.014, 0.012, 0.022), 0.002,
+		Transform3D(Basis.IDENTITY, Vector3(0.030, 0.055, -0.088)))
+	_append_beveled_box(st_iron, Vector3(0.011, 0.036, 0.016), 0.002,
+		Transform3D(Basis(Vector3.RIGHT, -0.15), Vector3(0.031, 0.076, -0.098)))
+	# Forged-iron trigger blade inside the brass guard.
+	_append_beveled_box(st_iron, Vector3(0.006, 0.028, 0.008), 0.001,
+		Transform3D(Basis(Vector3.RIGHT, -0.32), Vector3(0.0, 0.002, -0.056)))
+	# Iron breech tang strip atop wrist.
+	_append_beveled_box(st_iron, Vector3(0.016, 0.008, 0.052), 0.002,
+		Transform3D(Basis(Vector3.RIGHT, 0.22), Vector3(0.0, 0.068, -0.012)))
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("FlintlockMechanism", st_iron.commit(), _make_mat(COL_IRON, 0.38, 0.80)))
 	return root
 
 

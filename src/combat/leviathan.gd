@@ -318,6 +318,20 @@ func living_tentacles() -> int:
 	return n
 
 
+func is_defeated() -> bool:
+	return _defeated
+
+
+func get_health_ratio() -> float:
+	if _defeated or _tentacles.is_empty():
+		return 0.0
+	var hp_sum := 0.0
+	for t in _tentacles:
+		if bool(t["alive"]):
+			hp_sum += maxf(float(t["hp"]), 0.0)
+	return clampf(hp_sum / (float(_tentacles.size()) * TENTACLE_HP), 0.0, 1.0)
+
+
 func _physics_process(delta: float) -> void:
 	_clock += delta
 	if _first_tick:
