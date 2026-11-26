@@ -24,6 +24,11 @@ const GROUP := &"ladders"
 @export var exit_offset: Vector3 = Vector3(0.0, 0.08, -0.75)
 ## How far below the foot a swimmer can still grab the lowest rung.
 @export var reach_below: float = 1.7
+## When true (e.g. deck-mounted mast ladders), require squarely walking straight into
+## the rungs from close range rather than brushing past at an oblique angle.
+@export var require_direct_approach: bool = false
+## When false, AI crew/enemy pawns will not auto-grab this ladder while traversing deck.
+@export var allow_ai_grab: bool = true
 
 func _init() -> void:
 	collision_layer = LAYER

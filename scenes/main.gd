@@ -24,6 +24,7 @@ const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
 const DOLPHIN_POD_PATH := "res://src/world/dolphin_pod.gd"
 const FLOTSAM_CLUSTER_PATH := "res://src/world/flotsam_cluster.gd"
 const OCEAN_WHALE_PATH := "res://src/world/ocean_whale.gd"
+const VICTORY_FLARE_PATH := "res://src/world/victory_flare.gd"
 
 const CREW_SPECS: Array[Dictionary] = [
 	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
@@ -1655,7 +1656,18 @@ func _on_voyage_completed(_voyage: Dictionary, summary: Dictionary) -> void:
 		var next_ch := mini(VoyageComposer.STORY_CHAPTER_COUNT, int(summary.get("story_chapter", 1)) + 1)
 		shipwright_menu.selected_story_chapter = next_ch
 	_sync_cabin_renown(false)
+	if player_ship != null and is_instance_valid(player_ship):
+		_launch_victory_flare(player_ship.global_position + Vector3(0.0, 3.6, 0.0), Color(1.0, 0.84, 0.28))
 	Game.save()
+
+
+func _launch_victory_flare(world_pos: Vector3, accent_col: Color = Color(1.0, 0.84, 0.28)) -> Node3D:
+	if _entities_root == null or not ResourceLoader.exists(VICTORY_FLARE_PATH):
+		return null
+	var flare_gd := load(VICTORY_FLARE_PATH) as GDScript
+	if flare_gd == null or not flare_gd.has_method(&"launch"):
+		return null
+	return flare_gd.call(&"launch", _entities_root, world_pos, accent_col) as Node3D
 
 
 func _sync_cabin_renown(force_all: bool = false) -> void:
@@ -1707,6 +1719,9 @@ func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
 	lev.position = Vector3(center.x, 0.0, center.z)
 	_entities_root.add_child(lev)
 	lev.global_position = Vector3(center.x, 0.0, center.z)
+	lev.leviathan_defeated.connect(func(pos: Vector3, _salvage: Array) -> void:
+		_launch_victory_flare(Vector3(pos.x, Sea.height(pos.x, pos.z) + 2.5, pos.z), Color(0.24, 0.94, 0.88))
+	)
 	active_leviathans.append(lev)
 
 
@@ -1849,7 +1864,8 @@ func _check_fort_vault_unlock(bastion: Node3D, vault: Node3D) -> void:
 	if vault.has_method(&"set_siege_cleared"):
 		vault.call(&"set_siege_cleared", true)
 	if vault.has_method(&"open_vault"):
-		vault.call(&"open_vault")
+		if bool(vault.call(&"open_vault")):
+			_launch_victory_flare(bastion.global_position + Vector3(0.0, 8.5, 0.0), Color(0.28, 0.96, 0.68))
 
 
 static func _collect_bastion_batteries(bastion: Node3D) -> Array[FortBattery]:
@@ -3201,9 +3217,9 @@ func _apply_hero_shot(mode: String) -> void:
 					player_combat.call(&"spawn_showcase_slash_arc", clash_world, player_ship.global_basis * Basis(Vector3.UP, 0.35), &"heavy", true)
 			_shot_duel_spark_timer = 0.42
 
-			# Zero-occlusion quarterdeck-edge camera looking straight forward down the sunlit waist!
-			var cam_duel := Vector3(-0.82, deck_y + 1.52, 4.35) if is_brig else Vector3(-0.62, deck_y + 1.48, 3.25)
-			var look_duel := Vector3(0.05, deck_y + 1.18, 0.80) if is_brig else Vector3(0.02, deck_y + 1.24, 0.15)
+			# Zero-occlusion main-deck waist camera strictly IN FRONT of quarterdeck rail balusters (cam_z < rail_z - 0.40)!
+			var cam_duel := Vector3(-0.62, deck_y + 1.56, 3.38) if is_brig else Vector3(-0.55, deck_y + 1.48, 2.55)
+			var look_duel := Vector3(0.05, deck_y + 1.24, 0.92)
 			_enable_ship_track_shot(cam_duel, look_duel, 58.0)
 
 		"whale_breach":

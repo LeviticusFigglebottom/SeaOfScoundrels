@@ -568,17 +568,23 @@ func _try_grab_ladder() -> bool:
 	var wish := _clean_wish()
 	if wish.length_squared() < 0.01:
 		return false
+	var is_ai_pawn := get_node_or_null(^"CrewBrain") != null or get_node_or_null(^"EnemyBrain") != null
 	for node in get_tree().get_nodes_in_group(Ladder.GROUP):
 		var l := node as Ladder
 		if l == null or not l.is_inside_tree():
 			continue
+		if is_ai_pawn and not l.allow_ai_grab:
+			continue
 		var lp := l.global_transform.affine_inverse() * global_position
-		if absf(lp.x) > l.width * 0.5 + 0.25:
+		var x_pad := 0.08 if l.require_direct_approach else 0.25
+		if absf(lp.x) > l.width * 0.5 + x_pad:
 			continue
 		var toward := wish.dot(l.into_dir())
 		# From the side: from the ground, a lower deck, or the water.
-		if lp.z > -0.1 and lp.z < l.standoff + 0.65 and lp.y > -l.reach_below and lp.y < l.height - 0.35:
-			if toward > (0.1 if mode == Mode.SWIM else 0.35):
+		var z_pad := 0.35 if l.require_direct_approach else 0.65
+		var min_toward := 0.1 if mode == Mode.SWIM else (0.72 if l.require_direct_approach else 0.35)
+		if lp.z > -0.1 and lp.z < l.standoff + z_pad and lp.y > -l.reach_below and lp.y < l.height - 0.35:
+			if toward > min_toward:
 				_mount_ladder(l, lp)
 				return true
 		# From the top: walking off the edge above the ladder, facing out.

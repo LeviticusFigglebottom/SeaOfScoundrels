@@ -17,6 +17,7 @@ signal settings_changed
 
 const TAB_VOYAGES := &"voyages"
 const TAB_SHIPWRIGHT := &"shipwright"
+const TAB_LOG := &"log"
 const TAB_SETTINGS := &"settings"
 
 const SLOT_SECTIONS: Array[Array] = [
@@ -70,6 +71,7 @@ var _status_label: Label = null
 # Dynamic tab content roots
 var _voyage_list_box: VBoxContainer = null
 var _shipwright_box: VBoxContainer = null
+var _log_box: VBoxContainer = null
 var _settings_box: VBoxContainer = null
 
 
@@ -165,6 +167,8 @@ func set_active_tab(tab: StringName) -> void:
 	for key: StringName in _tab_buttons:
 		var btn: Button = _tab_buttons[key]
 		_style_highlight_button(btn, key == tab)
+	if tab == TAB_LOG:
+		_rebuild_log_tab()
 
 
 ## Rebuild all dynamic cards and readouts from live profile, voyage, and settings state.
@@ -174,6 +178,7 @@ func refresh() -> void:
 		_gold_header_label.text = "Treasury: %d Gold" % gold
 	_rebuild_voyages_tab()
 	_rebuild_shipwright_tab()
+	_rebuild_log_tab()
 	_rebuild_settings_tab()
 
 
@@ -578,6 +583,7 @@ func _build_ui() -> void:
 	var tab_specs: Array[Array] = [
 		[TAB_VOYAGES, "Voyage Board"],
 		[TAB_SHIPWRIGHT, "Shipwright & Companies"],
+		[TAB_LOG, "Captain's Log"],
 		[TAB_SETTINGS, "Settings & Controls"],
 	]
 	for spec in tab_specs:
@@ -602,6 +608,7 @@ func _build_ui() -> void:
 
 	_voyage_list_box = _make_scroll_page(body_holder, "VoyagesPage", TAB_VOYAGES)
 	_shipwright_box = _make_scroll_page(body_holder, "ShipwrightPage", TAB_SHIPWRIGHT)
+	_log_box = _make_scroll_page(body_holder, "CaptainsLogPage", TAB_LOG)
 	_settings_box = _make_scroll_page(body_holder, "SettingsPage", TAB_SETTINGS)
 
 	# Footer status bar
@@ -1130,6 +1137,184 @@ func _rebuild_settings_tab() -> void:
 	reset_btn.pressed.connect(reset_keybindings)
 	cv.add_child(reset_btn)
 	_settings_box.add_child(ctl_card)
+
+
+func _rebuild_log_tab() -> void:
+	if _log_box == null:
+		return
+	_clear_children(_log_box)
+	var prof: Profile = Game.profile if Game != null else null
+	var ship_name := prof.get_ship_name() if prof != null else Profile.DEFAULT_SHIP_NAME
+	var cls_id := ship.ship_class if (ship != null and is_instance_valid(ship)) else selected_ship_class
+	var cls_label := String(cls_id).capitalize()
+	var gold := int(prof.data.get("gold", 0)) if prof != null else 0
+	var stats: Dictionary = prof.get_stats() if prof != null else {}
+
+	# 1. Vessel & Deeds Header Card
+	var deeds_card := _make_card_panel(Color(0.95, 0.89, 0.74, 0.98), HudIcons.COL_INK)
+	deeds_card.name = "LogDeedsCard"
+	var dv := VBoxContainer.new()
+	dv.add_theme_constant_override("separation", 8)
+	deeds_card.add_child(dv)
+
+	var vessel_hdr := Label.new()
+	vessel_hdr.name = "LogVesselLabel"
+	vessel_hdr.text = _to_ascii("%s  -  %s" % [ship_name, cls_label])
+	vessel_hdr.add_theme_font_size_override("font_size", 21)
+	vessel_hdr.add_theme_color_override("font_color", HudIcons.COL_INK)
+	dv.add_child(vessel_hdr)
+
+	var deeds_grid := GridContainer.new()
+	deeds_grid.name = "LogDeedsGrid"
+	deeds_grid.columns = 3
+	deeds_grid.add_theme_constant_override("h_separation", 24)
+	deeds_grid.add_theme_constant_override("v_separation", 6)
+	dv.add_child(deeds_grid)
+
+	var deed_rows: Array[String] = [
+		"Gold Purse: %d Gold" % gold,
+		"Voyages Completed: %d" % int(stats.get("voyages_completed", 0)),
+		"Treasures Sold: %d" % int(stats.get("chests_sold", 0)),
+		"Total Gold Earned: %d Gold" % int(stats.get("gold_earned", 0)),
+		"Bosses Vanquished: %d" % int(stats.get("bosses_defeated", 0)),
+		"Ships Lost: %d" % int(stats.get("times_sunk", 0)),
+	]
+	for item_txt in deed_rows:
+		var lbl := Label.new()
+		lbl.text = _to_ascii(item_txt)
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.add_theme_font_size_override("font_size", 14)
+		lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+		deeds_grid.add_child(lbl)
+	_log_box.add_child(deeds_card)
+
+	# 2. Trading Company Standing Section (all 3 companies with heraldic ink-framed ProgressBars)
+	var stand_card := _make_card_panel(Color(0.91, 0.84, 0.69, 0.96), HudIcons.COL_INK_SOFT)
+	stand_card.name = "LogStandingCard"
+	var sv := VBoxContainer.new()
+	sv.add_theme_constant_override("separation", 10)
+	stand_card.add_child(sv)
+
+	var shdr := Label.new()
+	shdr.text = "TRADING COMPANY STANDING"
+	shdr.add_theme_font_size_override("font_size", 16)
+	shdr.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	sv.add_child(shdr)
+
+	var company_order: Array[StringName] = [&"gilded_compass", &"iron_tide", &"sunken_archive"]
+	for cid: StringName in company_order:
+		var cmeta: Dictionary = Economy.COMPANIES.get(cid, {})
+		var cprog: Dictionary = Economy.get_company_progress(prof, cid)
+		var cname := String(cmeta.get("name", String(cid).capitalize()))
+		var ccol: Color = cmeta.get("color", HudIcons.COL_GOLD) as Color
+		var rank := int(cprog.get("rank", 1))
+		var rtitle := String(cprog.get("title", "Swab"))
+		var pts := int(cprog.get("points", 0))
+		var next_thr := int(cprog.get("next_threshold", pts))
+		var is_max := bool(cprog.get("is_max", false))
+		var frac := float(cprog.get("progress_frac", 0.0))
+
+		var row_v := VBoxContainer.new()
+		row_v.add_theme_constant_override("separation", 4)
+		sv.add_child(row_v)
+
+		var row_top := HBoxContainer.new()
+		row_top.add_theme_constant_override("separation", 12)
+		row_v.add_child(row_top)
+
+		var name_lbl := Label.new()
+		name_lbl.text = _to_ascii("%s   (Rank %d - %s)" % [cname, rank, rtitle])
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_lbl.add_theme_font_size_override("font_size", 15)
+		name_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
+		row_top.add_child(name_lbl)
+
+		var ren_lbl := Label.new()
+		ren_lbl.text = _to_ascii("%d Renown (MAX)" % pts if is_max else "%d / %d Renown" % [pts, next_thr])
+		ren_lbl.add_theme_font_size_override("font_size", 14)
+		ren_lbl.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+		row_top.add_child(ren_lbl)
+
+		var bar := ProgressBar.new()
+		bar.name = "StandingBar_" + String(cid)
+		bar.min_value = 0.0
+		bar.max_value = 100.0
+		bar.value = clampf(frac * 100.0, 0.0, 100.0)
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(0.0, 14.0)
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+		var bg_sb := StyleBoxFlat.new()
+		bg_sb.bg_color = Color(0.84, 0.77, 0.62, 0.96)
+		bg_sb.border_color = HudIcons.COL_INK
+		bg_sb.set_border_width_all(2)
+		bg_sb.set_corner_radius_all(3)
+		bar.add_theme_stylebox_override("background", bg_sb)
+
+		var fill_sb := StyleBoxFlat.new()
+		fill_sb.bg_color = ccol
+		fill_sb.border_color = HudIcons.COL_INK
+		fill_sb.set_border_width_all(1)
+		fill_sb.set_corner_radius_all(2)
+		bar.add_theme_stylebox_override("fill", fill_sb)
+		row_v.add_child(bar)
+	_log_box.add_child(stand_card)
+
+	# 3. Archipelago Discovery Ledger (2-column ink checklist)
+	var disc_card := _make_card_panel(Color(0.91, 0.84, 0.69, 0.96), HudIcons.COL_INK_SOFT)
+	disc_card.name = "LogDiscoveryCard"
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 8)
+	disc_card.add_child(lv)
+
+	var disc_lookup: Dictionary = {}
+	if prof != null:
+		var raw_disc: Variant = prof.data.get("discoveries", [])
+		if raw_disc is Array:
+			for d_item in (raw_disc as Array):
+				disc_lookup[String(d_item)] = true
+
+	var isl_entries: Array[Dictionary] = []
+	if archipelago != null and is_instance_valid(archipelago):
+		isl_entries = archipelago.get_map_data()
+	else:
+		isl_entries = VoyageComposer.default_archipelago_roster()
+
+	var charted := 0
+	for e in isl_entries:
+		var iid := String(e.get("island_id", e.get("id", "")))
+		if disc_lookup.has(iid):
+			charted += 1
+
+	var lhdr := Label.new()
+	lhdr.name = "ChartedWatersHeader"
+	lhdr.text = _to_ascii("CHARTED WATERS: %d / %d ISLANDS" % [charted, isl_entries.size()])
+	lhdr.add_theme_font_size_override("font_size", 16)
+	lhdr.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	lv.add_child(lhdr)
+
+	var ledger_grid := GridContainer.new()
+	ledger_grid.name = "DiscoveryLedgerGrid"
+	ledger_grid.columns = 2
+	ledger_grid.add_theme_constant_override("h_separation", 22)
+	ledger_grid.add_theme_constant_override("v_separation", 6)
+	lv.add_child(ledger_grid)
+
+	for e in isl_entries:
+		var iid := String(e.get("island_id", e.get("id", "")))
+		var iname := String(e.get("display_name", e.get("name", iid.capitalize())))
+		var raw_arch := String(e.get("archetype", e.get("kind", "island")))
+		var arch_lbl := raw_arch.replace("_", " ").capitalize()
+		var found := disc_lookup.has(iid)
+
+		var row_lbl := Label.new()
+		row_lbl.name = "DiscoveryItem_" + iid
+		row_lbl.text = _to_ascii("[%s] %s (%s)" % ["X" if found else " ", iname, arch_lbl])
+		row_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row_lbl.add_theme_font_size_override("font_size", 14)
+		row_lbl.add_theme_color_override("font_color", HudIcons.COL_INK if found else Color(0.46, 0.39, 0.29))
+		ledger_grid.add_child(row_lbl)
+	_log_box.add_child(disc_card)
 
 
 # ==============================================================================

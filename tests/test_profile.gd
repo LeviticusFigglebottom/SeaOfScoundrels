@@ -578,6 +578,95 @@ func test_ship_nameplate_persistence_painting_and_zero_leak_teardown() -> void:
 		"ShipNameplate releases all static mesh & material caches cleanly on teardown")
 
 
+func test_profile_lifetime_stats_and_shipwright_captains_log_tab() -> void:
+	var stats_path := "user://test_captains_log_profile.json"
+	var legacy_path := "user://test_captains_log_legacy.json"
+
+	# 1. Legacy profile.json missing gold_earned & bosses_defeated loads cleanly with 0 defaults.
+	var lf := FileAccess.open(legacy_path, FileAccess.WRITE)
+	lf.store_string('{"gold": 90, "stats": {"voyages_completed": 2, "chests_sold": 3, "times_sunk": 1}}')
+	lf.close()
+	var legacy_prof := Profile.new()
+	check(legacy_prof.load_from(legacy_path), "legacy profile JSON loads cleanly")
+	var lstats := legacy_prof.get_stats()
+	check_eq(int(lstats.get("voyages_completed", -1)), 2, "legacy voyages_completed preserved")
+	check_eq(int(lstats.get("chests_sold", -1)), 3, "legacy chests_sold preserved")
+	check_eq(int(lstats.get("gold_earned", -1)), 0, "missing gold_earned defaults to 0")
+	check_eq(int(lstats.get("bosses_defeated", -1)), 0, "missing bosses_defeated defaults to 0")
+
+	# 2. New lifetime stat & discovery helpers persist cleanly across save_to() / load_from() roundtrip.
+	var p := Profile.new()
+	p.set_ship_name("Abyssal Dawn")
+	p.data["ship_class"] = "brigantine"
+	p.add_gold(850)
+	p.add_renown("gilded_compass", 240)
+	p.add_renown("iron_tide", 120)
+	p.add_renown("sunken_archive", 310)
+	p.record_voyage_completed()
+	p.record_voyage_completed()
+	p.record_chest_sold(420)
+	p.record_chest_sold(315)
+	p.record_boss_defeated()
+	check(p.discover("port_scoundrel"), "discover port_scoundrel")
+	check(p.discover("cutlass_cay"), "discover cutlass_cay")
+	check_eq(p.get_discovery_count(), 2, "get_discovery_count returns 2")
+
+	check_eq(p.save_to(stats_path), OK, "profile with lifetime stats saves via save_to()")
+	var loaded := Profile.new()
+	check(loaded.load_from(stats_path), "profile reloads lifetime stats cleanly")
+	var rstats := loaded.get_stats()
+	check_eq(int(rstats.get("voyages_completed", 0)), 2, "voyages_completed roundtrips")
+	check_eq(int(rstats.get("chests_sold", 0)), 2, "chests_sold roundtrips")
+	check_eq(int(rstats.get("gold_earned", 0)), 735, "gold_earned accumulates 420 + 315 = 735")
+	check_eq(int(rstats.get("bosses_defeated", 0)), 1, "bosses_defeated roundtrips")
+	check_eq(loaded.get_discovery_count(), 2, "discovery count roundtrips")
+
+	# 3. Verify 4th Captain's Log tab in ShipwrightMenu renders Vessel Name, 3 Company ProgressBars & Discovery Ledger!
+	var saved_game_prof := Game.profile
+	Game.profile = loaded
+	var menu := ShipwrightMenu.new()
+	add_child(menu)
+	menu.open_menu(ShipwrightMenu.TAB_LOG)
+	await physics_frames(1)
+
+	check_eq(menu.active_tab, ShipwrightMenu.TAB_LOG, "open_menu(TAB_LOG) switches to TAB_LOG")
+	var tab_btn := menu.find_child("Tab_log", true, false) as Button
+	check(tab_btn != null and tab_btn.text == "Captain's Log", "4th tab button labeled Captain's Log")
+
+	var vessel_lbl := menu.find_child("LogVesselLabel", true, false) as Label
+	check(vessel_lbl != null and vessel_lbl.text == "Abyssal Dawn  -  Brigantine",
+		"LogVesselLabel displays ship name & class (got '%s')" % (vessel_lbl.text if vessel_lbl != null else ""))
+	if vessel_lbl != null:
+		for ci in vessel_lbl.text.length():
+			check(vessel_lbl.text.unicode_at(ci) < 128, "LogVesselLabel text is strictly ASCII")
+
+	for cid: String in ["gilded_compass", "iron_tide", "sunken_archive"]:
+		var bar := menu.find_child("StandingBar_" + cid, true, false) as ProgressBar
+		check(bar != null and bar.value > 0.0,
+			"StandingBar_%s renders live renown progress (val=%.1f)" % [cid, bar.value if bar != null else -1.0])
+
+	var chart_hdr := menu.find_child("ChartedWatersHeader", true, false) as Label
+	check(chart_hdr != null and chart_hdr.text.begins_with("CHARTED WATERS: 2 / "),
+		"ChartedWatersHeader counts 2 discovered islands (got '%s')" % (chart_hdr.text if chart_hdr != null else ""))
+	var disc_grid := menu.find_child("DiscoveryLedgerGrid", true, false) as GridContainer
+	check(disc_grid != null and disc_grid.columns == 2 and disc_grid.get_child_count() >= 10,
+		"DiscoveryLedgerGrid builds 2-column archipelago checklist")
+	var cutlass_row := menu.find_child("DiscoveryItem_cutlass_cay", true, false) as Label
+	check(cutlass_row != null and cutlass_row.text.begins_with("[X] Cutlass Cay"),
+		"discovered island Cutlass Cay marked [X] (got '%s')" % (cutlass_row.text if cutlass_row != null else ""))
+	var fort_row := menu.find_child("DiscoveryItem_ironwatch_fort", true, false) as Label
+	check(fort_row != null and fort_row.text.begins_with("[ ] Ironwatch Fort"),
+		"uncharted island Ironwatch Fort marked [ ] (got '%s')" % (fort_row.text if fort_row != null else ""))
+
+	menu.close_menu()
+	menu.queue_free()
+	Game.profile = saved_game_prof
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(stats_path))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy_path))
+	await physics_frames(2)
+
+
+
 
 
 

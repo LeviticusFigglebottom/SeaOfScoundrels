@@ -75,7 +75,7 @@ func test_sloop_loads_stations_and_collision() -> void:
 			cols += 1
 		elif child.is_in_group(&"shelter"):
 			shelters += 1
-	check_eq(ladders, 2, "sloop must create port & starboard Ladder nodes")
+	check_eq(ladders, 3, "sloop must create port, starboard, and crow's nest Ladder nodes")
 	check(cols > 40, "expected convex collision pieces from col_*, got %d" % cols)
 	check(shelters >= 1, "sloop hold must have a shelter volume")
 	check_eq(s.holes.size(), 10, "sloop must map all 10 damage slots")
@@ -1153,6 +1153,130 @@ func test_sculpted_cannonball_ordnance_variants_and_fort_battery_zero_primitives
 	check(FortBattery._fuse_spark_mesh == null and FortBattery._coastal_shot_mesh == null \
 		and FortBattery._coastal_shot_mat == null,
 		"FortBattery releases all static fuse spark & coastal shot caches on teardown")
+
+
+func test_crows_nest_ladder_rungs_and_ship_name_net_replication() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 0.0, 0.0)
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(28.0, 0.0, 0.0)
+	await physics_frames(12)
+
+	# 1. Verify Ladder_CrowsNest & sculpted 1-draw-call CrowsNestRungs on BOTH Sloop & Brigantine!
+	var sloop_rung_tris := 0
+	var brig_rung_tris := 0
+	for spec: Array in [[sloop, "sloop", 10.0], [brig, "brigantine", 11.5]]:
+		var sh := spec[0] as Ship
+		var lbl := String(spec[1])
+		var min_h := float(spec[2])
+		var sh_lad := sh.crows_nest_ladder
+		check(sh_lad != null and sh_lad == sh.get_node_or_null(^"Ladder_CrowsNest"),
+			"%s mounts Ladder_CrowsNest and exposes crows_nest_ladder" % lbl)
+		if sh_lad != null:
+			check(sh_lad.height >= 7.5 and sh_lad.height >= min_h,
+				"%s Ladder_CrowsNest height %.2f m reaches Crow's Nest (>= %.1f m)" % [lbl, sh_lad.height, min_h])
+			check(sh_lad.get_platform() == sh, "%s Ladder_CrowsNest binds to Ship platform" % lbl)
+
+		var rungs := sh.get_node_or_null(^"CrowsNestRungs") as MeshInstance3D
+		check(rungs != null and rungs.mesh is ArrayMesh and not (rungs.mesh is PrimitiveMesh),
+			"%s CrowsNestRungs uses sculpted ArrayMesh (zero PrimitiveMeshes)" % lbl)
+		if rungs != null and rungs.mesh is ArrayMesh:
+			var am := rungs.mesh as ArrayMesh
+			check_eq(am.get_surface_count(), 1, "%s CrowsNestRungs is strictly 1 draw call (1 surface)" % lbl)
+			var arr := am.surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var tris := floori(float(verts.size()) / 3.0)
+			var bad_n := 0
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_n += 1
+			check_eq(bad_n, 0, "%s CrowsNestRungs normals are all finite unit vectors" % lbl)
+			check(tris >= 400, "%s CrowsNestRungs has rich sculpted side-ropes & oak rungs (%d >= 400 tris)" % [lbl, tris])
+			var rmat := rungs.material_override as StandardMaterial3D
+			check(rmat != null and rmat.vertex_color_use_as_albedo and rmat.vertex_color_is_srgb,
+				"%s CrowsNestRungs material enables vertex_color_is_srgb" % lbl)
+			if lbl == "sloop":
+				sloop_rung_tris = tris
+			else:
+				brig_rung_tris = tris
+	print("    CrowsNestRungs sculpted tris: sloop=%d, brigantine=%d" % [sloop_rung_tris, brig_rung_tris])
+
+	# 2. Verify a real Pawn climbs Ladder_CrowsNest from the main deck all the way onto the Crow's Nest!
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pawn)
+	var lad := sloop.crows_nest_ladder
+	var lad_xf := lad.transform
+	var start_local := lad_xf * Vector3(0.0, 0.04, lad.standoff + 0.25)
+	pawn.board(sloop, start_local)
+	await physics_frames(8)
+
+	var entered_ladder := false
+	var reached_top := false
+	for _tick in 480:
+		var into := lad.into_dir()
+		pawn.wish_dir = into
+		await physics_frames(1)
+		if pawn.mode == Pawn.Mode.LADDER and pawn.ladder == lad:
+			entered_ladder = true
+		elif entered_ladder and pawn.mode == Pawn.Mode.WALK:
+			reached_top = true
+			break
+	pawn.wish_dir = Vector3.ZERO
+	check(entered_ladder, "Pawn mounts Sloop Ladder_CrowsNest cleanly from main deck")
+	check(reached_top, "Pawn climbs Sloop Ladder_CrowsNest all the way to the Crow's Nest top")
+
+	# Hold steady on the Crow's Nest platform for 30 physics ticks to prove solid perch with zero ejection!
+	await physics_frames(30)
+	var nest_local := pawn.platform_local_position()
+	print("    Pawn atop Sloop Crow's Nest: local=%s platform=%s" % [nest_local, pawn.platform])
+	check(pawn.platform == sloop, "Pawn remains anchored to Sloop while perched in Crow's Nest")
+	check(nest_local.y >= 11.2 and nest_local.y <= 12.2,
+		"Pawn lands safely on Sloop Crow's Nest deck (local y=%.2f)" % nest_local.y)
+
+	# 3. Verify co-op custom ship_name replication via get_net_state() -> apply_net_state() with dirty-check!
+	sloop.set_ship_name("Emerald Horizon")
+	check_eq(sloop.ship_name, "Emerald Horizon", "host sloop updates ship_name to Emerald Horizon")
+	var snap := sloop.get_net_state()
+	check_eq(String(snap.get("ship_name", "")), "Emerald Horizon",
+		"get_net_state() exports custom ship_name")
+
+	var client_sloop := _spawn_sloop(Vector3(-28.0, 0.0, 0.0))
+	await physics_frames(4)
+	check(client_sloop.ship_name != "Emerald Horizon", "client sloop starts with default ship_name")
+	var tex_before: Variant = client_sloop.ship_nameplate.call(&"get_plaque_texture") \
+		if client_sloop.ship_nameplate != null else null
+
+	client_sloop.apply_net_state(snap)
+	check_eq(client_sloop.ship_name, "Emerald Horizon",
+		"apply_net_state() replicates custom ship_name to client ship")
+	var tex_after: Variant = client_sloop.ship_nameplate.call(&"get_plaque_texture") \
+		if client_sloop.ship_nameplate != null else null
+	check(tex_after != null and tex_after != tex_before,
+		"ShipNameplate repaints plaque texture once when replicated ship_name changes")
+
+	# Repeat unchanged snapshot -> must NOT trigger needless ShipNameplate texture repaint!
+	client_sloop.apply_net_state(snap)
+	var tex_repeat: Variant = client_sloop.ship_nameplate.call(&"get_plaque_texture") \
+		if client_sloop.ship_nameplate != null else null
+	check(tex_repeat == tex_after,
+		"Repeated apply_net_state() with unchanged ship_name skips redundant ShipNameplate repaint")
+
+	# 4. Clean 0-leak teardown releases all static CrowsNestRungs caches!
+	tex_before = null
+	tex_after = null
+	tex_repeat = null
+	await _end()
+	check(Ship._crows_nest_rungs_sloop == null and Ship._crows_nest_rungs_brig == null \
+		and Ship._crows_nest_rungs_mat == null,
+		"Ship releases static CrowsNestRungs mesh & material caches cleanly on teardown")
+
 
 
 

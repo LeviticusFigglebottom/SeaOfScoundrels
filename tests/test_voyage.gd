@@ -1474,4 +1474,80 @@ func test_cargo_hazard_vfx_and_zero_primitive_doubloons_digsite() -> void:
 		"DigSite releases static clod & sparkle caches cleanly to null")
 
 
+func test_victory_flare_sculpted_launch_burst_and_teardown() -> void:
+	Net.start_single_player()
+	var flare_gd: GDScript = preload("res://src/world/victory_flare.gd")
+	var holder := Node3D.new()
+	holder.name = "VictoryFlareTestHolder"
+	add_child(holder)
+
+	# 1. Launch flare & inspect zero-primitive sculpted Rocket, 16-tri 4-Point Star & 8-tri Diamond ArrayMeshes!
+	var flare: Node3D = flare_gd.call(&"launch", holder, Vector3(0.0, 2.0, 0.0), Color(1.0, 0.84, 0.28)) as Node3D
+	check(flare != null and flare.is_in_group(&"victory_flares"), "VictoryFlare.launch spawns node in group victory_flares")
+
+	var rocket_mi := flare.get_node_or_null(^"RocketRoot/RocketMesh") as MeshInstance3D
+	var star_gp := flare.get_node_or_null(^"StarburstParticles") as GPUParticles3D
+	var ember_gp := flare.get_node_or_null(^"EmberCascadeParticles") as GPUParticles3D
+	var light := flare.get_node_or_null(^"ApexFlashLight") as OmniLight3D
+
+	check(rocket_mi != null and rocket_mi.mesh is ArrayMesh and not (rocket_mi.mesh is PrimitiveMesh),
+		"VictoryFlare builds sculpted Brass Signal Rocket ArrayMesh (zero primitives)")
+	check(star_gp != null and star_gp.draw_pass_1 is ArrayMesh and not (star_gp.draw_pass_1 is PrimitiveMesh),
+		"StarburstParticles uses sculpted 4-Point Star ArrayMesh (zero primitives)")
+	check(ember_gp != null and ember_gp.draw_pass_1 is ArrayMesh and not (ember_gp.draw_pass_1 is PrimitiveMesh),
+		"EmberCascadeParticles uses sculpted Diamond Spark ArrayMesh (zero primitives)")
+	check(light != null and not light.shadow_enabled, "VictoryFlare mounts shadowless ApexFlashLight OmniLight3D")
+
+	var rocket_tris: int = int(flare.call(&"get_rocket_triangle_count"))
+	var star_tris: int = _count_mesh_triangles(star_gp.draw_pass_1) if star_gp != null else 0
+	var diamond_tris: int = _count_mesh_triangles(ember_gp.draw_pass_1) if ember_gp != null else 0
+	print("    VictoryFlare sculpted meshes: Rocket=%d, StarSpark=%d, DiamondEmber=%d tris" % [
+		rocket_tris, star_tris, diamond_tris])
+	check(rocket_tris >= 240, "Brass Signal Rocket has rich sculpted silhouette (%d tris)" % rocket_tris)
+	check_eq(star_tris, 16, "4-point faceted celebration star-spark has exact 16 tris")
+	check_eq(diamond_tris, 8, "faceted diamond ember-spark has exact 8 tris")
+
+	# 2. Step RISING -> BURST (emits burst_detonated once at ~22-26 m apex) -> DONE auto-cleanup!
+	var burst_positions: Array[Vector3] = []
+	flare.connect(&"burst_detonated", func(pos: Vector3) -> void: burst_positions.append(pos))
+	flare.call(&"step_flare", 0.50)
+	check(flare.global_position.y > 10.0, "VictoryFlare climbs rapidly during RISING (y=%.1f m)" % flare.global_position.y)
+	check_eq(burst_positions.size(), 0, "flare has not detonated before apex")
+
+	flare.call(&"step_flare", 0.85)
+	check_eq(burst_positions.size(), 1, "burst_detonated emits exactly once upon reaching apex")
+	check(burst_positions[0].y >= 22.0 and burst_positions[0].y <= 32.0,
+		"VictoryFlare detonates cleanly at celebratory altitude (y=%.1f m)" % burst_positions[0].y)
+	check(not (flare.get_node(^"RocketRoot") as Node3D).visible, "RocketRoot hides on burst detonation")
+	check(star_gp.emitting and ember_gp.emitting, "both sculpted starburst particle layers emit on detonation")
+	check(light.light_energy >= 6.0 and light.omni_range >= 35.0,
+		"ApexFlashLight flashes brightly at detonation (energy=%.1f)" % light.light_energy)
+
+	# Decay smoothly to DONE and auto-queue_free!
+	flare.call(&"step_flare", 1.10)
+	check(light.light_energy < 3.5 and light.light_energy > 0.1,
+		"ApexFlashLight decays smoothly mid-burst (energy=%.2f)" % light.light_energy)
+	flare.call(&"step_flare", 1.25)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(flare), "VictoryFlare auto-frees cleanly upon reaching DONE")
+
+	# 3. Verify force_burst_apex() + zero-leak static cache teardown!
+	var flare2: Node3D = flare_gd.call(&"launch", holder, Vector3(12.0, 2.0, -8.0), Color(0.28, 0.96, 0.68)) as Node3D
+	var burst2 := [false]
+	flare2.connect(&"burst_detonated", func(_p: Vector3) -> void: burst2[0] = true)
+	flare2.call(&"force_burst_apex")
+	check(burst2[0] and flare2.global_position.y >= 24.0, "force_burst_apex snaps to apex and detonates cleanly")
+
+	holder.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(flare2), "second VictoryFlare freed cleanly on parent teardown")
+	check_eq(int(flare_gd.get(&"_active_flares")), 0, "all VictoryFlares exited cleanly")
+	check(flare_gd.get(&"_rocket_mesh") == null and flare_gd.get(&"_star_mesh") == null \
+			and flare_gd.get(&"_diamond_mesh") == null and flare_gd.get(&"_rocket_mat") == null,
+		"VictoryFlare releases all static mesh & material caches cleanly to null")
+
+
+
 

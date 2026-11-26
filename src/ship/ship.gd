@@ -204,6 +204,8 @@ var _active_muzzle_vfx: Array[Node] = []
 var cabin_furnishings: CaptainCabinFurnishings = null
 var ship_nameplate: Node3D = null
 var hull_crest: Node3D = null
+var crows_nest_ladder: Ladder = null
+var _crows_nest_rungs_mi: MeshInstance3D = null
 var ship_name: String = "The Gilded Scoundrel"
 var ship_bell_node: Node3D = null
 var ship_bell_interactable: Interactable = null
@@ -226,6 +228,9 @@ static var _bell_frame_mesh: ArrayMesh = null
 static var _bell_cup_mesh: ArrayMesh = null
 static var _bell_iron_mat: StandardMaterial3D = null
 static var _bell_bronze_mat: StandardMaterial3D = null
+static var _crows_nest_rungs_sloop: ArrayMesh = null
+static var _crows_nest_rungs_brig: ArrayMesh = null
+static var _crows_nest_rungs_mat: StandardMaterial3D = null
 
 
 func _init() -> void:
@@ -338,6 +343,11 @@ func _exit_tree() -> void:
 	_bell_frame_mi = null
 	_bell_cup_mi = null
 	_bell_cup_pivot = null
+	if _crows_nest_rungs_mi != null and is_instance_valid(_crows_nest_rungs_mi):
+		_crows_nest_rungs_mi.material_override = null
+		_crows_nest_rungs_mi.mesh = null
+	_crows_nest_rungs_mi = null
+	crows_nest_ladder = null
 	ship_bell_interactable = null
 	ship_bell_node = null
 	ship_nameplate = null
@@ -357,6 +367,9 @@ func _exit_tree() -> void:
 		_bell_cup_mesh = null
 		_bell_iron_mat = null
 		_bell_bronze_mat = null
+		_crows_nest_rungs_sloop = null
+		_crows_nest_rungs_brig = null
+		_crows_nest_rungs_mat = null
 
 
 # ------------------------------------------------------------------ construction
@@ -530,6 +543,200 @@ func _build_ladders() -> void:
 		# Place foot 1.6 m below the waterline marker so the top aligns with the main deck (y ~= 1.15).
 		lad.transform = Transform3D(Basis(Vector3.UP, float(spec[2])), Vector3(lp.x, lp.y - 1.6, lp.z))
 		add_child(lad)
+
+	_build_crows_nest_ladder()
+
+
+func _build_crows_nest_ladder() -> void:
+	# Climbable mainmast Crow's Nest ladder positioned on the starboard-aft face of the mainmast:
+	# clears the swinging yard/sail forward, Lantern_Mast aft, and Sloop's open hold hatch so
+	# bottom dismount always lands on solid main deck and top exit steps safely onto col_mast_top!
+	var is_brig := ship_class == &"brigantine"
+	var mast_z := 0.50 if is_brig else -1.00
+	var deck_y := 1.25 if is_brig else 1.10
+	var nest_top_y := 13.17 if is_brig else 11.52
+	var mast_r := 0.37 if is_brig else 0.33
+	var yaw_rad := deg_to_rad(32.0) if is_brig else deg_to_rad(80.0)
+	var lad_h := nest_top_y - deck_y
+	var out_dir := Vector3(sin(yaw_rad), 0.0, cos(yaw_rad))
+	var foot_pos := Vector3(out_dir.x * mast_r, deck_y, mast_z + out_dir.z * mast_r)
+	var lad_xf := Transform3D(Basis(Vector3.UP, yaw_rad), foot_pos)
+
+	var cn := Ladder.new()
+	cn.name = "Ladder_CrowsNest"
+	cn.height = lad_h
+	cn.width = 0.68
+	cn.standoff = 0.42
+	cn.reach_below = 0.15
+	cn.require_direct_approach = true
+	cn.allow_ai_grab = false
+	# Step inward across the topmast onto the solid circular col_mast_top platform (r = 0.95 / 1.04 m).
+	cn.exit_offset = Vector3(0.0, 0.10, -0.88 if is_brig else -0.80)
+	cn.transform = lad_xf
+	add_child(cn)
+	crows_nest_ladder = cn
+
+	_ensure_crows_nest_rungs_assets()
+	var rungs_mi := MeshInstance3D.new()
+	rungs_mi.name = "CrowsNestRungs"
+	rungs_mi.mesh = _crows_nest_rungs_brig if is_brig else _crows_nest_rungs_sloop
+	rungs_mi.material_override = _crows_nest_rungs_mat
+	rungs_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rungs_mi.transform = lad_xf
+	add_child(rungs_mi)
+	_crows_nest_rungs_mi = rungs_mi
+
+
+static func _ensure_crows_nest_rungs_assets() -> void:
+	if _crows_nest_rungs_mat == null:
+		_crows_nest_rungs_mat = StandardMaterial3D.new()
+		_crows_nest_rungs_mat.vertex_color_use_as_albedo = true
+		_crows_nest_rungs_mat.vertex_color_is_srgb = true
+		_crows_nest_rungs_mat.roughness = 0.84
+		_crows_nest_rungs_mat.metallic = 0.04
+	if _crows_nest_rungs_sloop == null:
+		_crows_nest_rungs_sloop = _build_crows_nest_rungs_mesh(false)
+	if _crows_nest_rungs_brig == null:
+		_crows_nest_rungs_brig = _build_crows_nest_rungs_mesh(true)
+
+
+static func _build_crows_nest_rungs_mesh(is_brig: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var height := (13.17 - 1.25) if is_brig else (11.52 - 1.10)
+	var flare_start_y := (11.35 - 1.25) if is_brig else (9.75 - 1.10)
+	var tub_bot_y := (12.10 - 1.25) if is_brig else (10.50 - 1.10)
+	var rim_out_z := 0.70 if is_brig else 0.65
+	var tub_out_z := 0.52 if is_brig else 0.49
+	var half_w := 0.22
+
+	var col_rope_hi := Color(0.32, 0.25, 0.18)
+	var col_rope_lo := Color(0.15, 0.11, 0.08)
+	var col_oak_top := Color(0.68, 0.48, 0.26)
+	var col_oak_side := Color(0.48, 0.31, 0.16)
+	var col_oak_bot := Color(0.26, 0.16, 0.08)
+	var col_lash_hi := Color(0.24, 0.19, 0.14)
+	var col_lash_lo := Color(0.12, 0.09, 0.07)
+
+	# Helper closure computing futtock-shroud +Z flare around the Crow's Nest stave tub.
+	var z_at := func(y: float) -> float:
+		if y <= flare_start_y:
+			return 0.02
+		if y <= tub_bot_y:
+			var t0 := clampf((y - flare_start_y) / maxf(tub_bot_y - flare_start_y, 0.01), 0.0, 1.0)
+			return lerpf(0.02, tub_out_z, t0)
+		var t1 := clampf((y - tub_bot_y) / maxf(height - tub_bot_y, 0.01), 0.0, 1.0)
+		return lerpf(tub_out_z, rim_out_z, t1)
+
+	# 1. Twin taut tarred vertical hemp side-ropes running from main deck up & flaring over the nest rim.
+	var rope_ys: Array[float] = [0.06, flare_start_y, tub_bot_y, height - 0.02]
+	for sx: float in [-1.0, 1.0]:
+		var rx := sx * half_w
+		for i in rope_ys.size() - 1:
+			var ya := rope_ys[i]
+			var yb := rope_ys[i + 1]
+			var pa := Vector3(rx, ya, float(z_at.call(ya)))
+			var pb := Vector3(rx, yb, float(z_at.call(yb)))
+			_cn_add_tube(st, pa, pb, 0.022, 6, col_rope_hi, col_rope_lo)
+
+	# 2. Evenly spaced chunky beveled oak ratline rungs + hemp seizing collars gripping both side-ropes.
+	var step_y := 0.36
+	var y_cur := 0.28
+	while y_cur < height - 0.12:
+		var rz := float(z_at.call(y_cur))
+		# Main beveled oak rung bar.
+		_cn_add_box(st, Vector3(0.0, y_cur, rz), Vector3(half_w * 2.0 + 0.08, 0.040, 0.036),
+			col_oak_top, col_oak_side, col_oak_bot)
+		# Pair of tarred hemp lashing collars clamping rung to left/right side-ropes.
+		for sx: float in [-1.0, 1.0]:
+			_cn_add_box(st, Vector3(sx * half_w, y_cur, rz), Vector3(0.056, 0.052, 0.052),
+				col_lash_hi, col_lash_hi, col_lash_lo)
+		y_cur += step_y
+
+	# 3. Mast seizure lashing straps anchoring the side-ropes cleanly against the mast barrel.
+	var strap_y := 1.6
+	while strap_y < flare_start_y - 0.5:
+		_cn_add_box(st, Vector3(0.0, strap_y, -0.005), Vector3(half_w * 2.0 + 0.06, 0.048, 0.046),
+			col_lash_hi, col_lash_lo, col_lash_lo)
+		strap_y += 2.2
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _cn_add_box(st: SurfaceTool, center: Vector3, size: Vector3,
+		col_top: Color, col_side: Color, col_bot: Color) -> void:
+	var h := size * 0.5
+	var c: Array[Vector3] = [
+		center + Vector3(-h.x, -h.y, -h.z),
+		center + Vector3(h.x, -h.y, -h.z),
+		center + Vector3(h.x, h.y, -h.z),
+		center + Vector3(-h.x, h.y, -h.z),
+		center + Vector3(-h.x, -h.y, h.z),
+		center + Vector3(h.x, -h.y, h.z),
+		center + Vector3(h.x, h.y, h.z),
+		center + Vector3(-h.x, h.y, h.z),
+	]
+	_cn_outward_quad(st, c[3], c[2], c[6], c[7], center, col_top, col_top, col_top, col_top)
+	_cn_outward_quad(st, c[4], c[5], c[1], c[0], center, col_bot, col_bot, col_bot, col_bot)
+	_cn_outward_quad(st, c[0], c[1], c[2], c[3], center, col_bot, col_bot, col_side, col_side)
+	_cn_outward_quad(st, c[5], c[4], c[7], c[6], center, col_bot, col_bot, col_side, col_side)
+	_cn_outward_quad(st, c[4], c[0], c[3], c[7], center, col_bot, col_bot, col_side, col_side)
+	_cn_outward_quad(st, c[1], c[5], c[6], c[2], center, col_bot, col_bot, col_side, col_side)
+
+
+static func _cn_add_tube(st: SurfaceTool, a: Vector3, b: Vector3, radius: float, segs: int,
+		col_hi: Color, col_lo: Color) -> void:
+	var axis := b - a
+	var length := axis.length()
+	if length < 0.0001:
+		return
+	var dir := axis / length
+	var ref := Vector3.FORWARD if absf(dir.dot(Vector3.FORWARD)) < 0.9 else Vector3.RIGHT
+	var u := dir.cross(ref).normalized()
+	var v := dir.cross(u).normalized()
+	var mid := (a + b) * 0.5
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		var o0 := (u * cos(a0) + v * sin(a0)) * radius
+		var o1 := (u * cos(a1) + v * sin(a1)) * radius
+		var c0 := col_lo.lerp(col_hi, clampf(0.5 + 0.5 * o0.normalized().z, 0.0, 1.0))
+		var c1 := col_lo.lerp(col_hi, clampf(0.5 + 0.5 * o1.normalized().z, 0.0, 1.0))
+		_cn_outward_quad(st, a + o0, b + o0, b + o1, a + o1, mid, c0, c0, c1, c1)
+		_cn_outward_tri(st, a, a + o0, a + o1, mid, col_lo, c0, c1)
+		_cn_outward_tri(st, b, b + o1, b + o0, mid, col_hi, c1, c0)
+
+
+static func _cn_outward_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_cn_outward_tri(st, a, b, c, ref_center, ca, cb, cc)
+	_cn_outward_tri(st, a, c, d, ref_center, ca, cc, cd)
+
+
+static func _cn_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ref_center: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)
 
 
 func _build_shelters() -> void:
@@ -3111,6 +3318,8 @@ func _update_lod() -> void:
 			ship_nameplate.visible = not want_lod
 		if hull_crest != null and is_instance_valid(hull_crest):
 			hull_crest.visible = (not want_lod) and (_spectral_phase > 0.05)
+		if _crows_nest_rungs_mi != null and is_instance_valid(_crows_nest_rungs_mi):
+			_crows_nest_rungs_mi.visible = not want_lod
 
 
 func _update_visuals(delta: float) -> void:
@@ -3381,6 +3590,7 @@ func get_net_state() -> Dictionary:
 		"flag_tint": _livery_flag_tint,
 		"hull_tint": _livery_hull_tint,
 		"glow_accent": _livery_glow_accent,
+		"ship_name": ship_name,
 	}
 
 
@@ -3444,3 +3654,9 @@ func apply_net_state(state: Dictionary) -> void:
 			or not g_acc.is_equal_approx(_livery_glow_accent)
 		if livery_changed:
 			apply_livery(s_tint, f_tint, g_acc, h_tint, e_mode)
+
+	# Replicate custom ship_name only when non-empty and changed (avoids needless ShipNameplate repaints).
+	if state.has("ship_name"):
+		var incoming_name := String(state["ship_name"]).strip_edges()
+		if incoming_name != "" and incoming_name != ship_name:
+			set_ship_name(incoming_name)

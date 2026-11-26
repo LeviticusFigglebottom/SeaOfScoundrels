@@ -8,17 +8,15 @@
 ---
 
 ## 1. Current Cloud Lead Status (2026-11-26)
-- **Latest pushed Cloud Lead commit on `origin/ccr-663b66a0-rdiq4f`**: `44b9c18` (**Wave 22**, GitHub Actions CI `45801136777` **GREEN** across Linux, Windows `.exe`, macOS Universal; `177/177` headless tests **0 ObjectDB / 0 resource leaks**, `3/3` GPU shader tests **0 leaks**, `CLIENT RESULT PASS`, `107/0/0` lint, `164` audio files `0` flagged, **0 remaining 3D gameplay/prop/beast/boss/ordnance/particle primitives across `src/`**!).
-- **Currently building in Cloud Lead (4 parallel subagents, landing in ~5 min as Wave 23)**:
-  - `23A`: Climbable mainmast `Ladder_CrowsNest` + sculpted `CrowsNestRungs` + co-op `ship_name` replication (`src/ship/ship.gd`).
-  - `23B`: Sculpted Mariner's Celebration `VictoryFlare` rocket (`src/world/victory_flare.gd`) + `shot=deck_duel` quarterdeck-rail baluster clearance fix (`scenes/main.gd`).
-  - `23C`: 4th `"Captain's Log"` discovery & standing tab in `ShipwrightMenu` + `Profile` lifetime stats (`src/core/profile.gd`, `src/ui/shipwright_menu.gd`).
-  - `23D`: `MapTableView` custom ship name cartouche, wind-knot medallion & Outpost lighthouse stars (`src/items/map_table_view.gd`).
-- **Next Major Cloud Lead Initiative (Waves 24–27 — Owner Priority Directive!)**:
-  - **Massive Archipelago & Island Graphical + Mechanical Depth Overhaul**:
-    - Expanding the world from uniform `52–68 m` islands into a dramatic **~4.4 km × 4.4 km archipelago of 14+ islands across 4 distinct size tiers** (`38–44 m` tiny cays/sea-stacks -> `78–92 m` medium ports/forts/coves -> `122–132 m` large lagoons/bluffs/jungles -> **`165–185 m` radius / `330–370 m` diameter MASSIVE flagship islands**!).
-    - Eliminating blocky triangular pyramid mountains with adaptive-resolution multi-octave ridged coastal strata, terraced highlands, walkable inland trails, lush batched jungle canopies, ancient stone ruins, wooden bridges, **live animated cliffside Waterfalls & plunge pools**, active volcanic lava rivers & steam fumaroles on massive `Cinder Crag`, sprawling multi-level sea forts (`Ironwatch Fort` + massive `Sovereign's Bastion`), and grand tiered capital outposts (`Port Scoundrel` + massive `Galleon's Reach`)!
-    - Cloud Lead owns Blender prop generation (`tools/blender/gen_props.py`), `archipelago.gd`, `island_generator.gd`, `outpost.gd`, and new island landmark/waterfall scripts.
+- **Latest Cloud Lead Wave (`ccr-663b66a0-rdiq4f`)**: **Wave 23** (`181/181` headless tests **0 ObjectDB / 0 resource leaks**, `3/3` GPU shader tests **0 leaks**, `CLIENT RESULT PASS`, `108/0/0` lint, `164` audio files `0` flagged, **0 remaining 3D gameplay/prop/beast/boss/ordnance/particle primitives across `src/`**!).
+  - Wave 23 landed: climbable mainmast `Ladder_CrowsNest` + 1-DC sculpted `CrowsNestRungs` (`1,188` Sloop / `1,380` Brigantine tris) + co-op `ship_name` replication; sculpted zero-primitive Mariner's Celebration `VictoryFlare` rockets (voyage complete, Fort Vault unlock, Leviathan defeat) + baluster-clear `shot=deck_duel` camera; 4th `"Captain's Log"` discovery & standing tab in `ShipwrightMenu` + `Profile` lifetime deeds; and `MapTableView` custom ship name cartouche, live wind-knot medallion & Outpost lighthouse star stamps.
+- **Actively Building Next in Cloud Lead (Waves 24–27 — Owner Priority Directive: Massive Island & Archipelago Overhaul!)**:
+  - **Wave 24 (starting immediately)**:
+    - `24A`: 7 brand-new sculpted painterly Blender island landmark & jungle props (`jungle_banyan.glb`, `ruin_arch.glb`, `ruin_pillar.glb`, `timber_bridge.glb`, `harbour_warehouse.glb`, `seawall_bastion.glb`, `watchtower_wood.glb` -> 24 total stylized props!).
+    - `24B`: Live animated cliffside **`IslandWaterfall`** (`src/world/island_waterfall.gd` + `src/world/waterfall.gdshader`, shimmering foam-streak curtain + sunlit mist plume + bubbling plunge pool) and active **`VolcanicFumarole`** (`src/world/island_fumarole.gd`, obsidian steam/ash vents & glowing ember pulses).
+    - `24C`: **Massive Varied Archipelago Expansion (`14` islands across `~4.4 km × 4.4 km` spanning 4 size tiers from `38 m` tiny sea-stacks up to `166–184 m` radius / `332–368 m` diameter MASSIVE flagship islands!)** + adaptive high-res sculpted multi-octave ridged topography (`72 -> 128` grid) eliminating blocky triangular cones!
+    - `24D`: Multi-size showcase cameras (`shot=sovereigns_bastion`, `shot=galleons_reach`, `shot=emerald_waterfall`, `shot=archipelago_panorama`) & full 14-island `VoyageComposer` integration!
+  - **Reminder**: Cloud Lead will NOT edit `src/world/island_shader.gdshader` or `src/world/foliage_wind.gdshader` — those remain **exclusively yours** on `local/gpu-polish` for RX 9070 XT painterly terrain & jungle foliage look-dev!
 
 ---
 

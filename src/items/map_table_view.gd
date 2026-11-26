@@ -28,6 +28,8 @@ const MAX_SPAN := 5600.0
 const MAX_TRAIL_POINTS := 48
 const PIN_TOGGLE_RADIUS_M := 90.0
 const FORT_CLUSTER_RADIUS_M := 160.0
+const MPS_TO_KNOTS := 1.94384
+const DEFAULT_CARTOUCHE_NAME := "SV SCOUNDREL"
 
 const COMPASS_16: Array[String] = [
 	"N", "NNE", "NE", "ENE",
@@ -77,6 +79,14 @@ var _station_player_active: bool = false
 var _jump_was_down: bool = false
 
 
+func _enter_tree() -> void:
+	if _surface_mat != null and _viewport != null and is_instance_valid(_viewport):
+		var vp_tex := _viewport.get_texture()
+		_surface_mat.albedo_texture = vp_tex
+		_surface_mat.emission_texture = vp_tex
+		_dirty = true
+
+
 func _ready() -> void:
 	_auto_detect_parent_ship()
 	_build_viewport()
@@ -89,6 +99,8 @@ func _exit_tree() -> void:
 	if _surface_mat != null:
 		_surface_mat.albedo_texture = null
 		_surface_mat.emission_texture = null
+	if _canvas != null and is_instance_valid(_canvas):
+		_canvas._chart_font = null
 	if _viewport != null and is_instance_valid(_viewport):
 		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
@@ -201,6 +213,61 @@ static func format_course_bearing(from_pos: Vector3, to_pos: Vector3) -> String:
 	return "%s  %d m" % [COMPASS_16[idx], int(roundf(dist))]
 
 
+## Format a vessel name as a strict-ASCII uppercase chart cartouche banner (e.g. "SV ABYSSAL DAWN").
+static func format_ship_cartouche(raw_name: String) -> String:
+	var ascii := ""
+	var prev_space := false
+	for i in raw_name.length():
+		var code := raw_name.unicode_at(i)
+		if code >= 32 and code <= 126:
+			var ch := char(code)
+			if ch == " ":
+				if not prev_space and not ascii.is_empty():
+					ascii += " "
+				prev_space = true
+			else:
+				ascii += ch
+				prev_space = false
+	var upper := ascii.strip_edges().to_upper()
+	if upper.is_empty():
+		return DEFAULT_CARTOUCHE_NAME
+	if upper.begins_with("SV "):
+		var rest := upper.substr(3).strip_edges()
+		return DEFAULT_CARTOUCHE_NAME if rest.is_empty() else ("SV " + rest)
+	return "SV " + upper
+
+
+## Format live wind speed (m/s -> knots) and heading (rad, -Z North, +X East) as strict ASCII,
+## e.g. "WIND 19 kt NNE".
+static func format_wind_medallion(wind_spd_mps: float, heading_rad: float) -> String:
+	var knots := int(roundf(maxf(wind_spd_mps, 0.0) * MPS_TO_KNOTS))
+	var ang := fposmod(heading_rad, TAU)
+	var idx := int(roundf(ang / (TAU / 16.0))) % 16
+	return "WIND %d kt %s" % [knots, COMPASS_16[idx]]
+
+
+## Return the live strict-ASCII Captain's custom ship name displayed in the chart cartouche.
+func get_ship_cartouche_text() -> String:
+	var ship_ref: Node3D = tracked_ship if (tracked_ship != null and is_instance_valid(tracked_ship)) else _mounted_ship
+	if ship_ref != null and is_instance_valid(ship_ref):
+		var raw_v: Variant = ship_ref.get(&"ship_name")
+		if raw_v is String and not (raw_v as String).strip_edges().is_empty():
+			return format_ship_cartouche(raw_v as String)
+	if Game != null and Game.profile != null and Game.profile.has_method(&"get_ship_name"):
+		var prof_name := String(Game.profile.call(&"get_ship_name"))
+		if not prof_name.strip_edges().is_empty():
+			return format_ship_cartouche(prof_name)
+	return DEFAULT_CARTOUCHE_NAME
+
+
+## Return the live strict-ASCII wind knots & 16-point compass readout shown under the wind medallion.
+func get_wind_medallion_text() -> String:
+	if Weather != null:
+		return format_wind_medallion(Weather.local_wind_speed(), Weather.wind_heading)
+	var snap := get_last_snapshot()
+	return format_wind_medallion(float(snap.get("wind_speed", 8.0)), float(snap.get("wind_heading", 0.0)))
+
+
 ## Return the latest rendered chart draw snapshot (useful for telemetry and tests).
 func get_last_snapshot() -> Dictionary:
 	return _canvas.snapshot if _canvas != null else {}
@@ -270,10 +337,20 @@ func _process(delta: float) -> void:
 	_update_accum += delta
 	_cache_accum += delta
 	var interval := UPDATE_INTERVAL
-	if not _dirty and is_inside_tree():
+	var offscreen_far := false
+	if not _dirty and not _station_player_active and is_inside_tree():
 		var cam := get_viewport().get_camera_3d()
-		if cam != null and cam.global_position.distance_squared_to(global_position) > FAR_CAMERA_DIST * FAR_CAMERA_DIST:
-			interval = FAR_UPDATE_INTERVAL
+		if cam != null:
+			var to_table := global_position - cam.global_position
+			var dist_sq := to_table.length_squared()
+			var facing_away := dist_sq > 1.0 and to_table.normalized().dot(-cam.global_basis.z) < -0.15
+			if dist_sq > FAR_CAMERA_DIST * FAR_CAMERA_DIST or facing_away:
+				offscreen_far = true
+				interval = FAR_UPDATE_INTERVAL
+	if offscreen_far:
+		if _viewport != null and _viewport.render_target_update_mode != SubViewport.UPDATE_DISABLED:
+			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		return
 	if _dirty or _update_accum >= interval:
 		_update_accum = 0.0
 		var need_cache := _dirty or _islands_cache.is_empty() or _cache_accum >= ISLAND_CACHE_INTERVAL
@@ -470,8 +547,9 @@ func _refresh_islands_cache() -> void:
 
 	for d in raw_list:
 		var id_str := String(d["id"])
-		var is_outpost: bool = (d["kind"] == &"outpost")
+		var is_outpost: bool = bool(d.get("is_outpost", false)) or (d["kind"] == &"outpost")
 		var explicit_disc := bool(d.get("discovered", false))
+		d["is_outpost"] = is_outpost
 		d["discovered"] = explicit_disc or is_outpost or discovered_list.has(id_str)
 
 	_islands_cache = raw_list
@@ -486,7 +564,9 @@ func _normalize_island_array(arr: Array) -> Array[Dictionary]:
 			var pos_v: Variant = d.get("position", Vector3.ZERO)
 			var pos := pos_v as Vector3 if pos_v is Vector3 else Vector3.ZERO
 			var rad := float(d.get("radius", 95.0))
-			var contour_v: Variant = d.get("contour", PackedVector2Array())
+			var kind := StringName(String(d.get("kind", &"treasure_island")))
+			var is_outpost := bool(d.get("is_outpost", false)) or (kind == &"outpost")
+			var contour_v: Variant = d.get("contour", d.get("contour_points", PackedVector2Array()))
 			var contour := PackedVector2Array()
 			if contour_v is PackedVector2Array:
 				contour = contour_v as PackedVector2Array
@@ -497,7 +577,8 @@ func _normalize_island_array(arr: Array) -> Array[Dictionary]:
 			out.append({
 				"id": id,
 				"name": String(d.get("name", d.get("display_name", String(id).replace("_", " ").capitalize()))),
-				"kind": StringName(String(d.get("kind", &"treasure_island"))),
+				"kind": kind,
+				"is_outpost": is_outpost,
 				"position": pos,
 				"radius": rad,
 				"contour": contour,
@@ -515,12 +596,16 @@ func _normalize_island_array(arr: Array) -> Array[Dictionary]:
 			if nm_v == null and n.has_meta("display_name"):
 				nm_v = n.get_meta("display_name")
 			var kind_v: Variant = n.get(&"kind")
+			var kind := StringName(String(kind_v if kind_v != null else &"treasure_island"))
+			var out_v: Variant = n.get(&"is_outpost")
+			var is_outpost := (out_v is bool and bool(out_v)) or (kind == &"outpost")
 			var rad_v: Variant = n.get(&"radius")
 			var pos := (n as Node3D).global_position if n is Node3D and n.is_inside_tree() else Vector3.ZERO
 			out.append({
 				"id": id,
 				"name": String(nm_v if nm_v != null else n.name),
-				"kind": StringName(String(kind_v if kind_v != null else &"treasure_island")),
+				"kind": kind,
+				"is_outpost": is_outpost,
 				"position": pos,
 				"radius": float(rad_v) if (rad_v is float or rad_v is int) else 95.0,
 				"contour": PackedVector2Array(),
@@ -641,12 +726,15 @@ func _build_draw_snapshot() -> Dictionary:
 		for ci in cluster_sums.size():
 			fort_sieges.append(cluster_sums[ci] / float(cluster_counts[ci]))
 
+	var wind_hdg := Weather.wind_heading if Weather != null else 0.0
+	var wind_spd := Weather.local_wind_speed() if Weather != null else 8.0
 	return {
 		"view_center": view_center,
 		"view_span": view_span,
 		"islands": _islands_cache,
 		"ship_pos": ship_pos,
 		"ship_heading": ship_heading,
+		"ship_cartouche_text": get_ship_cartouche_text(),
 		"trail": _trail.duplicate(),
 		"target_pos": target_pos,
 		"target_label": target_label,
@@ -662,8 +750,9 @@ func _build_draw_snapshot() -> Dictionary:
 		"storm_center": Weather.storm_center if Weather != null else Vector3.ZERO,
 		"storm_radius": Weather.storm_radius if Weather != null else 0.0,
 		"storm_phase": _storm_phase,
-		"wind_heading": Weather.wind_heading if Weather != null else 0.0,
-		"wind_speed": Weather.local_wind_speed() if Weather != null else 8.0,
+		"wind_heading": wind_hdg,
+		"wind_speed": wind_spd,
+		"wind_medallion_text": format_wind_medallion(wind_spd, wind_hdg),
 	}
 
 
@@ -829,11 +918,16 @@ class _ChartCanvas extends Control:
 		if bool(snapshot.get("station_occupied", false)):
 			_draw_plotting_reticle(size * 0.5, font)
 
-		# 12. Decorative nautical compass rose, live wind-direction feather, & double ink border.
+		# 12. Ornate ship-name cartouche, wind-knot medallion, compass rose, & double ink border.
+		_draw_ship_cartouche(
+			String(snapshot.get("ship_cartouche_text", DEFAULT_CARTOUCHE_NAME)),
+			font
+		)
 		_draw_wind_feather(
-			Vector2(w - 224.0, h - 92.0),
+			Vector2(w - 238.0, h - 98.0),
 			float(snapshot.get("wind_heading", 0.0)),
 			float(snapshot.get("wind_speed", 8.0)),
+			String(snapshot.get("wind_medallion_text", "WIND 16 kt N")),
 			font
 		)
 		_draw_compass_rose(rose_c, 58.0, font)
@@ -847,6 +941,7 @@ class _ChartCanvas extends Control:
 		var discovered := bool(isl.get("discovered", false))
 		var nm: String = String(isl.get("name", "Island"))
 		var kind: StringName = isl.get("kind", &"treasure_island")
+		var is_outpost := bool(isl.get("is_outpost", false)) or (kind == &"outpost")
 
 		var contour: PackedVector2Array = isl.get("contour", PackedVector2Array())
 		if contour.size() < 3:
@@ -870,24 +965,84 @@ class _ChartCanvas extends Control:
 			draw_colored_polygon(inner, COL_LAND_CORE)
 			var closed := poly.duplicate()
 			closed.append(poly[0])
-			draw_polyline(closed, COL_INK, 2.2, true)
-			# Small icon flourish for outposts and forts.
-			if kind == &"outpost":
-				draw_circle(center, 4.5, COL_GOLD)
-				draw_arc(center, 6.5, 0.0, TAU, 14, COL_INK, 1.6, true)
+			draw_polyline(closed, COL_INK, 2.4, true)
+			# Subtle charted coastline surveyor hachure ticks along discovered shorelines.
+			var p_cnt := poly.size()
+			var tick_stride := maxi(1, int(floorf(float(p_cnt) / 8.0)))
+			var tick_col := Color(COL_INK.r, COL_INK.g, COL_INK.b, 0.42)
+			for ti in range(0, p_cnt, tick_stride):
+				var out_v := (poly[ti] - center).normalized()
+				draw_line(poly[ti], poly[ti] + out_v * 3.8, tick_col, 1.1, true)
+			# Unmistakable 8-ray crimson-gold Outpost Lighthouse Star beside friendly Outposts!
+			if is_outpost:
+				var star_off := Vector2(minf(r_px * 0.72 + 8.0, 28.0), -minf(r_px * 0.48 + 6.0, 20.0))
+				_draw_outpost_lighthouse_star(center + star_off)
+				draw_circle(center, 3.6, COL_GOLD)
+				draw_arc(center, 5.2, 0.0, TAU, 14, COL_INK, 1.4, true)
 			elif kind == &"fort":
 				draw_rect(Rect2(center - Vector2(4.5, 4.5), Vector2(9.0, 9.0)), COL_CRIMSON, true)
 			if font != null and center.x >= -30.0 and center.x <= size.x + 30.0 and center.y >= -30.0 and center.y <= size.y + 30.0:
-				_draw_island_label(font, nm, center, r_px)
+				_draw_island_label(font, nm, center, r_px, true)
 		else:
-			draw_colored_polygon(poly, COL_GHOST_LAND)
-			var n := poly.size()
-			for i in range(0, n, 2):
-				draw_line(poly[i], poly[(i + 1) % n], COL_INK_SOFT, 1.5, true)
+			# Softer hand-sketched silhouette & dashed faded sepia coast for uncharted islands.
+			var faded_fill := Color(COL_GHOST_LAND.r, COL_GHOST_LAND.g, COL_GHOST_LAND.b, 0.36)
+			var faded_ink := Color(COL_INK_SOFT.r, COL_INK_SOFT.g, COL_INK_SOFT.b, 0.56)
+			draw_colored_polygon(poly, faded_fill)
+			_draw_dashed_polygon(poly, faded_ink, 1.4, 5.5, 4.5)
+			# Soft cartographer's cross-sketch hint inside uncharted silhouette.
+			var sk_r := minf(r_px * 0.35, 11.0)
+			var sk_col := Color(COL_INK_SOFT.r, COL_INK_SOFT.g, COL_INK_SOFT.b, 0.28)
+			draw_line(center + Vector2(-sk_r, -sk_r * 0.4), center + Vector2(sk_r * 0.4, -sk_r), sk_col, 1.0, true)
+			draw_line(center + Vector2(-sk_r * 0.5, sk_r * 0.8), center + Vector2(sk_r * 0.8, -sk_r * 0.4), sk_col, 1.0, true)
 			if font != null:
-				draw_string(font, Vector2(center.x - 4.0, center.y + 5.0), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, COL_INK_SOFT)
+				draw_string(font, Vector2(center.x - 4.0, center.y + 5.0), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, faded_ink)
 
-	func _draw_island_label(font: Font, nm: String, center: Vector2, r_px: float) -> void:
+	func _draw_outpost_lighthouse_star(pos: Vector2) -> void:
+		# Warm golden lantern halo + unmistakable 8-ray crimson-gold lighthouse star stamp.
+		draw_circle(pos, 10.5, Color(COL_GOLD.r, COL_GOLD.g, COL_GOLD.b, 0.30))
+		draw_arc(pos, 7.6, 0.0, TAU, 16, Color(COL_INK_SOFT.r, COL_INK_SOFT.g, COL_INK_SOFT.b, 0.52), 1.0, true)
+		for i in 8:
+			var a := float(i) * (TAU / 8.0) - PI * 0.5
+			var d := Vector2(cos(a), sin(a))
+			var s := Vector2(-d.y, d.x)
+			var is_major := (i % 2 == 0)
+			var ray_len := 11.8 if is_major else 8.0
+			var half_w := 2.4 if is_major else 1.7
+			var col_a := COL_CRIMSON if is_major else COL_GOLD
+			var col_b := COL_GOLD if is_major else COL_CRIMSON
+			draw_colored_polygon(PackedVector2Array([pos, pos + d * ray_len, pos + s * half_w]), col_a)
+			draw_colored_polygon(PackedVector2Array([pos, pos + d * ray_len, pos - s * half_w]), col_b)
+		draw_circle(pos, 3.2, COL_INK)
+		draw_circle(pos, 2.3, COL_GOLD)
+		draw_circle(pos, 1.2, Color(1.0, 0.96, 0.84, 1.0))
+
+	func _draw_dashed_polygon(poly: PackedVector2Array, col: Color, width: float, dash_len: float, gap_len: float) -> void:
+		var n := poly.size()
+		if n < 2:
+			return
+		var carry := 0.0
+		var drawing := true
+		for i in n:
+			var p0 := poly[i]
+			var p1 := poly[(i + 1) % n]
+			var seg := p1 - p0
+			var seg_len := seg.length()
+			if seg_len < 0.1:
+				continue
+			var dir := seg / seg_len
+			var pos := 0.0
+			while pos < seg_len:
+				var span_lim := (dash_len if drawing else gap_len) - carry
+				var step := minf(span_lim, seg_len - pos)
+				if drawing and step > 0.25:
+					draw_line(p0 + dir * pos, p0 + dir * (pos + step), col, width, true)
+				pos += step
+				carry += step
+				if carry >= (dash_len if drawing else gap_len) - 0.001:
+					carry = 0.0
+					drawing = not drawing
+
+	func _draw_island_label(font: Font, nm: String, center: Vector2, r_px: float, charted: bool = true) -> void:
 		var fs := 15
 		var tsz := font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 		var tw := tsz.x
@@ -897,9 +1052,10 @@ class _ChartCanvas extends Control:
 		var max_y := size.y - 30.0
 		var max_x := maxf(margin_x, size.x - margin_x - tw)
 
-		# Avoid physical top-left brass paperweight & bottom-right compass rose / wind feather.
+		# Avoid top-left paperweight, bottom-left ship cartouche, and bottom-right compass/wind medallion.
 		var paperweight_rect := Rect2(0.0, 0.0, 182.0, 188.0)
-		var compass_rect := Rect2(size.x - 270.0, size.y - 196.0, 270.0, 196.0)
+		var cartouche_rect := Rect2(0.0, size.y - 96.0, 396.0, 96.0)
+		var compass_rect := Rect2(size.x - 308.0, size.y - 196.0, 308.0, 196.0)
 
 		var candidates: Array[Vector2] = [
 			Vector2(center.x - tw * 0.5, center.y + r_px + 18.0),
@@ -913,7 +1069,7 @@ class _ChartCanvas extends Control:
 		for cand in candidates:
 			var clamped := Vector2(clampf(cand.x, margin_x, max_x), clampf(cand.y, min_y, max_y))
 			var box := Rect2(clamped.x - 3.0, clamped.y - th + 2.0, tw + 6.0, th + 2.0)
-			if not box.intersects(paperweight_rect) and not box.intersects(compass_rect):
+			if not box.intersects(paperweight_rect) and not box.intersects(compass_rect) and not box.intersects(cartouche_rect):
 				chosen = clamped
 				found_clear = true
 				break
@@ -924,10 +1080,99 @@ class _ChartCanvas extends Control:
 				chosen.x = clampf(paperweight_rect.end.x + 6.0, margin_x, max_x)
 			elif box.intersects(compass_rect):
 				chosen.y = clampf(compass_rect.position.y - 8.0, min_y, max_y)
+			elif box.intersects(cartouche_rect):
+				chosen.y = clampf(cartouche_rect.position.y - 8.0, min_y, max_y)
 
-		var halo_r := Rect2(chosen.x - 4.0, chosen.y - th + 2.0, tw + 8.0, th + 3.0)
-		draw_rect(halo_r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.68), true)
+		var tick_pad := 11.0 if charted else 0.0
+		var halo_r := Rect2(chosen.x - 4.0, chosen.y - th + 2.0, tw + 8.0 + tick_pad, th + 3.0)
+		draw_rect(halo_r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.72), true)
 		draw_string(font, chosen, nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_INK)
+		if charted:
+			# Subtle hand-inked charted checkmark tick right beside discovered island names.
+			var tx := chosen.x + tw + 3.5
+			var ty := chosen.y - 5.5
+			var tick_col := Color(COL_INK.r, COL_INK.g, COL_INK.b, 0.76)
+			draw_line(Vector2(tx, ty + 0.5), Vector2(tx + 2.4, ty + 3.0), tick_col, 1.5, true)
+			draw_line(Vector2(tx + 2.4, ty + 3.0), Vector2(tx + 6.8, ty - 2.6), tick_col, 1.5, true)
+
+	func _draw_ship_cartouche(title_text: String, font: Font) -> void:
+		var lbl := title_text if not title_text.is_empty() else DEFAULT_CARTOUCHE_NAME
+		var fs := 13
+		var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x if font != null else float(lbl.length()) * 8.0
+		var box_w := clampf(tw + 40.0, 152.0, 332.0)
+		var box_h := 34.0
+		var left_x := 52.0
+		var top_y := size.y - 72.0
+		var rect := Rect2(left_x, top_y, box_w, box_h)
+		var vellum := Color(0.89, 0.82, 0.65, 0.95)
+		var tail_fill := Color(0.77, 0.68, 0.50, 0.94)
+		var fold_shadow := Color(0.42, 0.30, 0.17, 0.55)
+
+		# Tiny swallowtail scrolled ribbon tails tucking outward from both lower corners.
+		var tail_drop := 5.0
+		var tail_w := 17.0
+		var tail_h := 22.0
+		var left_tail := PackedVector2Array([
+			Vector2(left_x + 4.0, top_y + box_h - tail_h + tail_drop),
+			Vector2(left_x - tail_w, top_y + box_h - tail_h + tail_drop),
+			Vector2(left_x - tail_w + 6.0, top_y + box_h - tail_h * 0.5 + tail_drop),
+			Vector2(left_x - tail_w, top_y + box_h + tail_drop),
+			Vector2(left_x + 4.0, top_y + box_h + tail_drop),
+		])
+		draw_colored_polygon(left_tail, tail_fill)
+		var lt_ring := left_tail.duplicate()
+		lt_ring.append(left_tail[0])
+		draw_polyline(lt_ring, COL_INK, 1.5, true)
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(left_x, top_y + box_h),
+			Vector2(left_x + 7.0, top_y + box_h),
+			Vector2(left_x + 4.0, top_y + box_h + tail_drop),
+		]), fold_shadow)
+
+		var rx := left_x + box_w
+		var right_tail := PackedVector2Array([
+			Vector2(rx - 4.0, top_y + box_h - tail_h + tail_drop),
+			Vector2(rx + tail_w, top_y + box_h - tail_h + tail_drop),
+			Vector2(rx + tail_w - 6.0, top_y + box_h - tail_h * 0.5 + tail_drop),
+			Vector2(rx + tail_w, top_y + box_h + tail_drop),
+			Vector2(rx - 4.0, top_y + box_h + tail_drop),
+		])
+		draw_colored_polygon(right_tail, tail_fill)
+		var rt_ring := right_tail.duplicate()
+		rt_ring.append(right_tail[0])
+		draw_polyline(rt_ring, COL_INK, 1.5, true)
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(rx, top_y + box_h),
+			Vector2(rx - 7.0, top_y + box_h),
+			Vector2(rx - 4.0, top_y + box_h + tail_drop),
+		]), fold_shadow)
+
+		# Main parchment cartouche body with ornate double ink border & rolled scroll curls.
+		draw_rect(rect, vellum, true)
+		draw_rect(rect, COL_INK, false, 2.1)
+		draw_rect(Rect2(left_x + 3.5, top_y + 3.5, box_w - 7.0, box_h - 7.0), COL_INK_SOFT, false, 1.1)
+
+		for sx: float in [left_x, rx]:
+			draw_circle(Vector2(sx, top_y + 4.5), 3.6, vellum)
+			draw_arc(Vector2(sx, top_y + 4.5), 3.6, 0.0, TAU, 12, COL_INK, 1.3, true)
+			draw_circle(Vector2(sx, top_y + box_h - 4.5), 3.6, vellum)
+			draw_arc(Vector2(sx, top_y + box_h - 4.5), 3.6, 0.0, TAU, 12, COL_INK, 1.3, true)
+
+		# Tiny gold diamond end-flourishes framing the vessel name.
+		var mid_y := top_y + box_h * 0.5
+		for fx: float in [left_x + 12.0, rx - 12.0]:
+			draw_colored_polygon(PackedVector2Array([
+				Vector2(fx, mid_y - 3.2),
+				Vector2(fx + 3.2, mid_y),
+				Vector2(fx, mid_y + 3.2),
+				Vector2(fx - 3.2, mid_y),
+			]), COL_GOLD)
+			draw_arc(Vector2(fx, mid_y), 3.4, 0.0, TAU, 4, COL_INK, 0.9, true)
+
+		if font != null:
+			var tx := left_x + (box_w - tw) * 0.5
+			var ty := top_y + box_h * 0.5 + 4.5
+			draw_string(font, Vector2(tx, ty), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_INK)
 
 	func _draw_ship_marker(center: Vector2, heading_rad: float) -> void:
 		# heading_rad = atan2(fwd.x, fwd.z), so forward vector in 2D canvas is (sin(h), cos(h)).
@@ -1019,7 +1264,7 @@ class _ChartCanvas extends Control:
 		draw_rect(pill, Color(line_col.r, line_col.g, line_col.b, 0.65), false, 1.3)
 		draw_string(font, Vector2(bx, by), label_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, line_col)
 
-	func _draw_wind_feather(center: Vector2, heading_rad: float, wind_spd: float, font: Font) -> void:
+	func _draw_wind_feather(center: Vector2, heading_rad: float, wind_spd: float, wind_text: String, font: Font) -> void:
 		var r := 29.0
 		draw_circle(center, r, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.86))
 		draw_arc(center, r, 0.0, TAU, 28, COL_INK, 1.7, true)
@@ -1054,9 +1299,16 @@ class _ChartCanvas extends Control:
 			draw_line(root_pt, root_pt + wing_dir_r * barb_len, b_col, 1.7, true)
 
 		if font != null:
-			var lbl := "WIND"
-			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-			draw_string(font, Vector2(center.x - tw * 0.5, center.y + r + 14.0), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, COL_INK_SOFT)
+			var lbl := wind_text if not wind_text.is_empty() else "WIND 0 kt N"
+			var fs := 11
+			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			var px := center.x - tw * 0.5
+			var py := center.y + r + 16.0
+			var pill := Rect2(px - 6.0, py - 11.5, tw + 12.0, 15.5)
+			var border_col := COL_CRIMSON if gale else Color(COL_INK_SOFT.r, COL_INK_SOFT.g, COL_INK_SOFT.b, 0.72)
+			draw_rect(pill, Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.90), true)
+			draw_rect(pill, border_col, false, 1.2)
+			draw_string(font, Vector2(px, py), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, COL_CRIMSON if gale else COL_INK)
 
 	func _draw_plotting_reticle(center: Vector2, font: Font) -> void:
 		var col_brass := Color(0.56, 0.36, 0.12, 0.72)

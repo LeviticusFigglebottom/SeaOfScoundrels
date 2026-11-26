@@ -1420,6 +1420,98 @@ func test_tool_variant_3d_visuals_lantern_signal_and_zero_primitive_shovel() -> 
 		"Inventory releases static sculpted particle mesh caches cleanly when last inventory exits tree")
 
 
+# ---------------------------------------------------------------------------
+# 13. Wave 23D: MapTableView Ship Cartouche, Wind-Knot Medallion & Outpost Stars
+# ---------------------------------------------------------------------------
+
+func test_map_table_ship_cartouche_wind_knots_and_outpost_markers() -> void:
+	_begin()
+	var prev_profile_ship := Game.profile.get_ship_name()
+
+	# 1. Pure formatting & strict-ASCII sanitization checks.
+	check_eq(MapTableView.format_ship_cartouche(""), "SV SCOUNDREL", "empty ship name falls back to SV SCOUNDREL")
+	check_eq(MapTableView.format_ship_cartouche("Abyssal Dawn"), "SV ABYSSAL DAWN", "prefixes ship name with SV")
+	check_eq(MapTableView.format_ship_cartouche("SV Crimson Kraken"), "SV CRIMSON KRAKEN", "avoids double SV prefix")
+	check_eq(MapTableView.format_wind_medallion(10.0, 0.0), "WIND 19 kt N", "10 m/s due North formats as WIND 19 kt N")
+	check_eq(MapTableView.format_wind_medallion(16.0, PI * 0.5), "WIND 31 kt E", "16 m/s due East formats as WIND 31 kt E")
+	check_eq(MapTableView.format_wind_medallion(8.0, PI * 0.25), "WIND 16 kt NE", "8 m/s NE formats as WIND 16 kt NE")
+
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+
+	var arch := MockArchipelago.new()
+	arch.islands_data = [
+		{"id": &"port_scoundrel", "name": "Port Scoundrel", "kind": &"outpost", "is_outpost": true, "position": Vector3(0, 0, 0), "radius": 110.0, "discovered": true},
+		{"id": &"haven_harbor", "name": "Haven Harbor", "kind": &"treasure_island", "is_outpost": true, "position": Vector3(-320, 0, -280), "radius": 90.0, "discovered": false},
+		{"id": &"cutlass_cay", "name": "Cutlass Cay", "kind": &"treasure_island", "is_outpost": false, "position": Vector3(420, 0, -680), "radius": 95.0, "discovered": true},
+		{"id": &"shrouded_atoll", "name": "Shrouded Atoll", "kind": &"landmark", "is_outpost": false, "position": Vector3(-540, 0, -900), "radius": 80.0, "discovered": false},
+	]
+	_root.add_child(arch)
+
+	var mtv := MapTableView.new()
+	check(mtv.mount_to_ship(ship), "MapTableView mounts cleanly onto sloop")
+	mtv.set_archipelago_data(arch)
+
+	# 2. Custom ship name reflects live in get_ship_cartouche_text() and chart snapshot in strict ASCII!
+	ship.set_ship_name("Crimson Kraken")
+	var cartouche_txt := mtv.get_ship_cartouche_text()
+	check_eq(cartouche_txt, "SV CRIMSON KRAKEN",
+		"ship.set_ship_name('Crimson Kraken') renders as 'SV CRIMSON KRAKEN' (got '%s')" % cartouche_txt)
+	for ci in cartouche_txt.length():
+		check(cartouche_txt.unicode_at(ci) < 128, "ship cartouche text is strictly ASCII")
+
+	# 3. Live Weather wind knots & 16-point compass readout in strict ASCII!
+	Weather.set_weather(0.15, 14.0, 0.7854)  # 14 m/s ~= 27 kt, NE
+	mtv.refresh_now()
+	await get_tree().process_frame
+	var wind_txt := mtv.get_wind_medallion_text()
+	check_eq(wind_txt, "WIND 27 kt NE", "wind medallion formats 14 m/s NE as WIND 27 kt NE (got '%s')" % wind_txt)
+	for ci in wind_txt.length():
+		check(wind_txt.unicode_at(ci) < 128, "wind medallion text is strictly ASCII")
+
+	var snap := mtv.get_last_snapshot()
+	check_eq(String(snap.get("ship_cartouche_text", "")), "SV CRIMSON KRAKEN",
+		"snapshot carries live ship_cartouche_text")
+	check_eq(String(snap.get("wind_medallion_text", "")), "WIND 27 kt NE",
+		"snapshot carries live wind_medallion_text")
+
+	# 4. Outpost Lighthouse Star flags & discovered vs undiscovered island states!
+	var plotted := mtv.get_plotted_islands()
+	check_eq(plotted.size(), 4, "all 4 test islands normalized cleanly")
+	var by_id: Dictionary = {}
+	for isl in plotted:
+		by_id[isl["id"]] = isl
+	check(bool((by_id[&"port_scoundrel"] as Dictionary).get("is_outpost", false))
+		and bool((by_id[&"port_scoundrel"] as Dictionary).get("discovered", false)),
+		"Port Scoundrel carries is_outpost=true and discovered=true")
+	check(bool((by_id[&"haven_harbor"] as Dictionary).get("is_outpost", false))
+		and bool((by_id[&"haven_harbor"] as Dictionary).get("discovered", false)),
+		"explicit is_outpost=true island is preserved and marked discovered for Outpost Lighthouse Star")
+	check(not bool((by_id[&"cutlass_cay"] as Dictionary).get("is_outpost", true))
+		and bool((by_id[&"cutlass_cay"] as Dictionary).get("discovered", false)),
+		"Cutlass Cay renders as discovered charted non-outpost island")
+	check(not bool((by_id[&"shrouded_atoll"] as Dictionary).get("is_outpost", true))
+		and not bool((by_id[&"shrouded_atoll"] as Dictionary).get("discovered", true)),
+		"Shrouded Atoll renders as undiscovered dashed sepia silhouette")
+
+	# 5. Off-screen far camera throttling switches SubViewport to UPDATE_DISABLED cleanly.
+	var far_cam := Camera3D.new()
+	_root.add_child(far_cam)
+	far_cam.global_position = mtv.global_position + Vector3(0.0, 2.0, 35.0)
+	far_cam.current = true
+	mtv._dirty = false
+	mtv._process(0.25)
+	check_eq(mtv._viewport.render_target_update_mode, SubViewport.UPDATE_DISABLED,
+		"MapTableView throttles SubViewport to UPDATE_DISABLED when camera is far away")
+
+	Game.profile.set_ship_name(prev_profile_ship)
+	await _end()
+	check(not is_instance_valid(mtv), "MapTableView tears down cleanly with 0 leaks")
+
+
+
 
 
 
