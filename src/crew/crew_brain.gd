@@ -61,6 +61,13 @@ var _target_carryable: Carryable = null
 var _target_enemy_ship: Ship = null
 var _cannon_side: StringName = &"starboard"
 var _joining_shanty: bool = false
+var _clock: float = 0.0
+var _shanty_phase: float = 0.0
+var _last_audio_beat: float = -1.0
+var _shanty_tool_node: Node3D = null
+var _shanty_tool_id: StringName = &""
+var _shanty_motes: GPUParticles3D = null
+var _shanty_base_rot: Vector3 = Vector3.ZERO
 var _scan_timer: float = 0.5
 var _banter_timer: float = 28.0
 var _callout_cooldowns: Dictionary = {}  # String -> float seconds left
@@ -84,14 +91,23 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	_stop_shanty_join()
+	_stop_shanty_join(false)
+
+
+func _find_character_visual() -> CharacterVisual:
+	if pawn == null or not is_instance_valid(pawn):
+		return null
+	var vis := pawn.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
+	if vis == null:
+		vis = pawn.get_node_or_null(^"Visual") as CharacterVisual
+	return vis
 
 
 func _apply_persona_visual() -> void:
 	if pawn == null:
 		return
 	var p := CrewDialogue.get_persona(persona_id)
-	var vis := pawn.get_node_or_null(^"Visual/CharacterVisual")
+	var vis: Node = _find_character_visual()
 	if vis == null:
 		vis = pawn.get_node_or_null(^"Visual")
 	if vis != null and vis.has_method(&"set_archetype"):
@@ -103,8 +119,17 @@ func crew_name() -> String:
 	return String(CrewDialogue.get_persona(persona_id)["name"])
 
 
+## Return the currently equipped 3D shanty instrument prop (or null when idle).
+func get_held_shanty_instrument() -> Node3D:
+	if _shanty_tool_node != null and is_instance_valid(_shanty_tool_node):
+		return _shanty_tool_node
+	return null
+
+
 ## Assign ship, captain, and persona in one call.
 func setup(p_ship: Ship, p_captain: Pawn, p_persona: StringName = &"helmsman") -> void:
+	if _joining_shanty and p_persona != persona_id:
+		_stop_shanty_join()
 	ship = p_ship
 	captain = p_captain
 	persona_id = p_persona
@@ -176,7 +201,10 @@ func yield_to_human_player() -> void:
 # ------------------------------------------------------------------ main tick
 
 func _physics_process(delta: float) -> void:
+	_clock += delta
 	if not Net.is_host() or pawn == null or pawn.dead:
+		if _joining_shanty:
+			_stop_shanty_join()
 		if pawn != null:
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
@@ -188,6 +216,7 @@ func _physics_process(delta: float) -> void:
 
 	# Handle being overboard: swim straight for the nearest hull ladder.
 	if ship != null and is_instance_valid(ship) and pawn.is_swimming() and current_order != &"follow":
+		_stop_shanty_join()
 		_set_task(&"board_ladder")
 		_tick_swim_to_ladder()
 		return
@@ -219,7 +248,7 @@ func _physics_process(delta: float) -> void:
 		&"follow":
 			_tick_follow(delta)
 		&"shanty":
-			_tick_shanty()
+			_tick_shanty(delta)
 		_:
 			_tick_idle()
 
@@ -551,28 +580,204 @@ func _tick_follow(_delta: float) -> void:
 		_move_world_towards(captain.global_position, 2.4, flat_d > 5.5)
 
 
-func _tick_shanty() -> void:
+func _tick_shanty(delta: float) -> void:
 	pawn.wish_dir = Vector3.ZERO
 	pawn.wish_sprint = false
 	var inst: StringName = CrewDialogue.get_persona(persona_id)["instrument"]
 	if not _joining_shanty:
 		_joining_shanty = true
+		_last_audio_beat = -1.0
+		_shanty_phase = Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
 		if not Audio.is_shanty_playing():
 			Audio.play_shanty([inst])
 		else:
 			Audio.set_shanty_instrument(inst, true, 0.35)
 		Audio.set_shanty_emitter(inst, pawn)
+		_attach_shanty_props(inst)
 		_speak(&"shanty_join", {}, "shanty")
-	_play_anim(&"play_instrument", 0.5)
+	elif _shanty_tool_node == null or not is_instance_valid(_shanty_tool_node):
+		var vis := _find_character_visual()
+		if vis != null and vis.hand_right != null:
+			_attach_shanty_props(inst)
+
+	_play_anim_if_idle(&"play_instrument", 1.6)
+	_animate_shanty_instrument(delta)
 
 
-func _stop_shanty_join() -> void:
+func _stop_shanty_join(detach_from_parent: bool = true) -> void:
+	_detach_shanty_props(detach_from_parent)
+	_last_audio_beat = -1.0
+	_shanty_phase = 0.0
 	if not _joining_shanty:
 		return
 	_joining_shanty = false
 	var inst: StringName = CrewDialogue.get_persona(persona_id)["instrument"]
-	Audio.set_shanty_emitter(inst, null)
-	Audio.set_shanty_instrument(inst, false, 0.35)
+	if Audio != null:
+		Audio.set_shanty_emitter(inst, null)
+		Audio.set_shanty_instrument(inst, false, 0.35)
+
+
+func _attach_shanty_props(inst: StringName) -> void:
+	_detach_shanty_props(true)
+	var tool_id := _tool_id_for_instrument(inst)
+	var vis := _find_character_visual()
+	if vis != null and vis.hand_right == null:
+		vis.set_archetype(vis.archetype)
+	if vis != null and vis.hand_right != null and is_instance_valid(vis.hand_right):
+		var prop := ToolMeshes.build_tool(tool_id)
+		prop.name = "ShantyInstrument_" + String(tool_id)
+		# Position naturally in CharacterVisual.hand_right socket (+Y along fingers, -X forward).
+		match tool_id:
+			&"hurdy_gurdy":
+				prop.position = Vector3(-0.05, 0.13, -0.09)
+				prop.rotation_degrees = Vector3(8.0, -14.0, -84.0)
+				prop.scale = Vector3.ONE * 0.95
+			&"whistle":
+				prop.position = Vector3(0.0, 0.085, -0.03)
+				prop.rotation_degrees = Vector3(-16.0, 12.0, -80.0)
+				prop.scale = Vector3.ONE * 0.95
+			_:
+				prop.position = Vector3(-0.04, 0.08, -0.08)
+				prop.rotation_degrees = Vector3(12.0, -18.0, -78.0)
+				prop.scale = Vector3.ONE * 0.95
+		vis.hand_right.add_child(prop)
+		_shanty_tool_node = prop
+		_shanty_tool_id = tool_id
+		_shanty_base_rot = prop.rotation
+
+	if pawn != null and is_instance_valid(pawn):
+		_shanty_motes = _build_shanty_motes()
+		pawn.add_child(_shanty_motes)
+
+
+func _detach_shanty_props(detach_from_parent: bool = true) -> void:
+	if _shanty_motes != null and is_instance_valid(_shanty_motes):
+		_shanty_motes.emitting = false
+		_shanty_motes.visible = false
+		_shanty_motes.draw_pass_1 = null
+		_shanty_motes.process_material = null
+		if detach_from_parent and _shanty_motes.get_parent() != null:
+			_shanty_motes.get_parent().remove_child(_shanty_motes)
+		_shanty_motes.queue_free()
+	_shanty_motes = null
+	if _shanty_tool_node != null and is_instance_valid(_shanty_tool_node):
+		if detach_from_parent and _shanty_tool_node.get_parent() != null:
+			_shanty_tool_node.get_parent().remove_child(_shanty_tool_node)
+		_shanty_tool_node.queue_free()
+	_shanty_tool_node = null
+	_shanty_tool_id = &""
+
+
+func _animate_shanty_instrument(delta: float) -> void:
+	if _shanty_tool_node == null or not is_instance_valid(_shanty_tool_node):
+		return
+	var audio_beat := Audio.shanty_beat() if Audio.is_shanty_playing() else -1.0
+	if audio_beat >= 0.0 and absf(audio_beat - _last_audio_beat) > 0.0001:
+		_last_audio_beat = audio_beat
+		_shanty_phase = audio_beat
+	else:
+		_shanty_phase += delta * 2.0
+	var beat := _shanty_phase
+	match _shanty_tool_id:
+		&"instrument":
+			var stretch := 0.5 + 0.46 * sin(beat * PI)
+			ToolMeshes.set_concertina_stretch(_shanty_tool_node, stretch)
+		&"hurdy_gurdy":
+			ToolMeshes.set_hurdy_gurdy_crank(_shanty_tool_node, beat * TAU * 0.5)
+		&"whistle":
+			var sway := sin(beat * PI) * 0.15
+			var nod := sin(beat * TAU) * 0.07
+			_shanty_tool_node.rotation = _shanty_base_rot + Vector3(nod, sway, sway * 0.5)
+
+
+static func _tool_id_for_instrument(inst: StringName) -> StringName:
+	match inst:
+		&"hurdy_gurdy":
+			return &"hurdy_gurdy"
+		&"whistle":
+			return &"whistle"
+		&"concertina":
+			return &"instrument"
+		_:
+			return &"instrument"
+
+
+static func _build_shanty_motes() -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "ShantyMotes"
+	p.position = Vector3(0.0, 1.36, -0.24)
+	p.amount = 8
+	p.lifetime = 1.45
+	p.explosiveness = 0.18
+	p.randomness = 0.35
+	p.local_coords = false
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-1.5, -0.5, -1.5), Vector3(3.0, 3.0, 3.0))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = 0.22
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 38.0
+	proc.initial_velocity_min = 0.26
+	proc.initial_velocity_max = 0.58
+	proc.gravity = Vector3(0.0, 0.16, 0.0)
+	proc.damping_min = 0.35
+	proc.damping_max = 0.65
+	proc.scale_min = 0.55
+	proc.scale_max = 1.05
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.25))
+	sc_curve.add_point(Vector2(0.28, 1.0))
+	sc_curve.add_point(Vector2(1.0, 0.05))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc_curve
+	proc.scale_curve = sc_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.22, 0.68, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.94, 0.68, 0.0),
+		Color(1.0, 0.85, 0.38, 0.72),
+		Color(1.0, 0.68, 0.22, 0.38),
+		Color(0.95, 0.50, 0.12, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 24
+	ramp.gradient = grad
+	proc.color_ramp = ramp
+	p.process_material = proc
+
+	var radial_grad := Gradient.new()
+	radial_grad.offsets = PackedFloat32Array([0.0, 0.38, 0.76, 1.0])
+	radial_grad.colors = PackedColorArray([
+		Color(1.0, 0.98, 0.86, 1.0),
+		Color(1.0, 0.88, 0.44, 0.65),
+		Color(1.0, 0.70, 0.24, 0.16),
+		Color(1.0, 0.55, 0.12, 0.0),
+	])
+	var mote_tex := GradientTexture2D.new()
+	mote_tex.width = 24
+	mote_tex.height = 24
+	mote_tex.fill = GradientTexture2D.FILL_RADIAL
+	mote_tex.fill_from = Vector2(0.5, 0.5)
+	mote_tex.fill_to = Vector2(0.5, 0.0)
+	mote_tex.gradient = radial_grad
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.11, 0.11)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = mote_tex
+	quad.material = mat
+	p.draw_pass_1 = quad
+	p.emitting = true
+	return p
 
 
 func _tick_idle() -> void:
@@ -881,6 +1086,18 @@ func _play_anim(action: StringName, duration: float) -> void:
 		drv = pawn.get_node_or_null(^"AnimationDriver")
 	if drv != null and drv.has_method(&"play_action"):
 		drv.call(&"play_action", action, duration)
+
+
+func _play_anim_if_idle(action: StringName, duration: float) -> void:
+	if pawn == null:
+		return
+	var drv := pawn.get_node_or_null(^"Visual/AnimationDriver") as AnimationDriver
+	if drv == null:
+		drv = pawn.get_node_or_null(^"AnimationDriver") as AnimationDriver
+	if drv == null:
+		return
+	if drv.get_current_action() != action:
+		drv.play_action(action, duration)
 
 
 static func _station_kind_for_order(order: StringName) -> StringName:

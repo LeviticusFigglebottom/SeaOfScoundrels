@@ -283,6 +283,7 @@ vec4 march_clouds(vec3 ro, vec3 rd, int steps, int light_steps, bool fine, vec3 
 			}
 		}
 		float dens = smoothstep(0.0, 1.0, clamp(max(sd, 2.0) / 96.0, 0.0, 1.0));
+		dens *= smoothstep(top, top - 340.0, p.y);
 		// Anything that belongs to the storm cell wears storm colours, tower and anvil included.
 		float in_cell = 0.0;
 		if (storm_cell.w > 0.0) {

@@ -74,6 +74,10 @@ func _process(delta: float) -> void:
 		drv.update_pose(delta)
 
 
+func _exit_tree() -> void:
+	_harbour_npcs.clear()
+
+
 ## Build all outpost structures on the sculpted harbour terrain.
 ## Called by `IslandGenerator` right after the terrain mesh & height grid exist.
 func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,

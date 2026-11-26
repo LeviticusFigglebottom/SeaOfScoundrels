@@ -55,6 +55,8 @@ func _ready() -> void:
 			_setup_map_table_shot()
 		"hud":
 			_setup_hud_shot(sky)
+		"armory":
+			_setup_armory_bench_shot()
 		_:
 			_setup_tools_table_shot()
 
@@ -250,6 +252,65 @@ func _process(delta: float) -> void:
 		_update_camera()
 
 
+func _setup_armory_bench_shot() -> void:
+	# Elevated oak Armory & Band bench overlooking the sunlit sea.
+	var bench := Node3D.new()
+	bench.name = "ArmoryBench"
+	bench.position = Vector3(0.0, 2.2, 0.0)
+	add_child(bench)
+
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	ToolMeshes._append_beveled_box(st_wood, Vector3(3.15, 0.12, 1.25), 0.02, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.06, 0.0)))
+	for sx in [-1.35, 1.35]:
+		for sz in [-0.46, 0.46]:
+			ToolMeshes._append_beveled_box(st_wood, Vector3(0.14, 1.10, 0.14), 0.015, Transform3D(Basis.IDENTITY, Vector3(sx, -0.62, sz)))
+	st_wood.generate_normals()
+	var table_mi := MeshInstance3D.new()
+	table_mi.mesh = st_wood.commit()
+	table_mi.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.78, 0.04)
+	bench.add_child(table_mi)
+
+	var fill := OmniLight3D.new()
+	fill.position = Vector3(-0.4, 1.35, 1.2)
+	fill.light_color = Color(1.0, 0.90, 0.74)
+	fill.light_energy = 1.85
+	fill.omni_range = 8.0
+	bench.add_child(fill)
+
+	var layout: Array[Array] = [
+		# Back row: Boarding Axe, Cutlass, Blunderbuss, Flintlock Pistol
+		[&"boarding_axe", Vector3(-1.05, 0.09, -0.22), Vector3(0.0, 12.0, -86.0), 1.05],
+		[&"cutlass", Vector3(-0.22, 0.08, -0.24), Vector3(0.0, 10.0, -86.0), 1.02],
+		[&"blunderbuss", Vector3(0.55, 0.06, -0.18), Vector3(0.0, -72.0, 88.0), 1.15],
+		[&"pistol", Vector3(1.12, 0.04, -0.20), Vector3(0.0, -68.0, 88.0), 1.15],
+		# Front row: Crew Shanty Trio (Hurdy-Gurdy, Concertina, Bosun's Whistle) + Lit Lantern
+		[&"hurdy_gurdy", Vector3(-0.78, 0.10, 0.24), Vector3(0.0, 18.0, 0.0), 1.18],
+		[&"instrument", Vector3(0.02, 0.11, 0.26), Vector3(0.0, -14.0, 0.0), 1.12],
+		[&"whistle", Vector3(0.66, 0.04, 0.28), Vector3(0.0, 26.0, 0.0), 1.35],
+		[&"lantern", Vector3(1.18, 0.35, 0.22), Vector3(0.0, -24.0, 0.0), 1.02],
+	]
+	for spec in layout:
+		var tid: StringName = spec[0]
+		var node := ToolMeshes.build_tool(tid)
+		node.position = spec[1]
+		node.rotation_degrees = spec[2]
+		node.scale = Vector3.ONE * float(spec[3])
+		bench.add_child(node)
+		if tid == &"lantern":
+			ToolMeshes.set_lantern_lit(node, true)
+		elif tid == &"instrument":
+			_display_instrument = node
+
+	_cam = Camera3D.new()
+	_cam.fov = 50.0
+	_cam.near = 0.05
+	_cam.far = 4000.0
+	add_child(_cam)
+	_cam.make_current()
+	_update_camera()
+
+
 func _update_camera() -> void:
 	if _shot == "map_table" and _ship != null:
 		var xf := _ship.global_transform
@@ -257,8 +318,8 @@ func _update_camera() -> void:
 		var sway_x := sin(_clock * 0.7) * 0.16
 		var eye := xf * Vector3(sway_x, 0.92, 3.22)
 		_cam.look_at_from_position(eye, table_top, Vector3.UP)
-	elif _shot == "tools":
-		var pan_x := sin(_clock * 0.55) * 0.65
-		var eye := Vector3(pan_x, 3.35, 2.15)
-		var target := Vector3(pan_x * 0.55, 2.38, -0.02)
+	elif _shot == "tools" or _shot == "armory":
+		var pan_x := sin(_clock * 0.55) * 0.55
+		var eye := Vector3(pan_x, 3.32, 2.08)
+		var target := Vector3(pan_x * 0.50, 2.34, -0.02)
 		_cam.look_at_from_position(eye, target, Vector3.UP)

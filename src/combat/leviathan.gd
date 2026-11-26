@@ -193,6 +193,8 @@ var _active_bursts: Array[GPUParticles3D] = []
 func _ready() -> void:
 	name = "Leviathan"
 	add_to_group(&"world_events")
+	if global_position.is_zero_approx() and target_ship != null and is_instance_valid(target_ship):
+		global_position = Vector3(target_ship.global_position.x, 0.0, target_ship.global_position.z)
 	_center = Vector3(global_position.x, 0.0, global_position.z)
 	_build_shared_assets()
 	_build_ink_pool()
@@ -528,15 +530,16 @@ func _update_crown(delta: float, emerge_ease: float, rage: float) -> void:
 		var is_brig := target_ship.ship_class == &"brigantine"
 		var lat_r := 9.4 if is_brig else 8.2
 		var fwd_r := 10.6 if is_brig else 8.4
-		# Loom inside the inner ink ring off the ship's bow quarter (clear of hull & bowsprit).
-		var prowl_ang := 0.72 + sin(_clock * 0.22) * 0.24
+		# Loom inside the inner ink ring off the ship's port-bow quarter (clear of hull & bowsprit)
+		# so its glowing amber-aqua eyes stare menacingly across the bow at the crew and camera.
+		var prowl_ang := -0.78 + sin(_clock * 0.22) * 0.22
 		var off := ship_right * (sin(prowl_ang) * lat_r) + ship_fwd * (cos(prowl_ang) * fwd_r)
 		crown_xz = Vector2(_center.x + off.x, _center.z + off.z)
 		look_at_ship = true
 
 	var surf := Sea.height(crown_xz.x, crown_xz.y)
 	var breath := sin(_clock * 1.25) * 0.24 + rage * 0.35
-	var sub_y := lerpf(surf - 3.6, surf - 0.12, emerge_ease) + breath
+	var sub_y := lerpf(surf - 3.6, surf + 0.26, emerge_ease) + breath
 	_crown_root.global_position = Vector3(crown_xz.x, sub_y, crown_xz.y)
 
 	var wave_n := Sea.normal(crown_xz.x, crown_xz.y)

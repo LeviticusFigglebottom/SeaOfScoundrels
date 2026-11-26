@@ -484,7 +484,9 @@ func _update_sky(p: Dictionary, sun_dir: Vector3, moon_dir: Vector3,
 	var heavy := smoothstep(0.2, 0.9, any_storm)
 	var tower := clampf(0.2 + 0.9 * smoothstep(0.25, 0.75, cl) + 2.0 * any_storm, 0.0, 1.0)
 	m.set_shader_parameter(&"slab_base", lerpf(CloudField.BASE_FAIR - 70.0, CloudField.BASE_STORM - 320.0, heavy))
-	m.set_shader_parameter(&"slab_top", CloudField.BASE_FAIR + 450.0 + 2500.0 * tower)
+	# Parabolic domes peak at c.base + c.height * sqrt(c.m / c.k), which reaches ~1.75x c.height
+	# under moderate-to-heavy cumulus cover; keep slab_top above the true summit so tops stay rounded.
+	m.set_shader_parameter(&"slab_top", minf(CloudField.BASE_FAIR + (450.0 + 2500.0 * tower) * 1.80, 6200.0))
 	_set_field(m)
 
 func _set_field(m: ShaderMaterial) -> void:

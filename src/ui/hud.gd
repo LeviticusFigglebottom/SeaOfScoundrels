@@ -19,7 +19,9 @@ signal quality_changed(target: StringName, level: int)
 
 const ITEM_SLICE_HINTS := {
 	&"cutlass": "Light combo | Hold heavy | RMB parry",
+	&"boarding_axe": "Heavy cleave | Guard crush | RMB parry",
 	&"pistol": "Flintlock shot | RMB aim",
+	&"blunderbuss": "6-pellet spread | Short range | RMB aim",
 	&"compass": "Points true North | RMB raise",
 	&"spyglass": "RMB zoom & sight horizon",
 	&"lantern": "LMB toggle flame | RMB raise",
@@ -477,8 +479,11 @@ func _build_banner() -> void:
 	holder.anchor_right = 1.0
 	holder.anchor_top = 0.0
 	holder.anchor_bottom = 0.0
+	# Keep top-center notices clear of the top-right Voyage Whisper / Gold card (326 px wide).
+	holder.offset_left = 340.0
+	holder.offset_right = -340.0
 	holder.offset_top = 24.0
-	holder.offset_bottom = 86.0
+	holder.offset_bottom = 104.0
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(holder)
 
@@ -486,7 +491,7 @@ func _build_banner() -> void:
 	_banner_panel.name = "NoticeBanner"
 	_banner_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_banner_panel.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.71, 0.96), HudIcons.COL_INK, 2, 8, 24, 10))
+		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.71, 0.96), HudIcons.COL_INK, 2, 8, 22, 9))
 	_banner_panel.modulate.a = 0.0
 	holder.add_child(_banner_panel)
 
@@ -504,6 +509,7 @@ func _build_banner() -> void:
 	_banner_label = Label.new()
 	_banner_label.name = "BannerText"
 	_banner_label.text = ""
+	_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_banner_label.add_theme_font_size_override("font_size", 18)
 	_banner_label.add_theme_color_override("font_color", HudIcons.COL_INK)
 	hbox.add_child(_banner_label)
@@ -522,8 +528,8 @@ func _build_boss_bar() -> void:
 	holder.anchor_right = 1.0
 	holder.anchor_top = 0.0
 	holder.anchor_bottom = 0.0
-	holder.offset_top = 92.0
-	holder.offset_bottom = 148.0
+	holder.offset_top = 104.0
+	holder.offset_bottom = 160.0
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(holder)
 
@@ -945,6 +951,13 @@ func _pop_next_banner() -> void:
 	_banner_timer = 2.4 if _banner_queue.size() >= 2 else 3.6
 	if _banner_label != null:
 		_banner_label.text = _banner_current
+		# Wrap long notices cleanly inside the safe centered band so they never overlap the Voyage Whisper card.
+		if _banner_current.length() > 54:
+			_banner_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_banner_label.custom_minimum_size = Vector2(560.0, 0.0)
+		else:
+			_banner_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+			_banner_label.custom_minimum_size = Vector2.ZERO
 
 
 func _tick_vitals(delta: float) -> void:
@@ -1118,11 +1131,17 @@ func _refresh_item_radial_entries() -> void:
 	var slot_list: Array[StringName] = inventory.slots if inventory != null else Inventory.DEFAULT_SLOTS
 	var slices: Array[Dictionary] = []
 	for id in slot_list:
+		var resolved_id := id
+		if inventory != null:
+			if id == &"cutlass" and inventory.get(&"melee_weapon") != null:
+				resolved_id = StringName(inventory.get(&"melee_weapon"))
+			elif id == &"pistol" and inventory.get(&"ranged_weapon") != null:
+				resolved_id = StringName(inventory.get(&"ranged_weapon"))
 		slices.append({
 			"id": id,
-			"label": ToolMeshes.get_display_name(id),
-			"hint": String(ITEM_SLICE_HINTS.get(id, "")),
-			"icon": id,
+			"label": ToolMeshes.get_display_name(resolved_id),
+			"hint": String(ITEM_SLICE_HINTS.get(resolved_id, ITEM_SLICE_HINTS.get(id, ""))),
+			"icon": resolved_id,
 		})
 	item_radial.configure("Tools & Gear", slices)
 

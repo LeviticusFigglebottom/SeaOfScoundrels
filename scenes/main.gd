@@ -1015,6 +1015,7 @@ func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
 		return
 	var lev := Leviathan.new()
 	lev.target_ship = target as Ship if target is Ship else player_ship
+	lev.position = Vector3(center.x, 0.0, center.z)
 	_entities_root.add_child(lev)
 	lev.global_position = Vector3(center.x, 0.0, center.z)
 	active_leviathans.append(lev)
@@ -1083,6 +1084,11 @@ func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
 		local_pt.y = fort.surface_height(local_pt.x, local_pt.z) + 0.15
 		_spawn_enemy_pawn(defenders[i], fort.global_transform * local_pt)
 
+	# Activate Ironwatch Fort's blazing Signal Brazier and 4 coastal sea-battery cannons!
+	var bastion := fort.get_node_or_null(^"FortBastion")
+	if bastion != null and bastion.has_method(&"set_siege_active"):
+		bastion.call(&"set_siege_active", true)
+
 	# Place Fort Vault chest on the terrace!
 	var vault_local := fort.dig_points[0] if not fort.dig_points.is_empty() else Vector3(0.0, 0.0, 0.0)
 	vault_local.y = fort.surface_height(vault_local.x, vault_local.z) + 0.35
@@ -1095,61 +1101,26 @@ func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
 func _on_director_spawn_castaway(pos: Vector3) -> void:
 	if not Net.is_host():
 		return
-	var raft := Node3D.new()
+	var raft := CastawayRaft.new()
 	raft.name = "CastawayRaft"
 	_entities_root.add_child(raft)
 	raft.global_position = Vector3(pos.x, Sea.height(pos.x, pos.z), pos.z)
 
-	var wood_mat := StandardMaterial3D.new()
-	wood_mat.albedo_color = Color(0.46, 0.31, 0.18)
-	wood_mat.roughness = 0.85
-	var deck := MeshInstance3D.new()
-	var dbox := BoxMesh.new()
-	dbox.size = Vector3(2.8, 0.24, 2.4)
-	deck.mesh = dbox
-	deck.material_override = wood_mat
-	raft.add_child(deck)
+	# Circling gulls draw the captain's eye to the drifting castaway from afar.
+	var raft_gulls := SeabirdFlock.spawn_over(_entities_root, Vector3(pos.x, 0.0, pos.z), 10.0, 13.0, 4)
+	raft_gulls.is_loot_marker = true
 
-	var lantern := OmniLight3D.new()
-	lantern.light_color = Color(1.0, 0.72, 0.28)
-	lantern.light_energy = 2.6
-	lantern.omni_range = 16.0
-	lantern.position = Vector3(0.9, 1.4, -0.7)
-	raft.add_child(lantern)
-
-	var beacon := MeshInstance3D.new()
-	var bsp := SphereMesh.new()
-	bsp.radius = 0.18
-	bsp.height = 0.36
-	beacon.mesh = bsp
-	beacon.position = lantern.position
-	var bmat := StandardMaterial3D.new()
-	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bmat.albedo_color = Color(1.0, 0.86, 0.45)
-	beacon.material_override = bmat
-	raft.add_child(beacon)
-
-	var npc_vis := CharacterVisual.new()
-	npc_vis.name = "CastawayVisual"
-	npc_vis.archetype = &"carpenter"
-	npc_vis.position = Vector3(-0.2, 0.12, 0.0)
-	raft.add_child(npc_vis)
-
-	var rescue_it := Interactable.create("Rescue Castaway", 1.5)
-	rescue_it.position = Vector3(0.0, 1.1, 0.0)
-	rescue_it.reach = 4.2
-	rescue_it.interacted.connect(func(_p: Node) -> void:
+	raft.rescued.connect(func(r: CastawayRaft, _rescuer: Node) -> void:
 		if not Net.is_host():
 			return
-		rescue_it.enabled = false
 		Game.profile.add_gold(150)
 		Game.save()
-		Audio.play_sfx(&"coin_jingle", raft.global_position)
-		Game.post_notice("Castaway rescued! 'Bless ye, Cap'n — take 150 gold & beware the fort!'")
-		raft.queue_free()
+		Audio.play_sfx(&"coin_jingle", r.global_position)
+		Game.post_notice("Castaway rescued! 'Bless ye, Cap'n - take 150 gold & beware Ironwatch Fort!'")
+		if is_instance_valid(raft_gulls):
+			raft_gulls.queue_free()
+		r.queue_free()
 	)
-	raft.add_child(rescue_it)
-	_bobbing_props.append({"node": raft, "x": pos.x, "z": pos.z, "y_off": 0.04, "phase": 0.7})
 
 
 func _on_director_spawn_storm_cell(_center: Vector3, _radius: float, _velocity: Vector3) -> void:
@@ -1762,7 +1733,8 @@ func _apply_hero_shot(mode: String) -> void:
 	if p_cv != null:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
-			"storm", "sunset", "night", "leviathan", "fleet"
+			"storm", "sunset", "night", "leviathan", "fleet",
+			"fort_siege", "harbour_plaza"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -1859,9 +1831,11 @@ func _apply_hero_shot(mode: String) -> void:
 			if map_table != null:
 				map_table.refresh_now()
 				var table_y := MapTableView.BRIGANTINE_TABLE_TOP_Y if is_brig else MapTableView.SHIP_TABLE_TOP_Y
-				var table_top := map_table.global_position + Vector3(0.0, table_y, 0.0)
-				var cam_local := Vector3(0.0, 0.58, 3.60) if is_brig else Vector3(0.0, 0.62, 1.58)
-				_mount_shot_camera(player_ship.global_transform * cam_local, table_top, 52.0)
+				var table_local := player_ship.to_local(map_table.global_position)
+				var target_local := table_local + Vector3(0.0, table_y, -0.02)
+				# Stand aft of the map table (clear of the forward companionway stairs) looking down at the chart.
+				var cam_local := table_local + Vector3(0.0, table_y + 0.88, 0.72)
+				_enable_ship_track_shot(cam_local, target_local, 50.0)
 
 		"hold":
 			Weather.time_of_day = 14.0 if is_nan(_cli_time) else _cli_time
@@ -1870,9 +1844,9 @@ func _apply_hero_shot(mode: String) -> void:
 			player_ship.water_level = 0.18
 			if map_table != null:
 				map_table.refresh_now()
-			var cam_local_hold := Vector3(-1.35, 0.45, -1.85) if is_brig else Vector3(-1.05, 0.48, -1.95)
-			var look_local_hold := Vector3(0.15, -0.25, 3.60) if is_brig else Vector3(0.20, -0.20, 2.25)
-			_mount_shot_camera(player_ship.global_transform * cam_local_hold, player_ship.global_transform * look_local_hold, 68.0)
+			var cam_local_hold := Vector3(1.35, 0.42, -0.45) if is_brig else Vector3(1.02, 0.34, -0.82)
+			var look_local_hold := Vector3(-0.10, -0.25, 4.20) if is_brig else Vector3(-0.08, -0.22, 2.55)
+			_enable_ship_track_shot(cam_local_hold, look_local_hold, 66.0)
 
 		"leviathan":
 			Weather.time_of_day = 17.25 if is_nan(_cli_time) else _cli_time
@@ -1882,8 +1856,10 @@ func _apply_hero_shot(mode: String) -> void:
 			var lev := Leviathan.new()
 			lev.name = "HeroLeviathan"
 			lev.target_ship = player_ship
+			var lev_pos := player_ship.global_transform * Vector3(2.0, 0.0, -4.0)
+			lev.position = Vector3(lev_pos.x, 0.0, lev_pos.z)
 			_entities_root.add_child(lev)
-			lev.global_position = player_ship.global_transform * Vector3(2.0, 0.0, -4.0)
+			lev.global_position = Vector3(lev_pos.x, 0.0, lev_pos.z)
 			active_leviathans.append(lev)
 			_enable_ship_track_shot(Vector3(22.0 * sc, 8.8 * sc, -24.0 * sc), Vector3(0.0, 4.5, -1.0), 58.0)
 
@@ -1906,7 +1882,37 @@ func _apply_hero_shot(mode: String) -> void:
 			if f3 != null:
 				f3.rotation.y = player_ship.rotation.y + 0.45
 			_shot_combat_timer = 0.22
-			_enable_ship_track_shot(Vector3(-18.5 * sc, 10.5 * sc, 26.0 * sc), Vector3(4.0, 3.8, -22.0), 60.0)
+			var fsc := 1.38 if is_brig else 1.24
+			_enable_ship_track_shot(Vector3(-19.5 * fsc, 10.8 * fsc, 27.5 * fsc), Vector3(0.0, 3.8, -22.0), 62.0)
+
+		"fort_siege":
+			# Ironwatch Fort Stone Bastion, blazing Signal Brazier & 4 live coastal Sea-Battery Cannons!
+			Weather.time_of_day = 16.6 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.32, 13.5, -0.25, 0.0, 0.62)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.30)
+			var fort := archipelago.get_island_by_id("ironwatch_fort")
+			if fort != null:
+				_on_director_spawn_fort_siege(fort.global_position, "N")
+				var fpos := fort.global_position
+				var ship_off := Vector3(-64.0, 0.0, 74.0)
+				var s_pos := fpos + ship_off
+				var yaw := atan2(-(fpos.x - s_pos.x), -(fpos.z - s_pos.z))
+				_place_sailing_ship(s_pos, yaw, 0.78, 3.2)
+				# Dramatic low-altitude coastal shot showing Bastion, Signal Brazier, sea batteries & approaching Brigantine!
+				var cam_p := fpos + Vector3(-28.0, 26.5, 42.0)
+				var look_p := fpos + Vector3(0.0, 21.0, 0.0)
+				_mount_shot_camera(cam_p, look_p, 56.0)
+
+		"harbour_plaza":
+			# Port Scoundrel living harbour plaza: Merchant Factor, Pier Quartermaster, Tavern, Stall & gulls!
+			Weather.time_of_day = 10.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.04, 8.0, -0.35, 0.0, 0.34)
+			Sea.amp_scale = Sea.AMP_CALM
+			if port != null:
+				var pier_xf := port.global_transform * port.dock_local_transform
+				var cam_p := pier_xf * Vector3(-2.5, 5.4, -7.5)
+				var look_p := pier_xf * Vector3(2.2, 3.2, 12.0)
+				_mount_shot_camera(cam_p, look_p, 58.0)
 
 
 func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:

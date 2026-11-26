@@ -1736,7 +1736,8 @@ def extras(hull):
         o = (sg * (hx1 + 0.13), DECK_Y + 0.21, (hz0 + hz1) / 2 - 0.05); h = MB(name, o); build_hatch_cover(h, o, sg); build(h)
     build_holes()
     # where the sea surface must be cut away inside the hull (hide like col_*; for the ocean shader/stencil)
-    wm = MB('mask_water'); poly = deck_outline(0.0, 0.0, -6.3, zstern(0.0) - 0.02, 20, 1.3, 0.02)
+    # Trace at y = +0.50 m so the flared stern transom stays watertight even when pitching with bilge water.
+    wm = MB('mask_water'); poly = deck_outline(0.50, 0.50, -6.32, zstern(0.50) - 0.02, 20, 1.3, 0.02)
     wm.newoff(); wm.fp([(x, 0.0, z) for x, z in poly], 'col', C_WHITE, None, (0, -5, 0)); build(wm)
 
 def rig_clearance():

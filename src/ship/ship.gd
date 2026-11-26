@@ -21,6 +21,7 @@ const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb"
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
 const SAIL_WIND_SHADER: Shader = preload("res://src/ship/sail_wind.gdshader")
 const HOLD_WATER_SHADER: Shader = preload("res://src/ship/hold_water.gdshader")
+const GHOST_HULL_SHADER: Shader = preload("res://src/ship/ghost_hull.gdshader")
 
 ## Collision layer 2 (ships). Mask deliberately excludes layer 3 (pawns) so
 ## CharacterBody3D pawns never shove the hull (docs/ARCHITECTURE.md).
@@ -180,10 +181,19 @@ var _livery_hull_tint: Color = Color.WHITE
 var _effective_glow_accent: Color = Color.BLACK
 var _hull_mats_duplicated: bool = false
 var _hull_mat_entries: Array[Dictionary] = []
+var _ghost_hull_mats: Array[ShaderMaterial] = []
+var _spectral_phase: float = 1.0
+var _spectral_flare: float = 0.0
+var _wisp_time: float = 0.0
 
 var _bow_spray_port: GPUParticles3D = null
 var _bow_spray_starboard: GPUParticles3D = null
 var _spray_tex: GradientTexture2D = null
+var _active_muzzle_vfx: Array[Node] = []
+
+static var _smoke_puff_tex: ImageTexture = null
+static var _muzzle_flash_tex: GradientTexture2D = null
+static var _muzzle_spark_tex: ImageTexture = null
 
 
 func _init() -> void:
@@ -241,6 +251,37 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_cleanup_all_muzzle_vfx()
+	for spray: GPUParticles3D in [_bow_spray_port, _bow_spray_starboard]:
+		if spray != null and is_instance_valid(spray):
+			spray.emitting = false
+			spray.visible = false
+			spray.draw_pass_1 = null
+			spray.process_material = null
+	for h in holes:
+		var jet := h.get("jet") as GPUParticles3D
+		if jet != null and is_instance_valid(jet):
+			jet.emitting = false
+			jet.visible = false
+			jet.draw_pass_1 = null
+			jet.process_material = null
+	for entry in _hull_mat_entries:
+		for target_pair: Array in entry.get("targets", []):
+			var target_mi := target_pair[0] as MeshInstance3D
+			var target_si := int(target_pair[1])
+			if target_mi != null and is_instance_valid(target_mi):
+				target_mi.set_surface_override_material(target_si, null)
+	_hull_mat_entries.clear()
+	for gm in _ghost_hull_mats:
+		if gm != null:
+			gm.set_shader_parameter(&"albedo_tex", null)
+	_ghost_hull_mats.clear()
+	for sm in _sail_mats:
+		if sm != null:
+			sm.set_shader_parameter(&"albedo_tex", null)
+	for fmat in _flag_mats:
+		if fmat != null:
+			fmat.set_shader_parameter(&"albedo_tex", null)
 	_unregister_ocean_mask()
 
 
@@ -554,6 +595,11 @@ static func _make_color_ramp(offsets: PackedFloat32Array, colors: PackedColorArr
 
 static func _make_scale_curve(points: Array[Vector2]) -> CurveTexture:
 	var curve := Curve.new()
+	var max_y := 1.0
+	for pt in points:
+		max_y = maxf(max_y, pt.y)
+	curve.min_value = 0.0
+	curve.max_value = max_y
 	for pt in points:
 		curve.add_point(pt)
 	var tex := CurveTexture.new()
@@ -1007,7 +1053,27 @@ func apply_livery(
 		_apply_current_livery()
 
 
+## Drive spectral visibility, ectoplasmic dissolve, and phase flare on Ghost Ships.
+func set_spectral_phase(alpha: float, flare: float = 0.0) -> void:
+	_spectral_phase = clampf(alpha, 0.0, 1.0)
+	_spectral_flare = clampf(flare, 0.0, 2.0)
+	for gm in _ghost_hull_mats:
+		gm.set_shader_parameter(&"phase_alpha", _spectral_phase)
+		gm.set_shader_parameter(&"phase_flare", _spectral_flare)
+	for sm in _sail_mats:
+		sm.set_shader_parameter(&"phase_alpha", _spectral_phase)
+		sm.set_shader_parameter(&"phase_flare", _spectral_flare)
+	for fmat in _flag_mats:
+		fmat.set_shader_parameter(&"phase_alpha", _spectral_phase)
+		fmat.set_shader_parameter(&"phase_flare", _spectral_flare)
+	for l in _lantern_lights:
+		if is_instance_valid(l):
+			l.visible = _spectral_phase > 0.02
+	visible = _spectral_phase > 0.02
+
+
 func _apply_current_livery() -> void:
+	var is_ghost := faction == &"ghost"
 	var eff_glow := _livery_glow_accent
 	var eff_hull := _livery_hull_tint
 	var eff_paint := _livery_hull_tint.lerp(Color.WHITE, 0.15)
@@ -1023,14 +1089,12 @@ func _apply_current_livery() -> void:
 			eff_rough_add = 0.14
 			if eff_glow.get_luminance() <= 0.01:
 				eff_glow = Color(0.14, 0.92, 0.52)
-		elif faction == &"ghost":
-			eff_hull = Color(0.42, 0.86, 0.84)
-			eff_paint = Color(0.48, 0.92, 0.90)
+		elif is_ghost:
+			eff_hull = Color(0.06, 0.22, 0.26)
+			eff_paint = Color(0.08, 0.28, 0.30)
 			eff_rough_add = 0.04
-			eff_hull_emit = Color(0.14, 0.88, 0.82)
-			eff_hull_emit_energy = 0.35
 			if eff_glow.get_luminance() <= 0.01:
-				eff_glow = Color(0.22, 0.98, 0.84)
+				eff_glow = Color(0.24, 1.0, 0.90)
 		elif faction == &"corsair":
 			eff_hull = Color(0.58, 0.46, 0.44)
 			eff_paint = Color(0.64, 0.42, 0.38)
@@ -1042,11 +1106,28 @@ func _apply_current_livery() -> void:
 	var glow_mag := eff_glow.get_luminance()
 	var sail_glow_strength := 0.0
 	if glow_mag > 0.01:
-		# Keep Drowned sails dark & weathered with a faint eerie sheen; let Ghost sails glow brightly.
-		sail_glow_strength = 0.08 if faction == &"drowned" else clampf(glow_mag * 0.78, 0.14, 0.82)
+		# Ghost sails drive their own Fresnel + drifting wisp emission in sail_wind.gdshader;
+		# keep base flat emission modest so the deep abyssal core stays rich.
+		if is_ghost:
+			sail_glow_strength = 0.04
+		elif faction == &"drowned":
+			sail_glow_strength = 0.015
+		else:
+			sail_glow_strength = clampf(glow_mag * 0.78, 0.14, 0.82)
+
+	var emblem_mode := 0
+	if is_ghost:
+		emblem_mode = 3
+	elif faction == &"drowned":
+		emblem_mode = 2
+	elif faction == &"corsair":
+		emblem_mode = 1
 
 	for sm in _sail_mats:
 		sm.set_shader_parameter(&"albedo_tint", _livery_sail_tint)
+		sm.set_shader_parameter(&"emblem_mode", emblem_mode)
+		sm.set_shader_parameter(&"phase_alpha", _spectral_phase)
+		sm.set_shader_parameter(&"phase_flare", _spectral_flare)
 		if glow_mag > 0.01:
 			sm.set_shader_parameter(&"emission_tint", eff_glow)
 			sm.set_shader_parameter(&"emission_strength", sail_glow_strength)
@@ -1056,6 +1137,9 @@ func _apply_current_livery() -> void:
 			sm.set_shader_parameter(&"emission_strength", 0.08 if is_back else 0.0)
 	for fmat in _flag_mats:
 		fmat.set_shader_parameter(&"albedo_tint", _livery_flag_tint)
+		fmat.set_shader_parameter(&"emblem_mode", emblem_mode)
+		fmat.set_shader_parameter(&"phase_alpha", _spectral_phase)
+		fmat.set_shader_parameter(&"phase_flare", _spectral_flare)
 		if glow_mag > 0.01:
 			fmat.set_shader_parameter(&"emission_tint", eff_glow)
 			fmat.set_shader_parameter(&"emission_strength", sail_glow_strength)
@@ -1074,7 +1158,8 @@ func _apply_current_livery() -> void:
 			wm.albedo_color = Color(1.0, 1.0, 1.0, 0.30)
 
 	var need_hull_livery := (
-		eff_hull != Color.WHITE
+		is_ghost
+		or eff_hull != Color.WHITE
 		or glow_mag > 0.01
 		or _livery_sail_tint != Color.WHITE
 		or _livery_flag_tint != Color.WHITE
@@ -1084,11 +1169,62 @@ func _apply_current_livery() -> void:
 		return
 
 	_ensure_hull_livery_mats()
+	_ghost_hull_mats.clear()
+
+	if is_ghost:
+		for entry in _hull_mat_entries:
+			var kind: StringName = entry["kind"]
+			var gm := entry["ghost_mat"] as ShaderMaterial
+			if gm == null:
+				gm = ShaderMaterial.new()
+				gm.shader = GHOST_HULL_SHADER
+				# Draw cleanly after the ocean screen-reading pass (priority 0) so waves show through phantom planks.
+				gm.render_priority = 1
+				var orig_tex := entry["orig_tex"] as Texture2D
+				if orig_tex != null:
+					gm.set_shader_parameter(&"albedo_tex", orig_tex)
+					gm.set_shader_parameter(&"use_albedo_tex", 1.0)
+				else:
+					gm.set_shader_parameter(&"use_albedo_tex", 0.0)
+				entry["ghost_mat"] = gm
+			var base_col := Color(0.06, 0.22, 0.26)
+			var rim_col := Color(0.24, 1.0, 0.90)
+			match kind:
+				&"paint", &"brass":
+					base_col = Color(0.08, 0.28, 0.30)
+					rim_col = Color(0.32, 1.0, 0.92)
+				&"iron":
+					base_col = Color(0.04, 0.16, 0.21)
+					rim_col = Color(0.20, 0.95, 0.88)
+				&"lantern", &"window", &"lod_window":
+					base_col = Color(0.22, 0.96, 0.88)
+					rim_col = Color(0.68, 1.0, 0.96)
+				&"lod_canvas", &"lod_flag":
+					base_col = Color(0.06, 0.24, 0.28)
+					rim_col = Color(0.26, 1.0, 0.92)
+			gm.set_shader_parameter(&"base_color", base_col)
+			gm.set_shader_parameter(&"rim_color", rim_col)
+			gm.set_shader_parameter(&"phase_alpha", _spectral_phase)
+			gm.set_shader_parameter(&"phase_flare", _spectral_flare)
+			gm.set_shader_parameter(&"wisp_time", _wisp_time)
+			for target_pair: Array in entry["targets"]:
+				var target_mi := target_pair[0] as MeshInstance3D
+				var target_si := int(target_pair[1])
+				if target_mi != null and is_instance_valid(target_mi):
+					target_mi.set_surface_override_material(target_si, gm)
+			_ghost_hull_mats.append(gm)
+		return
+
 	for entry in _hull_mat_entries:
 		var mat: BaseMaterial3D = entry["mat"]
 		var kind: StringName = entry["kind"]
 		var orig_albedo: Color = entry["orig_albedo"]
 		var orig_rough: float = float(entry["orig_rough"])
+		for target_pair: Array in entry["targets"]:
+			var target_mi := target_pair[0] as MeshInstance3D
+			var target_si := int(target_pair[1])
+			if target_mi != null and is_instance_valid(target_mi):
+				target_mi.set_surface_override_material(target_si, mat)
 		match kind:
 			&"wood":
 				mat.albedo_color = orig_albedo * eff_hull
@@ -1112,8 +1248,11 @@ func _apply_current_livery() -> void:
 					mat.emission_enabled = bool(entry["orig_emit_on"])
 					mat.emission = entry["orig_emit"] as Color
 					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
-			&"cloth":
-				mat.albedo_color = orig_albedo * eff_hull.lerp(Color.WHITE, 0.10)
+			&"iron":
+				mat.albedo_color = orig_albedo * eff_hull.lerp(Color.WHITE, 0.55)
+				mat.roughness = clampf(orig_rough + eff_rough_add * 1.2, 0.0, 0.95)
+			&"cloth", &"furled_canvas":
+				mat.albedo_color = orig_albedo * (_livery_sail_tint if kind == &"furled_canvas" else eff_hull.lerp(Color.WHITE, 0.10))
 			&"rope":
 				mat.albedo_color = orig_albedo * eff_hull.lerp(Color.WHITE, 0.35)
 			&"brass":
@@ -1130,6 +1269,14 @@ func _apply_current_livery() -> void:
 					mat.emission_enabled = bool(entry["orig_emit_on"])
 					mat.emission = entry["orig_emit"] as Color
 					mat.emission_energy_multiplier = float(entry["orig_emit_e"])
+			&"window":
+				if glow_mag > 0.01:
+					mat.albedo_color = Color(eff_glow.r * 0.65, eff_glow.g * 0.88, eff_glow.b * 0.72, 0.58)
+					mat.emission_enabled = true
+					mat.emission = eff_glow
+				else:
+					mat.albedo_color = Color(1.0, 1.0, 1.0, 0.30)
+					mat.emission = Color(1.0, 0.72, 0.34)
 			&"lod_window":
 				if glow_mag > 0.01:
 					mat.albedo_color = Color(eff_glow.r * 0.65, eff_glow.g * 0.88, eff_glow.b * 0.72, 0.65)
@@ -1168,7 +1315,7 @@ func _ensure_hull_livery_mats() -> void:
 		return
 	_hull_mats_duplicated = true
 	_hull_mat_entries.clear()
-	var mat_cache: Dictionary = {}  # orig BaseMaterial3D -> duplicated per-ship BaseMaterial3D
+	var mat_cache: Dictionary = {}  # orig BaseMaterial3D -> entry Dictionary
 	var roots: Array[Node3D] = []
 	if _model != null:
 		roots.append(_model)
@@ -1190,22 +1337,28 @@ func _ensure_hull_livery_mats() -> void:
 				var kind := _classify_livery_material(orig.resource_name, is_lod)
 				if kind == &"":
 					continue
-				var dup: BaseMaterial3D
+				var entry: Dictionary
 				if mat_cache.has(orig):
-					dup = mat_cache[orig] as BaseMaterial3D
+					entry = mat_cache[orig] as Dictionary
 				else:
-					dup = orig.duplicate() as BaseMaterial3D
-					mat_cache[orig] = dup
-					_hull_mat_entries.append({
+					# Main-model mat_window_glass was already duplicated per ship in _setup_lights_and_glass().
+					var dup := orig if (kind == &"window" and not is_lod) else orig.duplicate() as BaseMaterial3D
+					entry = {
 						"mat": dup,
+						"ghost_mat": null,
+						"orig_tex": orig.albedo_texture,
 						"kind": kind,
 						"orig_albedo": orig.albedo_color,
 						"orig_rough": orig.roughness,
 						"orig_emit_on": orig.emission_enabled,
 						"orig_emit": orig.emission,
 						"orig_emit_e": orig.emission_energy_multiplier,
-					})
-				mi.set_surface_override_material(si, dup)
+						"targets": [],
+					}
+					mat_cache[orig] = entry
+					_hull_mat_entries.append(entry)
+				(entry["targets"] as Array).append([mi, si])
+				mi.set_surface_override_material(si, entry["mat"] as Material)
 
 
 static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringName:
@@ -1213,6 +1366,8 @@ static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringN
 		return &"wood"
 	if mat_name == "mat_paint":
 		return &"paint"
+	if mat_name == "mat_iron":
+		return &"iron"
 	if mat_name == "mat_cloth":
 		return &"cloth"
 	if mat_name == "mat_rope":
@@ -1229,6 +1384,11 @@ static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringN
 			return &"lod_canvas"
 		if mat_name == "mat_flag":
 			return &"lod_flag"
+	else:
+		if mat_name == "mat_window_glass":
+			return &"window"
+		if mat_name == "mat_canvas" or mat_name == "mat_canvas_back":
+			return &"furled_canvas"
 	return &""
 
 
@@ -1398,46 +1558,271 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 	return ball
 
 
+static func _get_smoke_puff_texture() -> ImageTexture:
+	if _smoke_puff_tex != null:
+		return _smoke_puff_tex
+	var sz := 64
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	# Soft Gaussian core blended with organic billowing cloud lobes for feathered gunpowder smoke.
+	var lobes: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.86),
+		Vector3(-0.25, -0.10, 0.54),
+		Vector3(0.24, -0.08, 0.52),
+		Vector3(0.05, 0.24, 0.50),
+		Vector3(-0.18, 0.20, 0.44),
+		Vector3(0.20, 0.18, 0.40),
+	]
+	for y in sz:
+		for x in sz:
+			var nx := (float(x) - half) / half
+			var ny := (float(y) - half) / half
+			var rad := sqrt(nx * nx + ny * ny)
+			var gauss := exp(-rad * rad * 3.2)
+			var billow := 0.0
+			for lobe in lobes:
+				var dx := nx - lobe.x
+				var dy := ny - lobe.y
+				var r := sqrt(dx * dx + dy * dy) / lobe.z
+				if r < 1.0:
+					var w := 1.0 - r * r
+					billow = maxf(billow, w * w)
+			var outer_fade := smoothstep(0.0, 0.48, clampf(1.0 - rad, 0.0, 1.0))
+			var density := clampf(lerpf(gauss, billow, 0.62) * outer_fade, 0.0, 1.0)
+			# Subtle top-lit painterly shading inside each puff so billowing smoke has volume.
+			var top_lit := clampf(0.92 - ny * 0.08 + density * 0.08, 0.80, 1.0)
+			img.set_pixel(x, y, Color(top_lit, top_lit, top_lit, density))
+	_smoke_puff_tex = ImageTexture.create_from_image(img)
+	return _smoke_puff_tex
+
+
+static func _get_muzzle_flash_texture() -> GradientTexture2D:
+	if _muzzle_flash_tex != null:
+		return _muzzle_flash_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.22, 0.58, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.99, 0.90, 1.0),
+		Color(1.0, 0.76, 0.26, 0.88),
+		Color(0.98, 0.36, 0.06, 0.28),
+		Color(0.80, 0.12, 0.02, 0.0),
+	])
+	var tex := GradientTexture2D.new()
+	tex.width = 48
+	tex.height = 48
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.gradient = grad
+	_muzzle_flash_tex = tex
+	return _muzzle_flash_tex
+
+
+static func _get_muzzle_spark_texture() -> ImageTexture:
+	if _muzzle_spark_tex != null:
+		return _muzzle_spark_tex
+	var sz := 32
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	for y in sz:
+		for x in sz:
+			var dx := absf(float(x) - half) / half
+			var dy := absf(float(y) - half) / half
+			var d := sqrt(dx * dx * 3.0 + dy * dy * 1.05)
+			var a := pow(clampf(1.0 - d, 0.0, 1.0), 1.6)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a))
+	_muzzle_spark_tex = ImageTexture.create_from_image(img)
+	return _muzzle_spark_tex
+
+
+func _cleanup_muzzle_vfx_node(fx_node: Node) -> void:
+	_active_muzzle_vfx.erase(fx_node)
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	for child in fx_node.get_children():
+		if child is GPUParticles3D:
+			var gp := child as GPUParticles3D
+			gp.emitting = false
+			gp.draw_pass_1 = null
+			gp.process_material = null
+	fx_node.queue_free()
+
+
+func _cleanup_all_muzzle_vfx() -> void:
+	var pending := _active_muzzle_vfx.duplicate()
+	_active_muzzle_vfx.clear()
+	for fx in pending:
+		_cleanup_muzzle_vfx_node(fx)
+
+
 func _spawn_muzzle_flash(pos: Vector3, dir: Vector3) -> void:
 	var host := get_parent()
 	if host == null:
 		return
-	var p := GPUParticles3D.new()
-	p.name = "CannonSmoke"
-	p.one_shot = true
-	p.explosiveness = 0.92
-	p.amount = 22
-	p.lifetime = 1.0
-	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var aim_dir := dir.normalized() if dir.length_squared() > 0.0001 else Vector3.FORWARD
+	var fx_root := Node3D.new()
+	fx_root.name = "CannonMuzzleVFX"
 
-	var proc := ParticleProcessMaterial.new()
-	proc.direction = dir
-	proc.spread = 26.0
-	proc.initial_velocity_min = 4.0
-	proc.initial_velocity_max = 11.0
-	proc.damping_min = 4.0
-	proc.damping_max = 7.0
-	proc.gravity = Vector3(0.0, 1.4, 0.0)
-	proc.scale_min = 0.5
-	proc.scale_max = 1.6
-	p.process_material = proc
+	# 1. Billowing feathered radial gunpowder smoke puffs on billboarded QuadMesh.
+	var smoke := GPUParticles3D.new()
+	smoke.name = "CannonSmoke"
+	smoke.emitting = false
+	smoke.one_shot = true
+	smoke.explosiveness = 0.88
+	smoke.amount = 30
+	smoke.lifetime = 1.35
+	smoke.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	smoke.visibility_aabb = AABB(Vector3(-10.0, -5.0, -10.0), Vector3(20.0, 14.0, 20.0))
 
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.32
-	sphere.height = 0.64
-	sphere.radial_segments = 7
-	sphere.rings = 4
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.92, 0.88, 0.80, 0.72)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sphere.material = mat
-	p.draw_pass_1 = sphere
+	var s_proc := ParticleProcessMaterial.new()
+	s_proc.direction = aim_dir
+	s_proc.spread = 28.0
+	s_proc.initial_velocity_min = 3.5
+	s_proc.initial_velocity_max = 11.5
+	s_proc.damping_min = 3.4
+	s_proc.damping_max = 6.2
+	s_proc.gravity = Vector3(0.0, 1.45, 0.0)
+	s_proc.scale_min = 0.90
+	s_proc.scale_max = 1.45
+	s_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.40), Vector2(0.35, 1.55), Vector2(1.0, 2.40)])
+	s_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.36, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.92, 0.75, 0.88),
+			Color(0.72, 0.70, 0.68, 0.58),
+			Color(0.55, 0.56, 0.58, 0.0),
+		])
+	)
+	smoke.process_material = s_proc
 
-	host.add_child(p)
-	p.global_position = pos
-	p.emitting = true
-	p.finished.connect(p.queue_free)
+	var smoke_quad := QuadMesh.new()
+	smoke_quad.size = Vector2(1.15, 1.15)
+	var smoke_mat := StandardMaterial3D.new()
+	smoke_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smoke_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	smoke_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	smoke_mat.vertex_color_use_as_albedo = true
+	smoke_mat.render_priority = 1
+	smoke_mat.albedo_texture = _get_smoke_puff_texture()
+	smoke_quad.material = smoke_mat
+	smoke.draw_pass_1 = smoke_quad
+	fx_root.add_child(smoke)
+
+	# 2. Brief blazing additive golden-orange muzzle flash core (0.28 s).
+	var flash := GPUParticles3D.new()
+	flash.name = "MuzzleFlashCore"
+	flash.emitting = false
+	flash.one_shot = true
+	flash.explosiveness = 0.98
+	flash.amount = 10
+	flash.lifetime = 0.28
+	flash.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	flash.visibility_aabb = AABB(Vector3(-6.0, -4.0, -6.0), Vector3(12.0, 8.0, 12.0))
+
+	var f_proc := ParticleProcessMaterial.new()
+	f_proc.direction = aim_dir
+	f_proc.spread = 22.0
+	f_proc.initial_velocity_min = 2.5
+	f_proc.initial_velocity_max = 8.5
+	f_proc.damping_min = 4.8
+	f_proc.damping_max = 7.5
+	f_proc.gravity = Vector3(0.0, 0.6, 0.0)
+	f_proc.scale_min = 0.95
+	f_proc.scale_max = 1.55
+	f_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.55), Vector2(0.24, 1.55), Vector2(1.0, 0.14)])
+	f_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.28, 0.68, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.98, 0.86, 1.0),
+			Color(1.0, 0.72, 0.22, 0.96),
+			Color(0.95, 0.32, 0.05, 0.48),
+			Color(0.70, 0.10, 0.02, 0.0),
+		])
+	)
+	flash.process_material = f_proc
+
+	var flash_quad := QuadMesh.new()
+	flash_quad.size = Vector2(1.75, 1.75)
+	var flash_mat := StandardMaterial3D.new()
+	flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	flash_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	flash_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	flash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	flash_mat.vertex_color_use_as_albedo = true
+	flash_mat.render_priority = 2
+	flash_mat.albedo_texture = _get_muzzle_flash_texture()
+	flash_quad.material = flash_mat
+	flash.draw_pass_1 = flash_quad
+	fx_root.add_child(flash)
+
+	# 3. Flying burning ember sparks streaking out of the barrel.
+	var sparks := GPUParticles3D.new()
+	sparks.name = "MuzzleEmbers"
+	sparks.emitting = false
+	sparks.one_shot = true
+	sparks.explosiveness = 0.96
+	sparks.amount = 28
+	sparks.lifetime = 0.30
+	sparks.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
+	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sparks.visibility_aabb = AABB(Vector3(-10.0, -5.0, -10.0), Vector3(20.0, 10.0, 20.0))
+
+	var e_proc := ParticleProcessMaterial.new()
+	e_proc.direction = aim_dir
+	e_proc.spread = 32.0
+	e_proc.initial_velocity_min = 9.5
+	e_proc.initial_velocity_max = 20.5
+	e_proc.damping_min = 2.2
+	e_proc.damping_max = 4.6
+	e_proc.gravity = Vector3(0.0, -8.5, 0.0)
+	e_proc.scale_min = 0.75
+	e_proc.scale_max = 1.45
+	e_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.28, 0.70, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.98, 0.84, 1.0),
+			Color(1.0, 0.64, 0.16, 0.95),
+			Color(0.95, 0.26, 0.04, 0.55),
+			Color(0.65, 0.08, 0.02, 0.0),
+		])
+	)
+	sparks.process_material = e_proc
+
+	var spark_quad := QuadMesh.new()
+	spark_quad.size = Vector2(0.09, 0.40)
+	var spark_mat := StandardMaterial3D.new()
+	spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spark_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	spark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	spark_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	spark_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	spark_mat.vertex_color_use_as_albedo = true
+	spark_mat.render_priority = 2
+	spark_mat.albedo_texture = _get_muzzle_spark_texture()
+	spark_quad.material = spark_mat
+	sparks.draw_pass_1 = spark_quad
+	fx_root.add_child(sparks)
+
+	host.add_child(fx_root)
+	fx_root.global_position = pos
+	smoke.restart()
+	flash.restart()
+	sparks.restart()
+	smoke.emitting = true
+	flash.emitting = true
+	sparks.emitting = true
+	_active_muzzle_vfx.append(fx_root)
+
+	var cleanup := Timer.new()
+	cleanup.wait_time = 1.55
+	cleanup.one_shot = true
+	cleanup.autostart = true
+	cleanup.timeout.connect(_cleanup_muzzle_vfx_node.bind(fx_root))
+	fx_root.add_child(cleanup)
 
 
 # ------------------------------------------------------------------ station driving
@@ -1847,17 +2232,23 @@ func _update_visuals(delta: float) -> void:
 	if not _using_lod:
 		_aim_ropes()
 
+	if not _ghost_hull_mats.is_empty():
+		_wisp_time += delta
+		for gm in _ghost_hull_mats:
+			gm.set_shader_parameter(&"wisp_time", _wisp_time)
+
 	# Night cabin glass glow & lantern flicker (cursed vessels keep eerie glow even by day).
 	var night := 1.0 - Weather.daylight()
 	var has_curse_glow := _effective_glow_accent.get_luminance() > 0.01
-	var window_em := lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)
+	var window_em := (lerpf(1.45, 2.8, night) if has_curse_glow else lerpf(0.22, 2.2, night)) * _spectral_phase
 	for wm in _window_mats:
 		wm.emission_energy_multiplier = window_em
 	var flicker := 0.94 + 0.06 * sin(_sail_time * 9.3) * cos(_sail_time * 6.1)
+	var phase_light_scale := _spectral_phase * (1.0 + _spectral_flare * 0.45)
 	for idx in _lantern_lights.size():
 		var l := _lantern_lights[idx]
 		var base_e := 1.45 if l.get_parent().name.contains("Hold") else (lerpf(0.95, 1.85, night) if has_curse_glow else lerpf(0.35, 1.35, night))
-		l.light_energy = base_e * flicker
+		l.light_energy = base_e * flicker * phase_light_scale
 
 	# Rising hold bilge water & ocean hull mask flood update.
 	if _hold_water_mesh != null:
@@ -1895,13 +2286,14 @@ func _aim_ropes() -> void:
 
 func _update_wake() -> void:
 	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
-	var spray_on := (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
+	var phased_present := visible and _spectral_phase > 0.15
+	var spray_on := phased_present and (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
 	var spray_ratio := clampf((spd - 2.0) / 5.5, 0.15, 1.0)
 	for spray: GPUParticles3D in [_bow_spray_port, _bow_spray_starboard]:
 		if spray != null:
 			spray.emitting = spray_on
 			spray.amount_ratio = spray_ratio
-	if Ocean.current == null or is_sinking:
+	if Ocean.current == null or is_sinking or not phased_present:
 		return
 	var is_brig := (ship_class == &"brigantine")
 	var len_sc := 1.32 if is_brig else 1.0

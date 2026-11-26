@@ -105,8 +105,12 @@ static func draw_icon(
 	match icon_id:
 		&"cutlass":
 			_draw_cutlass(canvas, center, r, ink, accent)
+		&"boarding_axe":
+			_draw_boarding_axe(canvas, center, r, ink, accent)
 		&"pistol":
 			_draw_pistol(canvas, center, r, ink, accent)
+		&"blunderbuss":
+			_draw_blunderbuss(canvas, center, r, ink, accent)
 		&"compass":
 			_draw_compass(canvas, center, r, ink, accent)
 		&"spyglass":
@@ -192,6 +196,54 @@ static func _draw_pistol(c: CanvasItem, o: Vector2, r: float, ink: Color, accent
 	# Brass cock hammer & trigger guard.
 	c.draw_line(o + Vector2(-r * 0.18, -r * 0.26), o + Vector2(-r * 0.30, -r * 0.56), accent, 2.8, true)
 	c.draw_arc(o + Vector2(-r * 0.04, r * 0.14), r * 0.17, 0.0, PI, 10, accent, 2.2, true)
+
+
+static func _draw_boarding_axe(c: CanvasItem, o: Vector2, r: float, ink: Color, accent: Color) -> void:
+	# Diagonal ash haft from bottom-left to top-right with brass collar + bearded axe blade + back spike.
+	c.draw_line(o + Vector2(-r * 0.64, r * 0.68), o + Vector2(r * 0.44, -r * 0.56), ink, 4.4, true)
+	# Crescent bearded cutting blade on upper-left face.
+	var blade := PackedVector2Array([
+		o + Vector2(r * 0.22, -r * 0.34),
+		o + Vector2(-r * 0.12, -r * 0.78),
+		o + Vector2(-r * 0.46, -r * 0.42),
+		o + Vector2(-r * 0.36, -r * 0.02),
+		o + Vector2(r * 0.04, -r * 0.14),
+	])
+	c.draw_colored_polygon(blade, ink)
+	# Rear armor-piercing boarding spike.
+	var spike := PackedVector2Array([
+		o + Vector2(r * 0.28, -r * 0.40),
+		o + Vector2(r * 0.76, -r * 0.12),
+		o + Vector2(r * 0.20, -r * 0.22),
+	])
+	c.draw_colored_polygon(spike, accent)
+	# Brass langet strap & pommel ring.
+	c.draw_line(o + Vector2(r * 0.10, -r * 0.18), o + Vector2(r * 0.34, -r * 0.44), accent, 2.8, true)
+	c.draw_circle(o + Vector2(-r * 0.66, r * 0.70), r * 0.11, accent)
+
+
+static func _draw_blunderbuss(c: CanvasItem, o: Vector2, r: float, ink: Color, accent: Color) -> void:
+	# Wide bell-mouthed brass-flared blunderbuss barrel + heavy curved walnut buttstock.
+	var barrel := PackedVector2Array([
+		o + Vector2(-r * 0.36, -r * 0.24),
+		o + Vector2(r * 0.42, -r * 0.24),
+		o + Vector2(r * 0.80, -r * 0.48),
+		o + Vector2(r * 0.82, r * 0.14),
+		o + Vector2(r * 0.40, -r * 0.02),
+		o + Vector2(-r * 0.28, 0.0),
+	])
+	c.draw_colored_polygon(barrel, ink)
+	var stock := PackedVector2Array([
+		o + Vector2(-r * 0.36, -r * 0.16),
+		o + Vector2(-r * 0.08, -r * 0.02),
+		o + Vector2(-r * 0.44, r * 0.66),
+		o + Vector2(-r * 0.80, r * 0.48),
+	])
+	c.draw_colored_polygon(stock, ink)
+	# Flared brass bell-lip accent, barrel band, and hammer.
+	c.draw_line(o + Vector2(r * 0.76, -r * 0.46), o + Vector2(r * 0.78, r * 0.12), accent, 3.2, true)
+	c.draw_line(o + Vector2(r * 0.22, -r * 0.26), o + Vector2(r * 0.22, r * 0.04), accent, 2.6, true)
+	c.draw_line(o + Vector2(-r * 0.18, -r * 0.22), o + Vector2(-r * 0.30, -r * 0.52), accent, 2.6, true)
 
 
 static func _draw_compass(c: CanvasItem, o: Vector2, r: float, ink: Color, accent: Color) -> void:

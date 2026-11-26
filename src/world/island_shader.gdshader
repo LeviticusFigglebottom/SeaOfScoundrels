@@ -15,7 +15,7 @@ global uniform vec3 sky_horizon_color;
 
 uniform vec3 deep_seabed_color : source_color = vec3(0.16, 0.26, 0.30);
 uniform vec3 shallow_seabed_color : source_color = vec3(0.76, 0.80, 0.64);
-uniform vec3 wet_sand_color : source_color = vec3(0.57, 0.46, 0.28);
+uniform vec3 wet_sand_color : source_color = vec3(0.71, 0.56, 0.31);
 uniform vec3 dry_sand_color : source_color = vec3(0.89, 0.77, 0.50);
 uniform vec3 grass_deep_color : source_color = vec3(0.14, 0.37, 0.12);
 uniform vec3 grass_sun_color : source_color = vec3(0.40, 0.63, 0.17);
@@ -167,7 +167,7 @@ void fragment() {
 	// Surface roughness & specular: glistening wet sand, dry matte sand, textured cliffs.
 	float wet_mask = t_wet_in * (1.0 - t_dry_in) * (1.0 - cliff_mask * 0.85);
 	float rough = mix(0.92, 0.86, t_shallow);
-	rough = mix(rough, mix(0.20, 0.32, grain_n), wet_mask);
+	rough = mix(rough, mix(0.28, 0.40, grain_n), wet_mask);
 	rough = mix(rough, mix(0.86, 0.91, sand_wave), t_dry_in * (1.0 - t_grass_in));
 	rough = mix(rough, 0.84, t_grass_in);
 	rough = mix(rough, mix(0.78, 0.92, 1.0 - strata_soft), cliff_mask);
@@ -175,7 +175,7 @@ void fragment() {
 	ALBEDO = albedo;
 	ROUGHNESS = rough;
 	METALLIC = 0.0;
-	SPECULAR = mix(0.28, 0.65, wet_mask);
+	SPECULAR = mix(0.28, 0.44, wet_mask);
 	NORMAL = normalize((VIEW_MATRIX * vec4(final_n_world, 0.0)).xyz);
 }
 

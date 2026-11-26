@@ -184,3 +184,185 @@ func test_lookout_callouts_cannon_gunnery_and_shanty() -> void:
 	brain.yield_to_human_player()
 	check(pawn.station == null, "yielding to human releases station")
 	await _end()
+
+
+func test_shanty_instrument_meshes_and_tool_count() -> void:
+	check_eq(ToolMeshes.get_tool_ids().size(), 11, "canonical ALL_TOOLS count must remain exactly 11")
+	check_eq(ToolMeshes.get_display_name(&"hurdy_gurdy"), "Hurdy-Gurdy", "hurdy_gurdy display name")
+	check_eq(ToolMeshes.get_display_name(&"whistle"), "Bosun's Whistle", "whistle display name")
+
+	var hg := ToolMeshes.build_tool(&"hurdy_gurdy")
+	check(hg != null, "hurdy_gurdy builds non-null node")
+	var hg_verts := 0
+	for m in hg.find_children("*", "MeshInstance3D", true, false):
+		var mi := m as MeshInstance3D
+		check(mi.mesh != null and not (mi.mesh is PrimitiveMesh), "hurdy_gurdy uses sculpted ArrayMesh, not PrimitiveMesh")
+		if mi.mesh != null:
+			hg_verts += mi.mesh.get_faces().size()
+	check(hg_verts >= 36, "hurdy_gurdy must have rich sculpted geometry (got %d verts)" % hg_verts)
+	var crank := hg.get_node_or_null(^"CrankHandle") as Node3D
+	check(crank != null, "hurdy_gurdy exposes rotating CrankHandle child")
+	ToolMeshes.set_hurdy_gurdy_crank(hg, 1.35)
+	if crank != null:
+		check_near(crank.rotation.x, 1.35, 0.001, "set_hurdy_gurdy_crank rotates CrankHandle around X")
+	hg.free()
+
+	var wh := ToolMeshes.build_tool(&"whistle")
+	check(wh != null, "whistle builds non-null node")
+	var wh_verts := 0
+	for m in wh.find_children("*", "MeshInstance3D", true, false):
+		var mi := m as MeshInstance3D
+		check(mi.mesh != null and not (mi.mesh is PrimitiveMesh), "whistle uses sculpted ArrayMesh, not PrimitiveMesh")
+		if mi.mesh != null:
+			wh_verts += mi.mesh.get_faces().size()
+	check(wh_verts >= 36, "whistle must have rich sculpted geometry (got %d verts)" % wh_verts)
+	check(wh.get_node_or_null(^"OakBarrel") != null, "whistle has OakBarrel mesh")
+	check(wh.get_node_or_null(^"BrassFittings") != null, "whistle has BrassFittings mesh")
+	check(wh.get_node_or_null(^"FingerHoles") != null, "whistle has FingerHoles mesh")
+	check(wh.get_node_or_null(^"BraidedLanyard") != null, "whistle has BraidedLanyard mesh")
+	wh.free()
+
+
+func test_crew_shanty_3d_instrument_attach_animate_and_detach() -> void:
+	_begin()
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	_root.add_child(s)
+	await physics_frames(15)
+
+	var barnaby_pair := _make_crew(s, null, &"helmsman", Vector3(-0.8, 2.02, 4.6))
+	var maren_pair := _make_crew(s, null, &"lookout", Vector3(0.0, 1.12, -2.5))
+	var pip_pair := _make_crew(s, null, &"carpenter", Vector3(0.9, 1.12, -0.4))
+
+	var barnaby_pawn: Pawn = barnaby_pair[0]
+	var barnaby: CrewBrain = barnaby_pair[1]
+	var maren_pawn: Pawn = maren_pair[0]
+	var maren: CrewBrain = maren_pair[1]
+	var pip_pawn: Pawn = pip_pair[0]
+	var pip: CrewBrain = pip_pair[1]
+
+	await physics_frames(4)
+	check(barnaby.get_held_shanty_instrument() == null, "no instrument held before shanty")
+
+	barnaby.give_order(&"shanty")
+	maren.give_order(&"shanty")
+	pip.give_order(&"shanty")
+	await physics_frames(12)
+
+	var b_vis := barnaby_pawn.get_node(^"Visual/CharacterVisual") as CharacterVisual
+	var m_vis := maren_pawn.get_node(^"Visual/CharacterVisual") as CharacterVisual
+	var p_vis := pip_pawn.get_node(^"Visual/CharacterVisual") as CharacterVisual
+
+	var b_inst := barnaby.get_held_shanty_instrument()
+	var m_inst := maren.get_held_shanty_instrument()
+	var p_inst := pip.get_held_shanty_instrument()
+
+	check(b_inst != null and b_inst.get_parent() == b_vis.hand_right, "Barnaby attaches hurdy-gurdy to hand_right")
+	check(m_inst != null and m_inst.get_parent() == m_vis.hand_right, "Maren attaches whistle to hand_right")
+	check(p_inst != null and p_inst.get_parent() == p_vis.hand_right, "Pip attaches concertina to hand_right")
+	check(b_inst != null and b_inst.get_node_or_null(^"CrankHandle") != null, "Barnaby holds hurdy-gurdy with CrankHandle")
+	check(m_inst != null and m_inst.get_node_or_null(^"BraidedLanyard") != null, "Maren holds bosun's whistle")
+	check(p_inst != null and p_inst.get_node_or_null(^"Bellows") != null, "Pip holds concertina with Bellows")
+
+	var b_motes := barnaby_pawn.get_node_or_null(^"ShantyMotes") as GPUParticles3D
+	check(b_motes != null and b_motes.amount == 8 and b_motes.emitting, "shanty spawns subtle 8-mote GPUParticles3D")
+
+	# Verify live rhythmic animation advances crank angle while playing.
+	var crank := b_inst.get_node_or_null(^"CrankHandle") as Node3D if b_inst != null else null
+	var crank_before := crank.rotation.x if crank != null else 0.0
+	await physics_frames(18)
+	var crank_after := crank.rotation.x if crank != null else 0.0
+	check(absf(crank_after - crank_before) > 0.05, "hurdy-gurdy crank rotates rhythmically during shanty")
+
+	# Switching orders detaches & frees both 3D instrument and golden motes cleanly
+	# (even while Pip keeps playing her concertina!).
+	barnaby.give_order(&"helm")
+	maren.give_order(&"follow")
+	await physics_frames(6)
+	check(barnaby.get_held_shanty_instrument() == null, "Barnaby clears held instrument on order switch")
+	check(maren.get_held_shanty_instrument() == null, "Maren clears held instrument on order switch")
+	check(not is_instance_valid(b_inst), "Barnaby's detached hurdy-gurdy is freed")
+	check(not is_instance_valid(b_motes), "Barnaby's shanty motes are freed")
+	check_eq(b_vis.hand_right.get_child_count(), 0, "Barnaby hand_right socket has zero dangling children")
+
+	# Freeing Pip while actively playing exercises _exit_tree() teardown cleanly.
+	var p_motes := pip_pawn.get_node_or_null(^"ShantyMotes") as GPUParticles3D
+	check(p_motes != null, "Pip has active ShantyMotes prior to tree exit")
+	pip_pawn.queue_free()
+	await physics_frames(4)
+	check(not is_instance_valid(p_inst), "Pip's concertina freed cleanly on _exit_tree()")
+	check(not is_instance_valid(p_motes), "Pip's shanty motes freed cleanly on _exit_tree()")
+	await _end()
+
+
+func test_castaway_raft_sculpted_geometry_npc_and_rescue() -> void:
+	_begin()
+	var raft := CastawayRaft.new()
+	_root.add_child(raft)
+	raft.global_position = Vector3(14.0, 0.0, -10.0)
+	await physics_frames(4)
+	for _i in 4:
+		await get_tree().process_frame
+
+	# Verify zero primitive placeholders across the entire CastawayRaft hierarchy.
+	var all_meshes := raft.find_children("*", "MeshInstance3D", true, false)
+	check(all_meshes.size() >= 8, "CastawayRaft builds multi-part sculpted hierarchy (got %d meshes)" % all_meshes.size())
+	var total_verts := 0
+	for m in all_meshes:
+		var mi := m as MeshInstance3D
+		check(mi.mesh != null, "raft mesh '%s' non-null" % mi.name)
+		if mi.mesh != null:
+			check(not (mi.mesh is PrimitiveMesh), "raft mesh '%s' must not be a PrimitiveMesh placeholder" % mi.name)
+			if mi.visible:
+				total_verts += mi.mesh.get_faces().size()
+	check(total_verts >= 600, "CastawayRaft has rich multi-log & rigging geometry (got %d verts)" % total_verts)
+	check(raft.deck_logs_mesh != null and raft.deck_logs_mesh.mesh.get_faces().size() >= 300,
+		"7 sculpted driftwood logs have rich vertex-colored faces")
+	check(raft.cross_spars_mesh != null, "raft has transverse cross-spars")
+	check(raft.lashings_mesh != null, "raft has hemp rope lashings")
+	check(raft.mast_mesh != null, "raft has bamboo/driftwood signal mast & cross-yard")
+	check(raft.pennant_mesh != null, "raft has tattered crimson-orange distress pennant")
+	check(raft.supply_prop != null, "raft has corner supply barrel prop")
+
+	# Verify real lit hanging oil lantern from ToolMeshes.
+	check(raft.lantern_node != null, "raft hangs real ToolMeshes lantern")
+	var lan_light := raft.lantern_node.get_node_or_null(^"LanternLight") as OmniLight3D if raft.lantern_node != null else null
+	check(lan_light != null and lan_light.visible and lan_light.light_energy > 1.0, "hanging lantern is lit")
+
+	# Verify castaway CharacterVisual & lazily bound AnimationDriver.
+	check(raft.castaway_visual != null and raft.castaway_visual.archetype == &"carpenter",
+		"castaway uses carpenter CharacterVisual archetype")
+	check(raft.castaway_visual != null and raft.castaway_visual.skeleton != null,
+		"castaway CharacterVisual has loaded 19-bone skeleton")
+	check(raft.castaway_driver != null and raft.castaway_driver.visual == raft.castaway_visual,
+		"castaway AnimationDriver binds lazily to CharacterVisual")
+
+	# Verify Rescue Interactable & host-authoritative rescued signal.
+	var rescue_it := raft.get_rescue_interactable()
+	check(rescue_it != null, "raft exposes rescue Interactable")
+	check_eq(rescue_it.prompt, "Rescue Castaway", "rescue interactable prompt")
+	check_near(rescue_it.reach, 4.5, 0.01, "rescue interactable reach is 4.5 m")
+
+	var rescuer := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(rescuer)
+	rescuer.global_position = raft.global_position + Vector3(1.8, 0.2, 0.0)
+	await physics_frames(2)
+
+	var rescue_events: Array[Array] = []
+	raft.rescued.connect(func(r: CastawayRaft, who: Node) -> void:
+		rescue_events.append([r, who])
+	)
+	rescue_it.interact(rescuer)
+	check_eq(rescue_events.size(), 1, "rescue interaction emits rescued(raft, rescuer) once")
+	if rescue_events.size() == 1:
+		check(rescue_events[0][0] == raft and rescue_events[0][1] == rescuer, "rescued signal passes (raft, rescuer)")
+	check(raft.is_rescued and not rescue_it.enabled, "rescue marks raft rescued and disables further interaction")
+	rescue_it.interact(rescuer)
+	check_eq(rescue_events.size(), 1, "rescue is idempotent and cannot double-fire")
+
+	# Teardown check.
+	raft.queue_free()
+	await physics_frames(4)
+	check(not is_instance_valid(raft), "CastawayRaft tears down cleanly with zero dangling refs")
+	await _end()
+

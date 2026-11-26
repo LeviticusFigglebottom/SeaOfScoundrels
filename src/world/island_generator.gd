@@ -40,6 +40,110 @@ const LAYER_WORLD_STATIC := 1
 const SEA_FLOOR_Y := -20.0
 const CONTOUR_SAMPLES := 36
 
+# Coral-limestone bastion, weathered sea-oak gantry, and forged iron brazier palette.
+const COL_FORT_STONE_LIGHT := Color(0.84, 0.79, 0.70)
+const COL_FORT_STONE_MID := Color(0.71, 0.66, 0.58)
+const COL_FORT_STONE_SHADOW := Color(0.50, 0.48, 0.45)
+const COL_FORT_STONE_MOSS := Color(0.41, 0.47, 0.33)
+const COL_FORT_WOOD_LIGHT := Color(0.53, 0.36, 0.21)
+const COL_FORT_WOOD_MID := Color(0.40, 0.26, 0.15)
+const COL_FORT_WOOD_DARK := Color(0.25, 0.16, 0.09)
+const COL_FORT_IRON_HI := Color(0.25, 0.26, 0.29)
+const COL_FORT_IRON_LO := Color(0.11, 0.12, 0.14)
+const COL_FORT_BANNER := Color(0.66, 0.14, 0.13)
+
+static var _beacon_puff_tex: ImageTexture = null
+
+
+## Crowning Fort Bastion controller node mounted on `fort_rock` islands.
+## Owns the Signal Brazier flare state (`set_siege_beacon`), live flame/ember
+## beacon column animation, and the 4 mounted seaward `FortBattery` emplacements.
+class FortBastion:
+	extends Node3D
+
+	var signal_brazier_node: Node3D = null
+	var signal_brazier_light: OmniLight3D = null
+	var is_siege_beacon_active: bool = false
+	var batteries: Array[FortBattery] = []
+
+	var _flame_core: MeshInstance3D = null
+	var _flame_mat: StandardMaterial3D = null
+	var _beacon_smoke: GPUParticles3D = null
+	var _beacon_embers: GPUParticles3D = null
+	var _clock: float = 0.0
+
+	func _exit_tree() -> void:
+		if _beacon_smoke != null and is_instance_valid(_beacon_smoke):
+			_beacon_smoke.emitting = false
+		if _beacon_embers != null and is_instance_valid(_beacon_embers):
+			_beacon_embers.emitting = false
+
+	func _process(delta: float) -> void:
+		_clock += delta
+		var wave := sin(_clock * 6.4) * 0.6 + sin(_clock * 13.7 + 1.1) * 0.4
+		if _flame_core != null and is_instance_valid(_flame_core):
+			var base_xz := 1.48 if is_siege_beacon_active else 1.0
+			var base_y := 2.25 if is_siege_beacon_active else 1.05
+			_flame_core.scale = Vector3(
+				base_xz * (1.0 + wave * 0.08),
+				base_y * (1.0 + wave * 0.16),
+				base_xz * (1.0 - wave * 0.07)
+			)
+			_flame_core.rotation.y = _clock * (1.35 if is_siege_beacon_active else 0.55)
+		if is_siege_beacon_active and signal_brazier_light != null and is_instance_valid(signal_brazier_light):
+			signal_brazier_light.light_energy = 15.5 * (1.0 + wave * 0.16)
+
+	## Flare the Signal Brazier bright emerald-crimson during active Fort Sieges,
+	## or return it to a warm crimson watch-fire when calm.
+	func set_siege_beacon(active: bool) -> void:
+		is_siege_beacon_active = active
+		if signal_brazier_light != null and is_instance_valid(signal_brazier_light):
+			if active:
+				signal_brazier_light.light_color = Color(0.24, 0.98, 0.56)
+				signal_brazier_light.light_energy = 15.5
+				signal_brazier_light.omni_range = 88.0
+			else:
+				signal_brazier_light.light_color = Color(1.0, 0.34, 0.14)
+				signal_brazier_light.light_energy = 7.5
+				signal_brazier_light.omni_range = 62.0
+		if _flame_mat != null:
+			if active:
+				_flame_mat.albedo_color = Color(0.56, 1.0, 0.72)
+				_flame_mat.emission = Color(0.20, 0.96, 0.52)
+				_flame_mat.emission_energy_multiplier = 6.2
+			else:
+				_flame_mat.albedo_color = Color(1.0, 0.74, 0.32)
+				_flame_mat.emission = Color(1.0, 0.36, 0.10)
+				_flame_mat.emission_energy_multiplier = 3.8
+		if _flame_core != null and is_instance_valid(_flame_core):
+			_flame_core.scale = Vector3(1.48, 2.25, 1.48) if active else Vector3.ONE
+		if _beacon_smoke != null and is_instance_valid(_beacon_smoke):
+			var sp := _beacon_smoke.process_material as ParticleProcessMaterial
+			if sp != null:
+				sp.initial_velocity_min = 4.2 if active else 2.2
+				sp.initial_velocity_max = 7.5 if active else 4.2
+				sp.color_ramp = IslandGenerator._make_beacon_smoke_ramp(active)
+		if _beacon_embers != null and is_instance_valid(_beacon_embers):
+			var ep := _beacon_embers.process_material as ParticleProcessMaterial
+			if ep != null:
+				ep.initial_velocity_min = 5.2 if active else 2.6
+				ep.initial_velocity_max = 10.5 if active else 5.4
+				ep.color_ramp = IslandGenerator._make_beacon_ember_ramp(active)
+
+	## Convenience helper toggling both the Signal Brazier siege flare and all 4 batteries.
+	func set_siege_active(active: bool) -> void:
+		set_siege_beacon(active)
+		for bat in batteries:
+			if bat != null and is_instance_valid(bat):
+				bat.set_siege_active(active)
+
+	func get_batteries() -> Array[FortBattery]:
+		var out: Array[FortBattery] = []
+		for bat in batteries:
+			if bat != null and is_instance_valid(bat):
+				out.append(bat)
+		return out
+
 
 ## Build a complete procedural `Island` (or `Outpost` when `archetype == &"outpost"`).
 ## `spec` keys (all optional except defaults):
@@ -135,8 +239,28 @@ static func build_island(spec: Dictionary) -> Island:
 	else:
 		island.mooring_transform = _compute_non_outpost_mooring(island, landing_yaw)
 
+	# Build sculpted Stone Bastion, Watchtower Gantry, Signal Brazier & 4 FortBatteries on forts.
+	var fort_courtyard_spawns: Array[Vector3] = []
+	if arch == &"fort_rock":
+		var scale_r := radius / 60.0
+		var lb := Basis(Vector3.UP, landing_yaw)
+		var bastion_xz := lb * Vector3(0.0, 0.0, 2.0 * scale_r)
+		var bastion_pos := Vector3(bastion_xz.x, island.surface_height(bastion_xz.x, bastion_xz.z), bastion_xz.z)
+		_build_fort_bastion(island, landing_yaw, bastion_pos, prop_body, props_root, rng)
+		# Keep trees, ferns, boulders, and beach dig spots clear of the bastion & approach ramp.
+		exclusions.append(Vector3(bastion_pos.x, bastion_pos.z, 17.5))
+		for ramp_v: float in [-13.5, -22.5, -31.0]:
+			var rp := lb * Vector3(0.0, 0.0, ramp_v * scale_r)
+			exclusions.append(Vector3(rp.x, rp.z, 7.2))
+		for local_sp: Vector3 in [Vector3(0.0, 0.0, -2.0), Vector3(-5.0, 0.0, 2.8), Vector3(5.0, 0.0, 2.8)]:
+			var wp := bastion_pos + lb * local_sp
+			wp.y = island.surface_height(wp.x, wp.z)
+			fort_courtyard_spawns.append(wp)
+
 	# Gather verified walkable beach/clearing spots for buried treasure & enemy spawns.
 	_populate_gameplay_points(island, landing_yaw, exclusions, rng)
+	for sp in fort_courtyard_spawns:
+		island.enemy_spawns.append(sp)
 	for dp in island.dig_points:
 		exclusions.append(Vector3(dp.x, dp.z, 3.6))
 
@@ -310,15 +434,31 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			h = lerpf(h, clampf(lerpf(-1.8, 2.8, (v + 30.0 * scale_r) / (40.0 * scale_r)), -2.2, 3.0), bay * 0.72)
 
 		&"fort_rock":
-			# Sheer tiered flat-topped bastion mesa with walkable landing ramp flank!
-			var mesa := _stepped_mesa(u, v, 0.0, 6.0 * scale_r, 34.0 * scale_r, 30.0 * scale_r, target_peak * 0.78, 0.20, 6.0, 0.56)
-			var citadel := _stepped_mesa(u, v, -6.0 * scale_r, 12.0 * scale_r, 17.0 * scale_r, 16.0 * scale_r, target_peak, -0.15, 5.0, 0.45)
-			h = maxf(h, maxf(mesa, citadel))
-			# Walkable sloped landing beach & bastion approach on the -v side.
-			var appr_u := _smoothstep(22.0 * scale_r, 10.0 * scale_r, absf(u - 6.0 * scale_r))
-			var appr_v := _smoothstep(-2.0 * scale_r, -24.0 * scale_r, v)
-			var appr_h := lerpf(1.2, 8.0, clampf((v + 36.0 * scale_r) / (34.0 * scale_r), 0.0, 1.0))
-			h = lerpf(h, minf(h, appr_h), appr_u * appr_v * 0.75)
+			# Tiered coral-limestone Watch Mesa crowned by a level bastion plateau,
+			# a walkable sloped landing ramp from the -v cove, and twin rear citadel crags!
+			var bastion_v := 2.0 * scale_r
+			var bastion_y := clampf(target_peak * 0.42, 14.5, 19.5)
+			var mesa := _stepped_mesa(u, v, 0.0, bastion_v, 34.0 * scale_r, 31.0 * scale_r, bastion_y, 0.20, 8.0, 0.54)
+			var crag_l := _faceted_spire(u, v, -17.0 * scale_r, 27.0 * scale_r, 18.0 * scale_r, 17.0 * scale_r, target_peak, 0.32, 5.0, 1.32)
+			var crag_r := _faceted_spire(u, v, 18.0 * scale_r, 24.0 * scale_r, 16.0 * scale_r, 15.0 * scale_r, target_peak * 0.78, -0.38, 5.0, 1.38)
+			h = maxf(h, maxf(mesa, maxf(crag_l, crag_r)))
+			h += ridge_n * 2.2 * _smoothstep(18.0, 34.0, h)
+			# Level the bastion courtyard & gun terrace plateau cleanly so walls & cannons sit flush.
+			var mesa_d := Vector2(u, v - bastion_v).length()
+			var mesa_flat := _smoothstep(16.2 * scale_r, 13.4 * scale_r, mesa_d)
+			h = lerpf(h, bastion_y, mesa_flat)
+			# Walkable sloped landing ramp from the -v sandy cove straight up into the bastion gateway.
+			var ramp_u := _smoothstep(14.0 * scale_r, 5.6 * scale_r, absf(u))
+			var ramp_v := _smoothstep(-44.0 * scale_r, -37.0 * scale_r, v) * _smoothstep(-7.5 * scale_r, -12.5 * scale_r, v)
+			var ramp_t := clampf((v + 38.0 * scale_r) / (27.5 * scale_r), 0.0, 1.0)
+			var ramp_h := lerpf(1.75, bastion_y, ramp_t)
+			h = lerpf(h, ramp_h, ramp_u * ramp_v * 0.95)
+			# Welcoming sandy landing beach cove at the ramp foot (-v shoreline).
+			var cove_u := _smoothstep(28.0 * scale_r, 11.0 * scale_r, absf(u))
+			var cove_v := _smoothstep(-28.0 * scale_r, -42.0 * scale_r, v)
+			if d_shore < 0.0 and cove_u * cove_v > 0.001:
+				var cove_h := 1.45 + 1.15 * clampf((-d_shore - 4.0) / (20.0 * scale_r), 0.0, 1.0)
+				h = lerpf(h, minf(h, cove_h), cove_u * cove_v * 0.78)
 
 		&"wreck_shoal":
 			# Broad shallow sandbars & jagged knife-edge limestone ribs for dramatic shipwrecks.
@@ -1169,3 +1309,749 @@ static func _default_landmarks(arch: StringName) -> Array[String]:
 			return ["Hidden Pocket", "Cliff Gate", "Smuggler's Fire"]
 		_:
 			return ["Coastal Rock", "Sandy Cove", "Lone Palm"]
+
+
+# ============================================================ fort stone bastion & signal brazier
+
+## Construct the crowning Coral-Limestone Stone Bastion, Timber Watchtower Gantry,
+## Towering Iron Signal Brazier, wall-pier colliders, and 4 seaward FortBatteries.
+static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos: Vector3,
+		prop_body: StaticBody3D, props_root: Node3D, rng: RandomNumberGenerator) -> FortBastion:
+	var bastion := FortBastion.new()
+	bastion.name = "FortBastion"
+	var bastion_xform := Transform3D(Basis(Vector3.UP, landing_yaw), bastion_pos)
+	bastion.transform = bastion_xform
+	island.add_child(bastion)
+
+	const WALL_R := 11.4
+	const CORNER_R := 12.35
+	const EMBRASURE_INDICES := [1, 2, 6, 7]  # Starboard-fore, starboard-flank, port-flank, port-fore
+	const REAR_WALL_INDICES := [3, 4, 5]     # Solid crenellated rear curtain walls
+
+	var stone_st := SurfaceTool.new()
+	stone_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var wood_st := SurfaceTool.new()
+	wood_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var iron_st := SurfaceTool.new()
+	iron_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Octagonal coral-limestone flagstone courtyard pavement & central compass dais.
+	_build_bastion_courtyard(stone_st, WALL_R - 0.55)
+
+	# 2. Eight battered octagonal corner buttress towers with recessed ashlar bands & merlons.
+	for ci in 8:
+		var corner_yaw := float(ci) * (PI * 0.25) + PI * 0.125
+		var corner_dir := Vector3(-sin(corner_yaw), 0.0, -cos(corner_yaw))
+		var c_pos := corner_dir * CORNER_R
+		# Deep battered plinth anchored into the mesa rock with mossy stone base staining.
+		_bastion_add_tapered_prism(stone_st, Vector3(c_pos.x, -2.8, c_pos.z),
+			Vector2(1.48, 1.48), Vector2(1.18, 1.18), 3.0, corner_yaw,
+			COL_FORT_STONE_MID, COL_FORT_STONE_MOSS, COL_FORT_STONE_SHADOW)
+		# Main faceted ashlar pier shaft.
+		_bastion_add_tapered_prism(stone_st, Vector3(c_pos.x, 0.2, c_pos.z),
+			Vector2(1.16, 1.16), Vector2(1.04, 1.04), 3.35, corner_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+		# Overhanging beveled stone cornice cap & corner merlon crown.
+		_bastion_add_tapered_prism(stone_st, Vector3(c_pos.x, 3.55, c_pos.z),
+			Vector2(1.18, 1.18), Vector2(1.22, 1.22), 0.28, corner_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_LIGHT, COL_FORT_STONE_SHADOW)
+		_bastion_add_tapered_prism(stone_st, Vector3(c_pos.x, 3.83, c_pos.z),
+			Vector2(1.02, 1.02), Vector2(0.86, 0.86), 0.78, corner_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+		_add_bastion_box_collider(prop_body, bastion_xform, "CornerPier_%d" % ci,
+			Transform3D(Basis(Vector3.UP, corner_yaw), Vector3(c_pos.x, 2.0, c_pos.z)),
+			Vector3(2.25, 4.4, 2.25))
+
+	# 3. Eight curtain wall bays around the octagon:
+	#    Bay 0 (yaw=0, facing -Z landing ramp): wide open stone arch gateway + open oak gates
+	#    Bays 1, 2, 6, 7: open seaward gun embrasures with mounted FortBatteries
+	#    Bays 3, 4, 5: solid crenellated limestone curtain walls
+	var battery_idx := 0
+	for bi in 8:
+		var bay_yaw := -float(bi) * (PI * 0.25)
+		if bay_yaw < -PI:
+			bay_yaw += TAU
+		var bay_basis := Basis(Vector3.UP, bay_yaw)
+		var bay_dir := -bay_basis.z
+		var bay_center := bay_dir * WALL_R
+		var bay_xf := Transform3D(bay_basis, bay_center)
+
+		if bi == 0:
+			_build_bastion_gateway(stone_st, wood_st, iron_st, bay_xf, bastion_xform, prop_body, bastion, island, rng)
+		elif EMBRASURE_INDICES.has(bi):
+			_build_bastion_embrasure(stone_st, bay_xf, bastion_xform, prop_body, bi)
+			# Ground & mount live FortBattery cleanly inside the seaward gun embrasure!
+			var bat := FortBattery.new()
+			bat.name = "FortBattery_%d" % battery_idx
+			bat.base_forward_yaw = bay_yaw
+			bat.position = bay_dir * (WALL_R - 1.35) + Vector3(0.0, 0.28, 0.0)
+			bastion.add_child(bat)
+			bastion.batteries.append(bat)
+			battery_idx += 1
+		elif REAR_WALL_INDICES.has(bi):
+			_build_bastion_curtain_wall(stone_st, bay_xf, bastion_xform, prop_body, bi)
+
+	# 4. Timber Watchtower Gantry & Towering Iron Signal Brazier on the rear bastion crest.
+	var gantry_origin := Vector3(0.0, 0.0, 8.35)
+	_build_watchtower_gantry(wood_st, iron_st, gantry_origin, bastion_xform, prop_body)
+	_build_signal_brazier(bastion, island, iron_st, gantry_origin + Vector3(0.0, 7.52, 0.0), rng)
+
+	# Commit the 3 shared stylized bastion meshes (only 3 draw calls for entire stone + timber + iron fort!).
+	stone_st.generate_normals()
+	var stone_mi := MeshInstance3D.new()
+	stone_mi.name = "BastionStonework"
+	stone_mi.mesh = stone_st.commit()
+	var stone_mat := StandardMaterial3D.new()
+	stone_mat.vertex_color_use_as_albedo = true
+	stone_mat.roughness = 0.89
+	stone_mat.metallic = 0.0
+	stone_mi.material_override = stone_mat
+	bastion.add_child(stone_mi)
+
+	wood_st.generate_normals()
+	var wood_mi := MeshInstance3D.new()
+	wood_mi.name = "WatchtowerGantry"
+	wood_mi.mesh = wood_st.commit()
+	var wood_mat := StandardMaterial3D.new()
+	wood_mat.vertex_color_use_as_albedo = true
+	wood_mat.roughness = 0.87
+	wood_mat.metallic = 0.02
+	wood_mi.material_override = wood_mat
+	bastion.add_child(wood_mi)
+
+	iron_st.generate_normals()
+	var iron_mi := MeshInstance3D.new()
+	iron_mi.name = "SignalBrazierIron"
+	iron_mi.mesh = iron_st.commit()
+	var iron_mat := StandardMaterial3D.new()
+	iron_mat.vertex_color_use_as_albedo = true
+	iron_mat.roughness = 0.44
+	iron_mat.metallic = 0.78
+	iron_mi.material_override = iron_mat
+	bastion.add_child(iron_mi)
+
+	# 5. Garrison supply crates & barrels tucked cleanly against the rear curtain walls.
+	var garrison_props: Array[Array] = [
+		[BARREL_SCENE, "BastionBarrel_L1", Vector3(-6.2, 0.06, 6.4), 0.4],
+		[CRATE_SCENE, "BastionCrate_L2", Vector3(-5.0, 0.06, 7.1), -0.35],
+		[BARREL_SCENE, "BastionBarrel_R1", Vector3(6.2, 0.06, 6.4), 1.7],
+		[CRATE_SCENE, "BastionCrate_R2", Vector3(4.9, 0.06, 7.0), 0.25],
+	]
+	var dummy_foliage: Dictionary = {}
+	for gp in garrison_props:
+		var local_p := bastion_xform * (gp[2] as Vector3)
+		var g_xf := Transform3D(Basis(Vector3.UP, landing_yaw + float(gp[3])), local_p)
+		_spawn_prop(island, gp[0] as PackedScene, String(gp[1]), g_xf, prop_body, props_root, dummy_foliage)
+
+	return bastion
+
+
+static func _build_bastion_courtyard(st: SurfaceTool, inner_r: float) -> void:
+	# Flush octagonal limestone courtyard floor with mossy seam borders.
+	var h := 0.06
+	var center := Vector3(0.0, h, 0.0)
+	for i in 8:
+		var a0 := float(i) * (PI * 0.25) + PI * 0.125
+		var a1 := float(i + 1) * (PI * 0.25) + PI * 0.125
+		var p0 := Vector3(-sin(a0) * inner_r, h, -cos(a0) * inner_r)
+		var p1 := Vector3(-sin(a1) * inner_r, h, -cos(a1) * inner_r)
+		var c_slab := COL_FORT_STONE_LIGHT.lerp(COL_FORT_STONE_MID, 0.25 + 0.18 * float(i % 2))
+		var c_edge := COL_FORT_STONE_MID.lerp(COL_FORT_STONE_MOSS, 0.35)
+		_bastion_tri(st, center, p1, p0, c_slab, c_edge, c_edge)
+	# Central chamfered stone compass dais in the courtyard heart.
+	_bastion_add_tapered_prism(st, Vector3(0.0, 0.0, 0.0),
+		Vector2(2.35, 2.35), Vector2(2.05, 2.05), 0.14, PI * 0.125,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_MOSS)
+
+
+static func _build_bastion_gateway(stone_st: SurfaceTool, wood_st: SurfaceTool, iron_st: SurfaceTool,
+		bay_xf: Transform3D, bastion_xform: Transform3D, prop_body: StaticBody3D,
+		bastion: FortBastion, island: Island, rng: RandomNumberGenerator) -> void:
+	# Twin heavy flanking gate-jamb piers leaving a wide 4.4 m walkable ramp gateway!
+	for sgn: float in [-1.0, 1.0]:
+		var jamb_local := Vector3(sgn * 3.15, 0.0, 0.0)
+		var jamb_pos := bay_xf * jamb_local
+		var bay_yaw := bay_xf.basis.get_euler().y
+		_bastion_add_tapered_prism(stone_st, Vector3(jamb_pos.x, -2.5, jamb_pos.z),
+			Vector2(1.15, 1.15), Vector2(0.95, 0.92), 2.7, bay_yaw,
+			COL_FORT_STONE_MID, COL_FORT_STONE_MOSS, COL_FORT_STONE_SHADOW)
+		_bastion_add_tapered_prism(stone_st, Vector3(jamb_pos.x, 0.2, jamb_pos.z),
+			Vector2(0.94, 0.90), Vector2(0.86, 0.84), 4.15, bay_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+		_bastion_add_tapered_prism(stone_st, Vector3(jamb_pos.x, 4.35, jamb_pos.z),
+			Vector2(0.98, 0.96), Vector2(0.88, 0.86), 0.65, bay_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_LIGHT, COL_FORT_STONE_SHADOW)
+		_add_bastion_box_collider(prop_body, bastion_xform, "GateJamb_%s" % ("R" if sgn > 0.0 else "L"),
+			Transform3D(bay_xf.basis, Vector3(jamb_pos.x, 2.2, jamb_pos.z)),
+			Vector3(1.85, 4.5, 1.85))
+
+		# Open heavy weathered oak gate wing swung wide inward (+Z of bay_xf is inside courtyard).
+		var wing_yaw := bay_yaw + sgn * 1.92
+		var hinge := bay_xf * Vector3(sgn * 2.15, 0.08, 0.55)
+		var wing_c := hinge + Basis(Vector3.UP, wing_yaw) * Vector3(-sgn * 0.92, 1.45, 0.0)
+		_bastion_add_tapered_prism(wood_st, wing_c + Vector3(0.0, -1.45, 0.0),
+			Vector2(0.92, 0.11), Vector2(0.90, 0.10), 2.95, wing_yaw,
+			COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+		for strap_y: float in [0.55, 2.25]:
+			_bastion_add_tapered_prism(iron_st, Vector3(wing_c.x, strap_y, wing_c.z),
+				Vector2(0.94, 0.14), Vector2(0.94, 0.14), 0.14, wing_yaw,
+				COL_FORT_IRON_HI, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+
+	# 5-voussoir sculpted coral-limestone arch spanning cleanly above y = 3.55 m!
+	var bay_yaw_arch := bay_xf.basis.get_euler().y
+	var voussoirs: Array[Array] = [
+		[-1.95, 3.35, 0.34, Vector2(0.58, 0.82), 0.72],
+		[-1.02, 3.82, 0.16, Vector2(0.62, 0.84), 0.78],
+		[0.0, 4.02, 0.0, Vector2(0.68, 0.94), 0.98],
+		[1.02, 3.82, -0.16, Vector2(0.62, 0.84), 0.78],
+		[1.95, 3.35, -0.34, Vector2(0.58, 0.82), 0.72],
+	]
+	for v_spec in voussoirs:
+		var vx: float = float(v_spec[0])
+		var vy: float = float(v_spec[1])
+		var vroll: float = float(v_spec[2])
+		var vh_xz: Vector2 = v_spec[3] as Vector2
+		var v_h: float = float(v_spec[4])
+		var v_xf := bay_xf * Transform3D(Basis(Vector3.BACK, vroll), Vector3(vx, vy, 0.0))
+		_bastion_add_oriented_prism(stone_st, v_xf, vh_xz, vh_xz * 0.92, v_h,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+
+	# Stepped stone ramp threshold slab welcoming players straight into the courtyard.
+	var thresh_pos := bay_xf * Vector3(0.0, -0.25, -0.65)
+	_bastion_add_tapered_prism(stone_st, thresh_pos,
+		Vector2(2.35, 1.45), Vector2(2.15, 1.25), 0.32, bay_yaw_arch,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_MOSS)
+
+	# Hanging wrought-iron gatehouse lantern beneath the arch keystone.
+	var lant_pos := bay_xf * Vector3(0.0, 3.45, 0.0)
+	_bastion_add_beam(iron_st, lant_pos + Vector3(0.0, 0.58, 0.0), lant_pos, 0.032, 6,
+		COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+	_bastion_add_tapered_prism(iron_st, lant_pos + Vector3(0.0, -0.24, 0.0),
+		Vector2(0.16, 0.16), Vector2(0.22, 0.22), 0.34, bay_yaw_arch,
+		COL_FORT_IRON_HI, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+	var gate_light := OmniLight3D.new()
+	gate_light.name = "GatehouseLanternLight"
+	gate_light.light_color = Color(1.0, 0.68, 0.28)
+	gate_light.light_energy = 3.2
+	gate_light.omni_range = 18.0
+	gate_light.omni_attenuation = 1.4
+	gate_light.shadow_enabled = false
+	gate_light.position = lant_pos + Vector3(0.0, -0.18, 0.0)
+	bastion.add_child(gate_light)
+	island.register_flicker_light(gate_light, 3.2, 0.14, rng.randf() * TAU)
+
+
+static func _build_bastion_embrasure(stone_st: SurfaceTool, bay_xf: Transform3D,
+		bastion_xform: Transform3D, prop_body: StaticBody3D, bay_idx: int) -> void:
+	var bay_yaw := bay_xf.basis.get_euler().y
+
+	# Raised beveled limestone gun firing terrace supporting the FortBattery (steppable 0.28 m rise).
+	var terrace_pos := bay_xf * Vector3(0.0, -0.04, 1.45)
+	_bastion_add_tapered_prism(stone_st, terrace_pos,
+		Vector2(2.65, 2.05), Vector2(2.45, 1.88), 0.32, bay_yaw,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_MOSS)
+	_add_bastion_box_collider(prop_body, bastion_xform, "EmbrasureTerrace_%d" % bay_idx,
+		Transform3D(bay_xf.basis, bay_xf * Vector3(0.0, 0.14, 1.45)),
+		Vector3(4.9, 0.28, 3.76))
+
+	# Low battered coral-limestone breastwork sill below the gun barrel (top y = 0.44 m)
+	# so downward plunging fire at close ships always clears the masonry cleanly!
+	var sill_pos := bay_xf * Vector3(0.0, -2.5, 0.20)
+	_bastion_add_tapered_prism(stone_st, sill_pos,
+		Vector2(3.95, 0.92), Vector2(3.80, 0.62), 2.94, bay_yaw,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_MOSS)
+	_add_bastion_box_collider(prop_body, bastion_xform, "EmbrasureSill_%d" % bay_idx,
+		Transform3D(bay_xf.basis, bay_xf * Vector3(0.0, 0.18, 0.25)),
+		Vector3(7.4, 0.44, 1.05))
+
+	# Twin flanking splayed embrasure cheek merlons leaving a wide 4.9 m open firing throat
+	# that clears the full +/-1.05 rad yaw arc!
+	for sgn: float in [-1.0, 1.0]:
+		var cheek_pos := bay_xf * Vector3(sgn * 3.22, 0.44, 0.0)
+		_bastion_add_tapered_prism(stone_st, cheek_pos,
+			Vector2(0.84, 0.78), Vector2(0.76, 0.70), 3.00, bay_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+		_bastion_add_tapered_prism(stone_st, cheek_pos + Vector3(0.0, 3.00, 0.0),
+			Vector2(0.86, 0.80), Vector2(0.74, 0.70), 0.72, bay_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_LIGHT, COL_FORT_STONE_SHADOW)
+		_add_bastion_box_collider(prop_body, bastion_xform, "EmbrasureCheek_%d_%s" % [bay_idx, "R" if sgn > 0.0 else "L"],
+			Transform3D(bay_xf.basis, bay_xf * Vector3(sgn * 3.22, 2.1, 0.0)),
+			Vector3(1.52, 3.9, 1.48))
+
+
+static func _build_bastion_curtain_wall(stone_st: SurfaceTool, bay_xf: Transform3D,
+		bastion_xform: Transform3D, prop_body: StaticBody3D, bay_idx: int) -> void:
+	var bay_yaw := bay_xf.basis.get_euler().y
+	# Deep battered limestone foundation plinth + full-height curtain wall.
+	var base_pos := bay_xf * Vector3(0.0, -2.6, 0.0)
+	_bastion_add_tapered_prism(stone_st, base_pos,
+		Vector2(4.05, 1.12), Vector2(3.85, 0.88), 2.85, bay_yaw,
+		COL_FORT_STONE_MID, COL_FORT_STONE_MOSS, COL_FORT_STONE_SHADOW)
+	var wall_pos := bay_xf * Vector3(0.0, 0.25, 0.0)
+	_bastion_add_tapered_prism(stone_st, wall_pos,
+		Vector2(3.85, 0.86), Vector2(3.75, 0.72), 3.10, bay_yaw,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+	# Overhanging cornice stringcourse.
+	var corn_pos := bay_xf * Vector3(0.0, 3.35, 0.0)
+	_bastion_add_tapered_prism(stone_st, corn_pos,
+		Vector2(3.88, 0.86), Vector2(3.92, 0.90), 0.24, bay_yaw,
+		COL_FORT_STONE_LIGHT, COL_FORT_STONE_LIGHT, COL_FORT_STONE_SHADOW)
+	# 3 sculpted beveled crenellation merlons separated by classic crenels.
+	for mx: float in [-2.45, 0.0, 2.45]:
+		var m_pos := bay_xf * Vector3(mx, 3.59, 0.0)
+		_bastion_add_tapered_prism(stone_st, m_pos,
+			Vector2(0.76, 0.72), Vector2(0.64, 0.62), 0.84, bay_yaw,
+			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
+	_add_bastion_box_collider(prop_body, bastion_xform, "CurtainWall_%d" % bay_idx,
+		Transform3D(bay_xf.basis, bay_xf * Vector3(0.0, 2.0, 0.0)),
+		Vector3(7.9, 4.2, 1.75))
+
+
+static func _build_watchtower_gantry(wood_st: SurfaceTool, iron_st: SurfaceTool,
+		origin: Vector3, bastion_xform: Transform3D, prop_body: StaticBody3D) -> void:
+	const DECK_Y := 7.45
+	var bot_corners: Array[Vector3] = [
+		origin + Vector3(-1.82, 0.0, -1.55),
+		origin + Vector3(1.82, 0.0, -1.55),
+		origin + Vector3(1.82, 0.0, 1.55),
+		origin + Vector3(-1.82, 0.0, 1.55),
+	]
+	var top_corners: Array[Vector3] = [
+		origin + Vector3(-1.42, DECK_Y, -1.24),
+		origin + Vector3(1.42, DECK_Y, -1.24),
+		origin + Vector3(1.42, DECK_Y, 1.24),
+		origin + Vector3(-1.42, DECK_Y, 1.24),
+	]
+
+	# 4 battered octagonal timber gantry legs + corner colliders + iron collar straps.
+	for i in 4:
+		_bastion_add_beam(wood_st, bot_corners[i], top_corners[i], 0.175, 8,
+			COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+		var mid_p := bot_corners[i].lerp(top_corners[i], 0.5)
+		_add_bastion_box_collider(prop_body, bastion_xform, "GantryPost_%d" % i,
+			Transform3D(Basis.IDENTITY, mid_p), Vector3(0.42, DECK_Y, 0.42))
+		for strap_t: float in [0.18, 0.55, 0.92]:
+			var sp := bot_corners[i].lerp(top_corners[i], strap_t)
+			_bastion_add_tapered_prism(iron_st, sp + Vector3(0.0, -0.07, 0.0),
+				Vector2(0.20, 0.20), Vector2(0.20, 0.20), 0.14, 0.0,
+				COL_FORT_IRON_HI, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+
+	# Horizontal ledger beams + diagonal X-bracing timber struts across 2 gantry tiers.
+	for tier_idx in 2:
+		var t0 := float(tier_idx) * 0.48 + 0.08
+		var t1 := t0 + 0.42
+		for side in 4:
+			var next_s := (side + 1) % 4
+			var a0 := bot_corners[side].lerp(top_corners[side], t0)
+			var b0 := bot_corners[next_s].lerp(top_corners[next_s], t0)
+			var a1 := bot_corners[side].lerp(top_corners[side], t1)
+			var b1 := bot_corners[next_s].lerp(top_corners[next_s], t1)
+			_bastion_add_beam(wood_st, a1, b1, 0.11, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+			# Leave courtyard-facing (-Z, side 0) lower bay open for walkway & ladder access!
+			if not (tier_idx == 0 and side == 0):
+				_bastion_add_beam(wood_st, a0, b1, 0.085, 6, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+				_bastion_add_beam(wood_st, b0, a1, 0.085, 6, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+
+	# Planked wooden lookout deck platform & overhanging corbel joists.
+	for jz: float in [-1.30, 0.0, 1.30]:
+		_bastion_add_beam(wood_st, origin + Vector3(-2.15, DECK_Y - 0.14, jz),
+			origin + Vector3(2.15, DECK_Y - 0.14, jz), 0.12, 6, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+	var plank_count := 8
+	for pi in plank_count:
+		var frac := (float(pi) + 0.5) / float(plank_count) - 0.5
+		var px := frac * 3.85
+		var c_p := COL_FORT_WOOD_LIGHT.lerp(COL_FORT_WOOD_MID, 0.25 * float(pi % 3))
+		_bastion_add_tapered_prism(wood_st, origin + Vector3(px, DECK_Y - 0.04, 0.0),
+			Vector2(0.21, 1.65), Vector2(0.20, 1.63), 0.12, 0.0, c_p, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+
+	# Waist-high timber lookout parapet railing around the gantry platform.
+	var rail_pts: Array[Vector3] = [
+		origin + Vector3(-1.82, DECK_Y, -1.55),
+		origin + Vector3(1.82, DECK_Y, -1.55),
+		origin + Vector3(1.82, DECK_Y, 1.55),
+		origin + Vector3(-1.82, DECK_Y, 1.55),
+	]
+	for ri in 4:
+		var rn := (ri + 1) % 4
+		_bastion_add_beam(wood_st, rail_pts[ri], rail_pts[ri] + Vector3(0.0, 1.08, 0.0),
+			0.09, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+		_bastion_add_beam(wood_st, rail_pts[ri] + Vector3(0.0, 0.98, 0.0),
+			rail_pts[rn] + Vector3(0.0, 0.98, 0.0), 0.075, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+		_bastion_add_beam(wood_st, rail_pts[ri] + Vector3(0.0, 0.52, 0.0),
+			rail_pts[rn] + Vector3(0.0, 0.52, 0.0), 0.058, 6, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+
+	# Sloped wooden ladder rising along the courtyard-facing (-Z) gantry side.
+	var lad_bot_l := origin + Vector3(-0.34, 0.04, -2.35)
+	var lad_bot_r := origin + Vector3(0.34, 0.04, -2.35)
+	var lad_top_l := origin + Vector3(-0.34, DECK_Y + 0.15, -1.52)
+	var lad_top_r := origin + Vector3(0.34, DECK_Y + 0.15, -1.52)
+	_bastion_add_beam(wood_st, lad_bot_l, lad_top_l, 0.055, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+	_bastion_add_beam(wood_st, lad_bot_r, lad_top_r, 0.055, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+	for rung_i in range(1, 14):
+		var rt := float(rung_i) / 14.0
+		_bastion_add_beam(wood_st, lad_bot_l.lerp(lad_top_l, rt), lad_bot_r.lerp(lad_top_r, rt),
+			0.036, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_MID)
+
+	# Tall weathered war-pennant flagpole & forked crimson fort standard on the rear corner!
+	var pole_base := origin + Vector3(1.58, DECK_Y, 1.32)
+	var pole_top := pole_base + Vector3(0.0, 5.2, 0.0)
+	_bastion_add_beam(wood_st, pole_base, pole_top, 0.075, 8, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+	var p_top := pole_top + Vector3(0.0, -0.25, 0.0)
+	var p_bot := pole_top + Vector3(0.0, -1.35, 0.0)
+	var p_mid := pole_top + Vector3(1.55, -0.80, -0.35)
+	var p_tip_u := pole_top + Vector3(2.45, -0.45, -0.55)
+	var p_tip_l := pole_top + Vector3(2.35, -1.18, -0.52)
+	var c_ban_hi := COL_FORT_BANNER * 1.15
+	var c_ban_lo := COL_FORT_BANNER * 0.72
+	# Double-sided weathered forked swallowtail pennant.
+	_bastion_tri(wood_st, p_top, p_tip_u, p_mid, c_ban_hi, c_ban_hi, c_ban_lo)
+	_bastion_tri(wood_st, p_top, p_mid, p_tip_u, c_ban_hi, c_ban_lo, c_ban_hi)
+	_bastion_tri(wood_st, p_top, p_mid, p_bot, c_ban_hi, c_ban_lo, c_ban_lo)
+	_bastion_tri(wood_st, p_top, p_bot, p_mid, c_ban_hi, c_ban_lo, c_ban_lo)
+	_bastion_tri(wood_st, p_bot, p_mid, p_tip_l, c_ban_lo, c_ban_hi, c_ban_lo)
+	_bastion_tri(wood_st, p_bot, p_tip_l, p_mid, c_ban_lo, c_ban_lo, c_ban_hi)
+
+
+static func _build_signal_brazier(bastion: FortBastion, island: Island, iron_st: SurfaceTool,
+		base_pos: Vector3, rng: RandomNumberGenerator) -> void:
+	var brazier_node := Node3D.new()
+	brazier_node.name = "SignalBrazier"
+	brazier_node.position = base_pos
+	bastion.add_child(brazier_node)
+	bastion.signal_brazier_node = brazier_node
+
+	# Heavy 4-legged splayed wrought-iron pedestal cradle (y = 0..1.35 above gantry deck).
+	for li in 4:
+		var ang := float(li) * (PI * 0.5) + PI * 0.25
+		var foot := base_pos + Vector3(cos(ang) * 0.92, 0.0, sin(ang) * 0.92)
+		var neck := base_pos + Vector3(cos(ang) * 0.42, 1.35, sin(ang) * 0.42)
+		_bastion_add_beam(iron_st, foot, neck, 0.085, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+
+	# Heavy riveted wrought-iron fire dish bottom & 8 curved spiked cage ribs.
+	_bastion_add_tapered_prism(iron_st, base_pos + Vector3(0.0, 1.25, 0.0),
+		Vector2(0.58, 0.58), Vector2(0.84, 0.84), 0.32, PI * 0.125,
+		COL_FORT_IRON_HI, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+	var basket_segs := 8
+	for si in basket_segs:
+		var a0 := TAU * float(si) / float(basket_segs)
+		var a1 := TAU * float(si + 1) / float(basket_segs)
+		var p_bot := base_pos + Vector3(cos(a0) * 0.78, 1.48, sin(a0) * 0.78)
+		var p_mid := base_pos + Vector3(cos(a0) * 1.18, 2.22, sin(a0) * 1.18)
+		var p_top := base_pos + Vector3(cos(a0) * 1.34, 2.75, sin(a0) * 1.34)
+		var p_finial := base_pos + Vector3(cos(a0) * 1.42, 3.05, sin(a0) * 1.42)
+		_bastion_add_beam(iron_st, p_bot, p_mid, 0.068, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+		_bastion_add_beam(iron_st, p_mid, p_top, 0.062, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+		_bastion_add_beam(iron_st, p_top, p_finial, 0.036, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+		# Two heavy horizontal riveted retaining iron hoops around the basket.
+		var p_mid_n := base_pos + Vector3(cos(a1) * 1.18, 2.22, sin(a1) * 1.18)
+		var p_top_n := base_pos + Vector3(cos(a1) * 1.34, 2.75, sin(a1) * 1.34)
+		_bastion_add_beam(iron_st, p_mid, p_mid_n, 0.064, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+		_bastion_add_beam(iron_st, p_top, p_top_n, 0.072, 6, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+
+	# Sculpted multi-tongue stylized emissive flame core inside the fire basket!
+	var flame_st := SurfaceTool.new()
+	flame_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var coal_col := Color(1.0, 0.42, 0.10)
+	var mid_col := Color(1.0, 0.72, 0.24)
+	var tip_col := Color(1.0, 0.96, 0.68)
+	# Glowing incandescent coal mound + 5 layered rising flame tongues.
+	_bastion_add_tapered_prism(flame_st, Vector3(0.0, 0.0, 0.0),
+		Vector2(0.82, 0.82), Vector2(0.54, 0.54), 0.42, PI * 0.125, mid_col, coal_col, coal_col)
+	var tongues: Array[Array] = [
+		[Vector3(0.0, 0.25, 0.0), 0.56, 1.85],
+		[Vector3(-0.36, 0.20, 0.24), 0.34, 1.28],
+		[Vector3(0.38, 0.20, -0.22), 0.34, 1.34],
+		[Vector3(0.22, 0.20, 0.36), 0.30, 1.12],
+		[Vector3(-0.26, 0.20, -0.34), 0.32, 1.22],
+	]
+	for t_spec in tongues:
+		var tc: Vector3 = t_spec[0] as Vector3
+		var t_rad: float = float(t_spec[1])
+		var th: float = float(t_spec[2])
+		var apex := tc + Vector3(0.0, th, 0.0)
+		for fi in 6:
+			var fa0 := TAU * float(fi) / 6.0
+			var fa1 := TAU * float(fi + 1) / 6.0
+			var b0 := tc + Vector3(cos(fa0) * t_rad, 0.0, sin(fa0) * t_rad)
+			var b1 := tc + Vector3(cos(fa1) * t_rad, 0.0, sin(fa1) * t_rad)
+			_bastion_tri(flame_st, b0, b1, apex, coal_col, mid_col, tip_col)
+	flame_st.generate_normals()
+
+	var flame_mat := StandardMaterial3D.new()
+	flame_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	flame_mat.vertex_color_use_as_albedo = true
+	flame_mat.albedo_color = Color(1.0, 0.74, 0.32)
+	flame_mat.emission_enabled = true
+	flame_mat.emission = Color(1.0, 0.36, 0.10)
+	flame_mat.emission_energy_multiplier = 3.8
+	var flame_mi := MeshInstance3D.new()
+	flame_mi.name = "BrazierFlameCore"
+	flame_mi.mesh = flame_st.commit()
+	flame_mi.material_override = flame_mat
+	flame_mi.position = Vector3(0.0, 1.52, 0.0)
+	flame_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	brazier_node.add_child(flame_mi)
+	bastion._flame_core = flame_mi
+	bastion._flame_mat = flame_mat
+
+	# Flickering warm-crimson Signal Brazier OmniLight3D registered via distance-gated flicker!
+	var brazier_light := OmniLight3D.new()
+	brazier_light.name = "SignalBrazierLight"
+	brazier_light.light_color = Color(1.0, 0.34, 0.14)
+	brazier_light.light_energy = 7.5
+	brazier_light.omni_range = 62.0
+	brazier_light.omni_attenuation = 1.25
+	brazier_light.shadow_enabled = false
+	brazier_light.position = Vector3(0.0, 2.85, 0.0)
+	brazier_node.add_child(brazier_light)
+	bastion.signal_brazier_light = brazier_light
+	island.register_flicker_light(brazier_light, 7.5, 0.20, rng.randf() * TAU)
+
+	# Rising feathered beacon smoke & ember column (skipped cleanly in headless mode).
+	if DisplayServer.get_name() == "headless":
+		return
+
+	var smoke_p := GPUParticles3D.new()
+	smoke_p.name = "BeaconSmokeColumn"
+	smoke_p.amount = 28
+	smoke_p.lifetime = 4.6
+	smoke_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	smoke_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	smoke_p.visibility_aabb = AABB(Vector3(-10.0, -2.0, -10.0), Vector3(20.0, 34.0, 20.0))
+	smoke_p.position = Vector3(0.0, 2.75, 0.0)
+	var s_proc := ParticleProcessMaterial.new()
+	s_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	s_proc.emission_ring_radius = 0.72
+	s_proc.emission_ring_inner_radius = 0.15
+	s_proc.emission_ring_height = 0.25
+	s_proc.emission_ring_axis = Vector3.UP
+	s_proc.direction = Vector3(0.18, 1.0, 0.08).normalized()
+	s_proc.spread = 14.0
+	s_proc.initial_velocity_min = 2.2
+	s_proc.initial_velocity_max = 4.2
+	s_proc.gravity = Vector3(0.35, 0.65, 0.15)
+	s_proc.scale_min = 1.25
+	s_proc.scale_max = 2.45
+	var s_curve := Curve.new()
+	s_curve.add_point(Vector2(0.0, 0.45))
+	s_curve.add_point(Vector2(0.42, 1.25))
+	s_curve.add_point(Vector2(1.0, 2.20))
+	var s_curve_tex := CurveTexture.new()
+	s_curve_tex.curve = s_curve
+	s_proc.scale_curve = s_curve_tex
+	s_proc.color_ramp = _make_beacon_smoke_ramp(false)
+	smoke_p.process_material = s_proc
+	var s_quad := QuadMesh.new()
+	s_quad.size = Vector2(2.1, 2.1)
+	var s_mat := StandardMaterial3D.new()
+	s_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	s_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	s_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	s_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	s_mat.vertex_color_use_as_albedo = true
+	s_mat.albedo_texture = _get_beacon_puff_texture()
+	s_quad.material = s_mat
+	smoke_p.draw_pass_1 = s_quad
+	smoke_p.emitting = true
+	brazier_node.add_child(smoke_p)
+	bastion._beacon_smoke = smoke_p
+
+	var ember_p := GPUParticles3D.new()
+	ember_p.name = "BeaconEmberColumn"
+	ember_p.amount = 24
+	ember_p.lifetime = 2.4
+	ember_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	ember_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ember_p.visibility_aabb = AABB(Vector3(-8.0, -1.0, -8.0), Vector3(16.0, 24.0, 16.0))
+	ember_p.position = Vector3(0.0, 2.55, 0.0)
+	var e_proc := ParticleProcessMaterial.new()
+	e_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	e_proc.emission_ring_radius = 0.85
+	e_proc.emission_ring_inner_radius = 0.10
+	e_proc.emission_ring_height = 0.20
+	e_proc.emission_ring_axis = Vector3.UP
+	e_proc.direction = Vector3.UP
+	e_proc.spread = 22.0
+	e_proc.initial_velocity_min = 2.6
+	e_proc.initial_velocity_max = 5.4
+	e_proc.gravity = Vector3(0.25, 0.45, 0.0)
+	e_proc.scale_min = 0.45
+	e_proc.scale_max = 1.05
+	e_proc.color_ramp = _make_beacon_ember_ramp(false)
+	ember_p.process_material = e_proc
+	var e_quad := QuadMesh.new()
+	e_quad.size = Vector2(0.32, 0.32)
+	var e_mat := StandardMaterial3D.new()
+	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	e_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	e_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	e_mat.vertex_color_use_as_albedo = true
+	e_mat.albedo_texture = _get_beacon_puff_texture()
+	e_quad.material = e_mat
+	ember_p.draw_pass_1 = e_quad
+	ember_p.emitting = true
+	brazier_node.add_child(ember_p)
+	bastion._beacon_embers = ember_p
+
+
+static func _make_beacon_smoke_ramp(siege_active: bool) -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.58, 1.0])
+	if siege_active:
+		grad.colors = PackedColorArray([
+			Color(0.26, 0.96, 0.54, 0.0),
+			Color(0.22, 0.72, 0.44, 0.68),
+			Color(0.26, 0.32, 0.28, 0.44),
+			Color(0.18, 0.20, 0.20, 0.0),
+		])
+	else:
+		grad.colors = PackedColorArray([
+			Color(0.95, 0.46, 0.16, 0.0),
+			Color(0.38, 0.28, 0.24, 0.56),
+			Color(0.26, 0.25, 0.26, 0.34),
+			Color(0.22, 0.22, 0.24, 0.0),
+		])
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+
+
+static func _make_beacon_ember_ramp(siege_active: bool) -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.72, 1.0])
+	if siege_active:
+		grad.colors = PackedColorArray([
+			Color(0.75, 1.0, 0.84, 1.0),
+			Color(0.22, 0.98, 0.54, 0.94),
+			Color(0.95, 0.26, 0.14, 0.52),
+			Color(0.60, 0.10, 0.06, 0.0),
+		])
+	else:
+		grad.colors = PackedColorArray([
+			Color(1.0, 0.96, 0.72, 1.0),
+			Color(1.0, 0.52, 0.14, 0.90),
+			Color(0.92, 0.20, 0.05, 0.48),
+			Color(0.55, 0.08, 0.02, 0.0),
+		])
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+
+
+static func _get_beacon_puff_texture() -> ImageTexture:
+	if _beacon_puff_tex != null:
+		return _beacon_puff_tex
+	var sz := 64
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	var lobes: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.88),
+		Vector3(-0.22, -0.10, 0.56),
+		Vector3(0.24, -0.06, 0.54),
+		Vector3(0.04, 0.22, 0.52),
+	]
+	for y in sz:
+		for x in sz:
+			var nx := (float(x) - half) / half
+			var ny := (float(y) - half) / half
+			var density := 0.0
+			for lobe in lobes:
+				var dx := nx - lobe.x
+				var dy := ny - lobe.y
+				var r := sqrt(dx * dx + dy * dy) / lobe.z
+				if r < 1.0:
+					var w := 1.0 - r * r
+					density = maxf(density, w * w)
+			var outer := clampf(1.0 - sqrt(nx * nx + ny * ny), 0.0, 1.0)
+			var alpha := clampf(density * smoothstep(0.0, 0.42, outer), 0.0, 1.0)
+			var shade := lerpf(0.88, 1.0, density)
+			img.set_pixel(x, y, Color(shade, shade, shade, alpha))
+	_beacon_puff_tex = ImageTexture.create_from_image(img)
+	return _beacon_puff_tex
+
+
+static func _add_bastion_box_collider(prop_body: StaticBody3D, bastion_xform: Transform3D,
+		col_name: String, local_xf: Transform3D, size: Vector3) -> void:
+	var cs := CollisionShape3D.new()
+	cs.name = "Col_Bastion_" + col_name
+	var box := BoxShape3D.new()
+	box.size = size
+	cs.shape = box
+	cs.transform = bastion_xform * local_xf
+	prop_body.add_child(cs)
+
+
+static func _bastion_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ca: Color, cb: Color, cc: Color) -> void:
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_color(cc)
+	st.add_vertex(c)
+
+
+static func _bastion_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ca: Color, cb: Color, cc: Color, cd: Color) -> void:
+	_bastion_tri(st, a, b, c, ca, cb, cc)
+	_bastion_tri(st, a, c, d, ca, cc, cd)
+
+
+static func _bastion_add_tapered_prism(st: SurfaceTool, base_center: Vector3,
+		half_bot: Vector2, half_top: Vector2, height: float, yaw: float,
+		col_top: Color, col_mid: Color, col_bot: Color) -> void:
+	_bastion_add_oriented_prism(st, Transform3D(Basis(Vector3.UP, yaw), base_center),
+		half_bot, half_top, height, col_top, col_mid, col_bot)
+
+
+static func _bastion_add_oriented_prism(st: SurfaceTool, xf: Transform3D,
+		half_bot: Vector2, half_top: Vector2, height: float,
+		col_top: Color, col_mid: Color, col_bot: Color) -> void:
+	var b: Array[Vector3] = [
+		xf * Vector3(-half_bot.x, 0.0, -half_bot.y),
+		xf * Vector3(half_bot.x, 0.0, -half_bot.y),
+		xf * Vector3(half_bot.x, 0.0, half_bot.y),
+		xf * Vector3(-half_bot.x, 0.0, half_bot.y),
+	]
+	var t: Array[Vector3] = [
+		xf * Vector3(-half_top.x, height, -half_top.y),
+		xf * Vector3(half_top.x, height, -half_top.y),
+		xf * Vector3(half_top.x, height, half_top.y),
+		xf * Vector3(-half_top.x, height, half_top.y),
+	]
+	# Top cap (+Y outward) & bottom cap (-Y outward).
+	_bastion_quad(st, t[0], t[1], t[2], t[3], col_top, col_top, col_top, col_top)
+	_bastion_quad(st, b[0], b[3], b[2], b[1], col_bot, col_bot, col_bot, col_bot)
+	for i in 4:
+		var j := (i + 1) % 4
+		var c_up := col_top.lerp(col_mid, 0.35 + 0.14 * float(i % 2))
+		var c_lo := col_bot.lerp(col_mid, 0.25)
+		_bastion_quad(st, b[i], b[j], t[j], t[i], c_lo, c_lo, c_up, c_up)
+
+
+static func _bastion_add_beam(st: SurfaceTool, a: Vector3, b: Vector3, radius: float,
+		segs: int, col_hi: Color, col_lo: Color) -> void:
+	var axis := b - a
+	var length := axis.length()
+	if length < 0.0001:
+		return
+	var dir := axis / length
+	var ref := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var u := dir.cross(ref).normalized()
+	var v := dir.cross(u).normalized()
+	for i in segs:
+		var ang0 := TAU * float(i) / float(segs)
+		var ang1 := TAU * float(i + 1) / float(segs)
+		var off0 := (u * cos(ang0) + v * sin(ang0)) * radius
+		var off1 := (u * cos(ang1) + v * sin(ang1)) * radius
+		var s0 := clampf(0.5 + 0.5 * off0.normalized().y, 0.0, 1.0)
+		var s1 := clampf(0.5 + 0.5 * off1.normalized().y, 0.0, 1.0)
+		var c0 := col_lo.lerp(col_hi, s0)
+		var c1 := col_lo.lerp(col_hi, s1)
+		_bastion_quad(st, a + off0, b + off0, b + off1, a + off1, c0, c0, c1, c1)
+		_bastion_tri(st, a, a + off0, a + off1, col_lo, c0, c1)
+		_bastion_tri(st, b, b + off1, b + off0, col_hi, c1, c0)

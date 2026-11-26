@@ -414,3 +414,163 @@ func test_shore_factor_and_discovery() -> void:
 	arch.queue_free()
 	Game.profile.data = saved_profile
 	await physics_frames(2)
+
+
+func test_fort_bastion_and_sea_batteries() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	var fort := arch.get_island_by_id("ironwatch_fort")
+	check(fort != null, "missing ironwatch_fort in Archipelago")
+	if fort == null:
+		arch.queue_free()
+		return
+
+	var bastion := fort.get_node_or_null(^"FortBastion")
+	check(bastion != null, "Ironwatch Fort must generate a FortBastion node")
+	if bastion == null:
+		arch.queue_free()
+		return
+
+	check(bastion.get_node_or_null(^"BastionStonework") is MeshInstance3D,
+		"FortBastion must contain sculpted BastionStonework mesh")
+	check(bastion.get_node_or_null(^"WatchtowerGantry") is MeshInstance3D,
+		"FortBastion must contain WatchtowerGantry timber mesh")
+	var brazier := bastion.get_node_or_null(^"SignalBrazier") as Node3D
+	check(brazier != null, "FortBastion must contain SignalBrazier")
+	var brazier_light := bastion.find_child("SignalBrazierLight", true, false) as OmniLight3D
+	check(brazier_light != null, "FortBastion must contain SignalBrazierLight")
+	if brazier_light != null:
+		check(brazier_light.global_position.y > 24.0,
+			"Signal Brazier light should crown Ironwatch Fort high above sea level (got %.1f m)" % brazier_light.global_position.y)
+		var calm_energy := brazier_light.light_energy
+		bastion.call(&"set_siege_beacon", true)
+		check(bool(bastion.get(&"is_siege_beacon_active")), "set_siege_beacon(true) should activate siege beacon")
+		check(brazier_light.light_energy > calm_energy,
+			"Siege beacon flare should boost brazier light energy")
+		bastion.call(&"set_siege_beacon", false)
+		check(not bool(bastion.get(&"is_siege_beacon_active")), "set_siege_beacon(false) should calm siege beacon")
+
+	# Verify exactly 4 FortBattery emplacements mounted cleanly on the bastion.
+	var found_nodes := fort.find_children("*", "FortBattery", true, false)
+	check_eq(found_nodes.size(), 4, "Ironwatch Fort must mount 4 FortBattery sea-batteries")
+	var batteries: Array[FortBattery] = []
+	for n in found_nodes:
+		var fb := n as FortBattery
+		check(fb != null and not fb.destroyed, "FortBattery must start intact")
+		if fb != null:
+			batteries.append(fb)
+			check(fb.global_position.y > 14.0,
+				"FortBattery %s must sit grounded on the elevated bastion parapet (y=%.2f)" % [fb.name, fb.global_position.y])
+			check(fb.interactable != null and fb.interactable.enabled,
+				"FortBattery %s must expose an enabled Interactable" % fb.name)
+
+	# Spawn a real player Ship approaching Ironwatch Fort's seaward landing lane (~105 m out).
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.faction = &"player"
+	ship.start_anchored = true
+	ship.enable_effects = false
+	add_child(ship)
+	var seaward := (-fort.mooring_transform.basis.z).normalized()
+	var ship_pos := fort.global_position + seaward * 105.0
+	ship_pos.y = 0.0
+	ship.global_position = ship_pos
+	await physics_frames(2)
+
+	# Activate siege and watch batteries track, telegraph priming fuse, and fire a real Cannonball!
+	var fired_balls: Array[Cannonball] = []
+	for fb in batteries:
+		fb.enable_effects = false
+		fb.battery_fired.connect(func(b: Cannonball) -> void: fired_balls.append(b))
+	bastion.call(&"set_siege_active", true)
+
+	var saw_telegraph := false
+	for _tick in 220:
+		await physics_frames(1)
+		for fb in batteries:
+			if fb.is_telegraphing():
+				saw_telegraph = true
+		if not fired_balls.is_empty():
+			break
+
+	check(saw_telegraph, "At least one FortBattery must visibly telegraph its priming fuse before firing")
+	check(not fired_balls.is_empty(), "Active siege FortBattery must fire a real Cannonball at approaching player ship")
+	if not fired_balls.is_empty():
+		var ball := fired_balls[0]
+		check(is_instance_valid(ball), "Fired Cannonball must remain valid right after launch")
+		var launch_pos := ball.global_position
+		check(ball.velocity.length() > 40.0,
+			"Fired Cannonball speed %.1f m/s should match ~52 m/s muzzle velocity" % ball.velocity.length())
+		var to_ship := (ship.global_position - launch_pos)
+		to_ship.y = 0.0
+		var vel_horiz := Vector3(ball.velocity.x, 0.0, ball.velocity.z)
+		check(to_ship.normalized().dot(vel_horiz.normalized()) > 0.75,
+			"Fired Cannonball must travel seaward toward the approaching player ship")
+		# Verify shot clears stone embrasure piers cleanly over the first 0.25 s of flight.
+		var early_impact := [false]
+		ball.impacted.connect(func(_p: Vector3, _t: Node) -> void: early_impact[0] = true)
+		await physics_frames(15)
+		check(not early_impact[0], "FortBattery shot must clear its own embrasure masonry without clipping")
+		if is_instance_valid(ball):
+			check(ball.global_position.distance_to(launch_pos) > 10.0,
+				"FortCannonball should travel cleanly out toward sea after launch")
+
+	# Verify a Pawn can walk right through the open landing-ramp gateway into the bastion courtyard!
+	var scout := PAWN_SCENE.instantiate() as Pawn
+	add_child(scout)
+	var gate_outer := (bastion as Node3D).global_transform * Vector3(0.0, 0.25, -13.0)
+	gate_outer.y = fort.world_surface_height(gate_outer) + 0.15
+	scout.global_position = gate_outer
+	var inward_dir := ((bastion as Node3D).global_position - gate_outer)
+	inward_dir.y = 0.0
+	scout.wish_dir = inward_dir.normalized()
+	scout.wish_sprint = true
+	var entered_courtyard := false
+	for _gt in 120:
+		await physics_frames(1)
+		var local_p := (bastion as Node3D).to_local(scout.global_position)
+		if Vector2(local_p.x, local_p.z).length() < 7.5 and scout.is_grounded():
+			entered_courtyard = true
+			break
+	check(entered_courtyard, "Pawn must walk cleanly through Ironwatch Fort's open landing-ramp gateway into the courtyard")
+	scout.queue_free()
+
+	# Verify manual player Interactable firing on an intact, ready battery.
+	var manual_bat := batteries[0]
+	manual_bat.set_siege_active(false)
+	manual_bat.repair_battery()
+	var before_manual := fired_balls.size()
+	manual_bat.interactable.interact(null)
+	check_eq(fired_balls.size(), before_manual + 1, "Interactable 'Fire Fort Cannon' must fire a Cannonball")
+
+	# Verify hitbox proxy forwards damage and take_damage() cleanly silences & repairs the battery.
+	var destroyed_events: Array[FortBattery] = []
+	manual_bat.battery_destroyed.connect(func(b: FortBattery) -> void: destroyed_events.append(b))
+	var hitbox := manual_bat.find_child("BatteryHitbox", true, false)
+	check(hitbox != null and hitbox is StaticBody3D, "FortBattery must include a StaticBody3D BatteryHitbox")
+	if hitbox != null:
+		hitbox.call(&"apply_damage", 35.0, null)
+	else:
+		manual_bat.take_damage(35.0)
+	check(not manual_bat.destroyed, "Partial damage should not silence FortBattery yet")
+	check_near(manual_bat.health, manual_bat.max_health - 35.0, 0.01, "Health should decrement accurately")
+	manual_bat.take_damage(60.0)
+	check(manual_bat.destroyed, "Lethal take_damage() must mark FortBattery destroyed")
+	check_near(manual_bat.health, 0.0, 0.01, "Destroyed FortBattery health must clamp to 0")
+	check(not manual_bat.is_telegraphing(), "Destroyed FortBattery must cancel any telegraph")
+	check(not manual_bat.interactable.enabled, "Destroyed FortBattery interactable must disable")
+	check_eq(destroyed_events.size(), 1, "battery_destroyed signal must emit once")
+	check(manual_bat.fire_battery() == null, "Destroyed FortBattery must refuse to fire")
+
+	manual_bat.repair_battery()
+	check(not manual_bat.destroyed and manual_bat.interactable.enabled,
+		"repair_battery() must restore FortBattery to fighting shape")
+
+	# Clean teardown with zero leaks.
+	bastion.call(&"set_siege_active", false)
+	ship.queue_free()
+	arch.queue_free()
+	await physics_frames(3)
+

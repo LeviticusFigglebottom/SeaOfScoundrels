@@ -7,11 +7,19 @@ extends Node
 ## `patch_hole`, `bail`) so enemy vessels obey identical wave, sail, and flood physics.
 
 signal salvage_dropped(ship_pos: Vector3, items: Array)
+signal phase_shifted(from_pos: Vector3, to_pos: Vector3)
 
-@export var archetype: StringName = &"drowned_sloop"  # &"drowned_sloop" or &"ghost_ship"
+const PHASE_OUT_DURATION := 1.2
+const PHASE_IN_DURATION := 1.1
+const PHASE_MIN_DIST := 25.0
+const PHASE_MAX_DIST := 155.0
+const PHASE_AMBUSH_RANGE := 58.0
+
+@export var archetype: StringName = &"drowned_sloop"  # &"drowned_sloop", &"ghost_ship", or &"corsair_sloop"
 @export var preferred_range: float = 58.0
 @export var aggro_range: float = 480.0
 @export var repair_interval: float = 11.0
+@export var phase_cooldown: float = 20.0
 
 var ship: Ship = null
 var target_ship: Ship = null
@@ -20,6 +28,10 @@ var _orbit_sign: float = 1.0  # +1 circles starboard-to-target, -1 port-to-targe
 var _repair_timer: float = 8.0
 var _fire_delay: float = 1.5
 var _salvage_spawned: bool = false
+var _phase_state: StringName = &"solid"  # &"solid", &"fading_out", &"fading_in"
+var _phase_timer: float = 14.0
+var _phase_elapsed: float = 0.0
+var _phase_ring_stamped: bool = false
 
 
 func _ready() -> void:
@@ -76,6 +88,24 @@ static func spawn_enemy_sloop(p_archetype: StringName, world_pos: Vector3, paren
 	return s
 
 
+## Host-only trigger to begin a Ghost Ship spectral phase-shift broadside ambush.
+func trigger_phase_shift() -> bool:
+	if not Net.is_host() or ship == null or ship.is_sinking:
+		return false
+	if archetype != &"ghost_ship" or _phase_state != &"solid":
+		return false
+	if target_ship == null or not is_instance_valid(target_ship) or target_ship.is_sinking:
+		return false
+	_phase_state = &"fading_out"
+	_phase_elapsed = 0.0
+	_phase_ring_stamped = false
+	ship.set_spectral_phase(1.0, 1.4)
+	if Ocean.current != null:
+		Ocean.current.add_foam(ship.global_position, 9.0, 1.0)
+	Audio.play_sfx(&"thunder_near", ship.global_position, -6.0)
+	return true
+
+
 func _physics_process(delta: float) -> void:
 	if not Net.is_host() or ship == null or ship.is_sinking:
 		return
@@ -90,6 +120,9 @@ func _physics_process(delta: float) -> void:
 	# Slow self-repair so sustained player broadsides can overwhelm and sink it.
 	_tick_self_repair(delta)
 
+	if archetype == &"ghost_ship":
+		_tick_ghost_phase(delta)
+
 	if target_ship == null:
 		# Patrol steadily.
 		ship.set_sail_target(0.65)
@@ -99,6 +132,11 @@ func _physics_process(delta: float) -> void:
 	var to_t := target_ship.global_position - ship.global_position
 	var flat := Vector3(to_t.x, 0.0, to_t.z)
 	var dist := flat.length()
+
+	if archetype == &"ghost_ship" and _phase_state == &"solid":
+		_phase_timer = maxf(0.0, _phase_timer - delta)
+		if _phase_timer <= 0.0 and dist >= PHASE_MIN_DIST and dist <= PHASE_MAX_DIST:
+			trigger_phase_shift()
 
 	# Desired heading: close in when far, smoothly tangent-orbit at preferred_range for broadsides!
 	var dir_to := flat.normalized() if dist > 0.1 else Vector3.FORWARD
@@ -118,10 +156,128 @@ func _physics_process(delta: float) -> void:
 	var want_sail := 1.0 if dist > preferred_range * 1.35 else (0.72 if dist > 32.0 else 0.45)
 	ship.set_sail_target(want_sail)
 
+	# Hold fire while dissolving into or materializing out of the mist.
+	if _phase_state != &"solid":
+		return
+
 	# Broadside gunnery with velocity lead & ballistic drop!
 	_fire_delay = maxf(0.0, _fire_delay - delta)
 	if _fire_delay <= 0.0 and dist < 135.0 and ship.cannonballs_remaining > 0:
 		_try_broadside(dist)
+
+
+func _tick_ghost_phase(delta: float) -> void:
+	if _phase_state == &"fading_out":
+		_phase_elapsed += delta
+		var t := clampf(_phase_elapsed / PHASE_OUT_DURATION, 0.0, 1.0)
+		var alpha := 1.0 - t
+		var flare := lerpf(1.4, 1.85, sin(t * PI))
+		ship.set_spectral_phase(alpha, flare)
+		if t >= 1.0:
+			_execute_phase_teleport()
+	elif _phase_state == &"fading_in":
+		_phase_elapsed += delta
+		var t := clampf(_phase_elapsed / PHASE_IN_DURATION, 0.0, 1.0)
+		var flare := lerpf(1.6, 0.0, t)
+		ship.set_spectral_phase(t, flare)
+		if not _phase_ring_stamped and t >= 0.08:
+			_phase_ring_stamped = true
+			_stamp_phase_foam_ring(ship.global_position, 9.5)
+		if t >= 1.0:
+			ship.set_spectral_phase(1.0, 0.0)
+			_phase_state = &"solid"
+			_phase_timer = phase_cooldown
+			_fire_delay = 0.6
+
+
+func _execute_phase_teleport() -> void:
+	if target_ship == null or not is_instance_valid(target_ship) or target_ship.is_sinking:
+		_phase_state = &"fading_in"
+		_phase_elapsed = 0.0
+		_phase_ring_stamped = false
+		return
+
+	var old_pos := ship.global_position
+	_orbit_sign = -_orbit_sign
+	var new_pos := _pick_opposite_beam_position(old_pos)
+	new_pos.y = Sea.height(new_pos.x, new_pos.z)
+
+	var to_t := target_ship.global_position - new_pos
+	to_t.y = 0.0
+	var dir_to := to_t.normalized() if to_t.length_squared() > 0.01 else Vector3.FORWARD
+	var broadside_fwd := (Vector3(-dir_to.z, 0.0, dir_to.x) * _orbit_sign).normalized()
+	var broadside_yaw := atan2(-broadside_fwd.x, -broadside_fwd.z)
+
+	ship.global_transform = Transform3D(Basis(Vector3.UP, broadside_yaw), new_pos)
+	ship.linear_velocity = broadside_fwd * 6.5
+	ship.angular_velocity = Vector3.ZERO
+	ship.set_spectral_phase(0.0, 1.6)
+
+	_stamp_phase_foam_ring(new_pos, 9.5)
+	Audio.play_sfx(&"thunder_near", new_pos, -5.0)
+	Game.post_notice("Ghost ship vanished into the mist — watch the opposite beam!")
+	phase_shifted.emit(old_pos, new_pos)
+
+	_phase_state = &"fading_in"
+	_phase_elapsed = 0.0
+	_phase_ring_stamped = false
+
+
+func _pick_opposite_beam_position(old_pos: Vector3) -> Vector3:
+	var t_pos := target_ship.global_position
+	var t_right := Vector3(target_ship.global_basis.x.x, 0.0, target_ship.global_basis.x.z)
+	if t_right.length_squared() < 0.01:
+		t_right = Vector3.RIGHT
+	else:
+		t_right = t_right.normalized()
+
+	var old_rel := Vector3(old_pos.x - t_pos.x, 0.0, old_pos.z - t_pos.z)
+	var old_lateral := old_rel.dot(t_right)
+	var beam_sign := -1.0 if old_lateral >= 0.0 else 1.0
+	if absf(old_lateral) < 4.0:
+		beam_sign = _orbit_sign
+	var base_dir := (t_right * beam_sign).normalized()
+
+	var angle_offsets: Array[float] = [
+		0.0,
+		deg_to_rad(25.0), deg_to_rad(-25.0),
+		deg_to_rad(50.0), deg_to_rad(-50.0),
+		deg_to_rad(75.0), deg_to_rad(-75.0),
+		deg_to_rad(100.0), deg_to_rad(-100.0),
+		deg_to_rad(130.0), deg_to_rad(-130.0),
+		deg_to_rad(160.0), deg_to_rad(-160.0),
+	]
+	var radii: Array[float] = [PHASE_AMBUSH_RANGE, 82.0, 112.0]
+	for rad in radii:
+		for ang in angle_offsets:
+			var cand_dir := base_dir.rotated(Vector3.UP, ang)
+			var cand := Vector3(t_pos.x + cand_dir.x * rad, 0.0, t_pos.z + cand_dir.z * rad)
+			if _is_position_clear_of_islands(cand):
+				return cand
+	return Vector3(t_pos.x + base_dir.x * PHASE_AMBUSH_RANGE, 0.0, t_pos.z + base_dir.z * PHASE_AMBUSH_RANGE)
+
+
+func _is_position_clear_of_islands(pos: Vector3) -> bool:
+	for node in get_tree().get_nodes_in_group(&"islands"):
+		if not (node is Node3D):
+			continue
+		var isl := node as Node3D
+		var raw_r: Variant = isl.get(&"island_radius")
+		var min_clear := (float(raw_r) if raw_r != null else 75.0) + 55.0
+		var dist_xz := Vector2(pos.x - isl.global_position.x, pos.z - isl.global_position.z).length()
+		if dist_xz <= min_clear:
+			return false
+	return true
+
+
+func _stamp_phase_foam_ring(center: Vector3, radius: float) -> void:
+	if Ocean.current == null:
+		return
+	Ocean.current.add_foam(center, radius, 1.0)
+	for i in 4:
+		var ang := float(i) * PI * 0.5 + 0.35
+		var p := center + Vector3(cos(ang) * 5.2, 0.0, sin(ang) * 5.2)
+		Ocean.current.add_foam(p, 5.5, 0.85)
 
 
 func _try_broadside(dist: float) -> void:
@@ -195,6 +351,9 @@ func _find_player_ship() -> Ship:
 
 
 func _on_sunk() -> void:
+	if archetype == &"ghost_ship" and ship != null:
+		_phase_state = &"solid"
+		ship.set_spectral_phase(1.0, 0.0)
 	if not Net.is_host() or _salvage_spawned:
 		return
 	_salvage_spawned = true

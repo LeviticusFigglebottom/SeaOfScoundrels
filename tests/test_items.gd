@@ -494,6 +494,17 @@ func test_armory_weapon_loadouts_and_meshes() -> void:
 	inv.equip(&"pistol", true)
 	check_eq(cc.equipped_weapon, &"blunderbuss", "equipping ranged slot activates blunderbuss on CombatComponent")
 
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(rig["pawn"], rig["pc"], inv, cc, null, null, null)
+	hud.open_item_radial()
+	check_eq(String(hud.item_radial.entries[0]["label"]), "Boarding Axe", "Item Radial reflects Boarding Axe label")
+	check_eq(hud.item_radial.entries[0]["icon"], &"boarding_axe", "Item Radial reflects boarding_axe icon")
+	check_eq(String(hud.item_radial.entries[1]["label"]), "Blunderbuss", "Item Radial reflects Blunderbuss label")
+	check_eq(hud.item_radial.entries[1]["icon"], &"blunderbuss", "Item Radial reflects blunderbuss icon")
+	hud.close_item_radial(false)
+
 	var menu := ShipwrightMenu.new()
 	_root.add_child(menu)
 	menu.inventory = inv

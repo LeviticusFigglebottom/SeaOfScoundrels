@@ -81,9 +81,10 @@ vec3 weather_at(vec2 xz) {
 
 CloudColumn cloud_column(vec2 xz) {
 	vec2 q = xz - cloud_drift;
-	vec4 a = texture(cloud_map, q / MAP_TILE);
+	// Explicit LOD 0 prevents divergent raymarch-loop quad derivative explosions on real GPUs.
+	vec4 a = textureLod(cloud_map, q / MAP_TILE, 0.0);
 	// A second, rotated, much larger read breaks up the tiling of the first.
-	float big = texture(cloud_map, vec2(q.x * 0.8 + q.y * 0.6, q.y * 0.8 - q.x * 0.6) / BIG_TILE + 0.37).g;
+	float big = textureLod(cloud_map, vec2(q.x * 0.8 + q.y * 0.6, q.y * 0.8 - q.x * 0.6) / BIG_TILE + 0.37, 0.0).g;
 	vec3 w = weather_at(xz);
 	float st = w.y;
 	float cover = clamp(mix(w.x, 1.0, smoothstep(0.1, 0.7, st)), 0.0, 1.0);
@@ -143,10 +144,11 @@ float cloud_sd(vec3 p, CloudColumn c, bool fine) {
 		return max(d, cell);
 	}
 	vec3 uvw = vec3(p.x - cloud_drift.x, p.y, p.z - cloud_drift.y) / VOL_TILE + cloud_churn;
-	vec4 n = texture(cloud_volume, uvw);
+	// Explicit LOD 0 avoids hardware 2x2 quad derivative spikes across divergent march steps.
+	vec4 n = textureLod(cloud_volume, uvw, 0.0);
 	float eat = 1.0 - n.r;
 	if (fine) {
-		float n2 = texture(cloud_volume, uvw * 3.3 + 0.31).g;
+		float n2 = textureLod(cloud_volume, uvw * 3.3 + 0.31, 0.0).g;
 		eat = eat * 0.78 + (1.0 - n2) * 0.22;
 	}
 	// Puffs bite hardest up the sides and top; the base stays flat in fair
@@ -157,7 +159,7 @@ float cloud_sd(vec3 p, CloudColumn c, bool fine) {
 	d = min((e - eat * bite) * M_SCALE, below - roll * c.relief);
 	if (cell > -900.0) {
 		// The tower is built of turrets: one more read at a much larger scale.
-		float turret = texture(cloud_volume, uvw * 0.31 + 0.17).r;
+		float turret = textureLod(cloud_volume, uvw * 0.31 + 0.17, 0.0).r;
 		float lump = min(storm_cell.z * 0.24, 520.0);
 		cell = max(parts.x - (1.0 - turret) * lump - eat * 60.0,
 				parts.y - (1.0 - turret) * 130.0 - eat * 90.0);

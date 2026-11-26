@@ -36,6 +36,8 @@ const DISPLAY_NAMES := {
 	&"planks": "Oak Planks",
 	&"tankard": "Grog Tankard",
 	&"instrument": "Concertina",
+	&"hurdy_gurdy": "Hurdy-Gurdy",
+	&"whistle": "Bosun's Whistle",
 }
 
 # Curated warm painterly pirate palette (matching sloop.glb & concept art).
@@ -106,6 +108,10 @@ static func build_tool(tool_id: StringName) -> Node3D:
 			return _build_tankard()
 		&"instrument":
 			return _build_instrument()
+		&"hurdy_gurdy":
+			return _build_hurdy_gurdy()
+		&"whistle":
+			return _build_whistle()
 		_:
 			push_warning("ToolMeshes: unknown tool '%s', falling back to cutlass." % String(tool_id))
 			return _build_cutlass()
@@ -175,6 +181,15 @@ static func set_concertina_stretch(inst_node: Node3D, stretch_01: float) -> void
 		left_end.position.x = -half_span
 	if right_end != null:
 		right_end.position.x = half_span
+
+
+## Rotate a Hurdy-Gurdy node's `"CrankHandle"` around its drive axle (`angle_rad`).
+static func set_hurdy_gurdy_crank(inst_node: Node3D, angle_rad: float) -> void:
+	if inst_node == null:
+		return
+	var crank := inst_node.get_node_or_null(^"CrankHandle") as Node3D
+	if crank != null:
+		crank.rotation.x = angle_rad
 
 
 ## Extend or retract a Spyglass node's telescoping draw tubes (`ext_01` in 0..1).
@@ -1266,6 +1281,375 @@ static func _build_instrument() -> Node3D:
 			], 6, Transform3D(end_rot, pos))
 		st_btn.generate_normals()
 		end_node.add_child(_make_mesh_node("Buttons", st_btn.commit(), _make_mat(COL_IVORY, 0.45, 0.05)))
+	return root
+
+
+## 12. Hurdy-Gurdy: chunky wooden lute-waisted soundbox, varnished belly, brass wheel cover,
+## pegged headstock, ivory keybox buttons, and rotating `"CrankHandle"` (for Barnaby).
+static func _build_hurdy_gurdy() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_HurdyGurdy"
+
+	# Figure-8 hurdy-gurdy soundbox ribs (darker oak), chamfered top & bottom + carved pegbox headstock.
+	var st_ribs := SurfaceTool.new()
+	st_ribs.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var body_segs := 24
+	var rib_levels := [
+		[-0.064, 0.90],
+		[-0.052, 1.00],
+		[0.044, 1.00],
+		[0.056, 0.93],
+	]
+	var body_rings: Array = []
+	for lv in rib_levels:
+		var y: float = float(lv[0])
+		var sc: float = float(lv[1])
+		var ring: Array = []
+		for k in body_segs:
+			var a := float(k) / float(body_segs) * TAU
+			var cx := cos(a)
+			var sz := sin(a)
+			var u := (cx + 1.0) * 0.5
+			var waist := 1.0 - 0.24 * exp(-pow((u - 0.46) / 0.18, 2.0))
+			var half_z := lerpf(0.098, 0.130, u) * waist * sc
+			var x := lerpf(-0.175, 0.165, u) * sc
+			ring.append(Vector3(x, y, sz * half_z))
+		body_rings.append(ring)
+	_append_loft(st_ribs, body_rings, true)
+
+	# Carved oak neck block, angled pegbox cheeks & decorative spiral scroll tip along -X.
+	_append_beveled_box(st_ribs, Vector3(0.055, 0.062, 0.068), 0.009,
+		Transform3D(Basis.IDENTITY, Vector3(-0.188, 0.012, 0.0)))
+	_append_beveled_box(st_ribs, Vector3(0.092, 0.048, 0.016), 0.004,
+		Transform3D(Basis(Vector3.BACK, -0.14), Vector3(-0.244, 0.018, -0.022)))
+	_append_beveled_box(st_ribs, Vector3(0.092, 0.048, 0.016), 0.004,
+		Transform3D(Basis(Vector3.BACK, -0.14), Vector3(-0.244, 0.018, 0.022)))
+	_append_beveled_box(st_ribs, Vector3(0.090, 0.016, 0.056), 0.004,
+		Transform3D(Basis(Vector3.BACK, -0.14), Vector3(-0.244, -0.002, 0.0)))
+	var scroll_rot := Basis(Vector3.RIGHT, PI * 0.5)
+	_append_lathe(st_ribs, [
+		Vector2(0.0, -0.028),
+		Vector2(0.024, -0.024),
+		Vector2(0.028, 0.0),
+		Vector2(0.024, 0.024),
+		Vector2(0.0, 0.028),
+	], 10, Transform3D(scroll_rot, Vector3(-0.294, 0.024, 0.0)))
+	st_ribs.generate_normals()
+	root.add_child(_make_mesh_node("SoundboxRibs", st_ribs.commit(), _make_mat(COL_OAK_DARK, 0.72, 0.04)))
+
+	# Warm varnished spruce/maple belly plate inset slightly inside the dark oak binding rim.
+	var belly_rings: Array = []
+	for lv in [[0.052, 0.89], [0.062, 0.86]]:
+		var y: float = float(lv[0])
+		var sc: float = float(lv[1])
+		var ring: Array = []
+		for k in body_segs:
+			var a := float(k) / float(body_segs) * TAU
+			var cx := cos(a)
+			var sz := sin(a)
+			var u := (cx + 1.0) * 0.5
+			var waist := 1.0 - 0.24 * exp(-pow((u - 0.46) / 0.18, 2.0))
+			var half_z := lerpf(0.098, 0.130, u) * waist * sc
+			var x := lerpf(-0.175, 0.165, u) * sc
+			ring.append(Vector3(x, y, sz * half_z))
+		belly_rings.append(ring)
+	root.add_child(_make_mesh_node("SoundboardBelly", _loft_mesh(belly_rings, true), _make_mat(COL_OAK_LIGHT, 0.50, 0.03)))
+
+	# Carved dark acoustic soundholes on the varnished belly.
+	var st_holes := SurfaceTool.new()
+	st_holes.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for sz_sign: float in [-1.0, 1.0]:
+		_append_lathe(st_holes, [
+			Vector2(0.0, 0.060),
+			Vector2(0.021, 0.060),
+			Vector2(0.021, 0.0645),
+			Vector2(0.0, 0.0645),
+		], 10, Transform3D(Basis.IDENTITY, Vector3(0.068, 0.0, sz_sign * 0.068)))
+	st_holes.generate_normals()
+	root.add_child(_make_mesh_node("Soundholes", st_holes.commit(), _make_mat(Color(0.08, 0.05, 0.03), 0.94, 0.02)))
+
+	# Walnut keybox housing, carved bridge, and tailpiece block.
+	var st_keybox := SurfaceTool.new()
+	st_keybox.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_beveled_box(st_keybox, Vector3(0.182, 0.038, 0.066), 0.006,
+		Transform3D(Basis.IDENTITY, Vector3(-0.095, 0.078, 0.0)))
+	_append_beveled_box(st_keybox, Vector3(0.186, 0.012, 0.072), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(-0.095, 0.099, 0.0)))
+	# Carved bridge & tailpiece behind the wheel.
+	_append_beveled_box(st_keybox, Vector3(0.016, 0.024, 0.064), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.106, 0.072, 0.0)))
+	_append_beveled_box(st_keybox, Vector3(0.034, 0.016, 0.058), 0.003,
+		Transform3D(Basis.IDENTITY, Vector3(0.138, 0.068, 0.0)))
+	st_keybox.generate_normals()
+	root.add_child(_make_mesh_node("KeyboxAndBridge", st_keybox.commit(), _make_mat(COL_WALNUT, 0.56, 0.04)))
+
+	# Ivory tangent keybox buttons, rosined wheel rim, and turned tuning-peg handles.
+	var st_ivory := SurfaceTool.new()
+	st_ivory.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ki in 7:
+		var kx := lerpf(-0.168, -0.022, float(ki) / 6.0)
+		_append_beveled_box(st_ivory, Vector3(0.014, 0.012, 0.026), 0.0025,
+			Transform3D(Basis.IDENTITY, Vector3(kx, 0.070, 0.042)))
+	for ki in 4:
+		var kx := lerpf(-0.154, -0.046, float(ki) / 3.0)
+		_append_beveled_box(st_ivory, Vector3(0.012, 0.011, 0.020), 0.002,
+			Transform3D(Basis.IDENTITY, Vector3(kx, 0.084, 0.039)))
+	# Cream rosined maple friction wheel visible inside the brass wheel cover.
+	var rot_x := Basis(Vector3.BACK, PI * 0.5)
+	_append_lathe(st_ivory, [
+		Vector2(0.0, -0.014),
+		Vector2(0.046, -0.014),
+		Vector2(0.048, 0.0),
+		Vector2(0.046, 0.014),
+		Vector2(0.0, 0.014),
+	], 14, Transform3D(rot_x, Vector3(0.052, 0.058, 0.0)))
+	# Four pegbox tuning keys jutting cleanly from both sides of the headstock.
+	for pi in 4:
+		var side := 1.0 if (pi % 2 == 0) else -1.0
+		var px := -0.214 - float(pi) * 0.018
+		var pz := side * 0.038
+		var peg_xf := Transform3D(Basis(Vector3.RIGHT, side * PI * 0.5), Vector3(px, 0.020, pz))
+		_append_lathe(st_ivory, [
+			Vector2(0.0045, -0.020),
+			Vector2(0.0055, 0.006),
+			Vector2(0.011, 0.014),
+			Vector2(0.010, 0.022),
+			Vector2(0.0, 0.024),
+		], 8, peg_xf)
+	st_ivory.generate_normals()
+	root.add_child(_make_mesh_node("KeysAndWheel", st_ivory.commit(), _make_mat(COL_IVORY, 0.44, 0.05)))
+
+	# Ornate brass rosined wheel housing arch, rim trim, and headstock peg ferrules.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for arch_x: float in [0.022, 0.052, 0.082]:
+		var arch_pts: Array[Vector3] = []
+		for i in 11:
+			var a := lerpf(-PI * 0.48, PI * 0.48, float(i) / 10.0)
+			arch_pts.append(Vector3(arch_x, 0.060 + cos(a) * 0.058, sin(a) * 0.056))
+		_append_tube(st_brass, arch_pts, 0.0068, 6, true)
+	# Longitudinal brass spine bars linking the wheel-housing arches.
+	for angle_deg: float in [-52.0, 0.0, 52.0]:
+		var rad := deg_to_rad(angle_deg)
+		var by := 0.060 + cos(rad) * 0.058
+		var bz := sin(rad) * 0.056
+		_append_tube(st_brass, [Vector3(0.018, by, bz), Vector3(0.086, by, bz)], 0.0062, 6, true)
+	# Brass axle boss & rear decorative strap collar.
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.012),
+		Vector2(0.018, -0.010),
+		Vector2(0.020, 0.008),
+		Vector2(0.013, 0.016),
+		Vector2(0.0, 0.018),
+	], 10, Transform3D(rot_x, Vector3(0.162, 0.004, 0.0)))
+	# Brass collars around headstock pegs.
+	for pi in 4:
+		var side := 1.0 if (pi % 2 == 0) else -1.0
+		var px := -0.214 - float(pi) * 0.018
+		var collar_xf := Transform3D(Basis(Vector3.RIGHT, side * PI * 0.5), Vector3(px, 0.020, side * 0.026))
+		_append_lathe(st_brass, [
+			Vector2(0.007, 0.0), Vector2(0.009, 0.002), Vector2(0.009, 0.008), Vector2(0.006, 0.010),
+		], 8, collar_xf)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassWheelHousing", st_brass.commit(), _make_mat(COL_BRASS, 0.25, 0.88)))
+
+	# Four taut steel melody & drone strings spanning tailpiece -> wheel -> keybox -> pegbox.
+	var st_strings := SurfaceTool.new()
+	st_strings.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for sz_off: float in [-0.018, -0.006, 0.006, 0.018]:
+		_append_tube(st_strings, [
+			Vector3(0.145, 0.078, sz_off),
+			Vector3(0.052, 0.098, sz_off),
+			Vector3(-0.095, 0.096, sz_off),
+			Vector3(-0.245, 0.032, sz_off * 0.65),
+		], 0.0018, 4, true)
+	st_strings.generate_normals()
+	root.add_child(_make_mesh_node("Strings", st_strings.commit(), _make_mat(COL_STEEL, 0.26, 0.90)))
+
+	# Rotating `"CrankHandle"` pivot at rear tailpiece axle (+X).
+	var crank := Node3D.new()
+	crank.name = "CrankHandle"
+	crank.position = Vector3(0.168, 0.004, 0.0)
+	root.add_child(crank)
+
+	var st_crank_brass := SurfaceTool.new()
+	st_crank_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_tube(st_crank_brass, [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(0.020, 0.004, 0.0),
+		Vector3(0.032, 0.044, 0.0),
+		Vector3(0.042, 0.082, 0.0),
+	], 0.0072, 8, true)
+	_append_lathe(st_crank_brass, [
+		Vector2(0.0, 0.0),
+		Vector2(0.014, 0.002),
+		Vector2(0.014, 0.012),
+		Vector2(0.0, 0.015),
+	], 8, Transform3D(rot_x, Vector3(0.094, 0.082, 0.0)))
+	st_crank_brass.generate_normals()
+	crank.add_child(_make_mesh_node("CrankArm", st_crank_brass.commit(), _make_mat(COL_BRASS, 0.26, 0.88)))
+
+	var knob_mesh := _lathe_mesh([
+		Vector2(0.0, 0.0),
+		Vector2(0.012, 0.004),
+		Vector2(0.018, 0.024),
+		Vector2(0.016, 0.048),
+		Vector2(0.010, 0.058),
+		Vector2(0.0, 0.060),
+	], 10, Transform3D(rot_x, Vector3(0.038, 0.082, 0.0)))
+	crank.add_child(_make_mesh_node("CrankKnob", knob_mesh, _make_mat(COL_WALNUT, 0.56, 0.05)))
+	return root
+
+
+## 13. Bosun's Whistle: curved brass-and-oak sailor's pipe/whistle with tapered fipple mouthpiece,
+## finger holes, brass ferrule rings, nautical buoy & keel, and braided lanyard loop (for Maren).
+static func _build_whistle() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Whistle"
+
+	# Helper centerline curve running from mouthpiece (+Z) to buoy (-Z) with graceful nautical droop.
+	var curve_pt := func(t: float) -> Vector3:
+		var z := lerpf(0.145, -0.185, t)
+		var y := -0.030 * pow(t, 1.85) + 0.007 * sin(t * PI)
+		return Vector3(0.0, y, z)
+
+	# Curved oak sailor's whistle barrel (t in 0.14..0.88).
+	var barrel_rings: Array = []
+	var barrel_steps := 10
+	var barrel_segs := 12
+	for i in range(barrel_steps + 1):
+		var u := float(i) / float(barrel_steps)
+		var t := lerpf(0.14, 0.88, u)
+		var c: Vector3 = curve_pt.call(t)
+		var r := lerpf(0.0155, 0.0200, u)
+		var ring: Array = []
+		for k in barrel_segs:
+			var a := float(k) / float(barrel_segs) * TAU
+			# Wound CW looking along -Z (dT = -Z) so normals face strictly outward.
+			ring.append(c + Vector3(-sin(a) * r, cos(a) * r, 0.0))
+		barrel_rings.append(ring)
+	root.add_child(_make_mesh_node("OakBarrel", _loft_mesh(barrel_rings, true), _make_mat(COL_OAK_WARM, 0.58, 0.04)))
+
+	# Brass mouthpiece beak, ferrule collar rings, resonator buoy, keel fin & lanyard shackle.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Tapered fipple mouthpiece beak from t = -0.10 (lip tip) to t = 0.16 (barrel collar).
+	var mouth_rings: Array = []
+	var mouth_specs := [
+		[0.178, 0.004, 0.012, 0.0055],
+		[0.162, 0.005, 0.014, 0.0085],
+		[0.136, 0.006, 0.016, 0.0140],
+		[0.102, 0.005, 0.018, 0.0175],
+	]
+	for ms in mouth_specs:
+		var z: float = float(ms[0])
+		var yc: float = float(ms[1])
+		var rx: float = float(ms[2])
+		var ry: float = float(ms[3])
+		var ring: Array = []
+		for k in 10:
+			var a := float(k) / 10.0 * TAU
+			ring.append(Vector3(-sin(a) * rx, yc + cos(a) * ry, z))
+		mouth_rings.append(ring)
+	_append_loft(st_brass, mouth_rings, true)
+
+	# Three turned brass ferrule collar rings wrapping the curved oak barrel.
+	for ft: float in [0.16, 0.50, 0.86]:
+		var c0: Vector3 = curve_pt.call(ft - 0.026)
+		var c1: Vector3 = curve_pt.call(ft + 0.026)
+		var cm: Vector3 = (c0 + c1) * 0.5
+		var r_base := lerpf(0.0155, 0.0200, (ft - 0.14) / 0.74)
+		var r_ring := r_base + 0.0042
+		var f_rings: Array = []
+		for fstep in [[c0, r_base], [c0.lerp(cm, 0.45), r_ring], [c1.lerp(cm, 0.45), r_ring], [c1, r_base]]:
+			var fc: Vector3 = fstep[0]
+			var fr: float = float(fstep[1])
+			var ring: Array = []
+			for k in 12:
+				var a := float(k) / 12.0 * TAU
+				ring.append(fc + Vector3(-sin(a) * fr, cos(a) * fr, 0.0))
+			f_rings.append(ring)
+		_append_loft(st_brass, f_rings, false)
+
+	# Classic bosun's-pipe flared brass resonator buoy/bell at the front end (-Z).
+	var buoy_center: Vector3 = curve_pt.call(1.0) + Vector3(0.0, -0.004, -0.012)
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.028),
+		Vector2(0.018, -0.024),
+		Vector2(0.030, -0.008),
+		Vector2(0.032, 0.010),
+		Vector2(0.022, 0.024),
+		Vector2(0.012, 0.028),
+		Vector2(0.0, 0.028),
+	], 14, Transform3D(Basis.IDENTITY, buoy_center))
+
+	# Nautical flat brass keel plate beneath the front barrel & buoy + suspension shackle ring.
+	_append_beveled_box(st_brass, Vector3(0.008, 0.044, 0.105), 0.0025,
+		Transform3D(Basis(Vector3.RIGHT, 0.16), Vector3(0.0, -0.044, -0.142)))
+	var eye_pts: Array[Vector3] = []
+	for i in 11:
+		var a := float(i) / 10.0 * TAU
+		eye_pts.append(Vector3(0.0, -0.072 + sin(a) * 0.012, -0.138 + cos(a) * 0.012))
+	_append_tube(st_brass, eye_pts, 0.0032, 6, false)
+
+	# Tiny brass inlay rings framing each of the 6 finger holes on top of the barrel.
+	var hole_ts: Array[float] = [0.24, 0.33, 0.42, 0.58, 0.67, 0.76]
+	for ht: float in hole_ts:
+		var hc: Vector3 = curve_pt.call(ht)
+		var r_b := lerpf(0.0155, 0.0200, (ht - 0.14) / 0.74)
+		_append_lathe(st_brass, [
+			Vector2(0.0042, 0.0),
+			Vector2(0.0068, 0.0),
+			Vector2(0.0068, 0.0026),
+			Vector2(0.0042, 0.0026),
+		], 8, Transform3D(Basis.IDENTITY, hc + Vector3(0.0, r_b - 0.0008, 0.0)))
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassFittings", st_brass.commit(), _make_mat(COL_BRASS, 0.24, 0.88)))
+
+	# Dark recessed finger holes & fipple labium windway notch along top ridge.
+	var st_holes := SurfaceTool.new()
+	st_holes.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ht: float in hole_ts:
+		var hc: Vector3 = curve_pt.call(ht)
+		var r_b := lerpf(0.0155, 0.0200, (ht - 0.14) / 0.74)
+		_append_lathe(st_holes, [
+			Vector2(0.0, 0.0),
+			Vector2(0.0044, 0.0),
+			Vector2(0.0044, 0.0028),
+			Vector2(0.0, 0.0028),
+		], 8, Transform3D(Basis.IDENTITY, hc + Vector3(0.0, r_b - 0.0006, 0.0)))
+	# Fipple windway labium cutout near mouthpiece.
+	_append_beveled_box(st_holes, Vector3(0.011, 0.005, 0.016), 0.001,
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.020, 0.118)))
+	st_holes.generate_normals()
+	root.add_child(_make_mesh_node("FingerHoles", st_holes.commit(), _make_mat(Color(0.07, 0.04, 0.03), 0.95, 0.02)))
+
+	# Decorative twin-strand braided sailor's lanyard loop hanging from the keel eyelet.
+	var st_rope := SurfaceTool.new()
+	st_rope.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for strand: float in [-1.0, 1.0]:
+		var loop_pts: Array[Vector3] = []
+		for i in 17:
+			var u := float(i) / 16.0
+			var a := u * TAU
+			var twist := sin(u * TAU * 4.0) * 0.0038 * strand
+			var lx := twist + sin(a) * 0.010 * strand
+			var ly := -0.078 - (1.0 - cos(a)) * 0.072
+			var lz := -0.138 + sin(a) * 0.044
+			loop_pts.append(Vector3(lx, ly, lz))
+		_append_tube(st_rope, loop_pts, 0.0036, 6, false)
+	st_rope.generate_normals()
+	root.add_child(_make_mesh_node("BraidedLanyard", st_rope.commit(), _make_mat(COL_ROPE, 0.88, 0.0)))
+
+	# Crimson sailor's Turks-head whipping knot collar securing the lanyard below the shackle.
+	var knot_mesh := _lathe_mesh([
+		Vector2(0.006, -0.010),
+		Vector2(0.011, -0.005),
+		Vector2(0.011, 0.005),
+		Vector2(0.006, 0.010),
+	], 10, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.088, -0.138)))
+	root.add_child(_make_mesh_node("LanyardKnot", knot_mesh, _make_mat(COL_CRIMSON, 0.78, 0.04)))
 	return root
 
 

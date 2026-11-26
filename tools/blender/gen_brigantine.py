@@ -2203,9 +2203,9 @@ def extras(hull):
 
     build_holes()
 
-    # Water cutout polygon at y = 0 inside the hull waterline (for Ocean hull mask)
+    # Water cutout polygon inside the flared hull waterline (for Ocean hull mask)
     wm = MB('mask_water')
-    poly = deck_outline(0.0, 0.0, zstem(0.0) + 0.14, zstern(0.0) - 0.04, 24, 1.3, 0.04)
+    poly = deck_outline(0.50, 0.50, zstem(0.50) + 0.14, zstern(0.50) - 0.04, 24, 1.3, 0.04)
     wm.newoff(); wm.fp([(x, 0.0, z) for x, z in poly], 'col', C_WHITE, None, (0, -5, 0))
     build(wm)
 
@@ -2627,8 +2627,8 @@ def main():
         'Yardarm_Starboard': (Vector((YARD_HALF, YARD_Y, ya_z)), 'Yard', (0, YARD_Y, MAST_Z)),
         'SheetPoint_Port': (Vector((-2.25, DECK_Y + 0.62, 2.55)), None, None),
         'SheetPoint_Starboard': (Vector((2.25, DECK_Y + 0.62, 2.55)), None, None),
-        'BracePoint_Port': (Vector((-(bp.x + 0.08), bp.y + 0.72, bp.z)), None, None),
-        'BracePoint_Starboard': (Vector((bp.x + 0.08, bp.y + 0.72, bp.z)), None, None),
+        'BracePoint_Port': (Vector((-(bp.x + 0.24), bp.y + 0.90, bp.z - 0.15)), None, None),
+        'BracePoint_Starboard': (Vector((bp.x + 0.24, bp.y + 0.90, bp.z - 0.15)), None, None),
         'AnchorCablePoint': (Vector((2.06, ytop(-7.2) + 0.10, -7.2)), None, None),
         # Foremast rope empties
         'Clew_Fore_Port': (fore_sail_pt(-1, 1), 'Sail_Fore', (0, YARD_FORE_Y, MAST_FORE_Z)),
