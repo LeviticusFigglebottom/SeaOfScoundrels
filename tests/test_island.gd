@@ -1,0 +1,416 @@
+extends TestCase
+## Headless integration tests for Workstream `island`:
+## 17 stylized props, 11 procedural archetypes, 11-island archipelago, Outpost
+## dock depth / mooring clearance / shelter / restock, Pawn beach landing walk,
+## 3-dig DigSite unearthing, Outpost MerchantStall selling, shore factor & discovery.
+
+const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
+const SLOOP_SCENE: PackedScene = preload("res://src/ship/sloop.tscn")
+
+const ALL_PROPS: Array[String] = [
+	"palm_tall.glb",
+	"palm_curved.glb",
+	"bush_fern.glb",
+	"rock_boulder.glb",
+	"rock_spire.glb",
+	"rock_arch.glb",
+	"dock_pier.glb",
+	"outpost_tavern.glb",
+	"outpost_stall.glb",
+	"beacon_tower.glb",
+	"chest_treasure.glb",
+	"dig_mound.glb",
+	"shipwreck_hulk.glb",
+	"barrel_prop.glb",
+	"crate_supply.glb",
+	"campfire.glb",
+	"notice_board.glb",
+]
+
+
+func _init_host() -> void:
+	Net.start_single_player()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+
+func test_all_17_props_load() -> void:
+	check_eq(ALL_PROPS.size(), 17, "expected 17 stylized props")
+	var expected_empties := {
+		"dock_pier.glb": "Lantern_Dock",
+		"outpost_tavern.glb": "Lantern_Tavern",
+		"outpost_stall.glb": "Lantern_Stall",
+		"beacon_tower.glb": "Lantern_Beacon",
+		"campfire.glb": "Lantern_Fire",
+	}
+	var expected_cols := {
+		"dock_pier.glb": 2,
+		"outpost_tavern.glb": 4,
+		"outpost_stall.glb": 3,
+		"beacon_tower.glb": 3,
+	}
+	for filename in ALL_PROPS:
+		var path := "res://assets/generated/props/" + filename
+		check(ResourceLoader.exists(path), "missing prop " + path)
+		var packed := load(path) as PackedScene
+		check(packed != null, "failed to load PackedScene " + path)
+		if packed == null:
+			continue
+		var inst := packed.instantiate()
+		check(inst is Node3D, "prop root must be Node3D: " + filename)
+		var meshes := inst.find_children("*", "MeshInstance3D", true, false)
+		check(meshes.size() >= 1, "prop has no meshes: " + filename)
+		if expected_empties.has(filename):
+			var empty_name: String = expected_empties[filename]
+			var found_empty := inst.find_child(empty_name, true, false)
+			check(found_empty != null, "missing empty %s in %s" % [empty_name, filename])
+		if expected_cols.has(filename):
+			var col_meshes := inst.find_children("col_*", "MeshInstance3D", true, false)
+			check(col_meshes.size() >= int(expected_cols[filename]),
+				"too few col_* meshes in %s (%d)" % [filename, col_meshes.size()])
+		inst.free()
+
+
+func test_all_11_archetypes_generate() -> void:
+	_init_host()
+	check_eq(IslandGenerator.ARCHETYPES.size(), 11, "expected 11 island archetypes")
+	for arch in IslandGenerator.ARCHETYPES:
+		var isl := IslandGenerator.build_island({
+			"id": "test_" + String(arch),
+			"name": "Test " + String(arch),
+			"archetype": arch,
+			"seed": 700 + IslandGenerator.ARCHETYPES.find(arch),
+		})
+		add_child(isl)
+		check(isl.peak_height >= 24.0, "archetype %s peak too low: %.1f" % [arch, isl.peak_height])
+		check(isl.surface_height(isl.seabed_radius + 4.0, 0.0) <= -18.0,
+			"archetype %s seabed must descend to <= -18 m" % arch)
+		check(isl.contour_points.size() >= 12,
+			"archetype %s contour_points too small (%d)" % [arch, isl.contour_points.size()])
+		var terrain_body := isl.get_node_or_null(^"TerrainBody") as StaticBody3D
+		check(terrain_body != null and terrain_body.collision_layer == 1,
+			"archetype %s TerrainBody must be on layer 1" % arch)
+		# Verify all col_* helper meshes are hidden visually.
+		for c_node in isl.find_children("col_*", "MeshInstance3D", true, false):
+			var c_mi := c_node as MeshInstance3D
+			check(not c_mi.visible, "col_* mesh still visible on %s: %s" % [arch, c_mi.name])
+		isl.queue_free()
+	await physics_frames(2)
+
+
+func test_archipelago_11_islands_no_overlap() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+
+	var all_islands := arch.get_islands()
+	check_eq(all_islands.size(), 11, "archipelago must contain 11 islands")
+
+	var seen_ids := {}
+	var seen_names := {}
+	for isl in all_islands:
+		check(not seen_ids.has(isl.island_id), "duplicate island_id: " + isl.island_id)
+		check(not seen_names.has(isl.display_name), "duplicate display_name: " + isl.display_name)
+		seen_ids[isl.island_id] = true
+		seen_names[isl.display_name] = true
+
+	var op0 := arch.get_outpost(0)
+	var op1 := arch.get_outpost(1)
+	var starter := arch.get_starter_treasure_island()
+	check(op0 != null and op0.island_id == "port_scoundrel", "outpost 0 must be port_scoundrel")
+	check(op1 != null and op1.island_id == "barnacle_haven", "outpost 1 must be barnacle_haven")
+	check(starter != null and starter.island_id == "cutlass_cay", "starter treasure island must be cutlass_cay")
+	check(starter.get_dig_sites().size() >= 1, "Cutlass Cay should have an active DigSite")
+
+	var dist_starter := op0.global_position.distance_to(starter.global_position)
+	check(dist_starter >= 380.0 and dist_starter <= 520.0,
+		"Cutlass Cay distance %.1f m should be ~430 m NNE of Port Scoundrel" % dist_starter)
+
+	# Verify zero overlaps and >320 m open sailing channels between every island pair.
+	for i in all_islands.size():
+		for j in range(i + 1, all_islands.size()):
+			var a := all_islands[i]
+			var b := all_islands[j]
+			var center_dist := Vector2(
+				a.global_position.x - b.global_position.x,
+				a.global_position.z - b.global_position.z).length()
+			var channel := center_dist - a.island_radius - b.island_radius
+			check(channel > 320.0,
+				"channel between %s and %s too narrow: %.1f m" % [a.island_id, b.island_id, channel])
+
+	# Verify get_map_data() works cleanly with VoyageComposer.
+	var map_data := arch.get_map_data()
+	check_eq(map_data.size(), 11, "get_map_data should return 11 entries")
+	var extracted := VoyageComposer.extract_archipelago_data(arch)
+	check_eq(extracted.size(), 11, "VoyageComposer must extract all 11 islands cleanly")
+
+	arch.queue_free()
+	await physics_frames(2)
+
+
+func test_outpost_dock_depth_mooring_and_restock() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	for idx in [0, 1]:
+		var op := arch.get_outpost(idx)
+		check(op != null, "missing outpost %d" % idx)
+		if op == null:
+			continue
+
+		var pier_end := op.get_world_pier_end()
+		var pier_depth := op.seabed_depth(pier_end)
+		check(pier_depth > 4.5, "%s pier end depth %.2f m must exceed 4.5 m" % [op.island_id, pier_depth])
+
+		var moor_world := op.get_world_mooring_transform()
+		var moor_depth := op.seabed_depth(moor_world.origin)
+		check(moor_depth > 4.5, "%s mooring depth %.2f m must exceed 4.5 m" % [op.island_id, moor_depth])
+
+		# Check full sloop footprint around mooring_transform (bow, stern, port/starboard).
+		for off: Vector3 in [Vector3(0.0, 0.0, -6.5), Vector3(0.0, 0.0, 6.5), Vector3(-2.2, 0.0, 0.0), Vector3(2.2, 0.0, 0.0)]:
+			var pt: Vector3 = moor_world * off
+			var d := op.seabed_depth(pt)
+			check(d > 4.0, "%s sloop mooring footprint depth %.2f m at %s must exceed 4.0 m" % [op.island_id, d, off])
+
+		# Verify mooring sits safely ~4.45 m abeam of pier centerline with zero pier overlap
+		# and bow (-Z) aligned seaward with pier (-Z).
+		var moor_in_dock := op.dock_local_transform.affine_inverse() * op.mooring_transform.origin
+		check_near(absf(moor_in_dock.x), Outpost.MOORING_ABEAM_OFFSET, 0.25,
+			"%s mooring abeam offset" % op.island_id)
+		var clearance := absf(moor_in_dock.x) - Outpost.PIER_HALF_WIDTH - 2.20
+		check(clearance >= 0.35, "%s hull-to-pier clearance %.2f m too tight" % [op.island_id, clearance])
+		var dot_fwd := (-op.mooring_transform.basis.z).dot(-op.dock_local_transform.basis.z)
+		check(dot_fwd > 0.99, "%s mooring bow must face straight out to open sea" % op.island_id)
+
+		# Verify Tavern shelter, Beacon Tower light, and Voyage Board interactable.
+		check(op.tavern_shelter != null and op.tavern_shelter.is_in_group(&"shelter"),
+			"%s tavern shelter Area3D must be in group shelter" % op.island_id)
+		check(op.beacon_light != null and op.beacon_light.global_position.y > 22.0,
+			"%s beacon light must shine high above sea level" % op.island_id)
+		check(op.voyage_board_interactable != null, "%s missing Voyage Board interactable" % op.island_id)
+
+	# Verify Voyage Board signal and Quartermaster ship restocking on a real Ship.
+	var op0 := arch.get_outpost(0)
+	var board_fired := [false]
+	op0.voyage_board_used.connect(func(_p: Node) -> void: board_fired[0] = true)
+	op0.voyage_board_interactable.interact(null)
+	check(board_fired[0], "voyage_board_used signal did not fire")
+
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.start_anchored = true
+	add_child(ship)
+	ship.global_transform = op0.get_world_mooring_transform()
+	ship.cannonballs_remaining = 3
+	ship.planks_remaining = 2
+	var ok := op0.restock_ship(ship)
+	check(ok, "Outpost.restock_ship should return true")
+	check_eq(ship.cannonballs_remaining, Ship.MAX_CANNONBALLS, "cannonballs refilled")
+	check_eq(ship.planks_remaining, Ship.MAX_PLANKS, "planks refilled")
+
+	ship.queue_free()
+	arch.queue_free()
+	await physics_frames(2)
+
+
+func test_pawn_walks_from_water_onto_cutlass_cay() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(3)
+
+	var cutlass := arch.get_starter_treasure_island()
+	check(cutlass != null, "missing Cutlass Cay")
+	if cutlass == null:
+		arch.queue_free()
+		return
+
+	# Find the shallow landing waterline right in front of Cutlass Cay's primary beach cove.
+	var land_basis := Basis(Vector3.UP, 2.77)
+	var seaward := -land_basis.z
+	var start_local := Vector3.ZERO
+	var found_water := false
+	for dist in range(24, 95, 2):
+		var cand := seaward * float(dist)
+		var h := cutlass.surface_height(cand.x, cand.z)
+		if h <= -0.9 and h >= -2.4:
+			start_local = Vector3(cand.x, maxf(h + 0.1, -1.2), cand.z)
+			found_water = true
+			break
+	check(found_water, "could not find shallow landing water off Cutlass Cay")
+
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	add_child(pawn)
+	pawn.global_position = cutlass.global_position + start_local
+	# Walk straight ashore along -seaward (inland toward the beach cove).
+	var inland_dir := (-seaward).normalized()
+	pawn.wish_dir = inland_dir
+	pawn.wish_sprint = true
+
+	var max_y := pawn.global_position.y
+	var reached_dry_walk := false
+	for _tick in 260:
+		await physics_frames(1)
+		if pawn.global_position.y > max_y:
+			max_y = pawn.global_position.y
+		if pawn.is_grounded() and pawn.global_position.y >= 1.25:
+			reached_dry_walk = true
+			break
+
+	check(reached_dry_walk,
+		"Pawn should walk cleanly from shallow water onto dry Cutlass Cay beach (final y=%.2f, mode=%d, grounded=%s)"
+		% [pawn.global_position.y, pawn.mode, pawn.is_grounded()])
+	var expected_h := cutlass.world_surface_height(pawn.global_position)
+	check_near(pawn.global_position.y, expected_h, 0.45,
+		"Pawn feet should match Cutlass Cay terrain surface height")
+
+	pawn.queue_free()
+	arch.queue_free()
+	await physics_frames(2)
+
+
+func test_dig_site_three_digs_unearths_chest() -> void:
+	_init_host()
+	var cutlass := IslandGenerator.build_island({
+		"id": "dig_test_cay",
+		"name": "Dig Test Cay",
+		"archetype": &"treasure_peak",
+		"seed": 4242,
+	})
+	add_child(cutlass)
+	await physics_frames(2)
+
+	var dig_pt := cutlass.dig_points[0] if not cutlass.dig_points.is_empty() else Vector3(0.0, 2.0, -24.0)
+	var site := cutlass.spawn_dig_site(dig_pt, &"corsair_chest")
+	await physics_frames(1)
+
+	var unearthed_chests: Array[Carryable] = []
+	site.unearthed.connect(func(c: Carryable) -> void: unearthed_chests.append(c))
+
+	# Out-of-range dig (> 2.4 m) must not advance.
+	var r_far := site.dig(site.global_position + Vector3(3.5, 0.0, 0.0))
+	check(not bool(r_far["hit"]), "dig beyond 2.4 m should miss")
+	check_eq(site.dig_count, 0, "dig_count must stay 0 after out-of-range dig")
+
+	# Dig 1 & 2 progress cleanly without spawning yet.
+	var r1 := site.dig(site.global_position + Vector3(0.5, 0.0, 0.0))
+	check(bool(r1["hit"]) and not bool(r1["unearthed"]), "dig 1 should hit and not unearth yet")
+	check_eq(int(r1["remaining"]), 2, "2 digs should remain")
+
+	var r2 := site.dig(site.global_position + Vector3(-0.4, 0.0, 0.6))
+	check(bool(r2["hit"]) and not bool(r2["unearthed"]), "dig 2 should hit and not unearth yet")
+	check_eq(int(r2["remaining"]), 1, "1 dig should remain")
+
+	# Dig 3 unearths a real Carryable treasure chest!
+	var r3 := site.dig(site.global_position)
+	check(bool(r3["hit"]) and bool(r3["unearthed"]), "dig 3 must unearth treasure")
+	check_eq(unearthed_chests.size(), 1, "unearthed signal must fire once")
+	var chest: Carryable = r3["chest"] as Carryable
+	check(chest != null and chest is Carryable, "spawned treasure must be a Carryable")
+	if chest != null:
+		var info := TreasureCatalog.inspect_carryable(chest)
+		check_eq(info.get("treasure_id"), &"corsair_chest", "spawned chest must match treasure_id")
+		check(int(info.get("gold_value", 0)) > 0, "spawned chest must have positive gold value")
+
+	# Dig 4 after unearthing must be rejected.
+	var r4 := site.dig(site.global_position)
+	check(not bool(r4["hit"]), "dig after unearthing should return hit=false")
+
+	cutlass.queue_free()
+	await physics_frames(2)
+
+
+func test_outpost_merchant_sells_chest() -> void:
+	_init_host()
+	var saved_profile: Dictionary = Game.profile.data.duplicate(true)
+
+	var outpost := IslandGenerator.build_island({
+		"id": "port_test",
+		"name": "Port Test",
+		"archetype": &"outpost",
+		"seed": 5151,
+	}) as Outpost
+	add_child(outpost)
+	await physics_frames(2)
+
+	var sold_events: Array[Dictionary] = []
+	outpost.treasure_sold.connect(func(it: Node, g: int, r: int) -> void:
+		sold_events.append({"item": it, "gold": g, "renown": r}))
+
+	# Test 1: Full Pawn pick_up -> interact with MerchantStall -> Economy sale!
+	var start_gold: int = int(Game.profile.data.get("gold", 0))
+	var start_renown: int = Economy.get_company_renown(Game.profile, &"gilded_compass")
+
+	var chest := TreasureCatalog.create_treasure_carryable(&"wayfarer_chest", Vector3.ZERO)
+	add_child(chest)
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	add_child(pawn)
+	pawn.global_position = outpost.merchant_stall.global_position + Vector3(0.0, 0.2, -1.6)
+	check(pawn.pick_up(chest), "Pawn should pick up treasure chest")
+	pawn.focus = outpost.merchant_stall.interactable
+	pawn.interact()
+	await physics_frames(2)
+
+	check(pawn.carried == null, "Pawn should no longer hold chest after selling")
+	check_eq(sold_events.size(), 1, "treasure_sold should fire on pawn sale")
+	check_eq(int(Game.profile.data["gold"]), start_gold + 240, "Wayfarer chest should award 240 gold")
+	check_eq(Economy.get_company_renown(Game.profile, &"gilded_compass"), start_renown + 40,
+		"Wayfarer chest should award 40 renown")
+	check(not is_instance_valid(chest), "sold chest should be freed")
+
+	# Test 2: Plain untagged Carryable uses 250g / 40 renown fallback.
+	var plain := Carryable.new()
+	plain.item_name = "Mystery Crate"
+	add_child(plain)
+	var gold_before_plain: int = int(Game.profile.data["gold"])
+	var renown_before_plain: int = Economy.get_company_renown(Game.profile, &"gilded_compass")
+	check(plain.hand_to(outpost.merchant_stall), "MerchantStall must accept plain Carryable")
+	await physics_frames(2)
+	check_eq(int(Game.profile.data["gold"]), gold_before_plain + 250, "plain Carryable fallback 250 gold")
+	check_eq(Economy.get_company_renown(Game.profile, &"gilded_compass"), renown_before_plain + 40,
+		"plain Carryable fallback 40 renown")
+	check(not is_instance_valid(plain), "sold plain Carryable should be freed")
+
+	pawn.queue_free()
+	outpost.queue_free()
+	Game.profile.data = saved_profile
+	await physics_frames(2)
+
+
+func test_shore_factor_and_discovery() -> void:
+	_init_host()
+	var saved_profile: Dictionary = Game.profile.data.duplicate(true)
+	Game.profile.data["discoveries"] = []
+
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(1)
+
+	var cutlass := arch.get_starter_treasure_island()
+	check(cutlass != null, "missing Cutlass Cay")
+	if cutlass != null:
+		# Beach shoreline point should report strong shore_factor (> 0.75).
+		var beach_pt := cutlass.global_position + (cutlass.dig_points[0] if not cutlass.dig_points.is_empty() else Vector3(0.0, 1.5, 20.0))
+		var sf_beach := arch.nearest_shore_factor(beach_pt)
+		check(sf_beach > 0.75, "shore_factor on beach should exceed 0.75 (got %.3f)" % sf_beach)
+
+		# Deep open sailing channel far from all islands should report 0.0.
+		var sf_open := arch.nearest_shore_factor(Vector3(0.0, 0.0, -250.0))
+		check_near(sf_open, 0.0, 0.01, "shore_factor in deep open channel should be 0.0")
+
+		check_eq(arch.nearest_island(cutlass.global_position + Vector3(15.0, 0.0, 0.0)), cutlass,
+			"nearest_island near Cutlass Cay must be Cutlass Cay")
+
+		# First discovery succeeds, second call returns null.
+		var discovered_sig: Array[Island] = []
+		arch.island_discovered.connect(func(isl: Island) -> void: discovered_sig.append(isl))
+		var d1 := arch.check_discovery(cutlass.global_position + Vector3(0.0, 0.0, 40.0))
+		check_eq(d1, cutlass, "first check_discovery near Cutlass Cay must discover it")
+		check_eq(discovered_sig.size(), 1, "island_discovered signal must emit once")
+		var d2 := arch.check_discovery(cutlass.global_position + Vector3(0.0, 0.0, 40.0))
+		check(d2 == null, "repeat check_discovery must return null")
+
+	arch.queue_free()
+	Game.profile.data = saved_profile
+	await physics_frames(2)
