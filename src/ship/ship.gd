@@ -99,7 +99,9 @@ var breach_resist_modifier: float = 1.0
 var reload_modifier: float = 1.0
 var cannon_radius_modifier: float = 1.0
 
-## Optional faction tag (&"player", &"drowned", &"ghost").
+## Ship class: &"sloop" (1 mast, 2 cannons) or &"brigantine" (2 masts, 4 cannons, higher top speed).
+@export var ship_class: StringName = &"sloop"
+## Optional faction tag (&"player", &"drowned", &"ghost", &"corsair").
 @export var faction: StringName = &"player"
 ## Optional starting anchor state.
 @export var start_anchored: bool = false
@@ -107,6 +109,10 @@ var cannon_radius_modifier: float = 1.0
 @export var enable_effects: bool = true
 
 # ------------------------------------------------------------------ internal refs
+
+var _hull_mass: float = BASE_MASS
+var _probe_scale: Vector3 = Vector3.ONE
+var _class_thrust_mult: float = 1.0
 
 var _model: Node3D = null
 var _lod_model: Node3D = null
@@ -118,10 +124,10 @@ var _hold_water_mat: ShaderMaterial = null
 
 var _wheel: Node3D = null
 var _rudder: Node3D = null
-var _yard: Node3D = null
-var _sail: MeshInstance3D = null
-var _sail_furled: Node3D = null
-var _flag: MeshInstance3D = null
+var _yards: Array[Node3D] = []
+var _sails: Array[MeshInstance3D] = []
+var _sails_furled: Array[Node3D] = []
+var _flags: Array[MeshInstance3D] = []
 var _capstan: Node3D = null
 var _anchor_node: Node3D = null
 var _anchor_base_pos: Vector3 = Vector3.ZERO
@@ -129,20 +135,20 @@ var _bell: Node3D = null
 var _bell_swing: float = 0.0
 var _bell_vel: float = 0.0
 
-var _lod_yard: Node3D = null
-var _lod_sail: Node3D = null
-var _lod_sail_furled: Node3D = null
-var _lod_flag: Node3D = null
+var _lod_yards: Array[Node3D] = []
+var _lod_sails: Array[Node3D] = []
+var _lod_sails_furled: Array[Node3D] = []
+var _lod_flags: Array[Node3D] = []
 
 var _sail_mats: Array[ShaderMaterial] = []
-var _flag_mat: ShaderMaterial = null
+var _flag_mats: Array[ShaderMaterial] = []
 var _window_mats: Array[BaseMaterial3D] = []
 var _lantern_lights: Array[OmniLight3D] = []
 var _rope_pairs: Array[Array] = []  # [rope_node, point_a, point_b]
 
 var _stations: Array[Station] = []
 var _stations_by_kind: Dictionary = {}  # StringName -> Array[Station]
-var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard") -> Dictionary state
+var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard" / &"port_aft" / &"starboard_aft") -> Dictionary state
 
 var _sink_timer: float = 0.0
 var _sink_list_dir: float = 1.0
@@ -171,7 +177,6 @@ var _livery_sail_tint: Color = Color.WHITE
 var _livery_flag_tint: Color = Color.WHITE
 var _livery_glow_accent: Color = Color.BLACK
 
-
 var _bow_spray: GPUParticles3D = null
 
 
@@ -196,6 +201,16 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	collision_layer = LAYER_SHIP
 	collision_mask = MASK_SHIP
+	if ship_class == &"brigantine":
+		_hull_mass = 13500.0
+		_probe_scale = Vector3(1.22, 1.05, 1.32)
+		_class_thrust_mult = 1.68
+		mass = _hull_mass
+		inertia = Vector3(245000.0, 315000.0, 74000.0)
+	else:
+		_hull_mass = BASE_MASS
+		_probe_scale = Vector3.ONE
+		_class_thrust_mult = 1.0
 	if start_anchored:
 		anchor_down = true
 		anchor_progress = 1.0
@@ -225,21 +240,42 @@ func _exit_tree() -> void:
 # ------------------------------------------------------------------ construction
 
 func _build_models() -> void:
-	_model = SLOOP_SCENE.instantiate() as Node3D
-	_model.name = "SloopModel"
+	var model_scene: PackedScene = SLOOP_SCENE
+	var lod_scene: PackedScene = SLOOP_LOD_SCENE
+	if ship_class == &"brigantine" and ResourceLoader.exists("res://assets/generated/ship/brigantine.glb"):
+		model_scene = load("res://assets/generated/ship/brigantine.glb") as PackedScene
+		if ResourceLoader.exists("res://assets/generated/ship/brigantine_lod.glb"):
+			lod_scene = load("res://assets/generated/ship/brigantine_lod.glb") as PackedScene
+
+	_model = model_scene.instantiate() as Node3D
+	_model.name = "BrigantineModel" if ship_class == &"brigantine" else "SloopModel"
 	add_child(_model)
 
-	_lod_model = SLOOP_LOD_SCENE.instantiate() as Node3D
-	_lod_model.name = "SloopLOD"
+	_lod_model = lod_scene.instantiate() as Node3D
+	_lod_model.name = "BrigantineLOD" if ship_class == &"brigantine" else "SloopLOD"
 	_lod_model.visible = false
 	add_child(_lod_model)
 
 	_wheel = _n("Wheel")
 	_rudder = _n("Rudder")
-	_yard = _n("Yard")
-	_sail = _n("Sail") as MeshInstance3D
-	_sail_furled = _n("Sail_Furled")
-	_flag = _n("Flag") as MeshInstance3D
+	_yards.clear()
+	_sails.clear()
+	_sails_furled.clear()
+	_flags.clear()
+	for suffix: String in ["", "_Fore"]:
+		var y := _n("Yard" + suffix)
+		if y != null:
+			_yards.append(y)
+		var s := _n("Sail" + suffix) as MeshInstance3D
+		if s != null:
+			_sails.append(s)
+		var sf := _n("Sail_Furled" + suffix)
+		if sf != null:
+			_sails_furled.append(sf)
+		var fl := _n("Flag" + suffix) as MeshInstance3D
+		if fl != null:
+			_flags.append(fl)
+
 	_capstan = _n("Capstan")
 	_anchor_node = _n("Anchor")
 	if _anchor_node != null:
@@ -247,18 +283,31 @@ func _build_models() -> void:
 	_bell = _n("Bell")
 	_mask_water = _n("mask_water") as MeshInstance3D
 
+	_lod_yards.clear()
+	_lod_sails.clear()
+	_lod_sails_furled.clear()
+	_lod_flags.clear()
 	if _lod_model != null:
-		_lod_yard = _lod_model.get_node_or_null("Yard") as Node3D
-		_lod_sail = _lod_model.get_node_or_null("Sail") as Node3D
-		_lod_sail_furled = _lod_model.get_node_or_null("Sail_Furled") as Node3D
-		_lod_flag = _lod_model.get_node_or_null("Flag") as Node3D
+		for suffix: String in ["", "_Fore"]:
+			var ly := _lod_model.get_node_or_null("Yard" + suffix) as Node3D
+			if ly != null:
+				_lod_yards.append(ly)
+			var ls := _lod_model.get_node_or_null("Sail" + suffix) as Node3D
+			if ls != null:
+				_lod_sails.append(ls)
+			var lsf := _lod_model.get_node_or_null("Sail_Furled" + suffix) as Node3D
+			if lsf != null:
+				_lod_sails_furled.append(lsf)
+			var lfl := _lod_model.get_node_or_null("Flag" + suffix) as Node3D
+			if lfl != null:
+				_lod_flags.append(lfl)
 
 	# Hide non-visual helper nodes per docs/SHIP_ART.md.
 	for child in _model.get_children():
 		var nm := String(child.name)
 		if nm.begins_with("col_") or nm.begins_with("mask_") \
 				or nm.begins_with("Hole_") or nm.begins_with("HolePatch_") \
-				or nm == "Sail_Furled":
+				or nm.begins_with("Sail_Furled"):
 			child.visible = false
 
 
@@ -290,6 +339,8 @@ func _build_stations() -> void:
 		["Station_Anchor", &"anchor", "Use capstan (anchor)", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.95)), Vector3(0.0, 0.85, 0.0), 0.7, &""],
 		["Station_CannonPort", &"cannon", "Man port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"port"],
 		["Station_CannonStarboard", &"cannon", "Man starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard"],
+		["Station_CannonPortAft", &"cannon", "Man aft port cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"port_aft"],
+		["Station_CannonStarboardAft", &"cannon", "Man aft starboard cannon", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 1.05)), Vector3(0.0, 0.85, 0.2), 0.7, &"starboard_aft"],
 		["Station_MapTable", &"map_table", "Inspect map table", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.82)), Vector3(0.0, 0.9, 0.0), 0.7, &""],
 		["Station_Bilge", &"bilge", "Bail bilge water", Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.35)), Vector3(0.0, 0.75, 0.0), 0.7, &""],
 	]
@@ -308,8 +359,14 @@ func _build_stations() -> void:
 			_stations_by_kind[kind] = []
 		(_stations_by_kind[kind] as Array).append(st)
 
-	# Wire cannon carriages and barrels from the model.
-	for side_pair: Array in [[&"port", "Cannon_Port"], [&"starboard", "Cannon_Starboard"]]:
+	# Wire cannon carriages and barrels from the model (2 on Sloop, 4 on Brigantine).
+	var cannon_specs: Array[Array] = [
+		[&"port", "Cannon_Port"],
+		[&"starboard", "Cannon_Starboard"],
+		[&"port_aft", "Cannon_Port_Aft"],
+		[&"starboard_aft", "Cannon_Starboard_Aft"],
+	]
+	for side_pair: Array in cannon_specs:
 		var side_key: StringName = side_pair[0]
 		var cname: String = side_pair[1]
 		var carriage := _n(cname)
@@ -560,9 +617,12 @@ func _build_deck_extras() -> void:
 
 func _setup_sail_shaders() -> void:
 	_sail_mats.clear()
-	if _sail != null and _sail.mesh != null:
-		var m := _sail.mesh.duplicate() as Mesh
-		_sail.mesh = m
+	_flag_mats.clear()
+	for sail_node in _sails:
+		if sail_node == null or sail_node.mesh == null:
+			continue
+		var m := sail_node.mesh.duplicate() as Mesh
+		sail_node.mesh = m
 		for surf_i in m.get_surface_count():
 			var orig := m.surface_get_material(surf_i) as BaseMaterial3D
 			var mat_name := orig.resource_name if orig != null else ""
@@ -581,22 +641,25 @@ func _setup_sail_shaders() -> void:
 			m.surface_set_material(surf_i, sm)
 			_sail_mats.append(sm)
 
-	if _flag != null and _flag.mesh != null:
-		var fm := _flag.mesh.duplicate() as Mesh
-		_flag.mesh = fm
+	for flag_node in _flags:
+		if flag_node == null or flag_node.mesh == null:
+			continue
+		var fm := flag_node.mesh.duplicate() as Mesh
+		flag_node.mesh = fm
 		if fm.get_surface_count() > 0:
 			var orig_f := fm.surface_get_material(0) as BaseMaterial3D
-			_flag_mat = ShaderMaterial.new()
-			_flag_mat.shader = SAIL_WIND_SHADER
-			_flag_mat.set_shader_parameter(&"is_flag", 1.0)
-			_flag_mat.set_shader_parameter(&"is_back_face", 0.0)
+			var fmat := ShaderMaterial.new()
+			fmat.shader = SAIL_WIND_SHADER
+			fmat.set_shader_parameter(&"is_flag", 1.0)
+			fmat.set_shader_parameter(&"is_back_face", 0.0)
 			if orig_f != null and orig_f.albedo_texture != null:
-				_flag_mat.set_shader_parameter(&"albedo_tex", orig_f.albedo_texture)
-				_flag_mat.set_shader_parameter(&"use_albedo_tex", 1.0)
+				fmat.set_shader_parameter(&"albedo_tex", orig_f.albedo_texture)
+				fmat.set_shader_parameter(&"use_albedo_tex", 1.0)
 			else:
-				_flag_mat.set_shader_parameter(&"use_albedo_tex", 0.0)
-			_flag_mat.set_shader_parameter(&"albedo_tint", _livery_flag_tint)
-			fm.surface_set_material(0, _flag_mat)
+				fmat.set_shader_parameter(&"use_albedo_tex", 0.0)
+			fmat.set_shader_parameter(&"albedo_tint", _livery_flag_tint)
+			fm.surface_set_material(0, fmat)
+			_flag_mats.append(fmat)
 
 
 func _setup_lights_and_glass() -> void:
@@ -625,6 +688,7 @@ func _setup_lights_and_glass() -> void:
 
 	if not enable_effects:
 		return
+
 	for child in _model.get_children():
 		var nm := String(child.name)
 		if not nm.begins_with("Lantern_"):
@@ -648,6 +712,10 @@ func _cache_ropes() -> void:
 		["Rope_Sheet_Starboard", "SheetPoint_Starboard", "Sail/Clew_Starboard"],
 		["Rope_Brace_Port", "BracePoint_Port", "Yard/Yardarm_Port"],
 		["Rope_Brace_Starboard", "BracePoint_Starboard", "Yard/Yardarm_Starboard"],
+		["Rope_Sheet_Fore_Port", "SheetPoint_Fore_Port", "Sail_Fore/Clew_Fore_Port"],
+		["Rope_Sheet_Fore_Starboard", "SheetPoint_Fore_Starboard", "Sail_Fore/Clew_Fore_Starboard"],
+		["Rope_Brace_Fore_Port", "BracePoint_Fore_Port", "Yard_Fore/Yardarm_Fore_Port"],
+		["Rope_Brace_Fore_Starboard", "BracePoint_Fore_Starboard", "Yard_Fore/Yardarm_Fore_Starboard"],
 	]
 	for spec in specs:
 		var r := _n(spec[0])
@@ -833,11 +901,11 @@ func apply_livery(sail_tint: Color, flag_tint: Color, glow_accent: Color = Color
 		if glow_mag > 0.01:
 			sm.set_shader_parameter(&"emission_tint", glow_accent)
 			sm.set_shader_parameter(&"emission_strength", clampf(glow_mag * 0.85, 0.12, 0.9))
-	if _flag_mat != null:
-		_flag_mat.set_shader_parameter(&"albedo_tint", flag_tint)
+	for fmat in _flag_mats:
+		fmat.set_shader_parameter(&"albedo_tint", flag_tint)
 		if glow_mag > 0.01:
-			_flag_mat.set_shader_parameter(&"emission_tint", glow_accent)
-			_flag_mat.set_shader_parameter(&"emission_strength", clampf(glow_mag * 0.75, 0.12, 0.8))
+			fmat.set_shader_parameter(&"emission_tint", glow_accent)
+			fmat.set_shader_parameter(&"emission_strength", clampf(glow_mag * 0.75, 0.12, 0.8))
 	if glow_mag > 0.01:
 		for l in _lantern_lights:
 			l.light_color = glow_accent.lerp(Color.WHITE, 0.3)
@@ -956,13 +1024,19 @@ func _sync_hole_visuals(slot: Dictionary) -> void:
 
 # ------------------------------------------------------------------ cannons
 
-## Host only. Aim cannon (`&"port"` or `&"starboard"`) directly (used by AI gunners or tests).
+## Host only. Aim cannon (`&"port"`, `&"starboard"`, `&"port_aft"`, `&"starboard_aft"`) directly.
 func aim_cannon(side: StringName, yaw_rad: float, pitch_rad: float) -> void:
 	if not Net.is_host() or not _cannons.has(side):
 		return
 	var c: Dictionary = _cannons[side]
 	c["yaw"] = clampf(yaw_rad, -0.58, 0.58)
 	c["pitch"] = clampf(pitch_rad, -0.18, 0.42)
+	var carriage: Node3D = c["carriage"]
+	var barrel: Node3D = c["barrel"]
+	if carriage != null:
+		carriage.rotation.y = float(c["base_rot_y"]) + float(c["yaw"])
+	if barrel != null:
+		barrel.rotation.x = float(c["base_barrel_rot_x"]) + float(c["pitch"])
 
 
 ## Host only. Fire the port or starboard cannon. Returns the spawned Cannonball, or null.
@@ -1182,7 +1256,7 @@ func _tick_flooding(delta: float) -> void:
 		water_level = 1.0
 
 	# Water weight increases ship mass and slows handling.
-	mass = BASE_MASS + water_level * FLOOD_EXTRA_MASS
+	mass = _hull_mass + water_level * FLOOD_EXTRA_MASS * (_hull_mass / BASE_MASS)
 
 
 func _begin_sinking() -> void:
@@ -1208,6 +1282,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 	var b := xf.basis
 	var origin := xf.origin
 	var sub_accum := 0.0
+	var mass_ratio := _hull_mass / BASE_MASS
 
 	# Buoyancy reduction as the hull founders.
 	var sink_buoy := 1.0
@@ -1221,7 +1296,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 	const PROBE_SPAN := 1.15
 	const BUOY_GAIN := 1.98
 	for entry in BUOYANCY_PROBES:
-		var local_p: Vector3 = entry[0]
+		var local_p: Vector3 = (entry[0] as Vector3) * _probe_scale
 		var w: float = entry[1]
 		var world_p := xf * local_p
 		var sea_y := Sea.height(world_p.x, world_p.z)
@@ -1232,9 +1307,9 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var damp_frac := minf(frac, 1.0)
 		sub_accum += w * damp_frac
 
-		var buoy_f := BASE_MASS * GRAVITY * BUOY_GAIN * w * frac * sink_buoy
+		var buoy_f := _hull_mass * GRAVITY * BUOY_GAIN * w * frac * sink_buoy
 		var v_p := get_velocity_at_position(world_p)
-		var v_damp := -v_p.y * (20500.0 * w * damp_frac)
+		var v_damp := -v_p.y * (20500.0 * mass_ratio * w * damp_frac)
 		var rel := world_p - origin
 		# Keep vertical application arm modest so steep waves pitch/roll smoothly without flipping.
 		rel.y = clampf(rel.y, -0.5, 0.5)
@@ -1245,18 +1320,18 @@ func _tick_hydrodynamics(delta: float) -> void:
 	# 2. Metacentric righting torque & local-frame angular damping.
 	var up_now := b.y
 	var righting_axis := up_now.cross(Vector3.UP)
-	var righting_strength := 142000.0 * (0.35 if is_sinking else 1.0)
+	var righting_strength := 142000.0 * mass_ratio * (0.35 if is_sinking else 1.0)
 	apply_torque(righting_axis * righting_strength)
 
 	if is_sinking:
 		# List gracefully to one side while settling below the waves.
-		apply_torque(b.z * (_sink_list_dir * 26000.0 * minf(_sink_timer * 0.4, 1.0)))
+		apply_torque(b.z * (_sink_list_dir * 26000.0 * mass_ratio * minf(_sink_timer * 0.4, 1.0)))
 
 	var ang_local := b.inverse() * angular_velocity
 	var ang_damp_local := Vector3(
-		-ang_local.x * 64000.0,
-		-ang_local.y * 52000.0,
-		-ang_local.z * 29000.0
+		-ang_local.x * 64000.0 * mass_ratio,
+		-ang_local.y * 52000.0 * mass_ratio,
+		-ang_local.z * 29000.0 * mass_ratio
 	)
 	apply_torque(b * ang_damp_local)
 
@@ -1265,9 +1340,9 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var wet := lerpf(0.3, 1.0, _last_submerged_frac)
 		var v_loc := b.inverse() * linear_velocity
 		var flood_drag := 1.0 + water_level * 0.55
-		var f_z := -(v_loc.z * 260.0 + v_loc.z * absf(v_loc.z) * 162.0) * flood_drag
-		var f_x := -(v_loc.x * 6800.0 + v_loc.x * absf(v_loc.x) * 2900.0)
-		var f_y := -v_loc.y * 5200.0
+		var f_z := -(v_loc.z * 260.0 + v_loc.z * absf(v_loc.z) * 162.0) * flood_drag * mass_ratio
+		var f_x := -(v_loc.x * 6800.0 + v_loc.x * absf(v_loc.x) * 2900.0) * mass_ratio
+		var f_y := -v_loc.y * 5200.0 * mass_ratio
 		apply_central_force((b * Vector3(f_x, f_y, f_z)) * wet)
 
 	# 4. Sail aerodynamics & gust heel (disabled once sinking).
@@ -1280,7 +1355,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var min_headway := 0.16 * close_hauled_modifier
 		var drive_coeff := lerpf(min_headway, 1.0, catch)
 		var flood_slow := lerpf(1.0, 0.65, water_level)
-		var thrust := sail_set * wind_factor * drive_coeff * 17500.0 * speed_modifier * flood_slow
+		var thrust := sail_set * wind_factor * drive_coeff * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow
 		var fwd_horiz := Vector3(-b.z.x, 0.0, -b.z.z)
 		if fwd_horiz.length_squared() > 0.001:
 			apply_central_force(fwd_horiz.normalized() * thrust)
@@ -1288,7 +1363,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		# Beam-wind heel torque about ship Z axis.
 		var aw_local := b.inverse() * aw
 		var side_wind := clampf(aw_local.x / 12.0, -1.6, 1.6)
-		apply_torque(b.z * (-side_wind * sail_set * 16500.0))
+		apply_torque(b.z * (-side_wind * sail_set * 16500.0 * mass_ratio))
 
 	# 5. Rudder torque (positive helm -> starboard turn -> negative Y torque).
 	if not is_sinking and _last_submerged_frac > 0.05:
@@ -1296,7 +1371,7 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var dir_sign := 1.0 if fwd >= -0.35 else -1.0
 		var speed_auth := clampf(absf(fwd) / 4.2, 0.0, 1.45)
 		var low_speed_auth := 0.30 * (1.0 - anchor_progress)
-		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * 38000.0 * speed_modifier
+		var turn_torque := -helm * dir_sign * (speed_auth + low_speed_auth) * 38000.0 * (1.18 if ship_class == &"brigantine" else 1.0) * speed_modifier
 		apply_torque(Vector3.UP * turn_torque)
 
 	# 6. Anchor drag and swinging stop.
@@ -1378,41 +1453,42 @@ func _update_visuals(delta: float) -> void:
 	if _rudder != null:
 		_rudder.rotation.y = helm * deg_to_rad(32.0)
 
-	# Yard, mainsail & furled sail.
+	# Yards, sails & furled rolls (1 mast on Sloop, 2 masts on Brigantine).
 	var show_sail := sail_set > 0.06
-	if _yard != null:
-		_yard.rotation.y = sail_trim
-	if _sail != null:
-		_sail.visible = show_sail
-		_sail.rotation.y = sail_trim
-		_sail.scale.y = maxf(sail_set, 0.08)
-	if _sail_furled != null:
-		_sail_furled.visible = not show_sail
-		_sail_furled.rotation.y = sail_trim
+	for y in _yards:
+		y.rotation.y = sail_trim
+	for s in _sails:
+		s.visible = show_sail
+		s.rotation.y = sail_trim
+		s.scale.y = maxf(sail_set, 0.08)
+	for sf in _sails_furled:
+		sf.visible = not show_sail
+		sf.rotation.y = sail_trim
 
-	# Sync LOD sail/yard too.
-	if _lod_yard != null:
-		_lod_yard.rotation.y = sail_trim
-	if _lod_sail != null:
-		_lod_sail.visible = show_sail
-		_lod_sail.rotation.y = sail_trim
-		_lod_sail.scale.y = maxf(sail_set, 0.08)
-	if _lod_sail_furled != null:
-		_lod_sail_furled.visible = not show_sail
-		_lod_sail_furled.rotation.y = sail_trim
+	# Sync LOD sails/yards too.
+	for ly in _lod_yards:
+		ly.rotation.y = sail_trim
+	for ls in _lod_sails:
+		ls.visible = show_sail
+		ls.rotation.y = sail_trim
+		ls.scale.y = maxf(sail_set, 0.08)
+	for lsf in _lod_sails_furled:
+		lsf.visible = not show_sail
+		lsf.rotation.y = sail_trim
 
-	# Masthead flag weathervanes to apparent wind.
+	# Masthead flags weathervane to apparent wind.
 	var aw := apparent_wind()
 	var wind_spd := aw.length()
-	if _flag != null and wind_spd > 0.2:
+	if not _flags.is_empty() and wind_spd > 0.2:
 		var aw_loc := global_basis.inverse() * aw
 		# Flag extends along local -Z from masthead, so aim -Z along aw_loc.
 		var target_yaw := atan2(-aw_loc.x, -aw_loc.z)
-		_flag.rotation.y = lerp_angle(_flag.rotation.y, target_yaw, clampf(delta * 6.0, 0.0, 1.0))
-		if _lod_flag != null:
-			_lod_flag.rotation.y = _flag.rotation.y
+		for idx in _flags.size():
+			_flags[idx].rotation.y = lerp_angle(_flags[idx].rotation.y, target_yaw, clampf(delta * 6.0, 0.0, 1.0))
+			if idx < _lod_flags.size():
+				_lod_flags[idx].rotation.y = _flags[idx].rotation.y
 
-	# Update wind-billow shader uniforms.
+	# Update wind-billow shader uniforms across all sails and flags.
 	var ws := clampf(wind_spd / 10.0, 0.1, 2.4)
 	var luff := clampf((1.0 - _last_wind_catch) * (0.4 + 0.6 * sail_set), 0.0, 1.0)
 	for sm in _sail_mats:
@@ -1420,9 +1496,9 @@ func _update_visuals(delta: float) -> void:
 		sm.set_shader_parameter(&"luff_amount", luff)
 		sm.set_shader_parameter(&"wind_strength", ws)
 		sm.set_shader_parameter(&"sail_time", _sail_time)
-	if _flag_mat != null:
-		_flag_mat.set_shader_parameter(&"wind_strength", ws)
-		_flag_mat.set_shader_parameter(&"sail_time", _sail_time)
+	for fmat in _flag_mats:
+		fmat.set_shader_parameter(&"wind_strength", ws)
+		fmat.set_shader_parameter(&"sail_time", _sail_time)
 
 	# Capstan spin & anchor drop.
 	if _capstan != null:

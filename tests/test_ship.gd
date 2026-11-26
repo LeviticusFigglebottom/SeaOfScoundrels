@@ -30,6 +30,9 @@ func _begin() -> void:
 
 
 func _end() -> void:
+	for ch in get_tree().root.get_children():
+		if ch is Cannonball:
+			ch.queue_free()
 	_root.queue_free()
 	_root = null
 	await physics_frames(2)
@@ -331,3 +334,41 @@ func test_net_state_roundtrip() -> void:
 	check(bool(b.holes[h0]["breached"]) and not bool(b.holes[h0]["patched"]), "open breach synced")
 	check(bool(b.holes[h1]["breached"]) and bool(b.holes[h1]["patched"]), "patched breach synced")
 	await _end()
+
+
+func test_brigantine_dual_masts_four_cannons_and_sailing() -> void:
+	_begin()
+	Weather.set_weather(0.0, 12.0, 0.0)
+	Sea.amp_scale = Sea.AMP_CALM
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	check(brig_scene != null, "brigantine.tscn loads cleanly")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(0.0, Sea.height(0.0, 0.0), 0.0)
+	await physics_frames(45)
+
+	check_eq(brig.ship_class, &"brigantine", "ship_class is brigantine")
+	check(brig.get_station(&"helm") != null, "brigantine has helm station")
+	check(brig.get_station(&"cannon", &"port") != null, "brigantine has fore port cannon")
+	check(brig.get_station(&"cannon", &"starboard") != null, "brigantine has fore starboard cannon")
+	check(brig.get_station(&"cannon", &"port_aft") != null, "brigantine has aft port cannon")
+	check(brig.get_station(&"cannon", &"starboard_aft") != null, "brigantine has aft starboard cannon")
+	check_eq(brig.holes.size(), 10, "brigantine has 10 breach slots")
+
+	# Both broadside starboard cannons fire cleanly.
+	var b1 := brig.fire_cannon(&"starboard")
+	var b2 := brig.fire_cannon(&"starboard_aft")
+	check(b1 != null and b2 != null, "brigantine fires twin broadside cannons")
+
+	# Full sails catch wind and achieve higher Brigantine top speed while staying upright.
+	brig.set_sail_target(1.0)
+	brig.set_trim_target(brig.ideal_sail_trim())
+	brig.apply_livery(Color(0.9, 0.85, 0.72), Color(0.18, 0.56, 0.64))
+	await physics_frames(220)
+	var spd := brig.forward_speed()
+	print("    brigantine downwind speed: %.2f m/s (%.1f kn) up.y=%.3f" % [spd, brig.speed_knots(), brig.global_basis.y.y])
+	check(spd > 6.0, "brigantine sails briskly downwind (got %.2f m/s)" % spd)
+	check(brig.global_basis.y.y > 0.90, "brigantine stays upright in waves")
+	await _end()
+
