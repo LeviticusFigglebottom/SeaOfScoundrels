@@ -859,7 +859,8 @@ static func _append_highland_grass_tuft(rng: RandomNumberGenerator, pt: Vector2,
 	var sx := rng.randf_range(1.45, 2.25)
 	var sz := sx * rng.randf_range(0.86, 1.15)
 	var sy := rng.randf_range(1.20, 1.85)
-	var sink := 0.10 + maxf(0.0, (0.70 - n.y) * 0.30)
+	var slope_sink := 0.14 * clampf((0.84 - n.y) / 0.34, 0.0, 1.0)
+	var sink := 0.10 + maxf(0.0, (0.70 - n.y) * 0.30) + slope_sink
 	var origin := Vector3(pt.x, h - sink, pt.y)
 	var xf := _grounded_transform(origin, n, 0.55, rng.randf() * TAU, Vector3(sx, sy, sz))
 	var srgb_col := _pick_jittered_color(rng, GRASS_HIGHLAND_PALETTE, 0.024, 0.10)
@@ -874,7 +875,8 @@ static func _append_highland_fern_rosette(rng: RandomNumberGenerator, pt: Vector
 		out_col: Array[Color]) -> void:
 	var sc := rng.randf_range(1.30, 2.05)
 	var sy := sc * rng.randf_range(0.86, 1.15)
-	var sink := 0.10 + maxf(0.0, (0.68 - n.y) * 0.30)
+	var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
+	var sink := 0.10 + maxf(0.0, (0.68 - n.y) * 0.30) + slope_sink
 	var origin := Vector3(pt.x, h - sink, pt.y)
 	var xf := _grounded_transform(origin, n, 0.54, rng.randf() * TAU, Vector3(sc, sy, sc))
 	var srgb_col := _pick_jittered_color(rng, FERN_HIGHLAND_PALETTE, 0.022, 0.10)
@@ -997,7 +999,8 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 				sx *= 0.82
 				sz *= 0.82
 				sy *= 0.76
-			var origin := Vector3(pt.x, h - 0.06, pt.y)
+			var slope_sink := 0.14 * clampf((0.84 - n.y) / 0.34, 0.0, 1.0)
+			var origin := Vector3(pt.x, h - 0.06 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.62, rng.randf() * TAU, Vector3(sx, sy, sz))
 
 			var srgb_col: Color
@@ -1115,7 +1118,8 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 
 			var sc := rng.randf_range(0.92, 1.54) * (0.76 if is_volcanic else 1.0)
 			var sy := sc * rng.randf_range(0.88, 1.16)
-			var origin := Vector3(pt.x, h - 0.07, pt.y)
+			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
+			var origin := Vector3(pt.x, h - 0.07 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.52, rng.randf() * TAU, Vector3(sc, sy, sc))
 			var srgb_col := _pick_jittered_color(rng,
 				FERN_VOLCANIC_PALETTE if is_volcanic else FERN_TROPICAL_PALETTE, 0.022, 0.10)
@@ -1168,7 +1172,8 @@ static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, t
 
 			var sc := rng.randf_range(0.86, 1.38) * (0.74 if is_volcanic else 1.0)
 			var sy := sc * rng.randf_range(0.90, 1.15)
-			var origin := Vector3(pt.x, h - 0.08, pt.y)
+			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
+			var origin := Vector3(pt.x, h - 0.08 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.42, rng.randf() * TAU, Vector3(sc, sy, sc))
 			var tint_srgb := _pick_jittered_color(rng,
 				HIBISCUS_VOLCANIC_TINTS if is_volcanic else HIBISCUS_TROPICAL_TINTS, 0.015, 0.05)
@@ -1414,6 +1419,8 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 
 	var tall_aabb := tall_mesh.get_aabb()
 	var wide_aabb := wide_mesh.get_aabb() if use_wide_layer else tall_aabb
+	var tall_probes := _extract_buttress_probe_points(tall_mesh, tall_aabb)
+	var wide_probes := _extract_buttress_probe_points(wide_mesh, wide_aabb) if use_wide_layer else tall_probes
 	var primary_spacing := clampf(radius * 0.14, 7.6 if arch == &"sea_stack" else 10.0, 16.5)
 	var fallback_spacing := maxf(4.6 if arch == &"sea_stack" else 6.2, primary_spacing * 0.56)
 	var cell_size := maxf(8.0, primary_spacing)
@@ -1444,6 +1451,7 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 				pick_wide = rng.randf() < wide_bias
 
 			var aabb := wide_aabb if pick_wide else tall_aabb
+			var probes := wide_probes if pick_wide else tall_probes
 			var uses_glb := wide_uses_glb if pick_wide else tall_uses_glb
 
 			# Monumental architectural scale so buttresses read as true carved mountain ribs & rocky spurs!
@@ -1467,33 +1475,61 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 			var rot_basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.FORWARD, roll)
 			var xf_basis := rot_basis.scaled(Vector3(sc_xz, sc_y, sc_xz))
 
-			# Embed deeply into the hillside (`pos -= out_xz * embed_back`) so pitched -5.8 m feet & top caps
-			# fuse organically into the mountain rock with ZERO floating undersides or mushroom-cap overhangs!
+			# Embed deeply into the hillside (`pos -= out_xz * embed_back`) so pitched -5.5..-7.0 m feet
+			# and top caps fuse organically into the mountain rock with ZERO floating undersides or overhangs!
 			var back_frac := 0.36 if pick_wide else 0.34
 			var embed_back := (clampf(aabb.size.z * back_frac, 2.2, 4.4) + maxf(0.0, (0.45 - ny) * 2.2)) * sc_xz
 			var base_sink := clampf(aabb.size.y * 0.24, 2.0, 4.8) * sc_y
 			if aabb.position.y > -2.5:
 				base_sink += (aabb.position.y + 2.5) * sc_y
-			var right_xz := Vector3(out_xz.z, 0.0, -out_xz.x)
-			var flank_half := aabb.size.x * 0.34 * sc_xz
 			var back_px := pos.x - out_xz.x * embed_back
 			var back_pz := pos.z - out_xz.z * embed_back
-			var pitched_foot_out := maxf(0.0, sin(pitch) * absf(aabb.position.y) * sc_y)
-			var front_probe_dist := maxf(1.8 * sc_xz, (2.2 * sc_xz) + pitched_foot_out - embed_back * 0.45)
-			var h_left := island.surface_height(back_px - right_xz.x * flank_half, back_pz - right_xz.z * flank_half)
-			var h_right := island.surface_height(back_px + right_xz.x * flank_half, back_pz + right_xz.z * flank_half)
-			var h_front := island.surface_height(pos.x + out_xz.x * front_probe_dist, pos.z + out_xz.z * front_probe_dist)
-			var foot_ground := minf(h_front, minf(h_left, h_right))
 			var desired_origin_y := pos.y - base_sink
-			# Ensure mesh bottom (`origin.y + aabb.position.y * sc_y * cos(pitch)`) sits at least 0.9 m BELOW `foot_ground`!
-			var max_origin_y := foot_ground - aabb.position.y * sc_y * cos(pitch) - 0.9
-			if not is_volcanic and desired_origin_y > max_origin_y:
-				# Skip positions where sinking to valley floor would bury the whole buttress top below pos.y.
-				if max_origin_y + (aabb.position.y + aabb.size.y) * sc_y * cos(pitch) < pos.y + 1.4:
-					continue
-				desired_origin_y = max_origin_y
 			var origin := Vector3(back_px, desired_origin_y, back_pz)
 			var xf := Transform3D(xf_basis, origin)
+
+			# Exact real-mesh bottom-skirt perimeter footing check guarantees ZERO floating rock bases
+			# over steep canyon corners or coastal dropoffs!
+			var bot_pts: PackedVector3Array = probes["bottom"] as PackedVector3Array
+			var max_foot_air := -INF
+			for fp in bot_pts:
+				var wp := xf * fp
+				var foot_air := wp.y - island.surface_height(wp.x, wp.z)
+				if foot_air > max_foot_air:
+					max_foot_air = foot_air
+			var req_embed := 0.85 if is_volcanic else 1.00
+			if max_foot_air > -req_embed:
+				desired_origin_y -= (max_foot_air + req_embed)
+				if not is_volcanic and desired_origin_y + (aabb.position.y + aabb.size.y) * sc_y * cos(pitch) < pos.y + 1.4:
+					continue
+				origin.y = desired_origin_y
+				xf = Transform3D(xf_basis, origin)
+
+			# Real-mesh anti-tip-sliver guard (fixes Local-GPU M14 Emerald Spire right canyon wall
+			# horizontal mossy cap wedge!): reject any buttress whose actual upper mossy cap/shoulder
+			# vertices poke above the cliff face while its supporting lower/mid rock body stays buried!
+			if is_volcanic:
+				var vp_mid := xf * Vector3(0.0, aabb.position.y + aabb.size.y * 0.50, 0.0)
+				if vp_mid.y < island.surface_height(vp_mid.x, vp_mid.z) + 0.5:
+					continue
+			else:
+				var low_pts: PackedVector3Array = probes["lower"] as PackedVector3Array
+				var up_pts: PackedVector3Array = probes["upper"] as PackedVector3Array
+				var max_up_clear := -INF
+				for up in up_pts:
+					var wup := xf * up
+					max_up_clear = maxf(max_up_clear, wup.y - island.surface_height(wup.x, wup.z))
+				if max_up_clear > -0.10:
+					var max_low_clear := -INF
+					var low_exposed := 0
+					for lp in low_pts:
+						var wlp := xf * lp
+						var lc := wlp.y - island.surface_height(wlp.x, wlp.z)
+						max_low_clear = maxf(max_low_clear, lc)
+						if lc > 0.10:
+							low_exposed += 1
+					if low_exposed < 3 or max_low_clear < 0.75:
+						continue
 
 			var inst_col: Color
 			if uses_glb:
@@ -1512,6 +1548,57 @@ static func _place_cliff_buttresses(island: Island, arch: StringName, rng: Rando
 
 			out_normals_y.append(ny)
 			_grid_insert(grid, cell_size, pt)
+
+
+static func _extract_buttress_probe_points(mesh: Mesh, aabb: AABB) -> Dictionary:
+	# Pre-extract voxel-deduplicated real-vertex envelopes (bottom skirt perimeter, lower-mid
+	# supporting prow, and upper mossy cap/shoulders) so footing & anti-tip-sliver checks test
+	# 100% of true mesh surface geometry with zero blind spots between angular sectors.
+	var y_bot_max := aabb.position.y + 0.85
+	var y_low_min := aabb.position.y + aabb.size.y * 0.14
+	var y_split := aabb.position.y + aabb.size.y * 0.55
+
+	var bot_cells: Dictionary = {}
+	var low_cells: Dictionary = {}
+	var up_cells: Dictionary = {}
+
+	for si in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(si)
+		if arrays.is_empty():
+			continue
+		var verts_var: Variant = arrays[Mesh.ARRAY_VERTEX]
+		if not (verts_var is PackedVector3Array):
+			continue
+		var verts: PackedVector3Array = verts_var as PackedVector3Array
+		for v in verts:
+			if v.y <= y_bot_max:
+				var bk := Vector3i(int(roundf(v.x / 0.9)), int(roundf(v.y / 0.9)), int(roundf(v.z / 0.9)))
+				if not bot_cells.has(bk):
+					bot_cells[bk] = v
+			if v.y >= y_low_min and v.y < y_split:
+				var lk := Vector3i(int(roundf(v.x / 1.4)), int(roundf(v.y / 1.4)), int(roundf(v.z / 1.4)))
+				if not low_cells.has(lk):
+					low_cells[lk] = v
+			elif v.y >= y_split:
+				var uk := Vector3i(int(roundf(v.x / 1.2)), int(roundf(v.y / 1.2)), int(roundf(v.z / 1.2)))
+				if not up_cells.has(uk):
+					up_cells[uk] = v
+
+	var bot_pts := PackedVector3Array()
+	for k in bot_cells:
+		bot_pts.append(bot_cells[k] as Vector3)
+	var low_pts := PackedVector3Array()
+	for k in low_cells:
+		low_pts.append(low_cells[k] as Vector3)
+	var up_pts := PackedVector3Array()
+	for k in up_cells:
+		up_pts.append(up_cells[k] as Vector3)
+
+	return {
+		"bottom": bot_pts,
+		"lower": low_pts,
+		"upper": up_pts,
+	}
 
 
 static func _buttress_fallback_palette(arch: StringName, is_volcanic: bool) -> Array[Color]:

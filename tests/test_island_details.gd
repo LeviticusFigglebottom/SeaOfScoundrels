@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (26 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (30 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -49,6 +49,13 @@ const COASTAL_LANDMARKS: Array[String] = [
 	"obsidian_lava_cauldron_shrine.glb",
 ]
 
+const HARBOUR_RUINS_LANDMARKS: Array[String] = [
+	"harbour_cargo_crane_dock.glb",
+	"overgrown_jungle_idol_altar.glb",
+	"cliffside_waterfall_shrine.glb",
+	"smuggler_contraband_hoard.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -76,6 +83,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"sunken_galleon_stern.glb": 2,
 	"giant_tidal_coral_arch.glb": 2,
 	"obsidian_lava_cauldron_shrine.glb": 1,
+	"harbour_cargo_crane_dock.glb": 1,
+	"overgrown_jungle_idol_altar.glb": 1,
+	"cliffside_waterfall_shrine.glb": 1,
+	"smuggler_contraband_hoard.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -92,11 +103,34 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"pirate_camp_canopy.glb": ["Lantern_Camp"],
 	"sunken_galleon_stern.glb": ["Lantern_Stern"],
 	"obsidian_lava_cauldron_shrine.glb": ["Lantern_CalderaShrine"],
+	"harbour_cargo_crane_dock.glb": ["Lantern_Crane*"],
+	"overgrown_jungle_idol_altar.glb": ["Lantern_Altar*"],
+	"cliffside_waterfall_shrine.glb": ["Lantern_WaterfallShrine*"],
+	"smuggler_contraband_hoard.glb": ["Lantern_Hoard*"],
 }
 
-const COMPACT_LANDMARKS: Array[String] = [
-	"trail_lantern_post.glb",
-	"stone_cairn_marker.glb",
+const GROUNDING_AUDIT_PREFIXES: Array[String] = [
+	"SkullCliffCarving",
+	"TempleStairway_",
+	"CliffCatwalk",
+	"ImpaledShipwreck",
+	"SeaGodIdol_",
+	"VolcanicObsidianArch_",
+	"LeviathanRibcage_",
+	"BeachedRowboat_",
+	"PirateGibbet_",
+	"SignalBrazier_",
+	"SummitCrag_",
+	"RuinAqueduct_",
+	"PirateWatchpost_",
+	"UpperStrataRib_",
+	"PirateCamp_",
+	"SunkenStern_",
+	"LavaCauldronShrine_",
+	"HarbourCrane_",
+	"JungleAltar_",
+	"WaterfallShrine_",
+	"SmugglerHoard_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -175,6 +209,47 @@ func _record_shared_landmark_tex(tex: Texture2D, filename: String, mesh_name: St
 		])
 
 
+func _relative_transform(node: Node3D, ancestor: Node3D) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var cur: Node = node
+	while cur != null and cur != ancestor:
+		if cur is Node3D:
+			xf = (cur as Node3D).transform * xf
+		cur = cur.get_parent()
+	return xf
+
+
+func _compute_landmark_visual_aabb(landmark: Node3D, isl: Node3D) -> Dictionary:
+	var has_box := false
+	var combined := AABB()
+	var meshes: Array[Node] = landmark.find_children("*", "MeshInstance3D", true, false)
+	if landmark is MeshInstance3D:
+		meshes.append(landmark)
+	for n in meshes:
+		var mi := n as MeshInstance3D
+		if mi == null or not mi.visible or mi.mesh == null or String(mi.name).begins_with("col_"):
+			continue
+		var local_box := mi.mesh.get_aabb()
+		var rel_xf := _relative_transform(mi, isl)
+		for ci in 8:
+			var pt := rel_xf * local_box.get_endpoint(ci)
+			if not has_box:
+				combined = AABB(pt, Vector3.ZERO)
+				has_box = true
+			else:
+				combined = combined.expand(pt)
+	return {"valid": has_box, "aabb": combined}
+
+
+func _is_grounding_audit_landmark(node_name: String) -> bool:
+	if node_name.begins_with("CoastalSeaArch_") or node_name.begins_with("TidalCoralArch_"):
+		return false
+	for prefix in GROUNDING_AUDIT_PREFIXES:
+		if node_name.begins_with(prefix):
+			return true
+	return false
+
+
 func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	var all_landmarks: Array[String] = []
 	all_landmarks.append_array(GEOLOGY_LANDMARKS)
@@ -182,7 +257,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(STORYTELLING_LANDMARKS)
 	all_landmarks.append_array(SKYLINE_LANDMARKS)
 	all_landmarks.append_array(COASTAL_LANDMARKS)
-	check_eq(all_landmarks.size(), 26, "expected 26 sculpted landmark GLBs")
+	all_landmarks.append_array(HARBOUR_RUINS_LANDMARKS)
+	check_eq(all_landmarks.size(), 30, "expected 30 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -258,7 +334,7 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 									bad_tangents += 1
 									break
 
-		var min_tris := 80 if COMPACT_LANDMARKS.has(filename) else 150
+		var min_tris := 500
 		print("    landmark %-32s %5d tris  (%d vis, %d col_, %d PBR)" % [
 			filename, total_tris, visual_meshes.size(), col_meshes.size(), pbr_surfaces])
 		check(total_tris >= min_tris,
@@ -288,14 +364,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 26 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 30 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 26 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected <= 36 unique shared landmark PBR texture paths across all 30 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -777,6 +853,73 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check(stern_total >= 3, "Wave I-5 spawns >= 3 SunkenStern_* landmarks (got %d)" % stern_total)
 	check(coral_arch_total >= 4, "Wave I-5 spawns >= 4 TidalCoralArch_* landmarks (got %d)" % coral_arch_total)
 	check(cinder_shrines >= 2, "Cinder Crag spawns >= 2 LavaCauldronShrine_* landmarks (got %d)" % cinder_shrines)
+
+	# 2e. Verify Wave I-6 harbour, jungle ruin, waterfall shrine & smuggler hoard landmarks!
+	var crane_total := 0
+	var altar_total := 0
+	var wf_shrine_total := 0
+	var hoard_total := 0
+	for isl_i6 in all_islands:
+		crane_total += isl_i6.find_children("HarbourCrane_*", "Node3D", true, false).size()
+		altar_total += isl_i6.find_children("JungleAltar_*", "Node3D", true, false).size()
+		wf_shrine_total += isl_i6.find_children("WaterfallShrine_*", "Node3D", true, false).size()
+		hoard_total += isl_i6.find_children("SmugglerHoard_*", "Node3D", true, false).size()
+	print("    wave_i6 harbour/ruins landmarks: cranes=%d altars=%d wf_shrines=%d hoards=%d" % [
+		crane_total, altar_total, wf_shrine_total, hoard_total])
+	check(crane_total >= 3, "Wave I-6 spawns >= 3 HarbourCrane_* landmarks (got %d)" % crane_total)
+	check(altar_total >= 3, "Wave I-6 spawns >= 3 JungleAltar_* landmarks (got %d)" % altar_total)
+	check(wf_shrine_total >= 3, "Wave I-6 spawns >= 3 WaterfallShrine_* landmarks (got %d)" % wf_shrine_total)
+	check(hoard_total >= 4, "Wave I-6 spawns >= 4 SmugglerHoard_* landmarks (got %d)" % hoard_total)
+
+	# 2f. Automated 14-island landmark anti-float grounding audit!
+	var grounded_checked := 0
+	var floating_count := 0
+	var worst_clearance := -INF
+	var floating_offenders: Array[String] = []
+	for isl_g in all_islands:
+		var props_root := isl_g.get_node_or_null(^"Props") as Node3D
+		if props_root == null:
+			props_root = isl_g.get_node_or_null(^"PropsRoot") as Node3D
+		if props_root == null:
+			continue
+		for child in props_root.get_children():
+			var lm := child as Node3D
+			if lm == null:
+				continue
+			var lm_name := String(lm.name)
+			if not _is_grounding_audit_landmark(lm_name):
+				continue
+			var aabb_res := _compute_landmark_visual_aabb(lm, isl_g)
+			if not bool(aabb_res.get("valid", false)):
+				continue
+			var bb: AABB = aabb_res["aabb"]
+			var lm_origin := _relative_transform(lm, isl_g).origin
+			var lx := lm_origin.x
+			var lz := lm_origin.z
+			var dx := bb.size.x * 0.28
+			var dz := bb.size.z * 0.28
+			var max_ground_y: float = isl_g.surface_height(lx, lz)
+			max_ground_y = maxf(max_ground_y, isl_g.surface_height(lx + dx, lz + dz))
+			max_ground_y = maxf(max_ground_y, isl_g.surface_height(lx - dx, lz + dz))
+			max_ground_y = maxf(max_ground_y, isl_g.surface_height(lx + dx, lz - dz))
+			max_ground_y = maxf(max_ground_y, isl_g.surface_height(lx - dx, lz - dz))
+			var clearance := bb.position.y - max_ground_y
+			grounded_checked += 1
+			if clearance > worst_clearance:
+				worst_clearance = clearance
+			if clearance > 0.60:
+				floating_count += 1
+				floating_offenders.append("%s/%s (min_y=%.2f > max_g=%.2f + 0.60, clr=%+.2fm)" % [
+					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
+	if grounded_checked == 0:
+		worst_clearance = 0.0
+	print("    wave_i6 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+		grounded_checked, floating_count, worst_clearance])
+	check(grounded_checked >= 50,
+		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check_eq(floating_count, 0,
+		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
+			", ".join(floating_offenders.slice(0, 6))])
 
 	# Verify zero-VRAM triplanar cliff PBR wired onto FortBastion & SmugglersGrotto stone meshes.
 	var fort_isl := archipelago.get_island_by_id("ironwatch_fort")

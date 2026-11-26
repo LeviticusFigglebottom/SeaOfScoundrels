@@ -949,11 +949,12 @@ def gen_cliff_ruin_aqueduct_arch(outdir):
 def gen_cliffside_pirate_watchpost(outdir):
     """Sea-of-Thieves-grade ~11.4 m tall cantilevered weathered-timber cliff-edge pirate lookout
     scaffolding & crow's-nest watchpost facing seaward (-Z).
-    Heavy angled timber stilts plunging to y = -4.8 m, diagonal X-bracing, rear cliff-anchor beams
-    extending to z = +3.85 m, planked octagonal lookout platform (y = 4.6 m, r ~ 2.4 m), rope-lashed
-    guardrail, weathered rear wooden ladder, mounted brass spyglass on oak tripod, oak rum barrel &
-    spyglass crate, crooked signal mast rising to y = 10.8 m with 3D double-sided swallowtail crimson
-    pirate pennant, and suspended iron-cage watch lantern with Empty 'Lantern_Watchpost'.
+    Heavy angled timber stilts plunging to y = -7.8 m with flared iron-banded footing shoes &
+    tapered driven-piling tips, diagonal X-bracing, rear cliff-anchor beams extending to z = +3.85 m,
+    planked octagonal lookout platform (y = 4.6 m, r ~ 2.4 m), rope-lashed guardrail, weathered
+    rear wooden ladder, mounted brass spyglass on oak tripod, oak rum barrel & spyglass crate,
+    crooked signal mast rising to y = 10.8 m with 3D double-sided swallowtail crimson pirate
+    pennant, and suspended iron-cage watch lantern with Empty 'Lantern_Watchpost'.
     Target: 2,800–4,600 visual tris.
     """
     clear_scene()
@@ -963,30 +964,58 @@ def gen_cliffside_pirate_watchpost(outdir):
     DECK_Y = 4.60
     PLAT_Z = -0.35
     PLAT_R = 2.42
-    STILT_BOT = -4.80
+    STILT_BOT = -7.80
     ANCHOR_Z = 3.85
     frame_col_pts = []
 
-    # 1. Heavy Angled Timber Stilts (plunging to y = -4.8 m), Rear Cliff-Anchor Beams (z = +3.85 m) & X-Bracing!
+    # 1. Heavy Angled Timber Stilts (plunging to y = -7.8 m with flared iron-banded footing shoes &
+    #    tapered driven-piling tips!), Rear Cliff-Anchor Beams (z = +3.85 m) & X-Bracing!
     stilt_specs = [
-        ((-1.62, DECK_Y - 0.14, PLAT_Z - 1.35), (-2.12, STILT_BOT,  1.15), 0.165, 0.215),
-        (( 1.62, DECK_Y - 0.14, PLAT_Z - 1.35), ( 2.12, STILT_BOT,  1.15), 0.165, 0.215),
-        ((-1.72, DECK_Y - 0.14, PLAT_Z + 1.48), (-1.95, STILT_BOT,  2.35), 0.160, 0.205),
-        (( 1.72, DECK_Y - 0.14, PLAT_Z + 1.48), ( 1.95, STILT_BOT,  2.35), 0.160, 0.205),
-        ((-1.78, DECK_Y - 0.18,  3.55),         (-1.82, -1.60,      3.72), 0.155, 0.185),
-        (( 1.78, DECK_Y - 0.18,  3.55),         ( 1.82, -1.60,      3.72), 0.155, 0.185),
+        # Front heavy battered support stilts (preserving exact upper ray, extending to y = -7.80 m)
+        ((-1.62, DECK_Y - 0.14, PLAT_Z - 1.35), (-2.28, STILT_BOT,  2.07), 0.165, 0.250, True),
+        (( 1.62, DECK_Y - 0.14, PLAT_Z - 1.35), ( 2.28, STILT_BOT,  2.07), 0.165, 0.250, True),
+        # Mid-rear heavy battered support stilts (extending cleanly to y = -7.80 m)
+        ((-1.72, DECK_Y - 0.14, PLAT_Z + 1.48), (-2.02, STILT_BOT,  2.75), 0.160, 0.238, True),
+        (( 1.72, DECK_Y - 0.14, PLAT_Z + 1.48), ( 2.02, STILT_BOT,  2.75), 0.160, 0.238, True),
+        # Rear cliff-anchor tie-down stilts (extended to y = -3.80 m for steep convex ridges)
+        ((-1.78, DECK_Y - 0.18,  3.55),         (-1.84, -3.80,      3.78), 0.155, 0.205, False),
+        (( 1.78, DECK_Y - 0.18,  3.55),         ( 1.84, -3.80,      3.78), 0.155, 0.205, False),
     ]
-    for p_top, p_bot, rt, rb in stilt_specs:
+    for p_top, p_bot, rt, rb, is_deep in stilt_specs:
         pa, pb = Vector(p_bot), Vector(p_top)
-        pm = pa.lerp(pb, 0.50) + Vector((rng.uniform(-0.04, 0.04), 0.0, rng.uniform(-0.04, 0.04)))
-        tube(mb, [pa, pm, pb], [rb, 0.5 * (rb + rt), rt], 6, 'timber',
-             jit(C_TIMBER_DARK, rng, 0.06), mode='flat',
-             scols=[C_TIMBER_DARK, C_TIMBER_MID, C_TIMBER_MID])
+        if is_deep:
+            # 5-station heavy driven timber piling: flared collar -> thick lower shaft -> upper shaft,
+            # capped at bottom with a tapered iron-shod driven-piling point reaching y = -7.80 m!
+            p_tip = pa
+            p_shoe_lo = pa.lerp(pb, 0.065)
+            p_shoe_hi = pa.lerp(pb, 0.145)
+            p_mid = pa.lerp(pb, 0.54) + Vector((rng.uniform(-0.04, 0.04), 0.0, rng.uniform(-0.04, 0.04)))
+            tube(mb, [p_shoe_lo, p_shoe_hi, p_mid, pb],
+                 [rb * 1.18, rb * 1.05, 0.5 * (rb + rt), rt], 6, 'timber',
+                 jit(C_TIMBER_DARK, rng, 0.06), mode='flat',
+                 scols=[C_TIMBER_DARK, C_TIMBER_DARK, C_TIMBER_MID, C_TIMBER_MID])
+            # Tapered forged-iron driven-piling point (y = -7.80 .. -7.00 m)
+            tube(mb, [p_tip, p_shoe_lo], [rb * 0.36, rb * 1.16], 4, 'iron',
+                 C_IRON_RUST, mode='flat', scols=[C_IRON, C_IRON_RUST])
+            # Heavy iron-banded weathered stone/timber footing collar sleeve around lower piling
+            cbox(mb, p_shoe_lo.lerp(p_shoe_hi, 0.50), (rb * 2.75, 0.52, rb * 2.75), 'temple_stone',
+                 jit(C_TEMPLE_DARK, rng, 0.05), 0.0)
+            cbox(mb, p_shoe_hi, (rb * 2.86, 0.16, rb * 2.86), 'iron', C_IRON, 0.0)
+            band_ys = (-4.60, 1.42, 3.92)
+        else:
+            pm = pa.lerp(pb, 0.50) + Vector((rng.uniform(-0.04, 0.04), 0.0, rng.uniform(-0.04, 0.04)))
+            tube(mb, [pa, pm, pb], [rb, 0.5 * (rb + rt), rt], 6, 'timber',
+                 jit(C_TIMBER_DARK, rng, 0.06), mode='flat',
+                 scols=[C_TIMBER_DARK, C_TIMBER_MID, C_TIMBER_MID])
+            band_ys = (1.45, 3.92)
         frame_col_pts.extend([pa, pb])
-        for t_band in (0.64, 0.94):
-            bp = pa.lerp(pb, t_band)
-            cbox(mb, bp, (rt * 2.45, 0.14, rt * 2.45), 'iron',
-                 C_IRON_RUST if t_band < 0.8 else C_IRON, 0.0)
+        for by_i, y_band in enumerate(band_ys):
+            t_b = (y_band - pa.y) / max(pb.y - pa.y, 1e-5)
+            if 0.05 < t_b < 0.96:
+                bp = pa.lerp(pb, t_b)
+                r_b = rb * (1.0 - t_b) + rt * t_b
+                cbox(mb, bp, (r_b * 2.45, 0.14, r_b * 2.45), 'iron',
+                     C_IRON_RUST if (by_i % 2 == 0) else C_IRON, 0.0)
 
     # Stout Rear Cliff-Anchor Longitudinal Tie-Back Beams extending solidly back to z = +3.85 m!
     for sx in (-1.75, 1.75):
@@ -1011,13 +1040,19 @@ def gen_cliffside_pirate_watchpost(outdir):
     _add_beam(mb, (-1.86, 1.42, PLAT_Z + 0.65), (1.86, 1.42, PLAT_Z + 0.65), 0.24, 0.26, 'timber', C_TIMBER_DARK, 0.0)
     cbox(mb, (-0.22, 1.56, PLAT_Z + 0.65), (0.50, 0.22, 0.50), 'iron', C_IRON, 0.0)
     _add_beam(mb, (-2.04, -1.65, 0.38), (2.04, -1.65, 0.38), 0.20, 0.22, 'timber', C_TIMBER_DARK, 0.0)
+    # Deep lower ledger cross-tie & side tie-beams at y = -4.60 m so exposed steep-slope stilts stay braced!
+    _add_beam(mb, (-2.14, -4.60, 1.12), (2.14, -4.60, 1.12), 0.20, 0.22, 'timber', C_TIMBER_DARK, 0.0)
+    _add_beam(mb, (-2.10, -4.60, 1.12), (-1.94, -4.60, 2.34), 0.17, 0.18, 'timber', C_TIMBER_DARK, 0.0)
+    _add_beam(mb, ( 2.10, -4.60, 1.12), ( 1.94, -4.60, 2.34), 0.17, 0.18, 'timber', C_TIMBER_DARK, 0.0)
 
-    # Diagonal X-Bracing across front bay, lower bay, and port/starboard side bays!
+    # Diagonal X-Bracing across front bay, lower bay, deep steep-slope bay, and port/starboard side bays!
     x_braces = [
         ((-1.88, 1.42, -0.32), ( 1.62, DECK_Y - 0.22, PLAT_Z - 1.32)),
         (( 1.88, 1.42, -0.32), (-1.62, DECK_Y - 0.22, PLAT_Z - 1.32)),
         ((-2.02, -1.65, 0.40), ( 1.88,  1.42, -0.32)),
         (( 2.02, -1.65, 0.40), (-1.88,  1.42, -0.32)),
+        ((-2.11, -4.60, 1.12), ( 2.00, -1.65,  0.40)),
+        (( 2.11, -4.60, 1.12), (-2.00, -1.65,  0.40)),
         ((-1.88, 1.42, -0.32), (-1.74, DECK_Y - 0.22, PLAT_Z + 1.45)),
         ((-1.84, 1.42,  1.88), (-1.64, DECK_Y - 0.22, PLAT_Z - 1.32)),
         (( 1.88, 1.42, -0.32), ( 1.74, DECK_Y - 0.22, PLAT_Z + 1.45)),
@@ -1027,6 +1062,7 @@ def gen_cliffside_pirate_watchpost(outdir):
         _add_beam(mb, p0, p1, 0.13, 0.13, 'timber', jit(C_TIMBER_DARK, rng, 0.06), 0.0)
     cbox(mb, (0.0, 2.90, -0.96), (0.28, 0.28, 0.22), 'iron', C_IRON, 0.0)
     cbox(mb, (0.0, -0.12, 0.04), (0.28, 0.28, 0.22), 'iron', C_IRON_RUST, 0.0)
+    cbox(mb, (0.0, -3.12, 0.76), (0.28, 0.28, 0.22), 'iron', C_IRON, 0.0)
     for sx in (-1.78, 1.78):
         cbox(mb, (sx, 2.90, 0.42), (0.22, 0.26, 0.26), 'iron', C_IRON, 0.0)
 

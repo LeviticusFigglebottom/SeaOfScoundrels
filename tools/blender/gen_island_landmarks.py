@@ -1,6 +1,9 @@
 # Sea of Scoundrels: top-level procedural island landmark generator driver.
-# Usage: blender --background --factory-startup --python tools/blender/gen_island_landmarks.py -- <outdir>
-# Writes up to 12 sculpted coastal geology & signature set-piece .glb files into <outdir>/landmarks/.
+# Usage:
+#   blender --background --factory-startup --python tools/blender/gen_island_landmarks.py -- <outdir>
+#   blender --background --python tools/blender/gen_island_landmarks.py -- --only <name> [<name> ...]
+# Writes up to 30 sculpted coastal geology, skyline, harbour, jungle & signature set-piece .glb files into <outdir>/landmarks/.
+import argparse
 import bpy
 import os
 import sys
@@ -39,10 +42,40 @@ try:
 except ImportError:
     COASTAL_GENERATORS = []
 
+try:
+    from _landmarks_harbour_ruins import HARBOUR_RUINS_GENERATORS
+except ImportError:
+    HARBOUR_RUINS_GENERATORS = []
+
+
+def _normalize_name(name):
+    n = name.strip()
+    if n.endswith('.glb'):
+        n = n[:-4]
+    if n.startswith('gen_'):
+        n = n[4:]
+    return n
+
 
 def main():
     argv = sys.argv
-    outdir = argv[-1] if '--' in argv else os.path.join(os.getcwd(), 'assets', 'generated')
+    cli = argv[argv.index('--') + 1:] if '--' in argv else []
+    parser = argparse.ArgumentParser(description='Generate procedural island landmark GLBs.')
+    parser.add_argument(
+        'outdir',
+        nargs='?',
+        default=os.path.join(os.getcwd(), 'assets', 'generated'),
+        help='Output root directory (writes into <outdir>/landmarks/)',
+    )
+    parser.add_argument(
+        '--only',
+        nargs='+',
+        default=None,
+        help='Generate only specific landmarks by stem name (e.g. harbour_cargo_crane_dock)',
+    )
+    args = parser.parse_args(cli)
+    outdir = args.outdir
+
     random.seed(lc.SEED)
     np.random.seed(lc.SEED)
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -55,7 +88,17 @@ def main():
         + list(STORYTELLING_B_GENERATORS)
         + list(SKYLINE_GENERATORS)
         + list(COASTAL_GENERATORS)
+        + list(HARBOUR_RUINS_GENERATORS)
     )
+
+    if args.only:
+        wanted = {_normalize_name(x) for x in args.only}
+        available = {_normalize_name(fn.__name__) for fn in generators}
+        missing = sorted(wanted - available)
+        if missing:
+            raise SystemExit('gen_island_landmarks: unknown --only target(s): %s' % ', '.join(missing))
+        generators = [fn for fn in generators if _normalize_name(fn.__name__) in wanted]
+
     lm_dir = os.path.join(outdir, 'landmarks')
     print('gen_island_landmarks: writing %d landmarks to %s' % (len(generators), lm_dir))
     for fn in generators:

@@ -1651,12 +1651,14 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			var fh := island.surface_height(fx, fz)
 			if fh < 1.75 or fh > max_fern_h:
 				continue
-			if island.surface_normal(fx, fz).y < 0.77:
+			var fn := island.surface_normal(fx, fz)
+			if fn.y < 0.77:
 				continue
 			var sc_f := rng.randf_range(0.78, 1.35)
+			var slope_sink := 0.20 * clampf((0.86 - fn.y) / 0.30, 0.0, 1.0)
 			var xform := Transform3D(
 				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
-				Vector3(fx, fh - 0.10, fz))
+				Vector3(fx, fh - 0.10 - slope_sink, fz))
 			_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
 			fern_positions.append(Vector3(fx, fh, fz))
 			ferns_placed += 1
@@ -1682,9 +1684,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		if n.y < 0.77:
 			continue
 		var sc_f := rng.randf_range(0.80, 1.38)
+		var slope_sink := 0.20 * clampf((0.86 - n.y) / 0.30, 0.0, 1.0)
 		var xform := Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
-			Vector3(fx, h - 0.10, fz))
+			Vector3(fx, h - 0.10 - slope_sink, fz))
 		_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
 		fern_positions.append(Vector3(fx, h, fz))
 		ferns_placed += 1
@@ -1707,9 +1710,11 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var h := island.surface_height(rx, rz)
 		if h < -1.0 or h > max_rock_h:
 			continue
-		if island.surface_normal(rx, rz).y < 0.72:
+		var n := island.surface_normal(rx, rz)
+		if n.y < 0.72:
 			continue
-		if island.surface_normal(rx, rz, 2.5).y < 0.72:
+		var n_wide := island.surface_normal(rx, rz, 2.5)
+		if n_wide.y < 0.72:
 			continue
 		var sc_r := rng.randf_range(0.75, 1.65)
 		var min_foot_h := h
@@ -1719,7 +1724,9 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 				min_foot_h = fh
 		if h - min_foot_h > 1.05 * sc_r:
 			continue
-		var embed_y := minf(h, min_foot_h + 0.35 * sc_r) - 0.38 * sc_r
+		var slope_ny := minf(n.y, n_wide.y)
+		var slope_sink := 0.28 * clampf((0.84 - slope_ny) / 0.30, 0.0, 1.0)
+		var embed_y := minf(h, min_foot_h + 0.35 * sc_r) - 0.38 * sc_r - slope_sink
 		var xform := Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(sc_r, sc_r * rng.randf_range(0.75, 1.20), sc_r)),
 			Vector3(rx, embed_y, rz))

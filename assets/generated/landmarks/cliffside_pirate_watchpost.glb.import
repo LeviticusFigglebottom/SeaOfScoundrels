@@ -62,6 +62,11 @@ _subresources={
 "use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_rope.tres",
 "use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_rope.tres"
 },
+"mat_landmark_temple_stone": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_temple_stone.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_temple_stone.tres"
+},
 "mat_landmark_timber": {
 "use_external/enabled": true,
 "use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_timber.tres",
