@@ -300,8 +300,9 @@ const UNLOCKS := {
 		"company_id": &"gilded_compass",
 		"req_rank": 2,
 		"is_default": false,
-		"summary": "Warm golden-ochre canvas painted with a compass sunburst.",
+		"summary": "Warm golden-ochre canvas painted with a sovereign compass sunburst.",
 		"tint": Color(0.95, 0.72, 0.24),
+		"emblem_mode": 7,
 		"modifiers": {},
 	},
 	&"sail_midnight_wave": {
@@ -313,8 +314,51 @@ const UNLOCKS := {
 		"company_id": &"iron_tide",
 		"req_rank": 3,
 		"is_default": false,
-		"summary": "Indigo-dyed mainsail emblazoned with a foaming iron wave.",
+		"summary": "Indigo-dyed mainsail emblazoned with luminous tide runes and foaming crest.",
 		"tint": Color(0.14, 0.22, 0.42),
+		"emblem_mode": 5,
+		"modifiers": {},
+	},
+	&"sail_gilded_compass": {
+		"id": &"sail_gilded_compass",
+		"name": "Gilded Compass Heraldic Sails",
+		"slot": &"sail_cosmetic",
+		"category": &"cosmetic",
+		"cost": 380,
+		"company_id": &"gilded_compass",
+		"req_rank": 1,
+		"is_default": false,
+		"summary": "Royal azure and burnished gold heraldic canvas crowned with the Guild's compass rose.",
+		"tint": Color(0.20, 0.45, 0.86),
+		"emblem_mode": 4,
+		"modifiers": {},
+	},
+	&"sail_sunken_archive": {
+		"id": &"sail_sunken_archive",
+		"name": "Sunken Archive Rune Sails",
+		"slot": &"sail_cosmetic",
+		"category": &"cosmetic",
+		"cost": 480,
+		"company_id": &"sunken_archive",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Abyssal obsidian cloth stitched with glowing turquoise sea-archive tide sigils.",
+		"tint": Color(0.14, 0.84, 0.72),
+		"emblem_mode": 5,
+		"modifiers": {},
+	},
+	&"sail_iron_tide": {
+		"id": &"sail_iron_tide",
+		"name": "Iron Tide War-Chevron Sails",
+		"slot": &"sail_cosmetic",
+		"category": &"cosmetic",
+		"cost": 480,
+		"company_id": &"iron_tide",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "War-crimson and sun-bleached ivory chevrons flown by Iron Tide bounty captains.",
+		"tint": Color(0.76, 0.16, 0.18),
+		"emblem_mode": 6,
 		"modifiers": {},
 	},
 
@@ -606,8 +650,12 @@ static func get_ship_modifiers(profile: Profile) -> Dictionary:
 		"trait_id": get_equipped(profile, &"trait"),
 		"flag_id": get_equipped(profile, &"flag"),
 		"sail_cosmetic_id": get_equipped(profile, &"sail_cosmetic"),
+		"sail_emblem_mode": 0,
 		"hull_livery_id": get_equipped(profile, &"hull_livery"),
 	}
+	var sail_cos_id: StringName = mods["sail_cosmetic_id"]
+	if sail_cos_id != &"" and UNLOCKS.has(sail_cos_id):
+		mods["sail_emblem_mode"] = int((UNLOCKS[sail_cos_id] as Dictionary).get("emblem_mode", 0))
 	for slot in [&"hull", &"sail", &"cannon", &"trait"]:
 		var equipped_id: StringName = get_equipped(profile, slot)
 		if equipped_id == &"" or not UNLOCKS.has(equipped_id):

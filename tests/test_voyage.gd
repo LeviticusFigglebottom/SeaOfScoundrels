@@ -1280,3 +1280,65 @@ func test_fort_vault_sculpted_gate_locking_swing_and_teardown() -> void:
 	await get_tree().process_frame
 	check(not is_instance_valid(vault), "FortVault freed cleanly with zero leaks")
 
+
+func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> void:
+	Net.start_single_player()
+	var holder := Node3D.new()
+	add_child(holder)
+
+	var vault_gd: GDScript = preload("res://src/world/fort_vault.gd")
+	var vault := vault_gd.new() as Node3D
+	vault.name = "FortVault"
+	holder.add_child(vault)
+
+	var bat_a := FortBattery.new()
+	bat_a.enable_effects = false
+	bat_a.siege_active = true
+	holder.add_child(bat_a)
+
+	var bat_b := FortBattery.new()
+	bat_b.enable_effects = false
+	bat_b.siege_active = true
+	holder.add_child(bat_b)
+
+	var batteries: Array[FortBattery] = [bat_a, bat_b]
+	var sync_unlock := func(_b: FortBattery) -> void:
+		for bat in batteries:
+			if not bat.destroyed:
+				return
+		vault.call(&"set_siege_cleared", true)
+		vault.call(&"open_vault")
+	bat_a.battery_destroyed.connect(sync_unlock)
+	bat_b.battery_destroyed.connect(sync_unlock)
+	vault.call(&"set_siege_cleared", false)
+
+	check(bool(vault.get(&"is_locked")) and bool(vault.call(&"is_blocking")),
+		"FortVault remains locked and blocking while coastal batteries survive")
+
+	# Destroying only 1 of 2 batteries must keep the vault sealed.
+	bat_a.take_damage(200.0)
+	check(bat_a.destroyed, "first FortBattery destroyed cleanly")
+	check(bool(vault.get(&"is_locked")) and not bool(vault.get(&"is_open")),
+		"vault stays locked until ALL coastal batteries are silenced")
+
+	# Destroying the final battery unlocks and opens the vault automatically.
+	bat_b.take_damage(200.0)
+	check(bat_b.destroyed, "second FortBattery destroyed cleanly")
+	check(not bool(vault.get(&"is_locked")) and bool(vault.get(&"is_open")),
+		"silencing all coastal batteries unlocks and opens FortVault")
+	check(not bool(vault.call(&"is_blocking")), "opened FortVault clears gate collision blocker")
+
+	holder.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(holder), "siege vault test nodes tear down cleanly")
+
+	# Verify scenes/main.gd contains zero raw primitive meshes and exposes Wave 13D showcase shots.
+	var main_src := FileAccess.get_file_as_string("res://scenes/main.gd")
+	check(main_src.length() > 1000, "loaded scenes/main.gd source cleanly")
+	for prim: String in ["BoxMesh.new", "SphereMesh.new", "CylinderMesh.new", "CapsuleMesh.new", "PrismMesh.new"]:
+		check(not main_src.contains(prim), "scenes/main.gd must contain zero raw %s placeholders" % prim)
+	check(main_src.contains("\"company_fleet\":"), "scenes/main.gd registers shot=company_fleet")
+	check(main_src.contains("\"fort_vault\":"), "scenes/main.gd registers shot=fort_vault")
+
+

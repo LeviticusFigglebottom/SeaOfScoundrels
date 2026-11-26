@@ -226,7 +226,7 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 	_anim_clock += delta
 	_last_caster_pos = caster_pos
 	var surf := Sea.height(bobber_pos.x, bobber_pos.z)
-	bobber_pos.y = surf - (0.14 + 0.045 * sin(_anim_clock * 19.0) if fish_fighting else 0.0)
+	bobber_pos.y = surf - (0.035 + 0.030 * sin(_anim_clock * 19.0) if fish_fighting else 0.0)
 
 	if state == State.WAITING:
 		_bite_timer -= delta
@@ -236,7 +236,7 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 			fish_fighting = true
 			_fight_timer = _rng.randf_range(1.2, 2.2)
 			_splash_timer = SPLASH_INTERVAL
-			bobber_pos.y = surf - 0.14
+			bobber_pos.y = surf - 0.045
 			Audio.play_sfx(&"splash_small", bobber_pos, 2.0)
 			if Ocean.current != null:
 				Ocean.current.add_foam(bobber_pos, 1.1, 0.75)
@@ -280,7 +280,7 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 		bobber_pos.z = caster_pos.z + dir.z * maxf(distance_out, 0.5)
 
 	surf = Sea.height(bobber_pos.x, bobber_pos.z)
-	bobber_pos.y = surf - (0.14 + 0.045 * sin(_anim_clock * 19.0) if fish_fighting else 0.0)
+	bobber_pos.y = surf - (0.035 + 0.030 * sin(_anim_clock * 19.0) if fish_fighting else 0.0)
 
 	# Churning foam rings & water-droplet splash bursts while the hooked fish fights.
 	if fish_fighting:
@@ -646,22 +646,22 @@ func _update_rod_transform(caster_pos: Vector3) -> void:
 	var hold_pos := caster_pos + forward * 0.55 + right * 0.28 + up * 1.15
 	var base_basis := Basis(right, up, -forward)
 
-	# Parabolic bamboo flex driven by line_tension + rapid fight tremor when fish_fighting.
+	# Smooth continuous monotonic bamboo cane arch across butt (0.18), mid (0.28), and tip (0.36).
 	var tension := clampf(line_tension, 0.0, 1.0)
 	var hook_load := 0.14 if state == State.HOOKED else 0.0
 	var bend_load := clampf(tension + hook_load * (1.0 - tension * 0.45), 0.0, 1.15)
-	var tremor := sin(_anim_clock * 34.0) * (0.04 + tension * 0.055) if fish_fighting else 0.0
-	var side_tremor := cos(_anim_clock * 27.0) * (0.028 + tension * 0.038) if fish_fighting else 0.0
+	var tremor := sin(_anim_clock * 34.0) * (0.035 + tension * 0.045) if fish_fighting else 0.0
+	var side_tremor := cos(_anim_clock * 27.0) * (0.025 + tension * 0.035) if fish_fighting else 0.0
 
-	var root_pitch := 0.46 - bend_load * 0.34 + tremor * 0.45
+	var root_pitch := 0.40 - bend_load * 0.18 + tremor * 0.30
 	_rod_root.global_transform = Transform3D(
 		base_basis * Basis.from_euler(Vector3(root_pitch, side_tremor * 0.35, 0.0)),
 		hold_pos
 	)
 	if _rod_mid_pivot != null:
-		_rod_mid_pivot.rotation = Vector3(-0.05 - bend_load * 0.38 - absf(tremor) * 0.45, side_tremor * 0.5, 0.0)
+		_rod_mid_pivot.rotation = Vector3(-0.04 - bend_load * 0.28 - absf(tremor) * 0.28, side_tremor * 0.5, 0.0)
 	if _rod_tip_pivot != null:
-		_rod_tip_pivot.rotation = Vector3(-0.08 - bend_load * 0.52 + tremor * 0.95, side_tremor, 0.0)
+		_rod_tip_pivot.rotation = Vector3(-0.06 - bend_load * 0.36 + tremor * 0.60, side_tremor, 0.0)
 
 
 # ==============================================================================

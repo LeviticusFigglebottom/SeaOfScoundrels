@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -2598,8 +2598,8 @@ func _apply_hero_shot(mode: String) -> void:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "leviathan", "fleet",
-			"fort_siege", "harbour_plaza", "smugglers_grotto",
-			"cinder_crag", "coral_reef", "fishing"
+			"company_fleet", "fort_siege", "fort_vault", "harbour_plaza",
+			"smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -2750,6 +2750,78 @@ func _apply_hero_shot(mode: String) -> void:
 			var fsc := 1.38 if is_brig else 1.24
 			_enable_ship_track_shot(Vector3(-19.5 * fsc, 10.8 * fsc, 27.5 * fsc), Vector3(0.0, 3.8, -22.0), 62.0)
 
+		"company_fleet":
+			# 4-ship Trading Company armada parade echoing Concept Art 2 in sunlit turquoise swells near Cutlass Cay!
+			Weather.time_of_day = 14.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 12.5, -0.75, 0.0, 0.34)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			for br in crew_brains:
+				if br != null and is_instance_valid(br):
+					br.hold_fire = true
+			var cc_pos := cutlass.global_position if cutlass != null else Vector3(165.0, 0.0, -415.0)
+			var cam_dir_h := Vector3(0.996, 0.0, 0.087).normalized()
+			var cam_right := cam_dir_h.cross(Vector3.UP).normalized()
+			# Position fleet ~195 m west of Cutlass Cay so its limestone spires rise behind left-center.
+			var fleet_c := cc_pos - cam_dir_h * 195.0 + cam_right * 48.0
+			var parade_yaw := 1.05
+			var parade_spd := 4.8
+
+			# Center-stage flagship (player's Brigantine or current ship): Sunken Archive (emblem_mode = 5).
+			var center_pos := fleet_c - cam_right * 0.5 - cam_dir_h * 5.0
+			_place_sailing_ship(center_pos, parade_yaw, 0.92, parade_spd)
+			_apply_company_livery(
+				player_ship,
+				Color(0.92, 0.96, 0.94),
+				Color(0.14, 0.84, 0.72),
+				Color(0.16, 0.88, 0.74),
+				Color(0.58, 0.94, 0.84),
+				5
+			)
+
+			# Left-center: Gilded Compass (emblem_mode = 4).
+			var gc_ship := _spawn_parade_ship(&"sloop", fleet_c - cam_right * 19.0 + cam_dir_h * 5.5, parade_yaw, 0.92, parade_spd)
+			_apply_company_livery(
+				gc_ship,
+				Color(0.96, 0.93, 0.84),
+				Color(0.20, 0.48, 0.92),
+				Color.BLACK,
+				Color(0.62, 0.78, 1.0),
+				4
+			)
+
+			# Right-center: Iron Tide (emblem_mode = 6).
+			var it_ship := _spawn_parade_ship(&"brigantine", fleet_c + cam_right * 18.5 + cam_dir_h * 3.5, parade_yaw, 0.92, parade_spd)
+			_apply_company_livery(
+				it_ship,
+				Color(0.96, 0.88, 0.86),
+				Color(0.84, 0.16, 0.18),
+				Color.BLACK,
+				Color(1.0, 0.56, 0.48),
+				6
+			)
+
+			# Far-right: Sovereign Sunburst (emblem_mode = 7).
+			var sv_ship := _spawn_parade_ship(&"sloop", fleet_c + cam_right * 34.0 + cam_dir_h * 12.0, parade_yaw, 0.92, parade_spd)
+			_apply_company_livery(
+				sv_ship,
+				Color(0.96, 0.90, 0.74),
+				Color(0.95, 0.72, 0.24),
+				Color(0.95, 0.68, 0.22),
+				Color(0.42, 0.40, 0.44),
+				7
+			)
+
+			# Sweeping low-waterline 3/4 bow hero camera tracking the armada (all 4 ships & streamers inside [-0.80, +0.76]).
+			var yaw_inv := Basis(Vector3.UP, parade_yaw).inverse()
+			var fleet_cam_w := fleet_c - cam_dir_h * 46.5 + cam_right * 4.0 + Vector3(0.0, 5.4, 0.0)
+			var fleet_look_w := fleet_c + cam_right * 4.0 + Vector3(0.0, 8.2, 0.0)
+			var ship_origin := player_ship.global_position
+			_enable_ship_track_shot(
+				yaw_inv * (fleet_cam_w - ship_origin),
+				yaw_inv * (fleet_look_w - ship_origin),
+				52.0
+			)
+
 		"fort_siege":
 			# Ironwatch Fort Stone Bastion, blazing Signal Brazier & 4 live coastal Sea-Battery Cannons!
 			Weather.time_of_day = 16.6 if is_nan(_cli_time) else _cli_time
@@ -2767,6 +2839,46 @@ func _apply_hero_shot(mode: String) -> void:
 				var cam_p := fpos + Vector3(-28.0, 26.5, 42.0)
 				var look_p := fpos + Vector3(0.0, 21.0, 0.0)
 				_mount_shot_camera(cam_p, look_p, 56.0)
+
+		"fort_vault":
+			# Tight golden-afternoon closeup into Ironwatch Fort's Bay 0 gateway framing the sculpted wrought-iron FortVault gate & Sovereign hoard!
+			Weather.time_of_day = 16.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.10, 9.5, -0.35, 0.0, 0.36)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.12)
+			var fort := archipelago.get_island_by_id("ironwatch_fort")
+			if fort != null:
+				_on_director_spawn_fort_siege(fort.global_position, "N")
+				var bastion := fort.get_node_or_null(^"FortBastion") as Node3D
+				if bastion != null:
+					var b_xf := bastion.global_transform
+					# Showcase gleaming Sovereign Chests & Archive Chalice right behind the barred vault gate bathed in VaultTreasuryGlow!
+					var vault_hoard: Array[Array] = [
+						[&"sovereign_chest", Vector3(0.05, 0.08, -8.35), 0.12],
+						[&"sovereign_chest", Vector3(-0.78, 0.08, -9.10), -0.38],
+						[&"archive_chalice", Vector3(0.76, 0.08, -8.90), 0.32],
+					]
+					for item_spec in vault_hoard:
+						var tid: StringName = item_spec[0]
+						var loc_p: Vector3 = item_spec[1] as Vector3
+						var yaw_off: float = float(item_spec[2])
+						var wp := b_xf * loc_p
+						var loot := TreasureCatalog.create_treasure_carryable(tid, wp)
+						loot.freeze = true
+						_entities_root.add_child(loot)
+						loot.global_position = wp
+						loot.rotation.y = bastion.global_rotation.y + yaw_off
+					# Keep spawned fort defenders inside the far courtyard so none block the gateway closeup.
+					for ep in active_enemies:
+						if ep != null and is_instance_valid(ep):
+							var ep_loc := b_xf.affine_inverse() * ep.global_position
+							if ep_loc.z < -6.0:
+								ep.teleport(b_xf * Vector3(clampf(ep_loc.x, -4.5, 4.5), 0.15, 3.8))
+					var cam_p := b_xf * Vector3(-1.35, 1.98, -18.1)
+					cam_p.y = maxf(cam_p.y, fort.world_surface_height(cam_p) + 1.15)
+					var look_p := b_xf * Vector3(0.15, 1.72, -10.2)
+					_mount_shot_camera(cam_p, look_p, 52.0)
+				else:
+					_mount_shot_camera(fort.global_position + Vector3(-18.0, 22.0, 22.0), fort.global_position + Vector3(0.0, 18.0, 0.0), 52.0)
 
 		"harbour_plaza":
 			# Port Scoundrel living harbour plaza: Merchant Factor, Pier Quartermaster, Tavern, Stall & gulls!
@@ -3032,6 +3144,51 @@ func _place_sailing_ship(pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_s
 	for i in crew_pawns.size():
 		if crew_pawns[i] != null:
 			crew_pawns[i].board(player_ship, specs[i % specs.size()]["local_pos"] as Vector3)
+
+
+func _spawn_parade_ship(cls: StringName, pos_xz: Vector3, yaw_rad: float, sail_val: float, fwd_speed: float) -> Ship:
+	var ship_scene := _resolve_ship_scene(cls)
+	var vessel := ship_scene.instantiate() as Ship
+	vessel.name = "ParadeShip_%s" % String(cls).capitalize()
+	vessel.faction = &"player"
+	vessel.enable_effects = true
+	vessel.start_anchored = false
+	_entities_root.add_child(vessel)
+	var sy := Sea.height(pos_xz.x, pos_xz.z)
+	var b := Basis(Vector3.UP, yaw_rad)
+	vessel.global_transform = Transform3D(b, Vector3(pos_xz.x, sy, pos_xz.z))
+	vessel.set_anchor(false)
+	vessel.anchor_progress = 0.0
+	vessel.set_sail_target(sail_val)
+	vessel.sail_set = sail_val
+	var ideal_trim := vessel.ideal_sail_trim()
+	vessel.set_trim_target(ideal_trim)
+	vessel.sail_trim = ideal_trim
+	vessel.linear_velocity = -b.z * fwd_speed
+	vessel.angular_velocity = Vector3.ZERO
+	return vessel
+
+
+static func _apply_company_livery(
+	vessel: Ship,
+	sail_tint: Color,
+	flag_tint: Color,
+	glow_accent: Color,
+	hull_tint: Color,
+	emblem_mode: int
+) -> void:
+	if vessel == null or not is_instance_valid(vessel):
+		return
+	var supports_emblem := false
+	for m: Dictionary in vessel.get_method_list():
+		if String(m.get("name", "")) == "apply_livery":
+			var args: Array = m.get("args", [])
+			supports_emblem = args.size() >= 5
+			break
+	if supports_emblem:
+		vessel.call(&"apply_livery", sail_tint, flag_tint, glow_accent, hull_tint, emblem_mode)
+	else:
+		vessel.apply_livery(sail_tint, flag_tint, glow_accent, hull_tint)
 
 
 func _mount_shot_camera(world_pos: Vector3, look_target: Vector3, fov_deg: float) -> void:

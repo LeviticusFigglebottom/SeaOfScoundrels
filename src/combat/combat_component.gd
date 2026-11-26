@@ -89,14 +89,30 @@ var _ray_result: PhysicsIntersectRayResult3D = PhysicsIntersectRayResult3D.new()
 var _shape_params: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 var _melee_sphere: SphereShape3D = SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
+var _active_vfx: Array[Node] = []
 
+static var _active_combatants: int = 0
 static var _spark_tex: ImageTexture = null
 static var _flash_tex: GradientTexture2D = null
+static var _ember_tex: ImageTexture = null
 
 
 func _init() -> void:
 	# Run after PlayerController (0) and Inventory (10) so visual recoil layers cleanly.
 	process_priority = 15
+
+
+func _enter_tree() -> void:
+	_active_combatants += 1
+
+
+func _exit_tree() -> void:
+	_cleanup_all_vfx()
+	_active_combatants = maxi(0, _active_combatants - 1)
+	if _active_combatants == 0:
+		_spark_tex = null
+		_flash_tex = null
+		_ember_tex = null
 
 
 func _ready() -> void:
@@ -266,7 +282,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		stamina = minf(max_stamina, stamina + 26.0)
 		_play_anim(&"parry", 0.35)
 		Audio.play_sfx(&"parry_ring", pawn.eye_position())
-		_spawn_parry_sparks(clash_pos, Color(1.0, 0.96, 0.78), true)
+		_spawn_clash_vfx(clash_pos, &"parried")
 		_trigger_recoil_pulse(1.0)
 		if attacker_cc != null:
 			attacker_cc._trigger_recoil_pulse(0.75)
@@ -280,7 +296,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		if is_heavy or cleaves_shield:
 			# Guard broken!
 			Audio.play_sfx(&"sword_clash", pawn.eye_position())
-			_spawn_parry_sparks(clash_pos, Color(1.0, 0.90, 0.52), true)
+			_spawn_clash_vfx(clash_pos, &"heavy")
 			_trigger_recoil_pulse(0.85)
 			if attacker_cc != null:
 				attacker_cc._trigger_recoil_pulse(0.85)
@@ -290,7 +306,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		if state == State.BLOCKING and stamina < 14.0:
 			# Out of stamina -> guard breaks!
 			stamina = 0.0
-			_spawn_parry_sparks(clash_pos, Color(1.0, 0.88, 0.48), true)
+			_spawn_clash_vfx(clash_pos, &"heavy")
 			_trigger_recoil_pulse(0.75)
 			apply_stagger(1.0)
 			pawn.apply_damage(raw_damage * 0.5, attacker_pawn)
@@ -298,7 +314,7 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		if state == State.BLOCKING:
 			_spend_stamina(16.0)
 		Audio.play_sfx(&"sword_clash", pawn.eye_position())
-		_spawn_parry_sparks(clash_pos, Color(1.0, 0.82, 0.40), false)
+		_spawn_clash_vfx(clash_pos, &"blocked")
 		_trigger_recoil_pulse(0.45)
 		blocked.emit(attacker_pawn)
 		return &"blocked"
@@ -308,11 +324,12 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	var dmg := raw_damage * mult
 	pawn.apply_damage(dmg, attacker_pawn)
 	Audio.play_sfx(&"hit_flesh", pawn.eye_position())
-	if is_heavy:
-		_spawn_parry_sparks(clash_pos, Color(1.0, 0.92, 0.62), true)
+	var is_combo_finisher := attacker_cc != null and not is_heavy and attacker_cc.combo_step == 3
+	if is_heavy or is_combo_finisher:
+		_spawn_clash_vfx(clash_pos, &"heavy")
 		if attacker_cc != null:
-			attacker_cc._trigger_recoil_pulse(0.85)
-		_trigger_recoil_pulse(0.65)
+			attacker_cc._trigger_recoil_pulse(0.85 if is_heavy else 0.55)
+		_trigger_recoil_pulse(0.65 if is_heavy else 0.42)
 	if attacker_pawn != null:
 		var push := pawn.global_position - attacker_pawn.global_position
 		push.y = 0.0
@@ -512,9 +529,9 @@ func _try_melee_hit_damageable(
 			(target as CharacterBody3D).velocity += flat.normalized() * (5.2 if _attack_is_heavy else 2.6)
 
 	if landed:
-		if _attack_is_heavy:
-			_spawn_parry_sparks(my_pos.lerp(target_center, 0.65), Color(1.0, 0.92, 0.62), true)
-			_trigger_recoil_pulse(0.85)
+		if _attack_is_heavy or combo_step == 3:
+			_spawn_clash_vfx(my_pos.lerp(target_center, 0.65), &"heavy")
+			_trigger_recoil_pulse(0.85 if _attack_is_heavy else 0.50)
 		if target is Pawn:
 			hit_landed.emit(target as Pawn, dmg, _attack_is_heavy)
 		target_hit.emit(target, dmg, _attack_is_heavy)
@@ -724,7 +741,7 @@ func _trigger_recoil_pulse(strength: float) -> void:
 
 
 func _can_spawn_vfx() -> bool:
-	return enable_effects and is_inside_tree() and DisplayServer.get_name() != "headless"
+	return enable_effects and is_inside_tree()
 
 
 func _play_anim(action: StringName, duration: float) -> void:
@@ -783,46 +800,103 @@ static func _get_flash_texture() -> GradientTexture2D:
 	return _flash_tex
 
 
-func _spawn_parry_sparks(pos: Vector3, tint: Color = Color(1.0, 0.94, 0.72), intense: bool = true) -> void:
+static func _get_ember_texture() -> ImageTexture:
+	if _ember_tex != null:
+		return _ember_tex
+	var sz := 24
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	# Soft glowing elliptical fiery ember mote for atmospheric floating swordfight embers.
+	for y in sz:
+		for x in sz:
+			var dx := (float(x) - half) / half
+			var dy := (float(y) - half) / half
+			var d := sqrt(dx * dx * 1.15 + dy * dy * 1.65)
+			var alpha := pow(clampf(1.0 - d, 0.0, 1.0), 1.6)
+			var bright := lerpf(0.75, 1.0, alpha)
+			img.set_pixel(x, y, Color(1.0, bright, bright * 0.88, alpha))
+	_ember_tex = ImageTexture.create_from_image(img)
+	return _ember_tex
+
+
+func _cleanup_vfx_node(fx_node: Node) -> void:
+	_active_vfx.erase(fx_node)
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	for child in fx_node.get_children():
+		if child is GPUParticles3D:
+			var gp := child as GPUParticles3D
+			gp.emitting = false
+			if gp.draw_pass_1 is QuadMesh:
+				var qm := gp.draw_pass_1 as QuadMesh
+				if qm.material is StandardMaterial3D:
+					(qm.material as StandardMaterial3D).albedo_texture = null
+				qm.material = null
+			if gp.process_material is ParticleProcessMaterial:
+				var pm := gp.process_material as ParticleProcessMaterial
+				pm.color_ramp = null
+				pm.scale_curve = null
+			gp.draw_pass_1 = null
+			gp.process_material = null
+	fx_node.queue_free()
+
+
+func _cleanup_all_vfx() -> void:
+	var pending := _active_vfx.duplicate()
+	_active_vfx.clear()
+	for fx in pending:
+		_cleanup_vfx_node(fx)
+
+
+func _spawn_parry_sparks(pos: Vector3, _tint: Color = Color(1.0, 0.94, 0.72), intense: bool = true) -> void:
+	_spawn_clash_vfx(pos, &"parried" if intense else &"blocked")
+
+
+func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	if not _can_spawn_vfx():
 		return
 	var host := pawn.get_parent() if pawn != null else null
 	if host == null:
 		return
 
+	var is_parry := (style == &"parried")
+	var is_heavy := (style == &"heavy")
 	var fx_root := Node3D.new()
 	fx_root.name = "ClashSparks"
+	fx_root.set_meta(&"clash_style", style)
 	host.add_child(fx_root)
 	fx_root.global_position = pos
 
-	# 1. Velocity-aligned additive golden-white metallic spark streaks.
+	# 1. White-hot radial metallic spark streaks bursting outward from the steel-on-steel clash.
 	var sparks := GPUParticles3D.new()
 	sparks.name = "SparkStreaks"
 	sparks.one_shot = true
 	sparks.explosiveness = 0.96
-	sparks.amount = 28 if intense else 14
-	sparks.lifetime = 0.36 if intense else 0.28
+	sparks.amount = 32 if is_parry else (24 if is_heavy else 16)
+	sparks.lifetime = 0.40 if is_parry else (0.34 if is_heavy else 0.28)
 	sparks.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	sparks.visibility_aabb = AABB(Vector3(-3.0, -3.0, -3.0), Vector3(6.0, 6.0, 6.0))
+	sparks.visibility_aabb = AABB(Vector3(-3.5, -3.5, -3.5), Vector3(7.0, 7.0, 7.0))
 
 	var proc := ParticleProcessMaterial.new()
 	proc.direction = Vector3.UP
-	proc.spread = 145.0 if intense else 115.0
-	proc.initial_velocity_min = 4.2 if intense else 2.8
-	proc.initial_velocity_max = 10.5 if intense else 6.8
+	proc.spread = 160.0 if is_parry else (140.0 if is_heavy else 115.0)
+	proc.initial_velocity_min = 4.6 if is_parry else (3.8 if is_heavy else 3.0)
+	proc.initial_velocity_max = 11.4 if is_parry else (9.4 if is_heavy else 7.4)
 	proc.damping_min = 1.8
 	proc.damping_max = 3.6
-	proc.gravity = Vector3(0.0, -14.0, 0.0)
-	proc.scale_min = 0.65
-	proc.scale_max = 1.35 if intense else 1.05
+	proc.gravity = Vector3(0.0, -13.5, 0.0)
+	proc.scale_min = 0.68
+	proc.scale_max = 1.40 if is_parry else (1.22 if is_heavy else 1.04)
+
+	var mid_tint := Color(1.0, 0.94, 0.56) if is_parry else (Color(1.0, 0.86, 0.42) if is_heavy else Color(1.0, 0.78, 0.34))
 	var grad := Gradient.new()
-	grad.offsets = PackedFloat32Array([0.0, 0.28, 0.72, 1.0])
+	grad.offsets = PackedFloat32Array([0.0, 0.26, 0.70, 1.0])
 	grad.colors = PackedColorArray([
-		Color(1.0, 0.99, 0.92, 1.0),
-		Color(tint.r, tint.g, tint.b, 0.96),
-		Color(1.0, 0.56, 0.12, 0.65),
-		Color(0.95, 0.26, 0.04, 0.0),
+		Color(1.0, 0.99, 0.94, 1.0),
+		Color(mid_tint.r, mid_tint.g, mid_tint.b, 0.96),
+		Color(1.0, 0.52, 0.10, 0.65),
+		Color(0.92, 0.22, 0.04, 0.0),
 	])
 	var ramp := GradientTexture1D.new()
 	ramp.width = 24
@@ -831,7 +905,7 @@ func _spawn_parry_sparks(pos: Vector3, tint: Color = Color(1.0, 0.94, 0.72), int
 	sparks.process_material = proc
 
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.045, 0.28) if intense else Vector2(0.036, 0.20)
+	quad.size = Vector2(0.050, 0.33) if is_parry else (Vector2(0.044, 0.27) if is_heavy else Vector2(0.036, 0.20))
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -843,50 +917,136 @@ func _spawn_parry_sparks(pos: Vector3, tint: Color = Color(1.0, 0.94, 0.72), int
 	quad.material = mat
 	sparks.draw_pass_1 = quad
 	fx_root.add_child(sparks)
+	sparks.restart()
 	sparks.emitting = true
 
-	# 2. Brief blazing golden-white core clash flash.
-	if intense:
-		var flash := GPUParticles3D.new()
-		flash.name = "ClashFlash"
-		flash.one_shot = true
-		flash.explosiveness = 1.0
-		flash.amount = 1
-		flash.lifetime = 0.14
-		flash.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
-		flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		var fproc := ParticleProcessMaterial.new()
-		fproc.gravity = Vector3.ZERO
-		fproc.initial_velocity_min = 0.0
-		fproc.initial_velocity_max = 0.0
-		var fcurve := Curve.new()
-		fcurve.add_point(Vector2(0.0, 0.45))
-		fcurve.add_point(Vector2(0.25, 1.15))
-		fcurve.add_point(Vector2(1.0, 0.10))
-		var fcurve_tex := CurveTexture.new()
-		fcurve_tex.curve = fcurve
-		fproc.scale_curve = fcurve_tex
-		flash.process_material = fproc
+	# 2. Concept-art glowing floating fiery orange-crimson combat embers drifting lazily across the air!
+	var embers := GPUParticles3D.new()
+	embers.name = "CombatEmbers"
+	embers.one_shot = true
+	embers.explosiveness = 0.82
+	embers.amount = 22 if is_parry else (16 if is_heavy else 10)
+	embers.lifetime = 0.92 if is_parry else (0.82 if is_heavy else 0.70)
+	embers.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	embers.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	embers.visibility_aabb = AABB(Vector3(-4.0, -2.5, -4.0), Vector3(8.0, 6.0, 8.0))
 
-		var fquad := QuadMesh.new()
-		fquad.size = Vector2(0.55, 0.55)
-		var fmat := StandardMaterial3D.new()
-		fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		fmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-		fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		fmat.albedo_texture = _get_flash_texture()
-		fquad.material = fmat
-		flash.draw_pass_1 = fquad
-		fx_root.add_child(flash)
-		flash.emitting = true
+	var e_proc := ParticleProcessMaterial.new()
+	e_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	e_proc.emission_sphere_radius = 0.28 if is_parry else 0.18
+	e_proc.direction = Vector3(0.0, 0.55, 0.0).normalized()
+	e_proc.spread = 155.0
+	e_proc.initial_velocity_min = 0.65 if is_parry else 0.45
+	e_proc.initial_velocity_max = 2.15 if is_parry else (1.75 if is_heavy else 1.35)
+	e_proc.damping_min = 1.6
+	e_proc.damping_max = 3.2
+	e_proc.gravity = Vector3(0.0, 0.26, 0.0)
+	e_proc.turbulence_enabled = true
+	e_proc.turbulence_noise_strength = 0.85
+	e_proc.turbulence_noise_scale = 2.4
+	e_proc.turbulence_influence_min = 0.25
+	e_proc.turbulence_influence_max = 0.55
+	e_proc.angle_min = 0.0
+	e_proc.angle_max = 360.0
+	e_proc.angular_velocity_min = -45.0
+	e_proc.angular_velocity_max = 45.0
+	e_proc.scale_min = 0.65
+	e_proc.scale_max = 1.35 if is_parry else 1.12
 
+	var e_curve := Curve.new()
+	e_curve.add_point(Vector2(0.0, 0.55))
+	e_curve.add_point(Vector2(0.22, 1.10))
+	e_curve.add_point(Vector2(0.75, 0.85))
+	e_curve.add_point(Vector2(1.0, 0.15))
+	var e_curve_tex := CurveTexture.new()
+	e_curve_tex.curve = e_curve
+	e_proc.scale_curve = e_curve_tex
+
+	var e_grad := Gradient.new()
+	e_grad.offsets = PackedFloat32Array([0.0, 0.18, 0.62, 1.0])
+	e_grad.colors = PackedColorArray([
+		Color(1.0, 0.88, 0.42, 0.0),
+		Color(1.0, 0.56, 0.12, 0.96) if not is_parry else Color(1.0, 0.72, 0.18, 1.0),
+		Color(0.98, 0.22, 0.05, 0.78),
+		Color(0.72, 0.06, 0.02, 0.0),
+	])
+	var e_ramp := GradientTexture1D.new()
+	e_ramp.width = 24
+	e_ramp.gradient = e_grad
+	e_proc.color_ramp = e_ramp
+	embers.process_material = e_proc
+
+	var e_quad := QuadMesh.new()
+	e_quad.size = Vector2(0.085, 0.058)
+	var e_mat := StandardMaterial3D.new()
+	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	e_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	e_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	e_mat.vertex_color_use_as_albedo = true
+	e_mat.albedo_texture = _get_ember_texture()
+	e_quad.material = e_mat
+	embers.draw_pass_1 = e_quad
+	fx_root.add_child(embers)
+	embers.restart()
+	embers.emitting = true
+
+	# 3. Core flash: distinct huge golden starburst for timed parries vs compact amber glint for blocks.
+	var flash := GPUParticles3D.new()
+	flash.name = "ParryStarburst" if is_parry else "ClashFlash"
+	flash.one_shot = true
+	flash.explosiveness = 1.0
+	flash.amount = 2 if is_parry else 1
+	flash.lifetime = 0.22 if is_parry else (0.16 if is_heavy else 0.11)
+	flash.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var fproc := ParticleProcessMaterial.new()
+	fproc.gravity = Vector3.ZERO
+	fproc.initial_velocity_min = 0.0
+	fproc.initial_velocity_max = 0.0
+	var fcurve := Curve.new()
+	fcurve.add_point(Vector2(0.0, 0.38))
+	fcurve.add_point(Vector2(0.24, 1.45 if is_parry else 1.10))
+	fcurve.add_point(Vector2(1.0, 0.12))
+	var fcurve_tex := CurveTexture.new()
+	fcurve_tex.curve = fcurve
+	fproc.scale_curve = fcurve_tex
+	var fgrad := Gradient.new()
+	fgrad.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
+	fgrad.colors = PackedColorArray([
+		Color(1.0, 0.99, 0.90, 1.0),
+		Color(1.0, 0.80, 0.24, 0.92) if is_parry else Color(1.0, 0.68, 0.22, 0.72),
+		Color(0.95, 0.32, 0.05, 0.0),
+	])
+	var framp := GradientTexture1D.new()
+	framp.width = 16
+	framp.gradient = fgrad
+	fproc.color_ramp = framp
+	flash.process_material = fproc
+
+	var fquad := QuadMesh.new()
+	fquad.size = Vector2(0.95, 0.95) if is_parry else (Vector2(0.58, 0.58) if is_heavy else Vector2(0.30, 0.30))
+	var fmat := StandardMaterial3D.new()
+	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fmat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fmat.vertex_color_use_as_albedo = true
+	fmat.albedo_texture = _get_flash_texture()
+	fquad.material = fmat
+	flash.draw_pass_1 = fquad
+	fx_root.add_child(flash)
+	flash.restart()
+	flash.emitting = true
+
+	_active_vfx.append(fx_root)
 	var cleanup := Timer.new()
-	cleanup.wait_time = 0.45
+	cleanup.wait_time = 1.08 if is_parry else (0.96 if is_heavy else 0.85)
 	cleanup.one_shot = true
 	cleanup.autostart = true
-	cleanup.timeout.connect(fx_root.queue_free)
+	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
 	fx_root.add_child(cleanup)
 
 
@@ -896,12 +1056,18 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	var host := pawn.get_parent() if pawn != null else null
 	if host == null:
 		return
+	var fx_root := Node3D.new()
+	fx_root.name = "MuzzlePuffVFX"
+	host.add_child(fx_root)
+	fx_root.global_position = pos
+
 	var p := GPUParticles3D.new()
 	p.name = "MuzzlePuff"
 	p.one_shot = true
 	p.explosiveness = 0.9
 	p.amount = 10
 	p.lifetime = 0.45
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var proc := ParticleProcessMaterial.new()
 	proc.direction = pawn.view_dir()
@@ -909,24 +1075,38 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	proc.initial_velocity_min = 1.5
 	proc.initial_velocity_max = 4.5
 	proc.gravity = Vector3(0.0, 1.2, 0.0)
+	var mgrad := Gradient.new()
+	mgrad.offsets = PackedFloat32Array([0.0, 0.35, 1.0])
+	mgrad.colors = PackedColorArray([
+		Color(tint.r, tint.g, tint.b, tint.a),
+		Color(tint.r, tint.g, tint.b, tint.a * 0.65),
+		Color(tint.r, tint.g, tint.b, 0.0),
+	])
+	var mramp := GradientTexture1D.new()
+	mramp.width = 16
+	mramp.gradient = mgrad
+	proc.color_ramp = mramp
 	p.process_material = proc
-	var sp := SphereMesh.new()
-	sp.radius = 0.12
-	sp.height = 0.24
-	sp.radial_segments = 6
-	sp.rings = 3
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.30, 0.30)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = tint
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sp.material = mat
-	p.draw_pass_1 = sp
-	host.add_child(p)
-	p.global_position = pos
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = _get_flash_texture()
+	quad.material = mat
+	p.draw_pass_1 = quad
+	fx_root.add_child(p)
+	p.restart()
 	p.emitting = true
+
+	_active_vfx.append(fx_root)
 	var cleanup := Timer.new()
 	cleanup.wait_time = 0.55
 	cleanup.one_shot = true
 	cleanup.autostart = true
-	cleanup.timeout.connect(p.queue_free)
-	p.add_child(cleanup)
+	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
+	fx_root.add_child(cleanup)

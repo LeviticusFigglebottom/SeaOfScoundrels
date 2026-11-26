@@ -144,6 +144,17 @@ func test_fishing_visuals_rod_catenary_bobber_and_leaping_catch() -> void:
 	check(taut_tip.y < relaxed_tip.y - 0.45, "rod tip flexes visibly downward under tension (%.2f -> %.2f)" % [relaxed_tip.y, taut_tip.y])
 	check(imm.get_surface_count() >= 1, "catenary line ribbon remains cleanly updated under tension")
 
+	# Verify painted bobber stays clearly visible near the waterline while fighting & rod bends monotonically.
+	var fight_surf := Sea.height(rod.bobber_pos.x, rod.bobber_pos.z)
+	check(rod.bobber_pos.y >= fight_surf - 0.10, "fighting bobber stays near waterline so crimson dome remains visible (dy=%.3f)" % (rod.bobber_pos.y - fight_surf))
+	var mid_piv := fish_rod.get_node_or_null(^"RodMidPivot") as Node3D
+	var tip_piv := fish_rod.get_node_or_null(^"RodMidPivot/RodTipPivot") as Node3D
+	check(mid_piv != null and tip_piv != null, "RodMidPivot and RodTipPivot exist")
+	if mid_piv != null and tip_piv != null:
+		check(mid_piv.rotation.x < -0.10 and tip_piv.rotation.x < mid_piv.rotation.x,
+			"rod flex distributes smoothly and monotonically from mid (%.2f) to tip (%.2f)" % [mid_piv.rotation.x, tip_piv.rotation.x])
+		check(absf(mid_piv.rotation.x) < 0.42, "mid-ferrule bend avoids sharp elbow kink (%.2f rad)" % mid_piv.rotation.x)
+
 	# 4. cancel_cast() hides all fishing visuals and clears the ImmediateMesh.
 	rod.cancel_cast()
 	check(not bobber.visible and not fish_rod.visible and not line_rib.visible, "cancel_cast() hides Bobber, FishingRod, and FishingLineRibbon")

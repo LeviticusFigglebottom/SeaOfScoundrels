@@ -29,8 +29,9 @@ uniform float luff_amount : hint_range(0.0, 1.0) = 0.0;
 uniform float wind_strength : hint_range(0.0, 3.0) = 0.8;
 uniform float sail_time = 0.0;
 
-// Faction emblem & spectral phase parameters (defaults keep player sails 100% unchanged).
-// 0 = standard, 1 = corsair, 2 = drowned, 3 = ghost.
+// Faction & trading-company emblem + spectral phase parameters.
+// 0 = standard, 1 = corsair, 2 = drowned, 3 = ghost,
+// 4 = gilded_compass, 5 = sunken_archive, 6 = iron_tide, 7 = sovereign_sunburst.
 uniform int emblem_mode = 0;
 uniform float phase_alpha : hint_range(0.0, 1.0) = 1.0;
 uniform float phase_flare : hint_range(0.0, 2.0) = 0.0;
@@ -178,6 +179,138 @@ float drowned_trident_anchor_rune(vec2 q) {
 	return smoothstep(0.006, -0.004, d);
 }
 
+// 8-point faceted maritime Compass Rose SDF (returns vec2(mask, two_tone_facet_shade)).
+vec2 compass_rose_sdf(vec2 q, float r_card, float r_inter, float r_base) {
+	// 4 cardinal kite spikes along ±X and ±Y.
+	vec2 f4 = abs(q);
+	bool swap4 = f4.y > f4.x;
+	vec2 p4 = swap4 ? f4.yx : f4;
+	float t4 = clamp(p4.x / max(r_card, 0.001), 0.0, 1.0);
+	float d_card = max(p4.y - r_base * (1.0 - t4), p4.x - r_card);
+	float side4 = (swap4 ? (q.x * q.y) : (-q.x * q.y)) >= 0.0 ? 1.0 : 0.0;
+
+	// 4 intercardinal kite spikes rotated 45 degrees.
+	vec2 rq = vec2(q.x + q.y, q.y - q.x) * 0.70710678;
+	vec2 fr = abs(rq);
+	bool swapr = fr.y > fr.x;
+	vec2 pr = swapr ? fr.yx : fr;
+	float tr = clamp(pr.x / max(r_inter, 0.001), 0.0, 1.0);
+	float d_inter = max(pr.y - (r_base * 0.74) * (1.0 - tr), pr.x - r_inter);
+	float sider = (swapr ? (rq.x * rq.y) : (-rq.x * rq.y)) >= 0.0 ? 1.0 : 0.0;
+
+	float m_card = smoothstep(0.005, -0.003, d_card);
+	float m_inter = smoothstep(0.005, -0.003, d_inter);
+	float mask = max(m_card, m_inter);
+	float shade = m_card > 0.5 ? side4 : sider;
+	return vec2(mask, shade);
+}
+
+// Sunken Archive octagonal bioluminescent rune-crest SDF (returns vec2(glow_mask, hot_core_mask)).
+vec2 sunken_archive_crest(vec2 q) {
+	vec2 aq = abs(q);
+	// Crisp chamfered octagonal medallion frame.
+	float oct_r = max(max(aq.x, aq.y), (aq.x + aq.y) * 0.70710678);
+	float d_frame = abs(oct_r - 0.188) - 0.014;
+	float d_inner_oct = abs(oct_r - 0.146) - 0.006;
+
+	// Four diagonal crossed compass-key spears piercing behind the octagonal corners.
+	float d_diag1 = sd_segment(q, vec2(-0.235, -0.235), vec2(0.235, 0.235)) - 0.011;
+	float d_diag2 = sd_segment(q, vec2(0.235, -0.235), vec2(-0.235, 0.235)) - 0.011;
+	float diag_mask = smoothstep(0.005, -0.003, min(d_diag1, d_diag2)) * step(0.186, oct_r);
+
+	// Four cardinal diamond stud notches around the outer octagon.
+	vec2 f4 = aq.y > aq.x ? aq.yx : aq;
+	float d_stud = (abs(f4.x - 0.205) + abs(f4.y)) - 0.022;
+
+	// Stylized central Archive mystic skull-sigil inside the octagon.
+	float d_head = length((q - vec2(0.0, -0.022)) / vec2(0.088, 0.078)) - 1.0;
+	d_head *= 0.082;
+	float d_jaw = sd_box(q - vec2(0.0, 0.062), vec2(0.048, 0.036)) - 0.010;
+	float d_sigil = min(d_head, d_jaw);
+
+	// Cutout glowing eye voids, nose triangle, and jaw tooth slits.
+	float d_eye = length((vec2(aq.x, q.y) - vec2(0.034, -0.008)) / vec2(0.024, 0.020)) - 1.0;
+	d_eye *= 0.022;
+	float d_nose = max(aq.x - clamp((0.018 + (q.y - 0.024)) * 0.65, 0.0, 0.016), abs(q.y - 0.024) - 0.016);
+	float tooth_x = min(aq.x, abs(aq.x - 0.022));
+	float d_teeth = max(tooth_x - 0.0045, abs(q.y - 0.074) - 0.022);
+	float d_cut = min(min(d_eye, d_nose), d_teeth);
+
+	float sigil_m = smoothstep(0.005, -0.003, d_sigil) * (1.0 - smoothstep(0.004, -0.003, d_cut));
+	float frame_m = smoothstep(0.005, -0.003, min(min(d_frame, d_inner_oct), d_stud));
+	float full_m = clamp(max(max(frame_m, diag_mask), sigil_m), 0.0, 1.0);
+	float hot_m = clamp(sigil_m * 0.85 + smoothstep(0.003, -0.004, d_frame) * 0.65, 0.0, 1.0);
+	return vec2(full_m, hot_m);
+}
+
+// Single stylized naval anchor SDF along local Y (-y ring top .. +y flukes bottom).
+float sd_naval_anchor(vec2 p) {
+	vec2 ap = vec2(abs(p.x), p.y);
+	float d = sd_segment(p, vec2(0.0, -0.175), vec2(0.0, 0.165)) - 0.013;
+	float d_ring = abs(length(p - vec2(0.0, -0.188)) - 0.028) - 0.008;
+	float d_stock = sd_segment(p, vec2(-0.075, -0.120), vec2(0.075, -0.120)) - 0.011;
+	float d_arm = sd_segment(ap, vec2(0.0, 0.165), vec2(0.078, 0.135)) - 0.012;
+	float d_arm2 = sd_segment(ap, vec2(0.078, 0.135), vec2(0.118, 0.068)) - 0.011;
+	float d_fluke = sd_segment(ap, vec2(0.118, 0.068), vec2(0.082, 0.090)) - 0.009;
+	return min(min(min(d, d_ring), d_stock), min(min(d_arm, d_arm2), d_fluke));
+}
+
+// Iron Tide Crossed-Anchors & Cannonball War Emblem SDF.
+// Returns vec3(ivory_anchors_mask, gold_crown_rim_mask, iron_ball_mask).
+vec3 iron_tide_war_emblem(vec2 q) {
+	// Twin anchors crossed at ±38 degrees.
+	float ca = 0.78801;
+	float sa = 0.61566;
+	vec2 q1 = vec2(q.x * ca - q.y * sa, q.x * sa + q.y * ca);
+	vec2 q2 = vec2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca);
+	float d_anc = min(sd_naval_anchor(q1), sd_naval_anchor(q2));
+
+	// Central iron cannonball medallion + golden war-ring + 3 crown-flame spikes at top (-y).
+	float r_ball = length(q - vec2(0.0, 0.008));
+	float d_ball = r_ball - 0.064;
+	float d_ring = abs(r_ball - 0.074) - 0.010;
+
+	vec2 aq = vec2(abs(q.x), q.y);
+	float d_sp_c = sd_segment(q, vec2(0.0, -0.068), vec2(0.0, -0.155)) - 0.012 * clamp(1.0 - (-0.068 - q.y) * 9.0, 0.25, 1.0);
+	float d_sp_s = sd_segment(aq, vec2(0.036, -0.058), vec2(0.076, -0.126)) - 0.009;
+	float d_studs = min(length(q - vec2(0.0, 0.118)) - 0.014, length(aq - vec2(0.044, 0.106)) - 0.012);
+	float d_gold = min(min(d_ring, d_sp_c), min(d_sp_s, d_studs));
+
+	float ball_m = smoothstep(0.005, -0.004, d_ball);
+	float gold_m = smoothstep(0.005, -0.003, d_gold) * (1.0 - ball_m * 0.7);
+	float anc_m = smoothstep(0.005, -0.003, d_anc) * (1.0 - smoothstep(0.018, 0.002, d_ball));
+	return vec3(anc_m, gold_m, ball_m);
+}
+
+// Sovereign Sunburst rays & Crown-Star emblem SDF.
+// Returns vec3(sun_rays_mask, crown_mask, star_core_mask).
+vec3 sovereign_sunburst_emblem(vec2 q) {
+	vec2 sc = q - vec2(0.0, -0.01);
+	float r = length(sc);
+	float ang = atan(sc.y, sc.x);
+
+	// 12 crisp alternating sunburst rays fanning across the sail belly.
+	float ray_wave = cos(ang * 12.0);
+	float ray_len = 0.295 + 0.055 * cos(ang * 6.0);
+	float ray_m = smoothstep(0.18, 0.42, ray_wave) * smoothstep(ray_len, ray_len - 0.04, r) * smoothstep(0.095, 0.135, r);
+
+	// Central sovereign royal-crown silhouette above a gleaming 4-point compass star.
+	vec2 cq = q - vec2(0.0, -0.048);
+	vec2 acq = vec2(abs(cq.x), cq.y);
+	float d_band = sd_box(cq - vec2(0.0, 0.030), vec2(0.088, 0.024)) - 0.005;
+	float d_mid_spire = sd_segment(cq, vec2(0.0, 0.018), vec2(0.0, -0.068)) - 0.016 * clamp(1.0 - (0.018 - cq.y) * 9.0, 0.3, 1.0);
+	float d_side_spire = sd_segment(acq, vec2(0.060, 0.020), vec2(0.094, -0.048)) - 0.013;
+	float d_orb = min(length(cq - vec2(0.0, -0.074)) - 0.014, length(acq - vec2(0.096, -0.054)) - 0.012);
+	float crown_m = smoothstep(0.005, -0.003, min(min(d_band, d_mid_spire), min(d_side_spire, d_orb)));
+
+	// Gleaming 4-point sovereign star medallion right beneath the crown.
+	vec2 sq = q - vec2(0.0, 0.072);
+	vec2 star_res = compass_rose_sdf(sq, 0.095, 0.052, 0.026);
+	float star_m = star_res.x;
+
+	return vec3(ray_m, crown_m, star_m);
+}
+
 void vertex() {
 	float w = clamp(UV2.x, 0.0, 1.0);
 	float v_down = clamp(UV2.y, 0.0, 1.0);
@@ -269,8 +402,11 @@ void fragment() {
 
 	vec3 extra_emission = vec3(0.0);
 	bool is_sail_canvas = is_flag < 0.5 && use_albedo_tex > 0.5;
+	bool is_streamer_staff = is_flag > 0.5 && use_albedo_tex < 0.5 && UV.x < -0.1;
 
-	if (emblem_mode == 0) {
+	if (is_streamer_staff) {
+		base_col = vec3(0.76, 0.58, 0.20) * billow_mod;
+	} else if (emblem_mode == 0) {
 		base_col *= billow_mod;
 	} else {
 		// Neutral woven linen canvas grain for faction sails so the player's red winking sun
@@ -430,6 +566,187 @@ void fragment() {
 			extra_emission += abyssal_core * (0.28 + 0.55 * wisp);
 			extra_emission += rim_col * (fresnel * 1.25 + sharp_rim * 1.45 + leech_rim * 0.55 + wisp * 0.62 + vein * 0.72 + frayed_glow * 1.65);
 			extra_emission += mix(rim_col, hot_edge, 0.48) * phase_flare * (0.45 + fresnel * 0.85);
+		} else if (emblem_mode == 4) {
+			// GILDED COMPASS: royal cobalt-blue vertical outer stripes, warm golden-ochre center field,
+			// dashed cartographer's route arc, and crisp ivory-gold 8-point Compass Rose medallion!
+			if (is_sail_canvas) {
+				float side_stripe = smoothstep(0.228, 0.214, UV.x) + smoothstep(0.772, 0.786, UV.x);
+				float pin_stripe = smoothstep(0.014, 0.006, abs(abs(UV.x - 0.5) - 0.278));
+
+				// Subtle dashed nautical route arc sweeping across the lower golden field.
+				float arc_y = 0.74 + 0.055 * sin((UV.x - 0.14) * 6.2831853);
+				float arc_dash = step(0.42, fract(UV.x * 16.5));
+				float arc_m = smoothstep(0.011, 0.004, abs(UV.y - arc_y)) * arc_dash * step(0.10, UV.x) * step(UV.x, 0.90);
+				// Tiny cartographer's X waypoint at starboard end of the route arc.
+				vec2 xp = vec2((UV.x - 0.71) * 1.14, UV.y - 0.735);
+				float x_mark = smoothstep(0.007, 0.002, min(
+					sd_segment(xp, vec2(-0.026, -0.026), vec2(0.026, 0.026)),
+					sd_segment(xp, vec2(0.026, -0.026), vec2(-0.026, 0.026))
+				));
+
+				// Centerpiece cobalt disc + ivory-gold double compass ring + faceted 8-point Compass Rose!
+				vec2 q = vec2((UV.x - 0.5) * 1.14, UV.y - 0.43);
+				float r = length(q);
+				float disc_m = smoothstep(0.206, 0.196, r);
+				float ring_outer = smoothstep(0.012, 0.004, abs(r - 0.200));
+				float ring_inner = smoothstep(0.008, 0.003, abs(r - 0.168));
+				vec2 star = compass_rose_sdf(q, 0.175, 0.120, 0.036);
+
+				vec3 royal_blue = vec3(0.075, 0.215, 0.560) * linen;
+				vec3 gold_field = vec3(0.86, 0.64, 0.18) * linen;
+				vec3 ivory_gold = vec3(0.97, 0.91, 0.74) * linen;
+				vec3 deep_gold = vec3(0.74, 0.52, 0.12) * linen;
+
+				vec3 painted = mix(gold_field, royal_blue, clamp(side_stripe, 0.0, 1.0));
+				painted = mix(painted, ivory_gold, clamp(pin_stripe * 0.92 + arc_m * 0.85 + x_mark * 0.95, 0.0, 1.0));
+				painted = mix(painted, royal_blue * 0.90, disc_m);
+				painted = mix(painted, ivory_gold, clamp(ring_outer + ring_inner * 0.75, 0.0, 1.0));
+				vec3 star_col = mix(deep_gold, ivory_gold, star.y);
+				painted = mix(painted, star_col, star.x);
+
+				vec3 soft_tint = mix(vec3(1.0), albedo_tint, 0.16);
+				float face_k = is_back_face > 0.5 ? 0.78 : 1.0;
+				base_col = mix(gold_field, painted, face_k) * soft_tint * billow_mod;
+				extra_emission += vec3(0.98, 0.82, 0.36) * (star.x * 0.14 + ring_outer * 0.08) * face_k;
+			} else if (is_flag > 0.5 && use_albedo_tex < 0.5) {
+				float stripe = step(0.5, fract(UV.x * 6.5 - UV.y * 0.35));
+				float edge = smoothstep(0.36, 0.44, abs(UV.y - 0.5));
+				vec3 c_a = vec3(0.08, 0.23, 0.58);
+				vec3 c_b = vec3(0.92, 0.74, 0.26);
+				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.96, 0.91, 0.76), edge * 0.65);
+				base_col = scol * mix(vec3(1.0), albedo_tint, 0.25) * billow_mod;
+			} else {
+				base_col *= billow_mod;
+			}
+		} else if (emblem_mode == 5) {
+			// SUNKEN ARCHIVE: dramatic midnight-obsidian canvas + weathered bronze outer stripes +
+			// luminous bioluminescent turquoise/emerald Archive Crest + glowing emerald stitched hem trim!
+			if (is_sail_canvas) {
+				float bronze_side = smoothstep(0.195, 0.180, UV.x) + smoothstep(0.805, 0.820, UV.x);
+				float border_dist = min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y));
+				float stitch = 0.72 + 0.28 * step(0.30, fract((UV.x + UV.y) * 28.0));
+				float hem_trim = smoothstep(0.028, 0.014, border_dist) * stitch;
+
+				vec2 q = vec2((UV.x - 0.5) * 1.14, UV.y - 0.45);
+				vec2 crest = sunken_archive_crest(q);
+				float crest_halo = smoothstep(0.30, 0.06, length(q)) * 0.14;
+				float pulse = 0.86 + 0.14 * sin(sail_time * 2.2 + UV.y * 3.5);
+
+				vec3 obsidian = vec3(0.08, 0.10, 0.14) * linen;
+				vec3 bronze = vec3(0.46, 0.31, 0.15) * linen;
+				vec3 teal_paint = vec3(0.16, 0.90, 0.74) * linen;
+				vec3 teal_hot = vec3(0.54, 1.00, 0.90);
+
+				vec3 painted = mix(obsidian, bronze, clamp(bronze_side, 0.0, 1.0));
+				painted = mix(painted, mix(teal_paint, teal_hot, crest.y * 0.45), crest.x);
+				painted = mix(painted, teal_paint, hem_trim * 0.90);
+
+				float face_k = is_back_face > 0.5 ? 0.78 : 1.0;
+				base_col = mix(obsidian, painted, face_k) * billow_mod;
+				extra_emission += vec3(0.12, 0.96, 0.78) * ((crest.x * 0.78 + crest_halo * 0.30 + hem_trim * 0.55) * face_k * pulse);
+			} else if (is_flag > 0.5 && use_albedo_tex < 0.5) {
+				float stripe = step(0.5, fract(UV.x * 6.5 - UV.y * 0.35));
+				float edge = smoothstep(0.35, 0.44, abs(UV.y - 0.5));
+				vec3 c_a = vec3(0.14, 0.10, 0.16);
+				vec3 c_b = vec3(0.14, 0.72, 0.58);
+				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.22, 0.96, 0.78), edge * 0.85);
+				base_col = scol * mix(vec3(1.0), albedo_tint, 0.20) * billow_mod;
+				extra_emission += vec3(0.14, 0.92, 0.74) * (edge * 0.45 + stripe * 0.15);
+			} else {
+				base_col *= billow_mod;
+			}
+		} else if (emblem_mode == 6) {
+			// IRON TIDE: rich war-crimson canvas + ivory chevron bands + bold white-and-gold
+			// Crossed-Anchors & Cannonball War Emblem + salt-bleached lower hem scallops!
+			if (is_sail_canvas) {
+				float dark_flank = smoothstep(0.165, 0.150, UV.x) + smoothstep(0.835, 0.850, UV.x);
+
+				// Crisp upper & lower ivory chevron war-bands framing the belly emblem.
+				float up_chev = smoothstep(0.022, 0.012, abs((UV.y - 0.21) - abs(UV.x - 0.5) * 0.36));
+				float lo_chev = smoothstep(0.020, 0.010, abs((UV.y - 0.77) + abs(UV.x - 0.5) * 0.32));
+
+				// Salt-bleached scalloped lower hem trim along the sail foot.
+				float scallop_y = 0.915 + 0.024 * abs(sin(UV.x * 28.2743));
+				float scallop_m = smoothstep(scallop_y - 0.012, scallop_y + 0.008, UV.y);
+
+				// Dark iron diamond backing + gold border + Crossed-Anchors & Cannonball War Emblem!
+				vec2 q = vec2((UV.x - 0.5) * 1.14, UV.y - 0.47);
+				float diam = abs(q.x) + abs(q.y);
+				float diam_bg = smoothstep(0.242, 0.230, diam);
+				float diam_rim = smoothstep(0.011, 0.004, abs(diam - 0.235));
+				vec3 war = iron_tide_war_emblem(q);
+
+				vec3 war_crimson = vec3(0.64, 0.10, 0.13) * linen;
+				vec3 deep_burgundy = vec3(0.42, 0.06, 0.09) * linen;
+				vec3 dark_iron = vec3(0.10, 0.10, 0.12) * linen;
+				vec3 ivory_white = vec3(0.95, 0.92, 0.85) * linen;
+				vec3 war_gold = vec3(0.92, 0.70, 0.20) * linen;
+
+				vec3 painted = mix(war_crimson, deep_burgundy, clamp(dark_flank, 0.0, 1.0));
+				painted = mix(painted, ivory_white, clamp((up_chev + lo_chev) * 0.92, 0.0, 1.0));
+				painted = mix(painted, ivory_white * 0.88, scallop_m * 0.72);
+				painted = mix(painted, dark_iron, diam_bg * 0.88);
+				painted = mix(painted, war_gold, diam_rim);
+				painted = mix(painted, ivory_white, war.x);
+				painted = mix(painted, dark_iron * 0.78, war.z);
+				painted = mix(painted, war_gold, war.y);
+
+				vec3 soft_tint = mix(vec3(1.0), albedo_tint, 0.16);
+				float face_k = is_back_face > 0.5 ? 0.78 : 1.0;
+				base_col = mix(war_crimson, painted, face_k) * soft_tint * billow_mod;
+				extra_emission += vec3(0.95, 0.72, 0.24) * war.y * 0.10 * face_k;
+			} else if (is_flag > 0.5 && use_albedo_tex < 0.5) {
+				float stripe = step(0.5, fract(UV.x * 6.5 - UV.y * 0.35));
+				float edge = smoothstep(0.36, 0.44, abs(UV.y - 0.5));
+				vec3 c_a = vec3(0.66, 0.11, 0.14);
+				vec3 c_b = vec3(0.94, 0.90, 0.82);
+				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.92, 0.72, 0.24), edge * 0.70);
+				base_col = scol * mix(vec3(1.0), albedo_tint, 0.22) * billow_mod;
+			} else {
+				base_col *= billow_mod;
+			}
+		} else if (emblem_mode == 7) {
+			// SOVEREIGN SUNBURST: warm golden-ochre & deep charcoal-plum split canvas with
+			// radiating golden sunburst rays & sovereign crown-star emblem!
+			if (is_sail_canvas) {
+				// Dramatic split: charcoal-plum upper/outer field vs warm sovereign golden-ochre belly.
+				float split_line = 0.58 + 0.14 * cos((UV.x - 0.5) * 6.2831853);
+				float gold_field_m = smoothstep(split_line - 0.014, split_line + 0.014, UV.y);
+				float split_trim = smoothstep(0.016, 0.006, abs(UV.y - split_line));
+				float side_band = smoothstep(0.14, 0.125, UV.x) + smoothstep(0.86, 0.875, UV.x);
+
+				vec2 q = vec2((UV.x - 0.5) * 1.14, UV.y - 0.44);
+				vec3 sun = sovereign_sunburst_emblem(q);
+				// Four sovereign gold coin medallions accenting the lower corners.
+				vec2 aq = vec2(abs(UV.x - 0.5), UV.y);
+				float coins = smoothstep(0.032, 0.025, length(aq - vec2(0.31, 0.78)))
+					+ smoothstep(0.024, 0.018, length(aq - vec2(0.22, 0.84)));
+
+				vec3 charcoal_plum = vec3(0.15, 0.10, 0.19) * linen;
+				vec3 warm_ochre = vec3(0.84, 0.58, 0.15) * linen;
+				vec3 sun_gold = vec3(0.99, 0.80, 0.24) * linen;
+				vec3 ivory_hi = vec3(0.99, 0.94, 0.78) * linen;
+
+				vec3 painted = mix(charcoal_plum, warm_ochre, gold_field_m * (1.0 - clamp(side_band, 0.0, 1.0) * 0.65));
+				painted = mix(painted, sun_gold, clamp(sun.x * 0.88 + split_trim * 0.92 + coins * 0.85, 0.0, 1.0));
+				painted = mix(painted, charcoal_plum * 0.82, smoothstep(0.145, 0.132, length(q - vec2(0.0, 0.01))) * 0.92);
+				painted = mix(painted, sun_gold, clamp(sun.y, 0.0, 1.0));
+				painted = mix(painted, ivory_hi, clamp(sun.z, 0.0, 1.0));
+
+				vec3 soft_tint = mix(vec3(1.0), albedo_tint, 0.16);
+				float face_k = is_back_face > 0.5 ? 0.78 : 1.0;
+				base_col = mix(warm_ochre, painted, face_k) * soft_tint * billow_mod;
+				extra_emission += vec3(1.00, 0.80, 0.26) * (sun.y * 0.14 + sun.z * 0.18 + sun.x * 0.06) * face_k;
+			} else if (is_flag > 0.5 && use_albedo_tex < 0.5) {
+				float stripe = step(0.5, fract(UV.x * 6.5 - UV.y * 0.35));
+				float edge = smoothstep(0.36, 0.44, abs(UV.y - 0.5));
+				vec3 c_a = vec3(0.17, 0.11, 0.22);
+				vec3 c_b = vec3(0.96, 0.76, 0.22);
+				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.99, 0.92, 0.68), edge * 0.75);
+				base_col = scol * mix(vec3(1.0), albedo_tint, 0.22) * billow_mod;
+			} else {
+				base_col *= billow_mod;
+			}
 		} else {
 			base_col *= billow_mod;
 		}

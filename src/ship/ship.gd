@@ -131,6 +131,7 @@ var _yards: Array[Node3D] = []
 var _sails: Array[MeshInstance3D] = []
 var _sails_furled: Array[Node3D] = []
 var _flags: Array[MeshInstance3D] = []
+var _emissary_streamer: MeshInstance3D = null
 var _capstan: Node3D = null
 var _anchor_node: Node3D = null
 var _anchor_base_pos: Vector3 = Vector3.ZERO
@@ -182,6 +183,7 @@ var _livery_sail_tint: Color = Color.WHITE
 var _livery_flag_tint: Color = Color.WHITE
 var _livery_glow_accent: Color = Color.BLACK
 var _livery_hull_tint: Color = Color.WHITE
+var _livery_emblem_mode: int = -1
 var _effective_glow_accent: Color = Color.BLACK
 var _hull_mats_duplicated: bool = false
 var _hull_mat_entries: Array[Dictionary] = []
@@ -199,6 +201,8 @@ static var _active_ship_count: int = 0
 static var _smoke_puff_tex: ImageTexture = null
 static var _muzzle_flash_tex: GradientTexture2D = null
 static var _muzzle_spark_tex: ImageTexture = null
+static var _streamer_mesh_sloop: ArrayMesh = null
+static var _streamer_mesh_brig: ArrayMesh = null
 
 
 func _init() -> void:
@@ -288,12 +292,18 @@ func _exit_tree() -> void:
 	for fmat in _flag_mats:
 		if fmat != null:
 			fmat.set_shader_parameter(&"albedo_tex", null)
+	if _emissary_streamer != null and is_instance_valid(_emissary_streamer):
+		_emissary_streamer.material_override = null
+		_emissary_streamer.mesh = null
+	_emissary_streamer = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
 	if _active_ship_count == 0:
 		_smoke_puff_tex = null
 		_muzzle_flash_tex = null
 		_muzzle_spark_tex = null
+		_streamer_mesh_sloop = null
+		_streamer_mesh_brig = null
 
 
 # ------------------------------------------------------------------ construction
@@ -334,6 +344,7 @@ func _build_models() -> void:
 		var fl := _n("Flag" + suffix) as MeshInstance3D
 		if fl != null:
 			_flags.append(fl)
+	_build_emissary_streamer()
 
 	_capstan = _n("Capstan")
 	_anchor_node = _n("Anchor")
@@ -820,6 +831,198 @@ func _setup_sail_shaders() -> void:
 			fm.surface_set_material(0, fmat)
 			_flag_mats.append(fmat)
 
+	if _emissary_streamer != null and is_instance_valid(_emissary_streamer):
+		var smat := ShaderMaterial.new()
+		smat.shader = SAIL_WIND_SHADER
+		smat.set_shader_parameter(&"is_flag", 1.0)
+		smat.set_shader_parameter(&"is_back_face", 0.0)
+		smat.set_shader_parameter(&"use_albedo_tex", 0.0)
+		smat.set_shader_parameter(&"albedo_tint", _livery_flag_tint)
+		_emissary_streamer.material_override = smat
+		_flag_mats.append(smat)
+
+
+func _build_emissary_streamer() -> void:
+	if _flags.is_empty() or _flags[0] == null:
+		return
+	var main_flag := _flags[0]
+	var parent_node := main_flag.get_parent() as Node3D
+	if parent_node == null:
+		parent_node = _model
+	if parent_node == null:
+		return
+
+	var is_brig := ship_class == &"brigantine"
+	var streamer_mesh := _get_streamer_mesh(is_brig)
+	_emissary_streamer = MeshInstance3D.new()
+	_emissary_streamer.name = "EmissaryStreamer"
+	_emissary_streamer.mesh = streamer_mesh
+	_emissary_streamer.position = main_flag.position + Vector3(0.0, 0.55, 0.0)
+	_emissary_streamer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent_node.add_child(_emissary_streamer)
+
+
+static func _get_streamer_mesh(is_brigantine: bool) -> ArrayMesh:
+	if is_brigantine:
+		if _streamer_mesh_brig == null:
+			_streamer_mesh_brig = _build_emissary_streamer_mesh(5.4)
+		return _streamer_mesh_brig
+	if _streamer_mesh_sloop == null:
+		_streamer_mesh_sloop = _build_emissary_streamer_mesh(4.4)
+	return _streamer_mesh_sloop
+
+
+static func _build_emissary_streamer_mesh(length_m: float) -> ArrayMesh:
+	# Long tapering twin-tailed masthead emissary streamer extending along local -Z
+	# with a rigid gilded brass finial staff extension anchored down into the mast truck.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Rigid 5-sided gilded brass finial spire (UV.x = -1.0 marks brass staff, UV2.x = 0.0 pinned!).
+	const STAFF_SEGS := 5
+	var staff_y0 := -0.58
+	var staff_y1 := 0.28
+	var staff_r0 := 0.026
+	var staff_r1 := 0.015
+	var staff_uv := Vector2(-1.0, 0.5)
+	var staff_uv2 := Vector2(0.0, 0.5)
+	var col_brass := Color(0.92, 0.74, 0.28)
+	var col_brass_lo := Color(0.68, 0.50, 0.16)
+	for k in STAFF_SEGS:
+		var a0 := float(k) / float(STAFF_SEGS) * TAU
+		var a1 := float((k + 1) % STAFF_SEGS) / float(STAFF_SEGS) * TAU
+		var p00 := Vector3(cos(a0) * staff_r0, staff_y0, sin(a0) * staff_r0)
+		var p01 := Vector3(cos(a1) * staff_r0, staff_y0, sin(a1) * staff_r0)
+		var p10 := Vector3(cos(a0) * staff_r1, staff_y1, sin(a0) * staff_r1)
+		var p11 := Vector3(cos(a1) * staff_r1, staff_y1, sin(a1) * staff_r1)
+		_emit_streamer_tri(st, p00, p11, p10, col_brass_lo, col_brass, col_brass, staff_uv, staff_uv, staff_uv, staff_uv2, staff_uv2, staff_uv2, -1)
+		_emit_streamer_tri(st, p00, p01, p11, col_brass_lo, col_brass_lo, col_brass, staff_uv, staff_uv, staff_uv, staff_uv2, staff_uv2, staff_uv2, -1)
+		# Pointed brass finial cap atop the staff.
+		var tip := Vector3(0.0, staff_y1 + 0.09, 0.0)
+		_emit_streamer_tri(st, p10, p11, tip, col_brass, col_brass, col_brass, staff_uv, staff_uv, staff_uv, staff_uv2, staff_uv2, staff_uv2, -1)
+
+	# 2. Subdivided 16-segment tapering streamer ribbon (segments 0..12 solid, 13..15 twin swallowtail forks).
+	const TOTAL_SEGS := 16
+	const FORK_START := 13
+	var col_light := Color(0.98, 0.96, 0.90)
+	var col_stripe := Color(0.70, 0.68, 0.66)
+
+	for i in FORK_START:
+		var t0 := float(i) / float(TOTAL_SEGS)
+		var t1 := float(i + 1) / float(TOTAL_SEGS)
+		var z0 := -t0 * length_m
+		var z1 := -t1 * length_m
+		var yc0 := 0.36 * pow(t0, 1.25) + 0.05 * sin(t0 * TAU)
+		var yc1 := 0.36 * pow(t1, 1.25) + 0.05 * sin(t1 * TAU)
+		var hh0 := lerpf(0.23, 0.092, pow(t0, 0.85))
+		var hh1 := lerpf(0.23, 0.092, pow(t1, 0.85))
+		var c0 := col_light if (i % 2 == 0) else col_stripe
+		var c1 := c0
+
+		var top0 := Vector3(0.0, yc0 + hh0, z0)
+		var mid0 := Vector3(0.0, yc0, z0)
+		var bot0 := Vector3(0.0, yc0 - hh0, z0)
+		var top1 := Vector3(0.0, yc1 + hh1, z1)
+		var mid1 := Vector3(0.0, yc1, z1)
+		var bot1 := Vector3(0.0, yc1 - hh1, z1)
+
+		var u_t0 := Vector2(t0, 0.0)
+		var u_m0 := Vector2(t0, 0.5)
+		var u_b0 := Vector2(t0, 1.0)
+		var u_t1 := Vector2(t1, 0.0)
+		var u_m1 := Vector2(t1, 0.5)
+		var u_b1 := Vector2(t1, 1.0)
+
+		# Upper ribbon strip.
+		_emit_streamer_tri(st, top0, top1, mid1, c0, c1, c1, u_t0, u_t1, u_m1, u_t0, u_t1, u_m1, 1)
+		_emit_streamer_tri(st, top0, mid1, mid0, c0, c1, c0, u_t0, u_m1, u_m0, u_t0, u_m1, u_m0, 1)
+		# Lower ribbon strip.
+		_emit_streamer_tri(st, mid0, mid1, bot1, c0, c1, c1, u_m0, u_m1, u_b1, u_m0, u_m1, u_b1, 1)
+		_emit_streamer_tri(st, mid0, bot1, bot0, c0, c1, c0, u_m0, u_b1, u_b0, u_m0, u_b1, u_b0, 1)
+
+	# 3. Twin notched swallowtail fork tips (upper & lower whipping tails, t = FORK_START/16 .. 1.0).
+	var fork_segs := TOTAL_SEGS - FORK_START
+	for tail_sgn: float in [1.0, -1.0]:
+		for fi in fork_segs:
+			var idx0 := FORK_START + fi
+			var idx1 := idx0 + 1
+			var t0 := float(idx0) / float(TOTAL_SEGS)
+			var t1 := float(idx1) / float(TOTAL_SEGS)
+			var frac0 := float(fi) / float(fork_segs)
+			var frac1 := float(fi + 1) / float(fork_segs)
+			var z0 := -t0 * length_m
+			var z1 := -t1 * length_m
+			var yc0 := 0.36 * pow(t0, 1.25) + 0.05 * sin(t0 * TAU)
+			var yc1 := 0.36 * pow(t1, 1.25) + 0.05 * sin(t1 * TAU)
+			var base_hh0 := lerpf(0.23, 0.092, pow(t0, 0.85))
+			var base_hh1 := lerpf(0.23, 0.092, pow(t1, 0.85))
+
+			# Outer edge flares slightly outward; inner notch edge sweeps sharply away from centerline!
+			var out_y0 := yc0 + tail_sgn * (base_hh0 + 0.038 * frac0)
+			var out_y1 := yc1 + tail_sgn * (base_hh1 + 0.038 * frac1)
+			var in_y0 := yc0 + tail_sgn * (base_hh0 * lerpf(0.0, 0.96, frac0) + 0.026 * frac0)
+			var in_y1 := yc1 + tail_sgn * (base_hh1 * lerpf(0.0, 0.96, frac1) + 0.026 * frac1)
+
+			var c := col_light if (idx0 % 2 == 0) else col_stripe
+			var v_out := 0.0 if tail_sgn > 0.0 else 1.0
+			var v_in0 := lerpf(0.5, v_out, frac0 * 0.85)
+			var v_in1 := lerpf(0.5, v_out, frac1 * 0.85)
+
+			var po0 := Vector3(0.0, out_y0, z0)
+			var pi0 := Vector3(0.0, in_y0, z0)
+			var po1 := Vector3(0.0, out_y1, z1)
+			var pi1 := Vector3(0.0, in_y1, z1)
+
+			var uo0 := Vector2(t0, v_out)
+			var ui0 := Vector2(t0, v_in0)
+			var uo1 := Vector2(t1, v_out)
+			var ui1 := Vector2(t1, v_in1)
+
+			# Order top-to-bottom (hi above lo) so both upper and lower forks share identical winding.
+			var hi0 := po0 if tail_sgn > 0.0 else pi0
+			var lo0 := pi0 if tail_sgn > 0.0 else po0
+			var hi1 := po1 if tail_sgn > 0.0 else pi1
+			var lo1 := pi1 if tail_sgn > 0.0 else po1
+			var uhi0 := uo0 if tail_sgn > 0.0 else ui0
+			var ulo0 := ui0 if tail_sgn > 0.0 else uo0
+			var uhi1 := uo1 if tail_sgn > 0.0 else ui1
+			var ulo1 := ui1 if tail_sgn > 0.0 else uo1
+
+			if fi == fork_segs - 1:
+				var tip_pt := Vector3(0.0, 0.5 * (out_y1 + in_y1), z1)
+				var u_tip := Vector2(t1, v_out)
+				_emit_streamer_tri(st, hi0, tip_pt, lo0, c, c, c, uhi0, u_tip, ulo0, uhi0, u_tip, ulo0, 1)
+			else:
+				_emit_streamer_tri(st, hi0, hi1, lo1, c, c, c, uhi0, uhi1, ulo1, uhi0, uhi1, ulo1, 1)
+				_emit_streamer_tri(st, hi0, lo1, lo0, c, c, c, uhi0, ulo1, ulo0, uhi0, ulo1, ulo0, 1)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _emit_streamer_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ca: Color, cb: Color, cc: Color, uva: Vector2, uvb: Vector2, uvc: Vector2,
+		uv2a: Vector2, uv2b: Vector2, uv2c: Vector2, smooth_grp: int) -> void:
+	if (c - a).cross(b - a).length_squared() < 1e-12:
+		return
+	st.set_smooth_group(smooth_grp)
+	st.set_color(ca)
+	st.set_uv(uva)
+	st.set_uv2(uv2a)
+	st.add_vertex(a)
+
+	st.set_smooth_group(smooth_grp)
+	st.set_color(cb)
+	st.set_uv(uvb)
+	st.set_uv2(uv2b)
+	st.add_vertex(b)
+
+	st.set_smooth_group(smooth_grp)
+	st.set_color(cc)
+	st.set_uv(uvc)
+	st.set_uv2(uv2c)
+	st.add_vertex(c)
+
 
 func _setup_lights_and_glass() -> void:
 	_window_mats.clear()
@@ -1049,19 +1252,36 @@ func apply_modifiers(mods: Dictionary) -> void:
 	cannon_radius_modifier = float(mods.get("cannon_radius_scale", 1.0))
 
 
-## Customize sail/flag/hull colours and optional spectral glow (player cosmetics, Drowned/Ghost/Corsair ships).
+## Customize sail/flag/hull colours, optional spectral glow, and procedural heraldic sail emblem mode.
+## Pass `sail_emblem_mode = -1` to preserve faction defaults (0=standard, 1=corsair, 2=drowned, 3=ghost),
+## or 4..7 for Trading Company crests (4=Gilded Compass, 5=Sunken Archive, 6=Iron Tide, 7=Sovereign Sunburst).
 func apply_livery(
 		sail_tint: Color,
 		flag_tint: Color,
 		glow_accent: Color = Color.BLACK,
-		hull_tint: Color = Color.WHITE
+		hull_tint: Color = Color.WHITE,
+		sail_emblem_mode: int = -1
 ) -> void:
 	_livery_sail_tint = sail_tint
 	_livery_flag_tint = flag_tint
 	_livery_glow_accent = glow_accent
 	_livery_hull_tint = hull_tint
+	_livery_emblem_mode = sail_emblem_mode
 	if is_node_ready():
 		_apply_current_livery()
+
+
+## Return the active procedural `emblem_mode` integer driving sails & emissary streamer.
+func get_emblem_mode() -> int:
+	if _livery_emblem_mode >= 0:
+		return _livery_emblem_mode
+	if faction == &"ghost":
+		return 3
+	if faction == &"drowned":
+		return 2
+	if faction == &"corsair":
+		return 1
+	return 0
 
 
 ## Drive spectral visibility, ectoplasmic dissolve, and phase flare on Ghost Ships.
@@ -1126,13 +1346,7 @@ func _apply_current_livery() -> void:
 		else:
 			sail_glow_strength = clampf(glow_mag * 0.78, 0.14, 0.82)
 
-	var emblem_mode := 0
-	if is_ghost:
-		emblem_mode = 3
-	elif faction == &"drowned":
-		emblem_mode = 2
-	elif faction == &"corsair":
-		emblem_mode = 1
+	var emblem_mode := get_emblem_mode()
 
 	for sm in _sail_mats:
 		sm.set_shader_parameter(&"albedo_tint", _livery_sail_tint)
@@ -2430,6 +2644,8 @@ func _update_visuals(delta: float) -> void:
 			_flags[idx].rotation.y = lerp_angle(_flags[idx].rotation.y, target_yaw, clampf(delta * 6.0, 0.0, 1.0))
 			if idx < _lod_flags.size():
 				_lod_flags[idx].rotation.y = _flags[idx].rotation.y
+		if _emissary_streamer != null and is_instance_valid(_emissary_streamer):
+			_emissary_streamer.rotation.y = lerp_angle(_emissary_streamer.rotation.y, target_yaw, clampf(delta * 5.2, 0.0, 1.0))
 
 	# Update wind-billow shader uniforms across all sails and flags.
 	var ws := clampf(wind_spd / 10.0, 0.1, 2.4)

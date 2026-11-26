@@ -509,3 +509,67 @@ func test_enemy_signature_combat_vfx_and_teardown() -> void:
 	await _end()
 
 
+func test_clash_sparks_and_floating_combat_embers_teardown() -> void:
+	_begin()
+	_ground()
+
+	var atk_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var def_pair := _fighter(Vector3(0.0, 5.05, -1.6), &"drowned", PI)
+	var atk_cc: CombatComponent = atk_pair[1]
+	var def_cc: CombatComponent = def_pair[1]
+	atk_cc.enable_effects = true
+	def_cc.enable_effects = true
+	await physics_frames(4)
+
+	# 1. Active block clash spawns warm steel-amber SparkStreaks + drifting CombatEmbers + compact ClashFlash.
+	def_cc.set_blocking(true)
+	def_cc._block_elapsed = CombatComponent.PARRY_WINDOW + 0.15
+	var block_res := def_cc.receive_melee_hit(atk_cc, 20.0, false, false)
+	check_eq(block_res, &"blocked", "late block returns &" + "blocked")
+	check_eq(def_cc._active_vfx.size(), 1, "blocked clash tracks ClashSparks VFX node")
+	var block_fx := def_cc._active_vfx[0]
+	var block_streaks := block_fx.get_node_or_null(^"SparkStreaks") as GPUParticles3D
+	var block_embers := block_fx.get_node_or_null(^"CombatEmbers") as GPUParticles3D
+	var block_flash := block_fx.get_node_or_null(^"ClashFlash") as GPUParticles3D
+	check(block_streaks != null and block_streaks.emitting, "blocked clash emits velocity-aligned SparkStreaks")
+	check(block_embers != null and block_embers.emitting and block_embers.lifetime >= 0.65,
+		"blocked clash emits drifting CombatEmbers (lifetime=%.2f)" % (block_embers.lifetime if block_embers != null else 0.0))
+	check(block_flash != null and block_fx.get_node_or_null(^"ParryStarburst") == null,
+		"blocked clash uses compact ClashFlash distinct from ParryStarburst")
+
+	# 2. Timed parry clash spawns larger golden SparkStreaks + ParryStarburst + vivid floating CombatEmbers!
+	def_cc.set_blocking(false)
+	def_cc.set_blocking(true)
+	def_cc._block_elapsed = 0.05
+	var parry_res := def_cc.receive_melee_hit(atk_cc, 24.0, false, false)
+	check_eq(parry_res, &"parried", "timed parry returns &" + "parried")
+	check_eq(def_cc._active_vfx.size(), 2, "parried clash tracks second ClashSparks VFX node")
+	var parry_fx := def_cc._active_vfx[1]
+	var parry_streaks := parry_fx.get_node_or_null(^"SparkStreaks") as GPUParticles3D
+	var parry_embers := parry_fx.get_node_or_null(^"CombatEmbers") as GPUParticles3D
+	var parry_star := parry_fx.get_node_or_null(^"ParryStarburst") as GPUParticles3D
+	check(parry_streaks != null and parry_streaks.amount > block_streaks.amount,
+		"parried clash emits denser golden SparkStreaks (%d > %d)" % [
+			parry_streaks.amount if parry_streaks != null else 0, block_streaks.amount])
+	check(parry_embers != null and parry_embers.amount > block_embers.amount and parry_embers.lifetime >= 0.85,
+		"parried clash emits richer longer-lived CombatEmbers")
+	check(parry_star != null and parry_star.draw_pass_1 is QuadMesh and (parry_star.draw_pass_1 as QuadMesh).size.x >= 0.90,
+		"parried clash emits distinct large golden ParryStarburst")
+
+	# 3. 3rd-hit combo finisher also triggers heavy spark + floating ember burst.
+	def_cc.set_blocking(false)
+	atk_cc.state = CombatComponent.State.IDLE
+	atk_cc.combo_step = 3
+	var fin_res := def_cc.receive_melee_hit(atk_cc, 28.0, false, false)
+	check_eq(fin_res, &"hit", "3rd-hit combo finisher lands cleanly")
+	check_eq(def_cc._active_vfx.size(), 3, "combo finisher spawns heavy spark & ember burst")
+	var fin_fx := def_cc._active_vfx[2]
+	check(fin_fx.get_node_or_null(^"CombatEmbers") is GPUParticles3D, "combo finisher includes drifting CombatEmbers")
+
+	# 4. Mid-burst teardown frees every active ClashSparks node cleanly with ZERO leaks!
+	await _end()
+	check(not is_instance_valid(block_fx) and not is_instance_valid(parry_fx) and not is_instance_valid(fin_fx),
+		"CombatComponent _exit_tree() cleanly frees all active clash spark & ember VFX with zero leaks")
+
+
+

@@ -438,3 +438,90 @@ func test_patch_bail_vfx_and_wind_caught_signal() -> void:
 	check(not is_instance_valid(live_patch) and not is_instance_valid(live_bail), "mid-burst patch & bail VFX freed cleanly on Ship _exit_tree()")
 
 
+func test_emissary_streamer_and_trading_company_sail_emblems() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 12.0, PI * 0.5)
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(24.0, 0.0, 0.0)
+	await physics_frames(4)
+
+	# 1. Verify EmissaryStreamer mounts cleanly above mainmast Flag on both Sloop & Brigantine!
+	var sloop_tris := 0
+	var brig_tris := 0
+	for spec: Array in [[sloop, "sloop", 4.2, 4.6], [brig, "brigantine", 5.2, 5.6]]:
+		var sh: Ship = spec[0] as Ship
+		var lbl: String = String(spec[1])
+		var min_len: float = float(spec[2])
+		var max_len: float = float(spec[3])
+		var streamer := sh.find_child("EmissaryStreamer", true, false) as MeshInstance3D
+		check(streamer != null and streamer == sh._emissary_streamer,
+			"%s mounts EmissaryStreamer MeshInstance3D" % lbl)
+		if streamer != null:
+			check(streamer.mesh is ArrayMesh and not (streamer.mesh is PrimitiveMesh),
+				"%s EmissaryStreamer uses sculpted ArrayMesh (zero primitives)" % lbl)
+			check_eq(streamer.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s EmissaryStreamer disables shadows" % lbl)
+			var smat := streamer.material_override as ShaderMaterial
+			check(smat != null and smat.shader == Ship.SAIL_WIND_SHADER,
+				"%s EmissaryStreamer binds sail_wind.gdshader" % lbl)
+			if smat != null:
+				check_near(float(smat.get_shader_parameter(&"is_flag")), 1.0, 0.01,
+					"%s EmissaryStreamer runs in flag ripple mode (is_flag=1.0)" % lbl)
+			if streamer.mesh is ArrayMesh:
+				var am := streamer.mesh as ArrayMesh
+				var aabb := am.get_aabb()
+				check(aabb.size.z >= min_len and aabb.size.z <= max_len,
+					"%s EmissaryStreamer length %.2f m within expected %.1f..%.1f m" % [lbl, aabb.size.z, min_len, max_len])
+				var arr := am.surface_get_arrays(0)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				var tris := floori(float(verts.size()) / 3.0)
+				var bad_n := 0
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_n += 1
+				check_eq(bad_n, 0, "%s EmissaryStreamer normals are all finite unit vectors" % lbl)
+				if lbl == "sloop":
+					sloop_tris = tris
+				else:
+					brig_tris = tris
+			if not sh._flags.is_empty():
+				check_near(streamer.position.y, sh._flags[0].position.y + 0.55, 0.02,
+					"%s EmissaryStreamer sits cleanly 0.55 m above mainmast Flag" % lbl)
+	print("    EmissaryStreamer sculpted tris: sloop=%d, brigantine=%d" % [sloop_tris, brig_tris])
+
+	# 2. Verify EmissaryStreamer weathervanes smoothly into crosswind alongside mainmast Flag!
+	var yaw0 := sloop._emissary_streamer.rotation.y
+	Weather.set_weather(0.0, 14.0, -PI * 0.5)
+	await physics_frames(60)
+	var yaw1 := sloop._emissary_streamer.rotation.y
+	check(absf(angle_difference(yaw0, yaw1)) > 0.6,
+		"EmissaryStreamer weathervanes into shifting crosswind (%.2f -> %.2f rad)" % [yaw0, yaw1])
+
+	# 3. Verify apply_livery 5th parameter cleanly applies Trading Company emblem modes 4, 5, 6, 7 & default -1!
+	for mode_i: int in [4, 5, 6, 7]:
+		sloop.apply_livery(Color.WHITE, Color(0.92, 0.74, 0.24), Color.BLACK, Color.WHITE, mode_i)
+		check_eq(sloop.get_emblem_mode(), mode_i, "get_emblem_mode() reports %d" % mode_i)
+		check(not sloop._sail_mats.is_empty(), "sloop has active _sail_mats")
+		for sm in sloop._sail_mats:
+			check_eq(int(sm.get_shader_parameter(&"emblem_mode")), mode_i,
+				"sail ShaderMaterial receives emblem_mode=%d" % mode_i)
+		for fm in sloop._flag_mats:
+			check_eq(int(fm.get_shader_parameter(&"emblem_mode")), mode_i,
+				"flag/streamer ShaderMaterial receives emblem_mode=%d" % mode_i)
+
+	sloop.apply_livery(Color.WHITE, Color.WHITE, Color.BLACK, Color.WHITE, -1)
+	check_eq(sloop.get_emblem_mode(), 0, "sail_emblem_mode=-1 restores faction default (0 for player)")
+
+	await _end()
+	check(Ship._streamer_mesh_sloop == null and Ship._streamer_mesh_brig == null,
+		"Ship releases static EmissaryStreamer mesh caches cleanly when last ship exits tree")
+
+
+

@@ -115,3 +115,91 @@ func test_hull_livery_persistence_and_ship_application() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(livery_path))
 	await physics_frames(2)
 
+
+func test_company_heraldic_sail_liveries_and_emblem_modes() -> void:
+	var sloop_scene: PackedScene = preload("res://src/ship/sloop.tscn")
+	var sail_path := "user://test_heraldic_sails_profile.json"
+	var p := Profile.new()
+
+	check_eq(int(Economy.get_ship_modifiers(p).get("sail_emblem_mode", -1)), 0,
+		"default sail_emblem_mode is 0 when no sail cosmetic is equipped")
+
+	var sail_cosmetics := Economy.get_unlocks_by_slot(&"sail_cosmetic")
+	check_eq(sail_cosmetics.size(), 5, "Economy registers 5 sail_cosmetic liveries (2 classic + 3 company flagships)")
+
+	# Verify exact metadata & emblem_mode contracts for all 5 sail liveries.
+	var expected_modes := {
+		&"sail_gilded_compass": 4,
+		&"sail_sunken_archive": 5,
+		&"sail_midnight_wave": 5,
+		&"sail_iron_tide": 6,
+		&"sail_sunburst": 7,
+	}
+	for uid: StringName in expected_modes.keys():
+		var entry := Economy.get_unlock(uid)
+		check(not entry.is_empty(), "Economy registers sail livery %s" % String(uid))
+		check_eq(entry.get("slot"), &"sail_cosmetic", "%s lives in sail_cosmetic slot" % String(uid))
+		check_eq(int(entry.get("emblem_mode", -1)), int(expected_modes[uid]),
+			"%s reports emblem_mode %d" % [String(uid), int(expected_modes[uid])])
+
+	# Unlock gold + renown across all 3 trading companies to test purchase, equip, and modifier reporting.
+	p.add_gold(4000)
+	p.add_renown("gilded_compass", Economy.rank_threshold(3))
+	p.add_renown("sunken_archive", Economy.rank_threshold(3))
+	p.add_renown("iron_tide", Economy.rank_threshold(3))
+
+	Net.start_single_player()
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	add_child(sloop)
+	await physics_frames(1)
+
+	for uid: StringName in [&"sail_gilded_compass", &"sail_sunken_archive", &"sail_iron_tide", &"sail_sunburst"]:
+		var buy_res := Economy.purchase_unlock(p, uid)
+		check(bool(buy_res.get("ok", false)), "purchase %s succeeds" % String(uid))
+		check(Economy.equip_loadout(p, &"sail_cosmetic", uid), "equip %s succeeds" % String(uid))
+		var mods := Economy.get_ship_modifiers(p)
+		var want_mode: int = int(expected_modes[uid])
+		check_eq(int(mods.get("sail_emblem_mode", -1)), want_mode,
+			"get_ship_modifiers exposes sail_emblem_mode=%d for %s" % [want_mode, String(uid)])
+
+		var applied := ShipwrightMenu.apply_economy_to_ship(sloop, p)
+		check_eq(int(applied.get("sail_emblem_mode", -1)), want_mode,
+			"apply_economy_to_ship returns sail_emblem_mode=%d for %s" % [want_mode, String(uid)])
+		check(sloop._livery_sail_tint.is_equal_approx(Color.WHITE),
+			"heraldic emblem mode %d keeps sail_tint crisp Color.WHITE" % want_mode)
+		var ship_mode: Variant = sloop.get(&"_livery_sail_emblem_mode")
+		if ship_mode is int:
+			check_eq(int(ship_mode), want_mode,
+				"Ship receives sail_emblem_mode=%d via apply_livery()" % want_mode)
+
+	# Save & reload equipped flagship sail into fresh Profile.
+	check(Economy.equip_loadout(p, &"sail_cosmetic", &"sail_iron_tide"), "equip sail_iron_tide before save")
+	check_eq(p.save(sail_path), OK, "profile saves flagship sail loadout cleanly")
+	var loaded := Profile.new()
+	check(loaded.load_from(sail_path), "profile reloads flagship sail loadout cleanly")
+	check_eq(Economy.get_equipped(loaded, &"sail_cosmetic"), &"sail_iron_tide",
+		"reloaded profile restores equipped sail_iron_tide")
+	check_eq(int(Economy.get_ship_modifiers(loaded).get("sail_emblem_mode", -1)), 6,
+		"reloaded profile restores sail_emblem_mode=6")
+
+	# Verify ShipwrightMenu renders ink-bordered color swatches for all 3 company flagship sails.
+	var menu := ShipwrightMenu.new()
+	add_child(menu)
+	menu.refresh()
+	for uid_str: String in ["sail_gilded_compass", "sail_sunken_archive", "sail_iron_tide"]:
+		var swatch := menu.find_child("Swatch_" + uid_str, true, false) as PanelContainer
+		check(swatch != null, "ShipwrightMenu builds swatch chip for %s" % uid_str)
+		if swatch != null:
+			var rect := swatch.get_node_or_null(^"SwatchColor") as ColorRect
+			var u_tint: Color = Economy.get_unlock(StringName(uid_str))["tint"] as Color
+			check(rect != null and rect.color.is_equal_approx(u_tint),
+				"Swatch %s renders unlock tint color" % uid_str)
+
+	menu.queue_free()
+	sloop.queue_free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(sail_path))
+	await physics_frames(2)
+
+

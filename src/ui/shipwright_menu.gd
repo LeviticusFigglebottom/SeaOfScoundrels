@@ -364,10 +364,14 @@ static func apply_economy_to_ship(
 		var flag_tint := Color.WHITE
 		var glow_accent := Color.BLACK
 		var hull_tint := Color.WHITE
+		var sail_emblem_mode := int(mods.get("sail_emblem_mode", 0))
 		var sail_cos := StringName(String(mods.get("sail_cosmetic_id", &"")))
 		if sail_cos != &"":
 			var se := Economy.get_unlock(sail_cos)
-			if se.has("tint") and se["tint"] is Color:
+			# Heraldic emblem modes (4..7) paint vibrant multi-color stripes & medallions
+			# directly in sail_wind.gdshader; keep sail_tint Color.WHITE so colors stay rich
+			# while the unlock's "tint" still drives the Shipwright swatch chip.
+			if sail_emblem_mode < 4 and se.has("tint") and se["tint"] is Color:
 				sail_tint = se["tint"] as Color
 		var flag_cos := StringName(String(mods.get("flag_id", &"")))
 		if flag_cos != &"":
@@ -381,7 +385,14 @@ static func apply_economy_to_ship(
 				hull_tint = he["tint"] as Color
 			if he.has("glow_accent") and he["glow_accent"] is Color:
 				glow_accent = he["glow_accent"] as Color
-		target_ship.apply_livery(sail_tint, flag_tint, glow_accent, hull_tint)
+		var livery_args: Array = [sail_tint, flag_tint, glow_accent, hull_tint]
+		for m: Dictionary in target_ship.get_method_list():
+			if String(m.get("name", "")) == "apply_livery":
+				var m_args: Array = m.get("args", []) as Array
+				if m_args.size() >= 5:
+					livery_args.append(sail_emblem_mode)
+				break
+		target_ship.callv(&"apply_livery", livery_args)
 
 	for b in crew_brains:
 		if b != null and is_instance_valid(b):
