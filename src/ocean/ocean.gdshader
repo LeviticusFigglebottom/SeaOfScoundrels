@@ -14,6 +14,10 @@ uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linea
 uniform sampler2D depth_tex : hint_depth_texture, repeat_disable, filter_nearest;
 // R = organic frothy foam lace erosion map, G = blotch noise, B = fine frothy bubble lace.
 uniform sampler2D foam_tex : repeat_enable, filter_linear_mipmap_anisotropic;
+// 2D-FFT directional JONSWAP/Tessendorf choppy wavelets (tools/textures/gen_ocean.py):
+// R,G = choppy normal slope (0.5 = flat), B = choppy ridge elevation, A = Jacobian crest fold.
+uniform sampler2D chop_tex : repeat_enable, filter_linear_mipmap_anisotropic;
+uniform float chop_tex_on = 0.0;
 // Simulated foam (Ocean's foam field): R = amount, stored in rest-plane
 // coordinates, one tile of foam_field_size metres that wraps around the camera.
 uniform sampler2D foam_field : repeat_enable, filter_linear;
@@ -24,16 +28,17 @@ uniform float foam_field_on = 0.0;
 uniform int quality = 2;
 
 group_uniforms water;
-uniform vec3 deep_color : source_color = vec3(0.004, 0.055, 0.18);
-uniform vec3 scatter_color : source_color = vec3(0.008, 0.42, 0.48);
-uniform vec3 sss_color : source_color = vec3(0.10, 0.90, 0.80);
-uniform vec3 shallow_color : source_color = vec3(0.04, 0.72, 0.70);
-uniform vec3 foam_under_color : source_color = vec3(0.18, 0.74, 0.68);
-uniform vec3 absorption = vec3(0.42, 0.082, 0.068); // per metre
-uniform float turbidity = 0.12;       // how fast the body colour builds with depth
-uniform float refraction_strength = 0.36;
-uniform float sss_strength = 1.10;
-uniform float reflectivity = 0.60;
+uniform vec3 deep_color : source_color = vec3(0.0018, 0.018, 0.088);
+uniform vec3 scatter_color : source_color = vec3(0.006, 0.30, 0.42);
+uniform vec3 sss_color : source_color = vec3(0.06, 0.92, 0.78);
+uniform vec3 shallow_color : source_color = vec3(0.03, 0.76, 0.72);
+uniform vec3 reef_color : source_color = vec3(0.014, 0.46, 0.48);
+uniform vec3 foam_under_color : source_color = vec3(0.09, 0.56, 0.56);
+uniform vec3 absorption = vec3(0.48, 0.095, 0.064); // per metre
+uniform float turbidity = 0.13;       // how fast the body colour builds with depth
+uniform float refraction_strength = 0.38;
+uniform float sss_strength = 1.25;
+uniform float reflectivity = 0.56;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.96, 0.99, 0.97);
 uniform float foam_crest_start = 0.91; // Jacobian below this starts to foam
@@ -156,6 +161,24 @@ vec2 ripple_flow(vec2 uv, vec2 off0, vec2 off1, float flow_w) {
 	vec2 b = texture(detail_tex, uv + off1).rg - 0.5;
 	float inv_rms = inversesqrt(max(flow_w * flow_w + (1.0 - flow_w) * (1.0 - flow_w), 0.25));
 	return mix(a, b, flow_w) * inv_rms;
+}
+
+// Unpack 2D-FFT JONSWAP/Tessendorf choppy wavelet sample:
+// xy = centred choppy slope, z = ridge height (0 trough..1 peak), w = Jacobian crest fold (0..1).
+vec4 chop_sample(vec2 uv) {
+	vec4 raw = texture(chop_tex, uv);
+	return vec4(raw.rg - 0.5, raw.b, clamp((raw.a - 0.02) / 0.98, 0.0, 1.0));
+}
+
+// Variance-preserving dual-phase flow-advected sample of ocean_fft_chop.png.
+vec4 chop_flow(vec2 uv, vec2 off0, vec2 off1, float flow_w) {
+	vec4 a = chop_sample(uv + off0);
+	vec4 b = chop_sample(uv + off1);
+	float inv_rms = inversesqrt(max(flow_w * flow_w + (1.0 - flow_w) * (1.0 - flow_w), 0.25));
+	vec2 slope = mix(a.xy, b.xy, flow_w) * inv_rms;
+	float h = clamp(0.5 + (mix(a.z, b.z, flow_w) - 0.5) * inv_rms, 0.0, 1.0);
+	float fold = mix(a.w, b.w, flow_w);
+	return vec4(slope, h, fold);
 }
 
 // Anisotropically stretch foam coordinates gently along local wave flow so lacy froth
@@ -298,42 +321,80 @@ void fragment() {
 	// Subtle draping along wave slopes so detail hugs steep ridges.
 	vec2 draped = v_rest + n_geo.xz * 0.55;
 
-	// --- multi-octave variance-normalized wave-advected micro ripples (normal-only detail)
-	const mat2 ROT_B = mat2(vec2(0.80, -0.60), vec2(0.60, 0.80));
+	// --- multi-cascade irrational-scale rotated 2D-FFT JONSWAP/Tessendorf chop + capillary wind ripples
+	// Three irrational spatial scales (19.3 m, 51.7 m, 137.3 m) at mutually irrational angles
+	// eliminate any segmented parallel rows or visible tiling from 2 m to the 3.7 km horizon.
+	const mat2 ROT_B  = mat2(vec2(0.80, -0.60), vec2(0.60, 0.80));
+	const mat2 ROT_C1 = mat2(vec2(0.77757, 0.62879), vec2(-0.62879, 0.77757));   // +0.68 rad
+	const mat2 ROT_C2 = mat2(vec2(0.37166, -0.92837), vec2(0.92837, 0.37166));   // -1.19 rad
 	float fine = smoothstep(0.45, 0.025, fp);
 	float med_fade = smoothstep(1.6, 0.08, fp);
+	float cfade_a = smoothstep(2.6, 0.07, fp);
+	float cfade_b = smoothstep(7.8, 0.24, fp);
+	float cfade_c = smoothstep(30.0, 1.15, fp);
+
 	vec2 rip_fine;
 	vec2 rip_med;
 	vec2 rip_micro = vec2(0.0);
 	vec2 ripple;
+	vec2 chop_slope = vec2(0.0);
+	float chop_h = 0.5;
+	float chop_fold = 0.0;
 	float gust = 0.55;
+	float macro_patch = 0.5;
+
 	if (quality > 0) {
-		rip_fine = ripple_flow(draped * 0.135, flow_off0 * 0.135, flow_off1 * 0.135, flow_w) * fine;
-		vec2 uv_m = (ROT_B * draped) * 0.054;
-		vec2 fm0 = (ROT_B * flow_off0) * 0.054;
-		vec2 fm1 = (ROT_B * flow_off1) * 0.054;
+		rip_fine = ripple_flow(draped * 0.145, flow_off0 * 0.145, flow_off1 * 0.145, flow_w) * fine;
+		vec2 uv_m = (ROT_B * draped) * 0.056;
+		vec2 fm0 = (ROT_B * flow_off0) * 0.056;
+		vec2 fm1 = (ROT_B * flow_off1) * 0.056;
 		rip_med = ripple_flow(uv_m, fm0, fm1, flow_w) * med_fade;
-		// Third broad chop octave for sculpted mid-distance facets
-		vec2 r3 = texture(detail_tex, draped * 0.0165 + flow_off0 * 0.0165).rg - 0.5;
-		// Fourth high-frequency wind-chop layer for crisp near sparkles & glossy texture
-		vec2 uv_micro = (draped.yx * 0.295) + wind_dir * 0.055 * sea_time;
-		rip_micro = ripple_flow(uv_micro, flow_off0.yx * 0.295, flow_off1.yx * 0.295, flow_w) * smoothstep(0.26, 0.015, fp);
-		ripple = rip_fine * 1.05 + rip_med * 1.30 + r3 * 0.65 * smoothstep(5.5, 0.45, fp) + rip_micro * (0.62 + 0.42 * storm);
-		gust = smoothstep(0.18, 0.82, texture(foam_tex, v_rest * 0.0037 + wind_dir * 0.004 * sea_time).g);
+		vec2 uv_micro = (draped.yx * 0.315) + wind_dir * 0.058 * sea_time;
+		rip_micro = ripple_flow(uv_micro, flow_off0.yx * 0.315, flow_off1.yx * 0.315, flow_w) * smoothstep(0.26, 0.015, fp);
+		ripple = rip_fine * 0.95 + rip_med * 1.05 + rip_micro * (0.64 + 0.42 * storm);
+		// 311 m macro swell-breakup & wind-gust field so the horizon feels vast and non-repeating.
+		macro_patch = smoothstep(0.14, 0.86, texture(foam_tex, (ROT_C1 * v_rest) * 0.003215 + wind_dir * 0.0025 * sea_time).g);
+		gust = smoothstep(0.18, 0.82, texture(foam_tex, v_rest * 0.0041 + wind_dir * 0.004 * sea_time).g);
+		if (chop_tex_on > 0.5) {
+			// Cascade A (19.3 m): dual-phase flow-advected near-to-mid choppy ridges & troughs.
+			vec2 ca_uv = draped * 0.051813 + wind_dir * (0.012 * sea_time);
+			vec4 ca = chop_flow(ca_uv, flow_off0 * 0.051813, flow_off1 * 0.051813, flow_w);
+			// Cascade B (51.7 m, +0.68 rad): oblique cross-chop sculpting mid-field faces.
+			vec2 cb_uv = (ROT_C1 * draped) * 0.019342 + vec2(-0.0072, 0.0054) * sea_time + (ROT_C1 * flow_off0) * 0.011;
+			vec4 cb = chop_sample(cb_uv);
+			vec2 cb_slope = transpose(ROT_C1) * cb.xy;
+			// Cascade C (137.3 m, -1.19 rad): vast macro chop breaking up distant swell bands.
+			vec2 cc_uv = (ROT_C2 * v_rest) * 0.007283 + vec2(0.0031, 0.0042) * sea_time;
+			vec4 cc = chop_sample(cc_uv);
+			vec2 cc_slope = transpose(ROT_C2) * cc.xy;
+
+			chop_slope = ca.xy * (1.28 * cfade_a) + cb_slope * (1.02 * cfade_b) + cc_slope * (0.72 * cfade_c);
+			chop_h = clamp(0.5 + (ca.z - 0.5) * 0.58 * cfade_a + (cb.z - 0.5) * 0.54 * cfade_b + (cc.z - 0.5) * 0.42 * cfade_c, 0.0, 1.0);
+			chop_fold = clamp(ca.w * 0.64 * cfade_a + cb.w * 0.52 * cfade_b + cc.w * 0.34 * cfade_c, 0.0, 1.0);
+		}
 	} else {
-		rip_fine = (texture(detail_tex, draped * 0.125 + flow_off0 * 0.125).rg - 0.5) * fine;
-		rip_med = (texture(detail_tex, (ROT_B * draped) * 0.048 + (ROT_B * flow_off0) * 0.048).rg - 0.5) * med_fade;
-		ripple = rip_fine * 0.95 + rip_med * 1.25;
+		rip_fine = (texture(detail_tex, draped * 0.135 + flow_off0 * 0.135).rg - 0.5) * fine;
+		rip_med = (texture(detail_tex, (ROT_B * draped) * 0.052 + (ROT_B * flow_off0) * 0.052).rg - 0.5) * med_fade;
+		ripple = rip_fine * 0.90 + rip_med * 1.05;
+		if (chop_tex_on > 0.5) {
+			vec4 ca = chop_sample(draped * 0.051813 + wind_dir * (0.012 * sea_time));
+			vec4 cb = chop_sample((ROT_C1 * draped) * 0.019342 + vec2(-0.0072, 0.0054) * sea_time);
+			vec2 cb_slope = transpose(ROT_C1) * cb.xy;
+			chop_slope = ca.xy * (1.15 * cfade_a) + cb_slope * (0.90 * cfade_b);
+			chop_h = clamp(0.5 + (ca.z - 0.5) * 0.55 * cfade_a + (cb.z - 0.5) * 0.48 * cfade_b, 0.0, 1.0);
+			chop_fold = clamp(ca.w * 0.58 * cfade_a + cb.w * 0.46 * cfade_b, 0.0, 1.0);
+		}
 	}
 
 	float crest_pre = clamp((1.0 - jac) * 1.9, 0.0, 1.0) * 0.55 + smoothstep(0.10, 1.05, h_rel) * 0.65;
-	crest_pre = clamp(crest_pre, 0.0, 1.0);
-	// Sheltered lagoons keep calmer gentle ripples; open fair/storm seas are richly sculpted & glossy.
-	float open_sea = smoothstep(0.28, 0.65, sea_amp_scale);
-	float ripple_amt = mix(0.28, mix(0.52, 0.78, storm), open_sea) * mix(0.72, 1.38, gust) * (1.0 + 0.24 * crest_pre);
-	float exag = mix(1.90, 1.0, smoothstep(0.0, 0.65, storm));
+	crest_pre = clamp(crest_pre + chop_fold * 0.24, 0.0, 1.0);
+	// Sheltered lagoons keep calmer gentle ripples; open fair/storm seas are richly choppy & sculptural.
+	float open_sea = smoothstep(0.24, 0.64, sea_amp_scale);
+	float ripple_amt = mix(0.24, mix(0.46, 0.72, storm), open_sea) * mix(0.74, 1.34, gust) * (1.0 + 0.22 * crest_pre);
+	float chop_amt = mix(0.18, mix(0.68, 0.96, storm), open_sea) * mix(0.76, 1.28, macro_patch) * (1.0 + 0.28 * crest_pre);
+	float exag = mix(1.65, 1.0, smoothstep(0.0, 0.65, storm));
 	vec3 n_shade = normalize(n_geo - vec3(long_slope.x, 0.0, long_slope.y) * (exag - 1.0));
-	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
+	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt + vec3(chop_slope.x, 0.0, chop_slope.y) * chop_amt;
 	float splash = 0.0;
 	if (rain_intensity > 0.01 && quality > 0 && fp < 0.09) {
 		vec3 rr = rain_rings(v_rest, rain_intensity, quality > 1 ? 3 : 2) * smoothstep(0.09, 0.02, fp);
@@ -341,7 +402,9 @@ void fragment() {
 		splash = rr.z;
 	}
 	vec3 N = normalize(n_shade + n_detail);
-	float rough_var = lost_var + 0.0005 + 0.0024 * storm + 0.004 * rain_intensity;
+	// Feed unresolved distant FFT chop variance into Toksvig roughness so the horizon shimmers smoothly.
+	float chop_lost_var = ((1.0 - cfade_a * cfade_a) * 0.0042 + (1.0 - cfade_b * cfade_b) * 0.0028) * open_sea * chop_tex_on;
+	float rough_var = lost_var + chop_lost_var + 0.0005 + 0.0024 * storm + 0.004 * rain_intensity;
 
 	// --- lighting with per-pixel cloud shadows
 	vec3 L = normalize(sun_dir);
@@ -395,49 +458,72 @@ void fragment() {
 		behind *= 0.70 + 0.30 * exp(-thick * 4.0);
 		behind *= mix(vec3(1.0), vec3(0.38, 0.94, 0.96), 1.0 - exp(-thick * 1.3));
 
-		// --- deep jewel-teal colour separation: deep sapphire troughs & backs,
-		// rich emerald-teal wave bodies, luminous aquamarine-cyan thinned crests (SSS)
+		// --- deep volumetric Sea-of-Thieves colour separation: fathomless dark sapphire-indigo
+		// troughs & shadowed backs, rich jewel teal-blue slopes, luminous emerald thinned crests (SSS)
 		float crest = crest_pre;
 		float facing = 1.0 - max(dot(N, V), 0.0);
 		float back_lit = pow(max(dot(V, -normalize(L + N * 0.32)), 0.0), 2.5);
 		float side_lit = pow(max(dot(V, -normalize(vec3(L.x, L.y * 0.5, L.z) + N * 0.45)), 0.0), 1.9);
-		float slope_light = dot(N, normalize(L + vec3(0.0, 0.50, 0.0)));
-		float macro_light = dot(n_shade, normalize(L + vec3(0.0, 0.55, 0.0)));
+		float slope_light = dot(N, normalize(L + vec3(0.0, 0.46, 0.0)));
+		float macro_light = dot(n_shade, normalize(L + vec3(0.0, 0.52, 0.0)));
 		float tilt = dot(-long_slope, normalize(L.xz + vec2(1e-4)));
-		float swell_shade = clamp(1.0 + tilt * mix(8.5, 1.8, storm), 0.46, 1.38);
+		float swell_shade = clamp(1.0 + tilt * mix(7.2, 1.9, storm), 0.40, 1.42);
 
-		// Deep sapphire-indigo in distant backs & troughs; luminous jewel sapphire-emerald
-		// translucent body floor in near-camera troughs (~60 m), tapering gently with distance.
-		float near_emerald = smoothstep(115.0, 18.0, dist);
-		float body_floor = mix(0.03, 0.16, near_emerald);
-		float dist_sapphire = smoothstep(50.0, 480.0, dist);
-		float body_k = body_floor + 0.34 * smoothstep(-0.55, 1.05, h_rel) + 0.40 * crest + 0.14 * facing * facing;
-		body_k *= mix(1.0, 0.14, dist_sapphire);
-		body_k *= mix(0.56, 1.22, smoothstep(0.58, 0.98, macro_light));
-		body_k = max(body_k, body_floor * 0.78);
-		float face_contrast = mix(0.46, 1.36, smoothstep(0.60, 0.98, mix(macro_light, slope_light, 0.45)));
+		// Combine geometric swell elevation with per-pixel FFT choppy wavelet trough/ridge height
+		// so deep hollows plunge into fathomless dark navy-sapphire while ridges catch bold light.
+		float eff_h = h_rel + (chop_h - 0.5) * mix(0.88, 1.18, storm) * open_sea;
+		float trough_depth = smoothstep(0.32, -0.95, eff_h);
+		float trough_ao = mix(1.0, 0.42, trough_depth * mix(0.55, 1.0, open_sea));
+		float near_emerald = smoothstep(105.0, 14.0, dist);
+		float body_floor = mix(0.008, 0.062, near_emerald);
+		float dist_sapphire = smoothstep(45.0, 440.0, dist);
+		float macro_depth = mix(0.76, 1.24, macro_patch);
+
+		float body_k = body_floor
+			+ 0.34 * smoothstep(-0.42, 1.05, eff_h)
+			+ 0.36 * crest
+			+ 0.22 * chop_fold * open_sea
+			+ 0.12 * facing * facing;
+		body_k *= mix(1.0, 0.14, dist_sapphire) * macro_depth;
+		body_k *= mix(0.34, 1.26, smoothstep(0.42, 0.96, mix(macro_light, slope_light, 0.50)));
+		body_k = max(body_k, body_floor * 0.65);
+
+		float face_lit = mix(macro_light, slope_light, 0.56);
+		float face_contrast = mix(0.24, 1.48, smoothstep(0.36, 0.96, face_lit)) * trough_ao;
 		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light * face_contrast * swell_shade;
 
-		// Luminous emerald-aquamarine translucent glow reserved for thinned upper crests,
-		// moderated at low sun/moon elevation so night horizon stays moody indigo-teal.
+		// Luminous emerald-aquamarine translucent glow concentrated tightly in thin upper crests
+		// and steep pinched FFT choppy ridges, contrasting sharply against dark sapphire troughs.
 		float sss_elev = smoothstep(-0.02, 0.16, L.y);
 		float sss_key = smoothstep(0.08, 0.55, max(sun_light.r, max(sun_light.g, sun_light.b)));
-		float sss_mod = mix(0.22, 1.0, sss_elev * sss_key);
-		// Break smooth crest SSS with organic wavelet facets so aerial views never show uniform ovals.
-		float sss_break = clamp(0.65 + (N.x * 0.9 + N.z * 0.7) * 0.55 + (1.0 - N.y) * 0.75, 0.35, 1.30);
-		float ridge_thin = smoothstep(0.34, 0.96, crest) * smoothstep(0.10, 0.92, h_rel) * sss_break;
-		float thin = clamp(ridge_thin * 1.02 + 0.52 * smoothstep(0.14, 0.90, h_rel) * max(back_lit, side_lit * 0.50) * sss_break, 0.0, 1.0);
+		float sss_mod = mix(0.20, 1.0, sss_elev * sss_key);
+		float sss_break = clamp(0.62 + (N.x * 0.9 + N.z * 0.7) * 0.52 + (1.0 - N.y) * 0.85, 0.32, 1.32);
+		float chop_ridge = smoothstep(0.54, 0.92, chop_h) * (0.40 + 0.60 * chop_fold) * open_sea;
+		float ridge_thin = clamp(
+			smoothstep(0.32, 0.96, crest) * smoothstep(0.08, 0.88, eff_h) * sss_break
+			+ chop_ridge * smoothstep(-0.18, 0.68, h_rel) * 0.72,
+			0.0, 1.0
+		);
+		float thin = clamp(
+			ridge_thin * 1.04
+			+ 0.54 * smoothstep(0.16, 0.92, eff_h) * max(back_lit, side_lit * 0.52) * sss_break,
+			0.0, 1.0
+		);
 		body += sss_color * sss_strength * sss_mod * (
-				ridge_thin * light * 0.44
-				+ thin * sun_light * (2.05 * back_lit + 0.52 * side_lit)
-		) * (0.35 + 0.65 * facing) * mix(1.0, 0.25, dist_sapphire);
+				ridge_thin * light * 0.42
+				+ thin * sun_light * (2.25 * back_lit + 0.58 * side_lit)
+		) * (0.34 + 0.66 * facing) * mix(1.0, 0.24, dist_sapphire);
 
-		// Depth-based absorption: vibrant turquoise shallows over sandy beaches.
+		// 3-zone coastal depth absorption: crystal turquoise shallows (0..3.5 m) -> vivid
+		// emerald-jade reef dropoff (3.5..14 m) -> fathomless dark sapphire-indigo open sea (> 14 m).
 		float path = vdepth * 1.45 + min(thick, 10.0) * 0.12;
 		vec3 trans = exp(-(absorption + turbidity) * path);
 		float fill = 1.0 - exp(-turbidity * (path + min(thick, 4.0) * 0.85));
-		vec3 shallow_tint = mix(shallow_color, scatter_color, 0.25) * light * 0.68;
-		col = behind * trans + mix(shallow_tint, body, smoothstep(0.0, 8.5, path)) * fill;
+		vec3 shallow_tint = mix(shallow_color, scatter_color, 0.18) * light * 0.74;
+		vec3 reef_tint = reef_color * light * mix(0.62, 1.12, smoothstep(0.38, 0.95, face_lit));
+		vec3 coast_body = mix(shallow_tint, reef_tint, smoothstep(1.2, 5.2, path));
+		vec3 water_vol = mix(coast_body, body, smoothstep(4.2, 16.5, path));
+		col = behind * trans + water_vol * fill;
 
 		// --- compute foam sources early so milky aqua aeration glows ONLY beneath real foam
 		float lod_fade = smoothstep(0.95, 0.22, fp * 0.18);
@@ -445,18 +531,19 @@ void fragment() {
 		float has_floor = step(scene_z, surf_z + 60.0);
 		float deep_water = mix(1.0, smoothstep(2.4, 4.0, vdepth), has_floor);
 		float open_foam = smoothstep(0.46, 0.64, sea_amp_scale) * deep_water;
-		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac) * deep_water;
-		// Chunky fair-weather breaking ridges: steep pinched high crests form creamy lacy caps
-		float fair_cap = smoothstep(0.32, 0.92, h_rel) * smoothstep(0.97, 0.84, jac) * mix(0.84, 0.30, storm) * open_foam;
-		float field = field_foam(v_rest, dist);
+		float f_now = smoothstep(foam_crest_start - 0.08, foam_crest_full - 0.08, jac) * deep_water;
+		// Crisp, sparse, wind-torn whitecaps strictly along the steepest pinched crests.
+		float chop_cap = smoothstep(0.72, 0.96, chop_fold) * smoothstep(0.44, 1.05, h_rel) * mix(0.30, 0.72, storm) * mix(0.55, 1.15, macro_patch) * open_foam;
+		float fair_cap = max(smoothstep(0.56, 1.12, h_rel) * smoothstep(0.89, 0.70, jac) * mix(0.46, 0.28, storm) * open_foam, chop_cap);
+		float field = clamp(field_foam(v_rest, dist) * 1.12, 0.0, 1.0);
 		float crest_foam = max(max(f_now, fair_cap), field);
 		float linger = clamp(field - max(f_now, fair_cap), 0.0, 1.0);
 		if (foam_field_on < 0.5 || dist > foam_field_size * 0.31) {
 			float j1 = sea_jacobian_lod(v_rest, sea_time - 1.1, max(fp * 2.5, 5.0));
-			float f_trail = smoothstep(foam_crest_start, foam_crest_full, j1 + 0.02) * 0.60 * deep_water;
+			float f_trail = smoothstep(foam_crest_start - 0.08, foam_crest_full - 0.08, j1 + 0.02) * 0.52 * deep_water;
 			if (quality > 0) {
 				float j2 = sea_jacobian_lod(v_rest, sea_time - 2.6, max(fp * 2.5, 5.0));
-				f_trail = max(f_trail, smoothstep(foam_crest_start, foam_crest_full, j2 + 0.04) * 0.36 * deep_water);
+				f_trail = max(f_trail, smoothstep(foam_crest_start - 0.08, foam_crest_full - 0.08, j2 + 0.04) * 0.30 * deep_water);
 			}
 			crest_foam = max(crest_foam, f_trail);
 			linger = max(linger, clamp(f_trail - f_now, 0.0, 1.0));
@@ -464,7 +551,7 @@ void fragment() {
 		// Wind streaks: standing foam in rough weather, drawn out downwind.
 		vec2 wuv = vec2(dot(v_rest, wind_dir) * 0.004, dot(v_rest, vec2(-wind_dir.y, wind_dir.x)) * 0.021);
 		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
-		float standing = storm * storm * smoothstep(0.38, 0.90, blot) * 0.62 * smoothstep(-0.5, 0.5, h_rel) * deep_water;
+		float standing = storm * storm * smoothstep(0.38, 0.90, blot) * 0.58 * smoothstep(-0.3, 0.55, h_rel) * deep_water;
 		crest_foam = max(crest_foam, standing);
 
 		// Shoreline / ship-hull intersection foam from the depth buffer.
@@ -493,31 +580,34 @@ void fragment() {
 		shore_foam *= step(scene_z, surf_z + 60.0) * in_water;
 
 		// Wave-action-driven gossamer frothy webbing: ZERO unconditional open-water floor!
-		// Calm troughs and sheltered lagoons stay rich glassy jewel-teal; breaking ridges,
-		// steep faces, lingering trails/wakes, and surf drape organic frothy webbing.
+		// Calm troughs and sheltered lagoons stay rich deep sapphire; breaking ridges,
+		// steep choppy crests, ship wakes, and surf drape delicate frothy webbing.
 		float wave_energy = smoothstep(0.46, 0.78, sea_amp_scale) * deep_water;
 		float slope_len = length(n_geo.xz);
 		float near_web_fade = smoothstep(115.0, 10.0, dist);
-		float web_patch = smoothstep(0.22, 0.84, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
-		float ridge_act = smoothstep(0.22, 0.82, crest) * 0.64 + smoothstep(0.08, 0.30, slope_len) * 0.56;
-		float web_src = max(ridge_act * wave_energy, max(field * 0.95, shore_foam * 0.82));
-		web_src = max(web_src, crest_foam * 0.88 + storm * 0.24 * smoothstep(0.06, 0.26, slope_len) * deep_water);
-		float web_amt = near_web_fade * clamp(web_src, 0.0, 1.0) * mix(0.30, 1.28, web_patch);
+		float web_patch = smoothstep(0.24, 0.86, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
+		float ridge_act = smoothstep(0.42, 0.92, crest) * 0.42 + smoothstep(0.12, 0.34, slope_len) * 0.34 + smoothstep(0.62, 0.94, chop_fold) * 0.34;
+		float web_src = max(ridge_act * wave_energy, max(field * 1.0, shore_foam * 0.84));
+		web_src = max(web_src, crest_foam * 0.85 + storm * 0.32 * smoothstep(0.08, 0.28, slope_len) * deep_water);
+		float web_amt = near_web_fade * clamp(web_src, 0.0, 1.0) * mix(0.26, 1.20, web_patch);
 
 		float soft = clamp(0.045 + fp * 0.55, 0.045, 0.45);
 		float amount = clamp(max(min(crest_foam, 0.78), shore_foam), 0.0, 1.0);
 		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
 		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, flow_dir, flow_stretch, soft, quality > 0 ? streak : 0.0);
-		float heavy_foam = mix(amount * amount * 0.6, fm.x, lod_fade);
+		// Break distant whitecaps into fine wind-torn flecks instead of solid aerial blobs.
+		float far_fleck = smoothstep(0.22, 0.78, blot * 0.65 + chop_fold * 0.55);
+		float heavy_foam = mix(amount * amount * 0.42 * far_fleck, fm.x, lod_fade);
 		float foam_body = mix(0.5, fm.y, lod_fade);
 		float web_foam = fm.z * lod_fade;
 
-		// Milky turquoise-green aerated water visibly glowing right beneath actual foam patches.
-		float aerate_src = clamp(max(amount * 1.15, web_foam * 0.95) + field * 0.80 + shore_foam * 0.75, 0.0, 1.0);
-		float aerate = smoothstep(0.15, 0.72, aerate_src) * mix(0.45, 1.0, lod_fade);
-		vec3 milky_light = ambient_color * 0.70 + sun_light * (0.36 + 0.64 * clamp(dot(N, L), 0.0, 1.0));
-		vec3 milky_col = foam_under_color * milky_light * mix(0.80, 1.12, smoothstep(0.75, 1.0, macro_light));
-		col = mix(col, milky_col, clamp(aerate * 0.60 + heavy_foam * 0.28, 0.0, 0.72));
+		// Tight milky turquoise-green aeration strictly beneath active foam patches & ship wakes
+		// (fades cleanly at distance so aerial views never show glowing cyan halos).
+		float aerate_src = clamp(max(heavy_foam * 1.15, web_foam * 0.78) + field * 0.92 + shore_foam * 0.72, 0.0, 1.0);
+		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist);
+		vec3 milky_light = ambient_color * 0.68 + sun_light * (0.34 + 0.66 * clamp(dot(N, L), 0.0, 1.0));
+		vec3 milky_col = foam_under_color * milky_light * mix(0.72, 1.10, smoothstep(0.55, 1.0, macro_light));
+		col = mix(col, milky_col, clamp(aerate * 0.46 + heavy_foam * 0.24, 0.0, 0.56));
 
 		// --- sky reflection (lower flat reflectivity keeps deep jewel troughs bold)
 		float ndv = max(dot(N, V), 0.0);
@@ -556,7 +646,7 @@ void fragment() {
 		glint += pow(max(dot(N, H), 0.0), sharp * 0.22) * 0.035;
 		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
 		vec3 glint_col = sun_light * (1.0 + 1.5 * smoothstep(0.5, 0.05, key));
-		float glint_mask = (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85)) * smoothstep(-0.02, 0.05, L.y);
+		float glint_mask = (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85)) * smoothstep(-0.02, 0.05, L.y) * mix(1.0, 0.32, storm * storm);
 		col += glint_col * glint * glint_strength * (0.34 + 0.66 * fres) * glint_mask;
 		col += (ambient_color + sun_light * 0.5) * splash * 0.35;
 

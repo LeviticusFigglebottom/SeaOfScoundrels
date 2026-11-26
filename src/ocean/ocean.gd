@@ -57,6 +57,7 @@ const MAX_HULL_MASKS := 8
 const SHADER := preload("res://src/ocean/ocean.gdshader")
 const DETAIL_TEX := preload("res://assets/generated/ocean/water_detail.png")
 const FOAM_TEX := preload("res://assets/generated/ocean/foam.png")
+const CHOP_TEX_PATH := "res://assets/generated/ocean/ocean_fft_chop.png"
 
 ## The ocean most recently added to the tree (there is normally exactly one).
 static var current: Ocean
@@ -73,6 +74,7 @@ var crest_spray: CrestSpray
 var _surface: MeshInstance3D
 var _underwater: Node
 var _hull_masks: Array[Dictionary] = []
+var _chop_tex: Texture2D = null
 
 func _enter_tree() -> void:
 	current = self
@@ -85,7 +87,10 @@ func _exit_tree() -> void:
 	if material != null:
 		material.set_shader_parameter(&"foam_field", null)
 		material.set_shader_parameter(&"foam_field_on", 0.0)
+		material.set_shader_parameter(&"chop_tex", null)
+		material.set_shader_parameter(&"chop_tex_on", 0.0)
 		material.set_shader_parameter(&"hull_mask_count", 0)
+	_chop_tex = null
 	if foam_field != null:
 		if is_instance_valid(foam_field):
 			foam_field.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -98,12 +103,31 @@ func _exit_tree() -> void:
 	if _surface != null and is_instance_valid(_surface):
 		_surface.material_override = null
 
+static func _load_chop_texture() -> Texture2D:
+	if ResourceLoader.exists(CHOP_TEX_PATH):
+		var loaded := load(CHOP_TEX_PATH) as Texture2D
+		if loaded != null:
+			return loaded
+	var abs_path := ProjectSettings.globalize_path(CHOP_TEX_PATH)
+	if FileAccess.file_exists(abs_path):
+		var img := Image.load_from_file(abs_path)
+		if img != null and not img.is_empty():
+			img.generate_mipmaps()
+			return ImageTexture.create_from_image(img)
+	return null
+
 func _ready() -> void:
 	process_priority = 100  # after cameras have moved this frame
 	material = ShaderMaterial.new()
 	material.shader = SHADER
 	material.set_shader_parameter(&"detail_tex", DETAIL_TEX)
 	material.set_shader_parameter(&"foam_tex", FOAM_TEX)
+	_chop_tex = _load_chop_texture()
+	if _chop_tex != null:
+		material.set_shader_parameter(&"chop_tex", _chop_tex)
+		material.set_shader_parameter(&"chop_tex_on", 1.0)
+	else:
+		material.set_shader_parameter(&"chop_tex_on", 0.0)
 	material.set_shader_parameter(&"mesh_base_cell", base_cell)
 	material.set_shader_parameter(&"foam_crest_start", foam_crest_start)
 	material.set_shader_parameter(&"foam_crest_full", foam_crest_full)

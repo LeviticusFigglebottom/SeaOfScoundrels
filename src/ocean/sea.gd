@@ -32,26 +32,37 @@ const MAX_WAVES := 32
 ## Waves shorter than about 7 m carry centimetres of height; they live in the
 ## ocean shader as normal-only detail and are deliberately not listed here.
 const WAVE_TABLE: Array[Array] = [
-	# primary ocean swell (>= 100 m): chunky rolling swells that beat into sets
-	# of big waves and lulls even in fair weather
-	[221.0, 0.21, 1.80, 0.28, 1.00],
-	[163.0, 0.29, 1.54, 0.45, 1.02],
-	[127.0, 0.34, 1.24, 0.14, 1.08],
-	[103.0, 0.35, 0.95, 0.56, 1.15],
-	# crossing swell (>= 100 m): builds chunky 3D peaks and hollows
-	[149.0, 0.17, 0.88, -0.78, 1.02],
-	[107.0, 0.20, 0.76, -0.52, 1.10],
-	# secondary waves and lively wind chop riding on top of the big swells
-	[73.0, 0.205, 0.58, 1.05, 1.22],
-	[57.0, 0.172, 0.46, 0.60, 1.24],
-	[45.0, 0.090, 0.39, 1.45, 1.22],
-	[35.0, 0.140, 0.295, -0.95, 1.24],
-	[27.5, 0.120, 0.230, 1.72, 1.22],
-	[21.3, 0.102, 0.175, 0.38, 1.20],
-	[16.3, 0.084, 0.135, -1.25, 1.18],
-	[12.7, 0.068, 0.102, 0.08, 1.14],
-	[9.7, 0.054, 0.076, 1.58, 1.10],
-	[7.3, 0.042, 0.056, -0.68, 1.06],
+	# Primary & wide crossing ocean swells (>= 100 m): 8 prime-wavelength rollers
+	# spread organically across crossing cones so swells sculpt shifting 3D hills
+	# and deep hollows rather than segmented parallel sine rows.
+	[241.0, 0.23, 1.54, 0.22, 1.02],
+	[193.0, 0.25, 1.36, 0.68, 1.05],
+	[167.0, 0.24, 1.22, -0.34, 1.08],
+	[149.0, 0.21, 1.06, -1.08, 1.08],
+	[131.0, 0.20, 0.94, 1.24, 1.12],
+	[113.0, 0.19, 0.82, -0.66, 1.15],
+	[107.0, 0.17, 0.72, 1.82, 1.14],
+	[101.0, 0.16, 0.66, -1.48, 1.16],
+	# Secondary wind-sea waves (31..83 m): index 8 is a strong storm wind-sea row
+	# (storm/calm > 4.0) so storm transitions visibly change sea character.
+	[83.0, 0.068, 0.360, 1.46, 1.22],
+	[67.0, 0.132, 0.315, -1.92, 1.24],
+	[53.0, 0.120, 0.260, 0.88, 1.25],
+	[43.0, 0.106, 0.212, -0.18, 1.26],
+	[37.0, 0.095, 0.175, 2.35, 1.28],
+	[31.0, 0.085, 0.146, -2.42, 1.28],
+	# Short-crested choppy wavelets (5.7..25.7 m) distributed around full 360 deg
+	# with irrational headings and high steepness for lively choppy wave faces.
+	[25.7, 0.075, 0.118, 1.12, 1.30],
+	[21.1, 0.065, 0.096, -1.32, 1.32],
+	[17.9, 0.056, 0.078, 2.88, 1.32],
+	[14.9, 0.048, 0.063, -0.74, 1.34],
+	[12.3, 0.041, 0.050, 0.44, 1.34],
+	[10.1, 0.034, 0.040, -2.82, 1.32],
+	[8.5, 0.028, 0.032, 1.96, 1.28],
+	[7.3, 0.023, 0.026, -1.74, 1.26],
+	[6.4, 0.019, 0.021, 2.64, 1.22],
+	[5.7, 0.016, 0.017, -0.48, 1.18],
 ]
 
 ## `amp_scale` runs from AMP_CALM (the calm column of the table) to AMP_STORM

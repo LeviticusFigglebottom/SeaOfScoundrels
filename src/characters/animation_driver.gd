@@ -1275,18 +1275,44 @@ func _act_drink(u: float, w: float) -> void:
 
 
 func _act_play_instrument(u: float, w: float) -> void:
-	# Jaunty sea-shanty concertina/hurdy-gurdy groove with lively pumping hands & head bob!
+	# Jaunty sea-shanty groove with lively pumping hands & head bob!
 	var beat := sin(u * TAU * 3.0)
 	var bob := sin(u * TAU * 6.0)
 	_set_char_rot(_b_spine, _euler_char(-0.04 + bob * 0.03, beat * 0.08, beat * 0.06), w)
 	_set_char_rot(_b_chest, _euler_char(0.04 + bob * 0.04, beat * 0.12, beat * 0.08), w)
 	_set_char_rot(_b_neck, _euler_char(bob * 0.06, -beat * 0.08, 0.0), w)
 	_set_char_rot(_b_head, _euler_char(0.06 + bob * 0.10, -beat * 0.12, -beat * 0.12), w)
-	# Concertina bellows squeeze & expand rhythm!
-	var spread := 0.18 + beat * 0.14
-	var inward := 0.36 - beat * 0.16
-	_set_arm(-1.0, 0.72 + bob * 0.06, spread, inward, 1.38 + beat * 0.14, 0.15, -0.25, 0.06, 0.10, w)
-	_set_arm(1.0, 0.72 - bob * 0.06, spread, inward, 1.38 + beat * 0.14, 0.15, -0.25, 0.06, 0.10, w)
+	var held_kind := _detect_held_shanty_instrument()
+	if held_kind == &"hurdy_gurdy":
+		# Lower chest/waist hurdy-gurdy hold (~11 cm lower hand clearance below jaw/beard)
+		# with left hand cradling the keybox and right hand turning the crank!
+		var crank_y := cos(u * TAU * 3.0)
+		_set_arm(-1.0, 0.50 + bob * 0.04, 0.14, 0.42, 1.12 + beat * 0.05, 0.24, -0.22, 0.0, 0.08, w)
+		_set_arm(1.0, 0.52 + crank_y * 0.06, 0.18 + beat * 0.06, 0.34 - beat * 0.05, 1.14 + beat * 0.10, 0.28, -0.28, 0.0, 0.08, w)
+	elif held_kind == &"whistle":
+		# Keep bosun's whistle poised near lip/chin height.
+		var spread := 0.18 + beat * 0.12
+		var inward := 0.36 - beat * 0.12
+		_set_arm(-1.0, 0.72 + bob * 0.06, spread, inward, 1.38 + beat * 0.12, 0.15, -0.25, 0.06, 0.10, w)
+		_set_arm(1.0, 0.72 - bob * 0.06, spread, inward, 1.38 + beat * 0.12, 0.15, -0.25, 0.06, 0.10, w)
+	else:
+		# Concertina bellows squeeze & expand rhythm comfortably across mid-chest!
+		var spread := 0.18 + beat * 0.14
+		var inward := 0.36 - beat * 0.16
+		_set_arm(-1.0, 0.66 + bob * 0.06, spread, inward, 1.30 + beat * 0.14, 0.15, -0.25, 0.04, 0.10, w)
+		_set_arm(1.0, 0.66 - bob * 0.06, spread, inward, 1.30 + beat * 0.14, 0.15, -0.25, 0.04, 0.10, w)
+
+
+func _detect_held_shanty_instrument() -> StringName:
+	if visual == null or visual.hand_right == null or not is_instance_valid(visual.hand_right):
+		return &"concertina"
+	for child in visual.hand_right.get_children():
+		var lname := String(child.name).to_lower()
+		if lname.contains("hurdy_gurdy"):
+			return &"hurdy_gurdy"
+		if lname.contains("whistle"):
+			return &"whistle"
+	return &"concertina"
 
 
 func _act_shout(u: float, w: float) -> void:

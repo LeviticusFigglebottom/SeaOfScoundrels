@@ -240,15 +240,17 @@ static func _build_debris_ring_mesh() -> ArrayMesh:
 	var accent_st := SurfaceTool.new()
 	accent_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 1. Six weathered splintered oak deck planks drifting in a natural ring around the center barrel.
+	# 1. Six weathered splintered oak deck planks drifting in an organic asymmetric shipwreck cluster
+	# (paired torn deck boards lashed parallel, skewed overlapping cross-strake, tangential hull board,
+	# and varied broken lengths 1.18..2.32 m — zero symmetrical radial wheel-spoke ring!).
 	# Row: [pos, yaw_rad, length, width, thick, tilt_x, tilt_z]
 	var planks: Array[Array] = [
-		[Vector3(-1.28, 0.02, 0.55), 0.48, 1.95, 0.30, 0.085, 0.06, -0.05],
-		[Vector3(1.38, 0.01, 0.72), -0.62, 1.72, 0.28, 0.080, -0.05, 0.07],
-		[Vector3(1.52, 0.02, -0.68), 0.36, 1.85, 0.27, 0.082, 0.05, 0.04],
-		[Vector3(-1.45, 0.01, -0.78), -0.44, 1.68, 0.29, 0.080, -0.04, -0.06],
-		[Vector3(0.24, 0.02, 1.48), 1.42, 2.05, 0.31, 0.088, 0.05, 0.03],
-		[Vector3(-0.72, 0.01, 1.18), 0.92, 1.42, 0.24, 0.075, -0.06, 0.04],
+		[Vector3(-0.88, 0.025, 0.88), 0.28, 2.32, 0.30, 0.084, 0.04, -0.05],
+		[Vector3(-0.56, 0.020, 1.24), 0.32, 1.86, 0.28, 0.080, 0.05, -0.04],
+		[Vector3(-1.18, 0.048, 0.48), 1.14, 1.28, 0.25, 0.072, -0.06, 0.07],
+		[Vector3(1.12, 0.022, -0.74), -0.18, 2.18, 0.29, 0.084, -0.04, 0.05],
+		[Vector3(0.96, 0.018, 0.42), 0.78, 1.18, 0.23, 0.074, 0.06, 0.04],
+		[Vector3(0.58, 0.044, 1.06), -0.92, 1.64, 0.26, 0.076, -0.05, -0.06],
 	]
 	for pi in planks.size():
 		var p: Array = planks[pi]
@@ -281,29 +283,29 @@ static func _build_debris_ring_mesh() -> ArrayMesh:
 		var bp1 := spar_a.lerp(spar_b, frac + 0.025)
 		_append_tapered_tube(accent_st, bp0, bp1, 0.152, 0.152, 8, COL_IRON_BAND, COL_IRON_BAND.lightened(0.14))
 
-	# 3. Weathered hemp netting loops & tethering lines draped across the spar & planks!
+	# 3. Weathered hemp netting loops & tethering lines draped across the spar & lashed planks!
 	var rope_paths: Array[Array] = [
 		[
-			Vector3(-1.05, 0.07, -1.48),
-			Vector3(-1.26, 0.09, -0.92),
-			Vector3(-1.35, 0.06, -0.18),
-			Vector3(-1.22, 0.07, 0.56),
+			Vector3(-1.08, 0.07, -1.46),
+			Vector3(-1.24, 0.06, -0.62),
+			Vector3(-1.18, 0.09, 0.44),
+			Vector3(-0.88, 0.08, 0.92),
 		],
 		[
-			Vector3(0.86, 0.08, -1.30),
-			Vector3(1.24, 0.07, -0.82),
-			Vector3(1.42, 0.06, -0.06),
-			Vector3(1.30, 0.07, 0.72),
+			Vector3(0.84, 0.08, -1.30),
+			Vector3(1.14, 0.07, -0.74),
+			Vector3(1.06, 0.06, 0.36),
+			Vector3(0.64, 0.09, 1.02),
 		],
 		[
-			Vector3(-0.78, 0.06, 1.22),
-			Vector3(-0.18, 0.08, 1.48),
-			Vector3(0.58, 0.07, 1.38),
-			Vector3(1.18, 0.06, 0.94),
+			Vector3(-1.28, 0.08, 0.96),
+			Vector3(-0.62, 0.08, 1.24),
+			Vector3(0.12, 0.07, 1.18),
+			Vector3(0.68, 0.08, 0.98),
 		],
 		# Cross-webbed netting diagonals near the spar for unmistakable fishing-net silhouette.
-		[Vector3(-0.92, 0.09, -1.42), Vector3(-0.42, 0.05, -0.96), Vector3(0.18, 0.07, -1.36)],
-		[Vector3(-0.62, 0.06, -1.16), Vector3(-1.12, 0.05, -0.68), Vector3(-0.72, 0.04, -0.38)],
+		[Vector3(-0.92, 0.09, -1.42), Vector3(-0.38, 0.05, -0.92), Vector3(0.24, 0.07, -1.34)],
+		[Vector3(-0.64, 0.06, -1.12), Vector3(-1.02, 0.06, -0.44), Vector3(-0.78, 0.07, 0.22)],
 	]
 	for path in rope_paths:
 		for ri in range(path.size() - 1):
@@ -313,8 +315,8 @@ static func _build_debris_ring_mesh() -> ArrayMesh:
 			)
 
 	# 4. Twin painted crimson-and-cream cork fishing floats tethered to the debris netting!
-	_append_cork_float(accent_st, wood_st, Vector3(-1.02, 0.02, -0.58), 0.165, Vector3(0.18, 0.4, -0.14))
-	_append_cork_float(accent_st, wood_st, Vector3(1.18, 0.02, 0.12), 0.155, Vector3(-0.14, 1.2, 0.20))
+	_append_cork_float(accent_st, wood_st, Vector3(-0.96, 0.02, -0.48), 0.165, Vector3(0.18, 0.4, -0.14))
+	_append_cork_float(accent_st, wood_st, Vector3(1.16, 0.02, -0.12), 0.155, Vector3(-0.14, 1.2, 0.20))
 
 	wood_st.generate_normals()
 	var mesh := wood_st.commit()

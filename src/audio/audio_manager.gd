@@ -519,7 +519,7 @@ func stop_shanty(fade: float = 0.6) -> void:
 
 
 func is_shanty_playing() -> bool:
-	return _shanty_song != &"" and not _stems.is_empty()
+	return _shanty_song != &"" and not _stems.is_empty() and not _shanty_stopping
 
 
 ## Seconds into the shanty loop (all stems share it).

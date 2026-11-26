@@ -61,7 +61,7 @@ C_TAR = srgb('#2d2622'); C_CREAM = srgb('#f0dfb2'); C_RED = srgb('#c9281e'); C_T
 C_GOLD = srgb('#e9ae2c'); C_IRON = srgb('#30313a'); C_ROPE = srgb('#cdb07c'); C_ROPE_D = srgb('#5c4731')
 C_WHITE = (1, 1, 1); C_GLASS = srgb('#ffc061'); C_BRASS = srgb('#e2b04a'); C_BLACK = srgb('#15120f')
 
-SU, SV = 1 / 1.8, 1 / 0.9     # wood texture tiling: metres per tile along / across the grain
+SU, SV = 1 / 2.2, 1 / 1.45    # wood texture tiling: metres per tile along / across the 8-plank oak grain
 
 # ---------------------------------------------------------------- transforms (game coords)
 def T(x, y=None, z=None):
@@ -116,6 +116,13 @@ class MB:
         if len(set(idx)) < 3: return
         if self.flip:
             idx = idx[::-1]; uvs = uvs[::-1]
+        if len(idx) > 4:
+            for k in range(1, len(idx) - 1):
+                tri = (idx[0], idx[k], idx[k + 1])
+                if len(set(tri)) < 3: continue
+                self.faces.append(tri); self.fmat.append(mat); self.fsm.append(smooth)
+                self.fcol.append(col); self.fuv.append([uvs[0], uvs[k], uvs[k + 1]])
+            return
         self.faces.append(tuple(idx)); self.fmat.append(mat); self.fsm.append(smooth)
         self.fcol.append(col); self.fuv.append(uvs)
 
@@ -593,14 +600,43 @@ MAT_NAMES = {'wood': 'mat_wood', 'paint': 'mat_paint', 'rope': 'mat_rope', 'iron
              'window': 'mat_window_glass', 'canvas': 'mat_canvas', 'canvas_back': 'mat_canvas_back', 'cloth': 'mat_cloth', 'flag': 'mat_flag',
              'canvas_lod': 'mat_canvas_lod', 'canvas_back_lod': 'mat_canvas_back_lod', 'col': 'mat_collision'}
 
-def make_materials():
+def load_pbr_image(tex_dir, filename, non_color=False):
+    path = os.path.join(tex_dir, filename)
+    if not os.path.isfile(path):
+        return None
+    img = bpy.data.images.load(path, check_existing=True)
+    if non_color:
+        img.colorspace_settings.name = 'Non-Color'
+    img.pack()
+    return img
+
+def make_materials(outdir=None):
     rs = np.random.RandomState(SEED)
+    tex_dir = os.path.join(outdir, 'textures') if outdir else os.path.join(os.getcwd(), 'assets', 'generated', 'textures')
     sail_px = tex_sail(rs)
-    wood = make_image('sloop_wood', tex_wood(rs)); sail = make_image('sloop_sail', sail_px); flag = make_image('sloop_flag', tex_flag(rs))
+    wood_alb = load_pbr_image(tex_dir, 'ship_oak_albedo.png') or make_image('sloop_wood', tex_wood(rs))
+    wood_nrm = load_pbr_image(tex_dir, 'ship_oak_normal.png', True)
+    wood_rgh = load_pbr_image(tex_dir, 'ship_oak_rough.png', True)
+    paint_alb = load_pbr_image(tex_dir, 'ship_paint_albedo.png')
+    paint_nrm = load_pbr_image(tex_dir, 'ship_paint_normal.png', True)
+    paint_rgh = load_pbr_image(tex_dir, 'ship_paint_rough.png', True)
+    iron_alb = load_pbr_image(tex_dir, 'ship_iron_albedo.png')
+    iron_nrm = load_pbr_image(tex_dir, 'ship_iron_normal.png', True)
+    iron_rgh = load_pbr_image(tex_dir, 'ship_iron_rough.png', True)
+    brass_alb = load_pbr_image(tex_dir, 'ship_brass_albedo.png')
+    brass_nrm = load_pbr_image(tex_dir, 'ship_brass_normal.png', True)
+    brass_rgh = load_pbr_image(tex_dir, 'ship_brass_rough.png', True)
+    rope_alb = load_pbr_image(tex_dir, 'ship_rope_albedo.png')
+    rope_nrm = load_pbr_image(tex_dir, 'ship_rope_normal.png', True)
+    rope_rgh = load_pbr_image(tex_dir, 'ship_rope_rough.png', True)
+    cloth_alb = load_pbr_image(tex_dir, 'ship_cloth_albedo.png')
+    cloth_nrm = load_pbr_image(tex_dir, 'ship_cloth_normal.png', True)
+    sail = make_image('sloop_sail', sail_px); flag = make_image('sloop_flag', tex_flag(rs))
     # the aft face of the sail: seams, patches and emblem ghosted through sunlit cloth
     back = sail_px * 0.42 + np.array([1.0, 0.95, 0.80]) * 0.60
     sail_back = make_image('sloop_sail_back', back)
-    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, alpha=1.0, emit_col=(1.0, 0.62, 0.22, 1)):
+    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, alpha=1.0, emit_col=(1.0, 0.62, 0.22, 1),
+           norm_tex=None, norm_strength=0.9, rough_tex=None):
         m = bpy.data.materials.new(MAT_NAMES[name]); m.use_nodes = True
         nt = m.node_tree; b = nt.nodes['Principled BSDF']
         b.inputs['Roughness'].default_value = rough; b.inputs['Metallic'].default_value = metal
@@ -612,22 +648,30 @@ def make_materials():
             nt.links.new(mx.outputs[2], b.inputs['Base Color'])
         else:
             nt.links.new(ca.outputs['Color'], b.inputs['Base Color'])
+        if norm_tex is not None:
+            tn = nt.nodes.new('ShaderNodeTexImage'); tn.image = norm_tex
+            nm = nt.nodes.new('ShaderNodeNormalMap'); nm.inputs['Strength'].default_value = norm_strength
+            nt.links.new(tn.outputs['Color'], nm.inputs['Color'])
+            nt.links.new(nm.outputs['Normal'], b.inputs['Normal'])
+        if rough_tex is not None:
+            tr = nt.nodes.new('ShaderNodeTexImage'); tr.image = rough_tex
+            nt.links.new(tr.outputs['Color'], b.inputs['Roughness'])
         if emit > 0:
             b.inputs['Emission Color'].default_value = emit_col; b.inputs['Emission Strength'].default_value = emit
         if alpha < 1.0:
             b.inputs['Alpha'].default_value = alpha; m.surface_render_method = 'BLENDED'
         m.use_backface_culling = not two
         MATS[name] = m
-    mk('wood', wood, 0.82)
-    mk('paint', None, 0.6)           # painted or plain surfaces (vertex colour only)
-    mk('rope', None, 0.95)
-    mk('iron', None, 0.5, 0.55)
-    mk('brass', None, 0.32, 0.85)
+    mk('wood', wood_alb, 0.80, norm_tex=wood_nrm, norm_strength=0.95, rough_tex=wood_rgh)
+    mk('paint', paint_alb, 0.58, norm_tex=paint_nrm, norm_strength=0.65, rough_tex=paint_rgh)
+    mk('rope', rope_alb, 0.94, norm_tex=rope_nrm, norm_strength=1.05, rough_tex=rope_rgh)
+    mk('iron', iron_alb, 0.48, 0.62, norm_tex=iron_nrm, norm_strength=0.85, rough_tex=iron_rgh)
+    mk('brass', brass_alb, 0.30, 0.88, norm_tex=brass_nrm, norm_strength=0.60, rough_tex=brass_rgh)
     mk('glass', None, 0.25, 0.0, 2.2)                                   # lantern glass: emissive
     mk('window', None, 0.08, 0.0, 0.35, two=True, alpha=0.3)            # stern glazing: see-through, faint warm glow to raise at night
-    mk('canvas', sail, 0.95)                                            # forward face of the sail
-    mk('canvas_back', sail_back, 0.95, emit=0.22, emit_col=(1.0, 0.86, 0.6, 1))   # aft face: ghosted print, a little back-lit glow
-    mk('cloth', None, 0.95, two=True)
+    mk('canvas', sail, 0.94, norm_tex=cloth_nrm, norm_strength=0.35)    # forward face of the sail
+    mk('canvas_back', sail_back, 0.94, emit=0.22, emit_col=(1.0, 0.86, 0.6, 1), norm_tex=cloth_nrm, norm_strength=0.35)
+    mk('cloth', cloth_alb, 0.92, two=True, norm_tex=cloth_nrm, norm_strength=0.72)
     mk('flag', flag, 0.9, two=True)
     mk('col', None, 1.0)
     small = sail_px.reshape(128, 4, 128, 4, 3).mean(axis=(1, 3))
@@ -1182,10 +1226,12 @@ def build_props_hold(mb):
     barrel(mb, (0.8, y + 0.31, -2.75), 0.3, 0.85, R('Y', 20) @ R('X', 90))          # one on its side
     crate(mb, (-0.85, y, -2.5), (0.7, 0.6, 0.7), R('Y', 8)); crate(mb, (-0.82, y + 0.6, -2.52), (0.5, 0.4, 0.5), R('Y', -15), C_HULL)
     rope_coil(mb, (0.0, y, 0.25), 0.25, 3)
-    # hammock slung fore and aft along the port side of the cabin
-    pts = [(-1.2, 0.72, 3.25), (-1.12, 0.42, 3.7), (-1.1, 0.3, 4.2), (-1.05, 0.42, 4.7), (-0.95, 0.72, 5.1)]
-    secs = [[Vector(q) + Vector((-0.3 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.1, 0)), Vector(q), Vector(q) + Vector((0.3 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.1, 0))] for i, q in enumerate(pts)]
+    # hammock slung fore and aft along the port side of the cabin, anchored cleanly to hull ribs with hemp clew ropes
+    pts = [(-1.32, 0.78, 3.25), (-1.24, 0.48, 3.7), (-1.22, 0.36, 4.2), (-1.18, 0.48, 4.7), (-1.08, 0.78, 5.1)]
+    secs = [[Vector(q) + Vector((-0.26 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.1, 0)), Vector(q), Vector(q) + Vector((0.26 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.1, 0))] for i, q in enumerate(pts)]
     loft(mb, secs, 'cloth', srgb('#e9dcb8'), False, (False, False), 'smooth', flip=False)
+    tube(mb, [pts[0], (-1.62, 1.06, 2.90)], 0.016, 6, 'rope', C_ROPE)
+    tube(mb, [pts[-1], (-1.38, 1.06, 5.38)], 0.016, 6, 'rope', C_ROPE)
     build_cabin(mb)
 
 def build_cabin(mb):
@@ -1950,7 +1996,7 @@ def main():
     argv = sys.argv; outdir = argv[-1] if '--' in argv else os.path.join(os.getcwd(), 'assets', 'generated')
     random.seed(SEED); np.random.seed(SEED)
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    make_materials()
+    make_materials(outdir)
     # Static ship structure & decorative sub-parts are authored in their own MBs (preserving per-part RNG)
     # and batched into one `Hull` MeshInstance3D so Godot draws 1 surface per static material across all shadow cascades.
     hull = MB('Hull'); build_hull(hull)
@@ -2036,7 +2082,7 @@ def main():
     path = os.path.join(outdir, 'ship', 'sloop.glb')
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_yup=True, export_apply=False, export_vertex_color='MATERIAL',
                               export_all_vertex_colors=False, export_cameras=False, export_lights=False, export_animations=False,
-                              export_extras=False, export_tangents=False)
+                              export_extras=False, export_tangents=True)
     print('wrote', path)
     build_lod(outdir)
 

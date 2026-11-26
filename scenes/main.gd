@@ -190,6 +190,37 @@ func _exit_tree() -> void:
 		Net.unregister_replicated_pawn(Net.local_id())
 		for pid: int in _peer_pawns.keys():
 			Net.unregister_replicated_pawn(pid)
+	_drain_static_visual_caches()
+
+
+static func _drain_static_visual_caches() -> void:
+	# Release statically cached procedural meshes, materials & textures on main teardown
+	# so live .exe exits cleanly with 0 leaked GPU resources (each class rebuilds lazily on demand).
+	TreasureCatalog.clear_mesh_cache()
+	Cannonball.clear_shared_cache()
+	ShipNameplate.clear_shared_cache()
+	HullCrest.clear_shared_cache()
+	CaptainCabinFurnishings.clear_shared_cache()
+	CombatComponent.clear_shared_vfx_cache()
+	EnemyBrain.clear_shared_vfx_cache()
+	Leviathan.clear_shared_cache()
+	Shark.clear_shared_cache()
+	CoralReef.clear_shared_cache()
+	ReefFishSchool.clear_shared_cache()
+	MantaRay.clear_shared_cache()
+	DolphinPod.clear_shared_cache()
+	OceanWhale.clear_shared_cache()
+	FlotsamCluster.clear_shared_cache()
+	FortBattery.clear_shared_cache()
+	FortVault.clear_shared_cache()
+	VictoryFlare.clear_shared_cache()
+	IslandWaterfall.clear_shared_cache()
+	VolcanicFumarole.clear_shared_cache()
+	MerchantStall.clear_shared_cache()
+	DigSite.clear_shared_cache()
+	MessageBottle.clear_shared_cache()
+	SupplyBarrel.clear_shared_cache()
+	Outpost.clear_shared_cache()
 
 
 # ==============================================================================
@@ -3386,21 +3417,30 @@ func _apply_hero_shot(mode: String) -> void:
 			)
 
 		"fort_siege":
-			# Ironwatch Fort Stone Bastion, blazing Signal Brazier & 4 live coastal Sea-Battery Cannons!
+			# Ironwatch Fort Stone Bastion, blazing Signal Brazier, 4 coastal Sea-Battery Cannons
+			# AND our approaching Brigantine under full sail framed heroically in one vista!
 			Weather.time_of_day = 16.6 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.32, 13.5, -0.25, 0.0, 0.62)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.30)
+			_suppress_shot_hud_overlays()
 			var fort := archipelago.get_island_by_id("ironwatch_fort")
 			if fort != null:
 				_on_director_spawn_fort_siege(fort.global_position, "N")
 				var fpos := fort.global_position
-				var ship_off := Vector3(-64.0, 0.0, 74.0)
-				var s_pos := fpos + ship_off
-				var yaw := atan2(-(fpos.x - s_pos.x), -(fpos.z - s_pos.z))
-				_place_sailing_ship(s_pos, yaw, 0.78, 3.2)
-				# Dramatic low-altitude coastal shot showing Bastion, Signal Brazier, sea batteries & approaching Brigantine!
-				var cam_p := fpos + Vector3(-28.0, 26.5, 42.0)
-				var look_p := fpos + Vector3(0.0, 21.0, 0.0)
+				var fr := fort.island_radius
+				var bastion := fort.get_node_or_null(^"FortBastion") as Node3D
+				var fort_focus := bastion.global_position if bastion != null else (fpos + Vector3(0.0, fort.peak_height * 0.45, 0.0))
+				var sea_sw := Vector3(-0.66, 0.0, 0.75).normalized()
+				var side_se := (-sea_sw).cross(Vector3.UP).normalized()
+				# Place Brigantine cruising broadside-3/4 off the SW flank well clear of the shoreline.
+				var s_pos := fpos + sea_sw * (fr + 34.0) - side_se * 18.0
+				var to_fort := (fpos + side_se * 36.0) - s_pos
+				to_fort.y = 0.0
+				var yaw := atan2(-to_fort.x, -to_fort.z)
+				_place_sailing_ship(s_pos, yaw, 0.88, 4.4)
+				# Seaward abeam maritime camera framing both the blazing Fort Bastion and our Brigantine!
+				var cam_p := fpos + sea_sw * (fr + 84.0) - side_se * 36.0 + Vector3(0.0, 20.5, 0.0)
+				var look_p := fort_focus.lerp(s_pos + Vector3(0.0, 7.5, 0.0), 0.24) + Vector3(0.0, 4.0, 0.0)
 				_mount_shot_camera(cam_p, look_p, 56.0)
 
 		"fort_vault":

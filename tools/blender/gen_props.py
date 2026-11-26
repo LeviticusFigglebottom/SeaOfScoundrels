@@ -161,6 +161,24 @@ class MB:
                 col = col[::-1]
             if uv2 is not None:
                 uv2 = uv2[::-1]
+        if len(idx) > 4:
+            # Triangulate n-gons (e.g. 5..16-sided loft/tube caps) so MikkTSpace calc_tangents succeeds on every mesh!
+            for k in range(1, len(idx) - 1):
+                t_idx = (idx[0], idx[k], idx[k + 1])
+                t_uvs = [uvs[0], uvs[k], uvs[k + 1]]
+                t_col = [col[0], col[k], col[k + 1]] if isinstance(col, list) else col
+                t_uv2 = [uv2[0], uv2[k], uv2[k + 1]] if uv2 is not None else None
+                self.faces.append(t_idx)
+                self.fmat.append(mat)
+                self.fsm.append(smooth)
+                self.fcol.append(t_col)
+                self.fuv.append(t_uvs)
+                if t_uv2 is not None:
+                    self.has_uv2 = True
+                    self.fuv2.append(t_uv2)
+                else:
+                    self.fuv2.append(None)
+            return
         self.faces.append(tuple(idx))
         self.fmat.append(mat)
         self.fsm.append(smooth)
@@ -504,6 +522,24 @@ def tile_noise(rs, w, h, gx, gy):
     FY = fy[:, None]
     return (a * (1.0 - FX) + b * FX) * (1.0 - FY) + (c * (1.0 - FX) + d * FX) * FY
 
+def _fbm_tile(rs, w, h, octaves):
+    acc = np.zeros((h, w), dtype=np.float64)
+    tot = 0.0
+    for gx, gy, amp in octaves:
+        acc += amp * tile_noise(rs, w, h, gx, gy)
+        tot += amp
+    return acc / max(tot, 1e-6)
+
+def height_to_normal(hf, strength=3.5):
+    """Convert a seamless tileable heightfield (H, W) into an OpenGL tangent-space Normal Map RGB [0..1]."""
+    dh_dx = (np.roll(hf, -1, axis=1) - np.roll(hf, 1, axis=1)) * 0.5 * strength
+    dh_dy = (np.roll(hf, -1, axis=0) - np.roll(hf, 1, axis=0)) * 0.5 * strength
+    nx = -dh_dx
+    ny = -dh_dy
+    nz = np.ones_like(hf)
+    inv = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz)
+    return np.stack([nx * inv * 0.5 + 0.5, ny * inv * 0.5 + 0.5, nz * inv * 0.5 + 0.5], axis=-1)
+
 def make_image(name, arr):
     h, w = arr.shape[:2]
     rgba = np.ones((h, w, 4), dtype=np.float32)
@@ -514,52 +550,494 @@ def make_image(name, arr):
     img.pack()
     return img
 
-def tex_wood(rs):
-    w = h = 256
-    warp = tile_noise(rs, w, h, 3, 4) * 0.08
-    yy = (np.arange(h)[:, None] / h + warp) % 1.0
-    lines = np.zeros((h, w))
-    for freq, amp in ((9, 0.5), (23, 0.3), (49, 0.2)):
-        ph = rs.rand() * 6.28
-        lines += amp * (0.5 + 0.5 * np.sin(yy * 2.0 * pi * freq + ph + tile_noise(rs, w, h, 2, 6) * 2.8))
-    streak = tile_noise(rs, w, h, 3, 48) * 0.6 + tile_noise(rs, w, h, 6, 96) * 0.4
-    val = 0.80 + 0.12 * lines + 0.10 * (streak - 0.5) * 2.0
-    dark = np.clip((0.30 - streak) * 6.0, 0.0, 1.0) * 0.16
-    val = val - dark + (tile_noise(rs, w, h, 64, 64) - 0.5) * 0.04
-    return np.stack([val, val * 0.975, val * 0.93], axis=-1)
+def make_normal_image(name, rgb):
+    h, w = rgb.shape[:2]
+    rgba = np.ones((h, w, 4), dtype=np.float32)
+    rgba[..., :3] = np.clip(rgb, 0.0, 1.0)
+    img = bpy.data.images.new(name, w, h, alpha=False, is_data=True)
+    img.colorspace_settings.name = 'Non-Color'
+    img.pixels.foreach_set(rgba.ravel())
+    img.file_format = 'PNG'
+    img.pack()
+    return img
 
-def tex_stone(rs):
-    w = h = 256
-    n1 = tile_noise(rs, w, h, 6, 6)
-    n2 = tile_noise(rs, w, h, 16, 16)
-    n3 = tile_noise(rs, w, h, 40, 40)
-    strata = 0.5 + 0.5 * np.sin((np.arange(h)[:, None] / h * 10.0 + n1 * 1.4) * 2.0 * pi)
-    cracks = np.clip((0.26 - np.abs(n2 - 0.5) * 2.0) * 3.0, 0.0, 1.0) * 0.15
-    val = 0.82 + 0.14 * (n1 - 0.5) + 0.10 * (n2 - 0.5) + 0.06 * (n3 - 0.5) + 0.05 * (strata - 0.5) - cracks
-    return np.stack([val, val * 0.99, val * 0.96], axis=-1)
+def make_gray_image(name, gray):
+    h, w = gray.shape[:2]
+    g = np.clip(gray, 0.0, 1.0).astype(np.float32)
+    rgba = np.ones((h, w, 4), dtype=np.float32)
+    rgba[..., 0] = g
+    rgba[..., 1] = g
+    rgba[..., 2] = g
+    img = bpy.data.images.new(name, w, h, alpha=False, is_data=True)
+    img.colorspace_settings.name = 'Non-Color'
+    img.pixels.foreach_set(rgba.ravel())
+    img.file_format = 'PNG'
+    img.pack()
+    return img
 
-def tex_foliage(rs):
+def _voronoi_tile(rs, w, h, n_pts):
+    """Seamless tiled 2D Voronoi (f1, f2 - f1 edge distance, cell_id) for genuine angular rock fractures."""
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    pts_x = rs.rand(n_pts)
+    pts_y = rs.rand(n_pts)
+    f1 = np.full((h, w), 1e9, dtype=np.float64)
+    f2 = np.full((h, w), 1e9, dtype=np.float64)
+    cid = np.zeros((h, w), dtype=np.int32)
+    for i in range(n_pts):
+        dx = ((xx - pts_x[i] + 0.5) % 1.0) - 0.5
+        dy = ((yy - pts_y[i] + 0.5) % 1.0) - 0.5
+        d = np.sqrt(dx * dx + dy * dy)
+        closer1 = d < f1
+        closer2 = (~closer1) & (d < f2)
+        f2 = np.where(closer1, f1, np.where(closer2, d, f2))
+        f1 = np.where(closer1, d, f1)
+        cid = np.where(closer1, i, cid)
+    return f1, f2 - f1, cid
+
+def pbr_bark_palm(rs):
+    """512x512 horizontal scaly coconut-palm leaf-scar rings (rings run across V, stacked along trunk U)."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    warp_u = _fbm_tile(rs, w, h, ((4, 4, 0.65), (10, 10, 0.35)))
+    # Horizontal palm leaf-scar rings (loft U = trunk height, V = circumference)
+    n_rings = 9.0
+    ring_phase = (xx * n_rings + (warp_u - 0.5) * 0.48) % 1.0
+    groove = np.exp(-((ring_phase - 0.08) / 0.068) ** 2) + np.exp(-((ring_phase - 1.08) / 0.068) ** 2)
+    lip = np.clip(1.0 - np.abs(ring_phase - 0.24) * 3.5, 0.0, 1.0)
+    # Diamond overlapping fibrous leaf-base scales tucked cleanly beneath each palm ring collar
+    diam = 0.5 + 0.5 * np.sin((yy * 16.0 + xx * 9.0) * 2.0 * pi) * np.sin((yy * 16.0 - xx * 9.0) * 2.0 * pi)
+    fibers = tile_noise(rs, w, h, 42, 10) * 0.55 + tile_noise(rs, w, h, 96, 20) * 0.45
+    splits = np.clip((tile_noise(rs, w, h, 28, 8) - 0.74) * 4.5, 0.0, 1.0)
+    hf = 0.52 + 0.32 * lip + 0.18 * diam + 0.12 * (fibers - 0.5) - 0.50 * groove - 0.16 * splits
+    hf = np.clip(hf, 0.0, 1.0)
+    val = 0.85 + 0.14 * lip + 0.09 * (diam - 0.5) + 0.08 * (fibers - 0.5) - 0.32 * groove - 0.10 * splits
+    bleach = np.clip(lip * 0.65 + (warp_u - 0.5) * 0.25, 0.0, 1.0)
+    alb = np.stack([
+        val * (1.01 + 0.02 * bleach),
+        val * (0.96 + 0.02 * bleach),
+        val * (0.89 + 0.04 * bleach),
+    ], axis=-1)
+    rough = 0.94 - 0.10 * lip + 0.06 * groove + 0.04 * (fibers - 0.5)
+    return alb, height_to_normal(hf, 4.8), np.clip(rough, 0.80, 0.97)
+
+def pbr_bark_banyan(rs):
+    """512x512 deeply vertically furrowed gnarled hardwood root bark with subtle crevice lichen."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    # Loft/tube U (xx) runs along trunk/root length -> long sweeping longitudinal bark ribs along xx!
+    warp_long = _fbm_tile(rs, w, h, ((2, 6, 0.65), (5, 14, 0.35)))
+    sway = (warp_long - 0.5) * 1.45 + 0.22 * np.sin(xx * 2.0 * pi * 2.0)
+    r1 = 0.5 + 0.5 * np.sin((yy * 9.0 + sway) * 2.0 * pi)
+    r2 = 0.5 + 0.5 * np.sin((yy * 18.0 - sway * 0.8 + 0.7) * 2.0 * pi)
+    # Sharp crested ridge profile (1 - |2r - 1|) for rugged braided bark fissures
+    ridge = 0.65 * np.power(r1, 0.75) + 0.35 * np.power(r2, 0.85)
+    cleft = np.clip((0.36 - ridge) * 3.4, 0.0, 1.0)
+    plates = tile_noise(rs, w, h, 6, 36) * 0.60 + tile_noise(rs, w, h, 14, 72) * 0.40
+    micro = tile_noise(rs, w, h, 32, 96)
+    # Soft muted sage-moss flecks nestled inside the deepest gnarled bark furrows
+    lichen_n = _fbm_tile(rs, w, h, ((6, 10, 0.55), (18, 22, 0.45)))
+    lichen = np.clip((lichen_n - 0.58) * 4.2, 0.0, 1.0) * np.clip(cleft * 1.5 + 0.15, 0.0, 1.0)
+    hf = np.clip(0.22 + 0.62 * ridge + 0.18 * (plates - 0.5) - 0.36 * cleft + 0.06 * (micro - 0.5), 0.0, 1.0)
+    val = 0.82 + 0.20 * (ridge - 0.35) + 0.12 * (plates - 0.5) - 0.28 * cleft + 0.05 * (micro - 0.5)
+    r = val * 1.01 * (1.0 - 0.22 * lichen) + 0.58 * lichen * 0.22
+    g = val * 0.96 * (1.0 - 0.14 * lichen) + 0.76 * lichen * 0.22
+    b = val * 0.89 * (1.0 - 0.22 * lichen) + 0.52 * lichen * 0.22
+    alb = np.stack([r, g, b], axis=-1)
+    rough = 0.88 - 0.09 * ridge + 0.08 * cleft + 0.05 * lichen
+    return alb, height_to_normal(hf, 5.4), np.clip(rough, 0.78, 0.96)
+
+def pbr_wood(rs):
+    """512x512 staggered weathered oak plank courses with knots, swirling grain, tar seams & nail dimples."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    n_planks = 6
+    row = np.floor(yy * n_planks).astype(int) % n_planks
+    row_v = (yy * n_planks) % 1.0
+
+    # Per-plank staggered butt-joints & warm oak/honey/driftwood tonal personality (never greenish!)
+    joint_x = np.array([0.14, 0.62, 0.34, 0.82, 0.48, 0.08])[row]
+    board_id = ((xx - joint_x) % 1.0 > 0.50).astype(int) + row * 2
+    tone_lut = np.array([0.97, 0.87, 0.93, 1.00, 0.89, 0.95, 0.98, 0.86, 0.94, 0.97, 0.88, 0.95])
+    # All boards stay warm timber (R >= G >= B) ranging from sunlit amber-oak to sun-bleached driftwood
+    r_lut = np.array([1.03, 0.99, 1.01, 1.04, 0.98, 1.02, 1.00, 0.98, 1.03, 1.01, 0.99, 1.02])
+    g_lut = np.array([0.97, 0.95, 0.96, 0.98, 0.95, 0.97, 0.96, 0.95, 0.97, 0.96, 0.95, 0.97])
+    b_lut = np.array([0.88, 0.90, 0.89, 0.87, 0.91, 0.89, 0.91, 0.90, 0.88, 0.89, 0.90, 0.88])
+    b_tone = tone_lut[board_id]
+    br_t = r_lut[board_id]
+    bg_t = g_lut[board_id]
+    bb_t = b_lut[board_id]
+
+    d_h = np.minimum(row_v, 1.0 - row_v)
+    butt_u = (xx - joint_x) % 0.50
+    d_v = np.minimum(butt_u, 0.50 - butt_u)
+    h_seam = np.clip(1.0 - d_h / 0.044, 0.0, 1.0)
+    v_seam = np.clip(1.0 - d_v / 0.0085, 0.0, 1.0)
+    seam = np.maximum(h_seam, v_seam)
+    bevel = np.clip(d_h / 0.095, 0.0, 1.0) * np.clip(d_v / 0.018, 0.0, 1.0)
+
+    # Organic swirled wood knots (5 knots placed seamlessly across the plank courses)
+    knot_disp = np.zeros((h, w), dtype=np.float64)
+    knot_dark = np.zeros((h, w), dtype=np.float64)
+    for kx, ky, kr in ((0.24, 0.09, 0.036), (0.74, 0.25, 0.040), (0.42, 0.42, 0.034), (0.16, 0.74, 0.038), (0.86, 0.91, 0.035)):
+        dx = ((xx - kx + 0.5) % 1.0) - 0.5
+        dy = (((yy - ky + 0.5) % 1.0) - 0.5) * 2.2
+        dist = np.sqrt(dx * dx + dy * dy)
+        inf = np.exp(-(dist / (kr * 2.5)) ** 2)
+        knot_disp += inf * 0.25 * np.sign(dy + 1e-6)
+        knot_dark = np.maximum(knot_dark, np.exp(-(dist / kr) ** 2))
+
+    # Expressive painterly swirling oak grain running along U (xx)
+    phase_lut = np.linspace(0.0, 5.7, 12)
+    b_ph = phase_lut[board_id]
+    warp = _fbm_tile(rs, w, h, ((4, 8, 0.65), (10, 20, 0.35))) * 0.16 + knot_disp
+    gy = (yy * 20.0 + warp * 4.8 + b_ph) * 2.0 * pi
+    rings = 0.50 * (0.5 + 0.5 * np.sin(gy)) + 0.32 * (0.5 + 0.5 * np.sin(gy * 2.2 + 1.1)) + 0.18 * (0.5 + 0.5 * np.sin(gy * 4.9))
+    streak = tile_noise(rs, w, h, 4, 64) * 0.62 + tile_noise(rs, w, h, 8, 128) * 0.38
+
+    # Paired forged nail / treenail dimples flanking every staggered butt-joint
+    nail_mask = np.zeros((h, w), dtype=np.float64)
+    for nv in (0.26, 0.74):
+        for sgn in (-0.022, 0.022):
+            ndx = np.minimum(np.abs(butt_u - (sgn % 0.50)), 0.50 - np.abs(butt_u - (sgn % 0.50)))
+            ndy = (row_v - nv) / float(n_planks)
+            nd = np.sqrt(ndx * ndx + ndy * ndy)
+            nail_mask = np.maximum(nail_mask, np.clip(1.0 - nd / 0.008, 0.0, 1.0))
+
+    hf = 0.66 * bevel + 0.20 * rings + 0.12 * (streak - 0.5) - 0.55 * seam - 0.20 * knot_dark - 0.32 * nail_mask
+    hf = np.clip(hf, 0.0, 1.0)
+    val = b_tone * (0.85 + 0.18 * (rings - 0.35) + 0.11 * (streak - 0.5)) - 0.44 * seam - 0.25 * knot_dark - 0.30 * nail_mask
+    alb = np.stack([val * br_t, val * bg_t, val * bb_t], axis=-1)
+    rough = 0.80 - 0.10 * rings + 0.14 * seam + 0.08 * knot_dark + 0.06 * (1.0 - bevel)
+    return alb, height_to_normal(hf, 4.4), np.clip(rough, 0.68, 0.95)
+
+def pbr_shingle(rs):
+    """512x512 overlapping split cedar roof shingles with staggered gaps, stepped shadow laps & grain."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    n_rows = 8
+    n_cols = 7
+    row = np.floor(yy * n_rows).astype(int) % n_rows
+    row_v = (yy * n_rows) % 1.0
+    row_shift = ((row * 0.37 + 0.11) % 1.0)
+    col_u = ((xx + row_shift) * n_cols) % 1.0
+    col = np.floor(((xx + row_shift) * n_cols)).astype(int) % n_cols
+    sid = (row * 13 + col * 7) % 16
+
+    tone_lut = np.array([0.98, 0.86, 0.93, 0.89, 1.00, 0.84, 0.95, 0.91, 0.97, 0.85, 0.92, 0.99, 0.87, 0.94, 0.90, 0.96])
+    s_tone = tone_lut[sid]
+    edge_j = (tile_noise(rs, w, h, 24, 8) - 0.5) * 0.07
+    rv_j = np.clip(row_v + edge_j, 0.0, 1.0)
+
+    lap_shadow = np.exp(-((rv_j - 0.04) / 0.065) ** 2)
+    step_h = 0.25 + 0.65 * (1.0 - rv_j)
+    d_gap = np.minimum(col_u, 1.0 - col_u)
+    v_gap = np.clip(1.0 - d_gap / 0.042, 0.0, 1.0)
+
+    grain = tile_noise(rs, w, h, 64, 8) * 0.60 + tile_noise(rs, w, h, 128, 16) * 0.40
+    moss_n = _fbm_tile(rs, w, h, ((8, 8, 0.5), (24, 24, 0.5)))
+    moss = np.clip((moss_n - 0.66) * 4.5, 0.0, 1.0) * np.clip(lap_shadow * 1.4 + 0.18, 0.0, 1.0)
+
+    hf = np.clip(step_h + 0.14 * (grain - 0.5) - 0.52 * v_gap - 0.35 * lap_shadow, 0.0, 1.0)
+    val = s_tone * (0.86 + 0.14 * (grain - 0.5)) - 0.38 * v_gap - 0.28 * lap_shadow
+    alb = np.stack([
+        val * (1.01 - 0.18 * moss) + 0.52 * moss * 0.18,
+        val * (0.96 - 0.06 * moss) + 0.68 * moss * 0.18,
+        val * (0.90 - 0.18 * moss) + 0.42 * moss * 0.18,
+    ], axis=-1)
+    rough = 0.84 + 0.10 * lap_shadow + 0.08 * v_gap + 0.05 * (grain - 0.5)
+    return alb, height_to_normal(hf, 5.2), np.clip(rough, 0.76, 0.96)
+
+def pbr_thatch(rs):
+    """512x512 overlapping woven tropical palm-thatch reed bundles with ragged fringed eaves."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    n_tiers = 6
+    tier_v = (yy * n_tiers) % 1.0
+    fringe = (tile_noise(rs, w, h, 48, 6) - 0.5) * 0.14
+    tv = np.clip(tier_v + fringe, 0.0, 1.0)
+    reeds = 0.55 * tile_noise(rs, w, h, 96, 8) + 0.45 * tile_noise(rs, w, h, 180, 16)
+    bundles = 0.5 + 0.5 * np.sin((xx * 14.0 + tile_noise(rs, w, h, 6, 6) * 0.6) * 2.0 * pi)
+    tier_shadow = np.exp(-((tv - 0.05) / 0.075) ** 2)
+    step_h = 0.22 + 0.55 * (1.0 - tv) + 0.24 * reeds + 0.10 * bundles - 0.34 * tier_shadow
+    hf = np.clip(step_h, 0.0, 1.0)
+    val = 0.84 + 0.18 * (reeds - 0.5) + 0.08 * (bundles - 0.5) - 0.28 * tier_shadow
+    alb = np.stack([val * 1.02, val * 0.98, val * 0.86], axis=-1)
+    rough = 0.90 + 0.06 * tier_shadow + 0.05 * (0.5 - reeds)
+    return alb, height_to_normal(hf, 4.8), np.clip(rough, 0.82, 0.97)
+
+def pbr_stone(rs):
+    """512x512 weathered hand-chiseled coral-limestone ashlar masonry with mortar seams & muted coastal moss."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    n_rows = 6
+    n_cols = 4
+    wob = (_fbm_tile(rs, w, h, ((8, 8, 0.6), (24, 24, 0.4))) - 0.5) * 0.018
+    yy_w = (yy + wob) % 1.0
+    xx_w = (xx + wob) % 1.0
+    row = np.floor(yy_w * n_rows).astype(int) % n_rows
+    row_v = (yy_w * n_rows) % 1.0
+    stagger = (row % 2) * 0.50 + ((row * 0.17) % 0.22)
+    col_u = ((xx_w + stagger) * n_cols) % 1.0
+    col = np.floor((xx_w + stagger) * n_cols).astype(int) % n_cols
+    bid = (row * 7 + col * 5) % 12
+
+    tone_lut = np.array([0.98, 0.88, 0.94, 0.91, 1.00, 0.86, 0.95, 0.89, 0.97, 0.92, 0.87, 0.96])
+    r_lut = np.array([1.02, 1.00, 1.01, 0.99, 1.03, 0.99, 1.01, 1.00, 1.02, 0.99, 1.00, 1.01])
+    b_tone = tone_lut[bid]
+    b_warm = r_lut[bid]
+
+    d_h = np.minimum(row_v, 1.0 - row_v)
+    d_v = np.minimum(col_u, 1.0 - col_u)
+    mortar_h = np.clip(1.0 - d_h / 0.056, 0.0, 1.0)
+    mortar_v = np.clip(1.0 - d_v / 0.042, 0.0, 1.0)
+    mortar = np.maximum(mortar_h, mortar_v)
+    bevel = np.clip(d_h / 0.13, 0.0, 1.0) * np.clip(d_v / 0.10, 0.0, 1.0)
+
+    macro = _fbm_tile(rs, w, h, ((8, 8, 0.5), (20, 20, 0.5)))
+    pits = np.clip((0.25 - tile_noise(rs, w, h, 48, 48)) * 4.2, 0.0, 1.0)
+    chisel = tile_noise(rs, w, h, 36, 72)
+    moss_n = _fbm_tile(rs, w, h, ((8, 8, 0.55), (24, 24, 0.45)))
+    moss = np.clip((moss_n - 0.58) * 3.4, 0.0, 1.0) * np.clip(mortar * 1.25 + (1.0 - bevel) * 0.30, 0.0, 1.0)
+
+    hf = 0.25 + 0.58 * bevel + 0.16 * (macro - 0.5) + 0.08 * (chisel - 0.5) - 0.42 * mortar - 0.22 * pits
+    hf = np.clip(hf, 0.0, 1.0)
+    val = b_tone * (0.87 + 0.14 * (macro - 0.5) + 0.06 * (chisel - 0.5)) - 0.34 * mortar - 0.14 * pits
+    # Warm sunlit limestone + subtle olive-sage crevice moss (never neon green)
+    alb = np.stack([
+        val * b_warm * (1.0 - 0.22 * moss) + 0.54 * moss * 0.22,
+        val * (0.985 - 0.08 * moss) + 0.66 * moss * 0.22,
+        val * (0.935 - 0.24 * moss) + 0.42 * moss * 0.22,
+    ], axis=-1)
+    rough = 0.80 + 0.14 * mortar + 0.08 * pits + 0.05 * moss + 0.04 * (macro - 0.5)
+    return alb, height_to_normal(hf, 4.8), np.clip(rough, 0.74, 0.96)
+
+def pbr_rock(rs):
+    """512x512 natural stratified coastal cliff rock with sharp angular Voronoi fracture facets & strata ledges."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    f1_lg, edge_lg, cid_lg = _voronoi_tile(rs, w, h, 22)
+    f1_sm, edge_sm, _ = _voronoi_tile(rs, w, h, 52)
+    n1 = _fbm_tile(rs, w, h, ((5, 5, 0.6), (14, 14, 0.4)))
+    n3 = tile_noise(rs, w, h, 64, 64)
+
+    # Sharp polygonal cliff fracture seams (zero closed noise-contour spaghetti!)
+    jagged_e = np.clip(edge_lg + (n1 - 0.5) * 0.018, 0.0, 1.0)
+    crack_lg = np.clip(1.0 - jagged_e / 0.022, 0.0, 1.0)
+    crack_sm = np.clip(1.0 - np.clip(edge_sm + (n3 - 0.5) * 0.012, 0.0, 1.0) / 0.014, 0.0, 1.0)
+    cracks = np.maximum(crack_lg, crack_sm * 0.55)
+
+    # Per-facet limestone elevation step + sweeping geological sedimentary strata
+    facet_lut = rs.uniform(0.84, 1.02, 22)
+    f_tone = facet_lut[cid_lg]
+    facet_slope = np.clip(1.0 - f1_lg * 3.2, 0.0, 1.0)
+    strata_ph = (yy * 6.0 + (n1 - 0.5) * 1.4) * 2.0 * pi
+    strata = 0.5 + 0.36 * np.sin(strata_ph) + 0.14 * np.sin(strata_ph * 2.0 + 0.8)
+
+    hf = 0.38 + 0.32 * facet_slope + 0.22 * (strata - 0.5) + 0.16 * (n1 - 0.5) + 0.06 * (n3 - 0.5) - 0.48 * cracks
+    hf = np.clip(hf, 0.0, 1.0)
+    val = f_tone * (0.86 + 0.14 * (strata - 0.5) + 0.10 * (n1 - 0.5) + 0.06 * (n3 - 0.5)) - 0.32 * cracks
+    alb = np.stack([val * 1.01, val * 0.99, val * 0.94], axis=-1)
+    rough = 0.80 + 0.14 * cracks + 0.08 * (0.5 - strata) + 0.04 * (n3 - 0.5)
+    return alb, height_to_normal(hf, 5.2), np.clip(rough, 0.74, 0.96)
+
+def pbr_plaster(rs):
+    """512x512 sun-baked weathered coastal lime stucco with broad hand-trowel sweeps & fine angular cracks."""
+    w = h = 512
+    # Broad curved painterly hand-trowel plaster sweeps + fine lime grit
+    trowel_a = tile_noise(rs, w, h, 5, 14)
+    trowel_b = tile_noise(rs, w, h, 14, 5)
+    trowel = 0.55 * trowel_a + 0.45 * trowel_b
+    stucco = _fbm_tile(rs, w, h, ((8, 8, 0.45), (24, 24, 0.35), (64, 64, 0.20)))
+    # Crisp angular Voronoi hairline plaster age cracks (never round loops!) masked to sparse patches
+    _, edge_v, _ = _voronoi_tile(rs, w, h, 14)
+    crack_mask = np.clip((tile_noise(rs, w, h, 4, 4) - 0.48) * 3.5, 0.0, 1.0)
+    cracks = np.clip(1.0 - edge_v / 0.0085, 0.0, 1.0) * crack_mask
+    blister = np.clip((tile_noise(rs, w, h, 12, 12) - 0.78) * 4.5, 0.0, 1.0)
+    hf = 0.54 + 0.24 * (trowel - 0.5) + 0.18 * (stucco - 0.5) - 0.28 * cracks - 0.12 * blister
+    hf = np.clip(hf, 0.0, 1.0)
+    val = 0.93 + 0.09 * (trowel - 0.5) + 0.07 * (stucco - 0.5) - 0.14 * cracks - 0.06 * blister
+    alb = np.stack([val * 1.00, val * 0.985, val * 0.945], axis=-1)
+    rough = 0.78 + 0.10 * (stucco - 0.5) + 0.10 * cracks + 0.07 * blister
+    return alb, height_to_normal(hf, 2.8), np.clip(rough, 0.70, 0.94)
+
+def pbr_foliage_palm(rs):
+    """512x512 veined tropical palm & fern frond texture (midrib along U, curved diagonal pinnae veins across V)."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    dist_mid = np.abs(yy - 0.5) * 2.0
+    midrib = np.exp(-((dist_mid) / 0.075) ** 2)
+    vein_ph = (xx * 18.0 - np.power(dist_mid, 0.85) * 4.2) * 2.0 * pi
+    veins = 0.5 + 0.5 * np.sin(vein_ph)
+    fine_vein = 0.5 + 0.5 * np.sin(vein_ph * 3.0)
+    serr = 0.5 + 0.5 * np.sin(xx * 18.0 * 2.0 * pi) * np.clip(dist_mid * 1.4 - 0.3, 0.0, 1.0)
+    brush = _fbm_tile(rs, w, h, ((6, 12, 0.55), (22, 28, 0.45)))
+    dapple = _fbm_tile(rs, w, h, ((5, 5, 0.6), (14, 14, 0.4)))
+    hf = np.clip(0.45 + 0.34 * midrib + 0.22 * veins + 0.08 * fine_vein + 0.08 * (brush - 0.5), 0.0, 1.0)
+    val = 0.85 + 0.12 * midrib + 0.11 * (veins - 0.5) + 0.10 * (brush - 0.5) + 0.08 * (dapple - 0.5) + 0.05 * serr
+    alb = np.stack([
+        val * (0.94 + 0.09 * midrib + 0.05 * dapple),
+        val * (1.01 + 0.04 * midrib),
+        val * (0.85 - 0.05 * midrib),
+    ], axis=-1)
+    rough = 0.58 - 0.10 * midrib - 0.06 * veins + 0.08 * (0.5 - brush)
+    return alb, height_to_normal(hf, 3.8), np.clip(rough, 0.44, 0.70)
+
+def pbr_foliage_broad(rs):
+    """512x512 dense hand-painted overlapping tropical banyan broadleaf & jungle ivy clusters with feather veins."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    hf = np.full((h, w), 0.12, dtype=np.float64)
+    val = np.full((h, w), 0.58, dtype=np.float64)
+    sun = np.zeros((h, w), dtype=np.float64)
+    # Stamp 88 dense overlapping pointed tropical broadleaf silhouettes (100% lush coverage, seamless wrap!)
+    for li in range(88):
+        cx = rs.rand()
+        cy = rs.rand()
+        ang = rs.rand() * 2.0 * pi
+        ca, sa = cos(ang), sin(ang)
+        len_l = rs.uniform(0.085, 0.160)
+        wid_l = len_l * rs.uniform(0.48, 0.64)
+        layer_h = 0.24 + 0.68 * (li / 87.0)
+        leaf_tone = rs.uniform(0.80, 1.04)
+        leaf_sun = rs.uniform(0.32, 1.0) if li > 48 else rs.uniform(0.0, 0.42)
+
+        dx = ((xx - cx + 0.5) % 1.0) - 0.5
+        dy = ((yy - cy + 0.5) % 1.0) - 0.5
+        lu = (dx * ca + dy * sa) / len_l
+        lv = (-dx * sa + dy * ca) / wid_l
+        env = np.clip(1.0 - lu * lu, 0.0, 1.0) * (1.0 - 0.20 * lu)
+        inside = (np.abs(lu) < 1.0) & (np.abs(lv) < env)
+        if not np.any(inside):
+            continue
+        iu = lu[inside]
+        iv = lv[inside]
+        ie = np.maximum(env[inside], 1e-4)
+        dist_rib = np.abs(iv) / ie
+        midrib = np.exp(-((dist_rib) / 0.14) ** 2)
+        vein = 0.5 + 0.5 * np.sin((iu * 7.5 - dist_rib * 3.0) * pi)
+        cup = (1.0 - dist_rib * dist_rib) * np.sqrt(np.clip(1.0 - iu * iu, 0.0, 1.0))
+        lh = layer_h + 0.13 * cup + 0.08 * midrib + 0.04 * vein
+        lv_val = leaf_tone * (0.85 + 0.13 * midrib + 0.08 * (vein - 0.5) + 0.07 * cup)
+        win = lh > hf[inside]
+        cur_h = hf[inside]
+        cur_v = val[inside]
+        cur_s = sun[inside]
+        cur_h[win] = lh[win]
+        cur_v[win] = lv_val[win]
+        cur_s[win] = (leaf_sun * (0.65 + 0.35 * cup))[win]
+        hf[inside] = cur_h
+        val[inside] = cur_v
+        sun[inside] = cur_s
+
+    micro = tile_noise(rs, w, h, 48, 48)
+    val = val + 0.05 * (micro - 0.5)
+    alb = np.stack([
+        val * (0.91 + 0.11 * sun),
+        val * (1.00 + 0.05 * sun),
+        val * (0.85 - 0.06 * sun),
+    ], axis=-1)
+    rough = 0.68 - 0.18 * sun - 0.06 * hf
+    return alb, height_to_normal(np.clip(hf, 0.0, 1.0), 4.4), np.clip(rough, 0.46, 0.74)
+
+def pbr_awning(rs):
+    """512x512 heavy woven maritime sailcloth with warp/weft thread grid, subtle sail seams & salt weathering."""
+    w = h = 512
+    yy, xx = np.mgrid[0:h, 0:w] / float(w)
+    warp_t = 0.5 + 0.5 * np.sin(xx * 2.0 * pi * 96.0)
+    weft_t = 0.5 + 0.5 * np.sin(yy * 2.0 * pi * 96.0)
+    weave = 0.5 * (warp_t + weft_t) + 0.25 * (warp_t * weft_t)
+    # Single clean sailmaker horizontal panel seam + subtle double-stitch dash
+    d_seam = np.abs(((yy * 1.0) % 1.0) - 0.5)
+    seam_ridge = np.exp(-((d_seam) / 0.010) ** 2)
+    stitch = np.exp(-((np.abs(d_seam - 0.015)) / 0.0035) ** 2) * (0.5 + 0.5 * np.sin(xx * 2.0 * pi * 56.0))
+    creases = _fbm_tile(rs, w, h, ((4, 6, 0.6), (12, 16, 0.4)))
+    hf = np.clip(0.46 + 0.24 * weave + 0.16 * seam_ridge - 0.12 * stitch + 0.22 * (creases - 0.5), 0.0, 1.0)
+    val = 0.90 + 0.08 * (weave - 0.5) + 0.11 * (creases - 0.5) - 0.07 * seam_ridge - 0.09 * stitch
+    alb = np.stack([val * 1.00, val * 0.99, val * 0.94], axis=-1)
+    rough = 0.88 + 0.06 * (0.5 - creases) + 0.04 * seam_ridge
+    return alb, height_to_normal(hf, 2.5), np.clip(rough, 0.82, 0.96)
+
+def pbr_rope(rs):
+    """256x256 braided diagonal twisted 3-strand hemp rope."""
     w = h = 256
     yy, xx = np.mgrid[0:h, 0:w] / float(w)
-    veins = 0.5 + 0.5 * np.sin((xx * 28.0 + np.abs(yy - 0.5) * 14.0) * 2.0 * pi)
-    brush = tile_noise(rs, w, h, 8, 24)
-    fine = tile_noise(rs, w, h, 32, 32)
-    val = 0.86 + 0.08 * veins + 0.10 * (brush - 0.5) + 0.05 * (fine - 0.5)
-    return np.stack([val * 0.98, val, val * 0.94], axis=-1)
+    diag = (xx * 6.0 + yy * 6.0) * 2.0 * pi
+    strands = np.abs(np.sin(diag * 0.5))
+    fibers = 0.5 + 0.5 * np.sin((xx * 42.0 - yy * 42.0) * 2.0 * pi + tile_noise(rs, w, h, 16, 16) * 2.2)
+    fuzz = tile_noise(rs, w, h, 48, 48)
+    hf = np.clip(0.18 + 0.64 * strands + 0.14 * fibers + 0.08 * (fuzz - 0.5), 0.0, 1.0)
+    val = 0.78 + 0.24 * strands + 0.08 * (fibers - 0.5) + 0.06 * (fuzz - 0.5)
+    alb = np.stack([val * 1.02, val * 0.97, val * 0.88], axis=-1)
+    rough = 0.94 - 0.06 * strands + 0.04 * fuzz
+    return alb, height_to_normal(hf, 4.6), np.clip(rough, 0.86, 0.98)
 
-def tex_canvas_striped(rs):
+def pbr_iron(rs):
+    """256x256 forged hand-hammered wrought iron with anvil dimples & dark mill-scale variation."""
     w = h = 256
     yy, xx = np.mgrid[0:h, 0:w] / float(w)
-    weave = 0.95 + 0.03 * np.sin(xx * 2.0 * pi * 64.0) * np.sin(yy * 2.0 * pi * 64.0)
-    blot = 0.90 + 0.10 * tile_noise(rs, w, h, 6, 6)
-    val = weave * blot
-    return np.stack([val, val * 0.99, val * 0.95], axis=-1)
+    dimples = np.ones((h, w), dtype=np.float64) * 0.65
+    for _ in range(42):
+        cx, cy = rs.rand(), rs.rand()
+        rad = rs.uniform(0.055, 0.115)
+        dx = ((xx - cx + 0.5) % 1.0) - 0.5
+        dy = ((yy - cy + 0.5) % 1.0) - 0.5
+        d2 = (dx * dx + dy * dy) / (rad * rad)
+        dent = 0.28 + 0.42 * np.clip(d2, 0.0, 1.0)
+        dimples = np.minimum(dimples, dent)
+    scale_n = _fbm_tile(rs, w, h, ((8, 8, 0.55), (24, 24, 0.45)))
+    rust_n = _fbm_tile(rs, w, h, ((12, 12, 0.5), (32, 32, 0.5)))
+    rust = np.clip((rust_n - 0.66) * 5.0, 0.0, 1.0) * np.clip(0.75 - dimples, 0.0, 1.0)
+    hf = np.clip(dimples + 0.16 * (scale_n - 0.5), 0.0, 1.0)
+    val = 0.78 + 0.24 * (dimples - 0.45) + 0.14 * (scale_n - 0.5)
+    alb = np.stack([
+        val * (1.0 + 0.18 * rust),
+        val * (0.99 - 0.06 * rust),
+        val * (1.02 - 0.24 * rust),
+    ], axis=-1)
+    rough = 0.44 + 0.16 * (0.65 - dimples) + 0.22 * rust + 0.08 * (scale_n - 0.5)
+    return alb, height_to_normal(hf, 3.2), np.clip(rough, 0.34, 0.68)
+
+def pbr_brass(rs):
+    """256x256 brushed aged marine brass with directional polish grain & fine antique tarnish streaks."""
+    w = h = 256
+    brush = tile_noise(rs, w, h, 4, 96) * 0.65 + tile_noise(rs, w, h, 8, 160) * 0.35
+    wear = _fbm_tile(rs, w, h, ((10, 20, 0.55), (28, 48, 0.45)))
+    patina = np.clip((wear - 0.68) * 3.8, 0.0, 1.0)
+    hf = np.clip(0.54 + 0.20 * (brush - 0.5) + 0.14 * (wear - 0.5) - 0.12 * patina, 0.0, 1.0)
+    val = 0.91 + 0.13 * (brush - 0.5) + 0.07 * (wear - 0.5) - 0.12 * patina
+    alb = np.stack([
+        val * (1.02 - 0.08 * patina),
+        val * (0.99 - 0.02 * patina),
+        val * (0.90 - 0.02 * patina),
+    ], axis=-1)
+    rough = 0.25 + 0.10 * (0.5 - brush) + 0.18 * patina
+    return alb, height_to_normal(hf, 2.2), np.clip(rough, 0.20, 0.46)
+
+def pbr_paint(rs):
+    """256x256 subtle hand-painted impasto brush-stroke tooth preserving vibrant vertex colors."""
+    w = h = 256
+    s1 = tile_noise(rs, w, h, 8, 28)
+    s2 = tile_noise(rs, w, h, 28, 8)
+    fine = tile_noise(rs, w, h, 48, 48)
+    hf = np.clip(0.50 + 0.24 * (s1 - 0.5) + 0.20 * (s2 - 0.5) + 0.08 * (fine - 0.5), 0.0, 1.0)
+    val = 0.93 + 0.08 * (s1 - 0.5) + 0.06 * (s2 - 0.5)
+    alb = np.stack([val, val * 0.995, val * 0.98], axis=-1)
+    rough = 0.70 + 0.10 * (0.5 - s1) + 0.06 * (fine - 0.5)
+    return alb, height_to_normal(hf, 1.4), np.clip(rough, 0.58, 0.84)
 
 MATS = {}
+_FOL_NODES = {}
+_FOL_IMGS = {}
 MAT_NAMES = {
     'wood': 'mat_wood',
+    'bark_palm': 'mat_bark_palm',
+    'bark_banyan': 'mat_bark_banyan',
+    'shingle': 'mat_shingle',
+    'thatch': 'mat_thatch',
     'paint': 'mat_paint',
+    'plaster': 'mat_plaster',
     'stone': 'mat_stone',
+    'rock': 'mat_rock',
     'foliage': 'mat_foliage',
     'awning': 'mat_awning',
     'rope': 'mat_rope',
@@ -571,14 +1049,44 @@ MAT_NAMES = {
     'col': 'mat_collision',
 }
 
+def set_foliage_style(style):
+    """Swap MATS['foliage'] PBR image triplet between 'palm' and 'broad' while keeping exact name 'mat_foliage'."""
+    if style in _FOL_IMGS and _FOL_NODES:
+        alb_i, norm_i, rough_i = _FOL_IMGS[style]
+        _FOL_NODES['alb'].image = alb_i
+        _FOL_NODES['norm'].image = norm_i
+        _FOL_NODES['rough'].image = rough_i
+
 def make_materials():
     rs = np.random.RandomState(SEED)
-    wood_img = make_image('prop_wood', tex_wood(rs))
-    stone_img = make_image('prop_stone', tex_stone(rs))
-    fol_img = make_image('prop_foliage', tex_foliage(rs))
-    awn_img = make_image('prop_canvas', tex_canvas_striped(rs))
 
-    def mk(key, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, emit_col=(1.0, 0.64, 0.22, 1.0)):
+    def pack_pbr(prefix, triple):
+        alb, nrm, rgh = triple
+        return (
+            make_image(prefix + '_alb', alb),
+            make_normal_image(prefix + '_nrm', nrm),
+            make_gray_image(prefix + '_rgh', rgh),
+        )
+
+    pbr_sets = {
+        'wood': pack_pbr('prop_wood', pbr_wood(rs)),
+        'bark_palm': pack_pbr('prop_bark_palm', pbr_bark_palm(rs)),
+        'bark_banyan': pack_pbr('prop_bark_banyan', pbr_bark_banyan(rs)),
+        'shingle': pack_pbr('prop_shingle', pbr_shingle(rs)),
+        'thatch': pack_pbr('prop_thatch', pbr_thatch(rs)),
+        'stone': pack_pbr('prop_stone', pbr_stone(rs)),
+        'rock': pack_pbr('prop_rock', pbr_rock(rs)),
+        'plaster': pack_pbr('prop_plaster', pbr_plaster(rs)),
+        'awning': pack_pbr('prop_awning', pbr_awning(rs)),
+        'rope': pack_pbr('prop_rope', pbr_rope(rs)),
+        'iron': pack_pbr('prop_iron', pbr_iron(rs)),
+        'brass': pack_pbr('prop_brass', pbr_brass(rs)),
+        'paint': pack_pbr('prop_paint', pbr_paint(rs)),
+    }
+    _FOL_IMGS['palm'] = pack_pbr('prop_foliage_palm', pbr_foliage_palm(rs))
+    _FOL_IMGS['broad'] = pack_pbr('prop_foliage_broad', pbr_foliage_broad(rs))
+
+    def mk(key, pbr=None, rough=0.8, metal=0.0, emit=0.0, two=False, emit_col=(1.0, 0.64, 0.22, 1.0), norm_str=1.0):
         m = bpy.data.materials.new(MAT_NAMES[key])
         m.use_nodes = True
         nt = m.node_tree
@@ -587,16 +1095,34 @@ def make_materials():
         b.inputs['Metallic'].default_value = metal
         ca = nt.nodes.new('ShaderNodeVertexColor')
         ca.layer_name = 'Color'
-        if tex is not None:
-            t = nt.nodes.new('ShaderNodeTexImage')
-            t.image = tex
+        nodes_out = {}
+        if pbr is not None:
+            alb_img, nrm_img, rgh_img = pbr
+            t_alb = nt.nodes.new('ShaderNodeTexImage')
+            t_alb.image = alb_img
             mx = nt.nodes.new('ShaderNodeMix')
             mx.data_type = 'RGBA'
             mx.blend_type = 'MULTIPLY'
             mx.inputs[0].default_value = 1.0
-            nt.links.new(t.outputs['Color'], mx.inputs[6])
+            nt.links.new(t_alb.outputs['Color'], mx.inputs[6])
             nt.links.new(ca.outputs['Color'], mx.inputs[7])
             nt.links.new(mx.outputs[2], b.inputs['Base Color'])
+            nodes_out['alb'] = t_alb
+
+            if nrm_img is not None:
+                t_nrm = nt.nodes.new('ShaderNodeTexImage')
+                t_nrm.image = nrm_img
+                nmap = nt.nodes.new('ShaderNodeNormalMap')
+                nmap.inputs['Strength'].default_value = norm_str
+                nt.links.new(t_nrm.outputs['Color'], nmap.inputs['Color'])
+                nt.links.new(nmap.outputs['Normal'], b.inputs['Normal'])
+                nodes_out['norm'] = t_nrm
+
+            if rgh_img is not None:
+                t_rgh = nt.nodes.new('ShaderNodeTexImage')
+                t_rgh.image = rgh_img
+                nt.links.new(t_rgh.outputs['Color'], b.inputs['Roughness'])
+                nodes_out['rough'] = t_rgh
         else:
             nt.links.new(ca.outputs['Color'], b.inputs['Base Color'])
         if emit > 0.0:
@@ -604,15 +1130,23 @@ def make_materials():
             b.inputs['Emission Strength'].default_value = emit
         m.use_backface_culling = not two
         MATS[key] = m
+        return nodes_out
 
-    mk('wood', wood_img, 0.82)
-    mk('paint', None, 0.70)
-    mk('stone', stone_img, 0.88)
-    mk('foliage', fol_img, 0.62, two=True)
-    mk('awning', awn_img, 0.90, two=True)
-    mk('rope', None, 0.94)
-    mk('iron', None, 0.48, 0.60)
-    mk('brass', None, 0.30, 0.86)
+    mk('wood', pbr_sets['wood'], 0.82, norm_str=1.0)
+    mk('bark_palm', pbr_sets['bark_palm'], 0.88, norm_str=1.05)
+    mk('bark_banyan', pbr_sets['bark_banyan'], 0.88, norm_str=1.10)
+    mk('shingle', pbr_sets['shingle'], 0.86, norm_str=1.05)
+    mk('thatch', pbr_sets['thatch'], 0.90, norm_str=1.0)
+    mk('stone', pbr_sets['stone'], 0.86, norm_str=1.05)
+    mk('rock', pbr_sets['rock'], 0.88, norm_str=1.05)
+    mk('plaster', pbr_sets['plaster'], 0.82, norm_str=0.85)
+    mk('paint', pbr_sets['paint'], 0.72, norm_str=0.65)
+    fol_nodes = mk('foliage', _FOL_IMGS['palm'], 0.60, two=True, norm_str=0.90)
+    _FOL_NODES.update(fol_nodes)
+    mk('awning', pbr_sets['awning'], 0.90, two=True, norm_str=0.80)
+    mk('rope', pbr_sets['rope'], 0.94, norm_str=1.0)
+    mk('iron', pbr_sets['iron'], 0.48, 0.72, norm_str=0.90)
+    mk('brass', pbr_sets['brass'], 0.30, 0.86, norm_str=0.70)
     mk('glass', None, 0.22, 0.0, emit=2.6, emit_col=(1.0, 0.66, 0.22, 1.0))
     mk('window', None, 0.14, 0.0, emit=1.55, emit_col=(1.0, 0.68, 0.26, 1.0))
     mk('embers', None, 0.60, 0.0, emit=3.8, emit_col=(1.0, 0.34, 0.06, 1.0))
@@ -714,7 +1248,7 @@ def export_glb(outdir, filename):
         filepath=path, export_format='GLB', export_yup=True, export_apply=False,
         export_vertex_color='MATERIAL', export_all_vertex_colors=False,
         export_cameras=False, export_lights=False, export_animations=False,
-        export_extras=False, export_tangents=False
+        export_extras=False, export_tangents=True
     )
     tris = 0
     cols = 0
@@ -730,6 +1264,7 @@ def export_glb(outdir, filename):
 
 def _add_palm_frond(mb, crown, azimuth, pitch_deg, length, width, droop, tier_tint, phase, rng):
     """Sculpted tropical palm frond: arched midrib + folded serrated leaflet panels with UV2 wind weights 0..1."""
+    mb.newoff()
     ca, sa = cos(azimuth), sin(azimuth)
     fwd = Vector((ca, 0.0, sa))
     side = Vector((-sa, 0.0, ca))
@@ -802,6 +1337,7 @@ def _add_palm_frond(mb, crown, azimuth, pitch_deg, length, width, droop, tier_ti
 
 def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count, seed_off):
     clear_scene()
+    set_foliage_style('palm')
     rng = random.Random(SEED + seed_off)
     mb_trunk = MB('Trunk', seed=seed_off)
     mb_fronds = MB('Fronds', seed=seed_off + 100)
@@ -849,11 +1385,11 @@ def _build_palm_tree(name, height, lean_x, lean_z, s_curve, n_rings, frond_count
             c_ring = mul(c_ring, 0.91)
         w0 = (0.12 * t0 * t0, 0.0)
         w1 = (0.12 * t1 * t1, 0.0)
-        loft(mb_trunk, [sec0, sec1], 'wood', c_ring, closed=True, caps=(i == 0, i == n_rings - 1), mode='flat', suv2=[w0, w1])
+        loft(mb_trunk, [sec0, sec1], 'bark_palm', c_ring, closed=True, caps=(i == 0, i == n_rings - 1), mode='flat', suv2=[w0, w1])
 
     crown = trunk_pt(1.0)
     # Chunky palm heart bulb at crown
-    ellipsoid(mb_trunk, crown + Vector((0, 0.05, 0)), (0.28, 0.24, 0.28), 'wood', C_TRUNK_DARK, 8, 5)
+    ellipsoid(mb_trunk, crown + Vector((0, 0.05, 0)), (0.28, 0.24, 0.28), 'bark_palm', C_TRUNK_DARK, 8, 5)
 
     # Cluster of 6 chunky tropical coconuts tucked beneath crown
     for ci in range(6):
@@ -914,10 +1450,11 @@ def gen_palm_curved(outdir):
 
 def gen_bush_fern(outdir):
     clear_scene()
+    set_foliage_style('palm')
     rng = random.Random(SEED + 37)
     mb = MB('BushFern', seed=37)
     # Earthy root heart mound
-    ellipsoid(mb, (0, 0.08, 0), (0.34, 0.22, 0.34), 'wood', C_TRUNK_DARK, 8, 4)
+    ellipsoid(mb, (0, 0.08, 0), (0.34, 0.22, 0.34), 'bark_banyan', C_TRUNK_DARK, 8, 4)
 
     # Outer & inner layered tropical fern fronds with UV2 wind weights
     tiers = [(9, 14.0, 26.0, 1.15, 1.45, 0.42, 0.36, 0.2), (6, 38.0, 56.0, 0.78, 1.08, 0.34, 0.28, 0.85)]
@@ -947,9 +1484,9 @@ def gen_rock_boulder(outdir):
     rng = random.Random(SEED + 51)
     mb = MB('RockBoulder', seed=51)
     pts = []
-    pts += faceted_rock(mb, (0.0, 0.55, 0.0), (1.75, 1.35, 1.55), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.26, strata=0.14)
-    pts += faceted_rock(mb, (1.25, 0.12, 0.72), (0.95, 0.78, 0.86), 'stone', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.10, rot_deg=(8, 42, -5))
-    pts += faceted_rock(mb, (-1.10, -0.05, -0.68), (0.88, 0.65, 0.80), 'stone', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(-6, -30, 9))
+    pts += faceted_rock(mb, (0.0, 0.55, 0.0), (1.75, 1.35, 1.55), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.26, strata=0.14)
+    pts += faceted_rock(mb, (1.25, 0.12, 0.72), (0.95, 0.78, 0.86), 'rock', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.24, strata=0.10, rot_deg=(8, 42, -5))
+    pts += faceted_rock(mb, (-1.10, -0.05, -0.68), (0.88, 0.65, 0.80), 'rock', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(-6, -30, 9))
     build(mb)
     col_piece('col_rock_boulder', pts)
     export_glb(outdir, 'rock_boulder.glb')
@@ -1008,10 +1545,10 @@ def _limestone_monolith(mb, ring_specs, sides, rng, rot_y=0.0, twist=0.18, apex_
         for k in range(sides):
             kn = (k + 1) % sides
             q = [r0[k], r0[kn], r1[kn], r1[k]]
-            mb.fp(q, 'stone', _stone_face_col(q, inside), (1, 0, 0), inside, smooth=False)
+            mb.fp(q, 'rock', _stone_face_col(q, inside), (1, 0, 0), inside, smooth=False)
 
     # Bottom cap
-    mb.fp(rings[0], 'stone', C_STONE_SHADE, (1, 0, 0), centers[0] + Vector((0, 1.0, 0)), smooth=False)
+    mb.fp(rings[0], 'rock', C_STONE_SHADE, (1, 0, 0), centers[0] + Vector((0, 1.0, 0)), smooth=False)
 
     # Tapered chisel summit cap (crisp faceted peak with zero flat disc look)
     top_ring = rings[-1]
@@ -1023,10 +1560,10 @@ def _limestone_monolith(mb, ring_specs, sides, rng, rot_y=0.0, twist=0.18, apex_
         for k in range(sides):
             kn = (k + 1) % sides
             tri = [top_ring[k], top_ring[kn], apex]
-            mb.fp(tri, 'stone', _stone_face_col(tri, inside_top), (1, 0, 0), inside_top, smooth=False)
+            mb.fp(tri, 'rock', _stone_face_col(tri, inside_top), (1, 0, 0), inside_top, smooth=False)
     else:
         inside_top = top_c - Vector((0, 1.0, 0))
-        mb.fp(top_ring, 'stone', _stone_face_col(top_ring, inside_top), (1, 0, 0), inside_top, smooth=False)
+        mb.fp(top_ring, 'rock', _stone_face_col(top_ring, inside_top), (1, 0, 0), inside_top, smooth=False)
 
     return out_pts
 
@@ -1088,10 +1625,10 @@ def gen_rock_arch(outdir):
     pts_r = []
     pts_b = []
     # Left & right sea-pillars extending to y = -3.0 m
-    pts_l += faceted_rock(mb, (-6.2, 0.8, 0.0), (2.8, 4.2, 2.9), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(0, 15, -6))
-    pts_l += faceted_rock(mb, (-5.4, 5.6, 0.1), (2.3, 3.6, 2.4), 'stone', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(2, -10, -14))
-    pts_r += faceted_rock(mb, (6.2, 0.8, 0.1), (2.9, 4.3, 2.8), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(0, -22, 7))
-    pts_r += faceted_rock(mb, (5.3, 5.8, -0.1), (2.2, 3.8, 2.3), 'stone', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(-3, 18, 15))
+    pts_l += faceted_rock(mb, (-6.2, 0.8, 0.0), (2.8, 4.2, 2.9), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(0, 15, -6))
+    pts_l += faceted_rock(mb, (-5.4, 5.6, 0.1), (2.3, 3.6, 2.4), 'rock', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(2, -10, -14))
+    pts_r += faceted_rock(mb, (6.2, 0.8, 0.1), (2.9, 4.3, 2.8), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(0, -22, 7))
+    pts_r += faceted_rock(mb, (5.3, 5.8, -0.1), (2.2, 3.8, 2.3), 'rock', C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=2, warp=0.22, strata=0.15, rot_deg=(-3, 18, 15))
     # Vaulted keystone arch span (5 chunky interlocking faceted rock masses!)
     span_specs = [
         (-3.6, 9.2, 0.0, (2.2, 2.1, 2.2), (0, 8, -24)),
@@ -1102,7 +1639,7 @@ def gen_rock_arch(outdir):
     ]
     for x, y, z, rad, rot in span_specs:
         top_c = C_MOSS if y > 11.2 else C_STONE_OCHRE
-        pts_b += faceted_rock(mb, (x, y, z), rad, 'stone', top_c, C_STONE_LIGHT, C_STONE_DARK, rng, subdiv=2, warp=0.20, strata=0.12, rot_deg=rot)
+        pts_b += faceted_rock(mb, (x, y, z), rad, 'rock', top_c, C_STONE_LIGHT, C_STONE_DARK, rng, subdiv=2, warp=0.20, strata=0.12, rot_deg=rot)
     build(mb)
     col_piece('col_arch_left', pts_l)
     col_piece('col_arch_right', pts_r)
@@ -1232,13 +1769,13 @@ def gen_outpost_tavern(outdir):
         [(-4.55, FLOOR_Y, -3.35), (4.55, FLOOR_Y, -3.35), (4.55, FLOOR_Y, 3.55), (-4.55, FLOOR_Y, 3.55)],
         [(-4.82, EAVE_Y, -3.56), (4.82, EAVE_Y, -3.56), (4.82, EAVE_Y, 3.76), (-4.82, EAVE_Y, 3.76)],
     ]
-    loft(mb, secs, 'paint', C_PLASTER, closed=True, caps=(True, True), mode='flat', scols=[C_PLASTER])
+    loft(mb, secs, 'plaster', C_PLASTER, closed=True, caps=(True, True), mode='flat', scols=[C_PLASTER])
 
     # Gable triangles (left & right ends along X)
     for sx in (-1, 1):
         gx = sx * 4.80
         g_pts = [(gx, EAVE_Y - 0.05, -3.56), (gx, EAVE_Y - 0.05, 3.76), (gx, RIDGE_Y - 0.15, 0.10)]
-        mb.fp(g_pts, 'paint', C_PLASTER_SH, (0, 0, 1), (0, EAVE_Y, 0))
+        mb.fp(g_pts, 'plaster', C_PLASTER_SH, (0, 0, 1), (0, EAVE_Y, 0))
 
     # Heavy dark-oak half-timber framing (corner posts, horizontals, diagonal X-braces)
     for sx in (-1, 1):
@@ -1292,10 +1829,10 @@ def gen_outpost_tavern(outdir):
                 mb.newoff()
                 p_top = [(x0, y0 + sag + th, z0), (x1, y0 + sag + th, z0), (x1, y1 + sag + th + lip_dy, z1), (x0, y1 + sag + th + lip_dy, z1)]
                 p_bot = [(x0, y0 + sag, z0), (x1, y0 + sag, z0), (x1, y1 + sag + lip_dy, z1), (x0, y1 + sag + lip_dy, z1)]
-                mb.fp(p_top, 'wood', c_sh, (1, 0, 0), (xm, y0 - 2.0, 0.10))
+                mb.fp(p_top, 'shingle', c_sh, (1, 0, 0), (xm, y0 - 2.0, 0.10))
                 mb.fp(p_bot, 'wood', mul(c_sh, 0.65), (1, 0, 0), (xm, y0 + 2.0, 0.10))
                 # Front lip edge of shake course
-                mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'wood', mul(c_sh, 0.78), (1, 0, 0), (xm, y0, 0.10))
+                mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'shingle', mul(c_sh, 0.78), (1, 0, 0), (xm, y0, 0.10))
     # Heavy ridge cap timber + crimson bargeboards
     cbox(mb, (0.0, RIDGE_Y + 0.12, 0.10), (11.6, 0.32, 0.34), 'wood', C_DARK, 0.03)
     for sx in (-5.62, 5.62):
@@ -1327,7 +1864,7 @@ def gen_outpost_tavern(outdir):
     # Slanted porch overhang roof (shelters porch from rain!)
     p_r_top = [(-4.75, 3.72, -3.45), (4.75, 3.72, -3.45), (4.75, 3.12, -6.05), (-4.75, 3.12, -6.05)]
     p_r_bot = [(p[0], p[1] - 0.18, p[2]) for p in p_r_top]
-    mb.fp(p_r_top, 'wood', C_THATCH, (1, 0, 0), (0, 1.0, -4.5))
+    mb.fp(p_r_top, 'thatch', C_THATCH, (1, 0, 0), (0, 1.0, -4.5))
     mb.fp(p_r_bot, 'wood', mul(C_DARK, 0.8), (1, 0, 0), (0, 5.0, -4.5))
     mb.fp([p_r_bot[3], p_r_bot[2], p_r_top[2], p_r_top[3]], 'wood', C_RED, (1, 0, 0), (0, 3.4, -3.0))
 
@@ -1491,10 +2028,10 @@ def gen_beacon_tower(outdir):
 
     # 2. Bold maritime banded tower shaft (y = 6.3..16.2) with crimson/cream bands for horizon contrast!
     bands = [
-        (6.35, 8.8, 2.38, 2.18, 'paint', C_CREAM),
-        (8.8, 11.4, 2.18, 1.98, 'paint', C_RED),
-        (11.4, 13.9, 1.98, 1.80, 'paint', C_CREAM),
-        (13.9, 16.2, 1.80, 1.66, 'paint', C_RED),
+        (6.35, 8.8, 2.38, 2.18, 'plaster', C_CREAM),
+        (8.8, 11.4, 2.18, 1.98, 'plaster', C_RED),
+        (11.4, 13.9, 1.98, 1.80, 'plaster', C_CREAM),
+        (13.9, 16.2, 1.80, 1.66, 'plaster', C_RED),
     ]
     for y0, y1, r0, r1, mat, col in bands:
         cyl(mb, r0, y0, y1, 8, mat, col, False, 0.03, r1)
@@ -1644,7 +2181,7 @@ def gen_dig_mound(outdir):
         rr = rng.uniform(0.32, 0.74)
         py = 0.06 + max(0.0, (0.65 - rr) * 0.32)
         sr = rng.uniform(0.055, 0.11)
-        faceted_rock(mb, (cos(ang) * rr, py, sin(ang) * rr), (sr * 1.2, sr * 0.7, sr), 'stone',
+        faceted_rock(mb, (cos(ang) * rr, py, sin(ang) * rr), (sr * 1.2, sr * 0.7, sr), 'rock',
                      C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.18, strata=0.05, rot_deg=(0, rng.uniform(0, 360), 0))
 
     # Subtle crossed weathered driftwood / shovel-mark sticks poking from the sand
@@ -1701,12 +2238,14 @@ def gen_shipwreck_hulk(outdir):
                 b0 = 2.48 * max(0.30, (1.0 - abs(z0 / 5.7) ** 2.2) ** 0.72)
                 b1 = 2.48 * max(0.30, (1.0 - abs(z1 / 5.7) ** 2.2) ** 0.72)
                 p_col = jit(C_TAR if si == 0 else (C_HULL if si != 3 else C_TEAL), rng, 0.10)
+                mb.newoff()
                 # Port side strake
                 q = [(-b0, y0, z0), (-b1, y0, z1), (-b1 * 0.98, y1, z1), (-b0 * 0.98, y1, z0)]
                 mb.fp(q, 'wood', p_col, (0, 0, 1), (0, 0, 0.5 * (z0 + z1)))
                 mb.fp(q[::-1], 'wood', mul(p_col, 0.72), (0, 0, 1), (-6.0, 0, 0.5 * (z0 + z1)))
                 # Starboard lower strakes only
                 if si <= 1 or seg <= 2:
+                    mb.newoff()
                     q2 = [(b0, y0, z0), (b1, y0, z1), (b1 * 0.98, y1, z1), (b0 * 0.98, y1, z0)]
                     mb.fp(q2, 'wood', p_col, (0, 0, 1), (0, 0, 0.5 * (z0 + z1)))
 
@@ -1794,7 +2333,7 @@ def gen_campfire(outdir):
     mb = MB('Campfire', seed=367)
 
     # Charred ash bed
-    cyl(mb, 0.56, -0.05, 0.08, 10, 'stone', C_CHAR, False, 0.02, 0.44)
+    cyl(mb, 0.56, -0.05, 0.08, 10, 'rock', C_CHAR, False, 0.02, 0.44)
     # Ring of 10 chunky faceted beach stones
     for i in range(10):
         ang = i * (2.0 * pi / 10.0) + rng.uniform(-0.14, 0.14)
@@ -1802,7 +2341,7 @@ def gen_campfire(outdir):
         sx = rng.uniform(0.18, 0.25)
         sy = rng.uniform(0.13, 0.21)
         sz = rng.uniform(0.17, 0.24)
-        faceted_rock(mb, (cos(ang) * rr, sy * 0.55, sin(ang) * rr), (sx, sy, sz), 'stone',
+        faceted_rock(mb, (cos(ang) * rr, sy * 0.55, sin(ang) * rr), (sx, sy, sz), 'rock',
                      C_STONE_LIGHT, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.20, strata=0.06, rot_deg=(0, rng.uniform(0, 360), 0))
 
     # Glowing cracked ember mound at heart (mat_embers!)
@@ -1816,7 +2355,7 @@ def gen_campfire(outdir):
         ang = i * (2.0 * pi / 6.0) + rng.uniform(-0.12, 0.12)
         p0 = Vector((cos(ang) * 0.52, 0.08, sin(ang) * 0.52))
         p1 = Vector((cos(ang + 2.4) * 0.12, 0.44 + rng.uniform(-0.05, 0.08), sin(ang + 2.4) * 0.12))
-        tube(mb, [p0, p1], [0.068, 0.052], 6, 'wood', jit(C_DARK if i % 2 == 0 else C_CHAR, rng, 0.08), mode='flat')
+        tube(mb, [p0, p1], [0.068, 0.052], 6, 'bark_banyan', jit(C_DARK if i % 2 == 0 else C_CHAR, rng, 0.08), mode='flat')
 
     build(mb)
     add_empty('Lantern_Fire', (0.0, 0.55, 0.0))
@@ -1838,8 +2377,9 @@ def gen_notice_board(outdir):
     cbox(mb, (0.0, 0.92, 0.0), (2.28, 0.14, 0.18), 'wood', C_DARK, 0.02)
     # Pitched shingle rain hood over board
     for sz in (-1, 1):
+        mb.newoff()
         q = [(-1.35, 2.52, 0.0), (1.35, 2.52, 0.0), (1.35, 2.20, sz * 0.58), (-1.35, 2.20, sz * 0.58)]
-        mb.fp(q, 'wood', C_SHINGLE, (1, 0, 0), (0, 1.8, 0))
+        mb.fp(q, 'shingle', C_SHINGLE, (1, 0, 0), (0, 1.8, 0))
     cbox(mb, (0.0, 2.54, 0.0), (2.78, 0.10, 0.12), 'wood', C_RED, 0.015)
     # Pinned parchment voyage notices & crimson wax seals!
     notes = [(-0.56, 1.62, 0.28, 0.36, 5), (0.02, 1.54, 0.38, 0.44, -4), (0.58, 1.60, 0.30, 0.34, 8), (-0.42, 1.18, 0.34, 0.26, -7), (0.44, 1.20, 0.32, 0.28, 3)]
@@ -1898,6 +2438,7 @@ def _add_faceted_canopy_dome(mb, center, radii, rng, phase, base_w=0.18, tip_w=0
 
 def _add_ivy_drape(mb, anchor, length, width, out_dir, rng, phase):
     """Hanging jungle ivy ribbon pinned at top (UV2.x = 0) and swaying softly toward the tip (UV2.x = 0.9)."""
+    mb.newoff()
     od = Vector(out_dir).normalized()
     side = Vector((-od.z, 0.0, od.x)).normalized()
     segs = 5
@@ -1921,6 +2462,7 @@ def _add_ivy_drape(mb, anchor, length, width, out_dir, rng, phase):
 
 def gen_jungle_banyan(outdir):
     clear_scene()
+    set_foliage_style('broad')
     rng = random.Random(SEED + 431)
     mb_wood = MB('BanyanWood', seed=431)
     mb_leaf = MB('BanyanCanopy', seed=531)
@@ -1949,7 +2491,7 @@ def gen_jungle_banyan(outdir):
             col_pts.append(v)
         secs.append(ring)
         scols.append(jit(mix(C_TRUNK_DARK, C_DARK, 0.35 + 0.30 * t), rng, 0.06, 0.02))
-    loft(mb_wood, secs, 'wood', C_TRUNK_DARK, closed=True, caps=(True, True), mode='flat', scols=scols)
+    loft(mb_wood, secs, 'bark_banyan', C_TRUNK_DARK, closed=True, caps=(True, True), mode='flat', scols=scols)
 
     # 2. Five dramatic splayed buttress roots plunging cleanly down to y = -0.85 m for sloped terrain!
     for ri in range(5):
@@ -1962,7 +2504,7 @@ def gen_jungle_banyan(outdir):
             Vector((ca * (reach * 0.82), 0.12, sa * (reach * 0.82))),
             Vector((ca * reach, -0.85, sa * reach)),
         ]
-        tube(mb_wood, r_path, [0.34, 0.28, 0.23, 0.16], 6, 'wood', jit(C_TRUNK_DARK, rng, 0.07), mode='flat')
+        tube(mb_wood, r_path, [0.34, 0.28, 0.23, 0.16], 6, 'bark_banyan', jit(C_TRUNK_DARK, rng, 0.07), mode='flat')
         for p in r_path[:3]:
             col_pts.append(p)
 
@@ -1984,7 +2526,7 @@ def gen_jungle_banyan(outdir):
             Vector((ca * (reach * 0.78) + sx * sw, top_y - 0.55, sa * (reach * 0.78) + sz * sw)),
             Vector((ca * reach, top_y, sa * reach)),
         ]
-        tube(mb_wood, b_path, [r0, r0 * 0.78, r0 * 0.56, r1], 6, 'wood', jit(C_DARK, rng, 0.07), mode='flat')
+        tube(mb_wood, b_path, [r0, r0 * 0.78, r0 * 0.56, r1], 6, 'bark_banyan', jit(C_DARK, rng, 0.07), mode='flat')
         bough_tips.append(b_path[-1])
         # Forked secondary sub-branch for rich broad-canopy structure
         for sgn in (-1.0, 1.0):
@@ -1992,7 +2534,7 @@ def gen_jungle_banyan(outdir):
             fca, fsa = cos(fork_az), sin(fork_az)
             f_start = b_path[2]
             f_end = f_start + Vector((fca * 1.45, 0.85 + rng.uniform(-0.15, 0.25), fsa * 1.45))
-            tube(mb_wood, [f_start, f_end], [r0 * 0.42, r1 * 0.65], 5, 'wood', jit(C_TRUNK_LIGHT, rng, 0.07), mode='flat')
+            tube(mb_wood, [f_start, f_end], [r0 * 0.42, r1 * 0.65], 5, 'bark_banyan', jit(C_TRUNK_LIGHT, rng, 0.07), mode='flat')
             bough_tips.append(f_end)
 
         # Hanging banyan aerial root tendrils draping down from the heavy bough!
@@ -2000,11 +2542,11 @@ def gen_jungle_banyan(outdir):
         a_end_y = -0.65 if bi % 2 == 0 else rng.uniform(1.4, 2.6)
         a_mid = Vector((a_anchor.x * 1.06, 0.5 * (a_anchor.y + a_end_y), a_anchor.z * 1.06))
         a_bot = Vector((a_anchor.x * 1.04, a_end_y, a_anchor.z * 1.04))
-        tube(mb_wood, [a_anchor, a_mid, a_bot], [0.065, 0.050, 0.042], 5, 'wood', jit(C_WEATH, rng, 0.08), mode='flat')
+        tube(mb_wood, [a_anchor, a_mid, a_bot], [0.065, 0.050, 0.042], 5, 'bark_banyan', jit(C_WEATH, rng, 0.08), mode='flat')
 
     # Towering central crown bough reaching up into the sunlit canopy apex (~10.5 m!)
     crown_limb = [Vector((-0.02, 4.50, 0.04)), Vector((0.18, 6.45, -0.12)), Vector((0.08, 8.25, -0.06))]
-    tube(mb_wood, crown_limb, [0.42, 0.28, 0.16], 6, 'wood', C_TRUNK_DARK, mode='flat')
+    tube(mb_wood, crown_limb, [0.42, 0.28, 0.16], 6, 'bark_banyan', C_TRUNK_DARK, mode='flat')
 
     # 4. Lush multi-tiered emerald-to-sunlit-gold layered leaf-frond dome canopy ('foliage' -> wind shader!)
     # Outer broad bough leaf domes + forked mid-canopy tiers
@@ -2038,6 +2580,7 @@ def gen_jungle_banyan(outdir):
 
 def gen_ruin_arch(outdir):
     clear_scene()
+    set_foliage_style('broad')
     rng = random.Random(SEED + 461)
     mb = MB('RuinArch', seed=461)
 
@@ -2136,6 +2679,7 @@ def gen_ruin_arch(outdir):
 
 def gen_ruin_pillar(outdir):
     clear_scene()
+    set_foliage_style('broad')
     rng = random.Random(SEED + 491)
     mb = MB('RuinPillar', seed=491)
 
@@ -2183,9 +2727,9 @@ def gen_ruin_pillar(outdir):
         scols=[C_STONE_WARM, C_STONE_PALE, jit(C_STONE_PALE, rng, 0.04)])
 
     # Jagged chipped limestone fracture shards crowning the diagonal break & 2 fallen stones at foot
-    faceted_rock(mb, (-0.18, 5.18, 0.10), (0.34, 0.24, 0.30), 'stone', C_STONE_PALE, C_STONE_WARM, C_STONE_SHADE, rng, subdiv=1, warp=0.18, strata=0.06)
-    faceted_rock(mb, (0.86, 0.16, -0.78), (0.34, 0.24, 0.28), 'stone', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(12, 35, -8))
-    faceted_rock(mb, (-0.95, 0.12, 0.62), (0.28, 0.19, 0.25), 'stone', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.20, strata=0.06, rot_deg=(-8, -42, 10))
+    faceted_rock(mb, (-0.18, 5.18, 0.10), (0.34, 0.24, 0.30), 'rock', C_STONE_PALE, C_STONE_WARM, C_STONE_SHADE, rng, subdiv=1, warp=0.18, strata=0.06)
+    faceted_rock(mb, (0.86, 0.16, -0.78), (0.34, 0.24, 0.28), 'rock', C_STONE_OCHRE, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.22, strata=0.08, rot_deg=(12, 35, -8))
+    faceted_rock(mb, (-0.95, 0.12, 0.62), (0.28, 0.19, 0.25), 'rock', C_MOSS, C_STONE_MID, C_STONE_DARK, rng, subdiv=1, warp=0.20, strata=0.06, rot_deg=(-8, -42, 10))
 
     # 5. Emerald moss patches clinging to plinth ledge & fractured top + trailing ivy sprig
     _add_faceted_canopy_dome(mb, (0.22, 4.92, -0.18), (0.36, 0.16, 0.32), rng, phase=rng.random(), base_w=0.04, tip_w=0.18, tint=0.45)
@@ -2340,11 +2884,11 @@ def gen_harbour_warehouse(outdir):
     loft(mb, [
         [(-4.15, FLOOR_Y, -2.86), (4.15, FLOOR_Y, -2.86), (4.15, FLOOR_Y, 2.86), (-4.15, FLOOR_Y, 2.86)],
         [(-4.30, EAVE_Y, -2.96), (4.30, EAVE_Y, -2.96), (4.30, EAVE_Y, 2.96), (-4.30, EAVE_Y, 2.96)],
-    ], 'paint', C_PLASTER, closed=True, caps=(True, True), mode='flat', scols=[C_PLASTER])
+    ], 'plaster', C_PLASTER, closed=True, caps=(True, True), mode='flat', scols=[C_PLASTER])
     for sz in (-1.0, 1.0):
         gz = sz * 2.94
         g_pts = [(-4.28, EAVE_Y - 0.04, gz), (4.28, EAVE_Y - 0.04, gz), (0.0, RIDGE_Y - 0.12, gz)]
-        mb.fp(g_pts, 'paint', C_PLASTER_SH, (1, 0, 0), (0.0, EAVE_Y, 0.0))
+        mb.fp(g_pts, 'plaster', C_PLASTER_SH, (1, 0, 0), (0.0, EAVE_Y, 0.0))
 
     # Heavy dark-oak half-timber framing (corner posts, horizontals, diagonal X-braces)
     for sx in (-1.0, 1.0):
@@ -2379,11 +2923,12 @@ def gen_harbour_warehouse(outdir):
                 z0, z1 = zs[zi], zs[zi + 1]
                 th = 0.15 + rng.uniform(-0.015, 0.02)
                 c_sh = jit(mix(C_CEDAR_PALETTE[(ci + zi) % len(C_CEDAR_PALETTE)], C_DARK, 0.12 * f0), rng, 0.07, 0.02)
+                mb.newoff()
                 p_top = [(x0, y0 + th, z0), (x0, y0 + th, z1), (x1, y1 + th, z1), (x1, y1 + th, z0)]
                 p_bot = [(x0, y0, z0), (x0, y0, z1), (x1, y1, z1), (x1, y1, z0)]
-                mb.fp(p_top, 'wood', c_sh, (0, 0, 1), (0.0, y0 - 2.0, 0.5 * (z0 + z1)))
+                mb.fp(p_top, 'shingle', c_sh, (0, 0, 1), (0.0, y0 - 2.0, 0.5 * (z0 + z1)))
                 mb.fp(p_bot, 'wood', mul(c_sh, 0.68), (0, 0, 1), (0.0, y0 + 2.0, 0.5 * (z0 + z1)))
-                mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'wood', mul(c_sh, 0.78), (0, 0, 1), (0.0, y0, 0.5 * (z0 + z1)))
+                mb.fp([p_bot[3], p_bot[2], p_top[2], p_top[3]], 'shingle', mul(c_sh, 0.78), (0, 0, 1), (0.0, y0, 0.5 * (z0 + z1)))
     # Heavy ridge cap timber + bold maritime teal bargeboards distinguishing the Trading Warehouse!
     cbox(mb, (0.0, RIDGE_Y + 0.12, 0.0), (0.34, 0.30, 7.15), 'wood', C_DARK, 0.03)
     for sz in (-3.44, 3.44):
@@ -2657,7 +3202,7 @@ def gen_watchtower_wood(outdir):
         loft(mb, [
             [(-r0, y0, -r0), (r0, y0, -r0), (r0, y0, r0), (-r0, y0, r0)],
             [(-r1, y1, -r1), (r1, y1, -r1), (r1, y1, r1), (-r1, y1, r1)],
-        ], 'wood', tcol, closed=True, caps=(True, True), mode='flat', scols=[mul(tcol, 0.88), tcol])
+        ], 'thatch', tcol, closed=True, caps=(True, True), mode='flat', scols=[mul(tcol, 0.88), tcol])
     # Thatch crown finial bundle & bamboo corner rafter tails
     cyl(mb, 0.18, PEAK_Y - 0.06, PEAK_Y + 0.16, 6, 'wood', C_DARK, False, 0.02, 0.08)
     for sx in (-1.0, 1.0):

@@ -153,10 +153,17 @@ float cloud_sd(vec3 p, CloudColumn c, bool fine) {
 	}
 	// Puffs bite hardest up the sides and top; the base stays flat in fair
 	// weather and rolls under a storm.
-	float bite = PUFF * (0.35 + 0.65 * smoothstep(0.0, 0.25, hn));
+	float bite = PUFF * (0.42 + 0.58 * smoothstep(0.0, 0.25, hn));
 	// Under a storm the base rolls: slow swells from the big lumps, scud from the wisps.
 	float roll = (n.b - 0.35) * 2.0 + (n.a - 0.5) * 3.0;
-	d = min((e - eat * bite) * M_SCALE, below - roll * c.relief);
+	float side_sd = (e - eat * bite) * M_SCALE;
+	float base_sd = below - roll * c.relief;
+	// Gently tuck hanging cloud bellies below `c.base` and smooth-blend the base crease
+	// so distant cumulus flanks never terminate in a razor-sharp vertical clip edge.
+	float hn_sub = max(-below, 0.0) / max(c.relief * 2.5, 90.0);
+	side_sd -= (c.k * 0.45 * hn_sub * hn_sub) * M_SCALE;
+	float h_blend = clamp(0.5 + 0.5 * (base_sd - side_sd) / 55.0, 0.0, 1.0);
+	d = mix(base_sd, side_sd, h_blend) - 55.0 * h_blend * (1.0 - h_blend);
 	if (cell > -900.0) {
 		// The tower is built of turrets: one more read at a much larger scale.
 		float turret = textureLod(cloud_volume, uvw * 0.31 + 0.17, 0.0).r;

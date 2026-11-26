@@ -270,3 +270,42 @@ func test_ocean_nocturnal_bioluminescence_shader() -> void:
 	remove_child(ocean)
 	ocean.free()
 
+
+func test_wave25_directional_chop_and_fft_binding() -> void:
+	check_eq(Sea.WAVE_TABLE.size(), 24, "WAVE_TABLE must carry 24 directional Gerstner waves")
+	var min_long_hdg := INF
+	var max_long_hdg := -INF
+	var calm_pinch := 0.0
+	var storm_pinch := 0.0
+	for w in Sea.WAVE_TABLE:
+		var wl := float(w[0])
+		var k := TAU / wl
+		calm_pinch += k * float(w[1]) * float(w[4])
+		storm_pinch += k * float(w[2]) * float(w[4])
+		if wl >= 100.0:
+			min_long_hdg = minf(min_long_hdg, float(w[3]))
+			max_long_hdg = maxf(max_long_hdg, float(w[3]))
+	var long_spread := max_long_hdg - min_long_hdg
+	print("    24-wave spectrum: calm_pinch=%.4f storm_pinch=%.4f long_spread=%.2f rad" % [calm_pinch, storm_pinch, long_spread])
+	check(calm_pinch < 0.85, "calm sum(k*A*steepness) %.4f must be < 0.85" % calm_pinch)
+	check(storm_pinch < 0.94, "storm sum(k*A*steepness) %.4f must be < 0.94" % storm_pinch)
+	check(long_spread > 2.0, "primary/crossing swell headings must span > 2.0 rad (got %.2f)" % long_spread)
+
+	var ocean_scene: PackedScene = load("res://src/ocean/ocean.tscn")
+	var ocean: Ocean = ocean_scene.instantiate() as Ocean
+	add_child(ocean)
+	var chop_tex: Variant = ocean.material.get_shader_parameter(&"chop_tex")
+	var chop_on := float(ocean.material.get_shader_parameter(&"chop_tex_on"))
+	check(chop_tex is Texture2D, "Ocean must bind ocean_fft_chop.png to chop_tex")
+	check_near(chop_on, 1.0, 0.001, "Ocean chop_tex_on must be 1.0")
+	if chop_tex is Texture2D:
+		var sz := (chop_tex as Texture2D).get_size()
+		check(sz.x >= 1024 and sz.y >= 1024, "ocean_fft_chop.png must be 1024x1024 (got %s)" % str(sz))
+	var code := ocean.material.shader.code
+	check(code.contains("ROT_C1") and code.contains("ROT_C2") and code.contains("trough_ao"),
+		"ocean.gdshader must apply multi-cascade rotated FFT chop and trough depth shading")
+	await get_tree().process_frame
+	remove_child(ocean)
+	ocean.free()
+
+

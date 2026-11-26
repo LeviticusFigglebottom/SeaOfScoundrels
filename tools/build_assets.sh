@@ -6,12 +6,16 @@ cd "$(dirname "$0")/.."
 BLENDER="${BLENDER:-blender}"
 out="$PWD/assets/generated"
 shopt -s nullglob
+for f in tools/textures/gen_*.py; do
+	echo "== python (textures): $f"
+	python3 "$f" "$out"
+done
 for f in tools/blender/gen_*.py; do
 	echo "== blender: $f"
 	"$BLENDER" --background --factory-startup --python "$f" -- "$out" 2>&1 | grep -vE "^(Blender|Read|Saved|$)" || true
 done
-for f in tools/textures/gen_*.py tools/audio/gen_*.py; do
-	echo "== python: $f"
+for f in tools/audio/gen_*.py; do
+	echo "== python (audio): $f"
 	python3 "$f" "$out"
 done
 echo "assets rebuilt in $out"

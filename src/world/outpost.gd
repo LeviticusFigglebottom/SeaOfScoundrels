@@ -427,8 +427,14 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 	props_root.add_child(campfire_stove)
 	campfire_cooking_stove = campfire_stove
 
-	# 7. Quartermaster Supply Crates & Barrels near the dock ramp head.
-	var qm_pos: Vector3 = harbour_pt.call(-3.8, -23.0)
+	# 7. Quartermaster Supply Crates & Barrels on dry golden sand beside the dock ramp head.
+	var qm_v := -21.2
+	var qm_pos: Vector3 = harbour_pt.call(-3.9, qm_v)
+	for _dry_step in 4:
+		if surface_height(qm_pos.x, qm_pos.z) >= 0.72:
+			break
+		qm_v += 0.5
+		qm_pos = harbour_pt.call(-3.9, qm_v)
 	qm_pos.y = surface_height(qm_pos.x, qm_pos.z)
 	var qm_xform := Transform3D(Basis(Vector3.UP, dock_yaw + 0.18), qm_pos)
 	var qm_crate := _place_outpost_prop(
@@ -443,8 +449,8 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 
 	# Accent barrels and supply crates around the plaza and pier entrance.
 	var clutter_specs: Array[Array] = [
-		[BARREL_SCENE, "DockBarrel_A", -2.9, -21.8, 0.4],
-		[BARREL_SCENE, "DockBarrel_B", -4.7, -22.2, 1.8],
+		[BARREL_SCENE, "DockBarrel_A", -3.0, qm_v + 0.6, 0.4],
+		[BARREL_SCENE, "DockBarrel_B", -4.8, qm_v + 0.2, 1.8],
 		[CRATE_SCENE, "StallCrate_A", 12.2, -16.8, -0.5],
 		[BARREL_SCENE, "TavernBarrel_A", -5.4, -10.8, 0.9],
 		[CRATE_SCENE, "TavernCrate_A", -4.4, -9.8, 0.2],
@@ -471,7 +477,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		"MerchantFactorNPC", props_root, merch_pos, dock_yaw + PI * 0.45,
 		&"captain", Color(0.56, 0.14, 0.16), Color(0.92, 0.74, 0.24), rng.randf() * TAU)
 
-	var qm_npc_pos: Vector3 = harbour_pt.call(-5.3, -22.2)
+	var qm_npc_pos: Vector3 = harbour_pt.call(-5.3, qm_v)
 	qm_npc_pos.y = surface_height(qm_npc_pos.x, qm_npc_pos.z)
 	_spawn_harbour_npc(
 		"QuartermasterNPC", props_root, qm_npc_pos, dock_yaw - 0.55,

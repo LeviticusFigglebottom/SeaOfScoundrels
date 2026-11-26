@@ -103,10 +103,10 @@ const SEA_FLOOR_Y := -20.0
 const CONTOUR_SAMPLES := 36
 
 # Warm weathered coral-limestone bastion, sea-oak gantry, and forged iron brazier palette.
-const COL_FORT_STONE_LIGHT := Color(0.70, 0.63, 0.51)
-const COL_FORT_STONE_MID := Color(0.56, 0.50, 0.40)
-const COL_FORT_STONE_SHADOW := Color(0.36, 0.34, 0.30)
-const COL_FORT_STONE_MOSS := Color(0.34, 0.41, 0.27)
+const COL_FORT_STONE_LIGHT := Color(0.68, 0.57, 0.41)
+const COL_FORT_STONE_MID := Color(0.49, 0.41, 0.31)
+const COL_FORT_STONE_SHADOW := Color(0.28, 0.25, 0.22)
+const COL_FORT_STONE_MOSS := Color(0.26, 0.36, 0.20)
 const COL_FORT_WOOD_LIGHT := Color(0.53, 0.36, 0.21)
 const COL_FORT_WOOD_MID := Color(0.40, 0.26, 0.15)
 const COL_FORT_WOOD_DARK := Color(0.25, 0.16, 0.09)
@@ -2488,8 +2488,10 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 	stone_mi.mesh = stone_st.commit()
 	var stone_mat := StandardMaterial3D.new()
 	stone_mat.vertex_color_use_as_albedo = true
+	stone_mat.vertex_color_is_srgb = true
 	stone_mat.roughness = 0.90
 	stone_mat.metallic = 0.0
+	stone_mat.metallic_specular = 0.24
 	stone_mi.material_override = stone_mat
 	bastion.add_child(stone_mi)
 
@@ -2499,6 +2501,7 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 	wood_mi.mesh = wood_st.commit()
 	var wood_mat := StandardMaterial3D.new()
 	wood_mat.vertex_color_use_as_albedo = true
+	wood_mat.vertex_color_is_srgb = true
 	wood_mat.roughness = 0.87
 	wood_mat.metallic = 0.02
 	wood_mi.material_override = wood_mat
@@ -2510,6 +2513,7 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 	iron_mi.mesh = iron_st.commit()
 	var iron_mat := StandardMaterial3D.new()
 	iron_mat.vertex_color_use_as_albedo = true
+	iron_mat.vertex_color_is_srgb = true
 	iron_mat.roughness = 0.44
 	iron_mat.metallic = 0.78
 	iron_mi.material_override = iron_mat
@@ -2601,10 +2605,15 @@ static func _build_bastion_gateway(stone_st: SurfaceTool, wood_st: SurfaceTool, 
 		_bastion_add_oriented_prism(stone_st, v_xf, vh_xz, vh_xz * 0.92, v_h,
 			COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW)
 
-	# Stepped stone ramp threshold slab welcoming players straight into the courtyard.
-	var thresh_pos := bay_xf * Vector3(0.0, -0.25, -0.65)
-	_bastion_add_tapered_prism(stone_st, thresh_pos,
-		Vector2(2.35, 1.45), Vector2(2.15, 1.25), 0.32, bay_yaw_arch,
+	# Grounded stepped stone ramp threshold apron with buried masonry skirt (y = -1.65 m)
+	# so outer left/right corners never hover over sloped approaches on any fort island.
+	var thresh_skirt_pos := bay_xf * Vector3(0.0, -1.65, -0.65)
+	_bastion_add_tapered_prism(stone_st, thresh_skirt_pos,
+		Vector2(2.62, 1.72), Vector2(2.26, 1.36), 1.62, bay_yaw_arch,
+		COL_FORT_STONE_MID, COL_FORT_STONE_SHADOW, COL_FORT_STONE_MOSS.lerp(COL_FORT_STONE_SHADOW, 0.40))
+	var thresh_cap_pos := bay_xf * Vector3(0.0, -0.05, -0.65)
+	_bastion_add_tapered_prism(stone_st, thresh_cap_pos,
+		Vector2(2.28, 1.38), Vector2(2.15, 1.25), 0.12, bay_yaw_arch,
 		COL_FORT_STONE_LIGHT, COL_FORT_STONE_MID, COL_FORT_STONE_MOSS)
 
 	# Hanging wrought-iron gatehouse lantern beneath the arch keystone.
@@ -3108,13 +3117,34 @@ static func _bastion_add_oriented_prism(st: SurfaceTool, xf: Transform3D,
 		xf * Vector3(half_top.x, height, half_top.y),
 		xf * Vector3(-half_top.x, height, half_top.y),
 	]
+	var block_hash := sin(xf.origin.x * 12.9898 + xf.origin.y * 78.233 + xf.origin.z * 37.719) * 43758.5453
+	var block_jit := (block_hash - floorf(block_hash)) * 2.0 - 1.0
+	var tone_mul := 1.0 + block_jit * 0.075
+	var warm_r := 1.0 + block_jit * 0.03
+	var warm_b := 1.0 - block_jit * 0.03
+	var j_top := Color(
+		clampf(col_top.r * tone_mul * warm_r, 0.0, 1.0),
+		clampf(col_top.g * tone_mul, 0.0, 1.0),
+		clampf(col_top.b * tone_mul * warm_b, 0.0, 1.0)
+	)
+	var j_mid := Color(
+		clampf(col_mid.r * tone_mul, 0.0, 1.0),
+		clampf(col_mid.g * tone_mul, 0.0, 1.0),
+		clampf(col_mid.b * tone_mul, 0.0, 1.0)
+	)
+	var j_bot := Color(
+		clampf(col_bot.r * (1.0 + block_jit * 0.045), 0.0, 1.0),
+		clampf(col_bot.g * (1.0 + block_jit * 0.045), 0.0, 1.0),
+		clampf(col_bot.b * (1.0 + block_jit * 0.045), 0.0, 1.0)
+	)
 	# Top cap (+Y outward) & bottom cap (-Y outward).
-	_bastion_quad(st, t[0], t[1], t[2], t[3], col_top, col_top, col_top, col_top)
-	_bastion_quad(st, b[0], b[3], b[2], b[1], col_bot, col_bot, col_bot, col_bot)
+	_bastion_quad(st, t[0], t[1], t[2], t[3], j_top, j_top, j_top, j_top)
+	_bastion_quad(st, b[0], b[3], b[2], b[1], j_bot, j_bot, j_bot, j_bot)
 	for i in 4:
 		var j := (i + 1) % 4
-		var c_up := col_top.lerp(col_mid, 0.35 + 0.14 * float(i % 2))
-		var c_lo := col_bot.lerp(col_mid, 0.25)
+		var face_shade := 0.30 + 0.16 * float(i % 2) + 0.06 * float(i >= 2)
+		var c_up := j_top.lerp(j_mid, face_shade)
+		var c_lo := j_bot.lerp(j_mid, 0.22 + 0.08 * float(i % 2))
 		_bastion_quad(st, b[i], b[j], t[j], t[i], c_lo, c_lo, c_up, c_up)
 
 

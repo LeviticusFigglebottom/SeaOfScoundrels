@@ -104,7 +104,7 @@ C_WHITE = (1.0, 1.0, 1.0)
 C_GLASS = srgb('#ffc264')
 C_BLACK = srgb('#14110f')
 
-SU, SV = 1 / 1.8, 1 / 0.9
+SU, SV = 1 / 2.2, 1 / 1.45
 
 # ---------------------------------------------------------------- transforms (game coords)
 def T(x, y=None, z=None):
@@ -167,6 +167,14 @@ class MB:
             return
         if self.flip:
             idx = idx[::-1]; uvs = uvs[::-1]
+        if len(idx) > 4:
+            for k in range(1, len(idx) - 1):
+                tri = (idx[0], idx[k], idx[k + 1])
+                if len(set(tri)) < 3:
+                    continue
+                self.faces.append(tri); self.fmat.append(mat); self.fsm.append(smooth)
+                self.fcol.append(col); self.fuv.append([uvs[0], uvs[k], uvs[k + 1]])
+            return
         self.faces.append(tuple(idx)); self.fmat.append(mat); self.fsm.append(smooth)
         self.fcol.append(col); self.fuv.append(uvs)
 
@@ -760,16 +768,44 @@ MAT_NAMES = {
     'col': 'mat_collision',
 }
 
-def make_materials():
+def load_pbr_image(tex_dir, filename, non_color=False):
+    path = os.path.join(tex_dir, filename)
+    if not os.path.isfile(path):
+        return None
+    img = bpy.data.images.load(path, check_existing=True)
+    if non_color:
+        img.colorspace_settings.name = 'Non-Color'
+    img.pack()
+    return img
+
+def make_materials(outdir=None):
     rs = np.random.RandomState(SEED)
+    tex_dir = os.path.join(outdir, 'textures') if outdir else os.path.join(os.getcwd(), 'assets', 'generated', 'textures')
     sail_px = tex_sail(rs)
-    wood = make_image('brigantine_wood', tex_wood(rs))
+    wood_alb = load_pbr_image(tex_dir, 'ship_oak_albedo.png') or make_image('brigantine_wood', tex_wood(rs))
+    wood_nrm = load_pbr_image(tex_dir, 'ship_oak_normal.png', True)
+    wood_rgh = load_pbr_image(tex_dir, 'ship_oak_rough.png', True)
+    paint_alb = load_pbr_image(tex_dir, 'ship_paint_albedo.png')
+    paint_nrm = load_pbr_image(tex_dir, 'ship_paint_normal.png', True)
+    paint_rgh = load_pbr_image(tex_dir, 'ship_paint_rough.png', True)
+    iron_alb = load_pbr_image(tex_dir, 'ship_iron_albedo.png')
+    iron_nrm = load_pbr_image(tex_dir, 'ship_iron_normal.png', True)
+    iron_rgh = load_pbr_image(tex_dir, 'ship_iron_rough.png', True)
+    brass_alb = load_pbr_image(tex_dir, 'ship_brass_albedo.png')
+    brass_nrm = load_pbr_image(tex_dir, 'ship_brass_normal.png', True)
+    brass_rgh = load_pbr_image(tex_dir, 'ship_brass_rough.png', True)
+    rope_alb = load_pbr_image(tex_dir, 'ship_rope_albedo.png')
+    rope_nrm = load_pbr_image(tex_dir, 'ship_rope_normal.png', True)
+    rope_rgh = load_pbr_image(tex_dir, 'ship_rope_rough.png', True)
+    cloth_alb = load_pbr_image(tex_dir, 'ship_cloth_albedo.png')
+    cloth_nrm = load_pbr_image(tex_dir, 'ship_cloth_normal.png', True)
     sail = make_image('brigantine_sail', sail_px)
     flag = make_image('brigantine_flag', tex_flag(rs))
     back = sail_px * 0.42 + np.array([1.0, 0.95, 0.82]) * 0.58
     sail_back = make_image('brigantine_sail_back', back)
 
-    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, alpha=1.0, emit_col=(1.0, 0.62, 0.22, 1)):
+    def mk(name, tex=None, rough=0.8, metal=0.0, emit=0.0, two=False, alpha=1.0, emit_col=(1.0, 0.62, 0.22, 1),
+           norm_tex=None, norm_strength=0.9, rough_tex=None):
         m = bpy.data.materials.new(MAT_NAMES[name])
         if m.node_tree is None:
             m.use_nodes = True
@@ -784,6 +820,14 @@ def make_materials():
             nt.links.new(mx.outputs[2], b.inputs['Base Color'])
         else:
             nt.links.new(ca.outputs['Color'], b.inputs['Base Color'])
+        if norm_tex is not None:
+            tn = nt.nodes.new('ShaderNodeTexImage'); tn.image = norm_tex
+            nm = nt.nodes.new('ShaderNodeNormalMap'); nm.inputs['Strength'].default_value = norm_strength
+            nt.links.new(tn.outputs['Color'], nm.inputs['Color'])
+            nt.links.new(nm.outputs['Normal'], b.inputs['Normal'])
+        if rough_tex is not None:
+            tr = nt.nodes.new('ShaderNodeTexImage'); tr.image = rough_tex
+            nt.links.new(tr.outputs['Color'], b.inputs['Roughness'])
         if emit > 0:
             b.inputs['Emission Color'].default_value = emit_col
             b.inputs['Emission Strength'].default_value = emit
@@ -793,16 +837,16 @@ def make_materials():
         m.use_backface_culling = not two
         MATS[name] = m
 
-    mk('wood', wood, 0.82)
-    mk('paint', None, 0.58)
-    mk('rope', None, 0.95)
-    mk('iron', None, 0.48, 0.58)
-    mk('brass', None, 0.28, 0.88)
+    mk('wood', wood_alb, 0.80, norm_tex=wood_nrm, norm_strength=0.95, rough_tex=wood_rgh)
+    mk('paint', paint_alb, 0.56, norm_tex=paint_nrm, norm_strength=0.65, rough_tex=paint_rgh)
+    mk('rope', rope_alb, 0.94, norm_tex=rope_nrm, norm_strength=1.05, rough_tex=rope_rgh)
+    mk('iron', iron_alb, 0.48, 0.62, norm_tex=iron_nrm, norm_strength=0.85, rough_tex=iron_rgh)
+    mk('brass', brass_alb, 0.28, 0.88, norm_tex=brass_nrm, norm_strength=0.60, rough_tex=brass_rgh)
     mk('glass', None, 0.24, 0.0, 2.2)
     mk('window', None, 0.08, 0.0, 0.35, two=True, alpha=0.32)
-    mk('canvas', sail, 0.94)
-    mk('canvas_back', sail_back, 0.94, emit=0.22, emit_col=(1.0, 0.87, 0.62, 1))
-    mk('cloth', None, 0.94, two=True)
+    mk('canvas', sail, 0.94, norm_tex=cloth_nrm, norm_strength=0.35)
+    mk('canvas_back', sail_back, 0.94, emit=0.22, emit_col=(1.0, 0.87, 0.62, 1), norm_tex=cloth_nrm, norm_strength=0.35)
+    mk('cloth', cloth_alb, 0.92, two=True, norm_tex=cloth_nrm, norm_strength=0.72)
     mk('flag', flag, 0.90, two=True)
     mk('col', None, 1.0)
     small = sail_px.reshape(128, 4, 128, 4, 3).mean(axis=(1, 3))
@@ -1508,15 +1552,17 @@ def build_props_hold(mb):
     barrel(mb, (-1.28, y, -0.35), 0.29, 0.82, tone=C_DARK, band=C_BRASS)
     rope_coil(mb, (0.95, y, 1.05), 0.26, 3)
 
-    # Crew hammocks slung fore and aft along port & starboard cabin sides
+    # Crew hammocks slung fore and aft in midship berthing (clear of shot=cabin), anchored to hull ribs with hemp clew ropes
     for sg in (-1, 1):
-        pts = [(sg * 1.55, 0.75, 4.4), (sg * 1.48, 0.42, 4.95), (sg * 1.45, 0.30, 5.50),
-               (sg * 1.40, 0.42, 6.05), (sg * 1.28, 0.75, 6.55)]
-        secs = [[Vector(q) + Vector((-0.30 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.11, 0)),
+        pts = [(sg * 1.82, 0.84, 2.35), (sg * 1.78, 0.56, 2.85), (sg * 1.76, 0.45, 3.35),
+               (sg * 1.74, 0.56, 3.85), (sg * 1.66, 0.84, 4.30)]
+        secs = [[Vector(q) + Vector((-0.24 if i not in (0, 4) else -0.02, 0.0 if i in (0, 4) else 0.10, 0)),
                  Vector(q),
-                 Vector(q) + Vector((0.30 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.11, 0))]
+                 Vector(q) + Vector((0.24 if i not in (0, 4) else 0.02, 0.0 if i in (0, 4) else 0.10, 0))]
                 for i, q in enumerate(pts)]
         loft(mb, secs, 'cloth', srgb('#e9dcb8'), False, (False, False), 'smooth', flip=False)
+        tube(mb, [pts[0], (sg * 2.15, 1.06, 1.98)], 0.017, 6, 'rope', C_ROPE)
+        tube(mb, [pts[-1], (sg * 2.02, 1.06, 4.65)], 0.017, 6, 'rope', C_ROPE)
     build_cabin(mb)
 
 def build_cabin(mb):
@@ -2503,7 +2549,7 @@ def main():
     outdir = argv[-1] if '--' in argv else os.path.join(os.getcwd(), 'assets', 'generated')
     random.seed(SEED); np.random.seed(SEED)
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    make_materials()
+    make_materials(outdir)
 
     # Static ship structure & decorative sub-parts are authored in their own MBs (preserving per-part RNG)
     # and batched into one `Hull` MeshInstance3D so Godot draws 1 surface per static material across all shadow cascades.
@@ -2675,7 +2721,7 @@ def main():
         filepath=path, export_format='GLB', export_yup=True, export_apply=False,
         export_vertex_color='MATERIAL', export_all_vertex_colors=False,
         export_cameras=False, export_lights=False, export_animations=False,
-        export_extras=False, export_tangents=False,
+        export_extras=False, export_tangents=True,
     )
     print('wrote', path)
     build_lod(outdir)

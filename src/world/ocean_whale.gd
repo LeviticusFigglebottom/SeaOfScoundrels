@@ -155,7 +155,12 @@ func _physics_process(delta: float) -> void:
 func step_breach(delta: float) -> void:
 	if phase == Phase.DONE:
 		return
-	_forced_apex = false
+	if _forced_apex:
+		_forced_apex = false
+		if _breach_spray != null and is_instance_valid(_breach_spray):
+			_breach_spray.one_shot = true
+		if _splash_plume != null and is_instance_valid(_splash_plume):
+			_splash_plume.one_shot = true
 	if not _call_played:
 		_call_played = true
 		if Audio.has_sound(&"whale_call"):
@@ -209,29 +214,33 @@ func force_breach_apex() -> void:
 	if tail_pivot != null:
 		tail_pivot.rotation = Vector3(-0.26, 0.0, 0.0)
 
-	# Dense 7-plume boiling white foam ring + cascading sculpted spray curtain + pre-warmed dual spray plumes!
-	var tail_surf_w := Vector3(wx - fwd.x * 2.2, sea_y + 0.08, wz - fwd.z * 2.2)
-	var plume_w := Vector3(tail_surf_w.x, sea_y + 0.30, tail_surf_w.z)
+	# Dense 7-plume boiling white foam ring + bold cascading sculpted spray curtain + live erupting spray plumes!
+	var tail_surf_w := Vector3(wx - fwd.x * 1.4, sea_y + 0.08, wz - fwd.z * 1.4)
+	var plume_w := Vector3(tail_surf_w.x, sea_y + 0.32, tail_surf_w.z)
 	if Ocean.current != null:
-		Ocean.current.add_foam(tail_surf_w, 6.8, 1.0)
+		Ocean.current.add_foam(tail_surf_w, 7.6, 1.0)
 		for ki in 6:
 			var a := float(ki) / 6.0 * TAU + 0.25
-			var rad := 3.6 if (ki % 2 == 0) else 5.2
-			Ocean.current.add_foam(tail_surf_w + Vector3(cos(a) * rad, 0.0, sin(a) * rad), 5.2, 1.0)
+			var rad := 3.8 if (ki % 2 == 0) else 5.6
+			Ocean.current.add_foam(tail_surf_w + Vector3(cos(a) * rad, 0.0, sin(a) * rad), 5.6, 1.0)
 	if _spray_curtain_mi != null and is_instance_valid(_spray_curtain_mi):
 		if is_inside_tree():
 			_spray_curtain_mi.global_position = tail_surf_w
 			_spray_curtain_mi.rotation = Vector3(0.0, _heading_yaw, 0.0)
-		_spray_curtain_mi.scale = Vector3.ONE
+		_spray_curtain_mi.scale = Vector3(1.16, 1.15, 1.16)
 		_spray_curtain_mi.visible = true
 	if _breach_spray != null and is_instance_valid(_breach_spray):
-		_breach_spray.preprocess = 0.42
+		_breach_spray.one_shot = false
+		_breach_spray.explosiveness = 0.35
+		_breach_spray.preprocess = 0.55
 		_breach_spray.global_position = plume_w if is_inside_tree() else Vector3(0.0, -5.3, 0.0)
 		_breach_spray.visible = true
 		_breach_spray.restart()
 		_breach_spray.emitting = true
 	if _splash_plume != null and is_instance_valid(_splash_plume):
-		_splash_plume.preprocess = 0.30
+		_splash_plume.one_shot = false
+		_splash_plume.explosiveness = 0.30
+		_splash_plume.preprocess = 0.45
 		_splash_plume.global_position = plume_w if is_inside_tree() else Vector3(0.0, -5.3, 0.0)
 		_splash_plume.visible = true
 		_splash_plume.restart()
@@ -902,13 +911,13 @@ static func _build_spray_curtain_mesh() -> ArrayMesh:
 
 	# Row: [base_r, top_r, base_h, peak_h, segs, base_alpha, mid_alpha, wave_amp]
 	var crowns: Array[Array] = [
-		[1.15, 2.55, 0.0, 5.85, 16, 0.84, 0.62, 0.24],
-		[2.25, 4.45, 0.0, 4.15, 18, 0.72, 0.46, 0.28],
-		[3.65, 6.20, 0.0, 2.25, 20, 0.56, 0.30, 0.22],
+		[1.25, 2.95, 0.0, 7.85, 16, 0.90, 0.80, 0.24],
+		[2.35, 4.90, 0.0, 5.65, 18, 0.84, 0.68, 0.28],
+		[3.75, 6.65, 0.0, 3.15, 20, 0.74, 0.50, 0.22],
 	]
-	var col_base := Color(0.92, 0.98, 1.0, 1.0)
-	var col_mid := Color(0.98, 0.99, 1.0, 1.0)
-	var col_tip := Color(1.0, 0.98, 0.94, 0.0)
+	var col_base := Color(0.94, 0.99, 1.0, 1.0)
+	var col_mid := Color(1.0, 1.0, 1.0, 1.0)
+	var col_tip := Color(1.0, 0.99, 0.96, 0.0)
 
 	for ci in crowns.size():
 		var spec: Array = crowns[ci]
