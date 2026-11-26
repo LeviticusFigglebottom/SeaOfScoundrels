@@ -77,6 +77,18 @@ const ARCHETYPES := {
 		"primary": Color(0.08, 0.36, 0.46),
 		"secondary": Color(0.82, 0.62, 0.24),
 	},
+	&"corsair_raider": {
+		"rig": &"pirate",
+		"meshes": ["Body", "Hat_Bandana", "Vest_Crew", "Eyepatch", "Belt_Sash"],
+		"primary": Color(0.56, 0.12, 0.14),
+		"secondary": Color(0.16, 0.16, 0.18),
+	},
+	&"rival_captain": {
+		"rig": &"pirate",
+		"meshes": ["Body", "Hat_Tricorne", "Coat_Captain", "Beard_Full", "Belt_Sash"],
+		"primary": Color(0.46, 0.10, 0.16),
+		"secondary": Color(0.88, 0.68, 0.20),
+	},
 }
 
 const DEFAULT_CARRY_LOCAL := Vector3(0.0, 1.0, -0.56)

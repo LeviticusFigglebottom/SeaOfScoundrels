@@ -1,6 +1,6 @@
 class_name EnemyBrain
 extends Node
-## Distinct enemy AI behaviours for the Drowned and Tidecaller factions.
+## Distinct enemy AI behaviours for the Drowned, Tidecaller, and Corsair factions.
 ##
 ## Archetypes (each has genuinely different tactical behaviour, never a reskin):
 ## - &"drowned_cutlass" : aggressive melee shambler; telegraphed slashes weak to parry.
@@ -12,6 +12,10 @@ extends Node
 ##                        cutlass combos with flintlock pistol volleys.
 ## - &"tidecaller"      : coral sea-cultist; keeps ranged distance (11..20 m), strafes
 ##                        away when rushed, casts water bolts & bubbling geyser hazards.
+## - &"corsair_raider"  : third faction rival pirate; dodges incoming attacks, weaves
+##                        mid-range flintlock shots with agile flanking cutlass lunges.
+## - &"rival_captain"   : named rival corsair captain; parries telegraphed strikes,
+##                        blasts with blunderbuss/pistol, and pushes aggressive boarding combos.
 
 signal keg_detonated(pos: Vector3, radius: float)
 signal rallied_allies(captain: Pawn, count: int)
@@ -94,6 +98,18 @@ func _configure_archetype() -> void:
 			pawn.max_health = 90.0
 			pawn.walk_speed = 3.6
 			pawn.sprint_speed = 4.9
+		&"corsair_raider":
+			combat.faction = &"corsair"
+			combat.equip_weapon(&"cutlass")
+			pawn.max_health = 95.0
+			pawn.walk_speed = 3.9
+			pawn.sprint_speed = 5.5
+		&"rival_captain":
+			combat.faction = &"corsair"
+			combat.equip_weapon(&"cutlass")
+			pawn.max_health = 210.0
+			pawn.walk_speed = 4.0
+			pawn.sprint_speed = 5.6
 		_:
 			# &"drowned_cutlass"
 			combat.faction = &"drowned"
@@ -110,7 +126,12 @@ static func spawn_enemy(p_archetype: StringName, world_pos: Vector3, parent: Nod
 	p.name = String(p_archetype).to_pascal_case()
 	var cc := CombatComponent.new()
 	cc.name = "CombatComponent"
-	cc.faction = &"tidecaller" if p_archetype == &"tidecaller" else &"drowned"
+	if p_archetype == &"tidecaller":
+		cc.faction = &"tidecaller"
+	elif p_archetype == &"corsair_raider" or p_archetype == &"rival_captain":
+		cc.faction = &"corsair"
+	else:
+		cc.faction = &"drowned"
 	p.add_child(cc)
 	var brain := EnemyBrain.new()
 	brain.archetype = p_archetype
@@ -209,7 +230,10 @@ func _physics_process(delta: float) -> void:
 
 	if _rattle_cd <= 0.0 and dist < 16.0:
 		_rattle_cd = _rng.randf_range(5.0, 9.0)
-		Audio.play_sfx(&"skeleton_rattle", pawn.global_position, -6.0)
+		if combat.faction == &"drowned":
+			Audio.play_sfx(&"skeleton_rattle", pawn.global_position, -6.0)
+		elif combat.faction == &"corsair":
+			Audio.play_sfx(&"crew_shout", pawn.global_position, -5.0, 0.08)
 
 	match archetype:
 		&"drowned_powder":
@@ -220,8 +244,67 @@ func _physics_process(delta: float) -> void:
 			_tick_captain(dir, dist)
 		&"tidecaller":
 			_tick_tidecaller(dir, dist)
+		&"corsair_raider":
+			_tick_corsair_raider(dir, dist)
+		&"rival_captain":
+			_tick_rival_captain(dir, dist)
 		_:
 			_tick_cutlasser(dir, dist)
+
+
+func _tick_corsair_raider(dir: Vector3, dist: float) -> void:
+	var right := Vector3(-dir.z, 0.0, dir.x) * _strafe_sign
+	# Agile flanker: weaves pistol shots at mid-range and dodges before lunging in.
+	if dist > 6.5 and dist < 20.0 and _special_cd <= 0.0:
+		combat.equip_weapon(&"pistol")
+		if combat.primary_attack():
+			_special_cd = 4.6
+			_strafe_sign = -_strafe_sign
+		pawn.wish_dir = (dir * 0.5 + right * 0.85).normalized()
+		pawn.wish_sprint = false
+	elif dist > 2.35:
+		combat.equip_weapon(&"cutlass")
+		pawn.wish_dir = (dir * 0.82 + right * 0.42).normalized()
+		pawn.wish_sprint = dist > 5.0
+	else:
+		combat.equip_weapon(&"cutlass")
+		pawn.wish_dir = right * 0.55
+		pawn.wish_sprint = false
+		if _special_cd <= 0.0 and _rng.randf() < 0.35:
+			if combat.dodge(right):
+				_special_cd = 3.2
+		if _attack_cd <= 0.0:
+			if combat.primary_attack():
+				_attack_cd = _rng.randf_range(0.58, 0.92)
+
+
+func _tick_rival_captain(dir: Vector3, dist: float) -> void:
+	var right := Vector3(-dir.z, 0.0, dir.x) * _strafe_sign
+	# Tactically guards briefly to fish for parries when pressed, mixes blunderbuss & combos.
+	if dist > 5.0 and dist < 14.0 and _special_cd <= 0.0:
+		combat.set_blocking(false)
+		combat.equip_weapon(&"blunderbuss")
+		if combat.primary_attack():
+			_special_cd = 5.4
+			_strafe_sign = -_strafe_sign
+		pawn.wish_dir = (dir * 0.7 + right * 0.5).normalized()
+		pawn.wish_sprint = false
+	elif dist > 2.3:
+		combat.set_blocking(false)
+		combat.equip_weapon(&"cutlass")
+		pawn.wish_dir = (dir * 0.88 + right * 0.3).normalized()
+		pawn.wish_sprint = dist > 5.2
+	else:
+		combat.equip_weapon(&"cutlass")
+		pawn.wish_dir = right * 0.35
+		pawn.wish_sprint = false
+		if _attack_cd > 0.35:
+			combat.set_blocking(true)
+		elif _attack_cd <= 0.0:
+			combat.set_blocking(false)
+			var did := combat.heavy_attack() if _rng.randf() < 0.38 else combat.primary_attack()
+			if did:
+				_attack_cd = 0.88
 
 
 func _tick_cutlasser(dir: Vector3, dist: float) -> void:

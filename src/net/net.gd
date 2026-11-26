@@ -8,6 +8,8 @@ signal session_started
 signal peer_joined(id: int)
 signal peer_left(id: int)
 signal client_intent_received(peer_id: int, intent: Dictionary)
+signal connection_lost
+signal connection_failed
 
 const DEFAULT_PORT := 24642
 const MAX_PLAYERS := 4
@@ -15,6 +17,9 @@ const MAX_PLAYERS := 4
 const WORLD_SYNC_HZ := 4.0
 ## Ship & pawn state snapshots per second sent to clients.
 const ENTITY_SYNC_HZ := 15.0
+
+var last_host_address: String = "127.0.0.1"
+var last_host_port: int = DEFAULT_PORT
 
 var _sync_accum := 0.0
 var _entity_sync_accum := 0.0
@@ -44,6 +49,7 @@ func host(port: int = DEFAULT_PORT) -> Error:
 	var err := peer.create_server(port, MAX_PLAYERS - 1)
 	if err != OK:
 		return err
+	last_host_port = port
 	multiplayer.multiplayer_peer = peer
 	_bind_multiplayer_signals()
 	session_started.emit()
@@ -55,9 +61,20 @@ func join(address: String, port: int = DEFAULT_PORT) -> Error:
 	var err := peer.create_client(address, port)
 	if err != OK:
 		return err
+	last_host_address = address
+	last_host_port = port
 	multiplayer.multiplayer_peer = peer
 	_bind_multiplayer_signals()
 	return OK
+
+
+## Reconnect a client to the last joined host address and port.
+func reconnect() -> Error:
+	if last_host_address.is_empty():
+		return ERR_INVALID_PARAMETER
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+	return join(last_host_address, last_host_port)
 
 
 func disconnect_session() -> void:
@@ -72,6 +89,8 @@ func _bind_multiplayer_signals() -> void:
 	_signals_bound = true
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	multiplayer.connection_failed.connect(_on_connection_failed)
 
 
 func _on_peer_connected(id: int) -> void:
@@ -87,6 +106,17 @@ func _on_peer_connected(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	_pawns.erase(id)
 	peer_left.emit(id)
+
+
+func _on_server_disconnected() -> void:
+	_pawns.clear()
+	connection_lost.emit()
+	start_single_player()
+
+
+func _on_connection_failed() -> void:
+	connection_failed.emit()
+	start_single_player()
 
 
 ## Register a ship for host -> client state replication under a stable id (e.g. &"player_sloop").

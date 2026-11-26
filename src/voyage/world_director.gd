@@ -14,6 +14,9 @@ signal spawn_shark_pack(center: Vector3, count: int)
 signal spawn_flotsam_barrels(pos: Vector3, count: int)
 signal spawn_ghost_ship(spawn_pos: Vector3)
 signal spawn_storm_cell(center: Vector3, radius: float, velocity: Vector3)
+signal spawn_leviathan(center: Vector3, target_ship: Node)
+signal spawn_fort_siege(fort_pos: Vector3, bearing: String)
+signal spawn_castaway(pos: Vector3)
 signal wreck_recorded(wreck: Dictionary)
 signal wreck_salvaged(wreck_id: String, recovered_items: Array)
 
@@ -334,8 +337,8 @@ func trigger_event(kind: StringName, context: Dictionary = {}) -> Dictionary:
 	var ship_node: Node = context.get("ship_node", player_ship)
 	var evt: Dictionary = {}
 	match kind:
-		&"rival_ship", &"drowned_sloop":
-			evt = _trigger_rival_ship(heading_dir, ship_node)
+		&"rival_ship", &"drowned_sloop", &"corsair_sloop":
+			evt = _trigger_rival_ship(heading_dir, ship_node, kind == &"corsair_sloop")
 			time_since_major_event = 0.0
 		&"ghost_ship":
 			evt = _trigger_ghost_ship(heading_dir)
@@ -343,6 +346,16 @@ func trigger_event(kind: StringName, context: Dictionary = {}) -> Dictionary:
 		&"storm_cell":
 			evt = _trigger_storm_cell(heading_dir)
 			time_since_major_event = 0.0
+		&"leviathan":
+			evt = _trigger_leviathan(heading_dir, ship_node)
+			time_since_major_event = 0.0
+		&"fort_siege":
+			var fort_pos: Vector3 = context.get("fort_pos", player_ship_pos + _forward_arc_offset(heading_dir, 360.0, 0.8))
+			evt = _trigger_fort_siege(fort_pos)
+			time_since_major_event = 0.0
+		&"castaway":
+			evt = _trigger_castaway(heading_dir)
+			time_since_flotsam = 0.0
 		&"flotsam_barrels":
 			evt = _trigger_flotsam(heading_dir)
 			time_since_flotsam = 0.0
@@ -387,20 +400,26 @@ func _trigger_major_event(heading_dir: Vector3, ship_node: Node,
 	var total := w_rival + w_ghost + w_storm
 	var roll := _rng.randf() * total
 	if roll < w_rival:
-		return _trigger_rival_ship(heading_dir, ship_node)
+		var use_corsair := cargo_value_aboard >= 500 and _rng.randf() < 0.35
+		return _trigger_rival_ship(heading_dir, ship_node, use_corsair)
 	elif roll < w_rival + w_ghost:
 		return _trigger_ghost_ship(heading_dir)
 	else:
 		return _trigger_storm_cell(heading_dir)
 
 
-func _trigger_rival_ship(heading_dir: Vector3, ship_node: Node) -> Dictionary:
+func _trigger_rival_ship(heading_dir: Vector3, ship_node: Node, force_corsair: bool = false) -> Dictionary:
 	var dist := _pick_sighting_distance()
 	var offset := _forward_arc_offset(heading_dir, dist, 1.05)
 	var spawn_pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
 	var bearing := compass_bearing(player_ship_pos, spawn_pos)
-	var archetype := &"drowned_sloop_raider" if cargo_value_aboard >= 700 else &"drowned_sloop"
-	var msg := "Sail on the horizon — Drowned Sloop bearing %s (%d m)!" % [bearing, roundi(dist)]
+	var archetype: StringName = &"drowned_sloop"
+	if force_corsair:
+		archetype = &"corsair_sloop"
+	elif cargo_value_aboard >= 700:
+		archetype = &"drowned_sloop_raider"
+	var label := "Corsair Rival Sloop" if archetype == &"corsair_sloop" else "Drowned Sloop"
+	var msg := "Sail on the horizon — %s bearing %s (%d m)!" % [label, bearing, roundi(dist)]
 
 	var evt := _register_event(&"rival_ship", spawn_pos, 240.0, {
 		"archetype": archetype,
@@ -427,6 +446,55 @@ func _trigger_ghost_ship(heading_dir: Vector3) -> Dictionary:
 	})
 	_emit_warning(msg, spawn_pos, &"ghost_ship", bearing, dist)
 	spawn_ghost_ship.emit(spawn_pos)
+	return evt
+
+
+func _trigger_leviathan(heading_dir: Vector3, ship_node: Node) -> Dictionary:
+	var dist := maxf(260.0, _pick_sighting_distance() * 0.9)
+	var offset := _forward_arc_offset(heading_dir, dist, 0.65)
+	var center := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
+	var bearing := compass_bearing(player_ship_pos, center)
+	var msg := "The sea boils ink-black ahead — Abyssal Leviathan stirring bearing %s (%d m)!" % [bearing, roundi(dist)]
+
+	var evt := _register_event(&"leviathan", center, 300.0, {
+		"bearing": bearing,
+		"distance": dist,
+		"message": msg,
+	})
+	_emit_warning(msg, center, &"leviathan", bearing, dist)
+	spawn_leviathan.emit(center, ship_node)
+	return evt
+
+
+func _trigger_fort_siege(fort_pos: Vector3) -> Dictionary:
+	var dist := Vector2(fort_pos.x - player_ship_pos.x, fort_pos.z - player_ship_pos.z).length()
+	var bearing := compass_bearing(player_ship_pos, fort_pos)
+	var msg := "Signal brazier lit over the sea fort — Fort Siege active bearing %s (%d m)!" % [bearing, roundi(dist)]
+
+	var evt := _register_event(&"fort_siege", fort_pos, 420.0, {
+		"bearing": bearing,
+		"distance": dist,
+		"message": msg,
+	})
+	_emit_warning(msg, fort_pos, &"fort_siege", bearing, dist)
+	spawn_fort_siege.emit(fort_pos, bearing)
+	return evt
+
+
+func _trigger_castaway(heading_dir: Vector3) -> Dictionary:
+	var dist := _rng.randf_range(FLOTSAM_MIN_RANGE, FLOTSAM_MAX_RANGE)
+	var offset := _forward_arc_offset(heading_dir, dist, 0.55)
+	var pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
+	var bearing := compass_bearing(player_ship_pos, pos)
+	var msg := "Distress lantern waving on a raft — Castaway sighting bearing %s (%d m)." % [bearing, roundi(dist)]
+
+	var evt := _register_event(&"castaway", pos, 220.0, {
+		"bearing": bearing,
+		"distance": dist,
+		"message": msg,
+	})
+	_emit_warning(msg, pos, &"castaway", bearing, dist)
+	spawn_castaway.emit(pos)
 	return evt
 
 

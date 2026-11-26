@@ -58,9 +58,9 @@ func test_glbs_load_bones_and_bounds() -> void:
 	await physics_frames(2)
 
 
-func test_all_9_archetypes_and_sockets() -> void:
+func test_all_archetypes_and_sockets() -> void:
 	var archs := CharacterVisual.get_archetype_names()
-	check_eq(archs.size(), 9, "expected 9 archetypes")
+	check_eq(archs.size(), 11, "expected 11 archetypes (4 crew, 4 drowned, 1 tidecaller, 2 corsair)")
 
 	var cv := CharacterVisual.new()
 	add_child(cv)

@@ -36,6 +36,12 @@ func _apply_archetype() -> void:
 		ship.speed_modifier = 1.15
 		ship.reload_modifier = 0.78
 		ship.apply_livery(Color(0.38, 0.94, 0.88), Color(0.28, 0.96, 0.86), Color(0.22, 0.98, 0.84))
+	elif archetype == &"corsair_sloop":
+		ship.faction = &"corsair"
+		ship.speed_modifier = 1.08
+		ship.reload_modifier = 0.92
+		preferred_range = 46.0
+		ship.apply_livery(Color(0.68, 0.14, 0.16), Color(0.92, 0.72, 0.22), Color(0.0, 0.0, 0.0))
 	else:
 		ship.faction = &"drowned"
 		ship.speed_modifier = 0.96
@@ -47,8 +53,15 @@ func _apply_archetype() -> void:
 static func spawn_enemy_sloop(p_archetype: StringName, world_pos: Vector3, parent: Node, target: Ship = null) -> Ship:
 	var sloop_scene: PackedScene = load("res://src/ship/sloop.tscn")
 	var s := sloop_scene.instantiate() as Ship
-	s.name = "GhostSloop" if p_archetype == &"ghost_ship" else "DrownedSloop"
-	s.faction = &"ghost" if p_archetype == &"ghost_ship" else &"drowned"
+	if p_archetype == &"ghost_ship":
+		s.name = "GhostSloop"
+		s.faction = &"ghost"
+	elif p_archetype == &"corsair_sloop":
+		s.name = "CorsairSloop"
+		s.faction = &"corsair"
+	else:
+		s.name = "DrownedSloop"
+		s.faction = &"drowned"
 	var brain := AIShipBrain.new()
 	brain.archetype = p_archetype
 	brain.target_ship = target
