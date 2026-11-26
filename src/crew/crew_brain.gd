@@ -91,7 +91,9 @@ func _apply_persona_visual() -> void:
 	if pawn == null:
 		return
 	var p := CrewDialogue.get_persona(persona_id)
-	var vis := pawn.get_node_or_null(^"Visual")
+	var vis := pawn.get_node_or_null(^"Visual/CharacterVisual")
+	if vis == null:
+		vis = pawn.get_node_or_null(^"Visual")
 	if vis != null and vis.has_method(&"set_archetype"):
 		vis.call(&"set_archetype", p["archetype"])
 

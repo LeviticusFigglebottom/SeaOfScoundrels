@@ -68,7 +68,9 @@ func _ensure_combat() -> void:
 
 
 func _configure_archetype() -> void:
-	var vis := pawn.get_node_or_null(^"Visual")
+	var vis := pawn.get_node_or_null(^"Visual/CharacterVisual")
+	if vis == null:
+		vis = pawn.get_node_or_null(^"Visual")
 	if vis != null and vis.has_method(&"set_archetype"):
 		vis.call(&"set_archetype", archetype)
 
@@ -271,7 +273,7 @@ func _tick_corsair_raider(dir: Vector3, dist: float) -> void:
 		pawn.wish_dir = right * 0.55
 		pawn.wish_sprint = false
 		if _special_cd <= 0.0 and _rng.randf() < 0.35:
-			if combat.dodge(right):
+			if combat.dodge_step(right):
 				_special_cd = 3.2
 		if _attack_cd <= 0.0:
 			if combat.primary_attack():
