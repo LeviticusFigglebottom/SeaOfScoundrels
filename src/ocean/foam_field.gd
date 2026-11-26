@@ -85,6 +85,14 @@ func _ready() -> void:
 	_stamps.draw.connect(_draw_stamps)
 	add_child(_stamps)
 
+func _exit_tree() -> void:
+	render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_queue.clear()
+	_decay = null
+	_inject = null
+	_white = null
+	_stamps = null
+
 func _material(code: String) -> ShaderMaterial:
 	var sh := Shader.new()
 	sh.code = code

@@ -85,20 +85,20 @@ def directional_waves(rng, n_waves, kmin, kmax, falloff, n=N, prefer_angles=None
 
 
 def ripple_normal(rng):
-    # Three-band wind chop with subtle crossing wave-train bias and trochoidal
-    # crest sharpening so wavelets have sculpted ridges and crisp glint facets.
+    # Three-band wind chop with crossing wave-train bias and sharp trochoidal
+    # ridges so near water has glossy, sculpted micro-facets and crisp glints.
     angles = (0.35, -0.75)
-    h1, gx1, gy1 = directional_waves(rng, 38, 2, 8, 0.95, prefer_angles=angles)
-    h2, gx2, gy2 = directional_waves(rng, 52, 8, 20, 1.15, prefer_angles=angles)
-    h3, gx3, gy3 = directional_waves(rng, 64, 20, 44, 1.35)
-    h = h1 + 0.42 * h2 + 0.16 * h3
+    h1, gx1, gy1 = directional_waves(rng, 40, 2, 8, 0.90, prefer_angles=angles)
+    h2, gx2, gy2 = directional_waves(rng, 56, 8, 22, 1.08, prefer_angles=angles)
+    h3, gx3, gy3 = directional_waves(rng, 72, 22, 52, 1.25)
+    h = h1 + 0.48 * h2 + 0.22 * h3
     h_norm = h / max(h.std(), 1e-6)
     # Sharpen crests and widen troughs (periodic, smooth, zero discontinuities).
-    sharp = np.clip(1.0 + 0.30 * np.tanh(h_norm * 0.9), 0.55, 1.60)
-    gx = (gx1 + 0.36 * gx2 + 0.18 * gx3) * sharp
-    gy = (gy1 + 0.36 * gy2 + 0.18 * gy3) * sharp
-    # Texture-space slope -> normal. Scale picked so slopes use the 8-bit range well.
-    sc = 0.52 / np.percentile(np.hypot(gx, gy), 99.4)
+    sharp = np.clip(1.0 + 0.42 * np.tanh(h_norm * 1.05), 0.48, 1.78)
+    gx = (gx1 + 0.44 * gx2 + 0.24 * gx3) * sharp
+    gy = (gy1 + 0.44 * gy2 + 0.24 * gy3) * sharp
+    # Texture-space slope -> normal with strong contrast for lively micro-facets.
+    sc = 0.85 / np.percentile(np.hypot(gx, gy), 97.5)
     nx = np.clip(-gx * sc, -1, 1)
     ny = np.clip(-gy * sc, -1, 1)
     return nx * 0.5 + 0.5, ny * 0.5 + 0.5
@@ -125,9 +125,9 @@ def caustics(rng):
 def worley_edges(rng, cells, warp=None, n=N):
     """Distance-to-cell-wall map (F2 - F1) of a periodic Voronoi pattern."""
     count = cells * cells
-    # Jittered grid points: even bubble sizes, organic placement.
+    # Jittered grid points: organic irregular cluster sizes.
     gx, gy = np.meshgrid(np.arange(cells), np.arange(cells))
-    pts = np.stack([gx.ravel(), gy.ravel()], 1) + rng.uniform(0.08, 0.92, (count, 2))
+    pts = np.stack([gx.ravel(), gy.ravel()], 1) + rng.uniform(0.03, 0.97, (count, 2))
     pts = (pts / cells) % 1.0
     tree = cKDTree(pts, boxsize=1.0)
     x, y = grid(n)
@@ -147,42 +147,70 @@ def normalize_range(a, lo_pct=0.4, hi_pct=99.6):
 
 
 def foam(rng):
-    # Divergence-free (curl) warp so foam webbing flows and curves like painted strokes.
-    _, wx, wy = periodic_waves(rng, 28, 1, 5, 1.05)
-    curl_x = wy / max(np.abs(wy).max(), 1e-6)
-    curl_y = -wx / max(np.abs(wx).max(), 1e-6)
-    warp_big = (0.018 * curl_x, 0.018 * curl_y)
-    warp_mid = (0.011 * curl_x, 0.011 * curl_y)
+    # Strong multi-octave divergence-free (curl) turbulent domain warp (0.065..0.11)
+    # so zero straight geometric Voronoi borders can ever survive.
+    _, wx1, wy1 = periodic_waves(rng, 26, 1, 4, 1.05)
+    _, wx2, wy2 = periodic_waves(rng, 34, 4, 10, 1.15)
+    _, wx3, wy3 = periodic_waves(rng, 38, 10, 22, 1.25)
+    cx_lo = wy1 / max(np.percentile(np.abs(wy1), 99.0), 1e-6)
+    cy_lo = -wx1 / max(np.percentile(np.abs(wx1), 99.0), 1e-6)
+    cx_mid = wy2 / max(np.percentile(np.abs(wy2), 99.0), 1e-6)
+    cy_mid = -wx2 / max(np.percentile(np.abs(wx2), 99.0), 1e-6)
+    cx_hi = wy3 / max(np.percentile(np.abs(wy3), 99.0), 1e-6)
+    cy_hi = -wx3 / max(np.percentile(np.abs(wx3), 99.0), 1e-6)
 
-    # Soft multi-octave organic blotch noise for domain warping & foam modulation.
-    b1, _, _ = periodic_waves(rng, 36, 1, 5, 1.15)
-    b2, _, _ = periodic_waves(rng, 40, 5, 13, 1.25)
-    blotch = equalize(gaussian_filter(b1 + 0.35 * b2, 1.8, mode="wrap"))
+    warp_big = (
+        0.072 * cx_lo + 0.026 * cx_mid + 0.008 * cx_hi,
+        0.072 * cy_lo + 0.026 * cy_mid + 0.008 * cy_hi,
+    )
+    warp_mid = (
+        0.054 * cx_lo + 0.024 * cx_mid + 0.009 * cx_hi,
+        0.054 * cy_lo + 0.024 * cy_mid + 0.009 * cy_hi,
+    )
+    warp_fine = (
+        0.032 * cx_lo + 0.018 * cx_mid + 0.008 * cx_hi,
+        0.032 * cy_lo + 0.018 * cy_mid + 0.008 * cy_hi,
+    )
 
-    # Primary foam webbing (R): nested Voronoi filaments. Low values are crisp
-    # bubble walls so even light fair-weather coverage traces delicate lacy webbing.
-    e_big, _ = worley_edges(rng, 6, warp_big)
-    e_mid, _ = worley_edges(rng, 15, warp_mid)
-    e_small, _ = worley_edges(rng, 35)
-    w_big = np.clip(e_big * 1.45, 0.0, 1.0) ** 0.72
-    w_mid = np.clip(e_mid * 1.35, 0.0, 1.0) ** 0.78
-    w_small = np.clip(e_small * 1.25, 0.0, 1.0) ** 0.85
-    lace = np.minimum(w_big, 0.24 + 0.76 * w_mid)
-    lace = np.minimum(lace, 0.48 + 0.52 * w_small)
-    lace = gaussian_filter(lace + 0.06 * (blotch - 0.5), 0.55, mode="wrap")
-    lace = normalize_range(lace) ** 0.86
+    # Soft multi-octave organic blotch noise (G) for domain warping & frothy clustering.
+    b1, _, _ = periodic_waves(rng, 36, 1, 5, 1.10)
+    b2, _, _ = periodic_waves(rng, 44, 5, 14, 1.20)
+    b3, _, _ = periodic_waves(rng, 40, 14, 30, 1.30)
+    blotch = equalize(gaussian_filter(b1 + 0.42 * b2 + 0.16 * b3, 1.4, mode="wrap"))
 
-    # Secondary fine bubble webbing (B): denser frothy lace inside breaking crests & surf.
-    e2a, _ = worley_edges(rng, 17, warp_mid)
-    e2b, _ = worley_edges(rng, 39)
-    e2c, _ = worley_edges(rng, 75)
-    f_a = np.clip(e2a * 1.40, 0.0, 1.0) ** 0.74
-    f_b = np.clip(e2b * 1.30, 0.0, 1.0) ** 0.82
-    f_c = np.clip(e2c * 1.25, 0.0, 1.0) ** 0.88
-    lace2 = np.minimum(f_a, 0.26 + 0.74 * f_b)
-    lace2 = np.minimum(lace2, 0.52 + 0.48 * f_c)
-    lace2 = gaussian_filter(lace2, 0.50, mode="wrap")
-    lace2 = normalize_range(lace2) ** 0.88
+    # Organic frothy ribbon noise so foam gathers in streaky painterly patches
+    # rather than uniform webs.
+    streak_h, _, _ = directional_waves(rng, 44, 3, 14, 1.05, prefer_angles=(0.45,))
+    streak_n = normalize_range(gaussian_filter(streak_h, 1.2, mode="wrap"))
+
+    # Primary organic foam lace erosion map (R): high-density 14 / 32 / 68 bubble
+    # clusters under strong turbulent curl warp, broken up by blotch & frothy streaks.
+    e_14, f1_14 = worley_edges(rng, 14, warp_big)
+    e_32, _ = worley_edges(rng, 32, warp_mid)
+    e_68, _ = worley_edges(rng, 68, warp_fine)
+    w_14 = np.clip(e_14 * 1.55, 0.0, 1.0) ** 0.78
+    w_32 = np.clip(e_32 * 1.45, 0.0, 1.0) ** 0.82
+    w_68 = np.clip(e_68 * 1.35, 0.0, 1.0) ** 0.86
+    # Modulate cluster wall thickness organically with blotch + streaks so thin
+    # filaments taper and break naturally instead of forming closed polygonal loops.
+    breakup = 0.22 * (blotch - 0.5) + 0.18 * (streak_n - 0.5) + 0.10 * np.clip(f1_14, 0.0, 1.0)
+    lace = np.minimum(w_14 * 0.85 + 0.15 * w_32, 0.18 + 0.82 * w_32)
+    lace = np.minimum(lace, 0.40 + 0.60 * w_68)
+    lace = gaussian_filter(lace + breakup, 0.65, mode="wrap")
+    lace = normalize_range(lace) ** 0.88
+
+    # Secondary fine frothy micro-bubble lace (B): dense curled clusters (28 / 60 / 110)
+    # for breaking crests, surf, and high-frequency spray droplet breakup.
+    e2_a, _ = worley_edges(rng, 28, warp_mid)
+    e2_b, _ = worley_edges(rng, 60, warp_fine)
+    e2_c, _ = worley_edges(rng, 110, (0.014 * cx_mid, 0.014 * cy_mid))
+    f_a = np.clip(e2_a * 1.50, 0.0, 1.0) ** 0.80
+    f_b = np.clip(e2_b * 1.40, 0.0, 1.0) ** 0.85
+    f_c = np.clip(e2_c * 1.30, 0.0, 1.0) ** 0.90
+    lace2 = np.minimum(f_a, 0.22 + 0.78 * f_b)
+    lace2 = np.minimum(lace2, 0.45 + 0.55 * f_c)
+    lace2 = gaussian_filter(lace2 + 0.14 * (blotch - 0.5), 0.55, mode="wrap")
+    lace2 = normalize_range(lace2) ** 0.90
     return lace, blotch, lace2
 
 

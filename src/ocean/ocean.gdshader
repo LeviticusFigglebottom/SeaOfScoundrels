@@ -12,7 +12,7 @@ render_mode unshaded, cull_disabled, depth_draw_always, world_vertex_coords, sha
 
 uniform sampler2D screen_tex : hint_screen_texture, repeat_disable, filter_linear;
 uniform sampler2D depth_tex : hint_depth_texture, repeat_disable, filter_nearest;
-// R = foam lace erosion map, G = blotch noise, B = second fine lace map.
+// R = organic frothy foam lace erosion map, G = blotch noise, B = fine frothy bubble lace.
 uniform sampler2D foam_tex : repeat_enable, filter_linear_mipmap_anisotropic;
 // Simulated foam (Ocean's foam field): R = amount, stored in rest-plane
 // coordinates, one tile of foam_field_size metres that wraps around the camera.
@@ -24,25 +24,25 @@ uniform float foam_field_on = 0.0;
 uniform int quality = 2;
 
 group_uniforms water;
-uniform vec3 deep_color : source_color = vec3(0.006, 0.14, 0.34);
-uniform vec3 scatter_color : source_color = vec3(0.008, 0.45, 0.50);
-uniform vec3 sss_color : source_color = vec3(0.14, 0.96, 0.84);
+uniform vec3 deep_color : source_color = vec3(0.004, 0.055, 0.18);
+uniform vec3 scatter_color : source_color = vec3(0.008, 0.42, 0.48);
+uniform vec3 sss_color : source_color = vec3(0.10, 0.90, 0.80);
 uniform vec3 shallow_color : source_color = vec3(0.04, 0.72, 0.70);
-uniform vec3 foam_under_color : source_color = vec3(0.20, 0.76, 0.70);
+uniform vec3 foam_under_color : source_color = vec3(0.18, 0.74, 0.68);
 uniform vec3 absorption = vec3(0.42, 0.082, 0.068); // per metre
 uniform float turbidity = 0.12;       // how fast the body colour builds with depth
 uniform float refraction_strength = 0.36;
-uniform float sss_strength = 1.15;
-uniform float reflectivity = 0.72;
+uniform float sss_strength = 1.10;
+uniform float reflectivity = 0.60;
 group_uniforms foam;
 uniform vec3 foam_color : source_color = vec3(0.96, 0.99, 0.97);
 uniform float foam_crest_start = 0.91; // Jacobian below this starts to foam
 uniform float foam_crest_full = 0.66;
-uniform float foam_scale = 0.092;
+uniform float foam_scale = 0.20;
 uniform float shore_foam_depth = 1.45;
 group_uniforms sun;
-uniform float glint_sharpness = 1150.0;
-uniform float glint_strength = 7.2;
+uniform float glint_sharpness = 320.0;
+uniform float glint_strength = 6.5;
 group_uniforms weather;
 uniform vec2 wind_dir = vec2(0.56, -0.83); // unit xz, the way the wind blows
 uniform float rain_intensity = 0.0;        // 0..1, rings on the surface
@@ -149,56 +149,70 @@ float field_foam(vec2 rest, float dist) {
 	return texture(foam_field, rest / foam_field_size).r * smoothstep(edge * 0.86, edge * 0.62, dist);
 }
 
-// Dual-phase flow-advected ripple normal sample (returns centred xy in -0.5..0.5).
+// Variance-preserving dual-phase flow-advected ripple normal sample (centred xy).
+// Normalizing by sqrt(w^2 + (1-w)^2) prevents micro-facets from blurring out at mid-cycle.
 vec2 ripple_flow(vec2 uv, vec2 off0, vec2 off1, float flow_w) {
-	vec2 a = texture(detail_tex, uv + off0).rg;
-	vec2 b = texture(detail_tex, uv + off1).rg;
-	return mix(a, b, flow_w) - 0.5;
+	vec2 a = texture(detail_tex, uv + off0).rg - 0.5;
+	vec2 b = texture(detail_tex, uv + off1).rg - 0.5;
+	float inv_rms = inversesqrt(max(flow_w * flow_w + (1.0 - flow_w) * (1.0 - flow_w), 0.25));
+	return mix(a, b, flow_w) * inv_rms;
 }
 
-// Evaluate curl-warped Voronoi foam lace pattern (x = combined erosion, y = sharp filaments).
-vec2 sample_foam_lace(vec2 uv, vec2 rest_p, float streak) {
-	float warp = texture(foam_tex, uv * 0.24 + vec2(0.11, 0.07)).g;
-	vec2 w = (vec2(warp, texture(foam_tex, uv.yx * 0.19 + vec2(0.31, 0.17)).g) - 0.5) * 0.34;
+// Anisotropically stretch foam coordinates gently along local wave flow so lacy froth
+// streams over wave crests rather than sitting like a static isotropic grid.
+vec2 flow_stretched_uv(vec2 p, vec2 fdir, float stretch_k) {
+	vec2 fperp = vec2(-fdir.y, fdir.x);
+	float along = dot(p, fdir) * mix(1.0, 0.72, stretch_k);
+	float across = dot(p, fperp) * mix(1.0, 1.18, stretch_k);
+	return (fdir * along + fperp * across) * foam_scale;
+}
+
+// Evaluate organic turbulent foam lace pattern (x = combined erosion, y = frothy filaments).
+vec2 sample_foam_lace(vec2 rest_p, vec2 fdir, float stretch_k, float streak) {
+	vec2 uv = flow_stretched_uv(rest_p, fdir, stretch_k);
+	float warp = texture(foam_tex, uv * 0.27 + vec2(0.11, 0.07)).g;
+	vec2 w = (vec2(warp, texture(foam_tex, uv.yx * 0.21 + vec2(0.31, 0.17)).g) - 0.5) * 0.42;
 	vec3 f1 = texture(foam_tex, uv + w).rgb;
-	float lace_big = texture(foam_tex, uv.yx * 0.31 + w * 0.55).r;
-	float lace_fine = texture(foam_tex, uv * 2.45 - w * 0.85).b;
+	float lace_big = texture(foam_tex, uv.yx * 0.37 + w * 0.65).r;
+	float lace_fine = texture(foam_tex, uv * 2.15 - w * 0.75).b;
 	// Combined erosion map for breaking caps, surf and wakes
-	float pattern = f1.r * 0.44 + lace_big * 0.36 + lace_fine * 0.20;
-	// Fine gossamer filaments: nested Voronoi walls stay crisp even at light coverage
-	float fil_wall = min(f1.r, 0.22 + 0.78 * lace_fine);
+	float pattern = f1.r * 0.42 + lace_big * 0.34 + lace_fine * 0.24;
+	// Soft wispy frothy filaments for active wave-face webbing (zero straight polygon rims)
+	float fil_wall = f1.r * 0.45 + lace_fine * 0.35 + (1.0 - f1.g) * 0.20;
 	if (streak > 0.01) {
 		vec2 along = wind_dir;
 		vec2 across = vec2(-wind_dir.y, wind_dir.x);
-		vec2 suv = vec2(dot(rest_p, along) * 0.17, dot(rest_p, across) * 0.64) * foam_scale;
-		float s1 = texture(foam_tex, suv + w * 0.3).r;
-		float s2 = texture(foam_tex, suv * vec2(0.62, 1.75) + 0.37).b;
-		pattern = mix(pattern, s1 * 0.58 + s2 * 0.42, streak);
-		fil_wall = mix(fil_wall, min(s1, 0.25 + 0.75 * s2), streak * 0.75);
+		vec2 suv = vec2(dot(rest_p, along) * 0.16, dot(rest_p, across) * 0.62) * foam_scale;
+		float s1 = texture(foam_tex, suv + w * 0.35).r;
+		float s2 = texture(foam_tex, suv * vec2(0.65, 1.70) + 0.37).b;
+		pattern = mix(pattern, s1 * 0.56 + s2 * 0.44, streak);
+		fil_wall = mix(fil_wall, s1 * 0.50 + s2 * 0.50, streak * 0.75);
 	}
 	return vec2(pattern, fil_wall);
 }
 
 // Wave-flow-advected painterly foam.
 // Returns x = heavy foam coverage, y = heavy foam thickness (0 at edge..1 core),
-// z = delicate near-water gossamer lacy webbing coverage.
-vec3 foam_mask_flow(float amount, float web_amt, vec2 draped, vec2 off0, vec2 off1, float flow_w, float soft, float streak) {
-	vec2 p0 = draped + off0;
-	vec2 s0 = sample_foam_lace(p0 * foam_scale, p0, streak);
+// z = delicate wave-action gossamer frothy webbing coverage.
+vec3 foam_mask_flow(float amount, float web_amt, vec2 draped, vec2 off0, vec2 off1, float flow_w, vec2 fdir, float stretch_k, float soft, float streak) {
+	// Shorter advect travel and smoothstep crossfade prevent double-grid ghosting on foam.
+	vec2 p0 = draped + off0 * 0.78;
+	vec2 s0 = sample_foam_lace(p0, fdir, stretch_k, streak);
 	vec2 s = s0;
 	if (quality > 0) {
-		vec2 p1 = draped + off1;
-		vec2 s1 = sample_foam_lace(p1 * foam_scale, p1, streak);
-		s = mix(s0, s1, flow_w);
+		vec2 p1 = draped + off1 * 0.78;
+		vec2 s1 = sample_foam_lace(p1, fdir, stretch_k, streak);
+		float fw = smoothstep(0.08, 0.92, flow_w);
+		s = mix(s0, s1, fw);
 	}
-	float pattern = smoothstep(0.10, 0.86, s.x);
+	float pattern = smoothstep(0.12, 0.88, s.x);
 	float thr = 1.0 - amount;
 	float cover = smoothstep(thr - soft, thr + soft, 1.0 - pattern) * smoothstep(0.0, 0.07, amount);
 	float body = smoothstep(thr, thr + 0.42, 1.0 - pattern);
-	// Gossamer webbing: delicate lacy bubble walls visible across near wave faces
-	float web_edge = mix(0.28, 0.56, clamp(web_amt, 0.0, 1.0));
-	float web_fil = 1.0 - smoothstep(0.04, web_edge, s.y);
-	float web_cover = web_fil * clamp(web_amt * 1.15, 0.0, 0.72);
+	// Organic frothy webbing draped strictly where wave action / wakes / surf exist
+	float web_edge = mix(0.18, 0.56, clamp(web_amt, 0.0, 1.0));
+	float web_fil = 1.0 - smoothstep(0.06, web_edge, s.y);
+	float web_cover = web_fil * smoothstep(0.02, 0.14, web_amt) * clamp(web_amt * 1.10, 0.0, 0.68);
 	return vec3(cover, body, web_cover);
 }
 
@@ -265,11 +279,13 @@ void fragment() {
 	// --- wave-coupled dual-phase flow advection
 	// Texture climbs UP rising front faces (-n_geo.xz when vert_vel > 0), surges OVER
 	// crests (+flow_vel), and streams DOWN falling backs (+n_geo.xz when vert_vel < 0).
-	float rise = clamp(vert_vel * 0.78, -1.0, 1.0);
+	float rise = clamp(vert_vel * 0.80, -1.0, 1.0);
 	vec2 face_flow = -rise * n_geo.xz;
 	vec2 raw_flow = flow_vel * 0.56 + face_flow * 2.45 + wind_dir * (0.24 + 0.58 * storm);
 	float flow_mag = length(raw_flow);
 	vec2 wave_flow = raw_flow / (1.0 + flow_mag * 0.16);
+	vec2 flow_dir = flow_mag > 1e-4 ? (raw_flow / flow_mag) : wind_dir;
+	float flow_stretch = smoothstep(0.18, 1.85, flow_mag);
 
 	// Spatial phase jitter breaks up any global cycle pulse across the sea.
 	float ph_jit = texture(foam_tex, v_rest * 0.0085).g * 0.55;
@@ -277,45 +293,45 @@ void fragment() {
 	float ph0 = fract(flow_t);
 	float ph1 = fract(flow_t + 0.5);
 	float flow_w = abs(2.0 * ph0 - 1.0);
-	vec2 flow_off0 = -wave_flow * (ph0 - 0.5) * 1.45;
-	vec2 flow_off1 = -wave_flow * (ph1 - 0.5) * 1.45;
+	vec2 flow_off0 = -wave_flow * (ph0 - 0.5) * 1.40;
+	vec2 flow_off1 = -wave_flow * (ph1 - 0.5) * 1.40;
 	// Subtle draping along wave slopes so detail hugs steep ridges.
 	vec2 draped = v_rest + n_geo.xz * 0.55;
 
-	// --- multi-octave wave-advected micro ripples (normal-only detail)
-	// Irrational rotation matrix avoids any axis-aligned repetition between octaves.
+	// --- multi-octave variance-normalized wave-advected micro ripples (normal-only detail)
 	const mat2 ROT_B = mat2(vec2(0.80, -0.60), vec2(0.60, 0.80));
-	float fine = smoothstep(0.40, 0.025, fp);
-	float med_fade = smoothstep(1.4, 0.08, fp);
+	float fine = smoothstep(0.45, 0.025, fp);
+	float med_fade = smoothstep(1.6, 0.08, fp);
 	vec2 rip_fine;
 	vec2 rip_med;
 	vec2 rip_micro = vec2(0.0);
 	vec2 ripple;
 	float gust = 0.55;
 	if (quality > 0) {
-		rip_fine = ripple_flow(draped * 0.132, flow_off0 * 0.132, flow_off1 * 0.132, flow_w) * fine;
-		vec2 uv_m = (ROT_B * draped) * 0.052;
-		vec2 fm0 = (ROT_B * flow_off0) * 0.052;
-		vec2 fm1 = (ROT_B * flow_off1) * 0.052;
+		rip_fine = ripple_flow(draped * 0.135, flow_off0 * 0.135, flow_off1 * 0.135, flow_w) * fine;
+		vec2 uv_m = (ROT_B * draped) * 0.054;
+		vec2 fm0 = (ROT_B * flow_off0) * 0.054;
+		vec2 fm1 = (ROT_B * flow_off1) * 0.054;
 		rip_med = ripple_flow(uv_m, fm0, fm1, flow_w) * med_fade;
 		// Third broad chop octave for sculpted mid-distance facets
-		vec2 r3 = texture(detail_tex, draped * 0.0155 + flow_off0 * 0.0155).rg - 0.5;
-		// Fourth high-frequency wind-chop layer for crisp near sparkles & texture
-		vec2 uv_micro = (draped.yx * 0.275) + wind_dir * 0.055 * sea_time;
-		rip_micro = ripple_flow(uv_micro, flow_off0.yx * 0.275, flow_off1.yx * 0.275, flow_w) * smoothstep(0.22, 0.015, fp);
-		ripple = rip_fine * 0.95 + rip_med * 1.25 + r3 * 0.65 * smoothstep(5.5, 0.45, fp) + rip_micro * (0.55 + 0.45 * storm);
+		vec2 r3 = texture(detail_tex, draped * 0.0165 + flow_off0 * 0.0165).rg - 0.5;
+		// Fourth high-frequency wind-chop layer for crisp near sparkles & glossy texture
+		vec2 uv_micro = (draped.yx * 0.295) + wind_dir * 0.055 * sea_time;
+		rip_micro = ripple_flow(uv_micro, flow_off0.yx * 0.295, flow_off1.yx * 0.295, flow_w) * smoothstep(0.26, 0.015, fp);
+		ripple = rip_fine * 1.05 + rip_med * 1.30 + r3 * 0.65 * smoothstep(5.5, 0.45, fp) + rip_micro * (0.62 + 0.42 * storm);
 		gust = smoothstep(0.18, 0.82, texture(foam_tex, v_rest * 0.0037 + wind_dir * 0.004 * sea_time).g);
 	} else {
 		rip_fine = (texture(detail_tex, draped * 0.125 + flow_off0 * 0.125).rg - 0.5) * fine;
 		rip_med = (texture(detail_tex, (ROT_B * draped) * 0.048 + (ROT_B * flow_off0) * 0.048).rg - 0.5) * med_fade;
-		ripple = rip_fine * 0.90 + rip_med * 1.20;
+		ripple = rip_fine * 0.95 + rip_med * 1.25;
 	}
 
 	float crest_pre = clamp((1.0 - jac) * 1.9, 0.0, 1.0) * 0.55 + smoothstep(0.10, 1.05, h_rel) * 0.65;
 	crest_pre = clamp(crest_pre, 0.0, 1.0);
-	float ripple_amt = mix(0.24, 0.36, storm) * mix(0.65, 1.45, gust) * (1.0 + 0.28 * crest_pre);
-	// Modest shading exaggeration of long swell in calm weather so rolling faces sculpt clearly
-	float exag = mix(1.85, 1.0, smoothstep(0.0, 0.65, storm));
+	// Sheltered lagoons keep calmer gentle ripples; open fair/storm seas are richly sculpted & glossy.
+	float open_sea = smoothstep(0.28, 0.65, sea_amp_scale);
+	float ripple_amt = mix(0.28, mix(0.52, 0.78, storm), open_sea) * mix(0.72, 1.38, gust) * (1.0 + 0.24 * crest_pre);
+	float exag = mix(1.90, 1.0, smoothstep(0.0, 0.65, storm));
 	vec3 n_shade = normalize(n_geo - vec3(long_slope.x, 0.0, long_slope.y) * (exag - 1.0));
 	vec3 n_detail = vec3(ripple.x, 0.0, ripple.y) * ripple_amt;
 	float splash = 0.0;
@@ -379,31 +395,37 @@ void fragment() {
 		behind *= 0.70 + 0.30 * exp(-thick * 4.0);
 		behind *= mix(vec3(1.0), vec3(0.38, 0.94, 0.96), 1.0 - exp(-thick * 1.3));
 
-		// --- jewel colour separation: deep sapphire backs/distance, emerald-teal bodies,
-		// luminous aquamarine-cyan backlit crests (SSS)
+		// --- deep jewel-teal colour separation: deep sapphire troughs & backs,
+		// rich emerald-teal wave bodies, luminous aquamarine-cyan thinned crests (SSS)
 		float crest = crest_pre;
 		float facing = 1.0 - max(dot(N, V), 0.0);
-		float back_lit = pow(max(dot(V, -normalize(L + N * 0.32)), 0.0), 2.6);
-		float side_lit = pow(max(dot(V, -normalize(vec3(L.x, L.y * 0.5, L.z) + N * 0.45)), 0.0), 1.8);
-		float slope_light = dot(n_shade, normalize(L + vec3(0.0, 0.55, 0.0)));
+		float back_lit = pow(max(dot(V, -normalize(L + N * 0.32)), 0.0), 2.5);
+		float side_lit = pow(max(dot(V, -normalize(vec3(L.x, L.y * 0.5, L.z) + N * 0.45)), 0.0), 1.9);
+		float slope_light = dot(N, normalize(L + vec3(0.0, 0.50, 0.0)));
+		float macro_light = dot(n_shade, normalize(L + vec3(0.0, 0.55, 0.0)));
 		float tilt = dot(-long_slope, normalize(L.xz + vec2(1e-4)));
-		float swell_shade = clamp(1.0 + tilt * mix(7.5, 1.5, storm), 0.56, 1.34);
+		float swell_shade = clamp(1.0 + tilt * mix(8.5, 1.8, storm), 0.46, 1.38);
 
-		// Deep sapphire-blue in distance and shaded backs; vivid emerald-teal on near/mid wave bodies.
-		float dist_sapphire = smoothstep(55.0, 520.0, dist);
-		float body_k = 0.10 + 0.38 * smoothstep(-0.85, 1.05, h_rel) + 0.34 * crest + 0.22 * facing * facing;
-		body_k *= mix(1.0, 0.16, dist_sapphire);
-		body_k *= mix(0.62, 1.15, smoothstep(0.72, 0.98, slope_light));
-		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light
-				* mix(0.52, 1.28, smoothstep(0.74, 1.0, slope_light)) * swell_shade;
+		// Deep sapphire-indigo in troughs, shaded backs, and distance; vivid emerald-teal
+		// on sunlit wave faces and upper shoulders.
+		float dist_sapphire = smoothstep(50.0, 480.0, dist);
+		float body_k = 0.03 + 0.34 * smoothstep(-0.55, 1.05, h_rel) + 0.40 * crest + 0.14 * facing * facing;
+		body_k *= mix(1.0, 0.14, dist_sapphire);
+		body_k *= mix(0.42, 1.22, smoothstep(0.60, 0.98, macro_light));
+		float face_contrast = mix(0.36, 1.36, smoothstep(0.62, 0.98, mix(macro_light, slope_light, 0.45)));
+		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light * face_contrast * swell_shade;
 
-		// Luminous aquamarine-cyan translucent glow right through raised & backlit crests.
-		float thin = clamp(crest * 0.95 + 0.65 * smoothstep(-0.15, 0.85, h_rel) * max(back_lit, side_lit * 0.55), 0.0, 1.0);
-		float ridge_glow = smoothstep(0.15, 0.95, crest) * smoothstep(-0.1, 0.75, h_rel);
-		body += sss_color * sss_strength * (
-				ridge_glow * light * 0.48
-				+ thin * sun_light * (1.85 * back_lit + 0.55 * side_lit)
-		) * (0.35 + 0.65 * facing) * mix(1.0, 0.35, dist_sapphire);
+		// Luminous emerald-aquamarine translucent glow reserved for thinned upper crests,
+		// moderated at low sun/moon elevation so night horizon stays moody indigo-teal.
+		float sss_elev = smoothstep(-0.02, 0.16, L.y);
+		float sss_key = smoothstep(0.08, 0.55, max(sun_light.r, max(sun_light.g, sun_light.b)));
+		float sss_mod = mix(0.22, 1.0, sss_elev * sss_key);
+		float ridge_thin = smoothstep(0.32, 0.96, crest) * smoothstep(0.08, 0.92, h_rel);
+		float thin = clamp(ridge_thin * 1.05 + 0.55 * smoothstep(0.12, 0.90, h_rel) * max(back_lit, side_lit * 0.50), 0.0, 1.0);
+		body += sss_color * sss_strength * sss_mod * (
+				ridge_thin * light * 0.46
+				+ thin * sun_light * (2.05 * back_lit + 0.52 * side_lit)
+		) * (0.35 + 0.65 * facing) * mix(1.0, 0.25, dist_sapphire);
 
 		// Depth-based absorption: vibrant turquoise shallows over sandy beaches.
 		float path = vdepth * 1.45 + min(thick, 10.0) * 0.12;
@@ -412,11 +434,11 @@ void fragment() {
 		vec3 shallow_tint = mix(shallow_color, scatter_color, 0.25) * light * 0.68;
 		col = behind * trans + mix(shallow_tint, body, smoothstep(0.0, 8.5, path)) * fill;
 
-		// --- compute foam sources early so milky turquoise-green aeration glows BENEATH foam & reflection
+		// --- compute foam sources early so milky aqua aeration glows ONLY beneath real foam
 		float lod_fade = smoothstep(0.95, 0.22, fp * 0.18);
 		float f_now = smoothstep(foam_crest_start, foam_crest_full, jac);
 		// Chunky fair-weather breaking ridges: steep pinched high crests form creamy caps
-		float fair_cap = smoothstep(0.45, 1.05, h_rel) * smoothstep(0.96, 0.84, jac) * mix(0.68, 0.25, storm);
+		float fair_cap = smoothstep(0.45, 1.05, h_rel) * smoothstep(0.95, 0.83, jac) * mix(0.68, 0.25, storm) * open_sea;
 		float field = field_foam(v_rest, dist);
 		float crest_foam = max(max(f_now, fair_cap), field);
 		float linger = clamp(field - max(f_now, fair_cap), 0.0, 1.0);
@@ -435,15 +457,6 @@ void fragment() {
 		float blot = texture(foam_tex, wuv + vec2(0.002, 0.0) * sea_time).g;
 		float standing = storm * storm * smoothstep(0.38, 0.90, blot) * 0.62 * smoothstep(-0.5, 0.5, h_rel);
 		crest_foam = max(crest_foam, standing);
-
-		// Near-water gossamer lacy webbing: organic ribbons flowing across wave faces & troughs
-		// even in fair weather.
-		float web_patch = smoothstep(0.16, 0.84, texture(foam_tex, (draped + flow_off0) * 0.018).g);
-		float slope_len = length(n_geo.xz);
-		float near_web_fade = smoothstep(135.0, 12.0, dist);
-		float web_amt = near_web_fade * (0.24 + 0.26 * crest + 0.18 * smoothstep(0.04, 0.28, slope_len) + 0.18 * storm)
-				* mix(0.45, 1.25, web_patch);
-		web_amt = max(web_amt, clamp(field * 0.85, 0.0, 0.85) * near_web_fade);
 
 		// Shoreline / ship-hull intersection foam from the depth buffer.
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
@@ -470,22 +483,34 @@ void fragment() {
 		float shore_foam = mix(hull_collar, beach_wash, flatness);
 		shore_foam *= step(scene_z, surf_z + 60.0) * in_water;
 
+		// Wave-action-driven gossamer frothy webbing: ZERO unconditional open-water floor!
+		// Calm troughs and sheltered lagoons stay rich glassy jewel-teal; breaking ridges,
+		// steep faces, lingering trails/wakes, and surf drape organic frothy webbing.
+		float wave_energy = smoothstep(0.45, 0.78, sea_amp_scale);
+		float slope_len = length(n_geo.xz);
+		float near_web_fade = smoothstep(115.0, 10.0, dist);
+		float web_patch = smoothstep(0.22, 0.84, texture(foam_tex, (draped + flow_off0 * 0.7) * 0.026).g);
+		float ridge_act = smoothstep(0.28, 0.88, crest) * 0.56 + smoothstep(0.10, 0.34, slope_len) * 0.50;
+		float web_src = max(ridge_act * wave_energy, max(field * 0.95, shore_foam * 0.82));
+		web_src = max(web_src, crest_foam * 0.78 + storm * 0.24 * smoothstep(0.06, 0.26, slope_len));
+		float web_amt = near_web_fade * clamp(web_src, 0.0, 1.0) * mix(0.25, 1.25, web_patch);
+
 		float soft = clamp(0.045 + fp * 0.55, 0.045, 0.45);
-		float amount = clamp(max(min(crest_foam, 0.76), shore_foam), 0.0, 1.0);
+		float amount = clamp(max(min(crest_foam, 0.78), shore_foam), 0.0, 1.0);
 		float streak = storm * clamp(max(linger, standing) * 2.0 - shore_foam, 0.0, 1.0) * 0.85;
-		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, soft, quality > 0 ? streak : 0.0);
+		vec3 fm = foam_mask_flow(amount, web_amt, draped, flow_off0, flow_off1, flow_w, flow_dir, flow_stretch, soft, quality > 0 ? streak : 0.0);
 		float heavy_foam = mix(amount * amount * 0.6, fm.x, lod_fade);
 		float foam_body = mix(0.5, fm.y, lod_fade);
 		float web_foam = fm.z * lod_fade;
 
-		// Milky turquoise-green aerated water visibly glowing right beneath foam & webbing.
-		float aerate_src = clamp(max(amount * 1.15, web_amt * 0.65) + field * 0.75 + shore_foam * 0.75, 0.0, 1.0);
-		float aerate = smoothstep(0.10, 0.75, aerate_src) * mix(0.45, 1.0, lod_fade);
-		vec3 milky_light = ambient_color * 0.72 + sun_light * (0.36 + 0.64 * clamp(dot(N, L), 0.0, 1.0));
-		vec3 milky_col = foam_under_color * milky_light * mix(0.82, 1.12, smoothstep(0.78, 1.0, slope_light));
-		col = mix(col, milky_col, clamp(aerate * 0.58 + heavy_foam * 0.28, 0.0, 0.72));
+		// Milky turquoise-green aerated water visibly glowing right beneath actual foam patches.
+		float aerate_src = clamp(max(amount * 1.15, web_foam * 0.95) + field * 0.80 + shore_foam * 0.75, 0.0, 1.0);
+		float aerate = smoothstep(0.15, 0.72, aerate_src) * mix(0.45, 1.0, lod_fade);
+		vec3 milky_light = ambient_color * 0.70 + sun_light * (0.36 + 0.64 * clamp(dot(N, L), 0.0, 1.0));
+		vec3 milky_col = foam_under_color * milky_light * mix(0.80, 1.12, smoothstep(0.75, 1.0, macro_light));
+		col = mix(col, milky_col, clamp(aerate * 0.60 + heavy_foam * 0.28, 0.0, 0.72));
 
-		// --- sky reflection
+		// --- sky reflection (lower flat reflectivity keeps deep jewel troughs bold)
 		float ndv = max(dot(N, V), 0.0);
 		float ndv_eff = clamp(ndv + sqrt(rough_var) * 0.85, 0.0, 1.0);
 		float fres = 0.02 + 0.98 * pow(1.0 - ndv_eff, 5.0);
@@ -495,44 +520,41 @@ void fragment() {
 		vec3 refl = ocean_sky(R);
 		// Sun reflection halo (cloud-shadowed).
 		float rs = max(dot(R, L), 0.0);
-		refl += sun_light * (pow(rs, 10.0) * 0.28 + pow(rs, 75.0) * 0.58);
+		refl += sun_light * (pow(rs, 10.0) * 0.26 + pow(rs, 70.0) * 0.56);
 		float film = mix(0.28, 1.0, smoothstep(0.0, 2.5, thick));
-		// Aerated foamy patches dampen mirror reflection slightly so milky turquoise & lace read crisply.
-		float foam_damp = 1.0 - clamp(heavy_foam * 0.65 + aerate * 0.25, 0.0, 0.82);
+		float foam_damp = 1.0 - clamp(heavy_foam * 0.68 + aerate * 0.26, 0.0, 0.84);
 		col = mix(col, refl, clamp(fres * reflectivity * film * foam_damp, 0.0, 1.0));
 
-		// --- dense twinkling stylized sun / moon glints (cloud-shadowed)
+		// --- crisp dense twinkling sun / moon glints across sunlit wave facets
 		vec3 H = normalize(L + V);
-		float sharp = 1.0 / (1.0 / glint_sharpness + rough_var * 2.0);
+		float sharp = 1.0 / (1.0 / glint_sharpness + rough_var * 1.8);
 		float glint_norm = glint_sharpness / (sharp + glint_sharpness);
 		float glint = 0.0;
 		if (quality > 0) {
-			vec3 n_sp1 = normalize(N + vec3(rip_fine.x, 0.0, rip_fine.y) * 1.35 + vec3(rip_med.x, 0.0, rip_med.y) * 0.45);
-			vec3 n_sp2 = normalize(N + vec3(rip_micro.x, 0.0, rip_micro.y) * 1.65 - vec3(rip_fine.y, 0.0, -rip_fine.x) * 0.55);
+			vec3 n_sp1 = normalize(N + vec3(rip_fine.x, 0.0, rip_fine.y) * 2.1 + vec3(rip_med.x, 0.0, rip_med.y) * 0.55);
+			vec3 n_sp2 = normalize(N + vec3(rip_micro.x, 0.0, rip_micro.y) * 2.5 - vec3(rip_fine.y, 0.0, -rip_fine.x) * 0.70);
 			float c1 = pow(max(dot(n_sp1, H), 0.0), sharp);
 			float c2 = pow(max(dot(n_sp2, H), 0.0), sharp * 1.15);
-			float tw1 = smoothstep(0.26, 0.58, c1) * glint_norm * 1.85;
-			float tw2 = smoothstep(0.22, 0.55, c2) * glint_norm * 1.65 * smoothstep(320.0, 12.0, dist);
-			glint = max(tw1, tw2) + min(tw1, tw2) * 0.45;
+			float tw1 = smoothstep(0.34, 0.66, c1) * glint_norm * 2.05;
+			float tw2 = smoothstep(0.32, 0.64, c2) * glint_norm * 1.85 * smoothstep(380.0, 10.0, dist);
+			glint = max(tw1, tw2) + min(tw1, tw2) * 0.50;
 		} else {
 			float c1 = pow(max(dot(N, H), 0.0), sharp);
-			glint = smoothstep(0.30, 0.60, c1) * glint_norm * 1.8;
+			glint = smoothstep(0.34, 0.66, c1) * glint_norm * 1.8;
 		}
-		// Broad sunlit shimmer path across the mid/far sea
-		glint += pow(max(dot(N, H), 0.0), sharp * 0.18) * 0.055;
+		// Broad sunlit shimmer path across mid/far sea
+		glint += pow(max(dot(N, H), 0.0), sharp * 0.16) * 0.05;
 		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
 		vec3 glint_col = sun_light * (1.0 + 1.5 * smoothstep(0.5, 0.05, key));
 		float glint_mask = (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85)) * smoothstep(-0.02, 0.05, L.y);
-		col += glint_col * glint * glint_strength * (0.24 + 0.76 * fres) * glint_mask;
+		col += glint_col * glint * glint_strength * (0.34 + 0.66 * fres) * glint_mask;
 		col += (ambient_color + sun_light * 0.5) * splash * 0.35;
 
-		// --- composite gossamer webbing and creamy breaking caps on top
+		// --- composite organic wave-action webbing and creamy breaking caps on top
 		vec3 foam_light = ambient_color * 0.86 + sun_light * (0.36 + 0.58 * clamp(dot(N, L), 0.0, 1.0));
-		float foam_shade = mix(0.82, 1.08, smoothstep(0.78, 1.0, slope_light));
-		// Gossamer lacy webbing: milky-white / pale-mint filaments draped on wave faces
-		vec3 web_tone = mix(foam_under_color, foam_color, 0.74) * foam_light * foam_shade;
-		col = mix(col, web_tone, clamp(web_foam * 0.76, 0.0, 0.76));
-		// Creamy aerated breaking caps, wakes, spindrift and surf
+		float foam_shade = mix(0.80, 1.08, smoothstep(0.75, 1.0, macro_light));
+		vec3 web_tone = mix(foam_under_color, foam_color, 0.76) * foam_light * foam_shade;
+		col = mix(col, web_tone, clamp(web_foam * 0.72, 0.0, 0.72));
 		vec3 thin_tone = mix(foam_under_color, foam_color, 0.68);
 		vec3 foam_lit = mix(thin_tone, foam_color, smoothstep(0.05, 0.72, foam_body)) * foam_light * foam_shade;
 		col = mix(col, foam_lit, heavy_foam * mix(0.80, 0.97, foam_body));

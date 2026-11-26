@@ -14,6 +14,12 @@ var material: ShaderMaterial
 var _quad: MeshInstance3D
 var _ocean: Node3D
 
+func _exit_tree() -> void:
+	_ocean = null
+	if _quad != null and is_instance_valid(_quad):
+		_quad.visible = false
+		_quad.material_override = null
+
 func setup(ocean: Node3D) -> void:
 	_ocean = ocean
 	material = ShaderMaterial.new()

@@ -81,6 +81,22 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	if current == self:
 		current = null
+	_hull_masks.clear()
+	if material != null:
+		material.set_shader_parameter(&"foam_field", null)
+		material.set_shader_parameter(&"foam_field_on", 0.0)
+		material.set_shader_parameter(&"hull_mask_count", 0)
+	if foam_field != null:
+		if is_instance_valid(foam_field):
+			foam_field.render_target_update_mode = SubViewport.UPDATE_DISABLED
+			if foam_field.get_parent() == self:
+				remove_child(foam_field)
+			foam_field.queue_free()
+		foam_field = null
+	if crest_spray != null and is_instance_valid(crest_spray):
+		crest_spray.set_quality(0)
+	if _surface != null and is_instance_valid(_surface):
+		_surface.material_override = null
 
 func _ready() -> void:
 	process_priority = 100  # after cameras have moved this frame
@@ -126,6 +142,10 @@ func _apply_quality() -> void:
 	if crest_spray != null:
 		crest_spray.set_quality(int(quality))
 	if foam_field != null:
+		material.set_shader_parameter(&"foam_field", null)
+		foam_field.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		if foam_field.get_parent() == self:
+			remove_child(foam_field)
 		foam_field.queue_free()
 		foam_field = null
 	var res: int = QUALITY_FOAM_RES[quality]
