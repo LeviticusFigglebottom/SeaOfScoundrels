@@ -78,6 +78,24 @@ const BATTLE_CRY_LINES := {
 	],
 }
 
+const SHANTY_STEM_POOL: Array[StringName] = [&"hurdy_gurdy", &"whistle", &"concertina"]
+const SHANTY_ENCORE_COOLDOWN := 20.0
+
+const SHANTY_ENCORE_LINES := {
+	&"helmsman": [
+		"Now THAT'S a tune to fill the sails!",
+		"Steady rhythm, Cap'n -- another verse for fair winds!",
+	],
+	&"lookout": [
+		"Encore, Captain -- the wind loves a merry band!",
+		"Best harmony on the archipelago! Keep it rolling!",
+	],
+	&"carpenter": [
+		"Best jam since Tortuga! Strike up another verse!",
+		"Even the hull timbers are tapping along, Cap'n!",
+	],
+}
+
 var _rng := RandomNumberGenerator.new()
 var _route: Array[Vector3] = []  # ship-local waypoints when moving across decks
 var _route_is_local: bool = true
@@ -93,6 +111,7 @@ var _melee_attack_cd: float = 0.0
 var _melee_block_timer: float = 0.0
 var _melee_combo_count: int = 0
 var _joining_shanty: bool = false
+var _active_shanty_inst: StringName = &""
 var _clock: float = 0.0
 var _shanty_phase: float = 0.0
 var _last_audio_beat: float = -1.0
@@ -111,6 +130,10 @@ var _was_breached: bool = false
 
 func _init() -> void:
 	process_physics_priority = -10
+
+
+func _enter_tree() -> void:
+	add_to_group(&"crew_brains")
 
 
 func _ready() -> void:
@@ -157,6 +180,11 @@ func get_held_shanty_instrument() -> Node3D:
 	if _shanty_tool_node != null and is_instance_valid(_shanty_tool_node):
 		return _shanty_tool_node
 	return null
+
+
+## Return the currently active shanty stem name (`&"hurdy_gurdy"`, `&"whistle"`, `&"concertina"`, or `&""` when idle).
+func get_active_shanty_instrument() -> StringName:
+	return _active_shanty_inst if _joining_shanty else &""
 
 
 ## Return the currently engaged ashore/boarding melee threat (or null when not fighting).
@@ -867,25 +895,108 @@ static func _is_target_defeated(node: Node) -> bool:
 func _tick_shanty(delta: float) -> void:
 	pawn.wish_dir = Vector3.ZERO
 	pawn.wish_sprint = false
-	var inst: StringName = CrewDialogue.get_persona(persona_id)["instrument"]
 	if not _joining_shanty:
-		_joining_shanty = true
-		_last_audio_beat = -1.0
-		_shanty_phase = Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
-		if not Audio.is_shanty_playing():
-			Audio.play_shanty([inst])
-		else:
-			Audio.set_shanty_instrument(inst, true, 0.35)
-		Audio.set_shanty_emitter(inst, pawn)
-		_attach_shanty_props(inst)
-		_speak(&"shanty_join", {}, "shanty")
-	elif _shanty_tool_node == null or not is_instance_valid(_shanty_tool_node):
-		var vis := _find_character_visual()
-		if vis != null and vis.hand_right != null:
-			_attach_shanty_props(inst)
+		var chosen := _choose_shanty_instrument()
+		_enter_shanty_jam(chosen)
+	else:
+		# If the captain cycles onto our stem mid-song, smoothly hand off to a complementary stem!
+		var cap_inst := _captain_playing_instrument()
+		if cap_inst != &"" and cap_inst == _active_shanty_inst:
+			var next_inst := _choose_shanty_instrument()
+			if next_inst != _active_shanty_inst:
+				_handoff_shanty_instrument(next_inst)
+		if _shanty_tool_node == null or not is_instance_valid(_shanty_tool_node):
+			var vis := _find_character_visual()
+			if vis != null and vis.hand_right != null:
+				_attach_shanty_props(_active_shanty_inst)
 
 	_play_anim_if_idle(&"play_instrument", 1.6)
 	_animate_shanty_instrument(delta)
+
+
+func _enter_shanty_jam(inst: StringName) -> void:
+	_joining_shanty = true
+	_active_shanty_inst = inst
+	_last_audio_beat = -1.0
+	_shanty_phase = Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
+	if not Audio.is_shanty_playing():
+		Audio.play_shanty([inst])
+	else:
+		Audio.set_shanty_instrument(inst, true, 0.35)
+	Audio.set_shanty_emitter(inst, pawn)
+	_attach_shanty_props(inst)
+	_speak(&"shanty_join", {}, "shanty")
+
+
+func _handoff_shanty_instrument(next_inst: StringName) -> void:
+	if next_inst == &"" or next_inst == _active_shanty_inst:
+		return
+	var old_inst := _active_shanty_inst
+	if Audio != null and old_inst != &"":
+		Audio.set_shanty_emitter(old_inst, null)
+		if not _is_stem_active_elsewhere(old_inst):
+			Audio.set_shanty_instrument(old_inst, false, 0.25)
+	_active_shanty_inst = next_inst
+	if Audio != null and Audio.is_shanty_playing():
+		Audio.set_shanty_instrument(next_inst, true, 0.25)
+		Audio.set_shanty_emitter(next_inst, pawn)
+	_attach_shanty_props(next_inst)
+
+
+func _captain_playing_instrument() -> StringName:
+	if captain == null or not is_instance_valid(captain):
+		return &""
+	var inv := captain.get_node_or_null(^"Inventory") as Inventory
+	if inv == null:
+		for c in captain.get_children():
+			if c is Inventory:
+				inv = c as Inventory
+				break
+	if inv != null and inv.playing_shanty:
+		return inv.shanty_instrument
+	return &""
+
+
+func _sibling_crew_brains() -> Array[CrewBrain]:
+	var out: Array[CrewBrain] = []
+	if not is_inside_tree():
+		return out
+	for node in get_tree().get_nodes_in_group(&"crew_brains"):
+		var cb := node as CrewBrain
+		if cb != null and cb != self and is_instance_valid(cb):
+			out.append(cb)
+	return out
+
+
+func _is_stem_active_elsewhere(inst: StringName) -> bool:
+	if _captain_playing_instrument() == inst:
+		return true
+	for cb in _sibling_crew_brains():
+		if cb._joining_shanty and cb._active_shanty_inst == inst:
+			return true
+	return false
+
+
+func _choose_shanty_instrument() -> StringName:
+	var pref: StringName = CrewDialogue.get_persona(persona_id)["instrument"]
+	var cap_inst := _captain_playing_instrument()
+	var used: Array[StringName] = []
+	if cap_inst != &"":
+		used.append(cap_inst)
+	for cb in _sibling_crew_brains():
+		if cb._joining_shanty and cb._active_shanty_inst != &"" and not used.has(cb._active_shanty_inst):
+			used.append(cb._active_shanty_inst)
+	if pref != cap_inst and not used.has(pref):
+		return pref
+	for cand in SHANTY_STEM_POOL:
+		if not used.has(cand):
+			return cand
+	if pref != cap_inst:
+		return pref
+	for cand in SHANTY_STEM_POOL:
+		if cand != cap_inst:
+			return cand
+	return pref
 
 
 func _stop_shanty_join(detach_from_parent: bool = true) -> void:
@@ -893,12 +1004,15 @@ func _stop_shanty_join(detach_from_parent: bool = true) -> void:
 	_last_audio_beat = -1.0
 	_shanty_phase = 0.0
 	if not _joining_shanty:
+		_active_shanty_inst = &""
 		return
+	var inst := _active_shanty_inst if _active_shanty_inst != &"" else StringName(CrewDialogue.get_persona(persona_id)["instrument"])
 	_joining_shanty = false
-	var inst: StringName = CrewDialogue.get_persona(persona_id)["instrument"]
+	_active_shanty_inst = &""
 	if Audio != null:
 		Audio.set_shanty_emitter(inst, null)
-		Audio.set_shanty_instrument(inst, false, 0.35)
+		if not _is_stem_active_elsewhere(inst):
+			Audio.set_shanty_instrument(inst, false, 0.35)
 
 
 func _attach_shanty_props(inst: StringName) -> void:
@@ -961,6 +1075,7 @@ func _animate_shanty_instrument(delta: float) -> void:
 		_last_audio_beat = audio_beat
 		if wrapped:
 			_shanty_phase = audio_beat
+			_trigger_shanty_encore_toast()
 		elif audio_beat > _shanty_phase:
 			_shanty_phase = audio_beat
 		else:
@@ -978,6 +1093,14 @@ func _animate_shanty_instrument(delta: float) -> void:
 			var sway := sin(beat * PI) * 0.15
 			var nod := sin(beat * TAU) * 0.07
 			_shanty_tool_node.rotation = _shanty_base_rot + Vector3(nod, sway, sway * 0.5)
+
+
+func _trigger_shanty_encore_toast() -> void:
+	if _callout_cooldowns.has("shanty_encore"):
+		return
+	_speak(&"shanty_encore", {}, "shanty_encore", SHANTY_ENCORE_COOLDOWN)
+	for other in _sibling_crew_brains():
+		other._callout_cooldowns["shanty_encore"] = SHANTY_ENCORE_COOLDOWN
 
 
 static func _tool_id_for_instrument(inst: StringName) -> StringName:
@@ -1322,12 +1445,18 @@ func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", co
 		var cries: Array = BATTLE_CRY_LINES.get(persona_id, BATTLE_CRY_LINES[&"helmsman"])
 		if not cries.is_empty():
 			text = "%s: %s" % [crew_name(), String(cries[_rng.randi_range(0, cries.size() - 1)])]
+	elif text == "" and category == &"shanty_encore":
+		var encores: Array = SHANTY_ENCORE_LINES.get(persona_id, SHANTY_ENCORE_LINES[&"helmsman"])
+		if not encores.is_empty():
+			text = "%s: %s" % [crew_name(), String(encores[_rng.randi_range(0, encores.size() - 1)])]
 	if text == "":
 		return
 	_callout_cooldowns[key] = cooldown
 	Game.post_notice(text)
 	Audio.play_sfx(&"crew_shout", pawn.global_position, -6.0, 0.08)
-	if category != &"battle_cry" or _combat == null or _combat.state == CombatComponent.State.IDLE:
+	var skip_shout_anim := (category == &"shanty_encore") \
+		or (category == &"battle_cry" and _combat != null and _combat.state != CombatComponent.State.IDLE)
+	if not skip_shout_anim:
 		_play_anim(&"shout", 0.7)
 	callout_spoken.emit(crew_name(), text, category)
 

@@ -40,4 +40,19 @@ func _ready() -> void:
 	print("\n%d tests, %d failures" % [total, failed.size()])
 	for msg in failed:
 		printerr("FAIL " + msg)
+	# Cleanly halt all Audio autoload players and drain the dummy audio thread before shutdown (0 ObjectDB leaks).
+	if Audio != null:
+		Audio.set_process(false)
+		for child in Audio.find_children("*", "", true, false):
+			if child is AudioStreamPlayer:
+				var p := child as AudioStreamPlayer
+				p.stop()
+				p.stream = null
+			elif child is AudioStreamPlayer3D:
+				var p3 := child as AudioStreamPlayer3D
+				p3.stop()
+				p3.stream = null
+	for _drain in 8:
+		OS.delay_msec(8)
+		await get_tree().process_frame
 	get_tree().quit(1 if failed.size() > 0 else 0)

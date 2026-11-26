@@ -572,4 +572,94 @@ func test_clash_sparks_and_floating_combat_embers_teardown() -> void:
 		"CombatComponent _exit_tree() cleanly frees all active clash spark & ember VFX with zero leaks")
 
 
+func test_enemy_stagger_stars_and_windup_telegraph_teardown() -> void:
+	_begin()
+	_ground()
+
+	# Spawn two enemies so we verify static mesh/material sharing as well as stagger & heavy windup.
+	var cap_pawn := EnemyBrain.spawn_enemy(&"drowned_captain", Vector3(0.0, 5.05, 0.0), _root)
+	var cor_pawn := EnemyBrain.spawn_enemy(&"corsair_raider", Vector3(10.0, 5.05, 0.0), _root)
+	var cap_brain := cap_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	var cor_brain := cor_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	cap_brain.aggro_range = 0.0
+	cor_brain.aggro_range = 0.0
+	await physics_frames(2)
+
+	var stars := cap_brain.get_stagger_stars_node()
+	var tele := cap_brain.get_strike_telegraph_node()
+	var cor_stars := cor_brain.get_stagger_stars_node()
+	var cor_tele := cor_brain.get_strike_telegraph_node()
+
+	check(stars != null and cap_pawn.get_node_or_null(^"StaggerStars") == stars,
+		"EnemyBrain attaches StaggerStars MeshInstance3D to Pawn")
+	check(tele != null and cap_pawn.get_node_or_null(^"StrikeTelegraph") == tele,
+		"EnemyBrain attaches StrikeTelegraph MeshInstance3D to Pawn")
+	check(stars.mesh is ArrayMesh and not (stars.mesh is PrimitiveMesh),
+		"StaggerStars uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(tele.mesh is ArrayMesh and not (tele.mesh is PrimitiveMesh),
+		"StrikeTelegraph uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(stars.mesh, cor_stars.mesh, "EnemyBrains share statically cached StaggerStars ArrayMesh")
+	check_eq(tele.mesh, cor_tele.mesh, "EnemyBrains share statically cached StrikeTelegraph ArrayMesh")
+	check_eq(stars.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"StaggerStars disables shadows")
+	check_eq(tele.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"StrikeTelegraph disables shadows")
+	var stars_mat := stars.material_override as StandardMaterial3D
+	var tele_mat := tele.material_override as StandardMaterial3D
+	check(stars_mat != null and stars_mat.vertex_color_use_as_albedo and stars_mat.vertex_color_is_srgb,
+		"StaggerStars material enables sRGB vertex color albedo")
+	check(tele_mat != null and tele_mat.vertex_color_use_as_albedo and tele_mat.vertex_color_is_srgb,
+		"StrikeTelegraph material enables sRGB vertex color albedo")
+	check(not stars.visible, "StaggerStars starts hidden while enemy is idle")
+	check(not tele.visible, "StrikeTelegraph starts hidden while enemy is idle")
+
+	var stars_tris := floori(float((stars.mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size()) / 3.0)
+	var tele_tris := floori(float((tele.mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size()) / 3.0)
+	check(stars_tris >= 180, "StaggerStars has 3 sculpted 5-point stars + dizzy ribbon (%d tris)" % stars_tris)
+	check(tele_tris >= 32, "StrikeTelegraph has sculpted 4-point starburst diamond (%d tris)" % tele_tris)
+
+	# 1. Trigger stagger -> StaggerStars becomes visible, orbits rapidly, then hides when stagger ends.
+	cap_brain.combat.apply_stagger(0.32)
+	await physics_frames(2)
+	check(stars.visible, "StaggerStars becomes visible during stagger")
+	var rot0 := stars.rotation.y
+	await physics_frames(8)
+	var rot1 := stars.rotation.y
+	check(rot1 > rot0 + 0.35, "StaggerStars orbits smoothly during stagger (%.2f -> %.2f rad)" % [rot0, rot1])
+	# Let the 0.32 s stagger expire (~20+ more frames at 60 Hz).
+	await physics_frames(22)
+	check(not cap_brain.combat.is_staggered(), "stagger expired cleanly")
+	check(not stars.visible, "StaggerStars hides automatically when stagger expires")
+
+	# 2. Death during active stagger hides StaggerStars immediately.
+	cap_brain.combat.apply_stagger(1.2)
+	await physics_frames(2)
+	check(stars.visible, "StaggerStars re-activates on fresh stagger")
+	cap_pawn.apply_damage(999.0)
+	await physics_frames(1)
+	check(cap_pawn.dead and not stars.visible, "StaggerStars hides immediately on enemy death")
+
+	# 3. Heavy attack windup flashes StrikeTelegraph cleanly, then turns off once windup completes.
+	cor_brain.combat.equip_weapon(&"cutlass")
+	var started_heavy := cor_brain.combat.heavy_attack()
+	check(started_heavy and cor_brain.combat.state == CombatComponent.State.WINDUP,
+		"Corsair starts heavy attack WINDUP")
+	await physics_frames(3)
+	check(cor_tele.visible, "StrikeTelegraph flashes visibly during heavy WINDUP")
+	check(cor_tele.scale.x >= 0.35, "StrikeTelegraph pulses scale cleanly (%.2f)" % cor_tele.scale.x)
+	# Wait past heavy_windup (0.34 s ~ 21 physics frames) so state leaves WINDUP.
+	await physics_frames(26)
+	check(cor_brain.combat.state != CombatComponent.State.WINDUP, "heavy attack left WINDUP state")
+	check(not cor_tele.visible, "StrikeTelegraph hides cleanly after WINDUP finishes")
+
+	# 4. Free all EnemyBrains and verify static VFX caches release cleanly to null (0 leaks)!
+	await _end()
+	check_eq(EnemyBrain._active_brains, 0, "all EnemyBrains exited cleanly")
+	check(EnemyBrain._stagger_stars_mesh == null and EnemyBrain._stagger_stars_mat == null,
+		"StaggerStars static cache released cleanly to null")
+	check(EnemyBrain._telegraph_mesh == null and EnemyBrain._telegraph_mat == null,
+		"StrikeTelegraph static cache released cleanly to null")
+
+
+
 

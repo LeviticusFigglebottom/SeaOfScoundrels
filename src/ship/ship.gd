@@ -198,12 +198,19 @@ var _bow_spray_starboard: GPUParticles3D = null
 var _spray_tex: GradientTexture2D = null
 var _active_muzzle_vfx: Array[Node] = []
 
+var cabin_furnishings: CaptainCabinFurnishings = null
+var _lookout_glint: MeshInstance3D = null
+var _lookout_glint_mat: ShaderMaterial = null
+var _lookout_glint_phase: float = 0.0
+
 static var _active_ship_count: int = 0
 static var _smoke_puff_tex: ImageTexture = null
 static var _muzzle_flash_tex: GradientTexture2D = null
 static var _muzzle_spark_tex: ImageTexture = null
 static var _streamer_mesh_sloop: ArrayMesh = null
 static var _streamer_mesh_brig: ArrayMesh = null
+static var _lookout_glint_mesh: ArrayMesh = null
+static var _lookout_glint_shader: Shader = null
 
 
 func _init() -> void:
@@ -250,8 +257,10 @@ func _ready() -> void:
 	_build_damage_slots()
 	_build_hold_water()
 	_build_deck_extras()
+	_setup_cabin_furnishings()
 	if enable_effects:
 		_build_bow_spray()
+		_setup_lookout_glint()
 	_setup_sail_shaders()
 	_setup_lights_and_glass()
 	_apply_current_livery()
@@ -297,6 +306,12 @@ func _exit_tree() -> void:
 		_emissary_streamer.material_override = null
 		_emissary_streamer.mesh = null
 	_emissary_streamer = null
+	if _lookout_glint != null and is_instance_valid(_lookout_glint):
+		_lookout_glint.material_override = null
+		_lookout_glint.mesh = null
+	_lookout_glint = null
+	_lookout_glint_mat = null
+	cabin_furnishings = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
 	if _active_ship_count == 0:
@@ -305,6 +320,8 @@ func _exit_tree() -> void:
 		_muzzle_spark_tex = null
 		_streamer_mesh_sloop = null
 		_streamer_mesh_brig = null
+		_lookout_glint_mesh = null
+		_lookout_glint_shader = null
 
 
 # ------------------------------------------------------------------ construction
@@ -1023,6 +1040,107 @@ static func _emit_streamer_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vecto
 	st.set_uv(uvc)
 	st.set_uv2(uv2c)
 	st.add_vertex(c)
+
+
+func _setup_cabin_furnishings() -> void:
+	if faction != &"player":
+		return
+	var furn := CaptainCabinFurnishings.new()
+	furn.name = "CaptainCabinFurnishings"
+	furn.ship_class = ship_class
+	add_child(furn)
+	cabin_furnishings = furn
+	sync_cabin_renown(Game.profile if Game != null else null, false)
+
+
+## Sync the Captain's Cabin Trading Company Renown Trophy Stand medallions from `profile`.
+func sync_cabin_renown(profile: Profile = null, force_all: bool = false) -> void:
+	if cabin_furnishings == null or not is_instance_valid(cabin_furnishings):
+		return
+	var prof: Profile = profile if profile != null else (Game.profile if Game != null else null)
+	cabin_furnishings.sync_renown(prof, force_all)
+
+
+func _setup_lookout_glint() -> void:
+	if faction == &"player":
+		return
+	if _lookout_glint_mesh == null:
+		_lookout_glint_mesh = _build_lookout_glint_quad()
+	if _lookout_glint_shader == null:
+		_lookout_glint_shader = _build_lookout_glint_shader()
+
+	_lookout_glint_mat = ShaderMaterial.new()
+	_lookout_glint_mat.shader = _lookout_glint_shader
+	_lookout_glint_mat.set_shader_parameter(&"glint_intensity", 0.0)
+	_lookout_glint_mat.set_shader_parameter(&"glint_scale", 2.8)
+
+	_lookout_glint = MeshInstance3D.new()
+	_lookout_glint.name = "LookoutGlint"
+	_lookout_glint.mesh = _lookout_glint_mesh
+	_lookout_glint.material_override = _lookout_glint_mat
+	_lookout_glint.position = Vector3(0.0, 12.2, 0.4) if ship_class == &"brigantine" else Vector3(0.0, 9.6, -0.35)
+	_lookout_glint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_lookout_glint.visible = false
+	add_child(_lookout_glint)
+	_lookout_glint_phase = fmod(float(get_instance_id() % 97) * 0.37, TAU)
+
+
+static func _build_lookout_glint_quad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_lookout_glint_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode blend_add, unshaded, cull_disabled, depth_draw_never, shadows_disabled;
+
+uniform float glint_intensity = 0.0;
+uniform float glint_scale = 2.8;
+uniform vec3 glint_color : source_color = vec3(1.0, 0.94, 0.76);
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * glint_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * glint_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * glint_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float core = exp(-r * r * 28.0);
+	float ray_h = exp(-abs(q.y) * 18.0) * smoothstep(1.0, 0.04, abs(q.x));
+	float ray_v = exp(-abs(q.x) * 22.0) * smoothstep(0.85, 0.04, abs(q.y));
+	vec2 dq = vec2(q.x + q.y, q.y - q.x) * 0.70710678;
+	float ray_d = (exp(-abs(dq.y) * 24.0) + exp(-abs(dq.x) * 24.0)) * 0.35 * smoothstep(0.70, 0.05, r);
+	float edge_fade = smoothstep(1.0, 0.72, r);
+	float star = clamp((core * 1.45 + ray_h * 0.85 + ray_v * 0.65 + ray_d) * edge_fade, 0.0, 2.0);
+	vec3 col = mix(glint_color, vec3(1.0, 0.99, 0.95), clamp(core, 0.0, 1.0));
+	ALBEDO = col * (star * glint_intensity);
+}
+"""
+	return sh
 
 
 func _setup_lights_and_glass() -> void:
@@ -2631,6 +2749,8 @@ func _update_lod() -> void:
 		_using_lod = want_lod
 		_model.visible = not want_lod
 		_lod_model.visible = want_lod
+		if cabin_furnishings != null and is_instance_valid(cabin_furnishings):
+			cabin_furnishings.visible = not want_lod
 
 
 func _update_visuals(delta: float) -> void:
@@ -2691,6 +2811,28 @@ func _update_visuals(delta: float) -> void:
 	for fmat in _flag_mats:
 		fmat.set_shader_parameter(&"wind_strength", ws)
 		fmat.set_shader_parameter(&"sail_time", _sail_time)
+
+	# Distant rival crow's nest spyglass optics glint (daylight horizon signal, 55..550 m).
+	if _lookout_glint != null and is_instance_valid(_lookout_glint):
+		_lookout_glint_phase += delta
+		var vp := get_viewport()
+		var cam := vp.get_camera_3d() if vp != null else null
+		var day_amt := Weather.daylight()
+		var cam_dist := cam.global_position.distance_to(global_position) if cam != null else 0.0
+		var eligible := (not is_sinking) and (_spectral_phase > 0.35) and (cam != null) \
+			and (cam_dist >= 55.0) and (cam_dist <= 550.0) and (day_amt > 0.15)
+		if eligible:
+			var dist_env := smoothstep(55.0, 88.0, cam_dist) * smoothstep(550.0, 440.0, cam_dist)
+			var pulse_main := pow(maxf(0.0, sin(_lookout_glint_phase * 1.38)), 10.0)
+			var pulse_shimmer := 0.22 * pow(maxf(0.0, sin(_lookout_glint_phase * 2.76 + 0.9)), 4.0)
+			var intensity := clampf((pulse_main + pulse_shimmer) * dist_env * clampf(day_amt, 0.0, 1.0) * 1.45, 0.0, 1.6)
+			_lookout_glint.visible = intensity > 0.015
+			if _lookout_glint.visible and _lookout_glint_mat != null:
+				_lookout_glint_mat.set_shader_parameter(&"glint_intensity", intensity)
+				var g_scale := lerpf(2.2, 5.2, clampf((cam_dist - 55.0) / 450.0, 0.0, 1.0))
+				_lookout_glint_mat.set_shader_parameter(&"glint_scale", g_scale)
+		else:
+			_lookout_glint.visible = false
 
 	# Capstan spin & anchor drop.
 	if _capstan != null:

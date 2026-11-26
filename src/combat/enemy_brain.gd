@@ -141,7 +141,17 @@ var _strafe_sign: float = 1.0
 var _keg_blown: bool = false
 var _rng := RandomNumberGenerator.new()
 var _active_vfx: Array[Node] = []
+var _stagger_stars: MeshInstance3D = null
+var _strike_telegraph: MeshInstance3D = null
+var _stagger_clock: float = 0.0
+var _telegraph_elapsed: float = 0.0
+var _telegraph_dur: float = 0.34
 
+static var _active_brains: int = 0
+static var _stagger_stars_mesh: ArrayMesh = null
+static var _stagger_stars_mat: StandardMaterial3D = null
+static var _telegraph_mesh: ArrayMesh = null
+static var _telegraph_mat: StandardMaterial3D = null
 static var _fireball_tex: ImageTexture = null
 static var _smoke_puff_tex: ImageTexture = null
 static var _streak_tex: ImageTexture = null
@@ -153,10 +163,47 @@ func _init() -> void:
 	process_physics_priority = -10
 
 
+func _enter_tree() -> void:
+	_active_brains += 1
+
+
 func _exit_tree() -> void:
 	# VFX live on host so explosions/geysers finish cleanly after pawn death;
 	# each VFX node releases its own GPU resources on tree_exiting.
 	_active_vfx.clear()
+	for node_mi: MeshInstance3D in [_stagger_stars, _strike_telegraph]:
+		if node_mi != null and is_instance_valid(node_mi):
+			node_mi.visible = false
+			node_mi.material_override = null
+			node_mi.mesh = null
+			if node_mi.get_parent() == null:
+				node_mi.queue_free()
+	_stagger_stars = null
+	_strike_telegraph = null
+	_active_brains = maxi(0, _active_brains - 1)
+	if _active_brains == 0:
+		clear_shared_vfx_cache()
+
+
+## Release all statically cached EnemyBrain VFX meshes, materials, textures & shaders cleanly.
+static func clear_shared_vfx_cache() -> void:
+	_stagger_stars_mesh = null
+	_stagger_stars_mat = null
+	_telegraph_mesh = null
+	_telegraph_mat = null
+	_fireball_tex = null
+	_smoke_puff_tex = null
+	_streak_tex = null
+	_tide_vortex_shader = null
+	_captain_rally_shader = null
+
+
+func get_stagger_stars_node() -> MeshInstance3D:
+	return _stagger_stars
+
+
+func get_strike_telegraph_node() -> MeshInstance3D:
+	return _strike_telegraph
 
 
 func _ready() -> void:
@@ -168,6 +215,7 @@ func _ready() -> void:
 	_strafe_sign = 1.0 if _rng.randf() > 0.5 else -1.0
 	_ensure_combat()
 	_configure_archetype()
+	_build_combat_telegraphs()
 	pawn.died.connect(_on_died)
 
 
@@ -305,12 +353,14 @@ func detonate_keg(trigger: Node = null) -> void:
 
 
 func _on_died() -> void:
+	_hide_combat_telegraphs()
 	enemy_defeated.emit(archetype, pawn.global_position)
 
 
 # ------------------------------------------------------------------ AI loop
 
 func _physics_process(delta: float) -> void:
+	_tick_combat_telegraphs(delta)
 	if not Net.is_host() or pawn == null or pawn.dead:
 		if pawn != null:
 			pawn.wish_dir = Vector3.ZERO
@@ -1309,3 +1359,268 @@ func _pick_target() -> Pawn:
 			best_d = d
 			best = cc.pawn
 	return best
+
+
+# ==============================================================================
+# Sculpted Parry-Stagger Dizzy Crown (`StaggerStars`) & Heavy-Strike Telegraph
+# ==============================================================================
+
+func _build_combat_telegraphs() -> void:
+	if pawn == null:
+		return
+	_ensure_telegraph_assets()
+
+	_stagger_stars = MeshInstance3D.new()
+	_stagger_stars.name = "StaggerStars"
+	_stagger_stars.mesh = _stagger_stars_mesh
+	_stagger_stars.material_override = _stagger_stars_mat
+	_stagger_stars.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_stagger_stars.position = Vector3(0.0, 2.08, 0.0)
+	_stagger_stars.visible = false
+
+	_strike_telegraph = MeshInstance3D.new()
+	_strike_telegraph.name = "StrikeTelegraph"
+	_strike_telegraph.mesh = _telegraph_mesh
+	_strike_telegraph.material_override = _telegraph_mat
+	_strike_telegraph.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_strike_telegraph.position = Basis(Vector3.UP, pawn.look_yaw) * Vector3(0.32, 1.55, -0.35)
+	_strike_telegraph.visible = false
+
+	if pawn.is_node_ready():
+		pawn.add_child(_stagger_stars)
+		pawn.add_child(_strike_telegraph)
+	else:
+		pawn.add_child.call_deferred(_stagger_stars)
+		pawn.add_child.call_deferred(_strike_telegraph)
+
+
+func _hide_combat_telegraphs() -> void:
+	_stagger_clock = 0.0
+	_telegraph_elapsed = 0.0
+	if _stagger_stars != null and is_instance_valid(_stagger_stars):
+		_stagger_stars.visible = false
+	if _strike_telegraph != null and is_instance_valid(_strike_telegraph):
+		_strike_telegraph.visible = false
+
+
+func _tick_combat_telegraphs(delta: float) -> void:
+	if pawn == null or pawn.dead or combat == null:
+		_hide_combat_telegraphs()
+		return
+
+	# 1. Orbiting gold dizzy crown throughout the 1.5x parry/guard-break stagger window.
+	if _stagger_stars != null and is_instance_valid(_stagger_stars):
+		if combat.is_staggered():
+			_stagger_stars.visible = true
+			_stagger_clock += delta
+			_stagger_stars.rotation.y += delta * 4.8
+			_stagger_stars.rotation.z = sin(_stagger_clock * 5.2) * 0.16
+			_stagger_stars.position.y = 2.08 + sin(_stagger_clock * 4.2) * 0.045
+		elif _stagger_stars.visible:
+			_stagger_stars.visible = false
+			_stagger_clock = 0.0
+
+	# 2. Crimson-gold parryable heavy-strike & lunge telegraph flash during WINDUP.
+	if _strike_telegraph != null and is_instance_valid(_strike_telegraph):
+		var is_windup := combat.state == CombatComponent.State.WINDUP
+		var show_flash := false
+		if is_windup:
+			var is_heavy: bool = combat._attack_is_heavy
+			var is_lunge: bool = archetype in [&"drowned_captain", &"rival_captain", &"corsair_raider"] \
+					and combat.combo_step == 3
+			show_flash = is_heavy or is_lunge
+		if show_flash:
+			if not _strike_telegraph.visible:
+				_telegraph_elapsed = 0.0
+				_telegraph_dur = maxf(combat._state_timer, 0.18)
+			_strike_telegraph.visible = true
+			_telegraph_elapsed += delta
+			var u := clampf(_telegraph_elapsed / maxf(_telegraph_dur, 0.05), 0.0, 1.0)
+			var sc: float
+			if u < 0.55:
+				sc = lerpf(0.35, 1.15, sin((u / 0.55) * PI * 0.5))
+			else:
+				sc = lerpf(1.15, 0.20, (u - 0.55) / 0.45)
+			_strike_telegraph.position = Basis(Vector3.UP, pawn.look_yaw) * Vector3(0.32, 1.55, -0.35)
+			_strike_telegraph.rotation = Vector3(0.0, pawn.look_yaw, _telegraph_elapsed * 5.5)
+			_strike_telegraph.scale = Vector3.ONE * sc
+		elif _strike_telegraph.visible:
+			_strike_telegraph.visible = false
+			_telegraph_elapsed = 0.0
+
+
+static func _ensure_telegraph_assets() -> void:
+	if _stagger_stars_mat == null:
+		_stagger_stars_mat = StandardMaterial3D.new()
+		_stagger_stars_mat.albedo_color = Color.WHITE
+		_stagger_stars_mat.vertex_color_use_as_albedo = true
+		_stagger_stars_mat.vertex_color_is_srgb = true
+		_stagger_stars_mat.roughness = 0.25
+		_stagger_stars_mat.metallic = 0.65
+		_stagger_stars_mat.emission_enabled = true
+		_stagger_stars_mat.emission = Color(1.0, 0.84, 0.28)
+		_stagger_stars_mat.emission_energy_multiplier = 1.35
+
+	if _stagger_stars_mesh == null:
+		_stagger_stars_mesh = _build_stagger_stars_mesh()
+
+	if _telegraph_mat == null:
+		_telegraph_mat = StandardMaterial3D.new()
+		_telegraph_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_telegraph_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_telegraph_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_telegraph_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_telegraph_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_telegraph_mat.albedo_color = Color(1.35, 0.92, 0.72, 0.96)
+		_telegraph_mat.vertex_color_use_as_albedo = true
+		_telegraph_mat.vertex_color_is_srgb = true
+		_telegraph_mat.emission_enabled = true
+		_telegraph_mat.emission = Color(1.0, 0.42, 0.14)
+		_telegraph_mat.emission_energy_multiplier = 2.0
+
+	if _telegraph_mesh == null:
+		_telegraph_mesh = _build_telegraph_mesh()
+
+
+static func _build_stagger_stars_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var gold_tip := Color(1.00, 0.96, 0.64)
+	var gold_hi := Color(1.00, 0.86, 0.30)
+	var gold_mid := Color(0.95, 0.68, 0.14)
+	var gold_lo := Color(0.72, 0.42, 0.08)
+
+	# 1. Three sculpted flat-faceted 5-point burnished-gold stars at 120 deg around 0.36 m halo.
+	var halo_r := 0.36
+	for si in 3:
+		var ang := float(si) * (TAU / 3.0)
+		var star_c := Vector3(cos(ang) * halo_r, sin(ang * 3.0) * 0.022, sin(ang) * halo_r)
+		# Face outward tangentially with a playful 18-degree comic dizzy lean.
+		var star_basis := Basis(Vector3.UP, -ang) * Basis(Vector3.RIGHT, deg_to_rad(18.0))
+		_append_faceted_5point_star(st, star_c, star_basis, 0.095, 0.042, 0.026,
+			gold_tip, gold_hi, gold_mid, gold_lo)
+
+	# 2. Thin luminous gold-amber undulating dizzy ribbon ring (24 segs x 4-side diamond profile).
+	var segs := 24
+	var minor_w := 0.014
+	var minor_h := 0.010
+	var ring_pts: Array[Array] = []
+	for i in segs:
+		var a := float(i) / float(segs) * TAU
+		var rad_dir := Vector3(cos(a), 0.0, sin(a))
+		var center_p := rad_dir * halo_r + Vector3(0.0, sin(a * 3.0) * 0.022, 0.0)
+		ring_pts.append([
+			center_p + Vector3(0.0, minor_h, 0.0),
+			center_p + rad_dir * minor_w,
+			center_p - Vector3(0.0, minor_h, 0.0),
+			center_p - rad_dir * minor_w,
+		])
+	var prof_cols: Array[Color] = [gold_tip, gold_hi, gold_lo, gold_mid]
+	for i in segs:
+		var ni := (i + 1) % segs
+		var r0: Array = ring_pts[i]
+		var r1: Array = ring_pts[ni]
+		var a_mid := (float(i) + 0.5) / float(segs) * TAU
+		var mid_c := Vector3(cos(a_mid) * halo_r, sin(a_mid * 3.0) * 0.022, sin(a_mid) * halo_r)
+		for k in 4:
+			var nk := (k + 1) % 4
+			var fc0 := prof_cols[k]
+			var fc1 := prof_cols[nk]
+			_emit_outward_quad(st, r0[k] as Vector3, fc0, r1[k] as Vector3, fc0,
+				r1[nk] as Vector3, fc1, r0[nk] as Vector3, fc1, mid_c)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_telegraph_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Three interlocking orthogonal flat-faceted 4-point crimson-gold starburst diamonds
+	# so the parry flash pops crisply from front, flank, and deck-overhead camera angles.
+	var col_core := Color(1.00, 0.96, 0.78)
+	var col_mid := Color(1.00, 0.64, 0.18)
+	var col_tip := Color(1.00, 0.24, 0.08)
+	var planes: Array[Basis] = [
+		Basis.IDENTITY,
+		Basis(Vector3.UP, PI * 0.5),
+		Basis(Vector3.RIGHT, PI * 0.5),
+	]
+	for b in planes:
+		_append_4point_starburst(st, b, 0.34, 0.095, 0.036, col_core, col_mid, col_tip)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_faceted_5point_star(st: SurfaceTool, center: Vector3, rot: Basis,
+		r_out: float, r_in: float, half_depth: float,
+		col_tip: Color, col_hi: Color, col_mid: Color, col_lo: Color) -> void:
+	var front_apex := center + rot * Vector3(0.0, 0.0, -half_depth)
+	var back_apex := center + rot * Vector3(0.0, 0.0, half_depth)
+	var ring: Array[Vector3] = []
+	var ring_cols: Array[Color] = []
+	for k in 10:
+		var a := float(k) / 10.0 * TAU + PI * 0.5
+		var is_tip := (k % 2 == 0)
+		var rad := r_out if is_tip else r_in
+		ring.append(center + rot * Vector3(cos(a) * rad, sin(a) * rad, 0.0))
+		ring_cols.append(col_tip if is_tip else col_mid)
+	for k in 10:
+		var nk := (k + 1) % 10
+		_emit_outward_tri(st, front_apex, col_hi, ring[k], ring_cols[k], ring[nk], ring_cols[nk], center)
+		_emit_outward_tri(st, back_apex, col_lo, ring[nk], ring_cols[nk], ring[k], ring_cols[k], center)
+
+
+static func _append_4point_starburst(st: SurfaceTool, rot: Basis, r_long: float,
+		r_waist: float, half_depth: float, col_core: Color, col_mid: Color, col_tip: Color) -> void:
+	var front_apex := rot * Vector3(0.0, 0.0, -half_depth)
+	var back_apex := rot * Vector3(0.0, 0.0, half_depth)
+	var ring: Array[Vector3] = []
+	var ring_cols: Array[Color] = []
+	for k in 8:
+		var a := float(k) / 8.0 * TAU
+		var is_spike := (k % 2 == 0)
+		var rad := r_long if is_spike else r_waist
+		ring.append(rot * Vector3(cos(a) * rad, sin(a) * rad, 0.0))
+		ring_cols.append(col_tip if is_spike else col_mid)
+	for k in 8:
+		var nk := (k + 1) % 8
+		_emit_outward_tri(st, front_apex, col_core, ring[k], ring_cols[k], ring[nk], ring_cols[nk], Vector3.ZERO)
+		_emit_outward_tri(st, back_apex, col_core, ring[nk], ring_cols[nk], ring[k], ring_cols[k], Vector3.ZERO)
+
+
+static func _emit_flat_tri(st: SurfaceTool, a: Vector3, ca: Color,
+		b: Vector3, cb: Color, c: Vector3, cc: Color) -> void:
+	if (c - a).cross(b - a).length_squared() < 1e-12:
+		return
+	st.set_smooth_group(-1)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_smooth_group(-1)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_smooth_group(-1)
+	st.set_color(cc)
+	st.add_vertex(c)
+
+
+static func _emit_outward_tri(st: SurfaceTool, a: Vector3, ca: Color,
+		b: Vector3, cb: Color, c: Vector3, cc: Color, ref_center: Vector3) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid - ref_center) < 0.0:
+		_emit_flat_tri(st, a, ca, c, cc, b, cb)
+	else:
+		_emit_flat_tri(st, a, ca, b, cb, c, cc)
+
+
+static func _emit_outward_quad(st: SurfaceTool, a: Vector3, ca: Color,
+		b: Vector3, cb: Color, c: Vector3, cc: Color, d: Vector3, cd: Color,
+		ref_center: Vector3) -> void:
+	_emit_outward_tri(st, a, ca, b, cb, c, cc, ref_center)
+	_emit_outward_tri(st, a, ca, c, cc, d, cd, ref_center)

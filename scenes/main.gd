@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|helm|map_table|hold|cabin|flotsam|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -504,6 +504,7 @@ func _build_player_ship() -> void:
 
 	# Mount FishingLine & aft-rail interactable on the quarterdeck stern rail.
 	_mount_fishing_station(player_ship)
+	_sync_cabin_renown(false)
 
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 
@@ -1564,6 +1565,7 @@ func _on_outpost_treasure_sold(item: Node, gold: int, renown: int) -> void:
 	if voyage_manager != null:
 		voyage_manager.notify_treasure_sold(sale_receipt)
 	_update_cargo_value()
+	_sync_cabin_renown(false)
 	Game.save()
 	if shipwright_menu != null and shipwright_menu.is_open:
 		shipwright_menu.refresh()
@@ -1579,7 +1581,13 @@ func _on_voyage_completed(_voyage: Dictionary, summary: Dictionary) -> void:
 	if bool(summary.get("is_story", false)) and shipwright_menu != null:
 		var next_ch := mini(VoyageComposer.STORY_CHAPTER_COUNT, int(summary.get("story_chapter", 1)) + 1)
 		shipwright_menu.selected_story_chapter = next_ch
+	_sync_cabin_renown(false)
 	Game.save()
+
+
+func _sync_cabin_renown(force_all: bool = false) -> void:
+	if player_ship != null and is_instance_valid(player_ship) and player_ship.has_method(&"sync_cabin_renown"):
+		player_ship.call(&"sync_cabin_renown", Game.profile if Game != null else null, force_all)
 
 
 # ==============================================================================
@@ -2439,8 +2447,10 @@ func _on_ship_class_selected(cls: StringName) -> void:
 				break
 		if near_outpost:
 			_swap_player_ship_class(cls)
+			_sync_cabin_renown(false)
 			Game.post_notice("Launched your %s from the drydock!" % String(cls).capitalize())
 			return
+	_sync_cabin_renown(false)
 	Game.post_notice("Ship class set to %s (launches at your next Outpost)." % String(cls).capitalize())
 
 
@@ -2471,6 +2481,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 
 	_mount_cooking_stove(player_ship)
 	_mount_fishing_station(player_ship)
+	_sync_cabin_renown(false)
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 	player_ship.sunk.connect(_on_player_ship_sunk)
 	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
@@ -2773,7 +2784,7 @@ func _apply_hero_shot(mode: String) -> void:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "night_sail", "leviathan", "fleet",
-			"company_fleet", "fort_siege", "fort_vault", "dolphins",
+			"company_fleet", "fort_siege", "fort_vault", "dolphins", "flotsam",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
 		p_cv.set_first_person_hidden(not third_person)
@@ -2928,6 +2939,39 @@ func _apply_hero_shot(mode: String) -> void:
 			var cam_local_hold := Vector3(1.35, 0.42, -0.45) if is_brig else Vector3(1.02, 0.34, -0.82)
 			var look_local_hold := Vector3(-0.10, -0.25, 4.20) if is_brig else Vector3(-0.08, -0.22, 2.55)
 			_enable_ship_track_shot(cam_local_hold, look_local_hold, 66.0)
+
+		"cabin":
+			# Candlelit dusk Captain's Cabin interior showcase: MapTable, Brass Armillary Astrolabe,
+			# Open Logbook, all 3 glowing Trading Company Renown Medallions, velvet curtains & stern windows!
+			Weather.time_of_day = 18.6 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.05, 6.0, -0.35, 0.0, 0.35)
+			Sea.amp_scale = 0.0
+			player_ship.water_level = 0.0
+			_sync_cabin_renown(true)
+			if map_table != null:
+				map_table.refresh_now()
+			var cam_local_cabin := Vector3(0.0, 0.62, 3.35) if is_brig else Vector3(-0.35, 0.58, 1.85)
+			var look_local_cabin := Vector3(0.0, -0.18, 6.25) if is_brig else Vector3(0.32, -0.18, 4.75)
+			_enable_ship_track_shot(cam_local_cabin, look_local_cabin, 66.0)
+
+		"flotsam":
+			# Sunlit midday open-sea shipwreck salvage showcase: sculpted FlotsamClusters (planks, mast spar,
+			# hemp netting, cork floats, barrel), driftwood chest, circling gulls & approaching ship under sail!
+			Weather.time_of_day = 11.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.04, 10.2, -0.38, 0.0, 0.34)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_place_sailing_ship(Vector3(68.0, 0.0, -198.0), -0.38, 0.94, 2.6)
+			var flotsam_pos := player_ship.global_transform * Vector3(7.4 * sc, 0.0, -17.8 * sc)
+			flotsam_pos.y = Sea.height(flotsam_pos.x, flotsam_pos.z)
+			_on_director_spawn_flotsam(flotsam_pos, 3)
+			var to_ship := player_ship.global_position - flotsam_pos
+			to_ship.y = 0.0
+			to_ship = to_ship.normalized() if to_ship.length_squared() > 0.01 else Vector3(-0.38, 0.0, 0.92)
+			var cam_right := to_ship.cross(Vector3.UP).normalized()
+			# Low-angle ocean hero camera: foreground-left sculpted flotsam + chest, gulls overhead, ship right-center!
+			var cam_p := flotsam_pos - to_ship * 8.4 + cam_right * 3.5 + Vector3(0.0, 2.45, 0.0)
+			var look_p := flotsam_pos + to_ship * (10.2 * sc) - cam_right * 0.45 + Vector3(0.0, 3.25, 0.0)
+			_mount_shot_camera(cam_p, look_p, 56.0)
 
 		"leviathan":
 			Weather.time_of_day = 17.25 if is_nan(_cli_time) else _cli_time

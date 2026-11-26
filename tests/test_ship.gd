@@ -586,6 +586,135 @@ func test_anchor_turn_swinging_stop_rotates_hull() -> void:
 	await _end()
 
 
+func test_cabin_furnishings_and_rival_lookout_glint() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.time_of_day = 12.0  # High noon daylight
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(26.0, 0.0, 0.0)
+
+	var corsair := SLOOP_SCENE.instantiate() as Ship
+	corsair.faction = &"corsair"
+	corsair.enable_effects = true
+	_root.add_child(corsair)
+	corsair.global_position = Vector3(0.0, 0.0, -160.0)
+	await physics_frames(2)
+
+	# 1. Verify CaptainCabinFurnishings mounts on BOTH player Sloop & Brigantine, NOT on rival Corsair.
+	check(sloop.cabin_furnishings != null, "player Sloop auto-mounts CaptainCabinFurnishings")
+	check(brig.cabin_furnishings != null, "player Brigantine auto-mounts CaptainCabinFurnishings")
+	check(corsair.cabin_furnishings == null, "rival Corsair ship does not mount player cabin furnishings")
+
+	var furn := brig.cabin_furnishings
+	check(furn.astrolabe_stand != null and furn.astrolabe_rings != null and furn.orrery_globe != null,
+		"CaptainCabinFurnishings builds AstrolabeStand, AstrolabeRings, and OrreryGlobe")
+	check(furn.trophy_lectern != null and furn.candle_light != null,
+		"CaptainCabinFurnishings builds TrophyLectern and CabinCandleLight")
+	for comp_name: String in ["Medallion_gilded_compass", "Medallion_sunken_archive", "Medallion_iron_tide"]:
+		check(furn.find_child(comp_name, true, false) is MeshInstance3D,
+			"CaptainCabinFurnishings builds sculpted %s" % comp_name)
+
+	# 2. Verify zero raw PrimitiveMeshes, finite unit normals, and vertex_color_is_srgb = true across ALL materials!
+	var raw_prims := 0
+	var bad_normals := 0
+	var total_tris := 0
+	var srgb_missing := 0
+	for n in furn.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		if am != null:
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				total_tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+				var mat := mi.get_surface_override_material(si) as StandardMaterial3D
+				if mat == null:
+					mat = mi.material_override as StandardMaterial3D
+				if mat != null and mat.vertex_color_use_as_albedo and not mat.vertex_color_is_srgb:
+					srgb_missing += 1
+	print("    CaptainCabinFurnishings total sculpted tris: %d" % total_tris)
+	check_eq(raw_prims, 0, "CaptainCabinFurnishings contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "CaptainCabinFurnishings normals are all finite unit vectors")
+	check_eq(srgb_missing, 0, "all CaptainCabinFurnishings vertex-colored materials enable vertex_color_is_srgb")
+	check(total_tris >= 900, "CaptainCabinFurnishings has rich sculpted geometry (%d tris)" % total_tris)
+
+	# 3. Verify AstrolabeRings & OrreryGlobe spin smoothly over process frames!
+	var ry0 := furn.astrolabe_rings.rotation.y
+	var gy0 := furn.orrery_globe.rotation.y
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(furn.astrolabe_rings.rotation.y != ry0, "AstrolabeRings spins smoothly in _process")
+	check(furn.orrery_globe.rotation.y != gy0, "OrreryGlobe counter-rotates smoothly in _process")
+
+	# 4. Verify sync_renown toggles medallions per Trading Company renown & force_all showcases all 3!
+	var prof := Profile.new()
+	prof.add_renown("gilded_compass", 300)  # >= 250 -> shown + gleaming
+	prof.add_renown("sunken_archive", 80)   # >= 50 -> shown
+	# iron_tide stays 0 -> hidden!
+	brig.sync_cabin_renown(prof, false)
+	check((furn.medallions[&"gilded_compass"] as MeshInstance3D).visible, "gilded_compass medallion visible at 300 renown")
+	check((furn.medallions[&"sunken_archive"] as MeshInstance3D).visible, "sunken_archive medallion visible at 80 renown")
+	check(not (furn.medallions[&"iron_tide"] as MeshInstance3D).visible, "iron_tide medallion hidden at 0 renown")
+
+	brig.sync_cabin_renown(prof, true)
+	check((furn.medallions[&"iron_tide"] as MeshInstance3D).visible, "force_all = true reveals all 3 company medallions")
+
+	# 5. Verify AstrolabeInteractable boosts spin cleanly on interaction!
+	check(furn.astrolabe_interactable != null, "AstrolabeInteractable exists")
+	furn.astrolabe_interactable.interact(null)
+	check(furn._spin_boost >= 2.5, "interacting with AstrolabeInteractable boosts spin velocity (%.2f)" % furn._spin_boost)
+
+	# 6. Verify Distant Rival Lookout Spyglass Glint (LookoutGlint)!
+	check(sloop.get_node_or_null(^"LookoutGlint") == null, "player ship does NOT mount rival LookoutGlint")
+	var glint := corsair.get_node_or_null(^"LookoutGlint") as MeshInstance3D
+	check(glint != null and glint.mesh is ArrayMesh, "rival Corsair ship mounts sculpted ArrayMesh LookoutGlint")
+
+	var cam := Camera3D.new()
+	_root.add_child(cam)
+	cam.global_position = Vector3(0.0, 4.0, 0.0)
+	cam.current = true
+	await get_tree().process_frame
+
+	# At 160 m in bright noon daylight & peak flash phase -> glint becomes visible!
+	Weather.time_of_day = 12.0
+	corsair._lookout_glint_phase = (PI * 0.5) / 1.38
+	corsair._update_visuals(0.0)
+	check(glint.visible, "LookoutGlint flashes visible at 160 m in daylight")
+
+	# At midnight -> glint hides completely!
+	Weather.time_of_day = 0.0
+	corsair._lookout_glint_phase = (PI * 0.5) / 1.38
+	corsair._update_visuals(0.0)
+	check(not glint.visible, "LookoutGlint hides at midnight")
+
+	# During daylight when sinking -> glint hides completely!
+	Weather.time_of_day = 12.0
+	corsair.is_sinking = true
+	corsair._lookout_glint_phase = (PI * 0.5) / 1.38
+	corsair._update_visuals(0.0)
+	check(not glint.visible, "LookoutGlint hides when rival ship is sinking")
+
+	await _end()
+	check(CaptainCabinFurnishings._astrolabe_base_mesh == null and CaptainCabinFurnishings._lectern_mesh == null,
+		"CaptainCabinFurnishings releases static mesh caches cleanly on teardown")
+	check(Ship._lookout_glint_mesh == null and Ship._lookout_glint_shader == null,
+		"Ship releases static LookoutGlint caches cleanly when last ship exits tree")
+
+
+
 func test_livery_net_state_replication_roundtrip() -> void:
 	_begin()
 	Sea.amp_scale = 0.0

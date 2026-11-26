@@ -1342,6 +1342,9 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	check(main_src.contains("\"fort_vault\":"), "scenes/main.gd registers shot=fort_vault")
 	check(main_src.contains("\"dolphins\":"), "scenes/main.gd registers shot=dolphins")
 	check(main_src.contains("\"night_sail\":"), "scenes/main.gd registers shot=night_sail")
+	check(main_src.contains("\"cabin\":"), "scenes/main.gd registers shot=cabin")
+	check(main_src.contains("\"flotsam\":"), "scenes/main.gd registers shot=flotsam")
+	check(main_src.contains("sync_cabin_renown"), "scenes/main.gd wires live sync_cabin_renown updates")
 	check(main_src.contains("flotsam_cluster.gd") and main_src.contains("flotsam_salvaged"),
 		"scenes/main.gd wires FlotsamCluster & flotsam_salvaged rewards cleanly")
 

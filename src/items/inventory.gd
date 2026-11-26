@@ -13,6 +13,7 @@ signal tipsy_changed(amount: float)
 signal sighting_updated(label: String, distance_m: float)
 signal bucket_changed(full: bool)
 signal shanty_playing_changed(playing: bool)
+signal shanty_instrument_changed(instrument: StringName)
 signal weapon_loadout_changed(melee_id: StringName, ranged_id: StringName)
 
 const DEFAULT_SLOTS: Array[StringName] = [
@@ -31,6 +32,12 @@ const DEFAULT_SLOTS: Array[StringName] = [
 
 const VALID_MELEE_WEAPONS: Array[StringName] = [&"cutlass", &"boarding_axe"]
 const VALID_RANGED_WEAPONS: Array[StringName] = [&"pistol", &"blunderbuss"]
+const SHANTY_INSTRUMENTS: Array[StringName] = [&"concertina", &"hurdy_gurdy", &"whistle"]
+const SHANTY_INSTRUMENT_NAMES := {
+	&"concertina": "Concertina",
+	&"hurdy_gurdy": "Hurdy-Gurdy",
+	&"whistle": "Bosun's Whistle",
+}
 
 const BASE_FOV := 80.0
 const SPYGLASS_FOV := 18.0
@@ -64,6 +71,8 @@ const FP_POSES := {
 	&"planks": [Vector3(0.30, -0.30, -0.50), Vector3(-12.0, -24.0, 10.0), Vector3(0.08, -0.16, -0.44), Vector3(-6.0, -10.0, 4.0), 0.86],
 	&"tankard": [Vector3(0.28, -0.22, -0.40), Vector3(6.0, -14.0, 4.0), Vector3(0.06, -0.08, -0.26), Vector3(26.0, -8.0, -10.0), 0.95],
 	&"instrument": [Vector3(0.0, -0.26, -0.42), Vector3(14.0, 0.0, 0.0), Vector3(0.0, -0.16, -0.36), Vector3(6.0, 0.0, 0.0), 0.95],
+	&"hurdy_gurdy": [Vector3(0.04, -0.28, -0.46), Vector3(12.0, -14.0, 4.0), Vector3(0.02, -0.19, -0.40), Vector3(6.0, -8.0, 2.0), 0.92],
+	&"whistle": [Vector3(0.14, -0.22, -0.38), Vector3(8.0, -12.0, 6.0), Vector3(0.02, -0.11, -0.28), Vector3(-4.0, 0.0, 0.0), 0.95],
 }
 
 ## Ordered tool/weapon slots in the player's belt.
@@ -97,6 +106,7 @@ var spyglass_sighting_dist: float = 0.0
 var spyglass_sighting_bearing: String = ""
 var tipsy: float = 0.0
 var playing_shanty: bool = false
+var shanty_instrument: StringName = &"concertina"
 
 ## Tool Variant sidegrade modifiers synced from Economy via `apply_tool_modifiers()`.
 var spyglass_zoom_scale: float = 1.0
@@ -131,6 +141,10 @@ var _burp_timer: float = -1.0
 var _sighting_timer: float = 0.0
 var _was_zooming_spyglass: bool = false
 var _started_shanty: bool = false
+var _shanty_phase: float = 0.0
+var _last_shanty_audio_beat: float = -1.0
+var _whistle_rot_deg: Vector3 = Vector3.ZERO
+var _shanty_motes: GPUParticles3D = null
 var _rng := RandomNumberGenerator.new()
 
 
@@ -170,6 +184,7 @@ func apply_tool_modifiers(mods: Dictionary) -> void:
 
 
 func _exit_tree() -> void:
+	_detach_captain_shanty_motes(false)
 	if playing_shanty:
 		set_playing_shanty(false)
 	treasure_map_texture = null
@@ -258,13 +273,19 @@ func _ensure_mounts() -> void:
 # Slot selection & equipment
 # ==============================================================================
 
-## Resolve a slot ID (`&"cutlass"` / `&"pistol"`) to the captain's active armory weapon ID.
+## Resolve a slot ID (`&"cutlass"`, `&"pistol"`, `&"instrument"`) to the captain's active tool/weapon mesh ID.
 func get_resolved_tool_id(slot_id: StringName = &"") -> StringName:
 	var target := active_item if slot_id == &"" else slot_id
 	if target == &"cutlass":
 		return melee_weapon
 	if target == &"pistol":
 		return ranged_weapon
+	if target == &"instrument":
+		if shanty_instrument == &"hurdy_gurdy":
+			return &"hurdy_gurdy"
+		if shanty_instrument == &"whistle":
+			return &"whistle"
+		return &"instrument"
 	return target
 
 
@@ -426,11 +447,14 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 # ==============================================================================
 
 ## Programmatically hold or release `secondary` (raise compass/map/lantern,
-## zoom spyglass, block with cutlass, ADS with pistol).
+## zoom spyglass, block with cutlass, ADS with pistol, cycle shanty instrument on press).
 func set_secondary_held(held: bool) -> void:
+	var was_held := _secondary_held
 	_secondary_held = held
 	if active_item == &"cutlass" and combat != null:
 		combat.set_blocking(held)
+	elif active_item == &"instrument" and held and not was_held:
+		cycle_shanty_instrument(true)
 
 
 ## Render & bind a dynamic parchment-and-ink treasure map for the active voyage.
@@ -696,7 +720,50 @@ func use_tankard() -> bool:
 	return true
 
 
-## Toggle concertina shanty playback (AI crewmates automatically hear it and join in!).
+## Cycle forward through the captain's 3 sculpted shanty instruments (Concertina -> Hurdy-Gurdy -> Bosun's Whistle).
+func cycle_shanty_instrument(announce: bool = true) -> StringName:
+	var idx := SHANTY_INSTRUMENTS.find(shanty_instrument)
+	var next_inst: StringName = SHANTY_INSTRUMENTS[(idx + 1) % SHANTY_INSTRUMENTS.size()]
+	set_shanty_instrument(next_inst, announce)
+	return shanty_instrument
+
+
+## Select a specific shanty instrument (`&"concertina"`, `&"hurdy_gurdy"`, `&"whistle"`).
+## Smoothly crossfades shanty stems without breaking beat-sync if currently playing.
+func set_shanty_instrument(inst: StringName, announce: bool = false) -> void:
+	if not SHANTY_INSTRUMENTS.has(inst):
+		return
+	if inst == shanty_instrument:
+		return
+	var old_inst := shanty_instrument
+	shanty_instrument = inst
+	_whistle_rot_deg = Vector3.ZERO
+	if playing_shanty:
+		if Audio.is_shanty_playing():
+			Audio.set_shanty_instrument(old_inst, false, 0.25)
+			Audio.set_shanty_instrument(shanty_instrument, true, 0.25)
+		else:
+			Audio.play_shanty([shanty_instrument])
+			_started_shanty = true
+	if active_item == &"instrument":
+		_discover_siblings()
+		_rebuild_tool_meshes()
+		_equip_dip = 0.55
+		Audio.play_sfx(&"ui_tick", Vector3.INF, -5.0, 0.06)
+	if announce and Game != null:
+		var disp := String(SHANTY_INSTRUMENT_NAMES.get(shanty_instrument, String(shanty_instrument).capitalize()))
+		Game.post_notice("Instrument: %s" % disp)
+	shanty_instrument_changed.emit(shanty_instrument)
+
+
+## Return the captain's active rising golden shanty motes particle node (or null when idle).
+func get_shanty_motes() -> GPUParticles3D:
+	if _shanty_motes != null and is_instance_valid(_shanty_motes):
+		return _shanty_motes
+	return null
+
+
+## Toggle shanty playback on the captain's active instrument (AI crewmates automatically join in!).
 func toggle_shanty() -> bool:
 	set_playing_shanty(not playing_shanty)
 	return playing_shanty
@@ -707,23 +774,54 @@ func set_playing_shanty(on: bool) -> void:
 		return
 	playing_shanty = on
 	if on:
+		_last_shanty_audio_beat = -1.0
+		_shanty_phase = Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
 		if not Audio.is_shanty_playing():
-			Audio.play_shanty([&"concertina"])
+			Audio.play_shanty([shanty_instrument])
 			_started_shanty = true
 		else:
-			Audio.set_shanty_instrument(&"concertina", true, 0.35)
+			Audio.set_shanty_instrument(shanty_instrument, true, 0.35)
 			_started_shanty = false
+		_attach_captain_shanty_motes()
 		_play_anim(&"play_instrument", 1.2)
 	else:
+		_detach_captain_shanty_motes(true)
+		_last_shanty_audio_beat = -1.0
+		_whistle_rot_deg = Vector3.ZERO
 		if _started_shanty:
 			Audio.stop_shanty(0.5)
 			_started_shanty = false
 		else:
-			Audio.set_shanty_instrument(&"concertina", false, 0.35)
+			Audio.set_shanty_instrument(shanty_instrument, false, 0.35)
 		if active_item == &"instrument":
-			ToolMeshes.set_concertina_stretch(fp_tool_node, 0.5)
-			ToolMeshes.set_concertina_stretch(tp_tool_node, 0.5)
+			if shanty_instrument == &"concertina":
+				ToolMeshes.set_concertina_stretch(fp_tool_node, 0.5)
+				ToolMeshes.set_concertina_stretch(tp_tool_node, 0.5)
+			elif shanty_instrument == &"whistle" and tp_tool_node != null and is_instance_valid(tp_tool_node):
+				tp_tool_node.rotation_degrees = Vector3.ZERO
 	shanty_playing_changed.emit(playing_shanty)
+
+
+func _attach_captain_shanty_motes() -> void:
+	_detach_captain_shanty_motes(true)
+	if pawn == null or not is_instance_valid(pawn):
+		return
+	var p := CrewBrain._build_shanty_motes()
+	p.name = "CaptainShantyMotes"
+	pawn.add_child(p)
+	_shanty_motes = p
+
+
+func _detach_captain_shanty_motes(detach_from_parent: bool = true) -> void:
+	if _shanty_motes != null and is_instance_valid(_shanty_motes):
+		_shanty_motes.emitting = false
+		_shanty_motes.visible = false
+		_shanty_motes.draw_pass_1 = null
+		_shanty_motes.process_material = null
+		if detach_from_parent and _shanty_motes.get_parent() != null:
+			_shanty_motes.get_parent().remove_child(_shanty_motes)
+		_shanty_motes.queue_free()
+	_shanty_motes = null
 
 
 # ==============================================================================
@@ -1085,15 +1183,43 @@ func _tick_compass(delta: float) -> void:
 				needle.rotation.y = _needle_angle
 
 
-func _tick_concertina(_delta: float) -> void:
+func _tick_concertina(delta: float) -> void:
 	if active_item != &"instrument":
+		_whistle_rot_deg = Vector3.ZERO
 		return
-	var stretch := 0.5
 	if playing_shanty:
-		var beat := Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
-		stretch = 0.5 + 0.48 * sin(beat * PI)
-	ToolMeshes.set_concertina_stretch(fp_tool_node, stretch)
-	ToolMeshes.set_concertina_stretch(tp_tool_node, stretch)
+		var audio_beat := Audio.shanty_beat() if Audio.is_shanty_playing() else -1.0
+		if audio_beat >= 0.0 and absf(audio_beat - _last_shanty_audio_beat) > 0.0001:
+			var wrapped := _last_shanty_audio_beat >= 0.0 and audio_beat < _last_shanty_audio_beat - 1.0
+			_last_shanty_audio_beat = audio_beat
+			if wrapped or audio_beat > _shanty_phase:
+				_shanty_phase = audio_beat
+			else:
+				_shanty_phase += delta * 2.0
+		else:
+			_shanty_phase += delta * 2.0
+
+	match shanty_instrument:
+		&"concertina":
+			_whistle_rot_deg = Vector3.ZERO
+			var stretch := 0.5 + 0.48 * sin(_shanty_phase * PI) if playing_shanty else 0.5
+			ToolMeshes.set_concertina_stretch(fp_tool_node, stretch)
+			ToolMeshes.set_concertina_stretch(tp_tool_node, stretch)
+		&"hurdy_gurdy":
+			_whistle_rot_deg = Vector3.ZERO
+			if playing_shanty:
+				var crank_rad := _shanty_phase * TAU * 0.5
+				ToolMeshes.set_hurdy_gurdy_crank(fp_tool_node, crank_rad)
+				ToolMeshes.set_hurdy_gurdy_crank(tp_tool_node, crank_rad)
+		&"whistle":
+			if playing_shanty:
+				var sway_deg := sin(_shanty_phase * PI) * 9.0
+				var nod_deg := sin(_shanty_phase * TAU) * 4.8
+				_whistle_rot_deg = Vector3(nod_deg, sway_deg, sway_deg * 0.5)
+			else:
+				_whistle_rot_deg = Vector3.ZERO
+			if tp_tool_node != null and is_instance_valid(tp_tool_node):
+				tp_tool_node.rotation_degrees = _whistle_rot_deg
 
 
 func _tick_lantern_flicker() -> void:
@@ -1120,9 +1246,7 @@ func _tick_viewmodel_pose(delta: float) -> void:
 	var raise_rot: Vector3 = pose[3]
 	var sc: float = float(pose[4])
 
-	var want_raise := _secondary_held
-	if active_item == &"instrument" and playing_shanty:
-		want_raise = true
+	var want_raise := playing_shanty if active_item == &"instrument" else _secondary_held
 	_raise_blend = lerpf(_raise_blend, 1.0 if want_raise else 0.0, 1.0 - exp(-11.0 * delta))
 	_equip_dip = move_toward(_equip_dip, 0.0, delta * 3.8)
 
@@ -1142,6 +1266,8 @@ func _tick_viewmodel_pose(delta: float) -> void:
 	var rot_deg := rest_rot.lerp(raise_rot, _raise_blend)
 	pos += Vector3(walk_x, idle_breath - walk_y - _equip_dip * 0.24, _equip_dip * 0.08)
 	rot_deg.x -= _equip_dip * 38.0
+	if active_item == &"instrument" and shanty_instrument == &"whistle":
+		rot_deg += _whistle_rot_deg
 
 	# Active swing / dig / recoil / drink offset!
 	if _swing_timer > 0.0:

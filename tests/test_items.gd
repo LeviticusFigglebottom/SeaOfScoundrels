@@ -992,6 +992,96 @@ func test_spyglass_living_sea_horizon_identifier_and_bearings() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 9. Wave 17B: Captain Multi-Instrument Shanty Solo Cycling & Golden Motes
+# ---------------------------------------------------------------------------
+
+func test_captain_multi_instrument_shanty_cycling_and_motes() -> void:
+	_begin()
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var inv: Inventory = rig["inv"]
+
+	# Verify FP_POSES exist for all 3 instruments without near-plane camera clipping.
+	for pid: StringName in [&"instrument", &"hurdy_gurdy", &"whistle"]:
+		check(Inventory.FP_POSES.has(pid), "FP_POSES defines pose for %s" % pid)
+		var pose: Array = Inventory.FP_POSES[pid]
+		check((pose[0] as Vector3).z <= -0.25 and (pose[2] as Vector3).z <= -0.22,
+			"FP pose for %s stays cleanly clear of camera near plane" % pid)
+
+	check_eq(inv.shanty_instrument, &"concertina", "default shanty_instrument is concertina")
+	check_eq(inv.get_resolved_tool_id(&"instrument"), &"instrument", "concertina resolves to &'instrument'")
+
+	var changed_events: Array[StringName] = []
+	inv.shanty_instrument_changed.connect(func(inst: StringName) -> void: changed_events.append(inst))
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	inv.equip(&"instrument", true)
+	await get_tree().process_frame
+	check(inv.fp_tool_node != null and inv.fp_tool_node.get_node_or_null(^"Bellows") != null,
+		"equipping instrument defaults to sculpted Concertina mesh")
+
+	# Start shanty on concertina -> starts Audio shanty & spawns CaptainShantyMotes.
+	inv.set_playing_shanty(true)
+	check(inv.playing_shanty and Audio.is_shanty_playing(), "playing shanty starts Audio stems")
+	check_near(float(Audio._stems[&"concertina"]["goal"]), 1.0, 0.01, "concertina stem active")
+	var motes := inv.get_shanty_motes()
+	check(motes != null and motes.name == "CaptainShantyMotes" and motes.emitting and motes.amount == 8,
+		"starting shanty spawns 8-mote CaptainShantyMotes GPUParticles3D")
+
+	# Holding RMB edge-triggers cycling ONCE: concertina -> hurdy_gurdy (without restarting shanty!).
+	inv.set_secondary_held(true)
+	inv.set_secondary_held(true)  # holding must NOT cycle twice
+	await get_tree().process_frame
+	check_eq(inv.shanty_instrument, &"hurdy_gurdy", "RMB press cycles concertina -> hurdy_gurdy once")
+	check_eq(inv.get_resolved_tool_id(&"instrument"), &"hurdy_gurdy", "hurdy_gurdy resolves cleanly")
+	check_eq(changed_events.size(), 1, "holding RMB does not double-cycle")
+	check(notices.has("Instrument: Hurdy-Gurdy"), "cycling posts Hurdy-Gurdy toast notice")
+	check(Audio.is_shanty_playing(), "cycling mid-song keeps shanty playing without restart")
+	check_near(float(Audio._stems[&"concertina"]["goal"]), 0.0, 0.01, "old concertina stem crossfades off")
+	check_near(float(Audio._stems[&"hurdy_gurdy"]["goal"]), 1.0, 0.01, "new hurdy_gurdy stem crossfades on")
+	var crank := inv.fp_tool_node.get_node_or_null(^"CrankHandle") as Node3D if inv.fp_tool_node != null else null
+	check(crank != null, "held FP mesh swaps to sculpted Hurdy-Gurdy with CrankHandle")
+	var crank_before := crank.rotation.x if crank != null else 0.0
+	for _i in 6:
+		inv._tick_concertina(0.05)
+	check(crank != null and absf(crank.rotation.x - crank_before) > 0.1,
+		"Hurdy-Gurdy crank animates rhythmically while playing")
+
+	# Release & press RMB again -> cycles hurdy_gurdy -> whistle and animates sway/nod.
+	inv.set_secondary_held(false)
+	inv.set_secondary_held(true)
+	await get_tree().process_frame
+	check_eq(inv.shanty_instrument, &"whistle", "second RMB press cycles hurdy_gurdy -> whistle")
+	check_eq(inv.get_resolved_tool_id(&"instrument"), &"whistle", "whistle resolves cleanly")
+	check(notices.has("Instrument: Bosun's Whistle"), "cycling posts Bosun's Whistle toast notice")
+	check_near(float(Audio._stems[&"hurdy_gurdy"]["goal"]), 0.0, 0.01, "hurdy_gurdy stem crossfades off")
+	check_near(float(Audio._stems[&"whistle"]["goal"]), 1.0, 0.01, "whistle stem crossfades on")
+	check(inv.fp_tool_node != null and inv.fp_tool_node.get_node_or_null(^"BraidedLanyard") != null,
+		"held FP mesh swaps to sculpted Bosun's Whistle")
+	for _i in 6:
+		inv._tick_concertina(0.05)
+	check(inv._whistle_rot_deg.length() > 0.2, "Bosun's Whistle animates rhythmic sway/nod while playing")
+
+	# Third cycle wraps whistle -> concertina cleanly.
+	inv.set_secondary_held(false)
+	inv.cycle_shanty_instrument(false)
+	check_eq(inv.shanty_instrument, &"concertina", "third cycle wraps cleanly back to concertina")
+
+	# Stopping shanty detaches & frees CaptainShantyMotes cleanly with zero leaks.
+	inv.set_playing_shanty(false)
+	await get_tree().process_frame
+	check(inv.get_shanty_motes() == null, "stopping shanty clears CaptainShantyMotes ref")
+	check(not is_instance_valid(motes), "CaptainShantyMotes freed cleanly on stop")
+	check(captain.get_node_or_null(^"CaptainShantyMotes") == null, "no dangling motes child on captain pawn")
+
+	Game.notice.disconnect(notice_cb)
+	await _end()
+
+
+
 
 
 

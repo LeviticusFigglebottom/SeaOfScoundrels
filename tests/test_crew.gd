@@ -459,3 +459,91 @@ func test_crew_follow_escort_engages_hostile_enemy_and_resumes_follow() -> void:
 	await _end()
 
 
+func test_crew_shanty_complementary_instrument_selection_and_handoff() -> void:
+	_begin()
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	_root.add_child(s)
+	await physics_frames(12)
+
+	# Captain with Inventory starting a shanty solo on Concertina.
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(s, Vector3(0.0, 2.02, 4.15))
+	var cap_inv := Inventory.new()
+	cap_inv.name = "Inventory"
+	cap_inv.input_enabled = false
+	captain.add_child(cap_inv)
+	cap_inv.equip(&"instrument", true)
+	cap_inv.set_shanty_instrument(&"concertina")
+	cap_inv.set_playing_shanty(true)
+
+	# Spawn 2-mate band (Barnaby=hurdy_gurdy, Maren=whistle) plus Pip (whose signature is concertina!).
+	var barnaby_pair := _make_crew(s, captain, &"helmsman", Vector3(-0.9, 2.02, 4.7))
+	var maren_pair := _make_crew(s, captain, &"lookout", Vector3(0.0, 1.12, -2.5))
+	var barnaby: CrewBrain = barnaby_pair[1]
+	var maren: CrewBrain = maren_pair[1]
+
+	await physics_frames(10)
+	check_eq(barnaby.get_active_shanty_instrument(), &"hurdy_gurdy",
+		"Barnaby keeps signature hurdy_gurdy while Captain plays concertina")
+	check_eq(maren.get_active_shanty_instrument(), &"whistle",
+		"Maren keeps signature whistle while Captain plays concertina")
+	check(barnaby.get_held_shanty_instrument().get_node_or_null(^"CrankHandle") != null,
+		"Barnaby holds 3D Hurdy-Gurdy mesh")
+	check(maren.get_held_shanty_instrument().get_node_or_null(^"BraidedLanyard") != null,
+		"Maren holds 3D Bosun's Whistle mesh")
+
+	# Captain switches mid-song to Hurdy-Gurdy -> Barnaby smoothly hands off to Concertina!
+	cap_inv.set_shanty_instrument(&"hurdy_gurdy")
+	await physics_frames(6)
+	check_eq(barnaby.get_active_shanty_instrument(), &"concertina",
+		"Barnaby hands off from hurdy_gurdy to unused concertina when Captain takes hurdy_gurdy")
+	check_eq(maren.get_active_shanty_instrument(), &"whistle",
+		"Maren stays on whistle during Barnaby's handoff")
+	check(barnaby.get_held_shanty_instrument() != null \
+		and barnaby.get_held_shanty_instrument().get_node_or_null(^"Bellows") != null,
+		"Barnaby swaps 3D hand-held mesh cleanly to Concertina")
+	check_near(float(Audio._stems[&"hurdy_gurdy"]["goal"]), 1.0, 0.01,
+		"Captain's newly claimed hurdy_gurdy stem stays unmuted after Barnaby's handoff")
+	check_near(float(Audio._stems[&"concertina"]["goal"]), 1.0, 0.01,
+		"Barnaby's handed-off concertina stem is active")
+	check_near(float(Audio._stems[&"whistle"]["goal"]), 1.0, 0.01,
+		"Maren's whistle stem stays active for full 3-part harmony")
+
+	# Captain switches again to Whistle -> Maren smoothly hands off to Hurdy-Gurdy!
+	cap_inv.set_shanty_instrument(&"whistle")
+	await physics_frames(6)
+	check_eq(maren.get_active_shanty_instrument(), &"hurdy_gurdy",
+		"Maren hands off from whistle to free hurdy_gurdy when Captain takes whistle")
+	check(maren.get_held_shanty_instrument() != null \
+		and maren.get_held_shanty_instrument().get_node_or_null(^"CrankHandle") != null,
+		"Maren swaps 3D hand-held mesh cleanly to Hurdy-Gurdy")
+
+	# Verify a newcomer whose persona prefers the Captain's active stem avoids doubling up on join.
+	cap_inv.set_shanty_instrument(&"concertina")
+	var pip_pair := _make_crew(s, captain, &"carpenter", Vector3(0.9, 1.12, -0.4))
+	var pip: CrewBrain = pip_pair[1]
+	await physics_frames(6)
+	check(pip.get_active_shanty_instrument() != &"concertina" and pip.get_active_shanty_instrument() != &"",
+		"Pip avoids doubling Captain's concertina on join (picked %s)" % pip.get_active_shanty_instrument())
+
+	# Verify verse-wrap encore toast fires ONCE across the band and obeys 20 s cooldown.
+	var encores: Array[String] = []
+	for br: CrewBrain in [barnaby, maren, pip]:
+		br.callout_spoken.connect(func(_sp: String, txt: String, cat: StringName) -> void:
+			if cat == &"shanty_encore":
+				encores.append(txt)
+		)
+	barnaby._trigger_shanty_encore_toast()
+	maren._trigger_shanty_encore_toast()
+	pip._trigger_shanty_encore_toast()
+	check_eq(encores.size(), 1, "only 1 crewmate cheers an encore toast per shanty loop (shared 20 s cooldown)")
+
+	# Clean teardown while jamming frees every instrument & mote with zero leaks.
+	cap_inv.set_playing_shanty(false)
+	await physics_frames(4)
+	await _end()
+
+
+
