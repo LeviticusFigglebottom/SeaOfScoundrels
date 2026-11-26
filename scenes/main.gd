@@ -3923,20 +3923,23 @@ func _apply_hero_shot(mode: String) -> void:
 				var sb_m := sb_isl.mooring_transform.origin
 				var sb_sea := Vector3(sb_m.x, 0.0, sb_m.z)
 				sb_sea = sb_sea.normalized() if sb_sea.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
-				var sb_nodes := sb_isl.find_children("*skull*", "Node3D", true, false)
+				var sb_nodes := sb_isl.find_children("*SkullCliff*", "Node3D", true, false)
+				if sb_nodes.is_empty():
+					sb_nodes = sb_isl.find_children("*skull*", "Node3D", true, false)
 				var sb_target := sb_pos + Vector3(0.0, sb_pk * 0.42, 0.0)
 				var sb_out := sb_sea
 				for sn in sb_nodes:
 					var n3 := sn as Node3D
 					if n3 != null and n3 != sb_isl:
 						sb_target = n3.global_position + Vector3(0.0, 5.5, 0.0)
-						var fwd := n3.global_basis.z
+						# SkullCliffCarving faces local -Z; +Z is the rear cranium embedded in the bluff.
+						var fwd := -n3.global_basis.z
 						fwd.y = 0.0
 						if fwd.length_squared() > 0.01:
 							sb_out = fwd.normalized()
 						break
 				var sb_side := (-sb_out).cross(Vector3.UP).normalized()
-				var sb_cam := sb_target + sb_out * maxf(54.0, sb_r * 0.72) + sb_side * 16.0 + Vector3(0.0, 8.5, 0.0)
+				var sb_cam := sb_target + sb_out * maxf(48.0, sb_r * 0.44) + sb_side * 16.0 + Vector3(0.0, 8.5, 0.0)
 				sb_cam.y = maxf(sb_cam.y, sb_isl.world_surface_height(sb_cam) + 5.0)
 				_mount_shot_camera(sb_cam, sb_target, 54.0)
 
@@ -3976,7 +3979,9 @@ func _apply_hero_shot(mode: String) -> void:
 				var ga_m := ga_isl.mooring_transform.origin
 				var ga_sea := Vector3(ga_m.x, 0.0, ga_m.z)
 				ga_sea = ga_sea.normalized() if ga_sea.length_squared() > 0.01 else Vector3(-0.6, 0.0, 0.8)
-				var ga_nodes := ga_isl.find_children("*arch*", "Node3D", true, false)
+				var ga_nodes := ga_isl.find_children("CoastalSeaArch_Main*", "Node3D", true, false)
+				if ga_nodes.is_empty():
+					ga_nodes = ga_isl.find_children("*arch*", "Node3D", true, false)
 				var ga_target := ga_pos + Vector3(0.0, clampf(ga_pk * 0.28, 7.0, 16.0), 0.0)
 				var ga_out := ga_sea
 				for an in ga_nodes:
@@ -3986,7 +3991,10 @@ func _apply_hero_shot(mode: String) -> void:
 						var fwd := n3.global_basis.z
 						fwd.y = 0.0
 						if fwd.length_squared() > 0.01:
-							ga_out = fwd.normalized()
+							fwd = fwd.normalized()
+							if fwd.dot(ga_sea) < 0.0:
+								fwd = -fwd
+							ga_out = fwd
 						break
 				var ga_side := (-ga_out).cross(Vector3.UP).normalized()
 				var ga_cam := ga_target + ga_out * maxf(44.0, ga_r * 0.72) + ga_side * 14.0 + Vector3(0.0, 7.5, 0.0)
@@ -4010,7 +4018,9 @@ func _apply_hero_shot(mode: String) -> void:
 				var wt_m := wt_isl.mooring_transform.origin
 				var wt_sea := Vector3(wt_m.x, 0.0, wt_m.z)
 				wt_sea = wt_sea.normalized() if wt_sea.length_squared() > 0.01 else Vector3(0.7, 0.0, 0.7)
-				var wt_nodes := wt_isl.find_children("*shipwreck*", "Node3D", true, false)
+				var wt_nodes := wt_isl.find_children("*ImpaledShipwreck*", "Node3D", true, false)
+				if wt_nodes.is_empty():
+					wt_nodes = wt_isl.find_children("*shipwreck*", "Node3D", true, false)
 				if wt_nodes.is_empty():
 					wt_nodes = wt_isl.find_children("*wreck*", "Node3D", true, false)
 				var wt_target := wt_pos + Vector3(0.0, clampf(wt_pk * 0.30, 6.0, 14.0), 0.0)
