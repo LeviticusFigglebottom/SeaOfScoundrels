@@ -77,6 +77,8 @@ var active_enemies: Array[Pawn] = []
 var enemy_ships: Array[Ship] = []
 var active_sharks: Array[Shark] = []
 var active_leviathans: Array[Leviathan] = []
+var active_megalodons: Array[AncientMegalodon] = []
+var active_mermaid: SeaMermaid = null
 var current_music_mood: StringName = &""
 var sea_soundscape: SeaSoundscape = null
 var player_rowboat: Rowboat = null
@@ -237,7 +239,9 @@ static func _drain_static_visual_caches() -> void:
 	CombatComponent.clear_shared_vfx_cache()
 	EnemyBrain.clear_shared_vfx_cache()
 	Leviathan.clear_shared_cache()
+	AncientMegalodon.clear_shared_cache()
 	Shark.clear_shared_cache()
+	SeaMermaid.clear_shared_cache()
 	CoralReef.clear_shared_cache()
 	ReefFishSchool.clear_shared_cache()
 	MantaRay.clear_shared_cache()
@@ -1243,6 +1247,7 @@ func _wire_world_signals() -> void:
 	world_director.spawn_ghost_ship.connect(_on_director_spawn_ghost_ship)
 	world_director.spawn_shark_pack.connect(_on_director_spawn_shark_pack)
 	world_director.spawn_leviathan.connect(_on_director_spawn_leviathan)
+	world_director.spawn_megalodon.connect(_on_director_spawn_megalodon)
 	world_director.spawn_flotsam_barrels.connect(_on_director_spawn_flotsam)
 	world_director.spawn_fort_siege.connect(_on_director_spawn_fort_siege)
 	world_director.spawn_castaway.connect(_on_director_spawn_castaway)
@@ -1526,6 +1531,20 @@ func _tick_world_director(delta: float) -> void:
 		"swimmer_pos": swimmer_pos,
 		"voyage_count": voyage_manager.completed_count if voyage_manager != null else 0,
 	})
+	_tick_sea_mermaid()
+
+
+func _tick_sea_mermaid() -> void:
+	if not Net.is_host() or _title_mode_active or active_shot_mode != "":
+		return
+	if active_mermaid != null and (not is_instance_valid(active_mermaid) or active_mermaid.is_queued_for_deletion()):
+		active_mermaid = null
+	if active_mermaid != null:
+		return
+	if SeaMermaid.should_spawn_for_pawn(player_pawn, player_ship):
+		active_mermaid = SeaMermaid.spawn_near_swimmer(_entities_root, player_pawn, player_ship)
+		if active_mermaid != null:
+			Game.post_notice("A Sea Mermaid rises ahead with emerald smoke -- press [F] to return to your ship!")
 
 
 func _tick_discovery_and_arrivals() -> void:
@@ -1936,6 +1955,19 @@ func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
 		_launch_victory_flare(Vector3(pos.x, Sea.height(pos.x, pos.z) + 2.5, pos.z), Color(0.24, 0.94, 0.88))
 	)
 	active_leviathans.append(lev)
+
+
+func _on_director_spawn_megalodon(center: Vector3, target: Node) -> void:
+	if not Net.is_host():
+		return
+	var target_s: Ship = target as Ship if target is Ship else player_ship
+	var mega := AncientMegalodon.spawn_near_ship(_entities_root, target_s, center)
+	if mega != null:
+		mega.megalodon_defeated.connect(func(_m: AncientMegalodon, pos: Vector3, _salvage: Array) -> void:
+			_launch_victory_flare(Vector3(pos.x, Sea.height(pos.x, pos.z) + 2.8, pos.z), Color(0.18, 0.96, 0.88))
+			Game.post_notice("Ancient Megalodon slain! Four treasures rise to the surface!")
+		)
+		active_megalodons.append(mega)
 
 
 func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:

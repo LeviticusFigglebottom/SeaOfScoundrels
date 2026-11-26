@@ -22,6 +22,8 @@ var _is_brig: bool = false
 var _ship: Ship
 var _rowboat: Rowboat = null
 var _shipwreck: SunkenShipwreck = null
+var _mermaid: SeaMermaid = null
+var _megalodon: AncientMegalodon = null
 var _target_ship: Ship = null
 var _pawn: Pawn = null
 var _cam: Camera3D
@@ -68,6 +70,16 @@ func _ready() -> void:
 			time_h = 18.25
 			storm = 0.24
 			wind_spd = 11.0
+		"mermaid":
+			time_h = 18.05
+			storm = 0.14
+			wind_spd = 9.2
+			wind_hdg = 0.35
+		"megalodon":
+			time_h = 16.85
+			storm = 0.34
+			wind_spd = 13.5
+			wind_hdg = 0.50
 		"shipwreck":
 			time_h = 16.4
 			storm = 0.16
@@ -187,6 +199,24 @@ func _ready() -> void:
 		if float_keg != null:
 			float_keg.rotation.y = 0.45
 
+	if _shot == "mermaid":
+		_ship.linear_velocity = Vector3.ZERO
+		_mermaid = SeaMermaid.spawn_at(self, Vector3(14.0, 0.0, -24.0), _ship)
+		if _mermaid != null:
+			_mermaid.set_facing_yaw(2.72)
+			_mermaid.force_emerged()
+
+	if _shot == "megalodon":
+		_ship.linear_velocity = Vector3.ZERO
+		_ship.set_sail_target(0.75)
+		_ship.sail_set = 0.75
+		var m_pos := Vector3(16.0, Sea.height(16.0, -26.0) + 0.45, -26.0)
+		_megalodon = AncientMegalodon.spawn_near_ship(self, _ship, m_pos)
+		if _megalodon != null:
+			_megalodon.global_position = m_pos
+			_megalodon.rotation.y = 0.58
+			_megalodon.force_pose_for_showcase(0.95, 1.0)
+
 	if _shot == "damage" or _shot == "hold":
 		var bx := 2.4 if _is_brig else 2.0
 		_ship.apply_hull_damage(_ship.global_transform * _ship.ship_point(Vector3(bx, -0.35, 0.4)), 0.55)
@@ -295,6 +325,18 @@ func _update_camera() -> void:
 			var eye := Vector3(1.8, Sea.height(1.8, -12.8) + 5.2, -12.8)
 			var look := Vector3(wpos.x - 0.6, 3.2, wpos.z + 0.6)
 			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"mermaid":
+			# Twilight ocean portrait framing sculpted 3,682-tri SeaMermaid, blazing sea-glass conch staff, coiled tail & 26 m curling emerald smoke beacon.
+			var mpos := _mermaid.global_position if (_mermaid != null and is_instance_valid(_mermaid)) else Vector3(14.0, 0.0, -24.0)
+			var eye := Vector3(11.4, Sea.height(11.4, -18.6) + 2.35, -18.6)
+			var look := Vector3(mpos.x, mpos.y + 2.4, mpos.z)
+			_cam.look_at_from_position(eye, look, Vector3.UP)
+		"megalodon":
+			# Dramatic front-3/4 ocean apex boss shot framing 16.4 m 3,392-tri AncientMegalodon gaping serrated jaws, glowing cyan scars & towering notched dorsal fin.
+			var gpos := _megalodon.global_position if (_megalodon != null and is_instance_valid(_megalodon)) else Vector3(16.0, 0.5, -26.0)
+			var eye := Vector3(3.8, Sea.height(3.8, -36.8) + 3.6, -36.8)
+			var look := Vector3(gpos.x - 0.5, gpos.y + 1.0, gpos.z)
+			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"rowboat":
 			# Dramatic 3/4 stern view framing the sculpted clinker Rowboat on stern davits cleanly below ShipNameplate.
 			var eye := xf * _ship.ship_point(Vector3(5.6, 2.65, 14.4) if _is_brig else Vector3(4.8, 2.35, 11.8))
@@ -320,6 +362,8 @@ func _exit_tree() -> void:
 	TreasureCatalog.clear_mesh_cache()
 	SunkenShipwreck.clear_shared_cache()
 	PowderKeg.clear_shared_cache()
+	SeaMermaid.clear_shared_cache()
+	AncientMegalodon.clear_shared_cache()
 	ShipFire.clear_shared_cache()
 	ShipEmissaryFlag.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()

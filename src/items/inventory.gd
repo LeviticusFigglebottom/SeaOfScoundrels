@@ -1489,6 +1489,26 @@ func _scan_spyglass_sighting() -> void:
 			best_pos = target_pos
 			best_label = "Abyssal Leviathan"
 
+	# 2b. Ancient Megalodon open-sea apex boss (group `megalodons`; ignore defeated).
+	var max_mega_dist := 2200.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"megalodons"):
+		if not (node is Node3D):
+			continue
+		var dead_v: Variant = node.get(&"dead")
+		if dead_v is bool and bool(dead_v):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 3.5
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 12.0 or dist > max_mega_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Ancient Megalodon"
+
 	# 3. Living sea wildlife: Dolphin Pods, Humpback Whales, Giant Manta Rays & Ocean Sharks.
 	var max_dolphin_dist := 1200.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"dolphins"):

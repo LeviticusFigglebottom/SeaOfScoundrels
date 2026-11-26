@@ -15,6 +15,7 @@ signal spawn_flotsam_barrels(pos: Vector3, count: int)
 signal spawn_ghost_ship(spawn_pos: Vector3)
 signal spawn_storm_cell(center: Vector3, radius: float, velocity: Vector3)
 signal spawn_leviathan(center: Vector3, target_ship: Node)
+signal spawn_megalodon(center: Vector3, target_ship: Node)
 signal spawn_fort_siege(fort_pos: Vector3, bearing: String)
 signal spawn_castaway(pos: Vector3)
 signal spawn_shipwreck(pos: Vector3, seed_val: int)
@@ -56,6 +57,8 @@ var time_since_major_event: float = 0.0
 var time_since_flotsam: float = 0.0
 ## Seconds elapsed since the last half-submerged sunken shipwreck dive encounter.
 var time_since_shipwreck: float = 0.0
+## Seconds elapsed since the last open-sea Ancient Megalodon encounter.
+var time_since_megalodon: float = 0.0
 ## Total gold value of treasure currently aboard the player ship.
 var cargo_value_aboard: int = 0
 ## Last known world position of the player ship.
@@ -91,11 +94,13 @@ var post_notices: bool = true
 
 var _rng := RandomNumberGenerator.new()
 var _shipwreck_rng := RandomNumberGenerator.new()
+var _megalodon_rng := RandomNumberGenerator.new()
 var _event_serial: int = 0
 var _wreck_serial: int = 0
 var _next_major_delay: float = 130.0
 var _next_flotsam_delay: float = 70.0
 var _next_shipwreck_delay: float = 215.0
+var _next_megalodon_delay: float = 410.0
 var _shark_cooldown: float = 0.0
 var _has_prev_pos: bool = false
 var _storm_active_id: String = ""
@@ -108,7 +113,9 @@ func _init(seed_value: int = 0) -> void:
 	else:
 		_rng.randomize()
 		_shipwreck_rng.randomize()
+		_megalodon_rng.randomize()
 		_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
+		_next_megalodon_delay = _megalodon_rng.randf_range(340.0, 480.0)
 	_roll_next_delays()
 
 
@@ -125,10 +132,13 @@ func _exit_tree() -> void:
 func set_seed(seed_value: int) -> void:
 	_rng.seed = seed_value
 	_shipwreck_rng.seed = seed_value ^ 0x5419EC
+	_megalodon_rng.seed = seed_value ^ 0xAE6A10D
 	_event_serial = 0
 	_wreck_serial = 0
 	time_since_shipwreck = 0.0
+	time_since_megalodon = 0.0
 	_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
+	_next_megalodon_delay = _megalodon_rng.randf_range(340.0, 480.0)
 	_roll_next_delays()
 
 
@@ -193,6 +203,8 @@ func step(delta: float, context: Dictionary = {}) -> Array[Dictionary]:
 		time_since_major_event += delta * (1.0 if is_sailing else 0.45)
 		time_since_flotsam += delta * (1.0 if is_sailing else 0.35)
 		time_since_shipwreck += delta * (1.0 if is_sailing else 0.35)
+		if cargo_value_aboard >= 400 or voyage_count >= 1:
+			time_since_megalodon += delta * (1.0 if is_sailing else 0.35)
 
 	if in_harbor:
 		return spawned
@@ -225,6 +237,17 @@ func step(delta: float, context: Dictionary = {}) -> Array[Dictionary]:
 		time_since_shipwreck = 0.0
 		time_since_event = 0.0
 		_next_shipwreck_delay = _shipwreck_rng.randf_range(190.0, 260.0)
+
+	# 3c. Rare deep-sea Ancient Megalodon stalking encounters on an isolated RNG & timer
+	#     so ZERO existing deterministic WorldDirector pacing expectations shift.
+	if (cargo_value_aboard >= 400 or voyage_count >= 1) \
+			and time_since_megalodon >= _next_megalodon_delay \
+			and not _has_active_event(&"megalodon"):
+		var mega_evt := _trigger_megalodon(heading_dir, ship_node)
+		spawned.append(mega_evt)
+		time_since_megalodon = 0.0
+		time_since_event = 0.0
+		_next_megalodon_delay = _megalodon_rng.randf_range(340.0, 480.0)
 
 	return spawned
 
@@ -388,6 +411,10 @@ func trigger_event(kind: StringName, context: Dictionary = {}) -> Dictionary:
 		&"leviathan":
 			evt = _trigger_leviathan(heading_dir, ship_node)
 			time_since_major_event = 0.0
+		&"megalodon":
+			evt = _trigger_megalodon(heading_dir, ship_node)
+			time_since_megalodon = 0.0
+			time_since_major_event = 0.0
 		&"fort_siege":
 			var fort_pos: Vector3 = context.get("fort_pos", player_ship_pos + _forward_arc_offset(heading_dir, 360.0, 0.8))
 			evt = _trigger_fort_siege(fort_pos)
@@ -426,6 +453,17 @@ func trigger_shipwreck(heading_dir: Vector3 = Vector3.FORWARD) -> Dictionary:
 ## Immediately force-spawn a Sunken Shipwreck encounter along `heading_dir` (host-only).
 func force_spawn_shipwreck(heading_dir: Vector3 = Vector3.FORWARD) -> Dictionary:
 	return trigger_shipwreck(heading_dir)
+
+
+## Immediately force-spawn an Ancient Megalodon encounter along `heading_dir` (host-only).
+func force_spawn_megalodon(heading_dir: Vector3 = Vector3.FORWARD, ship_node: Node = null) -> Dictionary:
+	if not Net.is_host():
+		return {}
+	var target: Node = ship_node if ship_node != null else player_ship
+	var evt := _trigger_megalodon(heading_dir, target)
+	time_since_megalodon = 0.0
+	time_since_event = 0.0
+	return evt
 
 
 func get_state() -> Dictionary:
@@ -690,6 +728,32 @@ func _trigger_shipwreck(heading_dir: Vector3) -> Dictionary:
 	})
 	_emit_warning(msg, pos, &"sunken_shipwreck", bearing, dist)
 	spawn_shipwreck.emit(pos, wreck_seed)
+	return evt
+
+
+func _trigger_megalodon(heading_dir: Vector3, ship_node: Node) -> Dictionary:
+	var flat_hdg := Vector3(heading_dir.x, 0.0, heading_dir.z)
+	if flat_hdg.length_squared() < 0.001:
+		flat_hdg = Vector3.FORWARD
+	else:
+		flat_hdg = flat_hdg.normalized()
+	var dist := maxf(260.0, _megalodon_rng.randf_range(260.0, 340.0) * maxf(1.0, lookout_scale))
+	var base_az := atan2(flat_hdg.x, -flat_hdg.z)
+	var az := base_az + _megalodon_rng.randf_range(-0.85, 0.85)
+	var offset := Vector3(sin(az) * dist, 0.0, -cos(az) * dist)
+	var center := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
+	var bearing := compass_bearing(player_ship_pos, center)
+	var msg := "Colossal dorsal fin breaking the swell -- Ancient Megalodon stalking bearing %s (%d m)!" % [
+		bearing, roundi(dist)]
+
+	var evt := _register_event(&"megalodon", center, 320.0, {
+		"bearing": bearing,
+		"distance": dist,
+		"message": msg,
+	})
+	_emit_warning(msg, center, &"megalodon", bearing, dist)
+	var target: Node = ship_node if ship_node != null else player_ship
+	spawn_megalodon.emit(center, target)
 	return evt
 
 

@@ -1358,6 +1358,270 @@ func test_wave34_sunken_shipwreck_sculpted_hull_dive_loot_spyglass_director_and_
 		"SunkenShipwreck.clear_shared_cache() clears all static caches with zero leaks")
 
 
+func test_wave35_sea_mermaid_sculpted_beacon_stranded_check_return_warp_and_crew_callouts() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Spawn two SeaMermaids and verify >= 950 sculpted tris, 0 PrimitiveMeshes,
+	#    sRGB vertex-colored materials, 0 extra texture VRAM, finite unit normals,
+	#    static mesh sharing, 16-tri diamond mist mote, shadowless 10.5 m light, & upright SmokePlume.
+	var sloop_scene := preload("res://src/ship/sloop.tscn") as PackedScene
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	_root.add_child(sloop)
+	sloop.global_position = Vector3(0.0, 0.0, 0.0)
+	await physics_frames(8)
+
+	var m_a := SeaMermaid.spawn_at(_root, Vector3(72.0, 0.0, -20.0), sloop)
+	var m_b := SeaMermaid.spawn_at(_root, Vector3(-72.0, 0.0, -20.0), sloop)
+	await physics_frames(1)
+
+	check(m_a != null and m_b != null, "SeaMermaid.spawn_at spawns sculpted mermaids cleanly")
+	check(m_a.is_in_group(SeaMermaid.GROUP), "SeaMermaid registers in sea_mermaids group")
+
+	var fig_mi_a := m_a.get_figure_mesh_instance()
+	var fig_mi_b := m_b.get_figure_mesh_instance()
+	var smk_mi_a := m_a.get_smoke_mesh_instance()
+	var smk_mi_b := m_b.get_smoke_mesh_instance()
+	check(fig_mi_a != null and fig_mi_b != null, "both SeaMermaids mount MerfolkFigure MeshInstance3D")
+	check(smk_mi_a != null and smk_mi_b != null, "both SeaMermaids mount SmokeBeaconMesh MeshInstance3D")
+	check(fig_mi_a.mesh is ArrayMesh and not (fig_mi_a.mesh is PrimitiveMesh),
+		"MerfolkFigure uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(smk_mi_a.mesh is ArrayMesh and not (smk_mi_a.mesh is PrimitiveMesh),
+		"SmokeBeaconMesh uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(fig_mi_a.mesh, fig_mi_b.mesh, "SeaMermaids share statically cached _figure_mesh")
+	check_eq(smk_mi_a.mesh, smk_mi_b.mesh, "SeaMermaids share statically cached _smoke_mesh")
+
+	var raw_prims := 0
+	for n in m_a.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+	var mist := m_a.get_mist_particles()
+	check(mist != null and mist.mesh is ArrayMesh and not (mist.mesh is PrimitiveMesh),
+		"SeaMistSparkles CPUParticles3D uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	if mist != null and mist.mesh is PrimitiveMesh:
+		raw_prims += 1
+	check_eq(raw_prims, 0, "SeaMermaid hierarchy contains zero PrimitiveMeshes")
+	check_eq(m_a.get_mote_triangle_count(), 16, "sculpted diamond mist mote has exactly 16 triangles")
+
+	var bad_normals := 0
+	var fig_tris := 0
+	var smoke_tris := 0
+	for pair: Array in [[fig_mi_a.mesh as ArrayMesh, "figure"], [smk_mi_a.mesh as ArrayMesh, "smoke"]]:
+		var am: ArrayMesh = pair[0] as ArrayMesh
+		var tag := String(pair[1])
+		var tris := 0
+		for si in am.get_surface_count():
+			var arr := am.surface_get_arrays(si)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			tris += floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+		if tag == "figure":
+			fig_tris = tris
+		else:
+			smoke_tris = tris
+
+	var total_tris := fig_tris + smoke_tris
+	print("    SeaMermaid sculpted meshes: figure=%d tris, smoke=%d tris, mote=%d tris (total=%d tris)" % [
+		fig_tris, smoke_tris, m_a.get_mote_triangle_count(), total_tris])
+	check_eq(bad_normals, 0, "all SeaMermaid sculpted normals are finite unit vectors")
+	check(total_tris >= 950, "SeaMermaid sculpted figure + emerald smoke >= 950 tris (got %d)" % total_tris)
+	check_eq(m_a.get_triangle_count(), total_tris, "get_triangle_count() matches ArrayMesh totals")
+
+	# Verify all 3 shared materials enable sRGB vertex colors and allocate 0 extra texture VRAM.
+	for mat: StandardMaterial3D in [SeaMermaid._body_mat, SeaMermaid._glow_mat, SeaMermaid._smoke_mat]:
+		check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+			"SeaMermaid material enables sRGB vertex_color_use_as_albedo")
+		if mat != null:
+			check(mat.albedo_texture == null and mat.normal_texture == null and mat.roughness_texture == null,
+				"SeaMermaid material allocates 0 extra texture VRAM")
+
+	var light := m_a.get_conch_light()
+	check(light != null and not light.shadow_enabled and is_equal_approx(light.omni_range, 10.5),
+		"SeaMermaid mounts shadowless 10.5 m turquoise ConchLight")
+
+	# Verify graceful emergence animation and strictly upright SmokePlume!
+	var rise0 := m_a.rise_offset
+	for _step in 30:
+		m_a.step_mermaid(0.05)
+	check(m_a.rise_offset > rise0 + 1.5 and is_equal_approx(m_a.rise_offset, 0.0),
+		"SeaMermaid smoothly rises from -2.4 -> 0.0 (start=%.2f, now=%.2f)" % [rise0, m_a.rise_offset])
+	var plume := m_a.get_smoke_plume()
+	check(plume != null and plume.global_basis.y.distance_to(Vector3.UP) < 0.001,
+		"SmokePlume stays strictly upright in world space")
+
+	var it := m_a.interactable
+	check(it != null and it.enabled and it.prompt == "Return to ship" \
+			and is_equal_approx(it.reach, SeaMermaid.INTERACT_REACH),
+		"SeaMermaid exposes enabled 'Return to ship' Interactable with 4.5 m reach")
+
+	# 2. Verify SeaMermaid.should_spawn_for_pawn() across aboard, close swimmer (< 55 m), & stranded (>= 65 m)!
+	var captain := _spawn_pawn(Vector3(0.0, 2.0, 0.0), &"player")
+	captain.board(sloop, sloop.ship_point(Vector3(0.0, 1.25, -1.5)))
+	await physics_frames(2)
+	check(not SeaMermaid.should_spawn_for_pawn(captain, sloop),
+		"should_spawn_for_pawn() returns false while captain is aboard ship")
+
+	# Move swimmer into water 30 m from ship (< 55 m STRANDED_DISTANCE).
+	captain.unboard()
+	captain.global_position = Vector3(30.0, -1.35, 0.0)
+	await physics_frames(4)
+	check(captain.is_swimming(), "captain enters SWIM mode in open water")
+	check(not SeaMermaid.should_spawn_for_pawn(captain, sloop),
+		"should_spawn_for_pawn() returns false when swimming < 55 m away")
+
+	# Move swimmer 70 m from ship (>= 65 m).
+	captain.global_position = Vector3(70.0, -1.35, 0.0)
+	await physics_frames(2)
+	check(SeaMermaid.should_spawn_for_pawn(captain, sloop),
+		"should_spawn_for_pawn() returns true when swimming >= 65 m away from ship")
+
+	# Verify spawn_near_swimmer() spawns ~12 m ahead of the stranded swimmer.
+	captain.look_yaw = 0.0  # facing -Z
+	var m_near := SeaMermaid.spawn_near_swimmer(_root, captain, sloop)
+	check(m_near != null, "spawn_near_swimmer() creates SeaMermaid ahead of swimmer")
+	if m_near != null:
+		var horiz_ahead := Vector2(
+			m_near.global_position.x - captain.global_position.x,
+			m_near.global_position.z - captain.global_position.z
+		).length()
+		check_near(horiz_ahead, SeaMermaid.SPAWN_AHEAD_DISTANCE, 0.25,
+			"spawn_near_swimmer() spawns ~12 m ahead of swimmer (got %.2f m)" % horiz_ahead)
+
+	# 3. Verify return_pawn_to_ship() warps stranded swimmer back onto deck, drops carried cargo,
+	#    emits pawn_returned_to_ship, notifies onboard CrewBrain, and dismisses the mermaid!
+	var crew_pawn := _spawn_pawn(Vector3(0.0, 2.0, 0.0), &"player")
+	crew_pawn.board(sloop, sloop.ship_point(Vector3(0.8, 1.15, 0.5)))
+	var crew_brain := CrewBrain.new()
+	crew_brain.persona_id = &"helmsman"
+	crew_pawn.add_child(crew_brain)
+	crew_brain.setup(sloop, captain, &"helmsman")
+	await physics_frames(2)
+
+	var deck_callouts: Array[Dictionary] = []
+	crew_brain.callout_spoken.connect(func(speaker: String, text: String, cat: StringName) -> void:
+		deck_callouts.append({"speaker": speaker, "text": text, "cat": cat})
+	)
+
+	var chest := TreasureCatalog.create_treasure_carryable(&"sovereign_chest", captain.global_position)
+	_root.add_child(chest)
+	check(captain.pick_up(chest), "stranded swimmer picks up treasure chest before mermaid warp")
+	check_eq(captain.carried, chest, "captain is carrying chest prior to warp")
+
+	var return_events: Array[Dictionary] = []
+	m_near.pawn_returned_to_ship.connect(func(mm: SeaMermaid, p: Pawn, s: Node3D) -> void:
+		return_events.append({"mermaid": mm, "pawn": p, "ship": s})
+	)
+
+	check(m_near.return_pawn_to_ship(captain), "return_pawn_to_ship() succeeds for stranded swimmer")
+	check_eq(captain.platform, sloop, "warped captain boards target ship (platform == ship)")
+	check_eq(captain.mode, Pawn.Mode.WALK, "warped captain transitions cleanly to Mode.WALK")
+	check(captain.carried == null, "mermaid warp drops carried item cleanly into the sea")
+	check(not chest.is_held(), "dropped treasure chest is no longer held after warp")
+	check(chest.global_position.distance_to(sloop.global_position) > 40.0,
+		"dropped treasure stays behind in the sea instead of teleporting aboard")
+	check_eq(return_events.size(), 1, "pawn_returned_to_ship signal emits once")
+	if return_events.size() == 1:
+		check_eq(return_events[0]["pawn"], captain, "signal passes warped pawn")
+		check_eq(return_events[0]["ship"], sloop, "signal passes destination ship")
+	check(m_near.dismissed and not m_near.interactable.enabled,
+		"mermaid dismisses itself and disables interactable after warp")
+	check_eq(deck_callouts.size(), 1, "crew aboard ship welcomes Captain back with mermaid_return callout")
+	if deck_callouts.size() == 1:
+		check_eq(deck_callouts[0]["cat"], &"mermaid_return", "crew welcome callout uses mermaid_return category")
+
+	# Confirm captain remains solidly on deck across physics frames.
+	await physics_frames(4)
+	check_eq(captain.platform, sloop, "captain remains solidly aboard ship across physics ticks")
+	check_eq(captain.mode, Pawn.Mode.WALK, "captain remains in Mode.WALK on main deck")
+
+	# Verify RECALL_DISTANCE (< 38 m) auto-dismisses and gracefully submerges the mermaid.
+	var swimmer2 := _spawn_pawn(Vector3(70.0, -1.35, 0.0), &"player")
+	await physics_frames(4)
+	var m_recall := SeaMermaid.spawn_near_swimmer(_root, swimmer2, sloop)
+	check(m_recall != null and not m_recall.dismissed, "spawn_near_swimmer creates active mermaid for second swimmer")
+	swimmer2.global_position = Vector3(24.0, -1.35, 0.0)
+	m_recall.step_mermaid(0.05)
+	check(m_recall.dismissed, "mermaid auto-dismisses when tracked swimmer swims within RECALL_DISTANCE (38 m)")
+	for _s in 20:
+		if is_instance_valid(m_recall):
+			m_recall.step_mermaid(0.2)
+	await physics_frames(2)
+	check(not is_instance_valid(m_recall), "dismissed mermaid gracefully submerges and queue_free()s")
+
+	# 4. Verify CrewBrain.notify_mermaid_return() and notify_megalodon_sighted() across all 3 personas
+	#    (strict ASCII < 128, cooldown enforcement) AND _tick_lookout() auto-detecting megalodons group!
+	var mock_meg := Node3D.new()
+	mock_meg.name = "AncientMegalodonMock"
+	mock_meg.add_to_group(&"megalodons")
+	mock_meg.set_meta(&"display_name", "The Hungering Leviathan")
+	_root.add_child(mock_meg)
+	mock_meg.global_position = Vector3(140.0, -1.0, -340.0)
+	await physics_frames(1)
+
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var cp := _spawn_pawn(Vector3(0.0, 4.0, 0.0), &"player")
+		var cb := CrewBrain.new()
+		cb.persona_id = pid
+		cp.add_child(cb)
+		cb.setup(sloop, captain, pid)
+		await physics_frames(1)
+
+		var spoken: Array[Dictionary] = []
+		cb.callout_spoken.connect(func(speaker: String, text: String, cat: StringName) -> void:
+			spoken.append({"speaker": speaker, "text": text, "cat": cat})
+		)
+
+		check(cb.notify_mermaid_return(), "%s notify_mermaid_return() returns true" % pid)
+		check(not cb.notify_mermaid_return(), "%s MERMAID_RETURN_COOLDOWN prevents immediate repeat" % pid)
+		check(cb.notify_megalodon_sighted("Ancient Megalodon", "starboard quarter"),
+			"%s notify_megalodon_sighted() returns true" % pid)
+		check(not cb.notify_megalodon_sighted("Ancient Megalodon", "starboard quarter"),
+			"%s MEGALODON_SIGHTED_COOLDOWN prevents immediate repeat" % pid)
+		check_eq(spoken.size(), 2, "%s emits both mermaid_return and megalodon_sighted callouts" % pid)
+
+		if spoken.size() == 2:
+			check_eq(spoken[0]["cat"], &"mermaid_return", "%s first callout is mermaid_return" % pid)
+			check_eq(spoken[1]["cat"], &"megalodon_sighted", "%s second callout is megalodon_sighted" % pid)
+			var meg_line := String(spoken[1]["text"])
+			check(meg_line.contains("Ancient Megalodon") and meg_line.contains("starboard quarter"),
+				"%s megalodon callout includes target & bearing (got '%s')" % [pid, meg_line])
+			for entry in spoken:
+				var line := String(entry["text"])
+				for ci in line.length():
+					check(line.unicode_at(ci) < 128, "%s callout is strict ASCII ('%s')" % [pid, line])
+
+		# Verify _tick_lookout() auto-detects live megalodons within lookout_range * 1.25 once!
+		if pid == &"lookout":
+			spoken.clear()
+			cb._scan_timer = 0.0
+			cb._tick_lookout(0.1)
+			check_eq(spoken.size(), 1, "lookout _tick_lookout() auto-detects live megalodons group node")
+			if spoken.size() == 1:
+				check_eq(spoken[0]["cat"], &"megalodon_sighted", "auto-detected callout uses megalodon_sighted")
+				check(String(spoken[0]["text"]).contains("The Hungering Leviathan"),
+					"auto-detected callout resolves Megalodon display name")
+			cb._scan_timer = 0.0
+			cb._tick_lookout(0.1)
+			check_eq(spoken.size(), 1, "lookout _tick_lookout() deduplicates Megalodon callout per instance ID")
+
+	# 5. Clean zero-leak teardown releases all static caches cleanly!
+	await _end()
+	SeaMermaid.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+	check(not is_instance_valid(m_a) and not is_instance_valid(m_b), "all SeaMermaids freed cleanly")
+	check_eq(SeaMermaid._active_mermaids, 0, "SeaMermaid._active_mermaids == 0 after teardown")
+	check(SeaMermaid._figure_mesh == null and SeaMermaid._smoke_mesh == null \
+			and SeaMermaid._mote_mesh == null and SeaMermaid._body_mat == null \
+			and SeaMermaid._glow_mat == null and SeaMermaid._smoke_mat == null,
+		"SeaMermaid.clear_shared_cache() releases all static caches cleanly with zero leaks")
+
+
 
 
 

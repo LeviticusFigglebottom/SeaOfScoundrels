@@ -107,6 +107,8 @@ const EVENT_CLOUD_COOLDOWN := 10.0
 const FIRE_CALLOUT_COOLDOWN := 7.0
 const CANNON_SELF_LAUNCH_COOLDOWN := 6.0
 const SHIPWRECK_COOLDOWN := 10.0
+const MERMAID_RETURN_COOLDOWN := 6.0
+const MEGALODON_SIGHTED_COOLDOWN := 12.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -142,6 +144,7 @@ var _callout_cooldowns: Dictionary = {}  # String -> float seconds left
 var _reported_islands: Dictionary = {}   # String -> true
 var _reported_ships: Dictionary = {}     # int instance_id -> true
 var _reported_wrecks: Dictionary = {}    # int instance_id -> true
+var _reported_megalodons: Dictionary = {} # int instance_id -> true
 var _last_wind_heading: float = NAN
 var _was_breached: bool = false
 var _was_on_fire: bool = false
@@ -1719,6 +1722,35 @@ func _tick_lookout(delta: float) -> void:
 			var wdir := Vector3(sin(Weather.wind_heading), 0.0, -cos(Weather.wind_heading))
 			_speak(&"wind_shift", {"bearing": CrewDialogue.compass_bearing(Vector3.ZERO, wdir)}, "wind_shift", 35.0)
 
+	# Colossal Ancient Megalodon sightings within extended range (deduplicated per instance ID).
+	var meg_range := lookout_range * 1.25
+	for node in get_tree().get_nodes_in_group(&"megalodons"):
+		if not (node is Node3D):
+			continue
+		var meg := node as Node3D
+		var dead_v: Variant = meg.get(&"dead")
+		if dead_v != null and bool(dead_v):
+			continue
+		var mid := meg.get_instance_id()
+		if _reported_megalodons.has(mid):
+			continue
+		var mdist := origin.distance_to(meg.global_position)
+		if mdist <= meg_range:
+			_reported_megalodons[mid] = true
+			var mnm := "Ancient Megalodon"
+			for prop_nm: StringName in [&"display_name", &"megalodon_name", &"boss_name"]:
+				var raw_mnm: Variant = meg.get(prop_nm)
+				if raw_mnm != null and String(raw_mnm).strip_edges() != "":
+					mnm = String(raw_mnm).strip_edges()
+					break
+			if mnm == "Ancient Megalodon" and meg.has_meta(&"display_name"):
+				var meta_mnm := String(meg.get_meta(&"display_name")).strip_edges()
+				if meta_mnm != "":
+					mnm = meta_mnm
+			var mbrg := CrewDialogue.ship_relative_bearing(ship, meg.global_position)
+			_speak(&"megalodon_sighted", {"target": mnm, "bearing": mbrg}, "meg:" + str(mid), 45.0)
+			return
+
 	# Hostile ship sightings take top priority over distant landmarks.
 	var enemy := _find_hostile_ship(lookout_range)
 	if enemy != null:
@@ -1920,6 +1952,33 @@ func notify_shipwreck_sighted(wreck_label: String, bearing: String) -> bool:
 		clean_bearing = "ahead"
 	_speak(&"shipwreck_sighted", {"target": clean_target, "bearing": clean_bearing},
 		"shipwreck_sighted", SHIPWRECK_COOLDOWN)
+	return true
+
+
+## Warm persona welcome when the Captain returns aboard via a Sea Mermaid beacon.
+func notify_mermaid_return() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("mermaid_return"):
+		return false
+	_speak(&"mermaid_return", {}, "mermaid_return", MERMAID_RETURN_COOLDOWN)
+	return true
+
+
+## Urgent persona callout when a colossal Ancient Megalodon circles the hull.
+func notify_megalodon_sighted(label: String = "Ancient Megalodon", bearing: String = "ahead") -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("megalodon_sighted"):
+		return false
+	var clean_target := label.strip_edges()
+	if clean_target == "":
+		clean_target = "Ancient Megalodon"
+	var clean_bearing := bearing.strip_edges()
+	if clean_bearing == "":
+		clean_bearing = "ahead"
+	_speak(&"megalodon_sighted", {"target": clean_target, "bearing": clean_bearing},
+		"megalodon_sighted", MEGALODON_SIGHTED_COOLDOWN)
 	return true
 
 

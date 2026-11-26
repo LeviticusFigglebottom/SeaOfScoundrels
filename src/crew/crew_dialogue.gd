@@ -149,6 +149,14 @@ const LINES := {
 			"Gulls wheeling over splintered oak! {target} off the {bearing} -- drop anchor for a dive, Cap'n!",
 			"Half-capsized hull breaking the swell! {target} bearing {bearing} -- bound to be treasure below!",
 		],
+		&"mermaid_return": [
+			"Welcome back aboard, Cap'n! The sea-folk brought ye home safe!",
+			"Back on dry oak, Cap'n! Nothing like a mermaid lift after a cannon flight!",
+		],
+		&"megalodon_sighted": [
+			"Fin off the {bearing}! {target} is circling the stern - man the cannons!",
+			"Steady on the helm! {target} rising off the {bearing} - brace for a jaw-strike, Cap'n!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -263,6 +271,14 @@ const LINES := {
 			"Circling seabirds off the {bearing}, Cap'n! {target} with flooded cabin loot waiting!",
 			"Broken mast jutting from the waves -- {target} dead {bearing}! Worth a swim, Cap'n!",
 		],
+		&"mermaid_return": [
+			"Whoa, right back on deck! Always knew those sea-mermaids had our back, Cap'n!",
+			"Safe aboard, Captain! That emerald smoke beacon never fails a stranded sailor!",
+		],
+		&"megalodon_sighted": [
+			"Colossal fin off the {bearing}, Cap'n! {target} is hunting our hull - load the guns!",
+			"Eyes sharp to the {bearing}! {target} breaking the swells - ready the broadside!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -376,6 +392,14 @@ const LINES := {
 		&"shipwreck_sighted": [
 			"Oof, poor timbers! {target} listing hard off the {bearing} -- bet her cabin's still full of gold!",
 			"Spot those gulls to the {bearing}, Cap'n? {target} -- grab a deep breath and dive for salvage!",
+		],
+		&"mermaid_return": [
+			"Haha! Dripping wet and back on my clean floorboards - welcome home, Cap'n!",
+			"The sea-folk delivered ye right to the main deck! Good to have ye back, Captain!",
+		],
+		&"megalodon_sighted": [
+			"Blimey! {target} off the {bearing} - bigger than our whole sloop! Stack the planks, Cap'n!",
+			"Teeth the size of oars off the {bearing}! {target} is circling us - hold fast, Captain!",
 		],
 	},
 }

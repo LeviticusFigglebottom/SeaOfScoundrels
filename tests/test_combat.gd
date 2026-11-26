@@ -1268,7 +1268,285 @@ func test_wave34_powder_keg_sculpted_fuse_shoot_slash_fire_chain_and_hull_breach
 		"PowderKeg static materials and WeakRef PBR cache released cleanly (0 leaks)")
 
 
+func test_wave35_ancient_megalodon_sculpted_boss_charge_interrupt_bite_cannon_hit_spyglass_and_salvage() -> void:
+	_begin()
+	Weather.set_weather(0.0, 6.0, 0.0)
+	Sea.amp_scale = 0.0
 
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	ship.faction = &"player"
+	ship.start_anchored = true
+	_root.add_child(ship)
+	ship.global_position = Vector3.ZERO
+	await physics_frames(4)
 
+	# 1. Spawn AncientMegalodon near ship and verify sculpted >= 2,200 tris, 0 PrimitiveMeshes,
+	#    vertex_color_is_srgb == true, 0 extra VRAM textures, and finite unit normals!
+	var mega := AncientMegalodon.spawn_near_ship(_root, ship, Vector3(AncientMegalodon.CIRCLE_RADIUS, 0.0, 0.0))
+	await physics_frames(2)
 
+	check(mega.is_in_group(AncientMegalodon.GROUP), "AncientMegalodon is in group &'megalodons'")
+	check(mega.is_in_group(&"world_events"), "AncientMegalodon is in group &'world_events'")
+	check(mega.is_in_group(&"beasts"), "AncientMegalodon is in group &'beasts'")
+	check_eq(mega.state, AncientMegalodon.State.EMERGE, "AncientMegalodon starts in State.EMERGE")
+	check_near(mega.health, AncientMegalodon.MAX_HEALTH, 0.01, "AncientMegalodon starts at 420 HP")
 
+	var mesh_nodes := mega.find_children("*", "MeshInstance3D", true, false)
+	check(mesh_nodes.size() >= 6, "AncientMegalodon builds full articulated sculpted mesh hierarchy (%d)" % mesh_nodes.size())
+	var raw_prims := 0
+	var bad_normals := 0
+	var extra_vram_textures := 0
+	var srgb_fail := 0
+	var part_tris: Dictionary = {}
+	var core_tris := 0
+	var total_tris := 0
+
+	for n in mesh_nodes:
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+		var am := mi.mesh as ArrayMesh
+		check(am != null, "Megalodon mesh '%s' uses sculpted ArrayMesh" % mi.name)
+		var mat := mi.material_override as StandardMaterial3D
+		check(mat != null, "Megalodon mesh '%s' has StandardMaterial3D" % mi.name)
+		if mat != null:
+			if not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb:
+				srgb_fail += 1
+			if mat.albedo_texture != null or mat.normal_texture != null or mat.roughness_texture != null:
+				extra_vram_textures += 1
+		if am != null:
+			var mi_tris := 0
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				mi_tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+			part_tris[String(mi.name)] = mi_tris
+			total_tris += mi_tris
+			if mi.name in [&"BodyMesh", &"JawMesh", &"TailMidMesh", &"TailFinMesh"]:
+				core_tris += mi_tris
+
+	check_eq(raw_prims, 0, "AncientMegalodon contains ZERO PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all sculpted AncientMegalodon normals are finite unit vectors")
+	check_eq(srgb_fail, 0, "all AncientMegalodon materials use vertex_color_is_srgb == true")
+	check_eq(extra_vram_textures, 0, "AncientMegalodon allocates ZERO extra VRAM textures")
+	check(core_tris >= 2200, "Body/Jaw/TailMid/TailFin sculpted tris >= 2200 (got %d, total %d)" % [core_tris, total_tris])
+	print("    Wave 35B Megalodon tris: Body=%d, Jaw=%d, TailMid=%d, TailFin=%d, ScarGlow=%d, TailScar=%d, Eyes=%d (core=%d, total=%d)" % [
+		int(part_tris.get("BodyMesh", 0)),
+		int(part_tris.get("JawMesh", 0)),
+		int(part_tris.get("TailMidMesh", 0)),
+		int(part_tris.get("TailFinMesh", 0)),
+		int(part_tris.get("ScarGlow", 0)),
+		int(part_tris.get("TailScarGlow", 0)),
+		int(part_tris.get("EyesMesh", 0)),
+		core_tris,
+		total_tris,
+	])
+
+	# Verify hitbox layer & megalodon metadata.
+	var hitbox := mega.get_node_or_null(^"MegalodonHitbox") as StaticBody3D
+	check(hitbox != null, "MegalodonHitbox StaticBody3D exists")
+	if hitbox != null:
+		check_eq(hitbox.collision_layer, Pawn.LAYER_PAWN, "MegalodonHitbox sits on Pawn.LAYER_PAWN")
+		check(hitbox.get_meta(&"megalodon") == mega, "MegalodonHitbox carries megalodon metadata")
+
+	# 2. Attack lifecycle: EMERGE -> CIRCLE -> WINDUP -> CHARGE emits charge_telegraphed;
+	#    dealing >= 95 damage via direct Cannonball hits during WINDUP/CHARGE triggers STAGGERED!
+	var telegraphed := [0]
+	var interrupted := [0]
+	var bitten := [0]
+	var bitten_breaches := [0]
+	var defeated_salvage: Array = []
+	var defeated_count := [0]
+
+	mega.charge_telegraphed.connect(func(_m: AncientMegalodon, _s: Node3D) -> void:
+		telegraphed[0] += 1
+	)
+	mega.charge_interrupted.connect(func(_m: AncientMegalodon, _a: Node) -> void:
+		interrupted[0] += 1
+	)
+	mega.hull_bitten.connect(func(_m: AncientMegalodon, _s: Node3D, b: int) -> void:
+		bitten[0] += 1
+		bitten_breaches[0] += b
+	)
+	mega.megalodon_defeated.connect(func(_m: AncientMegalodon, _p: Vector3, salvage: Array) -> void:
+		defeated_count[0] += 1
+		defeated_salvage.append_array(salvage)
+	)
+
+	# Step through EMERGE (1.6 s) into CIRCLE.
+	for _i in 24:
+		mega.step_ai(0.1)
+	check_eq(mega.state, AncientMegalodon.State.CIRCLE, "AncientMegalodon transitions EMERGE -> CIRCLE")
+	var idle_scar_e := mega.get_scar_emission_energy()
+
+	# Step through CIRCLE (13.5 s) into WINDUP -> charge_telegraphed emitted!
+	for _i in 150:
+		mega.step_ai(0.1)
+		if mega.state == AncientMegalodon.State.WINDUP:
+			break
+	check_eq(mega.state, AncientMegalodon.State.WINDUP, "AncientMegalodon transitions CIRCLE -> WINDUP")
+	check_eq(telegraphed[0], 1, "charge_telegraphed emitted on WINDUP entry")
+	mega.step_ai(1.2)
+	check(mega.get_scar_emission_energy() > idle_scar_e * 1.4,
+		"bioluminescent scar glow intensifies dramatically during WINDUP (%.2f vs %.2f)" % [
+			mega.get_scar_emission_energy(), idle_scar_e])
+
+	# Step into CHARGE and fire 2 direct Cannonballs (2 * 55 = 110 >= 95) into MegalodonHitbox!
+	for _i in 30:
+		mega.step_ai(0.1)
+		if mega.state == AncientMegalodon.State.CHARGE:
+			break
+	check_eq(mega.state, AncientMegalodon.State.CHARGE, "AncientMegalodon transitions WINDUP -> CHARGE")
+
+	var hero_pair := _fighter(Vector3(0.0, 2.5, 0.0), &"player", 0.0)
+	var hero: Pawn = hero_pair[0]
+	var hp_before_shots := mega.health
+	var cannon_hits := 0
+	for _shot in 2:
+		var m_pos := mega.global_position + Vector3(0.0, 1.0, 0.0)
+		var from_ship := Vector3(ship.global_position.x, 2.2, ship.global_position.z)
+		var to_m := (m_pos - from_ship).normalized()
+		var ball := Cannonball.new()
+		ball.enable_effects = false
+		ball.shooter_ship = ship
+		ball.shooter_pawn = hero
+		ball.velocity = to_m * 75.0
+		_root.add_child(ball)
+		ball.global_position = Vector3(m_pos.x - to_m.x * 13.5, 1.8, m_pos.z - to_m.z * 13.5)
+		var hit_flag := [false]
+		ball.impacted.connect(func(_hp: Vector3, tgt: Node) -> void:
+			if tgt == mega:
+				hit_flag[0] = true
+		)
+		await physics_frames(12)
+		if hit_flag[0]:
+			cannon_hits += 1
+		if is_instance_valid(ball):
+			ball.queue_free()
+		await physics_frames(1)
+
+	check_eq(cannon_hits, 2, "both direct Cannonballs strike AncientMegalodon via MegalodonHitbox")
+	check_near(mega.health, hp_before_shots - 110.0, 0.1, "two Cannonballs deal 110 damage to AncientMegalodon")
+	check_eq(mega.state, AncientMegalodon.State.STAGGERED,
+		"dealing >= 95 Cannonball damage during CHARGE interrupts into State.STAGGERED")
+	check_eq(interrupted[0], 1, "charge_interrupted signal emitted on stagger")
+	check_eq(ship.open_hole_count(), 0, "interrupted Megalodon charge inflicts 0 hull breaches")
+
+	# 3. Unstopped CHARGE reaches the Ship, emits hull_bitten, and punches >= 2 hull breaches!
+	#    Advance through STAGGERED -> RETREAT -> CIRCLE -> WINDUP -> CHARGE without interrupting.
+	mega.global_position = Vector3(26.0, -0.5, 0.0)
+	mega.state = AncientMegalodon.State.CHARGE
+	mega._state_timer = AncientMegalodon.CHARGE_TIMEOUT
+	mega._charge_damage_taken = 0.0
+	for _i in 35:
+		mega.step_ai(0.08)
+		if bitten[0] >= 1:
+			break
+	check_eq(bitten[0], 1, "unstopped Megalodon CHARGE emits hull_bitten")
+	check(bitten_breaches[0] >= AncientMegalodon.BITE_HULL_BREACHES,
+		"hull_bitten reports >= %d breaches (got %d)" % [AncientMegalodon.BITE_HULL_BREACHES, bitten_breaches[0]])
+	check(ship.open_hole_count() >= 2,
+		"unstopped Megalodon bite punches >= 2 hull breaches on Ship (got %d)" % ship.open_hole_count())
+	check_eq(mega.state, AncientMegalodon.State.RETREAT, "Megalodon enters State.RETREAT after biting hull")
+
+	# 4. Verify Brass Spyglass identifies a live Ancient Megalodon at 900 m as "Ancient Megalodon"
+	#    and ignores it once defeated!
+	var inv := Inventory.new()
+	inv.input_enabled = false
+	hero.add_child(inv)
+	hero.global_position = Vector3(0.0, 4.0, 0.0)
+	await physics_frames(2)
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+
+	# Park the first mega out of the northern sighting cone and spawn a distant mega at 900 m North.
+	mega.global_position = Vector3(0.0, -0.5, 40.0)
+	var far_mega := AncientMegalodon.spawn_near_ship(_root, null, Vector3(0.0, 0.0, -900.0))
+	far_mega.global_position = Vector3(0.0, -0.5, -900.0)
+	far_mega.state = AncientMegalodon.State.CIRCLE
+	await physics_frames(2)
+
+	var aim_at := func(world_pt: Vector3) -> void:
+		var delta_v := world_pt - hero.eye_position()
+		var horiz := maxf(Vector2(delta_v.x, delta_v.z).length(), 0.001)
+		hero.look_yaw = atan2(-delta_v.x, -delta_v.z)
+		hero.look_pitch = atan2(delta_v.y, horiz)
+		inv.call(&"_scan_spyglass_sighting")
+
+	aim_at.call(far_mega.global_position + Vector3.UP * 3.5)
+	check_eq(inv.spyglass_sighting, "Ancient Megalodon",
+		"Brass Spyglass identifies live Megalodon at 900 m as 'Ancient Megalodon' (got '%s')" % inv.spyglass_sighting)
+	check(inv.spyglass_sighting_dist >= 885.0 and inv.spyglass_sighting_dist <= 915.0,
+		"Brass Spyglass reports ~900 m distance (got %.1f m)" % inv.spyglass_sighting_dist)
+
+	# 5. Slaying the Megalodon (health <= 0) emits megalodon_defeated and spawns 4 high-tier Carryables!
+	check(mega.apply_damage(mega.health + 25.0, hero), "lethal damage slays AncientMegalodon")
+	check(mega.dead and mega.state == AncientMegalodon.State.DEFEATED,
+		"slain Megalodon sets dead == true and State.DEFEATED")
+	check_eq(defeated_count[0], 1, "megalodon_defeated signal emitted once on death")
+	check_eq(defeated_salvage.size(), 4,
+		"defeating AncientMegalodon spawns 4 floating high-tier treasure Carryables (got %d)" % defeated_salvage.size())
+	var carryable_count := 0
+	for item_v in defeated_salvage:
+		if item_v is Carryable and is_instance_valid(item_v) and (item_v as Node).is_in_group(TreasureCatalog.TREASURE_GROUP):
+			carryable_count += 1
+	check_eq(carryable_count, 4, "all 4 Megalodon salvage drops are valid treasure Carryables")
+
+	# Defeat far_mega and verify Brass Spyglass now ignores it!
+	far_mega.apply_damage(far_mega.health + 50.0, hero)
+	check(far_mega.dead, "far_mega marked dead on defeat")
+	aim_at.call(far_mega.global_position + Vector3.UP * 3.5)
+	check_eq(inv.spyglass_sighting, "", "Brass Spyglass ignores defeated AncientMegalodon")
+	inv.set_secondary_held(false)
+
+	# 6. Verify showcase pose helper runs cleanly with zero errors.
+	var showcase_mega := AncientMegalodon.spawn_near_ship(_root, null, Vector3(120.0, 0.0, 120.0))
+	showcase_mega.force_pose_for_showcase(0.85, 1.0)
+	check(showcase_mega.get_scar_emission_energy() >= 5.0,
+		"force_pose_for_showcase illuminates bioluminescent scar vents")
+
+	# 7. Verify WorldDirector.force_spawn_megalodon() emits spawn_megalodon + strict-ASCII warning!
+	var director := WorldDirector.new(0x35B01)
+	director.post_notices = false
+	director.weather_integration = false
+	director.player_ship = ship
+	_root.add_child(director)
+
+	var wd_spawns: Array[Dictionary] = []
+	var wd_warnings: Array[String] = []
+	director.spawn_megalodon.connect(func(ctr: Vector3, tgt: Node) -> void:
+		wd_spawns.append({"center": ctr, "target": tgt})
+	)
+	director.sighting_warning.connect(func(msg: String, _p: Vector3, kind: StringName, _b: String, _d: float) -> void:
+		if kind == &"megalodon":
+			wd_warnings.append(msg)
+	)
+
+	var wd_evt := director.force_spawn_megalodon(Vector3.FORWARD, ship)
+	check(not wd_evt.is_empty(), "WorldDirector.force_spawn_megalodon returns event dictionary")
+	check_eq(wd_spawns.size(), 1, "WorldDirector emits spawn_megalodon signal")
+	check(wd_spawns[0]["target"] == ship, "spawn_megalodon forwards target ship reference")
+	check_eq(wd_warnings.size(), 1, "WorldDirector emits megalodon sighting_warning")
+	if not wd_warnings.is_empty():
+		var wmsg := wd_warnings[0]
+		check(wmsg.contains("Ancient Megalodon"), "sighting warning names Ancient Megalodon")
+		var non_ascii := 0
+		for ci in wmsg.length():
+			if wmsg.unicode_at(ci) > 127:
+				non_ascii += 1
+		check_eq(non_ascii, 0, "WorldDirector Megalodon sighting warning is strict ASCII")
+
+	# 8. Clean teardown with AncientMegalodon.clear_shared_cache() and ZERO leaks!
+	await _end()
+	AncientMegalodon.clear_shared_cache()
+	check_eq(AncientMegalodon._active_megas, 0, "AncientMegalodon._active_megas == 0 after teardown")
+	check(AncientMegalodon._mesh_cache.is_empty(), "AncientMegalodon._mesh_cache cleared cleanly")
+	check(AncientMegalodon._hide_mat == null and AncientMegalodon._scar_mat == null and AncientMegalodon._eye_mat == null,
+		"AncientMegalodon static materials released cleanly to null (0 leaks)")

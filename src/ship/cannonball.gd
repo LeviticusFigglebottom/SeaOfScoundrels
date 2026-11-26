@@ -143,6 +143,7 @@ func _ready() -> void:
 	_ray_params.collision_mask = HIT_MASK
 	_ray_params.collide_with_areas = false
 	_ray_params.collide_with_bodies = true
+	_ray_params.hit_from_inside = true
 	_refresh_exclusions()
 
 
@@ -558,19 +559,28 @@ func _on_solid_hit(hit_pos: Vector3, hit_normal: Vector3, collider: Object) -> v
 		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.24, 0.72, 0.68)):
 			cleanup_delay = 0.8
 		Audio.play_sfx(&"hit_flesh", hit_pos)
-	elif target != null and target.has_method(&"apply_damage"):
-		if Net.is_host():
-			target.call(&"apply_damage", pawn_damage, shooter_pawn)
-			_detonate_nearby_powder_kegs(hit_pos, 3.2)
-		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.85, 0.72, 0.56)):
-			cleanup_delay = 0.8
-		Audio.play_sfx(&"hit_flesh", hit_pos)
 	else:
-		if Net.is_host():
-			_detonate_nearby_powder_kegs(hit_pos, 3.2)
-		if _spawn_dust_burst(hit_pos, hit_normal, Color(0.76, 0.74, 0.68)):
-			cleanup_delay = 0.8
-		Audio.play_sfx(&"hull_impact", hit_pos, -4.0)
+		var dmg_target: Node = target
+		if dmg_target != null and not dmg_target.has_method(&"apply_damage"):
+			if dmg_target.has_meta(&"megalodon"):
+				dmg_target = dmg_target.get_meta(&"megalodon") as Node
+			elif dmg_target.get_parent() != null and dmg_target.get_parent().has_method(&"apply_damage"):
+				dmg_target = dmg_target.get_parent()
+		if dmg_target != null and is_instance_valid(dmg_target) and dmg_target.has_method(&"apply_damage"):
+			target = dmg_target
+			if Net.is_host():
+				dmg_target.call(&"apply_damage", pawn_damage, shooter_pawn)
+				_detonate_nearby_powder_kegs(hit_pos, 3.2)
+			var burst_col := Color(0.24, 0.78, 0.82) if (dmg_target is AncientMegalodon) else Color(0.85, 0.72, 0.56)
+			if _spawn_dust_burst(hit_pos, hit_normal, burst_col):
+				cleanup_delay = 0.8
+			Audio.play_sfx(&"hit_flesh", hit_pos)
+		else:
+			if Net.is_host():
+				_detonate_nearby_powder_kegs(hit_pos, 3.2)
+			if _spawn_dust_burst(hit_pos, hit_normal, Color(0.76, 0.74, 0.68)):
+				cleanup_delay = 0.8
+			Audio.play_sfx(&"hull_impact", hit_pos, -4.0)
 
 	_mark_impacted(hit_pos, target, cleanup_delay)
 
@@ -638,8 +648,14 @@ func _apply_firebomb_splash_scorch(hit_pos: Vector3, direct_node: Node = null) -
 	var r_sq := FIREBOMB_SPLASH_RADIUS * FIREBOMB_SPLASH_RADIUS
 	var seen: Dictionary = {}
 	var candidates: Array[Node3D] = []
-	if direct_node is Node3D and is_instance_valid(direct_node):
-		candidates.append(direct_node as Node3D)
+	var resolved_direct: Node = direct_node
+	if resolved_direct != null and not resolved_direct.has_method(&"apply_damage") and not resolved_direct.has_method(&"take_damage"):
+		if resolved_direct.has_meta(&"megalodon"):
+			resolved_direct = resolved_direct.get_meta(&"megalodon") as Node
+		elif resolved_direct.get_parent() != null and resolved_direct.get_parent().has_method(&"apply_damage"):
+			resolved_direct = resolved_direct.get_parent()
+	if resolved_direct is Node3D and is_instance_valid(resolved_direct):
+		candidates.append(resolved_direct as Node3D)
 	var tree := get_tree()
 	if tree != null:
 		for grp: StringName in [&"pawn", &"pawns"]:
@@ -671,7 +687,7 @@ func _apply_firebomb_splash_scorch(hit_pos: Vector3, direct_node: Node = null) -
 		var is_dead: Variant = cand.get(&"dead")
 		if is_dead is bool and bool(is_dead):
 			continue
-		if cand != direct_node and cand.global_position.distance_squared_to(hit_pos) > r_sq:
+		if cand != resolved_direct and cand.global_position.distance_squared_to(hit_pos) > r_sq:
 			continue
 		if cand.has_method(&"take_damage"):
 			cand.call(&"take_damage", FIREBOMB_SPLASH_DAMAGE)
