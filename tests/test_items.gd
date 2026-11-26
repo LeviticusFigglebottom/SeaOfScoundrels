@@ -861,5 +861,137 @@ func test_riddle_scroll_and_bounty_poster_parchment_modes() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 10. Wave 16B: Full-Spectrum Living-Sea Spyglass Identifier & 16-Point Bearings
+# ---------------------------------------------------------------------------
+
+func test_spyglass_living_sea_horizon_identifier_and_bearings() -> void:
+	_begin()
+
+	# 1. Verify exact 16-point maritime compass heading convention (-Z = N, +X = E).
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(0.0, 0.0, -200.0)), "N")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(200.0, 0.0, 0.0)), "E")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(0.0, 0.0, 200.0)), "S")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(-200.0, 0.0, 0.0)), "W")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(-180.0, 0.0, 180.0)), "SW")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(-240.0, 0.0, -100.0)), "WNW")
+	check_eq(Inventory.format_compass_bearing(Vector3.ZERO, Vector3(165.0, 0.0, -415.0)), "NNE")
+
+	var rig := _make_player_pawn(Vector3(0.0, 4.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, null, null, null)
+	await physics_frames(2)
+
+	# Build a ring of living-sea horizon targets around the observer (one per bearing).
+	var corsair := SLOOP_SCENE.instantiate() as Ship
+	corsair.enable_effects = false
+	corsair.start_anchored = true
+	corsair.faction = &"corsair"
+	corsair.ship_class = &"sloop"
+	corsair.position = Vector3(0.0, 0.0, -220.0)  # N
+	_root.add_child(corsair)
+
+	var ghost := SLOOP_SCENE.instantiate() as Ship
+	ghost.enable_effects = false
+	ghost.start_anchored = true
+	ghost.faction = &"ghost"
+	ghost.ship_class = &"sloop"
+	ghost.position = Vector3(240.0, 0.0, 0.0)  # E
+	_root.add_child(ghost)
+
+	var brig := SLOOP_SCENE.instantiate() as Ship
+	brig.enable_effects = false
+	brig.start_anchored = true
+	brig.faction = &"player"
+	brig.ship_class = &"brigantine"
+	brig.position = Vector3(-180.0, 0.0, 180.0)  # SW
+	_root.add_child(brig)
+
+	var dolphins := Node3D.new()
+	dolphins.position = Vector3(-110.0, 0.0, -110.0)  # NW
+	dolphins.add_to_group(&"dolphins")
+	_root.add_child(dolphins)
+
+	var shark := Node3D.new()
+	shark.position = Vector3(70.0, 0.0, 70.0)  # SE
+	shark.add_to_group(&"sharks")
+	_root.add_child(shark)
+
+	var raft := CastawayRaft.new()
+	raft.auto_buoyancy = false
+	raft.position = Vector3(-160.0, 0.0, 0.0)  # W
+	_root.add_child(raft)
+
+	var battery := FortBattery.new()
+	battery.siege_active = true
+	battery.destroyed = false
+	battery.position = Vector3(0.0, 0.0, 180.0)  # S
+	_root.add_child(battery)
+
+	var lev := Node3D.new()
+	lev.position = Vector3(240.0, 0.0, -100.0)  # ENE
+	lev.add_to_group(&"leviathan")
+	_root.add_child(lev)
+
+	var island := Node3D.new()
+	island.position = Vector3(165.0, 0.0, -415.0)  # NNE
+	island.set_meta("display_name", "Cutlass Cay")
+	island.add_to_group(&"islands")
+	_root.add_child(island)
+
+	await physics_frames(1)
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+
+	var aim_and_scan := func(target_pos: Vector3) -> void:
+		var delta := target_pos - captain.eye_position()
+		var horiz := maxf(Vector2(delta.x, delta.z).length(), 0.001)
+		captain.look_yaw = atan2(-delta.x, -delta.z)
+		captain.look_pitch = atan2(delta.y, horiz)
+		inv.call(&"_scan_spyglass_sighting")
+
+	var cases: Array[Array] = [
+		[corsair.global_position + Vector3.UP * 3.5, "Corsair Raider", "N"],
+		[ghost.global_position + Vector3.UP * 3.5, "Spectral Ghost Ship", "E"],
+		[brig.global_position + Vector3.UP * 3.5, "Brigantine", "SW"],
+		[dolphins.global_position + Vector3.UP * 1.0, "Dolphin Pod", "NW"],
+		[shark.global_position + Vector3.UP * 0.5, "Ocean Shark", "SE"],
+		[raft.global_position + Vector3.UP * 2.0, "Castaway Raft", "W"],
+		[battery.global_position + Vector3.UP * 2.0, "Ironwatch Fort Battery", "S"],
+		[lev.global_position + Vector3.UP * 6.0, "Abyssal Leviathan", "ENE"],
+		[island.global_position + Vector3.UP * 14.0, "Cutlass Cay", "NNE"],
+	]
+	for c: Array in cases:
+		aim_and_scan.call(c[0] as Vector3)
+		check_eq(inv.spyglass_sighting, String(c[1]),
+			"spyglass identifies '%s' (got '%s')" % [String(c[1]), inv.spyglass_sighting])
+		check_eq(inv.spyglass_sighting_bearing, String(c[2]),
+			"spyglass computes bearing '%s' for %s (got '%s')" % [String(c[2]), String(c[1]), inv.spyglass_sighting_bearing])
+
+	# Verify HUD spyglass overlay formats crisp uppercase ASCII 'LABEL  -  DIST m  BEARING' pill!
+	aim_and_scan.call(ghost.global_position + Vector3.UP * 3.5)
+	var hud_txt: String = hud._spyglass_view.get_sighting_text()
+	check(hud_txt.begins_with("SPECTRAL GHOST SHIP  -  ") and hud_txt.ends_with(" m  E"),
+		"HUD spyglass pill formats uppercase ASCII with bearing (got '%s')" % hud_txt)
+	for ci in hud_txt.length():
+		check(hud_txt.unicode_at(ci) < 128, "HUD spyglass text is strictly ASCII")
+
+	# Verify rescued CastawayRaft is ignored cleanly.
+	raft.is_rescued = true
+	aim_and_scan.call(raft.global_position + Vector3.UP * 2.0)
+	check_eq(inv.spyglass_sighting, "", "rescued CastawayRaft is ignored by spyglass")
+
+	inv.set_secondary_held(false)
+	await _end()
+
+
+
 
 

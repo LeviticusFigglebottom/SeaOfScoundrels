@@ -21,10 +21,10 @@ const COL_EYE_DARK := Color(0.035, 0.045, 0.060)     # Wet obsidian glossy eye
 # [offset: Vector3, phase_offset: float, leap_height: float, body_scale: float, roll_dir: float]
 const POD_SLOTS: Array[Array] = [
 	[Vector3(-5.2, 0.0, -4.5), 0.00, 2.18, 1.04, -1.0],
-	[Vector3(5.4, 0.0, -6.2), 2.15, 2.32, 0.98, 1.0],
-	[Vector3(8.2, 0.0, -2.5), 4.25, 1.92, 0.90, 1.0],
-	[Vector3(-8.0, 0.0, -1.8), 1.12, 1.98, 0.93, -1.0],
-	[Vector3(2.8, 0.0, -9.0), 3.25, 2.24, 0.96, 1.0],
+	[Vector3(5.4, 0.0, -6.2), 2.15, 2.26, 0.98, 1.0],
+	[Vector3(7.3, 0.0, -2.5), 4.25, 1.94, 0.90, 1.0],
+	[Vector3(-7.2, 0.0, -1.8), 1.12, 1.98, 0.93, -1.0],
+	[Vector3(4.8, 0.0, -9.0), 3.25, 2.22, 0.96, 1.0],
 ]
 
 # Statically cached procedural ArrayMeshes & materials shared across all active pods.
@@ -138,17 +138,35 @@ func get_dolphin_nodes() -> Array[Node3D]:
 	return out
 
 
-## Deterministically pose the pod at `phase_rad` (e.g. `PI * 0.5` for a mid-air leap apex)
-## with picturesque staggered offsets across podmates, updating transforms & tail bend immediately.
+## Deterministically pose the pod at `phase_rad` (e.g. `1.25` or `PI * 0.5` for a mid-air leap apex)
+## with staggered offsets across podmates, updating transforms, tail bend, and breach foam rings immediately.
 func force_leap_phase(phase_rad: float) -> void:
 	_phase_forced = true
-	var stagger: Array[float] = [0.0, -0.46, 0.42, -0.72, 0.66]
+	var stagger: Array[float] = [0.0, 0.34, -0.52, -0.72, 0.66]
 	for i in _dolphins.size():
 		var d: Dictionary = _dolphins[i]
 		var stg: float = stagger[i % stagger.size()]
 		d["phase"] = phase_rad + stg
 		d["tail_phase"] = (phase_rad + stg) * 3.8
 	_update_dolphins(0.0, false)
+	# Stamp sparkling white breach foam rings & spray directly beneath airborne dolphins!
+	var inv_pod := global_transform.affine_inverse() if is_inside_tree() else transform.affine_inverse()
+	for d: Dictionary in _dolphins:
+		var d_root := d.get("root") as Node3D
+		if d_root == null or not is_instance_valid(d_root):
+			continue
+		var wp := d_root.global_position if is_inside_tree() else (transform * d_root.position)
+		var wy := Sea.height(wp.x, wp.z) if Sea != null else 0.0
+		if wp.y - wy > 0.35:
+			var splash_w := Vector3(wp.x, wy + 0.04, wp.z)
+			if Ocean.current != null:
+				Ocean.current.add_foam(splash_w, 1.48, 0.84)
+			var sp := d.get("spray") as GPUParticles3D
+			if sp != null and is_instance_valid(sp):
+				sp.position = inv_pod * splash_w
+				sp.visible = true
+				sp.restart()
+				sp.emitting = true
 
 
 # ==============================================================================
@@ -245,6 +263,14 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 		var u := clampf((age - (lifetime - 3.0)) / 3.0, 0.0, 1.0)
 		dive_out = u * u * (3.0 - 2.0 * u)
 
+	# Scale lateral beam clearance & bow-forward shift cleanly for wide-beam Brigantines vs Sloops.
+	var is_brig := false
+	if follow_ship != null and is_instance_valid(follow_ship):
+		var sc_val: Variant = follow_ship.get(&"ship_class")
+		is_brig = (sc_val == &"brigantine")
+	var beam_scale := 1.42 if is_brig else 1.0
+	var bow_shift := -3.8 if is_brig else 0.0
+
 	var inv_pod := global_transform.affine_inverse() if is_inside_tree() else transform.affine_inverse()
 
 	for d: Dictionary in _dolphins:
@@ -262,11 +288,13 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 		var ds := cos(phase) * omega
 		var leap_h: float = float(d["leap_h"]) * (1.0 - dive_out)
 
-		# Playful lateral bow-wave weave & slight fore-aft surge.
+		# Playful lateral bow-wave weave & slight fore-aft surge with guaranteed hull clearance.
 		var slot_off: Vector3 = d["slot_offset"] as Vector3
+		var eff_x := slot_off.x * beam_scale
+		var eff_z := slot_off.z + bow_shift
 		var weave_x := sin(phase * 0.5) * 0.55
 		var surge_z := cos(phase) * 0.60
-		var world_xz := ref_origin + ref_right * (slot_off.x + weave_x) + ref_fwd * (-slot_off.z + surge_z)
+		var world_xz := ref_origin + ref_right * (eff_x + weave_x) + ref_fwd * (-eff_z + surge_z)
 		var wave_y := Sea.height(world_xz.x, world_xz.z) if Sea != null else 0.0
 
 		var rel_y: float

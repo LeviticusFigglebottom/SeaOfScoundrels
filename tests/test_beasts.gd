@@ -13,6 +13,12 @@ extends TestCase
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const SPEEDUP := 6
 
+
+class MockBrigantine:
+	extends Node3D
+	var ship_class: StringName = &"brigantine"
+
+
 var _root: Node3D
 var _saved_weather: Dictionary
 var _saved_amp: float = 1.0
@@ -673,7 +679,28 @@ func test_dolphin_pod_sculpted_meshes_leaps_and_teardown() -> void:
 	pod.force_leap_phase(PI * 0.84)
 	check(d0.rotation.x < -0.20, "dolphin pitches nose-down on dive re-entry (pitch=%.3f)" % d0.rotation.x)
 
-	# 4. Verify lifetime expiry auto-frees cleanly and releases all static caches with ZERO leaks!
+	# 4. Verify Brigantine hull-size-aware bow-wave clearance (>= 5.5 m beam clearance, forward beside bow)
+	#    and force_leap_phase(1.25) putting 2 dolphins cleanly airborne near 1.8-2.3 m peak crest!
+	var mock_brig := MockBrigantine.new()
+	_root.add_child(mock_brig)
+	mock_brig.global_position = Vector3(40.0, 0.0, -20.0)
+	var brig_pod := DolphinPod.spawn_alongside(_root, mock_brig, 3, 18.0)
+	brig_pod.force_leap_phase(1.25)
+	var peak_count := 0
+	for bd in brig_pod.get_dolphin_nodes():
+		var beam_clear := absf(bd.global_position.x - mock_brig.global_position.x)
+		var bow_ahead := mock_brig.global_position.z - bd.global_position.z
+		var rel_h := bd.global_position.y - Sea.height(bd.global_position.x, bd.global_position.z)
+		check(beam_clear >= 5.5, "Brigantine dolphin '%s' clears hull centerline >= 5.5 m (got %.2f m)" % [bd.name, beam_clear])
+		check(bow_ahead >= 5.0, "Brigantine dolphin '%s' rides forward beside bow wave (ahead=%.2f m)" % [bd.name, bow_ahead])
+		if rel_h >= 1.80 and rel_h <= 2.35:
+			peak_count += 1
+	check(peak_count >= 2, "force_leap_phase(1.25) places >= 2 dolphins near 1.8-2.3 m peak crest (got %d)" % peak_count)
+	brig_pod.queue_free()
+	mock_brig.queue_free()
+	await physics_frames(2)
+
+	# 5. Verify lifetime expiry auto-frees cleanly and releases all static caches with ZERO leaks!
 	pod.age = pod.lifetime - 0.05
 	await physics_frames(8)
 	check(not is_instance_valid(pod), "DolphinPod cleanly queue_free()s after lifetime expires")
@@ -681,6 +708,97 @@ func test_dolphin_pod_sculpted_meshes_leaps_and_teardown() -> void:
 		"DolphinPod releases static mesh & material caches cleanly when last pod exits tree")
 
 	await _end()
+
+
+func test_flotsam_cluster_sculpted_debris_and_salvage() -> void:
+	_begin()
+	var flotsam_gd: GDScript = preload("res://src/world/flotsam_cluster.gd")
+	Sea.amp_scale = Sea.AMP_STORM
+	Sea.time = 1.2
+
+	var c1: Node3D = flotsam_gd.call(&"spawn_at", _root, Vector3(16.0, 0.0, -24.0), 42) as Node3D
+	var c2: Node3D = flotsam_gd.call(&"spawn_at", _root, Vector3(-18.0, 0.0, -28.0), 99) as Node3D
+	check(c1 != null and c2 != null, "FlotsamCluster.spawn_at creates buoyant clusters")
+	check(c1.is_in_group(&"flotsam"), "FlotsamCluster registers in group 'flotsam'")
+
+	# 1. Verify sculpted zero-primitive ShipwreckDebrisMesh, static mesh sharing, sRGB mats, and finite normals.
+	var dmi1 := c1.get_node_or_null(^"ShipwreckDebrisMesh") as MeshInstance3D
+	var dmi2 := c2.get_node_or_null(^"ShipwreckDebrisMesh") as MeshInstance3D
+	check(dmi1 != null and dmi1.mesh is ArrayMesh, "FlotsamCluster builds sculpted ShipwreckDebrisMesh ArrayMesh")
+	check(dmi2 != null and dmi1.mesh == dmi2.mesh, "FlotsamClusters share statically cached debris ArrayMesh")
+
+	var raw_prims := 0
+	var bad_normals := 0
+	var debris_tris := 0
+	for n in c1.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		if mi.mesh is PrimitiveMesh:
+			raw_prims += 1
+	if dmi1 != null and dmi1.mesh is ArrayMesh:
+		var am := dmi1.mesh as ArrayMesh
+		check(am.get_surface_count() >= 2, "ShipwreckDebrisMesh has timber/hemp + painted float/iron surfaces")
+		for si in am.get_surface_count():
+			var arr := am.surface_get_arrays(si)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			debris_tris += floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+		var wmat := dmi1.get_surface_override_material(0) as StandardMaterial3D
+		check(wmat != null and wmat.vertex_color_is_srgb, "ShipwreckDebrisMesh uses sRGB vertex-colored material")
+
+	var fb_barrel := flotsam_gd.get(&"_fallback_barrel_mesh") as ArrayMesh
+	var fb_tris := 0
+	if fb_barrel != null:
+		for si in fb_barrel.get_surface_count():
+			fb_tris += floori(float((fb_barrel.surface_get_arrays(si)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()) / 3.0)
+	print("    flotsam sculpted meshes: ShipwreckDebrisMesh=%d tris, fallback_barrel=%d tris" % [debris_tris, fb_tris])
+	check_eq(raw_prims, 0, "FlotsamCluster contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all ShipwreckDebrisMesh normals are finite unit vectors")
+	check(debris_tris >= 1200, "ShipwreckDebrisMesh has detailed planks/spar/netting/floats (%d tris)" % debris_tris)
+
+	# 2. Verify realistic Sea.height() wave bobbing and slope pitch/roll response.
+	for _i in 20:
+		Sea.time += 0.12
+		c1.call(&"step_buoyancy", 0.12)
+	var expected_y := Sea.height(16.0, -24.0)
+	check(absf(c1.global_position.y - expected_y) < 0.12,
+		"FlotsamCluster rides live Sea.height() (y=%.2f vs sea=%.2f)" % [c1.global_position.y, expected_y])
+	check(absf(c1.rotation.x) + absf(c1.rotation.z) > 0.01, "FlotsamCluster pitches/rolls naturally with wave chop")
+
+	# 3. Verify host-authoritative idempotent salvage via Interactable.
+	var it := c1.get(&"interactable") as Interactable
+	check(it != null and it.enabled and it.prompt == "Salvage flotsam supplies", "FlotsamCluster exposes Salvage Interactable")
+	var barrel := c1.get_node_or_null(^"CargoBarrel") as Node3D
+	check(barrel != null and barrel.visible, "CargoBarrel starts visible before salvage")
+
+	var salvaged_events: Array[Dictionary] = []
+	c1.connect(&"flotsam_salvaged", func(_cl: Node, _p: Node, loot: Dictionary) -> void:
+		salvaged_events.append(loot)
+	)
+	it.interact(null)
+	check_eq(salvaged_events.size(), 1, "flotsam_salvaged emits once on interact")
+	check(bool(c1.get(&"salvaged")), "FlotsamCluster marks salvaged = true")
+	check(not it.enabled, "salvaged FlotsamCluster disables Interactable")
+	check(not barrel.visible, "salvaged FlotsamCluster hides CargoBarrel")
+	if salvaged_events.size() == 1:
+		check_eq(int(salvaged_events[0].get("cannonballs", 0)), 6, "salvage awards 6 cannonballs")
+		check_eq(int(salvaged_events[0].get("planks", 0)), 4, "salvage awards 4 planks")
+		check_eq(int(salvaged_events[0].get("gold", 0)), 35, "salvage awards 35 gold")
+
+	# Repeat salvage must be strictly idempotent.
+	var repeat_loot: Dictionary = c1.call(&"salvage", null) as Dictionary
+	check(repeat_loot.is_empty() and salvaged_events.size() == 1, "repeat salvage() is strictly idempotent")
+
+	# 4. Zero-leak teardown releases all static caches cleanly when last FlotsamCluster exits tree!
+	await _end()
+	check(not is_instance_valid(c1) and not is_instance_valid(c2), "FlotsamClusters freed cleanly")
+	check(flotsam_gd.get(&"_debris_mesh") == null and flotsam_gd.get(&"_wood_mat") == null and flotsam_gd.get(&"_accent_mat") == null,
+		"FlotsamCluster releases static mesh & material caches cleanly with zero leaks")
+
 
 
 

@@ -1499,7 +1499,8 @@ func _on_spyglass_zoom(amount: float) -> void:
 
 func _on_sighting_updated(label: String, distance_m: float) -> void:
 	if _spyglass_view != null:
-		_spyglass_view.set_sighting(label, distance_m)
+		var bearing := inventory.spyglass_sighting_bearing if (inventory != null and is_instance_valid(inventory)) else ""
+		_spyglass_view.set_sighting(label, distance_m, bearing)
 
 
 func _on_pawn_damaged(amount: float, _from: Node) -> void:
@@ -1893,6 +1894,7 @@ class _SpyglassOverlay extends Control:
 	var _zoom: float = 0.0
 	var _sighting_label: String = ""
 	var _sighting_dist: float = 0.0
+	var _sighting_bearing: String = ""
 	var _font: Font = null
 
 	func _ready() -> void:
@@ -1906,10 +1908,19 @@ class _SpyglassOverlay extends Control:
 		visible = _zoom > 0.03
 		queue_redraw()
 
-	func set_sighting(label: String, dist_m: float) -> void:
+	func set_sighting(label: String, dist_m: float, bearing: String = "") -> void:
 		_sighting_label = GameHUD._to_ascii(label)
 		_sighting_dist = dist_m
+		_sighting_bearing = GameHUD._to_ascii(bearing).strip_edges()
 		queue_redraw()
+
+	func get_sighting_text() -> String:
+		if _sighting_label == "":
+			return ""
+		var upper := _sighting_label.to_upper()
+		if _sighting_bearing != "":
+			return "%s  -  %d m  %s" % [upper, int(roundf(_sighting_dist)), _sighting_bearing]
+		return "%s  -  %d m" % [upper, int(roundf(_sighting_dist))]
 
 	func _draw() -> void:
 		if _zoom <= 0.03:
@@ -1943,7 +1954,7 @@ class _SpyglassOverlay extends Control:
 
 		# Subtle horizon sighting readout tucked cleanly at the bottom of the lens.
 		if _sighting_label != "" and _zoom > 0.45 and _font != null:
-			var txt := "%s -- %d m" % [_sighting_label, int(roundf(_sighting_dist))]
+			var txt := get_sighting_text()
 			var sz := _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_CENTER, -1, 17)
 			var box_r := Rect2(c.x - sz.x * 0.5 - 16.0, c.y + aperture_r - 58.0, sz.x + 32.0, 32.0)
 			draw_rect(box_r, Color(0.92, 0.85, 0.70, 0.90 * a), true)

@@ -243,3 +243,30 @@ func test_ocean_quality_switching() -> void:
 	await get_tree().process_frame
 	remove_child(ocean)
 	ocean.free()
+
+
+func test_ocean_nocturnal_bioluminescence_shader() -> void:
+	var shader: Shader = load("res://src/ocean/ocean.gdshader") as Shader
+	check(shader != null, "ocean.gdshader loads cleanly as Shader resource")
+	if shader == null:
+		return
+	var code := shader.code
+	check(code.contains("night_bio"), "ocean.gdshader defines night_bio twilight/night mask")
+	check(code.contains("smoothstep(0.02, -0.14, sun_dir.y)"),
+		"ocean.gdshader keeps daytime & sunset sun elevations strictly untouched")
+	check(code.contains("wake_bio") and code.contains("crest_bio"),
+		"ocean.gdshader drives bioluminescent shimmer from ship wakes and breaking crests")
+	var frag_idx := code.find("void fragment()")
+	var bio_idx := code.find("night_bio")
+	check(frag_idx >= 0 and bio_idx > frag_idx,
+		"nocturnal bioluminescence lives strictly inside fragment() leaving vertex() parity untouched")
+
+	var ocean_scene: PackedScene = load("res://src/ocean/ocean.tscn")
+	var ocean: Ocean = ocean_scene.instantiate() as Ocean
+	add_child(ocean)
+	check(ocean.material != null and ocean.material.shader == shader,
+		"Ocean scene binds compiled ocean.gdshader cleanly")
+	await get_tree().process_frame
+	remove_child(ocean)
+	ocean.free()
+

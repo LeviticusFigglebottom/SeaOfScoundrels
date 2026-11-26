@@ -1333,12 +1333,16 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	await get_tree().process_frame
 	check(not is_instance_valid(holder), "siege vault test nodes tear down cleanly")
 
-	# Verify scenes/main.gd contains zero raw primitive meshes and exposes Wave 13D showcase shots.
+	# Verify scenes/main.gd contains zero raw primitive meshes and exposes Wave 13D–16D showcase shots & FlotsamCluster wiring.
 	var main_src := FileAccess.get_file_as_string("res://scenes/main.gd")
 	check(main_src.length() > 1000, "loaded scenes/main.gd source cleanly")
 	for prim: String in ["BoxMesh.new", "SphereMesh.new", "CylinderMesh.new", "CapsuleMesh.new", "PrismMesh.new"]:
 		check(not main_src.contains(prim), "scenes/main.gd must contain zero raw %s placeholders" % prim)
 	check(main_src.contains("\"company_fleet\":"), "scenes/main.gd registers shot=company_fleet")
 	check(main_src.contains("\"fort_vault\":"), "scenes/main.gd registers shot=fort_vault")
+	check(main_src.contains("\"dolphins\":"), "scenes/main.gd registers shot=dolphins")
+	check(main_src.contains("\"night_sail\":"), "scenes/main.gd registers shot=night_sail")
+	check(main_src.contains("flotsam_cluster.gd") and main_src.contains("flotsam_salvaged"),
+		"scenes/main.gd wires FlotsamCluster & flotsam_salvaged rewards cleanly")
 
 

@@ -41,6 +41,12 @@ const SHOVEL_REACH := 2.6
 const PLANK_REACH := 3.2
 const BAIL_AMOUNT := 0.16
 const GROG_HEAL := 15.0
+const COMPASS_16: PackedStringArray = [
+	"N", "NNE", "NE", "ENE",
+	"E", "ESE", "SE", "SSE",
+	"S", "SSW", "SW", "WSW",
+	"W", "WNW", "NW", "NNW",
+]
 
 ## First-person rest & secondary-raised poses relative to Camera3D:
 ## [rest_pos, rest_rot_deg, raise_pos, raise_rot_deg, scale].
@@ -88,6 +94,7 @@ var bucket_full: bool = false
 var spyglass_zoom: float = 0.0
 var spyglass_sighting: String = ""
 var spyglass_sighting_dist: float = 0.0
+var spyglass_sighting_bearing: String = ""
 var tipsy: float = 0.0
 var playing_shanty: bool = false
 
@@ -856,15 +863,28 @@ func _tick_spyglass(delta: float) -> void:
 		if _sighting_timer <= 0.0:
 			_sighting_timer = 0.15
 			_scan_spyglass_sighting()
-	elif spyglass_sighting != "":
+	elif spyglass_sighting != "" or spyglass_sighting_bearing != "":
 		spyglass_sighting = ""
 		spyglass_sighting_dist = 0.0
+		spyglass_sighting_bearing = ""
 		sighting_updated.emit("", 0.0)
 
 
 func _set_spyglass_zoom(v: float) -> void:
 	spyglass_zoom = clampf(v, 0.0, 1.0)
 	spyglass_zoom_changed.emit(spyglass_zoom)
+
+
+## Format horizontal heading from `from_pos` toward `to_pos` as a 16-point maritime compass bearing
+## (-Z = N, +X = E, matching `MapTableView.format_course_bearing`).
+static func format_compass_bearing(from_pos: Vector3, to_pos: Vector3) -> String:
+	var dx := to_pos.x - from_pos.x
+	var dz := to_pos.z - from_pos.z
+	if dx * dx + dz * dz < 0.25:
+		return "N"
+	var ang := fposmod(atan2(dx, -dz), TAU)
+	var idx := int(roundf(ang / (TAU / 16.0))) % 16
+	return COMPASS_16[idx]
 
 
 func _scan_spyglass_sighting() -> void:
@@ -875,16 +895,18 @@ func _scan_spyglass_sighting() -> void:
 	var my_ship := pawn.platform
 	var best_label := ""
 	var best_dist := 0.0
+	var best_pos := Vector3.ZERO
 	var best_score := cos(deg_to_rad(6.5))
-	var max_ship_dist := 2600.0 * sighting_range_scale
-	var max_island_dist := 3500.0 * sighting_range_scale
+	var r_scale := maxf(sighting_range_scale, 0.5)
 
-	# Check distant ships (other than our own).
+	# 1. Distant ships (excluding our own), distinguishing faction & ship class.
+	var max_ship_dist := 2600.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"ship"):
 		if not (node is Node3D) or node == my_ship:
 			continue
 		var s := node as Node3D
-		var to := (s.global_position + Vector3.UP * 3.5) - eye
+		var target_pos := s.global_position + Vector3.UP * 3.5
+		var to := target_pos - eye
 		var dist := to.length()
 		if dist < 12.0 or dist > max_ship_dist:
 			continue
@@ -892,20 +914,130 @@ func _scan_spyglass_sighting() -> void:
 		if score > best_score:
 			best_score = score
 			best_dist = dist
+			best_pos = target_pos
 			var fac: Variant = s.get(&"faction")
+			var s_cls: Variant = s.get(&"ship_class")
+			var is_brig: bool = (s_cls == &"brigantine")
 			if fac == &"ghost":
-				best_label = "Ghost Ship"
+				best_label = "Spectral Ghost Ship"
+			elif fac == &"corsair":
+				best_label = "Corsair Brigantine" if is_brig else "Corsair Raider"
 			elif fac == &"drowned":
-				best_label = "Drowned Sloop"
+				best_label = "Drowned Brigantine" if is_brig else "Drowned Sloop"
 			else:
-				best_label = "Sloop"
+				best_label = "Brigantine" if is_brig else "Sloop"
 
-	# Check archipelago islands (group `islands`).
+	# 2. Abyssal Leviathan world boss (group `world_events` or `leviathan`; ignore defeated).
+	var max_boss_dist := 2200.0 * r_scale
+	var boss_nodes: Array[Node] = []
+	boss_nodes.append_array(get_tree().get_nodes_in_group(&"world_events"))
+	boss_nodes.append_array(get_tree().get_nodes_in_group(&"leviathan"))
+	for node in boss_nodes:
+		if not (node is Node3D):
+			continue
+		var is_lev := (node is Leviathan) or node.is_in_group(&"leviathan")
+		if not is_lev:
+			continue
+		var active_v: Variant = node.get(&"active")
+		var defeated_v: Variant = node.get(&"_defeated")
+		if (active_v is bool and not bool(active_v)) or (defeated_v is bool and bool(defeated_v)):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 6.0
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 15.0 or dist > max_boss_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Abyssal Leviathan"
+
+	# 3. Living sea wildlife: Dolphin Pods & Ocean Sharks.
+	var max_dolphin_dist := 1200.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"dolphins"):
+		if not (node is Node3D):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 1.0
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 10.0 or dist > max_dolphin_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Dolphin Pod"
+
+	var max_shark_dist := 900.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"sharks"):
+		if not (node is Node3D):
+			continue
+		var dead_v: Variant = node.get(&"dead")
+		if dead_v is bool and bool(dead_v):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 0.5
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 8.0 or dist > max_shark_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Ocean Shark"
+
+	# 4. Castaway Rafts (ignore rescued) & active Ironwatch Fort Batteries.
+	var max_raft_dist := 1600.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"castaway_rafts"):
+		if not (node is Node3D):
+			continue
+		var rescued_v: Variant = node.get(&"is_rescued")
+		if rescued_v is bool and bool(rescued_v):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 2.0
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 10.0 or dist > max_raft_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Castaway Raft"
+
+	var max_fort_dist := 1800.0 * r_scale
+	for node in get_tree().get_nodes_in_group(&"fort_batteries"):
+		if not (node is Node3D):
+			continue
+		var dest_v: Variant = node.get(&"destroyed")
+		var siege_v: Variant = node.get(&"siege_active")
+		if (dest_v is bool and bool(dest_v)) or not (siege_v is bool and bool(siege_v)):
+			continue
+		var target_pos := (node as Node3D).global_position + Vector3.UP * 2.0
+		var to := target_pos - eye
+		var dist := to.length()
+		if dist < 15.0 or dist > max_fort_dist:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			best_pos = target_pos
+			best_label = "Ironwatch Fort Battery"
+
+	# 5. All 11 Archipelago Islands (group `islands`).
+	var max_island_dist := 3500.0 * r_scale
 	for node in get_tree().get_nodes_in_group(&"islands"):
 		if not (node is Node3D):
 			continue
 		var isl := node as Node3D
-		var to := (isl.global_position + Vector3.UP * 14.0) - eye
+		var target_pos := isl.global_position + Vector3.UP * 14.0
+		var to := target_pos - eye
 		var dist := to.length()
 		if dist < 25.0 or dist > max_island_dist:
 			continue
@@ -913,6 +1045,7 @@ func _scan_spyglass_sighting() -> void:
 		if score > best_score:
 			best_score = score
 			best_dist = dist
+			best_pos = target_pos
 			var nm: Variant = isl.get(&"display_name")
 			if nm == null:
 				nm = isl.get(&"island_name")
@@ -920,9 +1053,13 @@ func _scan_spyglass_sighting() -> void:
 				nm = isl.get_meta("display_name")
 			best_label = String(nm) if nm != null else String(isl.name)
 
-	if best_label != spyglass_sighting or absf(best_dist - spyglass_sighting_dist) > 5.0:
+	var best_bearing := format_compass_bearing(eye, best_pos) if best_label != "" else ""
+	if best_label != spyglass_sighting \
+			or best_bearing != spyglass_sighting_bearing \
+			or absf(best_dist - spyglass_sighting_dist) > 5.0:
 		spyglass_sighting = best_label
 		spyglass_sighting_dist = best_dist
+		spyglass_sighting_bearing = best_bearing
 		sighting_updated.emit(spyglass_sighting, spyglass_sighting_dist)
 
 

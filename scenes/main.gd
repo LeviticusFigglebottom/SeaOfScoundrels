@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault|dolphins
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -22,6 +22,7 @@ const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 
 const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
 const DOLPHIN_POD_PATH := "res://src/world/dolphin_pod.gd"
+const FLOTSAM_CLUSTER_PATH := "res://src/world/flotsam_cluster.gd"
 
 const CREW_SPECS: Array[Dictionary] = [
 	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
@@ -1620,32 +1621,34 @@ func _on_director_spawn_leviathan(center: Vector3, target: Node) -> void:
 func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:
 	if not Net.is_host():
 		return
-	# Spawn bobbing salvage barrels/crates plus one real floating treasure chest!
-	for i in maxi(1, count):
-		var ang := float(i) / float(maxi(1, count)) * TAU + 0.3
-		var rad := 2.4 + float(i % 2) * 2.2
+	var cluster_script: GDScript = load(FLOTSAM_CLUSTER_PATH) as GDScript if ResourceLoader.exists(FLOTSAM_CLUSTER_PATH) else null
+	var use_cluster := cluster_script != null and cluster_script.has_method(&"spawn_at")
+
+	# Spawn sculpted bobbing FlotsamClusters (or legacy barrel/crate fallback) plus one floating treasure chest!
+	for idx in maxi(1, count):
+		var ang := float(idx) / float(maxi(1, count)) * TAU + 0.3
+		var rad := 3.2 + float(idx % 2) * 2.6 if use_cluster else 2.4 + float(idx % 2) * 2.2
 		var bx := pos.x + cos(ang) * rad
 		var bz := pos.z + sin(ang) * rad
-		var prop_scene := BARREL_PROP_SCENE if (i % 2 == 0) else CRATE_PROP_SCENE
-		var barrel := prop_scene.instantiate() as Node3D
-		barrel.name = "FlotsamBarrel_%d" % i
-		_entities_root.add_child(barrel)
-		barrel.global_position = Vector3(bx, Sea.height(bx, bz) - 0.15, bz)
-		var it := Interactable.create("Salvage flotsam supplies", 1.2)
-		it.position = Vector3(0.0, 0.55, 0.0)
-		it.interacted.connect(func(_p: Node) -> void:
-			if not Net.is_host():
-				return
-			if player_ship != null and is_instance_valid(player_ship):
-				player_ship.cannonballs_remaining = mini(Ship.MAX_CANNONBALLS, player_ship.cannonballs_remaining + 6)
-				player_ship.planks_remaining = mini(Ship.MAX_PLANKS, player_ship.planks_remaining + 4)
-			Game.profile.add_gold(35)
-			Audio.play_sfx(&"coin_jingle", barrel.global_position)
-			Game.post_notice("Salvaged supplies & 35 gold from flotsam!")
-			barrel.queue_free()
-		)
-		barrel.add_child(it)
-		_bobbing_props.append({"node": barrel, "x": bx, "z": bz, "y_off": -0.18, "phase": float(i) * 1.3})
+		var bpos := Vector3(bx, Sea.height(bx, bz), bz)
+		if use_cluster:
+			var cluster := cluster_script.call(&"spawn_at", _entities_root, bpos, idx + 1) as Node3D
+			if cluster != null and cluster.has_signal(&"flotsam_salvaged"):
+				cluster.connect(&"flotsam_salvaged", _on_flotsam_cluster_salvaged)
+		else:
+			var prop_scene := BARREL_PROP_SCENE if (idx % 2 == 0) else CRATE_PROP_SCENE
+			var barrel := prop_scene.instantiate() as Node3D
+			barrel.name = "FlotsamBarrel_%d" % idx
+			_entities_root.add_child(barrel)
+			barrel.global_position = Vector3(bx, bpos.y - 0.15, bz)
+			var it := Interactable.create("Salvage flotsam supplies", 1.2)
+			it.position = Vector3(0.0, 0.55, 0.0)
+			it.interacted.connect(func(_p: Node) -> void:
+				_on_flotsam_cluster_salvaged(barrel, _p, {"cannonballs": 4, "planks": 2, "gold": 35})
+				barrel.queue_free()
+			)
+			barrel.add_child(it)
+			_bobbing_props.append({"node": barrel, "x": bx, "z": bz, "y_off": -0.18, "phase": float(idx) * 1.3})
 
 	var chest_pos := Vector3(pos.x, Sea.height(pos.x, pos.z) + 0.25, pos.z)
 	var chest := TreasureCatalog.create_treasure_carryable(&"driftwood_chest", chest_pos)
@@ -1655,6 +1658,22 @@ func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:
 	# Circling gulls mark floating flotsam from the horizon ("gulls that mark loot").
 	var flotsam_gulls := SeabirdFlock.spawn_over(_entities_root, Vector3(pos.x, 0.0, pos.z), 11.0, 14.0, 5)
 	flotsam_gulls.is_loot_marker = true
+
+
+func _on_flotsam_cluster_salvaged(cluster: Node, _pawn: Node, loot: Dictionary) -> void:
+	if not Net.is_host():
+		return
+	var balls := int(loot.get("cannonballs", 4))
+	var planks := int(loot.get("planks", 2))
+	var gold := int(loot.get("gold", 35))
+	if player_ship != null and is_instance_valid(player_ship):
+		player_ship.cannonballs_remaining = mini(Ship.MAX_CANNONBALLS, player_ship.cannonballs_remaining + balls)
+		player_ship.planks_remaining = mini(Ship.MAX_PLANKS, player_ship.planks_remaining + planks)
+	if Game != null and Game.profile != null and gold > 0:
+		Game.profile.add_gold(gold)
+	var sfx_pos := (cluster as Node3D).global_position if (cluster is Node3D and is_instance_valid(cluster)) else Vector3.INF
+	Audio.play_sfx(&"coin_jingle", sfx_pos)
+	Game.post_notice("Salvaged supplies & %d gold from shipwreck flotsam!" % gold)
 
 
 func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
@@ -2753,7 +2772,7 @@ func _apply_hero_shot(mode: String) -> void:
 	if p_cv != null:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
-			"storm", "sunset", "night", "leviathan", "fleet",
+			"storm", "sunset", "night", "night_sail", "leviathan", "fleet",
 			"company_fleet", "fort_siege", "fort_vault", "dolphins",
 			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
@@ -2779,7 +2798,7 @@ func _apply_hero_shot(mode: String) -> void:
 			_enable_ship_track_shot(Vector3(16.8 * sc, 5.6 * sc, -17.2 * sc), Vector3(0.0, 4.8 * sc, -0.5), 54.0)
 
 		"dolphins":
-			# Sunlit midday bow-riding DolphinPod leaping across sparkling turquoise swells beside our sailing ship!
+			# Tight sunlit midday starboard-bow hero shot: gilded bowsprit, billowing sails & leaping DolphinPod!
 			Weather.time_of_day = 12.6 if is_nan(_cli_time) else _cli_time
 			Weather.set_weather(0.04, 11.2, -0.38, 0.0, 0.32)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
@@ -2787,7 +2806,7 @@ func _apply_hero_shot(mode: String) -> void:
 			var pod := _spawn_dolphin_pod(3, 60.0)
 			if pod != null and pod.has_method(&"force_leap_phase"):
 				pod.call(&"force_leap_phase", 1.25)
-			_enable_ship_track_shot(Vector3(15.2 * sc, 4.0 * sc, -18.5 * sc), Vector3(0.8 * sc, 3.6 * sc, -5.2 * sc), 54.0)
+			_enable_ship_track_shot(Vector3(12.4 * sc, 3.2 * sc, -17.2 * sc), Vector3(2.8 * sc, 2.0 * sc, -6.8 * sc), 52.0)
 
 		"island_approach":
 			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time
@@ -2846,6 +2865,36 @@ func _apply_hero_shot(mode: String) -> void:
 				var cam_pos := pier_xf * Vector3(-6.8 * sc, 4.8 * sc, -2.2 * sc)
 				var look_pt := player_ship.global_position + Vector3(0.0, 3.6 * sc, -1.8)
 				_mount_shot_camera(cam_pos, look_pt, 56.0)
+
+		"night_sail":
+			# Moonlit midnight Sunken Archive sailing showcase framing warm cabin lanterns & nocturnal bioluminescent wake!
+			Weather.time_of_day = 22.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.08, 12.2, -0.55, 0.0, 0.28)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.16)
+			_place_sailing_ship(Vector3(64.0, 0.0, -210.0), -0.48, 0.90, 6.4)
+			_apply_company_livery(
+				player_ship,
+				Color(0.92, 0.96, 0.94),
+				Color(0.14, 0.84, 0.72),
+				Color(0.16, 0.88, 0.74),
+				Color(0.58, 0.94, 0.84),
+				5
+			)
+			# Pre-seed trailing stern V-wake foam ribbons so the glowing nocturnal bioluminescence spans cleanly aft.
+			if Ocean.current != null:
+				for wi in 7:
+					var frac := float(wi) / 6.0
+					var aft_z := (6.5 + float(wi) * 4.2) * sc
+					var spread_x := (1.4 + float(wi) * 0.95) * sc
+					var str_val := lerpf(0.88, 0.34, frac)
+					var rad_val := lerpf(2.8, 4.2, frac) * sc
+					var wp_c := player_ship.global_transform * Vector3(0.0, 0.0, aft_z)
+					var wp_l := player_ship.global_transform * Vector3(-spread_x, 0.0, aft_z)
+					var wp_r := player_ship.global_transform * Vector3(spread_x, 0.0, aft_z)
+					Ocean.current.add_foam(wp_c, rad_val, str_val * 0.85)
+					Ocean.current.add_foam(wp_l, rad_val * 0.85, str_val)
+					Ocean.current.add_foam(wp_r, rad_val * 0.85, str_val)
+			_enable_ship_track_shot(Vector3(14.5 * sc, 5.8 * sc, 16.5 * sc), Vector3(0.0, 2.8, -1.5), 56.0)
 
 		"helm":
 			Weather.time_of_day = 10.6 if is_nan(_cli_time) else _cli_time

@@ -470,7 +470,11 @@ func test_voyage_board_and_living_sea_events() -> void:
 	check(sharks.size() >= 2, "Shark pack spawned cleanly (got %d)" % sharks.size())
 	check(levs.size() >= 1, "Leviathan spawned cleanly")
 	check(entities != null and entities.find_child("CastawayRaft", true, false) != null, "Castaway raft spawned cleanly")
-	check(entities != null and entities.find_child("FlotsamBarrel_0", true, false) != null, "Flotsam salvage barrels spawned cleanly")
+	var has_flotsam := entities != null and (
+		entities.find_child("FlotsamCluster_1", true, false) != null
+		or entities.find_child("FlotsamBarrel_0", true, false) != null
+	)
+	check(has_flotsam, "Flotsam salvage clusters spawned cleanly")
 
 	# 3. Verify FishingLine & CookingStove live aboard the sloop.
 	check(fish.cast_line(fish.global_position, ship.global_basis.z, 10.0), "FishingLine casts off stern rail")

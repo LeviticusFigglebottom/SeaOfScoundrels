@@ -569,6 +569,28 @@ void fragment() {
 		vec3 foam_lit = mix(thin_tone, foam_color, smoothstep(0.05, 0.72, foam_body)) * foam_light * foam_shade;
 		col = mix(col, foam_lit, heavy_foam * mix(0.80, 0.97, foam_body));
 
+		// --- nocturnal bioluminescent plankton shimmer in ship wakes, breaking crests & surf (0 extra taps)
+		// Combines sun-elevation twilight drop with SkyRig's dark-blue moonlit night detection so daytime,
+		// golden sunset, and green-grey daytime storms remain 100% untouched.
+		float sun_dip = smoothstep(0.02, -0.14, sun_dir.y);
+		float hor_lum = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
+		float zen_lum = dot(sky_zenith_color, vec3(0.2126, 0.7152, 0.0722));
+		float dark_sky = smoothstep(0.055, 0.028, hor_lum) * smoothstep(0.018, 0.008, zen_lum);
+		float blue_night = smoothstep(1.15, 1.55, sky_horizon_color.b / max(sky_horizon_color.g, 0.001));
+		float night_bio = clamp(max(sun_dip, dark_sky * blue_night), 0.0, 1.0);
+		if (night_bio > 0.001) {
+			float wake_bio = clamp(field * 1.15 + field * (0.45 + 0.55 * web_foam), 0.0, 1.0);
+			float crest_bio = clamp(max(heavy_foam * 0.72, web_foam * 0.65) + shore_foam * 0.55, 0.0, 1.0);
+			float rip_energy = clamp(length(rip_fine + rip_micro * 0.85) * 2.4, 0.0, 1.0);
+			float micro_twinkle = 0.5 + 0.5 * sin(dot(v_rest, vec2(3.7, -2.9)) + sea_time * 2.6 + blot * 9.0);
+			float fine_glitter = smoothstep(0.42, 0.92, rip_energy * 0.65 + micro_twinkle * 0.45);
+			float bio_shimmer = (0.46 + 0.54 * blot) * (0.68 + 0.62 * fine_glitter);
+			float bio_dist = smoothstep(260.0, 22.0, dist);
+			vec3 bio_col = mix(vec3(0.06, 0.72, 0.88), vec3(0.18, 0.94, 0.96), fine_glitter * 0.55);
+			float bio_intensity = (wake_bio * 0.68 + crest_bio * 0.18) * bio_shimmer * bio_dist * night_bio;
+			col += bio_col * bio_intensity;
+		}
+
 		alpha_edge = smoothstep(0.0, 0.06, thick0);
 		col = mix(texture(screen_tex, SCREEN_UV).rgb, col, alpha_edge);
 
