@@ -76,6 +76,13 @@ var _banner_current: String = ""
 var _banner_timer: float = 0.0
 var _banner_alpha: float = 0.0
 
+# Boss encounter bar (top-center below banner; hidden outside active boss fights)
+var _boss_panel: PanelContainer = null
+var _boss_label: Label = null
+var _boss_bar: ProgressBar = null
+var _boss_active: bool = false
+var _boss_alpha: float = 0.0
+
 # Context prompt (bottom-center)
 var _prompt_panel: PanelContainer = null
 var _prompt_label: Label = null
@@ -425,8 +432,9 @@ func _build_ui() -> void:
 	_crosshair_view.name = "Crosshair"
 	_root.add_child(_crosshair_view)
 
-	# 3. Top-center Crew Callout & Notice parchment scroll banner.
+	# 3. Top-center Crew Callout & Notice parchment scroll banner + hidden Boss Bar.
 	_build_banner()
+	_build_boss_bar()
 
 	# 4. Top-right Gold & Voyage Objective whisper card.
 	_build_whisper_card()
@@ -505,6 +513,64 @@ func _build_banner() -> void:
 	right_orn.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
 	right_orn.add_theme_font_size_override("font_size", 18)
 	hbox.add_child(right_orn)
+
+
+func _build_boss_bar() -> void:
+	var holder := CenterContainer.new()
+	holder.name = "BossBarHolder"
+	holder.anchor_left = 0.0
+	holder.anchor_right = 1.0
+	holder.anchor_top = 0.0
+	holder.anchor_bottom = 0.0
+	holder.offset_top = 92.0
+	holder.offset_bottom = 148.0
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(holder)
+
+	_boss_panel = PanelContainer.new()
+	_boss_panel.name = "BossEncounterPanel"
+	_boss_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_panel.add_theme_stylebox_override("panel",
+		HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.94), HudIcons.COL_CRIMSON, 2, 6, 18, 6))
+	_boss_panel.modulate.a = 0.0
+	_boss_panel.visible = false
+	holder.add_child(_boss_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_panel.add_child(vbox)
+
+	_boss_label = Label.new()
+	_boss_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_boss_label.add_theme_font_size_override("font_size", 15)
+	_boss_label.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	vbox.add_child(_boss_label)
+
+	_boss_bar = ProgressBar.new()
+	_boss_bar.custom_minimum_size = Vector2(300.0, 12.0)
+	_boss_bar.min_value = 0.0
+	_boss_bar.max_value = 1.0
+	_boss_bar.value = 1.0
+	_boss_bar.show_percentage = false
+	var bg_sb := StyleBoxFlat.new()
+	bg_sb.bg_color = Color(0.20, 0.14, 0.10, 0.85)
+	bg_sb.set_corner_radius_all(3)
+	var fg_sb := StyleBoxFlat.new()
+	fg_sb.bg_color = Color(0.72, 0.16, 0.16, 0.96)
+	fg_sb.set_corner_radius_all(3)
+	_boss_bar.add_theme_stylebox_override("background", bg_sb)
+	_boss_bar.add_theme_stylebox_override("fill", fg_sb)
+	vbox.add_child(_boss_bar)
+
+
+## Show or hide the diegetic boss encounter bar (Leviathan, Rival Captain, etc.).
+func set_boss_encounter(title: String, hp_ratio: float, active: bool = true) -> void:
+	_boss_active = active and title != ""
+	if _boss_label != null and title != "":
+		_boss_label.text = _to_ascii(title)
+	if _boss_bar != null:
+		_boss_bar.value = clampf(hp_ratio, 0.0, 1.0)
 
 
 func _build_whisper_card() -> void:
@@ -835,11 +901,20 @@ func _input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	_tick_banner(delta)
+	_tick_boss_bar(delta)
 	_tick_vitals(delta)
 	_tick_context_prompt(delta)
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
 	_tick_crosshair(delta)
+
+
+func _tick_boss_bar(delta: float) -> void:
+	var want_a := 0.95 if (_boss_active and not pause_open) else 0.0
+	_boss_alpha = move_toward(_boss_alpha, want_a, delta * 4.5)
+	if _boss_panel != null:
+		_boss_panel.modulate.a = _boss_alpha
+		_boss_panel.visible = _boss_alpha > 0.01
 
 
 func _tick_banner(delta: float) -> void:
@@ -933,7 +1008,13 @@ func _refresh_tool_chip() -> void:
 	if _tool_title_label == null or _tool_meta_label == null:
 		return
 	var item_id := inventory.active_item if inventory != null else &"cutlass"
-	var title := ToolMeshes.get_display_name(item_id)
+	var resolved_id := item_id
+	if inventory != null:
+		if item_id == &"cutlass" and inventory.get(&"melee_weapon") != null:
+			resolved_id = StringName(inventory.get(&"melee_weapon"))
+		elif item_id == &"pistol" and inventory.get(&"ranged_weapon") != null:
+			resolved_id = StringName(inventory.get(&"ranged_weapon"))
+	var title := ToolMeshes.get_display_name(resolved_id)
 	var meta := "[Tab] Tools | [Q] Crew"
 
 	if pawn != null and pawn.station != null:
@@ -949,9 +1030,13 @@ func _refresh_tool_chip() -> void:
 			meta = "WASD Pan | LMB/RMB Zoom"
 	elif inventory != null:
 		match item_id:
+			&"cutlass":
+				if resolved_id == &"boarding_axe":
+					meta = "Heavy Cleave | [RMB] Guard"
 			&"pistol":
 				if combat != null:
-					meta = "Ammo: %d / 6 | [RMB] Aim" % combat.ammo
+					var cap := 4 if resolved_id == &"blunderbuss" else 6
+					meta = "Shot: %d / %d | [RMB] Aim" % [combat.ammo, cap]
 			&"lantern":
 				meta = "Lit | [LMB] Snuff" if inventory.lantern_lit else "Unlit | [LMB] Light"
 			&"bucket":

@@ -37,12 +37,41 @@ var merchant_stall: MerchantStall = null
 var notice_board_node: Node3D = null
 var voyage_board_interactable: Interactable = null
 var quartermaster_interactable: Interactable = null
+var _harbour_npcs: Array[Dictionary] = []  # {visual, driver, phase}
 
 
 func _init() -> void:
 	is_outpost = true
 	kind = &"outpost"
 	archetype = &"outpost"
+
+
+func _process(delta: float) -> void:
+	super._process(delta)
+	if _harbour_npcs.is_empty():
+		return
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if cam != null and global_position.distance_squared_to(cam.global_position) > 95.0 * 95.0:
+		return
+	for npc: Dictionary in _harbour_npcs:
+		var drv: AnimationDriver = npc.get("driver") as AnimationDriver
+		var cv: CharacterVisual = npc.get("visual") as CharacterVisual
+		if drv == null or not is_instance_valid(drv) or cv == null or not is_instance_valid(cv):
+			continue
+		if not bool(npc.get("bound", false)):
+			if cv.skeleton == null:
+				continue
+			drv.bind(cv)
+			cv.set_tint(npc.get("primary") as Color, npc.get("accent") as Color)
+			npc["bound"] = true
+		var phase: float = float(npc.get("phase", 0.0)) + delta
+		npc["phase"] = phase
+		drv.set(&"override_state", {
+			"speed": 0.0,
+			"grounded": true,
+			"look_pitch": sin(phase * 0.7) * 0.08,
+		})
+		drv.update_pose(delta)
 
 
 ## Build all outpost structures on the sculpted harbour terrain.
@@ -156,6 +185,47 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		cp.y = surface_height(cp.x, cp.z)
 		var cxform := Transform3D(Basis(Vector3.UP, dock_yaw + float(spec[4])), cp)
 		_place_outpost_prop(spec[0] as PackedScene, String(spec[1]), cxform, prop_body, props_root)
+
+	# 8. Living Outpost Harbour NPCs (Merchant Factor & Pier Quartermaster).
+	var merch_pos: Vector3 = harbour_pt.call(7.6, -18.8)
+	merch_pos.y = surface_height(merch_pos.x, merch_pos.z)
+	_spawn_harbour_npc(
+		"MerchantFactorNPC", props_root, merch_pos, dock_yaw + PI * 0.45,
+		&"captain", Color(0.56, 0.14, 0.16), Color(0.92, 0.74, 0.24), rng.randf() * TAU)
+
+	var qm_npc_pos: Vector3 = harbour_pt.call(-5.3, -22.2)
+	qm_npc_pos.y = surface_height(qm_npc_pos.x, qm_npc_pos.z)
+	_spawn_harbour_npc(
+		"QuartermasterNPC", props_root, qm_npc_pos, dock_yaw - 0.55,
+		&"carpenter", Color(0.14, 0.44, 0.46), Color(0.88, 0.62, 0.20), rng.randf() * TAU)
+
+
+func _spawn_harbour_npc(npc_name: String, parent_node: Node3D, local_pos: Vector3, yaw_rad: float,
+		arch: StringName, primary: Color, accent: Color, phase: float) -> void:
+	var holder := Node3D.new()
+	holder.name = npc_name
+	holder.position = local_pos
+	holder.rotation.y = yaw_rad
+	parent_node.add_child(holder)
+
+	var cv := CharacterVisual.new()
+	cv.name = "CharacterVisual"
+	cv.archetype = arch
+	holder.add_child(cv)
+	cv.set_tint(primary, accent)
+
+	var drv := AnimationDriver.new()
+	drv.name = "AnimationDriver"
+	drv.set(&"auto_update", false)
+	holder.add_child(drv)
+	_harbour_npcs.append({
+		"visual": cv,
+		"driver": drv,
+		"phase": phase,
+		"primary": primary,
+		"accent": accent,
+		"bound": false,
+	})
 
 
 ## Quartermaster auto-stock: refills a ship's cannonballs and repair planks (host-only).

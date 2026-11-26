@@ -142,6 +142,20 @@ class MB:
     def tris(self):
         return sum(len(f) - 2 for f in self.faces)
 
+    def merge(self, other):
+        """Append geometry from another static MB (authored in ship-local game coords) into self."""
+        assert other.gmatrix is None and other.parent is None and other.wfn is None and other.yaw == 0.0, \
+            'cannot merge non-static MB: %s' % other.name
+        assert self.origin.length < 1e-9 and self.yaw == 0.0, \
+            'merge target %s must sit at ship origin' % self.name
+        base = len(self.verts)
+        self.verts.extend(other.verts)
+        self.faces.extend(tuple(i + base for i in f) for f in other.faces)
+        self.fmat.extend(other.fmat)
+        self.fsm.extend(other.fsm)
+        self.fcol.extend(other.fcol)
+        self.fuv.extend(other.fuv)
+
 @contextmanager
 def xf(mb, M):
     mb.push(M)
@@ -662,6 +676,16 @@ def build(mb):
     bpy.context.scene.collection.objects.link(ob)
     OBJS[mb.name] = (ob, mb.tris())
     return ob
+
+def empty_anchor(name, origin, yaw=0.0):
+    """Named Node3D anchor (glTF Empty) preserving exact origin after merging static geometry into Hull."""
+    e = bpy.data.objects.new(name, None)
+    e.empty_display_size = 0.25
+    e.location = conv(origin)
+    if yaw != 0.0:
+        e.rotation_euler = (0, 0, radians(yaw))
+    bpy.context.scene.collection.objects.link(e)
+    return e
 
 def col_piece(name, pts):
     """Convex collision mesh from a point cloud (game coords)."""
@@ -1700,13 +1724,13 @@ def build_holes():
                         cbox(pb, (sx * (L / 2 - 0.07), 0.0, 0.024), (0.03, 0.03, 0.012), 'iron', C_IRON, 0.004)
         build(pb)
 
-def extras():
+def extras(hull):
     """Everything the mechanics need as separate, pivot-correct parts beyond the first-pass fittings."""
     sf = MB('Sail_Furled', (0, YARD_Y, MAST_Z)); build_sail_furled(sf); build(sf)
     o = (-0.62, 2.9, MAST_Z); b = MB('Bell', o); build_bell(b, o); build(b)
     bc = (0.0, HOLD_Y, -2.1)
-    o = (0.52, HOLD_Y, -1.75); bk = MB('Bucket', o); build_bucket(bk, o); build(bk)
-    o = (0.0, HOLD_Y, 1.25); ps = MB('PlankStack', o); build_plank_stack(ps, o); build(ps)
+    o = (0.52, HOLD_Y, -1.75); bk = MB('Bucket', o); build_bucket(bk, o); hull.merge(bk); empty_anchor('Bucket', o)
+    o = (0.0, HOLD_Y, 1.25); ps = MB('PlankStack', o); build_plank_stack(ps, o); hull.merge(ps); empty_anchor('PlankStack', o)
     hx0, hx1, hz0, hz1 = HATCH
     for name, sg in (('HatchCover_Starboard', 1), ('HatchCover_Port', -1)):
         o = (sg * (hx1 + 0.13), DECK_Y + 0.21, (hz0 + hz1) / 2 - 0.05); h = MB(name, o); build_hatch_cover(h, o, sg); build(h)
@@ -1926,15 +1950,17 @@ def main():
     random.seed(SEED); np.random.seed(SEED)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     make_materials()
-    hull = MB('Hull'); build_hull(hull); build(hull)
-    decks = MB('Decks'); build_decks(decks); build(decks)
-    rails = MB('Rails'); build_rails(rails); build(rails)
-    inter = MB('Interior'); build_interior(inter); build(inter)
+    # Static ship structure & decorative sub-parts are authored in their own MBs (preserving per-part RNG)
+    # and batched into one `Hull` MeshInstance3D so Godot draws 1 surface per static material across all shadow cascades.
+    hull = MB('Hull'); build_hull(hull)
+    decks = MB('Decks'); build_decks(decks); hull.merge(decks)
+    rails = MB('Rails'); build_rails(rails); hull.merge(rails)
+    inter = MB('Interior'); build_interior(inter); hull.merge(inter)
     mast = MB('Mast');
     with xf(mast, T(0, 0, MAST_Z)): build_mast(mast)
-    build_bowsprit(mast); build(mast)
-    rig = MB('Rigging'); build_rigging(rig); build(rig)
-    fig = MB('Figurehead', (0, 1.8, -7.0)); build_figurehead(fig); build(fig)
+    build_bowsprit(mast); hull.merge(mast)
+    rig = MB('Rigging'); build_rigging(rig); hull.merge(rig)
+    fig = MB('Figurehead', (0, 1.8, -7.0)); build_figurehead(fig); hull.merge(fig); empty_anchor('Figurehead', fig.origin)
     yard = MB('Yard', (0, YARD_Y, MAST_Z)); build_yard(yard); build(yard)
     sail = MB('Sail', (0, YARD_Y, MAST_Z)); build_sail(sail); build(sail)
     flag = MB('Flag', (0, MAST_TOP - 0.12, MAST_Z)); build_flag(flag); build(flag)
@@ -1947,8 +1973,8 @@ def main():
         o = Vector((sg * 1.38, DECK_Y, -1.5)); c = MB(name, o, seed=1, yaw=yaw - 90); build_cannon(c, o, yaw); build(c)   # object -Z = muzzle
         ob = o + R('Y', yaw).to_3x3() @ Vector(CANNON_TRUNNION)
         cb = MB(name + '_Barrel', ob, seed=1, yaw=yaw - 90, parent=c); build_cannon_barrel(cb, o, yaw); build(cb)
-        k = MB('PowderKeg_' + name.split('_')[1], (sg * 1.5, DECK_Y, -2.45)); build_powder_keg(k, k.origin); build(k)
-    extras()
+        k = MB('PowderKeg_' + name.split('_')[1], (sg * 1.5, DECK_Y, -2.45)); build_powder_keg(k, k.origin); hull.merge(k)
+    extras(hull)
     for name, c, s, hang in (('Lantern_Stern', (0, ytop(6.5) + 1.55, zstern(ytop(6.5)) - 0.02), 1.5, False), ('Lantern_Mast', (0, 3.45, MAST_Z + 0.52), 1.0, True),
                              ('Lantern_Hold', (0, 1.42, 3.7), 1.0, True), ('Lantern_Hold_Fore', (0.5, 0.45, MAST_Z), 0.9, True)):
         l = MB(name, c); build_lantern(l, c, s, hang);
@@ -1962,20 +1988,21 @@ def main():
             tube(l, [(0, c[1] + 0.42, c[2]), (0, QDECK_Y - 0.1, c[2])], 0.012, 4, 'iron', C_IRON)
         else:
             cbox(l, (0.4, c[1] + 0.38, MAST_Z), (0.3, 0.05, 0.05), 'iron', C_IRON, 0.01)
-        build(l)
+        hull.merge(l); empty_anchor(name, c)
     for name, key, band in (('Winch_SailLength', 'Station_SailLength', C_RED), ('Winch_SailAngle', 'Station_SailAngle', C_TEAL)):
-        o = STATIONS[key][0]; o = (o[0] * 0.955, o[1], o[2]); w = MB(name, o); build_winch(w, o, band); build(w)
+        o = STATIONS[key][0]; o = (o[0] * 0.955, o[1], o[2]); w = MB(name, o); build_winch(w, o, band); hull.merge(w)
     c = (-0.36, QDECK_Y + 1.36, hz - 0.28); l = MB('Lantern_Helm', c); build_lantern(l, c, 0.6, False)      # swivel lamp on the binnacle for night steering
     tube(l, [(-0.15, QDECK_Y + 1.0, hz - 0.28), (-0.36, QDECK_Y + 1.05, hz - 0.28), (-0.36, QDECK_Y + 1.24, hz - 0.28)], 0.018, 5, 'iron', C_IRON)
     with xf(l, T(-0.36, QDECK_Y + 1.06, hz - 0.28)): lathe(l, [(0, -0.03), (0.035, -0.03), (0.035, 0.03), (0, 0.03)], 8, 'brass', C_BRASS)
-    build(l)
+    hull.merge(l); empty_anchor('Lantern_Helm', c)
     o = (-1.6, DECK_Y, -2.85); bd = MB('Bucket_Deck', o); build_bucket(bd, o); rope_coil(bd, (-1.62, DECK_Y, -3.3), 0.17, 3)
     rp, _ = rail_frame(s_of_z(-2.85))
     tube(bd, [(-1.6, DECK_Y + 0.44, -2.83), (-1.75, DECK_Y + 0.6, -2.9), (-(rp.x - 0.1), rp.y + 0.12, -2.95), (-(rp.x - 0.2), DECK_Y + 0.4, -3.2), (-1.66, DECK_Y + 0.14, -3.3)], 0.014, 4, 'rope', C_ROPE)
-    build(bd)
-    mt = MB('MapTable', STATIONS['Station_MapTable'][0]); build_map_table(mt); build(mt)
-    pd = MB('Props_Deck'); build_props_deck(pd); build(pd)
-    ph = MB('Props_Hold'); build_props_hold(ph); build(ph)
+    hull.merge(bd); empty_anchor('Bucket_Deck', o)
+    mt = MB('MapTable', STATIONS['Station_MapTable'][0]); build_map_table(mt); hull.merge(mt); empty_anchor('MapTable', mt.origin)
+    pd = MB('Props_Deck'); build_props_deck(pd); hull.merge(pd)
+    ph = MB('Props_Hold'); build_props_hold(ph); hull.merge(ph)
+    build(hull)
     build_collision()
     gap = rig_clearance(); print('yard to standing rigging, smallest gap over +-1.2 rad trim: %.3f m' % gap)
     assert gap > 0.05, 'the yard fouls the standing rigging'

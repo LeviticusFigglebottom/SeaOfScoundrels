@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -590,11 +590,34 @@ func _apply_cli_overrides() -> void:
 func _process(delta: float) -> void:
 	_tick_bobbing_props(delta)
 	_tick_hero_shot_tracking(delta)
+	_tick_boss_hud()
 	_update_live_audio(false)
 	_music_accum += delta
 	if _music_accum >= 1.0:
 		_music_accum = 0.0
 		_update_adaptive_music(false)
+
+
+func _tick_boss_hud() -> void:
+	if hud == null or player_ship == null or not is_instance_valid(player_ship):
+		return
+	var origin := player_pawn.global_position if (player_pawn != null and is_instance_valid(player_pawn)) else player_ship.global_position
+	for lev in active_leviathans:
+		if lev != null and is_instance_valid(lev) and not lev.defeated:
+			if lev.global_position.distance_to(origin) < 130.0:
+				var ratio := clampf(lev.get_health_ratio() if lev.has_method(&"get_health_ratio") else float(lev.active_tentacle_count()) / 4.0, 0.0, 1.0)
+				hud.set_boss_encounter("ABYSSAL LEVIATHAN", ratio, true)
+				return
+	for foe in active_enemies:
+		if foe != null and is_instance_valid(foe) and not foe.dead:
+			if foe.global_position.distance_to(origin) < 42.0:
+				var cv := _character_visual_of(foe)
+				var arch := cv.get_archetype() if cv != null else &""
+				if arch == &"drowned_captain" or arch == &"rival_captain":
+					var label := "RIVAL CORSAIR CAPTAIN" if arch == &"rival_captain" else "DROWNED CAPTAIN"
+					hud.set_boss_encounter(label, clampf(foe.health / maxf(foe.max_health, 1.0), 0.0, 1.0), true)
+					return
+	hud.set_boss_encounter("", 0.0, false)
 
 
 func _physics_process(delta: float) -> void:
@@ -681,6 +704,9 @@ func _tick_discovery_and_arrivals() -> void:
 		if d <= near_isl.island_radius + 75.0:
 			if near_isl is Outpost:
 				world_director.set_last_outpost(StringName(near_isl.island_id), near_isl.global_position)
+				if player_ship.cannonballs_remaining < Ship.MAX_CANNONBALLS \
+						or player_ship.planks_remaining < Ship.MAX_PLANKS:
+					(near_isl as Outpost).restock_ship(player_ship)
 			if voyage_manager != null and voyage_manager.has_active_voyage():
 				voyage_manager.notify_island_arrived(StringName(near_isl.island_id))
 
@@ -1688,7 +1714,10 @@ func _apply_hero_shot(mode: String) -> void:
 	# Show the Captain's full 3D character mesh on external third-person hero cameras.
 	var p_cv := _character_visual_of(player_pawn)
 	if p_cv != null:
-		var third_person := mode in ["outpost_dock", "sailing", "island_approach", "combat", "storm", "sunset", "night"]
+		var third_person := mode in [
+			"outpost_dock", "sailing", "island_approach", "combat",
+			"storm", "sunset", "night", "leviathan", "fleet"
+		]
 		p_cv.set_first_person_hidden(not third_person)
 
 	match mode:
@@ -1798,6 +1827,40 @@ func _apply_hero_shot(mode: String) -> void:
 			var cam_local_hold := Vector3(-1.35, 0.45, -1.85) if is_brig else Vector3(-1.05, 0.48, -1.95)
 			var look_local_hold := Vector3(0.15, -0.25, 3.60) if is_brig else Vector3(0.20, -0.20, 2.25)
 			_mount_shot_camera(player_ship.global_transform * cam_local_hold, player_ship.global_transform * look_local_hold, 68.0)
+
+		"leviathan":
+			Weather.time_of_day = 17.25 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.72, 17.5, -0.25, 0.0, 0.88)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.65)
+			_place_sailing_ship(Vector3(-40.0, 0.0, -240.0), -0.32, 0.85, 4.6)
+			var lev := Leviathan.new()
+			lev.name = "HeroLeviathan"
+			lev.target_ship = player_ship
+			_entities_root.add_child(lev)
+			lev.global_position = player_ship.global_transform * Vector3(2.0, 0.0, -4.0)
+			active_leviathans.append(lev)
+			_enable_ship_track_shot(Vector3(22.0 * sc, 8.8 * sc, -24.0 * sc), Vector3(0.0, 4.5, -1.0), 58.0)
+
+		"fleet":
+			# 4-ship multi-faction fleet battle & real-GPU draw-call stress benchmark!
+			Weather.time_of_day = 15.0 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.28, 13.0, -0.22, 0.0, 0.58)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.28)
+			_place_sailing_ship(Vector3(45.0, 0.0, -215.0), -0.35, 0.92, 5.4)
+			var f1_pos := player_ship.global_transform * Vector3(38.0, 0.0, -14.0)
+			var f2_pos := player_ship.global_transform * Vector3(-42.0, 0.0, -26.0)
+			var f3_pos := player_ship.global_transform * Vector3(22.0, 0.0, -64.0)
+			var f1 := _spawn_enemy_vessel(&"drowned_sloop", f1_pos)
+			var f2 := _spawn_enemy_vessel(&"ghost_ship", f2_pos)
+			var f3 := _spawn_enemy_vessel(&"corsair_sloop", f3_pos)
+			if f1 != null:
+				f1.rotation.y = player_ship.rotation.y + 0.14
+			if f2 != null:
+				f2.rotation.y = player_ship.rotation.y - 0.18
+			if f3 != null:
+				f3.rotation.y = player_ship.rotation.y + 0.45
+			_shot_combat_timer = 0.22
+			_enable_ship_track_shot(Vector3(-18.5 * sc, 10.5 * sc, 26.0 * sc), Vector3(4.0, 3.8, -22.0), 60.0)
 
 
 func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:
