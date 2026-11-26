@@ -29,6 +29,11 @@ try:
 except ImportError:
     STORYTELLING_B_GENERATORS = []
 
+try:
+    from _landmarks_skyline import SKYLINE_GENERATORS
+except ImportError:
+    SKYLINE_GENERATORS = []
+
 
 def main():
     argv = sys.argv
@@ -43,6 +48,7 @@ def main():
         + list(SETPIECE_GENERATORS)
         + list(STORYTELLING_A_GENERATORS)
         + list(STORYTELLING_B_GENERATORS)
+        + list(SKYLINE_GENERATORS)
     )
     lm_dir = os.path.join(outdir, 'landmarks')
     print('gen_island_landmarks: writing %d landmarks to %s' % (len(generators), lm_dir))

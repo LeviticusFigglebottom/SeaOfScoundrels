@@ -57,11 +57,26 @@ const GRASS_VOLCANIC_PALETTE: Array[Color] = [
 	Color(0.29, 0.31, 0.19, 1.0),  # Charred highland scrub
 ]
 
+const GRASS_HIGHLAND_PALETTE: Array[Color] = [
+	Color(0.24, 0.56, 0.19, 1.0),  # Sun-dappled alpine emerald
+	Color(0.35, 0.62, 0.20, 1.0),  # Warm sunlit highland olive-green
+	Color(0.19, 0.49, 0.21, 1.0),  # Deep cliff-ledge moss jade
+	Color(0.43, 0.65, 0.23, 1.0),  # Sun-kissed ridge chartreuse
+	Color(0.30, 0.54, 0.18, 1.0),  # Hardy coastal-cliff olive
+]
+
 const FERN_TROPICAL_PALETTE: Array[Color] = [
 	Color(0.18, 0.58, 0.22, 1.0),  # Deep jungle fern emerald
 	Color(0.26, 0.66, 0.22, 1.0),  # Sunlit tropical frond
 	Color(0.14, 0.50, 0.24, 1.0),  # Cool shaded canopy jade
 	Color(0.36, 0.70, 0.21, 1.0),  # Bright chartreuse crown
+]
+
+const FERN_HIGHLAND_PALETTE: Array[Color] = [
+	Color(0.16, 0.55, 0.21, 1.0),  # Deep cliff-crevice emerald fern
+	Color(0.25, 0.64, 0.21, 1.0),  # Sun-dappled ledge frond
+	Color(0.13, 0.47, 0.23, 1.0),  # Cool canyon-shade jade fern
+	Color(0.34, 0.68, 0.20, 1.0),  # Sunlit cascading ridge frond
 ]
 
 const FERN_VOLCANIC_PALETTE: Array[Color] = [
@@ -309,11 +324,11 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var tidal_xf: Array[Transform3D] = []
 	var tidal_col: Array[Color] = []
 	_place_coastal_driftwood(island, rng, driftwood_target, radius, is_volcanic,
-		keepouts, has_pier, pier_a, pier_b, driftwood_xf, driftwood_col)
+		keepouts, has_pier, pier_a, pier_b, trail_ctx, driftwood_xf, driftwood_col)
 	_place_shore_pebbles(island, rng, pebble_target, radius, is_volcanic,
 		keepouts, has_pier, pier_a, pier_b, pebble_xf, pebble_col)
 	_place_tidal_outcrops(island, rng, tidal_target, radius, is_volcanic,
-		keepouts, has_pier, pier_a, pier_b, tidal_xf, tidal_col)
+		keepouts, has_pier, pier_a, pier_b, trail_ctx, tidal_xf, tidal_col)
 
 	# 7. Populate Layer 7 (+ optional Layer 8 `CliffButtressesWide`): Steep-Slope Cliff Buttresses.
 	var use_wide_layer := (not is_volcanic) and (island.island_radius >= WIDE_BUTTRESS_MIN_RADIUS)
@@ -602,13 +617,15 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 10.5
 	if cname.begins_with("TempleStairway"):
 		return 9.0
+	if cname.begins_with("VolcanicObsidianArch"):
+		return 8.8
 	if cname.begins_with("CliffCatwalk") or cname.begins_with("ImpaledShipwreck"):
 		return 8.5
 	if cname.begins_with("CliffOverhang") or cname.begins_with("CliffButtressWide"):
 		return 8.0
 	if cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck"):
 		return 7.5
-	if cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall"):
+	if cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall") or cname.begins_with("LeviathanRibcage"):
 		return 7.2
 	if cname.begins_with("VolcanicBasaltSpire"):
 		return 7.0
@@ -616,8 +633,14 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 5.8
 	if cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") or cname.begins_with("BluffTimberBridge"):
 		return 5.8
+	if cname.begins_with("SeaGodIdol"):
+		return 5.4
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") or cname.begins_with("MossyBoulder"):
 		return 4.2
+	if cname.begins_with("SignalBrazier"):
+		return 4.0
+	if cname.begins_with("BeachedRowboat") or cname.begins_with("PirateGibbet"):
+		return 3.8
 	if cname.begins_with("TrailLantern") or cname.begins_with("StoneCairn"):
 		return 2.0
 	return 0.0
@@ -789,14 +812,147 @@ static func _discover_meadow_centers(island: Island, rng: RandomNumberGenerator,
 	return centers
 
 
+static func _scan_highland_ledge_candidates(island: Island, rng: RandomNumberGenerator,
+		r_min: float, r_max: float, h_min: float, h_max: float, n_min: float, n_max: float,
+		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		trail_ctx: Dictionary) -> Array[Dictionary]:
+	var candidates: Array[Dictionary] = []
+	var radial_steps := clampi(int(roundf((r_max - r_min) / 2.0)), 18, 36)
+	var ang_step_arc := clampf(r_max * 0.048, 2.0, 4.8)
+	for ri in range(1, radial_steps + 1):
+		var frac := float(ri) / float(radial_steps)
+		var r_base := lerpf(r_min, r_max, frac)
+		var ring_samples := maxi(18, int(roundf(TAU * r_base / ang_step_arc)))
+		var phase := float(ri) * 0.517 + rng.randf() * 0.25
+		for ai in ring_samples:
+			var r_s := clampf(r_base + rng.randf_range(-0.65, 0.65), r_min, r_max)
+			var ang := phase + (float(ai) + rng.randf_range(-0.28, 0.28)) / float(ring_samples) * TAU
+			var pt := Vector2(cos(ang) * r_s, sin(ang) * r_s)
+			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if _is_on_trail(pt, trail_ctx):
+				continue
+			var h := island.surface_height(pt.x, pt.y)
+			if h < h_min or h > h_max:
+				continue
+			var n := island.surface_normal(pt.x, pt.y)
+			if n.y < n_min or n.y > n_max:
+				continue
+			candidates.append({
+				"pt": pt,
+				"h": h,
+				"n": n,
+			})
+
+	# Deterministic Fisher-Yates shuffle so highland tufts distribute naturally around every cliff face.
+	for i in range(candidates.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp: Dictionary = candidates[i]
+		candidates[i] = candidates[j]
+		candidates[j] = tmp
+	return candidates
+
+
+static func _append_highland_grass_tuft(rng: RandomNumberGenerator, pt: Vector2, h: float,
+		n: Vector3, grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
+		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
+	var sx := rng.randf_range(1.45, 2.25)
+	var sz := sx * rng.randf_range(0.86, 1.15)
+	var sy := rng.randf_range(1.20, 1.85)
+	var sink := 0.10 + maxf(0.0, (0.70 - n.y) * 0.30)
+	var origin := Vector3(pt.x, h - sink, pt.y)
+	var xf := _grounded_transform(origin, n, 0.55, rng.randf() * TAU, Vector3(sx, sy, sz))
+	var srgb_col := _pick_jittered_color(rng, GRASS_HIGHLAND_PALETTE, 0.024, 0.10)
+	out_xf.append(xf)
+	out_col.append(srgb_col.srgb_to_linear())
+	out_pos.append(origin)
+	_grid_insert(grid, cell_size, pt)
+
+
+static func _append_highland_fern_rosette(rng: RandomNumberGenerator, pt: Vector2, h: float,
+		n: Vector3, bush_grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
+		out_col: Array[Color]) -> void:
+	var sc := rng.randf_range(1.30, 2.05)
+	var sy := sc * rng.randf_range(0.86, 1.15)
+	var sink := 0.10 + maxf(0.0, (0.68 - n.y) * 0.30)
+	var origin := Vector3(pt.x, h - sink, pt.y)
+	var xf := _grounded_transform(origin, n, 0.54, rng.randf() * TAU, Vector3(sc, sy, sc))
+	var srgb_col := _pick_jittered_color(rng, FERN_HIGHLAND_PALETTE, 0.022, 0.10)
+	out_xf.append(xf)
+	out_col.append(srgb_col.srgb_to_linear())
+	_grid_insert(bush_grid, cell_size, pt)
+
+
 static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNumberGenerator,
 		target: int, radius: float, max_grass_h: float, is_volcanic: bool,
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
 	var base_spacing := clampf(radius * 0.017, 0.95, 2.55)
-	var cell_size := maxf(1.5, base_spacing)
+	var cell_size := maxf(1.8, base_spacing)
 	var grid: Dictionary = {}
+
+	# Pass 0 (Highland Cliff-Ledge Scrub): Zero-extra-DC bold alpine-tropical tufts across stepped
+	# upper mountain benches (h = 18..68 m, 0.48 <= n.y <= 0.94) on tall non-volcanic islands!
+	if island.peak_height >= 26.0 and not is_volcanic:
+		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.16)), 18, 84))
+		var hl_h_min := 18.0
+		var hl_h_max := minf(68.0, island.peak_height * 0.88)
+		if hl_h_max > hl_h_min + 0.5:
+			var hl_r_min := radius * 0.08
+			var hl_r_max := radius * 0.86
+			var hl_sep := maxf(1.8, base_spacing * 0.92)
+			var hl_candidates := _scan_highland_ledge_candidates(island, rng, hl_r_min, hl_r_max,
+				hl_h_min, hl_h_max, 0.48, 0.94, keepouts, has_pier, pier_a, pier_b, trail_ctx)
+			for cand in hl_candidates:
+				if out_xf.size() >= highland_cap:
+					break
+				var pt: Vector2 = cand["pt"] as Vector2
+				if not _grid_is_clear(grid, cell_size, pt, hl_sep):
+					continue
+				var h: float = float(cand["h"])
+				var n: Vector3 = cand["n"] as Vector3
+				_append_highland_grass_tuft(rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
+
+				# Cluster 1..2 companion tufts tangentially along the stepped cliff-ledge contour.
+				var tan_xz := Vector2(-n.z, n.x)
+				if tan_xz.length_squared() < 0.0004:
+					tan_xz = Vector2(-pt.y, pt.x)
+				tan_xz = tan_xz.normalized()
+				var rad_xz := Vector2(tan_xz.y, -tan_xz.x)
+				var cluster_n := rng.randi_range(1, 2)
+				for _ci in cluster_n:
+					if out_xf.size() >= highland_cap:
+						break
+					var side_sign := 1.0 if rng.randf() < 0.5 else -1.0
+					var cpt := pt + tan_xz * (side_sign * rng.randf_range(1.85, 4.4)) + rad_xz * rng.randf_range(-0.95, 0.95)
+					var cr := cpt.length()
+					if cr < hl_r_min or cr > hl_r_max:
+						continue
+					if _is_in_keepout(cpt, keepouts, has_pier, pier_a, pier_b):
+						continue
+					if _is_on_trail(cpt, trail_ctx):
+						continue
+					if not _grid_is_clear(grid, cell_size, cpt, hl_sep):
+						continue
+					var ch := island.surface_height(cpt.x, cpt.y)
+					if ch < hl_h_min or ch > hl_h_max:
+						continue
+					var cn := island.surface_normal(cpt.x, cpt.y)
+					if cn.y < 0.48 or cn.y > 0.94:
+						continue
+					_append_highland_grass_tuft(rng, cpt, ch, cn, grid, cell_size, out_xf, out_col, out_pos)
+
+			if out_xf.size() < highland_cap and hl_sep > 1.8:
+				for cand in hl_candidates:
+					if out_xf.size() >= highland_cap:
+						break
+					var pt: Vector2 = cand["pt"] as Vector2
+					if not _grid_is_clear(grid, cell_size, pt, 1.8):
+						continue
+					var h: float = float(cand["h"])
+					var n: Vector3 = cand["n"] as Vector3
+					_append_highland_grass_tuft(rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
 
 	# Pass 1: Lush green meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 2.25..2.8 m).
 	var passes: Array[Array] = [
@@ -868,6 +1024,60 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 		out_col: Array[Color]) -> void:
 	var min_sep := clampf(radius * 0.026, 1.45, 3.4)
 	var cell_size := 2.6
+
+	# Pass 0 (Highland Cliff-Ledge Cascading Ferns): Bold emerald cliff-edge rosettes gripping
+	# stepped canyon ledges & upper mountain terraces (h = 18..64 m, n.y >= 0.48) with +0 DC!
+	if island.peak_height >= 26.0 and not is_volcanic:
+		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.18)), 10, 30))
+		var hl_h_min := 18.0
+		var hl_h_max := minf(64.0, island.peak_height * 0.86)
+		if hl_h_max > hl_h_min + 0.5:
+			var hl_r_min := radius * 0.08
+			var hl_r_max := radius * 0.86
+			var hl_sep := maxf(2.0, min_sep * 0.85)
+			var hl_candidates := _scan_highland_ledge_candidates(island, rng, hl_r_min, hl_r_max,
+				hl_h_min, hl_h_max, 0.48, 1.01, keepouts, has_pier, pier_a, pier_b, trail_ctx)
+			for cand in hl_candidates:
+				if out_xf.size() >= highland_cap:
+					break
+				var pt: Vector2 = cand["pt"] as Vector2
+				if not _grid_is_clear(bush_grid, cell_size, pt, hl_sep):
+					continue
+				var h: float = float(cand["h"])
+				var n: Vector3 = cand["n"] as Vector3
+				_append_highland_fern_rosette(rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
+
+				# Pair with a companion cascading fern along the same ledge terrace when space permits.
+				if out_xf.size() < highland_cap:
+					var tan_xz := Vector2(-n.z, n.x)
+					if tan_xz.length_squared() < 0.0004:
+						tan_xz = Vector2(-pt.y, pt.x)
+					tan_xz = tan_xz.normalized()
+					var rad_xz := Vector2(tan_xz.y, -tan_xz.x)
+					var side_sign := 1.0 if rng.randf() < 0.5 else -1.0
+					var cpt := pt + tan_xz * (side_sign * rng.randf_range(2.05, 4.6)) + rad_xz * rng.randf_range(-0.9, 0.9)
+					var cr := cpt.length()
+					if cr >= hl_r_min and cr <= hl_r_max \
+							and not _is_in_keepout(cpt, keepouts, has_pier, pier_a, pier_b) \
+							and not _is_on_trail(cpt, trail_ctx) \
+							and _grid_is_clear(bush_grid, cell_size, cpt, hl_sep):
+						var ch := island.surface_height(cpt.x, cpt.y)
+						if ch >= hl_h_min and ch <= hl_h_max:
+							var cn := island.surface_normal(cpt.x, cpt.y)
+							if cn.y >= 0.48:
+								_append_highland_fern_rosette(rng, cpt, ch, cn, bush_grid, cell_size, out_xf, out_col)
+
+			if out_xf.size() < highland_cap and hl_sep > 1.8:
+				for cand in hl_candidates:
+					if out_xf.size() >= highland_cap:
+						break
+					var pt: Vector2 = cand["pt"] as Vector2
+					if not _grid_is_clear(bush_grid, cell_size, pt, 1.8):
+						continue
+					var h: float = float(cand["h"])
+					var n: Vector3 = cand["n"] as Vector3
+					_append_highland_fern_rosette(rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
+
 	var passes: Array[Array] = [
 		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 180],
 		[2.35, max_fern_h + 5.0, 0.66, min_sep * 0.68, 0.30, target * 12 + 160],
@@ -971,9 +1181,9 @@ static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, t
 
 static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator, target: int,
 		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
-		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color]) -> void:
-	var r_min := maxf(4.0, radius * 0.35)
+	var r_min := maxf(4.0, radius * 0.16)
 	var r_max := maxf(r_min + 8.0, island.seabed_radius * 0.88)
 	var base_sep := clampf(radius * 0.068, 2.8, 7.5)
 	var cell_size := 4.0
@@ -998,6 +1208,8 @@ static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator,
 				break
 			var pt := _sample_annulus_xz(rng, r_min, r_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+				continue
+			if _is_on_trail(pt, trail_ctx):
 				continue
 			if not _grid_is_clear(grid, cell_size, pt, sep):
 				continue
@@ -1026,7 +1238,10 @@ static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator,
 			var end_dz := -sin(yaw) * (1.05 * sc_x)
 			var h_a := island.surface_height(pt.x + end_dx, pt.y + end_dz)
 			var h_b := island.surface_height(pt.x - end_dx, pt.y - end_dz)
-			var seat_y := minf(h, minf(h_a, h_b) + 0.14 * sc_yz) - 0.06 * sc_yz
+			var h_end_min := minf(h_a, h_b)
+			if h_end_min < -0.15 or absf(h_a - h_b) > 0.65 or (h - h_end_min) > 0.50:
+				continue
+			var seat_y := minf(h, h_end_min + 0.14 * sc_yz) - 0.06 * sc_yz
 
 			var xf := _grounded_transform(Vector3(pt.x, seat_y, pt.y), n, 0.72, yaw, Vector3(sc_x, sc_yz, sc_yz))
 			out_xf.append(xf)
@@ -1039,7 +1254,7 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
 		out_col: Array[Color]) -> void:
-	var r_min := maxf(4.0, radius * 0.34)
+	var r_min := maxf(4.0, radius * 0.16)
 	var r_max := maxf(r_min + 8.0, island.seabed_radius * 0.90)
 	var base_sep := clampf(radius * 0.036, 1.5, 4.2)
 	var cell_size := 2.8
@@ -1077,7 +1292,7 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 			var sx := rng.randf_range(0.75, 1.42)
 			var sz := sx * rng.randf_range(0.86, 1.16)
 			var sy := rng.randf_range(0.78, 1.24)
-			var xf := _grounded_transform(Vector3(pt.x, h - 0.035, pt.y), n, 0.82, rng.randf() * TAU, Vector3(sx, sy, sz))
+			var xf := _grounded_transform(Vector3(pt.x, h - 0.045, pt.y), n, 0.82, rng.randf() * TAU, Vector3(sx, sy, sz))
 			out_xf.append(xf)
 			out_col.append(_pick_jittered_color(rng,
 				PEBBLE_VOLCANIC_PALETTE if is_volcanic else PEBBLE_PALETTE, 0.015, 0.08))
@@ -1086,9 +1301,9 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 
 static func _place_tidal_outcrops(island: Island, rng: RandomNumberGenerator, target: int,
 		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
-		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color]) -> void:
-	var r_min := maxf(4.0, radius * 0.42)
+	var r_min := maxf(4.0, radius * 0.20)
 	var r_max := maxf(r_min + 10.0, island.seabed_radius * 0.92)
 	var base_sep := clampf(radius * 0.068, 3.2, 8.2)
 	var cell_size := 4.8
@@ -1113,6 +1328,8 @@ static func _place_tidal_outcrops(island: Island, rng: RandomNumberGenerator, ta
 				break
 			var pt := _sample_annulus_xz(rng, r_min, r_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b, 1.2):
+				continue
+			if _is_on_trail(pt, trail_ctx):
 				continue
 			if not _grid_is_clear(grid, cell_size, pt, sep):
 				continue

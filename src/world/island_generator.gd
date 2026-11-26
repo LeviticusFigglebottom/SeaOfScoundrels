@@ -965,8 +965,25 @@ static func _ridged_massif(u: float, v: float, p_a: Vector2, p_b: Vector2,
 	var slope_u := clampf(1.0 - d_norm, 0.0, 1.0)
 	var prof := pow(slope_u, 1.12) * (0.82 + 0.18 * _smoothstep(0.0, 0.45, slope_u))
 	var h := prof * crest_h
+	var high_w := _smoothstep(18.0, 32.0, h)
+	if high_w > 0.0:
+		# Upper-mountain ridged-multifractal erosion chutes, angular buttress ribs & jagged spine crags.
+		var crag_n := _fbm2(u * 0.092 + seed_f * 1.37, v * 0.092 - seed_f * 0.89)
+		var crag_ridge := 1.0 - absf(crag_n * 2.0 - 1.0)
+		var frac_n := _fbm2(u * 0.165 - seed_f * 0.61, v * 0.165 + seed_f * 1.19)
+		var frac_ridge := 1.0 - absf(frac_n * 2.0 - 1.0)
+		var crag_sharp := crag_ridge * crag_ridge
+		var crag_signed := clampf((crag_sharp - 0.62) * 1.50 + (frac_ridge * frac_ridge - 0.62) * crag_ridge * 1.15, -1.0, 1.0)
+		var relief_amp := clampf(crest_h * 0.085, 2.2, 4.8)
+		var flank_w := high_w * clampf(slope_u * 1.65, 0.0, 1.0)
+		# Accentuate angular crag crowns along the upper ridge spine without altering flanks below 18 m.
+		var spine_crown := maxf(crag_sharp - 0.52, 0.0) * _smoothstep(0.68, 0.98, slope_u) * high_w * clampf(crest_h * 0.042, 0.8, 2.4)
+		h += crag_signed * relief_amp * flank_w + spine_crown
 	if strata_step > 0.5 and h > 4.0:
-		h = _apply_geological_terraces(h, strata_step, 0.46)
+		var terrace_strength := lerpf(0.46, 0.72, high_w)
+		h = _apply_geological_terraces(h, strata_step, terrace_strength)
+	if high_w > 0.0:
+		h = minf(h, crest_h * 1.15)
 	return h
 
 
@@ -989,9 +1006,20 @@ static func _terraced_cliff(u: float, v: float, cx: float, cz: float, rx: float,
 	var t := clampf((1.0 - r_fac) / maxf(1.0 - flat_crown, 0.14), 0.0, 1.0)
 	var prof := t * t * (3.0 - 2.0 * t)
 	var h := prof * height
+	var high_w := _smoothstep(18.0, 32.0, h)
+	if t > 0.06 and t < 0.82 and high_w > 0.0:
+		# Subtle angular vertical rock-fluting / erosion crevices on steep upper cliff flanks only.
+		var flute_w := sin(clampf((t - 0.06) / 0.76, 0.0, 1.0) * PI) * high_w
+		var flute_n := _fbm2(u * 0.115 - seed_f * 0.73, v * 0.115 + seed_f * 1.29)
+		var flute_ridge := 1.0 - absf(flute_n * 2.0 - 1.0)
+		var flute_signed := clampf((flute_ridge * flute_ridge - 0.62) * 2.0, -1.0, 1.0)
+		var flute_amp := clampf(height * 0.055, 1.4, 2.4)
+		h += flute_signed * flute_amp * flute_w
 	if terrace_levels >= 2 and t > 0.04 and t < 0.94:
 		var step_h := maxf(4.2, height / float(terrace_levels))
-		h = _apply_geological_terraces(h, step_h, 0.58)
+		var flank_w := _smoothstep(0.06, 0.16, t) * _smoothstep(0.82, 0.70, t) * high_w
+		var terrace_strength := lerpf(0.58, 0.74, flank_w)
+		h = _apply_geological_terraces(h, step_h, terrace_strength)
 	# Subtle rolling highland grass undulation across the walkable crown plateau.
 	if t >= 0.85:
 		h += rock_n * minf(2.2, height * 0.06) * _smoothstep(0.85, 0.98, t)
@@ -1013,9 +1041,11 @@ static func _faceted_spire(u: float, v: float, cx: float, cz: float, rx: float, 
 	var r_fac := r * (1.0 + 0.14 * cos(ang * facets + yaw * 1.7) + 0.07 * sin(ang * (facets + 2.0) - 0.8))
 	var profile := pow(clampf(1.0 - r_fac, 0.0, 1.0), sharpness)
 	var h := profile * height
-	# Subtle geological terrace steps on steep limestone cliffs.
+	# Subtle geological terrace steps on steep limestone cliffs (crisper strata above 18 m).
 	if h > 5.0:
-		h += 0.032 * height * sin(h * 0.42) * clampf(profile * 2.4, 0.0, 1.0)
+		var high_w := _smoothstep(18.0, 32.0, h)
+		var strata_amp := lerpf(0.032, 0.044, high_w)
+		h += strata_amp * height * sin(h * 0.42) * clampf(profile * 2.4, 0.0, 1.0)
 	return h
 
 

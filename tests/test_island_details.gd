@@ -1,7 +1,7 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (12 PBR GLB assets)
-## and batched MultiMesh `IslandDetails` ground foliage, coastal details &
-## steep-slope cliff buttresses across all 14 island archetypes.
+## Headless contract tests for sculpted 3D island landmarks (22 PBR GLB assets)
+## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
+## coastal details & steep-slope cliff buttresses across all 14 island archetypes.
 
 const IslandDetailsCls := preload("res://src/world/island_details.gd")
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -34,6 +34,13 @@ const STORYTELLING_LANDMARKS: Array[String] = [
 	"coastal_signal_brazier.glb",
 ]
 
+const SKYLINE_LANDMARKS: Array[String] = [
+	"cliff_summit_crag_spire.glb",
+	"cliff_ruin_aqueduct_arch.glb",
+	"cliffside_pirate_watchpost.glb",
+	"upper_cliff_strata_rib.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -53,6 +60,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"beached_rowboat_wreck.glb": 1,
 	"pirate_warning_gibbet.glb": 1,
 	"coastal_signal_brazier.glb": 1,
+	"cliff_summit_crag_spire.glb": 2,
+	"cliff_ruin_aqueduct_arch.glb": 4,
+	"cliffside_pirate_watchpost.glb": 2,
+	"upper_cliff_strata_rib.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -65,6 +76,7 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"beached_rowboat_wreck.glb": ["Lantern_Rowboat"],
 	"pirate_warning_gibbet.glb": ["Lantern_Gallows"],
 	"coastal_signal_brazier.glb": ["Lantern_Brazier"],
+	"cliffside_pirate_watchpost.glb": ["Lantern_Watchpost"],
 }
 
 const COMPACT_LANDMARKS: Array[String] = [
@@ -140,7 +152,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(GEOLOGY_LANDMARKS)
 	all_landmarks.append_array(SETPIECE_LANDMARKS)
 	all_landmarks.append_array(STORYTELLING_LANDMARKS)
-	check_eq(all_landmarks.size(), 18, "expected 18 sculpted landmark GLBs")
+	all_landmarks.append_array(SKYLINE_LANDMARKS)
+	check_eq(all_landmarks.size(), 22, "expected 22 sculpted landmark GLBs")
 
 	for filename in all_landmarks:
 		var path := LANDMARK_DIR + filename
@@ -680,6 +693,23 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check(rowboat_total >= 4, "Wave I-3 spawns >= 4 BeachedRowboat* landmarks (got %d)" % rowboat_total)
 	check(gibbet_total >= 3, "Wave I-3 spawns >= 3 PirateGibbet* landmarks (got %d)" % gibbet_total)
 	check(brazier_total >= 5, "Wave I-3 spawns >= 5 SignalBrazier* landmarks (got %d)" % brazier_total)
+
+	# 2c. Verify Wave I-4 upper-mountain skyline landmarks across Tier 2-4 islands!
+	var crag_total := 0
+	var aqueduct_total := 0
+	var watchpost_total := 0
+	var strata_total := 0
+	for isl_i4 in all_islands:
+		crag_total += isl_i4.find_children("SummitCrag*", "Node3D", true, false).size()
+		aqueduct_total += isl_i4.find_children("RuinAqueduct*", "Node3D", true, false).size()
+		watchpost_total += isl_i4.find_children("PirateWatchpost*", "Node3D", true, false).size()
+		strata_total += isl_i4.find_children("UpperStrataRib*", "Node3D", true, false).size()
+	print("    wave_i4 skyline landmarks: crags=%d aqueducts=%d watchposts=%d strata_ribs=%d" % [
+		crag_total, aqueduct_total, watchpost_total, strata_total])
+	check(crag_total >= 8, "Wave I-4 spawns >= 8 SummitCrag* landmarks (got %d)" % crag_total)
+	check(aqueduct_total >= 4, "Wave I-4 spawns >= 4 RuinAqueduct* landmarks (got %d)" % aqueduct_total)
+	check(watchpost_total >= 6, "Wave I-4 spawns >= 6 PirateWatchpost* landmarks (got %d)" % watchpost_total)
+	check(strata_total >= 14, "Wave I-4 spawns >= 14 UpperStrataRib* landmarks (got %d)" % strata_total)
 
 	# Verify zero-VRAM triplanar cliff PBR wired onto FortBastion & SmugglersGrotto stone meshes.
 	var fort_isl := archipelago.get_island_by_id("ironwatch_fort")
