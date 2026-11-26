@@ -325,3 +325,187 @@ func test_ghost_ship_phase_shift_and_faction_emblems() -> void:
 	check(not is_instance_valid(fx_root), "muzzle VFX node is cleanly freed on ship _exit_tree() with zero leaks")
 	await _end()
 
+
+func test_enemy_signature_combat_vfx_and_teardown() -> void:
+	_begin()
+	_ground()
+
+	# Near player with PlayerController (inside 24 m trauma radius) and far player (outside 24 m).
+	var hero_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var hero: Pawn = hero_pair[0]
+	var pc := PlayerController.new()
+	pc.name = "PlayerController"
+	pc.input_enabled = false
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.bob_amount = 0.028
+	hero.add_child(pc)
+
+	var far_pair := _fighter(Vector3(36.0, 5.05, 0.0), &"player", 0.0)
+	var far_hero: Pawn = far_pair[0]
+	var pc_far := PlayerController.new()
+	pc_far.name = "PlayerController"
+	pc_far.input_enabled = false
+	pc_far.capture_mouse = false
+	pc_far.make_current = false
+	pc_far.bob_amount = 0.028
+	far_hero.add_child(pc_far)
+	await physics_frames(4)
+
+	# 1. Powder-Carrier detonate_keg() spawns KegExplosionVFX (3+ particle layers, no SphereMesh!),
+	#    triggers nearby PlayerController camera trauma, and self-cleans even after pawn is freed.
+	var powder := EnemyBrain.spawn_enemy(&"drowned_powder", Vector3(0.0, 5.05, -8.0), _root)
+	var powder_brain := powder.get_node(^"EnemyBrain") as EnemyBrain
+	await physics_frames(2)
+	check_near(pc.get_camera_trauma(), 0.0, 0.001, "camera trauma starts at 0 before keg blast")
+	powder_brain.detonate_keg(hero)
+
+	var keg_fx := _root.get_node_or_null(^"KegExplosionVFX") as Node3D
+	check(keg_fx != null, "detonate_keg() must spawn KegExplosionVFX on host")
+	var keg_layers := 0
+	var keg_has_sphere := false
+	if keg_fx != null:
+		for ch in keg_fx.get_children():
+			if ch is GPUParticles3D:
+				keg_layers += 1
+				var gp := ch as GPUParticles3D
+				if gp.draw_pass_1 is SphereMesh:
+					keg_has_sphere = true
+			elif ch is MeshInstance3D and (ch as MeshInstance3D).mesh is SphereMesh:
+				keg_has_sphere = true
+		var fb := keg_fx.get_node_or_null(^"FireballCore") as GPUParticles3D
+		var sm := keg_fx.get_node_or_null(^"GunpowderSmoke") as GPUParticles3D
+		var sp := keg_fx.get_node_or_null(^"EmberSparks") as GPUParticles3D
+		check(fb != null and fb.draw_pass_1 is QuadMesh, "FireballCore uses billboarded QuadMesh")
+		if fb != null and fb.draw_pass_1 is QuadMesh:
+			var fb_mat := (fb.draw_pass_1 as QuadMesh).material as StandardMaterial3D
+			check(fb_mat != null and fb_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD, "FireballCore uses additive blend")
+			check(fb_mat != null and fb_mat.albedo_texture is ImageTexture, "FireballCore uses cached feathered ImageTexture")
+		check(sm != null and sm.draw_pass_1 is QuadMesh, "GunpowderSmoke uses feathered QuadMesh")
+		check(sp != null and sp.draw_pass_1 is QuadMesh and sp.transform_align == GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY,
+			"EmberSparks uses velocity-aligned QuadMesh streaks")
+	check(keg_layers >= 3, "KegExplosionVFX must contain at least 3 GPUParticles3D layers (got %d)" % keg_layers)
+	check(not keg_has_sphere, "KegExplosionVFX must contain zero raw SphereMesh primitives")
+	var trauma_near := pc.get_camera_trauma()
+	var trauma_far := pc_far.get_camera_trauma()
+	print("    keg blast: layers=%d trauma_near=%.3f trauma_far=%.3f" % [keg_layers, trauma_near, trauma_far])
+	check(trauma_near > 0.35 and trauma_near <= 0.78, "nearby PlayerController receives distance-attenuated trauma (got %.3f)" % trauma_near)
+	check_near(trauma_far, 0.0, 0.001, "PlayerController outside 24 m receives zero keg trauma")
+
+	# Free dead powder carrier immediately; host-owned explosion must still self-clean cleanly.
+	powder.queue_free()
+	await physics_frames(105)
+	check(not is_instance_valid(keg_fx), "KegExplosionVFX self-frees cleanly after burst completes")
+
+	# 2. Tidecaller _summon_water_hazard() creates shader-driven TideHazard vortex (no CylinderMesh!)
+	#    and erupts TideGeyserBurst on 1.1 s timeout, then cleans up with zero leaks.
+	var tc := EnemyBrain.spawn_enemy(&"tidecaller", Vector3(12.0, 5.05, -6.0), _root)
+	var tc_brain := tc.get_node(^"EnemyBrain") as EnemyBrain
+	await physics_frames(2)
+	tc_brain._summon_water_hazard(Vector3(12.0, 5.05, -1.0))
+
+	var hazard := _root.get_node_or_null(^"TideHazard") as MeshInstance3D
+	check(hazard != null, "Tidecaller spawns TideHazard node on host")
+	if hazard != null:
+		check(hazard.mesh is QuadMesh and not (hazard.mesh is CylinderMesh),
+			"TideHazard uses ground-hugging QuadMesh rather than raw CylinderMesh")
+		var hmat := hazard.material_override as ShaderMaterial
+		check(hmat != null and hmat.shader != null, "TideHazard uses inline coral-rune ShaderMaterial")
+		var mist := hazard.get_node_or_null(^"VortexMist") as GPUParticles3D
+		check(mist != null and mist.amount == 10 and mist.draw_pass_1 is QuadMesh,
+			"TideHazard includes bubbling rising mist GPUParticles3D (amount = 10)")
+
+	# Advance halfway through 1.1 s telegraph and verify shader progress advances.
+	await physics_frames(30)
+	if is_instance_valid(hazard) and hazard.material_override is ShaderMaterial:
+		var prog := float((hazard.material_override as ShaderMaterial).get_shader_parameter(&"progress"))
+		check(prog > 0.25 and prog < 0.95, "TideHazard vortex shader progress animates smoothly (got %.2f)" % prog)
+
+	# Advance past 1.1 s detonation -> TideHazard frees and TideGeyserBurst erupts!
+	await physics_frames(44)
+	check(not is_instance_valid(hazard), "TideHazard frees cleanly upon detonation")
+	var geyser := _root.get_node_or_null(^"TideGeyserBurst") as Node3D
+	check(geyser != null, "TideHazard detonation erupts TideGeyserBurst on host")
+	var geyser_layers := 0
+	var geyser_has_sphere := false
+	if geyser != null:
+		for ch in geyser.get_children():
+			if ch is GPUParticles3D:
+				geyser_layers += 1
+				var gp := ch as GPUParticles3D
+				if gp.draw_pass_1 is SphereMesh:
+					geyser_has_sphere = true
+		check(geyser.get_node_or_null(^"GeyserFoamColumn") is GPUParticles3D, "TideGeyserBurst has GeyserFoamColumn")
+		check(geyser.get_node_or_null(^"GeyserDroplets") is GPUParticles3D, "TideGeyserBurst has GeyserDroplets")
+		check(geyser.get_node_or_null(^"CoralSparks") is GPUParticles3D, "TideGeyserBurst has CoralSparks")
+	check(geyser_layers >= 3 and not geyser_has_sphere, "TideGeyserBurst has 3 feathered particle layers and zero SphereMesh")
+
+	await physics_frames(64)
+	check(not is_instance_valid(geyser), "TideGeyserBurst self-frees cleanly after eruption")
+	check(tc_brain._active_vfx.is_empty(), "Tidecaller _active_vfx is empty after teardown")
+
+	# 3. Captain rally spawns CaptainRallyRing (verdigris-emerald for Drowned, crimson-gold for Rival)
+	#    and expands smoothly 0.9 m -> 11.5 m before freeing cleanly.
+	var cap := EnemyBrain.spawn_enemy(&"drowned_captain", Vector3(-6.0, 5.05, -4.0), _root)
+	var ally := EnemyBrain.spawn_enemy(&"drowned_cutlass", Vector3(-4.0, 5.05, -4.0), _root)
+	var cap_brain := cap.get_node(^"EnemyBrain") as EnemyBrain
+	var ally_cc := ally.get_node(^"CombatComponent") as CombatComponent
+	var rallied_seen := [false]
+	cap_brain.rallied_allies.connect(func(_c: Pawn, _cnt: int) -> void: rallied_seen[0] = true)
+	cap_brain._special_cd = 0.0
+	await physics_frames(3)
+	check(rallied_seen[0], "Drowned Captain emits rallied_allies on rally tick")
+	check(ally_cc.damage_multiplier > 1.2, "Drowned Captain rally buffs nearby ally damage")
+
+	var rally_ring := _root.get_node_or_null(^"CaptainRallyRing") as MeshInstance3D
+	check(rally_ring != null, "Captain rally spawns CaptainRallyRing on host")
+	var start_scale := 0.0
+	if rally_ring != null:
+		check(rally_ring.mesh is QuadMesh, "CaptainRallyRing uses ground-hugging QuadMesh")
+		var rmat := rally_ring.material_override as ShaderMaterial
+		check(rmat != null and rmat.shader != null, "CaptainRallyRing uses inline ShaderMaterial")
+		if rmat != null:
+			var dc_tint: Color = rmat.get_shader_parameter(&"tint_outer")
+			check(dc_tint.g > dc_tint.r, "Drowned Captain rally ring uses eerie verdigris-emerald tint")
+		start_scale = rally_ring.scale.x
+	await physics_frames(18)
+	var mid_scale := rally_ring.scale.x if is_instance_valid(rally_ring) else 0.0
+	print("    captain rally ring scale: start=%.2f -> mid=%.2f" % [start_scale, mid_scale])
+	check(mid_scale > 4.0 and mid_scale <= 11.55, "CaptainRallyRing expands smoothly toward 11.5 m (got %.2f)" % mid_scale)
+	await physics_frames(30)
+	check(not is_instance_valid(rally_ring), "CaptainRallyRing self-frees cleanly after 0.65 s")
+	check(cap_brain._active_vfx.is_empty(), "Captain _active_vfx is empty after ring self-free")
+
+	# Rival Captain crimson-gold rally ring + early host teardown stress test (zero leaks!).
+	var sub_host := Node3D.new()
+	sub_host.name = "TeardownHost"
+	_root.add_child(sub_host)
+	var rival := EnemyBrain.spawn_enemy(&"rival_captain", Vector3(-10.0, 5.05, -4.0), sub_host)
+	var rival_brain := rival.get_node(^"EnemyBrain") as EnemyBrain
+	var sub_powder := EnemyBrain.spawn_enemy(&"drowned_powder", Vector3(-12.0, 5.05, -6.0), sub_host)
+	var sub_powder_brain := sub_powder.get_node(^"EnemyBrain") as EnemyBrain
+	var sub_tc := EnemyBrain.spawn_enemy(&"tidecaller", Vector3(-14.0, 5.05, -6.0), sub_host)
+	var sub_tc_brain := sub_tc.get_node(^"EnemyBrain") as EnemyBrain
+	await physics_frames(2)
+
+	rival_brain._perform_captain_rally()
+	sub_powder_brain.detonate_keg(hero)
+	sub_tc_brain._summon_water_hazard(Vector3(-14.0, 5.05, -2.0))
+
+	var rival_ring := sub_host.get_node_or_null(^"CaptainRallyRing") as MeshInstance3D
+	var sub_keg := sub_host.get_node_or_null(^"KegExplosionVFX") as Node3D
+	var sub_haz := sub_host.get_node_or_null(^"TideHazard") as MeshInstance3D
+	check(rival_ring != null and sub_keg != null and sub_haz != null,
+		"All 3 enemy signature VFX spawn cleanly on sub_host before mid-flight teardown")
+	if rival_ring != null and rival_ring.material_override is ShaderMaterial:
+		var rc_tint: Color = (rival_ring.material_override as ShaderMaterial).get_shader_parameter(&"tint_outer")
+		check(rc_tint.r > rc_tint.g, "Rival Captain rally ring uses warm crimson-gold tint")
+
+	# Immediately tear down host mid-flight and confirm GPU particle/mesh resources release cleanly.
+	sub_host.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(rival_ring) and not is_instance_valid(sub_keg) and not is_instance_valid(sub_haz),
+		"Early host teardown cleanly frees all active signature VFX with zero leaks")
+	await _end()
+
+

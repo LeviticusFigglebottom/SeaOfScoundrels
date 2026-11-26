@@ -23,9 +23,110 @@ signal enemy_defeated(archetype: StringName, pos: Vector3)
 
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 
+const TIDE_VORTEX_SHADER_CODE := """
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, cull_disabled, shadows_disabled, unshaded;
+
+uniform float progress : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 tint_deep : source_color = vec3(0.04, 0.46, 0.56);
+uniform vec3 tint_glow : source_color = vec3(0.24, 0.98, 0.90);
+uniform vec3 tint_core : source_color = vec3(0.82, 1.0, 0.98);
+
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float r = length(p);
+	if (r > 1.0) {
+		discard;
+	}
+
+	float p_ease = progress * progress;
+	float angle = atan(p.y, p.x + 1e-6);
+	float ang_mask = smoothstep(0.04, 0.16, r);
+	float spin = TIME * mix(2.4, 5.8, progress);
+
+	// Outer contracting danger-zone ring that tightens smoothly as detonation nears.
+	float outer_r = mix(0.90, 0.62, p_ease);
+	float d_outer = (r - outer_r) / mix(0.068, 0.045, progress);
+	float outer_ring = exp(-d_outer * d_outer);
+
+	// Counter-rotating notched coral-rune glyph ring inside the vortex.
+	float rune_r = mix(0.64, 0.36, progress);
+	float d_rune = (r - rune_r) / 0.055;
+	float rune_band = exp(-d_rune * d_rune);
+	float rune_glyphs = smoothstep(0.05, 0.38, sin(angle * 8.0 + spin * 1.35))
+		* smoothstep(-0.2, 0.55, cos(angle * 4.0 - spin * 0.7));
+	float rune_ring = rune_band * (0.35 + 0.85 * rune_glyphs * ang_mask);
+
+	// Five-armed bioluminescent aquamarine spiral pulled inward toward the spout.
+	float spiral_wave = sin(angle * 5.0 + r * 11.5 - spin * 1.9);
+	float spiral = smoothstep(0.10, 0.88, spiral_wave * 0.5 + 0.5)
+		* ang_mask * (1.0 - smoothstep(outer_r - 0.04, outer_r + 0.08, r));
+
+	// Boiling central surge well intensifying sharply right before eruption.
+	float d_core = r / mix(0.32, 0.24, progress);
+	float center_well = exp(-d_core * d_core) * (0.32 + 0.88 * p_ease);
+
+	// Subtle animated water-ripple caustics inside the danger circle.
+	float ripple = 0.5 + 0.5 * sin(r * 22.0 - spin * 2.6 + sin(angle * 3.0) * 1.2 * ang_mask);
+	float base_pool = (1.0 - smoothstep(outer_r * 0.65, outer_r + 0.05, r))
+		* (0.22 + 0.16 * ripple);
+
+	float pulse = 0.86 + 0.14 * sin(TIME * mix(7.0, 22.0, progress));
+	float intensity = mix(0.75, 1.85, progress) * pulse;
+
+	float pattern = clamp(base_pool + spiral * 0.52 + rune_ring * 0.85 + outer_ring * 0.95 + center_well * 0.90, 0.0, 1.5);
+	vec3 col = mix(tint_deep, tint_glow, clamp(spiral * 0.6 + rune_ring * 0.75 + outer_ring * 0.8, 0.0, 1.0));
+	col = mix(col, tint_core, clamp(center_well * 0.85 + outer_ring * p_ease * 0.7, 0.0, 1.0));
+
+	float fade_in = smoothstep(0.0, 0.12, progress);
+	float alpha = clamp(pattern * fade_in * mix(0.72, 0.96, progress), 0.0, 0.96);
+	ALBEDO = col * intensity;
+	ALPHA = alpha;
+}
+"""
+
+const CAPTAIN_RALLY_SHADER_CODE := """
+shader_type spatial;
+render_mode blend_add, depth_draw_never, cull_disabled, shadows_disabled, unshaded;
+
+uniform float progress : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 tint_outer : source_color = vec3(0.10, 0.88, 0.64);
+uniform vec3 tint_inner : source_color = vec3(0.54, 1.0, 0.82);
+
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float r = length(p);
+	if (r > 1.0) {
+		discard;
+	}
+
+	float angle = atan(p.y, p.x + 1e-6);
+	float ang_mask = smoothstep(0.06, 0.20, r);
+
+	// Crisp expanding shockwave crest with inner harmonic echo and subtle war-cry rays.
+	float d_wave = (r - 0.86) / mix(0.085, 0.052, progress);
+	float wave_band = exp(-d_wave * d_wave);
+	float d_echo = (r - 0.66) / 0.095;
+	float inner_echo = exp(-d_echo * d_echo) * 0.48 * (1.0 - progress * 0.45);
+	float trail = smoothstep(0.42, 0.86, r) * (1.0 - smoothstep(0.88, 1.0, r)) * 0.28;
+	float rays = 0.82 + 0.18 * sin(angle * 12.0 - TIME * 5.0) * ang_mask;
+
+	float fade_in = smoothstep(0.0, 0.08, progress);
+	float rem = clamp(1.0 - progress, 0.0, 1.0);
+	float fade_out = rem * sqrt(max(rem, 0.0));
+	float strength = (wave_band * rays + inner_echo + trail) * fade_in * fade_out;
+
+	vec3 col = mix(tint_outer, tint_inner, clamp(wave_band * 0.85, 0.0, 1.0));
+	ALBEDO = col * strength * 1.65;
+	ALPHA = clamp(strength, 0.0, 1.0);
+}
+"""
+
 @export var archetype: StringName = &"drowned_cutlass"
 @export var aggro_range: float = 34.0
 @export var leash_range: float = 65.0
+## Toggle signature combat VFX (powder-keg explosion, Tidecaller vortex/geyser, Captain rally ring).
+@export var enable_effects: bool = true
 
 var pawn: Pawn = null
 var combat: CombatComponent = null
@@ -34,14 +135,28 @@ var target: Pawn = null
 
 var _attack_cd: float = 0.0
 var _special_cd: float = 4.0
+var _rally_cd: float = 6.5
 var _rattle_cd: float = 3.0
 var _strafe_sign: float = 1.0
 var _keg_blown: bool = false
 var _rng := RandomNumberGenerator.new()
+var _active_vfx: Array[Node] = []
+
+static var _fireball_tex: ImageTexture = null
+static var _smoke_puff_tex: ImageTexture = null
+static var _streak_tex: ImageTexture = null
+static var _tide_vortex_shader: Shader = null
+static var _captain_rally_shader: Shader = null
 
 
 func _init() -> void:
 	process_physics_priority = -10
+
+
+func _exit_tree() -> void:
+	# VFX live on host so explosions/geysers finish cleanly after pawn death;
+	# each VFX node releases its own GPU resources on tree_exiting.
+	_active_vfx.clear()
 
 
 func _ready() -> void:
@@ -182,6 +297,9 @@ func detonate_keg(trigger: Node = null) -> void:
 		if s != null and s.global_position.distance_to(blast_pos) < 10.0:
 			s.apply_hull_damage(blast_pos, 0.72)
 
+	if enable_effects:
+		_spawn_keg_explosion_vfx(blast_pos)
+
 	keg_detonated.emit(blast_pos, BLAST_RADIUS)
 	pawn.apply_damage(999.0, trigger)
 
@@ -201,6 +319,7 @@ func _physics_process(delta: float) -> void:
 
 	_attack_cd = maxf(0.0, _attack_cd - delta)
 	_special_cd = maxf(0.0, _special_cd - delta)
+	_rally_cd = maxf(0.0, _rally_cd - delta)
 	_rattle_cd = maxf(0.0, _rattle_cd - delta)
 
 	if combat != null and combat.is_staggered():
@@ -282,6 +401,10 @@ func _tick_corsair_raider(dir: Vector3, dist: float) -> void:
 
 func _tick_rival_captain(dir: Vector3, dist: float) -> void:
 	var right := Vector3(-dir.z, 0.0, dir.x) * _strafe_sign
+	# Periodically rally nearby Corsair raiders with a crimson-gold war-cry shockwave.
+	if _rally_cd <= 0.0:
+		_rally_cd = 11.0
+		_perform_captain_rally()
 	# Tactically guards briefly to fish for parries when pressed, mixes blunderbuss & combos.
 	if dist > 5.0 and dist < 14.0 and _special_cd <= 0.0:
 		combat.set_blocking(false)
@@ -348,15 +471,7 @@ func _tick_captain(dir: Vector3, dist: float) -> void:
 	# Periodically rally nearby Drowned allies!
 	if _special_cd <= 0.0:
 		_special_cd = 10.0
-		var buffed := 0
-		for node in get_tree().get_nodes_in_group(&"combatants"):
-			var cc := node as CombatComponent
-			if cc != null and cc.faction == combat.faction and cc.pawn != null and not cc.pawn.dead:
-				if cc.pawn.global_position.distance_to(pawn.global_position) < 18.0:
-					cc.apply_rally_buff(7.0, 1.35)
-					buffed += 1
-		Audio.play_sfx(&"crew_shout", pawn.global_position, 1.0, 0.04)
-		rallied_allies.emit(pawn, buffed)
+		_perform_captain_rally()
 
 	# Mix ranged pistol shot at mid-range with heavy axe melee up close.
 	if dist > 8.5 and dist < 24.0 and _attack_cd <= 0.0:
@@ -405,42 +520,779 @@ func _tick_tidecaller(dir: Vector3, dist: float) -> void:
 		_summon_water_hazard(target.global_position)
 
 
+func _perform_captain_rally() -> void:
+	var buffed := 0
+	for node in get_tree().get_nodes_in_group(&"combatants"):
+		var cc := node as CombatComponent
+		if cc != null and cc.faction == combat.faction and cc.pawn != null and not cc.pawn.dead:
+			if cc.pawn.global_position.distance_to(pawn.global_position) < 18.0:
+				cc.apply_rally_buff(7.0, 1.35)
+				buffed += 1
+	Audio.play_sfx(&"crew_shout", pawn.global_position, 1.0, 0.04)
+	if enable_effects:
+		_spawn_captain_rally_vfx(pawn.global_position)
+	rallied_allies.emit(pawn, buffed)
+
+
 func _summon_water_hazard(at: Vector3) -> void:
 	var host := pawn.get_parent()
 	if host == null:
 		return
 	Audio.play_sfx(&"splash_small", at, 1.0)
-	# Brief telegraphed bubbling ring that bursts after 1.1 s.
-	var ring := MeshInstance3D.new()
-	ring.name = "TideHazard"
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.8
-	cyl.bottom_radius = 1.8
-	cyl.height = 0.08
-	ring.mesh = cyl
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.18, 0.92, 0.86, 0.65)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	ring.material_override = mat
-	host.add_child(ring)
-	ring.global_position = at + Vector3(0.0, 0.08, 0.0)
-	var timer := get_tree().create_timer(1.1)
-	var caster := pawn
+
+	# Phase 1 (1.1 s Telegraph): ground-hugging shader coral-rune vortex + rising mist.
+	var hazard := MeshInstance3D.new()
+	hazard.name = "TideHazard"
+	hazard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var quad := QuadMesh.new()
+	quad.orientation = PlaneMesh.FACE_Y
+	quad.size = Vector2(4.4, 4.4)
+	hazard.mesh = quad
+
+	var mat := ShaderMaterial.new()
+	mat.shader = _get_tide_vortex_shader()
+	mat.render_priority = 1
+	mat.set_shader_parameter(&"progress", 0.0)
+	hazard.material_override = mat
+
+	var mist: GPUParticles3D = null
+	if enable_effects:
+		mist = GPUParticles3D.new()
+		mist.name = "VortexMist"
+		mist.emitting = false
+		mist.one_shot = false
+		mist.amount = 10
+		mist.lifetime = 0.75
+		mist.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+		mist.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mist.visibility_aabb = AABB(Vector3(-3.0, -0.5, -3.0), Vector3(6.0, 4.5, 6.0))
+
+		var m_proc := ParticleProcessMaterial.new()
+		m_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+		m_proc.emission_ring_radius = 1.45
+		m_proc.emission_ring_inner_radius = 0.22
+		m_proc.emission_ring_height = 0.12
+		m_proc.emission_ring_axis = Vector3.UP
+		m_proc.direction = Vector3.UP
+		m_proc.spread = 18.0
+		m_proc.initial_velocity_min = 0.9
+		m_proc.initial_velocity_max = 2.4
+		m_proc.gravity = Vector3(0.0, 0.8, 0.0)
+		m_proc.scale_min = 0.45
+		m_proc.scale_max = 0.95
+		m_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.40), Vector2(0.45, 1.05), Vector2(1.0, 1.45)])
+		m_proc.color_ramp = _make_color_ramp(
+			PackedFloat32Array([0.0, 0.28, 0.72, 1.0]),
+			PackedColorArray([
+				Color(0.30, 0.96, 0.92, 0.0),
+				Color(0.56, 0.99, 0.96, 0.68),
+				Color(0.24, 0.88, 0.90, 0.34),
+				Color(0.16, 0.74, 0.84, 0.0),
+			])
+		)
+		mist.process_material = m_proc
+
+		var m_quad := QuadMesh.new()
+		m_quad.size = Vector2(0.72, 0.72)
+		var m_mat := StandardMaterial3D.new()
+		m_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		m_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m_mat.vertex_color_use_as_albedo = true
+		m_mat.render_priority = 2
+		m_mat.albedo_texture = _get_smoke_puff_texture()
+		m_quad.material = m_mat
+		mist.draw_pass_1 = m_quad
+		hazard.add_child(mist)
+
+	host.add_child(hazard)
+	hazard.global_position = at + Vector3(0.0, 0.08, 0.0)
+	_bind_vfx_lifecycle(hazard)
+	_track_vfx(hazard)
+
+	if mist != null:
+		mist.restart()
+		mist.emitting = true
+
+	var tw := hazard.create_tween()
+	tw.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
+	tw.tween_method(EnemyBrain._set_shader_progress.bind(mat), 0.0, 1.0, 1.1)
+
+	var det_timer := Timer.new()
+	det_timer.name = "DetonateTimer"
+	det_timer.process_callback = Timer.TIMER_PROCESS_PHYSICS
+	det_timer.wait_time = 1.1
+	det_timer.one_shot = true
+	det_timer.autostart = true
+	var caster_ref: WeakRef = weakref(pawn)
+	var brain_ref: WeakRef = weakref(self)
 	var caster_faction := combat.faction
-	timer.timeout.connect(func() -> void:
-		if is_instance_valid(ring):
-			var p_pos := ring.global_position
-			Audio.play_sfx(&"splash_large", p_pos, -4.0)
-			if Net.is_host():
-				for node in get_tree().get_nodes_in_group(&"combatants"):
-					var cc := node as CombatComponent
-					if cc != null and cc.faction != caster_faction and cc.pawn != null and not cc.pawn.dead:
-						if cc.pawn.global_position.distance_to(p_pos) <= 2.1 and not cc.is_invulnerable():
-							cc.pawn.apply_damage(22.0, caster)
-							cc.pawn.velocity.y += 4.5
-			ring.queue_free()
+	var spawn_vfx := enable_effects
+	det_timer.timeout.connect(EnemyBrain._on_tide_hazard_detonate.bind(
+		hazard, host, caster_ref, caster_faction, spawn_vfx, brain_ref
+	))
+	hazard.add_child(det_timer)
+
+
+# ------------------------------------------------------------------ Signature Combat VFX
+
+func _track_vfx(fx_node: Node) -> void:
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	_active_vfx.append(fx_node)
+	fx_node.tree_exited.connect(_on_vfx_exited.bind(fx_node))
+
+
+func _on_vfx_exited(fx_node: Node) -> void:
+	_active_vfx.erase(fx_node)
+
+
+static func _bind_vfx_lifecycle(fx_node: Node, auto_free_sec: float = -1.0) -> void:
+	fx_node.tree_exiting.connect(EnemyBrain._release_vfx_resources.bind(fx_node))
+	if auto_free_sec > 0.0:
+		var cleanup := Timer.new()
+		cleanup.name = "VfxCleanupTimer"
+		cleanup.process_callback = Timer.TIMER_PROCESS_PHYSICS
+		cleanup.wait_time = auto_free_sec
+		cleanup.one_shot = true
+		cleanup.autostart = true
+		cleanup.timeout.connect(EnemyBrain._finish_vfx_node.bind(fx_node))
+		fx_node.add_child(cleanup)
+
+
+static func _release_vfx_resources(node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	if node is GPUParticles3D:
+		var gp := node as GPUParticles3D
+		gp.emitting = false
+		gp.draw_pass_1 = null
+		gp.process_material = null
+	elif node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.material_override = null
+		mi.mesh = null
+	for child in node.get_children():
+		_release_vfx_resources(child)
+
+
+static func _finish_vfx_node(fx_node: Node) -> void:
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	_release_vfx_resources(fx_node)
+	fx_node.queue_free()
+
+
+static func _set_shader_progress(value: float, mat: ShaderMaterial) -> void:
+	if mat != null:
+		mat.set_shader_parameter(&"progress", value)
+
+
+static func _collect_player_controllers(node: Node, out: Array[PlayerController]) -> void:
+	if node is PlayerController:
+		out.append(node as PlayerController)
+	for child in node.get_children():
+		_collect_player_controllers(child, out)
+
+
+static func _make_color_ramp(offsets: PackedFloat32Array, colors: PackedColorArray) -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = offsets
+	grad.colors = colors
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+
+
+static func _make_scale_curve(points: Array[Vector2]) -> CurveTexture:
+	var curve := Curve.new()
+	for pt in points:
+		curve.add_point(pt)
+	var tex := CurveTexture.new()
+	tex.curve = curve
+	return tex
+
+
+static func _get_fireball_texture() -> ImageTexture:
+	if _fireball_tex != null:
+		return _fireball_tex
+	var sz := 64
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	# Radial Gaussian core blended with fiery billowing multi-lobe silhouette.
+	var lobes: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.84),
+		Vector3(-0.26, -0.14, 0.50),
+		Vector3(0.28, -0.10, 0.48),
+		Vector3(0.08, 0.28, 0.46),
+		Vector3(-0.22, 0.22, 0.44),
+		Vector3(0.22, 0.20, 0.42),
+	]
+	for y in sz:
+		for x in sz:
+			var nx := (float(x) - half) / half
+			var ny := (float(y) - half) / half
+			var rad := sqrt(nx * nx + ny * ny)
+			var gauss := exp(-rad * rad * 3.6)
+			var billow := 0.0
+			for lobe in lobes:
+				var dx := nx - lobe.x
+				var dy := ny - lobe.y
+				var r := sqrt(dx * dx + dy * dy) / lobe.z
+				if r < 1.0:
+					var w := 1.0 - r * r
+					billow = maxf(billow, w * w)
+			var outer_fade := smoothstep(0.0, 0.45, clampf(1.0 - rad, 0.0, 1.0))
+			var alpha := clampf(lerpf(gauss, billow, 0.52) * outer_fade, 0.0, 1.0)
+			var hot := lerpf(0.88, 1.0, clampf(gauss * 1.15, 0.0, 1.0))
+			img.set_pixel(x, y, Color(hot, hot, hot, alpha))
+	_fireball_tex = ImageTexture.create_from_image(img)
+	return _fireball_tex
+
+
+static func _get_smoke_puff_texture() -> ImageTexture:
+	if _smoke_puff_tex != null:
+		return _smoke_puff_tex
+	var sz := 64
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	var lobes: Array[Vector3] = [
+		Vector3(0.0, 0.0, 0.86),
+		Vector3(-0.25, -0.10, 0.54),
+		Vector3(0.24, -0.08, 0.52),
+		Vector3(0.05, 0.24, 0.50),
+		Vector3(-0.18, 0.20, 0.44),
+		Vector3(0.20, 0.18, 0.40),
+	]
+	for y in sz:
+		for x in sz:
+			var nx := (float(x) - half) / half
+			var ny := (float(y) - half) / half
+			var rad := sqrt(nx * nx + ny * ny)
+			var gauss := exp(-rad * rad * 3.2)
+			var billow := 0.0
+			for lobe in lobes:
+				var dx := nx - lobe.x
+				var dy := ny - lobe.y
+				var r := sqrt(dx * dx + dy * dy) / lobe.z
+				if r < 1.0:
+					var w := 1.0 - r * r
+					billow = maxf(billow, w * w)
+			var outer_fade := smoothstep(0.0, 0.48, clampf(1.0 - rad, 0.0, 1.0))
+			var density := clampf(lerpf(gauss, billow, 0.62) * outer_fade, 0.0, 1.0)
+			var top_lit := clampf(0.92 - ny * 0.08 + density * 0.08, 0.80, 1.0)
+			img.set_pixel(x, y, Color(top_lit, top_lit, top_lit, density))
+	_smoke_puff_tex = ImageTexture.create_from_image(img)
+	return _smoke_puff_tex
+
+
+static func _get_streak_texture() -> ImageTexture:
+	if _streak_tex != null:
+		return _streak_tex
+	var sz := 32
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	for y in sz:
+		for x in sz:
+			var dx := absf(float(x) - half) / half
+			var dy := absf(float(y) - half) / half
+			var d := sqrt(dx * dx * 3.0 + dy * dy * 1.05)
+			var a := pow(clampf(1.0 - d, 0.0, 1.0), 1.6)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a))
+	_streak_tex = ImageTexture.create_from_image(img)
+	return _streak_tex
+
+
+static func _get_tide_vortex_shader() -> Shader:
+	if _tide_vortex_shader == null:
+		_tide_vortex_shader = Shader.new()
+		_tide_vortex_shader.code = TIDE_VORTEX_SHADER_CODE
+	return _tide_vortex_shader
+
+
+static func _get_captain_rally_shader() -> Shader:
+	if _captain_rally_shader == null:
+		_captain_rally_shader = Shader.new()
+		_captain_rally_shader.code = CAPTAIN_RALLY_SHADER_CODE
+	return _captain_rally_shader
+
+
+## Spawn layered fiery powder-keg detonation burst, camera trauma, and ocean foam.
+func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
+	# Apply distance-attenuated camera shake trauma to any nearby PlayerController.
+	var tree := get_tree()
+	if tree != null and tree.root != null:
+		var pcs: Array[PlayerController] = []
+		_collect_player_controllers(tree.root, pcs)
+		for pc in pcs:
+			if not is_instance_valid(pc) or not pc.is_inside_tree():
+				continue
+			var ref_pos := pc.pawn.global_position if (pc.pawn != null and is_instance_valid(pc.pawn)) else pc.global_position
+			var d := ref_pos.distance_to(blast_pos)
+			if d <= 24.0:
+				pc.add_camera_trauma(clampf((1.0 - d / 24.0) * 0.78, 0.18, 0.78))
+
+	# Stamp boiling ocean foam ring when detonated near sea level.
+	if blast_pos.y < 3.5 and Ocean.current != null:
+		Ocean.current.add_foam(blast_pos, 5.2, 1.0)
+
+	var host := pawn.get_parent() if pawn != null else null
+	if host == null:
+		return
+
+	var fx_root := Node3D.new()
+	fx_root.name = "KegExplosionVFX"
+
+	# Layer 1: Blazing additive fireball core flash (0.38 s).
+	var fireball := GPUParticles3D.new()
+	fireball.name = "FireballCore"
+	fireball.emitting = false
+	fireball.one_shot = true
+	fireball.explosiveness = 0.96
+	fireball.amount = 22
+	fireball.lifetime = 0.38
+	fireball.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	fireball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fireball.visibility_aabb = AABB(Vector3(-8.0, -4.0, -8.0), Vector3(16.0, 14.0, 16.0))
+
+	var fb_proc := ParticleProcessMaterial.new()
+	fb_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	fb_proc.emission_sphere_radius = 0.45
+	fb_proc.direction = Vector3.UP
+	fb_proc.spread = 160.0
+	fb_proc.initial_velocity_min = 2.8
+	fb_proc.initial_velocity_max = 8.6
+	fb_proc.damping_min = 6.5
+	fb_proc.damping_max = 10.5
+	fb_proc.gravity = Vector3(0.0, 2.2, 0.0)
+	fb_proc.scale_min = 1.10
+	fb_proc.scale_max = 2.10
+	fb_proc.scale_curve = _make_scale_curve([
+		Vector2(0.0, 0.45), Vector2(0.22, 1.65), Vector2(0.65, 1.85), Vector2(1.0, 0.35),
+	])
+	fb_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.26, 0.62, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.99, 0.88, 1.0),
+			Color(1.0, 0.72, 0.18, 0.96),
+			Color(0.95, 0.28, 0.05, 0.72),
+			Color(0.55, 0.06, 0.02, 0.0),
+		])
 	)
+	fireball.process_material = fb_proc
+
+	var fb_quad := QuadMesh.new()
+	fb_quad.size = Vector2(2.6, 2.6)
+	var fb_mat := StandardMaterial3D.new()
+	fb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fb_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	fb_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fb_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fb_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fb_mat.vertex_color_use_as_albedo = true
+	fb_mat.render_priority = 3
+	fb_mat.albedo_texture = _get_fireball_texture()
+	fb_quad.material = fb_mat
+	fireball.draw_pass_1 = fb_quad
+	fx_root.add_child(fireball)
+
+	# Layer 2: Billowing gunpowder mushroom smoke plume (1.45 s, scale 0.6 -> 3.0).
+	var smoke := GPUParticles3D.new()
+	smoke.name = "GunpowderSmoke"
+	smoke.emitting = false
+	smoke.one_shot = true
+	smoke.explosiveness = 0.88
+	smoke.amount = 44
+	smoke.lifetime = 1.45
+	smoke.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	smoke.visibility_aabb = AABB(Vector3(-12.0, -4.0, -12.0), Vector3(24.0, 20.0, 24.0))
+
+	var sm_proc := ParticleProcessMaterial.new()
+	sm_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	sm_proc.emission_ring_radius = 0.95
+	sm_proc.emission_ring_inner_radius = 0.12
+	sm_proc.emission_ring_height = 0.42
+	sm_proc.emission_ring_axis = Vector3.UP
+	sm_proc.direction = Vector3.UP
+	sm_proc.spread = 38.0
+	sm_proc.initial_velocity_min = 2.6
+	sm_proc.initial_velocity_max = 6.6
+	sm_proc.damping_min = 3.2
+	sm_proc.damping_max = 5.8
+	sm_proc.gravity = Vector3(0.0, 2.6, 0.0)
+	sm_proc.scale_min = 0.95
+	sm_proc.scale_max = 1.55
+	sm_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.60), Vector2(0.35, 1.85), Vector2(1.0, 3.0)])
+	sm_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.10, 0.36, 0.74, 1.0]),
+		PackedColorArray([
+			Color(0.92, 0.46, 0.18, 0.0),
+			Color(0.50, 0.32, 0.22, 0.92),
+			Color(0.20, 0.20, 0.23, 0.84),
+			Color(0.13, 0.14, 0.17, 0.44),
+			Color(0.11, 0.13, 0.16, 0.0),
+		])
+	)
+	smoke.process_material = sm_proc
+
+	var sm_quad := QuadMesh.new()
+	sm_quad.size = Vector2(2.05, 2.05)
+	var sm_mat := StandardMaterial3D.new()
+	sm_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sm_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	sm_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	sm_mat.vertex_color_use_as_albedo = true
+	sm_mat.render_priority = 1
+	sm_mat.albedo_texture = _get_smoke_puff_texture()
+	sm_quad.material = sm_mat
+	smoke.draw_pass_1 = sm_quad
+	fx_root.add_child(smoke)
+
+	# Layer 3A: Velocity-aligned golden ember spark streaks scattering radially (0.75 s).
+	var sparks := GPUParticles3D.new()
+	sparks.name = "EmberSparks"
+	sparks.emitting = false
+	sparks.one_shot = true
+	sparks.explosiveness = 0.96
+	sparks.amount = 44
+	sparks.lifetime = 0.75
+	sparks.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
+	sparks.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sparks.visibility_aabb = AABB(Vector3(-14.0, -8.0, -14.0), Vector3(28.0, 20.0, 28.0))
+
+	var sp_proc := ParticleProcessMaterial.new()
+	sp_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	sp_proc.emission_sphere_radius = 0.40
+	sp_proc.direction = Vector3.UP
+	sp_proc.spread = 115.0
+	sp_proc.initial_velocity_min = 7.5
+	sp_proc.initial_velocity_max = 17.5
+	sp_proc.damping_min = 1.4
+	sp_proc.damping_max = 3.2
+	sp_proc.gravity = Vector3(0.0, -15.5, 0.0)
+	sp_proc.scale_min = 0.70
+	sp_proc.scale_max = 1.55
+	sp_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.30, 0.72, 1.0]),
+		PackedColorArray([
+			Color(1.0, 0.98, 0.82, 1.0),
+			Color(1.0, 0.64, 0.14, 0.96),
+			Color(0.92, 0.24, 0.04, 0.56),
+			Color(0.60, 0.08, 0.02, 0.0),
+		])
+	)
+	sparks.process_material = sp_proc
+
+	var sp_quad := QuadMesh.new()
+	sp_quad.size = Vector2(0.10, 0.48)
+	var sp_mat := StandardMaterial3D.new()
+	sp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sp_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	sp_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sp_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	sp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	sp_mat.vertex_color_use_as_albedo = true
+	sp_mat.render_priority = 3
+	sp_mat.albedo_texture = _get_streak_texture()
+	sp_quad.material = sp_mat
+	sparks.draw_pass_1 = sp_quad
+	fx_root.add_child(sparks)
+
+	# Layer 3B: Tumbling charred wooden keg barrel staves flying radially with gravity (0.75 s).
+	var shards := GPUParticles3D.new()
+	shards.name = "BarrelShards"
+	shards.emitting = false
+	shards.one_shot = true
+	shards.explosiveness = 0.95
+	shards.amount = 26
+	shards.lifetime = 0.75
+	shards.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shards.visibility_aabb = AABB(Vector3(-12.0, -8.0, -12.0), Vector3(24.0, 18.0, 24.0))
+
+	var sh_proc := ParticleProcessMaterial.new()
+	sh_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	sh_proc.emission_sphere_radius = 0.42
+	sh_proc.direction = Vector3.UP
+	sh_proc.spread = 105.0
+	sh_proc.initial_velocity_min = 5.5
+	sh_proc.initial_velocity_max = 13.5
+	sh_proc.angular_velocity_min = -16.0
+	sh_proc.angular_velocity_max = 16.0
+	sh_proc.gravity = Vector3(0.0, -17.5, 0.0)
+	sh_proc.scale_min = 0.65
+	sh_proc.scale_max = 1.45
+	sh_proc.scale_curve = _make_scale_curve([Vector2(0.0, 1.0), Vector2(0.72, 0.92), Vector2(1.0, 0.0)])
+	shards.process_material = sh_proc
+
+	var sh_box := BoxMesh.new()
+	sh_box.size = Vector3(0.08, 0.032, 0.42)
+	var sh_mat := StandardMaterial3D.new()
+	sh_mat.albedo_color = Color(0.26, 0.15, 0.08)
+	sh_mat.roughness = 0.88
+	sh_mat.emission_enabled = true
+	sh_mat.emission = Color(1.0, 0.36, 0.06)
+	sh_mat.emission_energy_multiplier = 0.75
+	sh_box.material = sh_mat
+	shards.draw_pass_1 = sh_box
+	fx_root.add_child(shards)
+
+	host.add_child(fx_root)
+	fx_root.global_position = blast_pos
+	fireball.restart()
+	smoke.restart()
+	sparks.restart()
+	shards.restart()
+	fireball.emitting = true
+	smoke.emitting = true
+	sparks.emitting = true
+	shards.emitting = true
+
+	_bind_vfx_lifecycle(fx_root, 1.60)
+	_track_vfx(fx_root)
+
+
+static func _on_tide_hazard_detonate(
+	hazard: MeshInstance3D,
+	host: Node,
+	caster_ref: WeakRef,
+	caster_faction: StringName,
+	spawn_vfx: bool,
+	brain_ref: WeakRef
+) -> void:
+	if not is_instance_valid(hazard) or not hazard.is_inside_tree():
+		return
+	var p_pos := hazard.global_position
+	Audio.play_sfx(&"splash_large", p_pos, -4.0)
+	var tree := hazard.get_tree()
+	var caster_obj: Variant = caster_ref.get_ref()
+	var caster_node: Node = caster_obj as Node if (caster_obj != null and is_instance_valid(caster_obj)) else null
+	if Net.is_host() and tree != null:
+		for node in tree.get_nodes_in_group(&"combatants"):
+			var cc := node as CombatComponent
+			if cc != null and cc.faction != caster_faction and cc.pawn != null and not cc.pawn.dead:
+				if cc.pawn.global_position.distance_to(p_pos) <= 2.1 and not cc.is_invulnerable():
+					cc.pawn.apply_damage(22.0, caster_node)
+					cc.pawn.velocity.y += 4.5
+	if spawn_vfx and is_instance_valid(host) and host.is_inside_tree():
+		_spawn_tide_geyser_burst(host, p_pos, brain_ref)
+	_finish_vfx_node(hazard)
+
+
+## Phase 2 Eruption: tall feathered turquoise-white water-geyser spout + droplets + coral sparks.
+static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: WeakRef) -> void:
+	if p_pos.y < 3.5 and Ocean.current != null:
+		Ocean.current.add_foam(p_pos, 3.6, 0.9)
+
+	var fx_root := Node3D.new()
+	fx_root.name = "TideGeyserBurst"
+
+	# 1. Tall upward-shooting feathered turquoise-white foam column (0.85 s).
+	var col_p := GPUParticles3D.new()
+	col_p.name = "GeyserFoamColumn"
+	col_p.emitting = false
+	col_p.one_shot = true
+	col_p.explosiveness = 0.84
+	col_p.amount = 40
+	col_p.lifetime = 0.85
+	col_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	col_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	col_p.visibility_aabb = AABB(Vector3(-6.0, -1.0, -6.0), Vector3(12.0, 16.0, 12.0))
+
+	var col_proc := ParticleProcessMaterial.new()
+	col_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	col_proc.emission_ring_radius = 0.68
+	col_proc.emission_ring_inner_radius = 0.08
+	col_proc.emission_ring_height = 0.22
+	col_proc.emission_ring_axis = Vector3.UP
+	col_proc.direction = Vector3.UP
+	col_proc.spread = 10.0
+	col_proc.initial_velocity_min = 11.5
+	col_proc.initial_velocity_max = 20.5
+	col_proc.damping_min = 1.8
+	col_proc.damping_max = 3.4
+	col_proc.gravity = Vector3(0.0, -16.5, 0.0)
+	col_proc.scale_min = 0.90
+	col_proc.scale_max = 1.95
+	col_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.55), Vector2(0.32, 1.30), Vector2(1.0, 1.90)])
+	col_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.12, 0.48, 1.0]),
+		PackedColorArray([
+			Color(0.86, 1.0, 0.99, 0.0),
+			Color(0.68, 0.98, 0.96, 0.94),
+			Color(0.16, 0.86, 0.86, 0.78),
+			Color(0.08, 0.62, 0.76, 0.0),
+		])
+	)
+	col_p.process_material = col_proc
+
+	var col_quad := QuadMesh.new()
+	col_quad.size = Vector2(1.35, 2.35)
+	var col_mat := StandardMaterial3D.new()
+	col_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	col_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	col_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	col_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	col_mat.vertex_color_use_as_albedo = true
+	col_mat.render_priority = 2
+	col_mat.albedo_texture = _get_smoke_puff_texture()
+	col_quad.material = col_mat
+	col_p.draw_pass_1 = col_quad
+	fx_root.add_child(col_p)
+
+	# 2. Outward-arcing sparkling water droplet streaks (0.85 s).
+	var drops := GPUParticles3D.new()
+	drops.name = "GeyserDroplets"
+	drops.emitting = false
+	drops.one_shot = true
+	drops.explosiveness = 0.94
+	drops.amount = 48
+	drops.lifetime = 0.85
+	drops.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
+	drops.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	drops.visibility_aabb = AABB(Vector3(-9.0, -2.0, -9.0), Vector3(18.0, 16.0, 18.0))
+
+	var d_proc := ParticleProcessMaterial.new()
+	d_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	d_proc.emission_ring_radius = 0.85
+	d_proc.emission_ring_inner_radius = 0.20
+	d_proc.emission_ring_height = 0.20
+	d_proc.emission_ring_axis = Vector3.UP
+	d_proc.direction = Vector3.UP
+	d_proc.spread = 42.0
+	d_proc.initial_velocity_min = 8.5
+	d_proc.initial_velocity_max = 16.5
+	d_proc.gravity = Vector3(0.0, -19.5, 0.0)
+	d_proc.scale_min = 0.60
+	d_proc.scale_max = 1.30
+	d_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.25, 0.72, 1.0]),
+		PackedColorArray([
+			Color(0.92, 1.0, 1.0, 0.96),
+			Color(0.56, 0.97, 0.98, 0.90),
+			Color(0.18, 0.84, 0.90, 0.52),
+			Color(0.10, 0.68, 0.82, 0.0),
+		])
+	)
+	drops.process_material = d_proc
+
+	var d_quad := QuadMesh.new()
+	d_quad.size = Vector2(0.16, 0.68)
+	var d_mat := StandardMaterial3D.new()
+	d_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	d_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	d_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	d_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	d_mat.vertex_color_use_as_albedo = true
+	d_mat.render_priority = 2
+	d_mat.albedo_texture = _get_streak_texture()
+	d_quad.material = d_mat
+	drops.draw_pass_1 = d_quad
+	fx_root.add_child(drops)
+
+	# 3. Bioluminescent cyan coral-rune sparks erupting outward (0.80 s).
+	var coral := GPUParticles3D.new()
+	coral.name = "CoralSparks"
+	coral.emitting = false
+	coral.one_shot = true
+	coral.explosiveness = 0.92
+	coral.amount = 32
+	coral.lifetime = 0.80
+	coral.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
+	coral.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	coral.visibility_aabb = AABB(Vector3(-8.0, -2.0, -8.0), Vector3(16.0, 14.0, 16.0))
+
+	var c_proc := ParticleProcessMaterial.new()
+	c_proc.direction = Vector3.UP
+	c_proc.spread = 58.0
+	c_proc.initial_velocity_min = 6.5
+	c_proc.initial_velocity_max = 13.5
+	c_proc.damping_min = 1.8
+	c_proc.damping_max = 3.5
+	c_proc.gravity = Vector3(0.0, -10.5, 0.0)
+	c_proc.scale_min = 0.75
+	c_proc.scale_max = 1.45
+	c_proc.color_ramp = _make_color_ramp(
+		PackedFloat32Array([0.0, 0.30, 0.74, 1.0]),
+		PackedColorArray([
+			Color(0.84, 1.0, 1.0, 1.0),
+			Color(0.14, 1.0, 0.92, 0.98),
+			Color(0.06, 0.74, 0.92, 0.60),
+			Color(0.04, 0.44, 0.76, 0.0),
+		])
+	)
+	coral.process_material = c_proc
+
+	var c_quad := QuadMesh.new()
+	c_quad.size = Vector2(0.13, 0.56)
+	var c_mat := StandardMaterial3D.new()
+	c_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	c_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	c_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	c_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	c_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	c_mat.vertex_color_use_as_albedo = true
+	c_mat.render_priority = 3
+	c_mat.albedo_texture = _get_streak_texture()
+	c_quad.material = c_mat
+	coral.draw_pass_1 = c_quad
+	fx_root.add_child(coral)
+
+	host.add_child(fx_root)
+	fx_root.global_position = p_pos
+	col_p.restart()
+	drops.restart()
+	coral.restart()
+	col_p.emitting = true
+	drops.emitting = true
+	coral.emitting = true
+
+	_bind_vfx_lifecycle(fx_root, 0.95)
+	var brain_obj: Variant = brain_ref.get_ref()
+	if brain_obj != null and is_instance_valid(brain_obj) and brain_obj is EnemyBrain:
+		(brain_obj as EnemyBrain)._track_vfx(fx_root)
+
+
+## Spawn ground-hugging expanding War-Cry Rally Shockwave Ring (0.9 m -> 11.5 m over 0.65 s).
+func _spawn_captain_rally_vfx(at: Vector3) -> void:
+	var host := pawn.get_parent() if pawn != null else null
+	if host == null:
+		return
+
+	var ring := MeshInstance3D.new()
+	ring.name = "CaptainRallyRing"
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var quad := QuadMesh.new()
+	quad.orientation = PlaneMesh.FACE_Y
+	quad.size = Vector2(2.0, 2.0)
+	ring.mesh = quad
+
+	var is_corsair := archetype == &"rival_captain" or (combat != null and combat.faction == &"corsair")
+	var tint_outer := Color(0.96, 0.24, 0.14) if is_corsair else Color(0.10, 0.88, 0.64)
+	var tint_inner := Color(1.0, 0.82, 0.30) if is_corsair else Color(0.54, 1.0, 0.82)
+
+	var mat := ShaderMaterial.new()
+	mat.shader = _get_captain_rally_shader()
+	mat.render_priority = 2
+	mat.set_shader_parameter(&"progress", 0.0)
+	mat.set_shader_parameter(&"tint_outer", tint_outer)
+	mat.set_shader_parameter(&"tint_inner", tint_inner)
+	ring.material_override = mat
+
+	host.add_child(ring)
+	ring.global_position = at + Vector3(0.0, 0.12, 0.0)
+	ring.scale = Vector3(0.9, 1.0, 0.9)
+	_bind_vfx_lifecycle(ring)
+	_track_vfx(ring)
+
+	var tw := ring.create_tween()
+	tw.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
+	tw.tween_property(ring, "scale", Vector3(11.5, 1.0, 11.5), 0.65).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_method(EnemyBrain._set_shader_progress.bind(mat), 0.0, 1.0, 0.65)
+	tw.chain().tween_callback(EnemyBrain._finish_vfx_node.bind(ring))
 
 
 func _pick_target() -> Pawn:
