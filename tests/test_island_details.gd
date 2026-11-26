@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (42 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (46 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -77,6 +77,13 @@ const ONFOOT_CRAFT_LANDMARKS: Array[String] = [
 	"pirate_lookout_bell_frame.glb",
 ]
 
+const STORY_CRAFT_LANDMARKS: Array[String] = [
+	"pirate_tavern_supply_cart.glb",
+	"sunken_anchor_memorial.glb",
+	"ancient_sun_dial_plaza.glb",
+	"volcanic_obsidian_fissure_vent.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -120,6 +127,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"coastal_smuggler_jetty.glb": 1,
 	"ancient_ruined_obelisk_gate.glb": 1,
 	"pirate_lookout_bell_frame.glb": 1,
+	"pirate_tavern_supply_cart.glb": 1,
+	"sunken_anchor_memorial.glb": 1,
+	"ancient_sun_dial_plaza.glb": 1,
+	"volcanic_obsidian_fissure_vent.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -152,6 +163,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"coastal_smuggler_jetty.glb": ["Lantern_Jetty*"],
 	"ancient_ruined_obelisk_gate.glb": ["Lantern_ObeliskGate*"],
 	"pirate_lookout_bell_frame.glb": ["Lantern_BellFrame*"],
+	"pirate_tavern_supply_cart.glb": ["Lantern_Cart*"],
+	"sunken_anchor_memorial.glb": ["Lantern_Anchor*"],
+	"ancient_sun_dial_plaza.glb": ["Lantern_Sundial*"],
+	"volcanic_obsidian_fissure_vent.glb": ["Lantern_MagmaVent*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -186,6 +201,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"ObeliskGate_",
 	"TrailFootbridge_",
 	"LookoutBell_",
+	"SupplyCart_",
+	"AnchorMemorial_",
+	"SundialPlaza_",
+	"ObsidianVent_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -320,7 +339,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(MARITIME_RELICS_LANDMARKS)
 	all_landmarks.append_array(WORLD_CRAFT_LANDMARKS)
 	all_landmarks.append_array(ONFOOT_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 42, "expected 42 sculpted landmark GLBs")
+	all_landmarks.append_array(STORY_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 46, "expected 46 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -426,14 +446,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 42 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 46 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 42 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected <= 36 unique shared landmark PBR texture paths across all 46 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -723,6 +743,44 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		"Port Scoundrel _foliage_materials contains IslandDetails wind shader material")
 	check(cutlass._foliage_materials.has(wind_mat),
 		"Cutlass Cay _foliage_materials contains IslandDetails wind shader material")
+
+	# 2b. Wave I-11 Botanical Craft & Trail Pebble Hygiene assertions.
+	if cc_details != null:
+		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
+		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
+		var cc_hib_mmi := cc_details.get_node_or_null(^"HibiscusShrubs") as MultiMeshInstance3D
+		check(cc_grass_mmi != null and cc_grass_mmi.multimesh != null and cc_grass_mmi.multimesh.mesh != null,
+			"Cutlass Cay mounts GrassClumps MultiMesh with procedural mesh")
+		check(cc_fern_mmi != null and cc_fern_mmi.multimesh != null and cc_fern_mmi.multimesh.mesh != null,
+			"Cutlass Cay mounts JungleFerns MultiMesh with procedural mesh")
+		check(cc_hib_mmi != null and cc_hib_mmi.multimesh != null and cc_hib_mmi.multimesh.mesh != null,
+			"Cutlass Cay mounts HibiscusShrubs MultiMesh with procedural mesh")
+		var grass_tris := _count_mesh_tris(cc_grass_mmi.multimesh.mesh) if (cc_grass_mmi != null and cc_grass_mmi.multimesh != null) else 0
+		var fern_tris := _count_mesh_tris(cc_fern_mmi.multimesh.mesh) if (cc_fern_mmi != null and cc_fern_mmi.multimesh != null) else 0
+		var hib_tris := _count_mesh_tris(cc_hib_mmi.multimesh.mesh) if (cc_hib_mmi != null and cc_hib_mmi.multimesh != null) else 0
+		print("    wave_i11 botanical craft tris: grass=%d fern=%d hibiscus=%d" % [grass_tris, fern_tris, hib_tris])
+		check(grass_tris >= 140,
+			"Wave I-11 GrassClumps mesh must have >= 140 tris (slender 28-blade + seed-stalk tuft, got %d)" % grass_tris)
+		check(fern_tris >= 200,
+			"Wave I-11 JungleFerns mesh must have >= 200 tris (true pinnate serrated fern fronds, got %d)" % fern_tris)
+		check(hib_tris >= 180,
+			"Wave I-11 HibiscusShrubs mesh must have >= 180 tris (16-leaf layered shrub + 6 cupped blossoms, got %d)" % hib_tris)
+
+		var cc_pebbles := cc_details.get_placed_pebble_positions()
+		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
+		check(bool(cc_trail_ctx.get("active", false)),
+			"Cutlass Cay trail context must be active for shore pebble hygiene audit")
+		var trail_pebble_violations := 0
+		for pp_var in cc_pebbles:
+			var pp: Vector3 = pp_var
+			if IslandDetailsCls._is_on_trail(Vector2(pp.x, pp.z), cc_trail_ctx):
+				trail_pebble_violations += 1
+		print("    wave_i11 trail pebble hygiene (Cutlass Cay): %d pebble clusters checked, %d on-trail" % [
+			cc_pebbles.size(), trail_pebble_violations])
+		check(cc_pebbles.size() >= 1,
+			"Cutlass Cay places >= 1 coastal shore pebble cluster (got %d)" % cc_pebbles.size())
+		check_eq(trail_pebble_violations, 0,
+			"Cutlass Cay shore pebbles must stay strictly outside walkable trail corridors (%d violations)" % trail_pebble_violations)
 
 	# 3. Zero-leak teardown: free all islands & details, await 2 physics frames, confirm all caches cleared!
 	outpost.queue_free()
@@ -1114,6 +1172,27 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check(footbridge_total >= 3, "Wave I-10 spawns >= 3 TrailFootbridge_* landmarks (got %d)" % footbridge_total)
 	check(lookout_bell_total >= 4, "Wave I-10 spawns >= 4 LookoutBell_* landmarks (got %d)" % lookout_bell_total)
 
+	# 2h-2. Verify Wave I-11 story-craft landmarks (pirate tavern supply cart, sunken anchor memorial,
+	#       ancient sun-dial plaza & volcanic obsidian fissure vent) + MID_RANGE_FILES LOD cap!
+	var supply_cart_total := 0
+	var anchor_memorial_total := 0
+	var sundial_plaza_total := 0
+	var obsidian_vent_total := 0
+	for isl_i11 in all_islands:
+		supply_cart_total += isl_i11.find_children("SupplyCart_*", "Node3D", true, false).size()
+		anchor_memorial_total += isl_i11.find_children("AnchorMemorial_*", "Node3D", true, false).size()
+		sundial_plaza_total += isl_i11.find_children("SundialPlaza_*", "Node3D", true, false).size()
+		obsidian_vent_total += isl_i11.find_children("ObsidianVent_*", "Node3D", true, false).size()
+	print("    wave_i11 story_craft landmarks: carts=%d anchors=%d sundials=%d vents=%d" % [
+		supply_cart_total, anchor_memorial_total, sundial_plaza_total, obsidian_vent_total])
+	check(supply_cart_total >= 4, "Wave I-11 spawns >= 4 SupplyCart_* landmarks (got %d)" % supply_cart_total)
+	check(anchor_memorial_total >= 4, "Wave I-11 spawns >= 4 AnchorMemorial_* landmarks (got %d)" % anchor_memorial_total)
+	check(sundial_plaza_total >= 3, "Wave I-11 spawns >= 3 SundialPlaza_* landmarks (got %d)" % sundial_plaza_total)
+	check(obsidian_vent_total >= 3, "Wave I-11 spawns >= 3 ObsidianVent_* landmarks (got %d)" % obsidian_vent_total)
+	for sc_glb in STORY_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(sc_glb),
+			"Wave I-11 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (< 0.45 ms offshore GPU cap)" % sc_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1156,7 +1235,7 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i10 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i11 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
 	check(grounded_checked >= 50,
 		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)

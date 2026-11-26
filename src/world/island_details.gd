@@ -7,9 +7,9 @@ extends Node3D
 ## Replaces bare flat 2D terrain slopes and smooth cliff cones with 8–11 strictly
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
-##   1. `GrassClumps`          — 18-blade arched swaying tropical grass tufts (`foliage_wind.gdshader`)
-##   2. `JungleFerns`          — 8-frond 2-tier serrated fern rosettes (`foliage_wind.gdshader`)
-##   3. `HibiscusShrubs`       — 12-leaf tropical bushes crowned with 5 vivid 5-petal blossoms (`foliage_wind.gdshader`)
+##   1. `GrassClumps`          — 28-blade slender 3-tuft swaying grass + 3 golden plumed seed-stalks (`foliage_wind.gdshader`)
+##   2. `JungleFerns`          — 10-frond 2-tier pinnate serrated fern rosettes (`foliage_wind.gdshader`)
+##   3. `HibiscusShrubs`       — 16-leaf 3-tier tropical bushes crowned with 6 vivid 5-petal blossoms (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs aligned to coastline contours
 ##   5. `ShorePebblesShells`   — 5 beveled beach cobbles + fluted spiral coastal shell along wet/dry sand
 ##   6. `TidalOutcrops`        — barnacle-ringed coastal rock triads emerging from tide pools & surf
@@ -303,6 +303,7 @@ var _crab_count: int = 0
 
 var _placed_buttress_normals_y: PackedFloat32Array = PackedFloat32Array()
 var _placed_grass_positions: PackedVector3Array = PackedVector3Array()
+var _placed_pebble_positions: PackedVector3Array = PackedVector3Array()
 var _butterfly_orbits: Array[Dictionary] = []
 var _butterfly_clock: float = 0.0
 var _crab_orbits: Array[Dictionary] = []
@@ -334,6 +335,7 @@ func _exit_tree() -> void:
 	_crab_mmi = null
 	_placed_buttress_normals_y = PackedFloat32Array()
 	_placed_grass_positions = PackedVector3Array()
+	_placed_pebble_positions = PackedVector3Array()
 	_butterfly_orbits.clear()
 	_butterfly_clock = 0.0
 	_crab_orbits.clear()
@@ -485,12 +487,13 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var driftwood_col: Array[Color] = []
 	var pebble_xf: Array[Transform3D] = []
 	var pebble_col: Array[Color] = []
+	var pebble_pos := PackedVector3Array()
 	var tidal_xf: Array[Transform3D] = []
 	var tidal_col: Array[Color] = []
 	_place_coastal_driftwood(island, rng, driftwood_target, radius, is_volcanic,
 		keepouts, has_pier, pier_a, pier_b, trail_ctx, driftwood_xf, driftwood_col)
 	_place_shore_pebbles(island, rng, pebble_target, radius, is_volcanic,
-		keepouts, has_pier, pier_a, pier_b, pebble_xf, pebble_col)
+		keepouts, has_pier, pier_a, pier_b, trail_ctx, pebble_xf, pebble_col, pebble_pos)
 	_place_tidal_outcrops(island, arch, rng, tidal_target, radius, is_volcanic,
 		keepouts, has_pier, pier_a, pier_b, trail_ctx, tidal_xf, tidal_col)
 
@@ -621,6 +624,7 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	details._crab_count = crab_xf.size()
 	details._placed_buttress_normals_y = buttress_normals_y
 	details._placed_grass_positions = grass_pos
+	details._placed_pebble_positions = pebble_pos
 	details._butterfly_orbits = butterfly_orbits
 	details._crab_orbits = crab_orbits
 	details.set_process((not butterfly_orbits.is_empty()) or (not crab_orbits.is_empty()))
@@ -702,6 +706,11 @@ func get_placed_buttress_normals_y() -> PackedFloat32Array:
 ## Copy of local-space positions for every placed `GrassClumps` instance (reliable under `--headless`).
 func get_placed_grass_positions() -> PackedVector3Array:
 	return _placed_grass_positions.duplicate()
+
+
+## Copy of local-space positions for every placed `ShorePebblesShells` instance (reliable under `--headless`).
+func get_placed_pebble_positions() -> PackedVector3Array:
+	return _placed_pebble_positions.duplicate()
 
 
 # ------------------------------------------------------------------ budget & keepout helpers
@@ -857,26 +866,51 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 8.5
 	if cname.begins_with("CliffOverhang") or cname.begins_with("CliffButtressWide"):
 		return 8.0
-	if cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck"):
+	if cname.begins_with("ShipDrydock"):
+		return 7.8
+	if cname.begins_with("HarbourWarehouse") or cname.begins_with("Shipwreck") or cname.begins_with("SummitCrag"):
 		return 7.5
 	if cname.begins_with("SeawallBastion") or cname.begins_with("CitadelSeawall") or cname.begins_with("LeviathanRibcage"):
 		return 7.2
-	if cname.begins_with("VolcanicBasaltSpire"):
+	if cname.begins_with("VolcanicBasaltSpire") or cname.begins_with("RuinAqueduct") \
+			or cname.begins_with("SunkenStern") or cname.begins_with("TidalCoralArch"):
 		return 7.0
-	if cname.begins_with("HeadlandWatchtower") or cname.begins_with("FortWatchtower"):
+	if cname.begins_with("HarbourCrane") or cname.begins_with("CompassMonolith"):
+		return 6.8
+	if cname.begins_with("FortWatchtower") or cname.begins_with("AstronomerOrrery"):
+		return 6.5
+	if cname.begins_with("UpperStrataRib") or cname.begins_with("SmugglerJetty"):
+		return 6.0
+	if cname.begins_with("HeadlandWatchtower") or cname.begins_with("FishingHut") \
+			or cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") \
+			or cname.begins_with("BluffTimberBridge"):
 		return 5.8
-	if cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") or cname.begins_with("BluffTimberBridge"):
-		return 5.8
-	if cname.begins_with("SeaGodIdol"):
+	if cname.begins_with("PirateCamp"):
+		return 5.6
+	if cname.begins_with("PirateWatchpost"):
+		return 5.5
+	if cname.begins_with("SeaGodIdol") or cname.begins_with("LavaCauldronShrine") \
+			or cname.begins_with("JungleAltar") or cname.begins_with("CascadeShrine"):
 		return 5.4
-	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") or cname.begins_with("MossyBoulder"):
+	if cname.begins_with("VolcanicChainPylon") or cname.begins_with("SkeletonThrone"):
+		return 5.2
+	if cname.begins_with("SundialPlaza"):
+		return 5.0
+	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") or cname.begins_with("ObsidianVent"):
+		return 4.6
+	if cname.begins_with("AnchorMemorial"):
+		return 4.5
+	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
+			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon"):
 		return 4.2
 	if cname.begins_with("SignalBrazier"):
 		return 4.0
-	if cname.begins_with("BeachedRowboat") or cname.begins_with("PirateGibbet"):
+	if cname.begins_with("BeachedRowboat") or cname.begins_with("PirateGibbet") or cname.begins_with("SupplyCart"):
 		return 3.8
 	if cname.begins_with("TrailLantern") or cname.begins_with("StoneCairn"):
 		return 2.0
+	# ObeliskGate & TrailFootbridge straddle walkable trails; skip keepout here so
+	# TrailSteppingStones continue smoothly through the open archway and bridge deck.
 	return 0.0
 
 
@@ -2288,8 +2322,8 @@ static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator,
 
 static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, target: int,
 		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
-		pier_a: Vector2, pier_b: Vector2, out_xf: Array[Transform3D],
-		out_col: Array[Color]) -> void:
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
+		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
 	var r_min := maxf(4.0, radius * 0.16)
 	var r_max := maxf(r_min + 8.0, island.seabed_radius * 0.90)
 	var base_sep := clampf(radius * 0.036, 1.5, 4.2)
@@ -2316,6 +2350,8 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 			var pt := _sample_annulus_xz(rng, r_min, r_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
 				continue
+			if _is_on_trail(pt, trail_ctx):
+				continue
 			if not _grid_is_clear(grid, cell_size, pt, sep):
 				continue
 			var h := island.surface_height(pt.x, pt.y)
@@ -2328,11 +2364,13 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 			var sx := rng.randf_range(0.75, 1.42)
 			var sz := sx * rng.randf_range(0.86, 1.16)
 			var sy := rng.randf_range(0.78, 1.24)
-			var xf := _grounded_transform(Vector3(pt.x, h - 0.045, pt.y), n, 0.82, rng.randf() * TAU, Vector3(sx, sy, sz))
+			var origin := Vector3(pt.x, h - 0.045, pt.y)
+			var xf := _grounded_transform(origin, n, 0.82, rng.randf() * TAU, Vector3(sx, sy, sz))
 			var col := _pick_jittered_color(rng,
 				PEBBLE_VOLCANIC_PALETTE if is_volcanic else PEBBLE_PALETTE, 0.015, 0.08)
 			out_xf.append(xf)
 			out_col.append(_apply_wet_shore_sheen(col, h))
+			out_pos.append(origin)
 			_grid_insert(grid, cell_size, pt)
 
 
@@ -3157,7 +3195,7 @@ static func _get_crab_mesh() -> ArrayMesh:
 	return _crab_mesh
 
 
-# ------------------------------------------------------------------ Mesh 1: Sculpted 18-Blade Tropical Grass Clump
+# ------------------------------------------------------------------ Mesh 1: Sculpted 28-Blade Slender Grass + 3 Plumed Seed-Stalks
 
 static func _scale_flora_linear(col_lin: Color, gain: float) -> Color:
 	# Normalize linear luminance gain into [0..1] UNORM8 vertex-color headroom so
@@ -3186,39 +3224,50 @@ static func _build_grass_mesh() -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	# Linear shading ramp (multiplied against linear instance emerald/gold colors in foliage_wind.gdshader).
-	var col_root := Color(0.56, 0.66, 0.54, 1.0).srgb_to_linear()
-	var col_low := Color(0.76, 0.85, 0.72, 1.0).srgb_to_linear()
-	var col_mid := Color(0.92, 0.96, 0.87, 1.0).srgb_to_linear()
+	var col_root := Color(0.54, 0.65, 0.52, 1.0).srgb_to_linear()
+	var col_low := Color(0.76, 0.86, 0.72, 1.0).srgb_to_linear()
+	var col_mid := Color(0.92, 0.96, 0.86, 1.0).srgb_to_linear()
 	var col_tip := Color(1.00, 1.00, 0.95, 1.0).srgb_to_linear()
 
-	# 18 organic radiating tropical grass blades clustered across 3 sub-tufts (broad lush meadow carpet!):
+	# 28 slender arching tropical meadow grass blades (`base_half_w = 0.026..0.042 m`) clustered
+	# organically across 3 natural sub-tufts (12 central + 8 offset A + 8 offset B):
 	# [azimuth, root_off, height, arch_out, base_half_w, twist_rad, droop, phase_01, cx, cz]
 	var blades: Array[Array] = [
-		# Central lush tuft (8 blades)
-		[0.14, 0.06, 0.86, 0.44, 0.082,  0.18, 0.11, 0.04,  0.00,  0.00],
-		[0.92, 0.14, 0.66, 0.52, 0.074, -0.22, 0.15, 0.14,  0.00,  0.00],
-		[1.68, 0.08, 0.80, 0.46, 0.078,  0.24, 0.12, 0.25,  0.00,  0.00],
-		[2.42, 0.16, 0.56, 0.54, 0.070, -0.18, 0.17, 0.36,  0.00,  0.00],
-		[3.18, 0.09, 0.76, 0.48, 0.076,  0.16, 0.13, 0.48,  0.00,  0.00],
-		[3.96, 0.15, 0.62, 0.54, 0.072, -0.24, 0.16, 0.59,  0.00,  0.00],
-		[4.74, 0.07, 0.82, 0.45, 0.078,  0.20, 0.11, 0.71,  0.00,  0.00],
-		[5.54, 0.16, 0.58, 0.52, 0.070, -0.15, 0.16, 0.83,  0.00,  0.00],
-		# Companion offset sub-tuft A (+X, +Z) (5 blades)
-		[0.35, 0.06, 0.68, 0.42, 0.072,  0.20, 0.13, 0.19,  0.54,  0.26],
-		[1.55, 0.10, 0.56, 0.48, 0.068, -0.18, 0.15, 0.33,  0.54,  0.26],
-		[2.80, 0.08, 0.62, 0.44, 0.070,  0.16, 0.14, 0.52,  0.54,  0.26],
-		[4.05, 0.12, 0.50, 0.46, 0.066, -0.22, 0.16, 0.68,  0.54,  0.26],
-		[5.25, 0.08, 0.64, 0.43, 0.070,  0.19, 0.13, 0.88,  0.54,  0.26],
-		# Companion offset sub-tuft B (-X, -Z) (5 blades)
-		[0.65, 0.07, 0.64, 0.44, 0.070, -0.19, 0.14, 0.11, -0.48, -0.34],
-		[1.90, 0.11, 0.54, 0.48, 0.066,  0.21, 0.15, 0.29, -0.48, -0.34],
-		[3.10, 0.06, 0.70, 0.42, 0.074, -0.17, 0.12, 0.45, -0.48, -0.34],
-		[4.35, 0.12, 0.52, 0.46, 0.066,  0.22, 0.16, 0.64, -0.48, -0.34],
-		[5.65, 0.08, 0.60, 0.45, 0.068, -0.16, 0.14, 0.94, -0.48, -0.34],
+		# Central lush tuft (12 slender blades)
+		[0.10, 0.04, 0.88, 0.40, 0.042,  0.22, 0.12, 0.03,  0.00,  0.00],
+		[0.64, 0.10, 0.56, 0.48, 0.034, -0.24, 0.16, 0.11,  0.00,  0.00],
+		[1.16, 0.05, 0.78, 0.42, 0.039,  0.19, 0.13, 0.19,  0.00,  0.00],
+		[1.70, 0.13, 0.44, 0.50, 0.030, -0.26, 0.18, 0.27,  0.00,  0.00],
+		[2.22, 0.06, 0.84, 0.41, 0.041,  0.25, 0.12, 0.35,  0.00,  0.00],
+		[2.76, 0.12, 0.52, 0.49, 0.033, -0.20, 0.16, 0.44,  0.00,  0.00],
+		[3.28, 0.05, 0.74, 0.44, 0.038,  0.18, 0.14, 0.52,  0.00,  0.00],
+		[3.82, 0.14, 0.38, 0.46, 0.029, -0.23, 0.17, 0.60,  0.00,  0.00],
+		[4.34, 0.06, 0.82, 0.42, 0.040,  0.21, 0.12, 0.69,  0.00,  0.00],
+		[4.88, 0.11, 0.60, 0.48, 0.035, -0.19, 0.15, 0.77,  0.00,  0.00],
+		[5.40, 0.05, 0.72, 0.43, 0.037,  0.24, 0.13, 0.85,  0.00,  0.00],
+		[5.92, 0.13, 0.46, 0.50, 0.031, -0.22, 0.17, 0.93,  0.00,  0.00],
+		# Companion offset sub-tuft A (+X, +Z) (8 slender blades)
+		[0.24, 0.05, 0.72, 0.40, 0.037,  0.20, 0.13, 0.08,  0.50,  0.24],
+		[1.04, 0.11, 0.48, 0.46, 0.031, -0.22, 0.16, 0.21,  0.50,  0.24],
+		[1.82, 0.06, 0.64, 0.42, 0.035,  0.24, 0.14, 0.34,  0.50,  0.24],
+		[2.62, 0.12, 0.36, 0.44, 0.027, -0.18, 0.16, 0.47,  0.50,  0.24],
+		[3.40, 0.05, 0.74, 0.39, 0.038,  0.19, 0.12, 0.59,  0.50,  0.24],
+		[4.20, 0.10, 0.52, 0.45, 0.032, -0.25, 0.15, 0.72,  0.50,  0.24],
+		[4.98, 0.06, 0.62, 0.43, 0.034,  0.21, 0.14, 0.83,  0.50,  0.24],
+		[5.78, 0.12, 0.40, 0.46, 0.028, -0.20, 0.17, 0.95,  0.50,  0.24],
+		# Companion offset sub-tuft B (-X, -Z) (8 slender blades)
+		[0.48, 0.05, 0.70, 0.41, 0.036, -0.21, 0.13, 0.14, -0.46, -0.30],
+		[1.26, 0.11, 0.44, 0.46, 0.030,  0.23, 0.16, 0.26, -0.46, -0.30],
+		[2.06, 0.06, 0.76, 0.40, 0.039, -0.19, 0.12, 0.39, -0.46, -0.30],
+		[2.84, 0.12, 0.34, 0.43, 0.026,  0.20, 0.16, 0.51, -0.46, -0.30],
+		[3.64, 0.05, 0.66, 0.42, 0.035, -0.24, 0.14, 0.64, -0.46, -0.30],
+		[4.42, 0.10, 0.50, 0.46, 0.031,  0.22, 0.15, 0.76, -0.46, -0.30],
+		[5.22, 0.06, 0.62, 0.43, 0.034, -0.18, 0.14, 0.88, -0.46, -0.30],
+		[6.02, 0.11, 0.42, 0.45, 0.028,  0.21, 0.16, 0.97, -0.46, -0.30],
 	]
 
-	var t_steps: Array[float] = [0.0, 0.30, 0.64, 0.86, 1.0]
-	var w_steps: Array[float] = [1.0, 0.92, 0.68, 0.36, 0.0]
+	var t_steps: Array[float] = [0.0, 0.36, 0.72, 1.0]
+	var w_steps: Array[float] = [1.0, 0.80, 0.42, 0.0]
 
 	for spec in blades:
 		var az: float = float(spec[0])
@@ -3255,11 +3304,11 @@ static func _build_grass_mesh() -> ArrayMesh:
 			elif si == 2:
 				c = col_mid
 			elif si >= 3:
-				c = col_mid.lerp(col_tip, 0.55 if si == 3 else 1.0)
+				c = col_tip
 			var gain := _flora_contact_ao_gain(y, t, 0.76, 1.065, 0.44)
 			cols.append(_scale_flora_linear(c, gain))
 
-		# 3 tapered curved quads + 1 sharp pointed grass tip = 7 tris/blade (126 tris total).
+		# 2 tapered curved quads + 1 sharp pointed grass tip = 5 tris/blade (140 tris across 28 blades).
 		for si in range(t_steps.size() - 1):
 			var t0: float = t_steps[si]
 			var t1: float = t_steps[si + 1]
@@ -3281,11 +3330,111 @@ static func _build_grass_mesh() -> ArrayMesh:
 					Vector2(0.0, 1.0 - t0), Vector2(0.5, 0.0), Vector2(1.0, 1.0 - t0),
 					uv2_0, uv2_1, uv2_0)
 
+	# 3 delicate tall golden-ochre plumed coastal seed-stalks rising gracefully above the 3 sub-tufts:
+	# [azimuth, root_off, height, arch_out, droop, phase_01, cx, cz]
+	var stalks: Array[Array] = [
+		[0.52, 0.04, 0.96, 0.30, 0.13, 0.17,  0.00,  0.00],
+		[2.46, 0.05, 0.86, 0.28, 0.12, 0.53,  0.50,  0.24],
+		[4.64, 0.04, 0.80, 0.29, 0.12, 0.86, -0.46, -0.30],
+	]
+	var col_stalk_hi := Color(0.95, 0.88, 0.56, 1.0).srgb_to_linear()
+	var col_plume_base := _scale_flora_linear(Color(0.96, 0.76, 0.36, 1.0).srgb_to_linear(), 1.04)
+	var col_plume_mid := _scale_flora_linear(Color(1.00, 0.80, 0.40, 1.0).srgb_to_linear(), 1.065)
+	var col_plume_tip := _scale_flora_linear(Color(1.00, 0.88, 0.52, 1.0).srgb_to_linear(), 1.075)
+	var stalk_t: Array[float] = [0.0, 0.25, 0.50, 0.75]
+	var stalk_hw: Array[float] = [0.011, 0.009, 0.007, 0.0055]
+
+	for sspec in stalks:
+		var az: float = float(sspec[0])
+		var roff: float = float(sspec[1])
+		var h_max: float = float(sspec[2])
+		var arch_out: float = float(sspec[3])
+		var droop: float = float(sspec[4])
+		var phase_01: float = float(sspec[5])
+		var tuft_off := Vector3(float(sspec[6]), 0.0, float(sspec[7]))
+
+		var rad := Vector3(cos(az), 0.0, sin(az))
+		var side := Vector3(-sin(az), 0.0, cos(az))
+
+		var eval_stalk := func(t_val: float) -> Vector3:
+			var y_s := lerpf(-0.07, h_max, sin(t_val * PI * 0.50)) - droop * pow(t_val, 2.5)
+			var r_s := roff + arch_out * pow(t_val, 1.48)
+			return tuft_off + rad * r_s + Vector3(0.0, y_s, 0.0)
+
+		# Slender curved stalk ribbon (3 quads = 6 tris/stalk).
+		var s_left: Array[Vector3] = []
+		var s_right: Array[Vector3] = []
+		var s_cols: Array[Color] = []
+		for si in stalk_t.size():
+			var tv: float = stalk_t[si]
+			var ctr: Vector3 = eval_stalk.call(tv)
+			var hw: float = stalk_hw[si]
+			s_left.append(ctr - side * hw)
+			s_right.append(ctr + side * hw)
+			var sc_col := col_root.lerp(col_low, smoothstep(0.0, 0.42, tv)).lerp(col_stalk_hi, smoothstep(0.35, 0.75, tv))
+			s_cols.append(_scale_flora_linear(sc_col, _flora_contact_ao_gain(ctr.y, tv, 0.76, 1.065, 0.44)))
+
+		for si in range(stalk_t.size() - 1):
+			var uv2_0 := Vector2(stalk_t[si], phase_01)
+			var uv2_1 := Vector2(stalk_t[si + 1], phase_01)
+			_add_foliage_tri(st, s_left[si], s_left[si + 1], s_right[si + 1],
+				s_cols[si], s_cols[si + 1], s_cols[si + 1],
+				Vector2(0.0, 1.0 - stalk_t[si]), Vector2(0.0, 1.0 - stalk_t[si + 1]), Vector2(1.0, 1.0 - stalk_t[si + 1]),
+				uv2_0, uv2_1, uv2_1)
+			_add_foliage_tri(st, s_left[si], s_right[si + 1], s_right[si],
+				s_cols[si], s_cols[si + 1], s_cols[si],
+				Vector2(0.0, 1.0 - stalk_t[si]), Vector2(1.0, 1.0 - stalk_t[si + 1]), Vector2(1.0, 1.0 - stalk_t[si]),
+				uv2_0, uv2_1, uv2_0)
+
+		# Feathered 3D golden-wheat diamond plume head (8 spindle tris + 4 feathery awn spikelets = 12 tris/stalk).
+		var p_base: Vector3 = eval_stalk.call(0.73)
+		var p_belly: Vector3 = eval_stalk.call(0.85)
+		var p_tip: Vector3 = eval_stalk.call(1.00)
+		var p_dir := (p_tip - p_base).normalized()
+		var u_ax := side
+		var v_ax := p_dir.cross(u_ax).normalized()
+		var plume_r := 0.032
+
+		var ring: Array[Vector3] = [
+			p_belly + u_ax * plume_r,
+			p_belly + v_ax * (plume_r * 0.88),
+			p_belly - u_ax * plume_r,
+			p_belly - v_ax * (plume_r * 0.88),
+		]
+		var uv2_pb := Vector2(0.73, phase_01)
+		var uv2_pm := Vector2(0.86, phase_01)
+		var uv2_pt := Vector2(1.00, phase_01)
+		for k in 4:
+			var nk := (k + 1) % 4
+			_add_outward_tri_uv2(st, p_base, ring[k], ring[nk], p_belly,
+				col_plume_base, col_plume_mid, col_plume_mid, uv2_pb, uv2_pm, uv2_pm)
+			_add_outward_tri_uv2(st, ring[k], p_tip, ring[nk], p_belly,
+				col_plume_mid, col_plume_tip, col_plume_mid, uv2_pm, uv2_pt, uv2_pm)
+
+		# 4 crisp outward-flaring feathery golden wheat spikelets (2 pairs in orthogonal planes).
+		var awn_specs: Array[Array] = [
+			[0.78,  u_ax, 0.82, 0.90],
+			[0.78, -u_ax, 0.82, 0.90],
+			[0.86,  v_ax, 0.89, 0.97],
+			[0.86, -v_ax, 0.89, 0.97],
+		]
+		for aspec in awn_specs:
+			var ta: float = float(aspec[0])
+			var out_v: Vector3 = aspec[1] as Vector3
+			var uv2_a0 := Vector2(ta, phase_01)
+			var uv2_a1 := Vector2(float(aspec[2]), phase_01)
+			var uv2_at := Vector2(float(aspec[3]), phase_01)
+			var ab0: Vector3 = eval_stalk.call(ta) + out_v * 0.010
+			var ab1: Vector3 = ab0 + p_dir * 0.026
+			var atip: Vector3 = ab0 + p_dir * 0.064 + out_v * 0.044
+			_add_foliage_tri(st, ab0, ab1, atip, col_plume_base, col_plume_mid, col_plume_tip,
+				Vector2(0.0, 0.3), Vector2(0.3, 0.6), Vector2(1.0, 1.0), uv2_a0, uv2_a1, uv2_at)
+
 	st.generate_normals()
 	return st.commit()
 
 
-# ------------------------------------------------------------------ Mesh 2: 8-Frond 2-Tier Tropical Fern Rosette
+# ------------------------------------------------------------------ Mesh 2: 10-Frond 2-Tier Pinnate Serrated Fern Rosette
 
 static func _build_fern_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -3294,128 +3443,186 @@ static func _build_fern_mesh() -> ArrayMesh:
 	# Grounded fibrous central fern rosette heart (UV2.x = 0.0 -> anchored firmly to soil, ~0.75-0.79x root AO).
 	var crown_bot := _scale_flora_linear(Color(0.28, 0.34, 0.24, 1.0).srgb_to_linear(), 0.75)
 	var crown_top := _scale_flora_linear(Color(0.42, 0.56, 0.36, 1.0).srgb_to_linear(), 0.79)
-	_append_anchored_mound(st, Vector3.ZERO, 0.17, 0.14, 0.16, -0.06, 6, crown_bot, crown_top, Vector2(0.0, 0.0))
+	_append_anchored_mound(st, Vector3.ZERO, 0.16, 0.14, 0.15, -0.06, 6, crown_bot, crown_top, Vector2(0.0, 0.0))
 
+	var col_rachis_lo := Color(0.36, 0.50, 0.33, 1.0).srgb_to_linear()
+	var col_rachis_hi := Color(0.66, 0.78, 0.56, 1.0).srgb_to_linear()
 	var col_base := Color(0.54, 0.68, 0.54, 1.0).srgb_to_linear()
 	var col_mid := Color(0.84, 0.93, 0.80, 1.0).srgb_to_linear()
 	var col_tip := Color(1.00, 1.00, 0.90, 1.0).srgb_to_linear()
 
-	# 8 arched serrated fronds in 2 tiers:
-	# [azimuth, reach, apex_y, tip_droop, max_half_w, phase_01, bend_scale]
+	# 10 graceful arching pinnate fronds in 2 tiers (6 lower spreading + 4 taller inner crown):
+	# [azimuth, reach, apex_y, tip_droop, max_pin_len, phase_01, bend_scale]
 	var fronds: Array[Array] = [
-		# Lower broad spreading tier
-		[0.22, 1.15, 0.54, 0.24, 0.27, 0.05, 0.90],
-		[1.79, 1.08, 0.50, 0.22, 0.25, 0.28, 0.88],
-		[3.36, 1.16, 0.56, 0.25, 0.27, 0.54, 0.90],
-		[4.92, 1.06, 0.49, 0.22, 0.24, 0.77, 0.86],
-		# Upper taller arching crown tier
-		[1.02, 0.88, 0.95, 0.18, 0.22, 0.16, 0.94],
-		[2.58, 0.82, 0.88, 0.17, 0.21, 0.41, 0.92],
-		[4.16, 0.90, 0.92, 0.19, 0.22, 0.66, 0.94],
-		[5.70, 0.80, 0.84, 0.16, 0.20, 0.89, 0.90],
+		# Lower spreading tier (6 fronds: reach 0.88..1.04 m, apex_y 0.40..0.50 m, droop 0.20..0.25 m)
+		[0.16, 1.02, 0.48, 0.24, 0.26, 0.04, 0.90],
+		[1.22, 0.92, 0.43, 0.21, 0.24, 0.21, 0.88],
+		[2.24, 1.04, 0.50, 0.25, 0.27, 0.38, 0.91],
+		[3.30, 0.90, 0.41, 0.20, 0.23, 0.55, 0.87],
+		[4.34, 1.00, 0.47, 0.23, 0.26, 0.72, 0.90],
+		[5.38, 0.88, 0.40, 0.21, 0.23, 0.88, 0.86],
+		# Upper taller arching inner crown tier (4 fronds: reach 0.68..0.80 m, apex_y 0.78..0.90 m, droop 0.16..0.20 m)
+		[0.68, 0.78, 0.88, 0.19, 0.21, 0.13, 0.94],
+		[1.88, 0.72, 0.82, 0.17, 0.20, 0.46, 0.92],
+		[3.68, 0.80, 0.90, 0.20, 0.22, 0.64, 0.94],
+		[5.02, 0.68, 0.78, 0.16, 0.19, 0.82, 0.91],
 	]
 
-	var segs := 5
+	var rachis_segs := 5
+	var rachis_end_t := 0.88
+	var pin_ts: Array[float] = [0.20, 0.35, 0.50, 0.65, 0.79]
+
 	for spec in fronds:
 		var az: float = float(spec[0])
 		var reach: float = float(spec[1])
 		var apex_y: float = float(spec[2])
 		var droop: float = float(spec[3])
-		var max_hw: float = float(spec[4])
+		var max_pin_len: float = float(spec[4])
 		var phase_01: float = float(spec[5])
 		var bend_sc: float = float(spec[6])
 
 		var rad := Vector3(cos(az), 0.0, sin(az))
 		var side := Vector3(-sin(az), 0.0, cos(az))
-
-		var left_pts: Array[Vector3] = []
-		var mid_pts: Array[Vector3] = []
-		var right_pts: Array[Vector3] = []
-		var t_vals: Array[float] = []
-
-		for s in range(segs + 1):
-			var t := float(s) / float(segs)
-			t_vals.append(t)
-			var r_out := 0.05 + reach * pow(t, 1.08)
-			var arch_y := 0.04 + apex_y * sin(t * PI * 0.64) - droop * pow(t, 2.3)
-			var ctr := rad * r_out + Vector3(0.0, arch_y, 0.0)
-
-			# Serrated botanical fern width envelope: narrow petiole -> broad notched lamina -> pointed tip.
-			var env := sin(pow(t, 0.65) * PI)
-			var serrate := 1.0 + 0.22 * sin(t * PI * 5.0)
-			var hw := max_hw * env * serrate * (1.0 - smoothstep(0.92, 1.0, t))
-			var v_lift := hw * 0.28
-
-			mid_pts.append(ctr - Vector3(0.0, v_lift * 0.35, 0.0))
-			left_pts.append(ctr - side * hw + Vector3(0.0, v_lift, 0.0))
-			right_pts.append(ctr + side * hw + Vector3(0.0, v_lift, 0.0))
-
 		var tip_lift := 1.07 if apex_y >= 0.70 else 1.05
-		var wing_cols: Array[Color] = []
-		var mid_cols: Array[Color] = []
-		for s in range(segs + 1):
-			var ts: float = t_vals[s]
-			var c_base := col_base.lerp(col_mid, smoothstep(0.0, 0.55, ts)).lerp(col_tip, smoothstep(0.55, 1.0, ts))
-			var c_midrib := Color(c_base.r * 0.84, c_base.g * 0.88, c_base.b * 0.84, 1.0)
-			wing_cols.append(_scale_flora_linear(c_base,
-				_flora_contact_ao_gain(left_pts[s].y, ts, 0.76, tip_lift, 0.44)))
-			mid_cols.append(_scale_flora_linear(c_midrib,
-				_flora_contact_ao_gain(mid_pts[s].y, ts, 0.75, tip_lift, 0.44)))
 
-		for s in segs:
-			var t0: float = t_vals[s]
-			var t1: float = t_vals[s + 1]
-			var c0: Color = wing_cols[s]
-			var c1: Color = wing_cols[s + 1]
-			var c0_m: Color = mid_cols[s]
-			var c1_m: Color = mid_cols[s + 1]
+		var eval_spine := func(tv: float) -> Vector3:
+			var r_out := 0.04 + reach * pow(tv, 1.08)
+			var arch_y := 0.04 + apex_y * sin(tv * PI * 0.64) - droop * pow(tv, 2.3)
+			return rad * r_out + Vector3(0.0, arch_y, 0.0)
+
+		# 1. Slender curved central rachis stem (5 tapered quads, half-width 0.016 -> 0.006 m = 10 tris/frond).
+		var r_left: Array[Vector3] = []
+		var r_right: Array[Vector3] = []
+		var r_cols: Array[Color] = []
+		var r_ts: Array[float] = []
+		for s in range(rachis_segs + 1):
+			var frac := float(s) / float(rachis_segs)
+			var tv := rachis_end_t * frac
+			r_ts.append(tv)
+			var ctr: Vector3 = eval_spine.call(tv)
+			var r_hw := lerpf(0.016, 0.006, frac)
+			r_left.append(ctr - side * r_hw)
+			r_right.append(ctr + side * r_hw)
+			var rc := col_rachis_lo.lerp(col_rachis_hi, smoothstep(0.0, 0.90, tv))
+			r_cols.append(_scale_flora_linear(rc,
+				_flora_contact_ao_gain(ctr.y, tv, 0.75, tip_lift * 0.96, 0.44)))
+
+		for s in rachis_segs:
+			var t0: float = r_ts[s]
+			var t1: float = r_ts[s + 1]
 			var uv2_0 := Vector2(t0 * bend_sc, phase_01)
 			var uv2_1 := Vector2(t1 * bend_sc, phase_01)
+			_add_foliage_tri(st, r_left[s], r_left[s + 1], r_right[s + 1],
+				r_cols[s], r_cols[s + 1], r_cols[s + 1],
+				Vector2(0.42, t0), Vector2(0.42, t1), Vector2(0.58, t1),
+				uv2_0, uv2_1, uv2_1)
+			_add_foliage_tri(st, r_left[s], r_right[s + 1], r_right[s],
+				r_cols[s], r_cols[s + 1], r_cols[s],
+				Vector2(0.42, t0), Vector2(0.58, t1), Vector2(0.58, t0),
+				uv2_0, uv2_1, uv2_0)
 
-			if s < segs - 1:
-				# Left V-folded frond wing.
-				_add_foliage_tri(st, left_pts[s], left_pts[s + 1], mid_pts[s + 1],
-					c0, c1, c1_m, Vector2(0.0, t0), Vector2(0.0, t1), Vector2(0.5, t1),
-					uv2_0, uv2_1, uv2_1)
-				_add_foliage_tri(st, left_pts[s], mid_pts[s + 1], mid_pts[s],
-					c0, c1_m, c0_m, Vector2(0.0, t0), Vector2(0.5, t1), Vector2(0.5, t0),
-					uv2_0, uv2_1, uv2_0)
-				# Right V-folded frond wing.
-				_add_foliage_tri(st, mid_pts[s], mid_pts[s + 1], right_pts[s + 1],
-					c0_m, c1_m, c1, Vector2(0.5, t0), Vector2(0.5, t1), Vector2(1.0, t1),
-					uv2_0, uv2_1, uv2_1)
-				_add_foliage_tri(st, mid_pts[s], right_pts[s + 1], right_pts[s],
-					c0_m, c1, c0, Vector2(0.5, t0), Vector2(1.0, t1), Vector2(1.0, t0),
-					uv2_0, uv2_1, uv2_0)
-			else:
-				var tip_pt := mid_pts[segs]
-				var c_tip: Color = wing_cols[segs]
-				_add_foliage_tri(st, left_pts[s], tip_pt, mid_pts[s],
-					c0, c_tip, c0_m, Vector2(0.0, t0), Vector2(0.5, 1.0), Vector2(0.5, t0),
-					uv2_0, uv2_1, uv2_0)
-				_add_foliage_tri(st, mid_pts[s], tip_pt, right_pts[s],
-					c0_m, c_tip, c0, Vector2(0.5, t0), Vector2(0.5, 1.0), Vector2(1.0, t0),
-					uv2_0, uv2_1, uv2_0)
+		# 2. 5 pairs of distinct angled lance-shaped pinnae (leaflets) separated by real open air gaps (20 tris/frond).
+		for p_idx in pin_ts.size():
+			var base_t: float = pin_ts[p_idx]
+			for s_sign: float in [-1.0, 1.0]:
+				var t_p := clampf(base_t + (0.011 if s_sign > 0.0 else -0.011), 0.16, 0.84)
+				var ctr: Vector3 = eval_spine.call(t_p)
+				var p_prev: Vector3 = eval_spine.call(maxf(0.0, t_p - 0.02))
+				var p_next: Vector3 = eval_spine.call(minf(1.0, t_p + 0.02))
+				var fwd := (p_next - p_prev).normalized()
+				var up_n := side.cross(fwd).normalized()
+
+				# Botanical fern length envelope `sin(pow(t, 0.7) * PI)` with clean open air gaps between leaflets.
+				var env := sin(pow(t_p, 0.7) * PI)
+				var basal_taper := lerpf(0.84, 1.0, smoothstep(0.16, 0.34, t_p))
+				var pin_len := max_pin_len * env * basal_taper
+				var pin_hw := clampf(pin_len * 0.135, 0.017, 0.032)
+				var sweep_rad := deg_to_rad(lerpf(67.0, 56.0, t_p))
+				var r_hw_loc := lerpf(0.016, 0.006, clampf(t_p / rachis_end_t, 0.0, 1.0))
+
+				var pin_dir := (side * (s_sign * sin(sweep_rad)) + fwd * cos(sweep_rad)).normalized()
+				var pin_perp := pin_dir.cross(up_n).normalized()
+				var v_cup := pin_hw * 0.34
+
+				var p_base := ctr + side * (s_sign * r_hw_loc * 0.55)
+				var p_mid := p_base + pin_dir * (pin_len * 0.38) + up_n * (pin_len * 0.05)
+				var p_tip := p_base + pin_dir * pin_len - up_n * (pin_len * 0.05)
+				var p_a := p_mid + pin_perp * pin_hw + up_n * v_cup
+				var p_b := p_mid - pin_perp * pin_hw + up_n * v_cup
+
+				var c_frond := col_base.lerp(col_mid, smoothstep(0.0, 0.55, t_p)).lerp(col_tip, smoothstep(0.55, 1.0, t_p))
+				var c_pin_base := _scale_flora_linear(
+					Color(c_frond.r * 0.90, c_frond.g * 0.93, c_frond.b * 0.90, 1.0),
+					_flora_contact_ao_gain(p_base.y, t_p, 0.75, tip_lift, 0.44))
+				var c_pin_edge := _scale_flora_linear(c_frond,
+					_flora_contact_ao_gain(p_a.y, minf(1.0, t_p + 0.06), 0.76, tip_lift, 0.44))
+				var c_pin_tip := _scale_flora_linear(c_frond.lerp(col_tip, 0.45),
+					_flora_contact_ao_gain(p_tip.y, minf(1.0, t_p + 0.14), 0.76, tip_lift, 0.44))
+
+				var uv2_b := Vector2(t_p * bend_sc, phase_01)
+				var uv2_m := Vector2(minf(1.0, (t_p + 0.05) * bend_sc), phase_01)
+				var uv2_t := Vector2(minf(1.0, (t_p + 0.11) * bend_sc), phase_01)
+
+				# Crisp 2-tri V-cupped diamond/lance pinna split along the central vein (p_base -> p_tip).
+				_add_foliage_tri(st, p_base, p_tip, p_a,
+					c_pin_base, c_pin_tip, c_pin_edge,
+					Vector2(0.5, t_p), Vector2(0.0 if s_sign < 0.0 else 1.0, minf(1.0, t_p + 0.12)),
+					Vector2(0.25 if s_sign < 0.0 else 0.75, minf(1.0, t_p + 0.06)),
+					uv2_b, uv2_t, uv2_m)
+				_add_foliage_tri(st, p_base, p_b, p_tip,
+					c_pin_base, c_pin_edge, c_pin_tip,
+					Vector2(0.5, t_p), Vector2(0.25 if s_sign < 0.0 else 0.75, t_p),
+					Vector2(0.0 if s_sign < 0.0 else 1.0, minf(1.0, t_p + 0.12)),
+					uv2_b, uv2_m, uv2_t)
+
+		# 3. Crisp pointed terminal tip leaflet continuing smoothly off the rachis end (2 tris/frond).
+		var tp_base: Vector3 = eval_spine.call(0.85)
+		var tp_tip: Vector3 = eval_spine.call(1.00)
+		var tp_dir := (tp_tip - tp_base).normalized()
+		var tp_len := tp_base.distance_to(tp_tip)
+		var tp_up := side.cross(tp_dir).normalized()
+		var tp_perp := tp_dir.cross(tp_up).normalized()
+		var tp_hw := clampf(max_pin_len * 0.14, 0.022, 0.036)
+		var tp_mid := tp_base.lerp(tp_tip, 0.36) + tp_up * (tp_len * 0.04)
+		var tp_cup := tp_hw * 0.34
+		var tp_a := tp_mid + tp_perp * tp_hw + tp_up * tp_cup
+		var tp_b := tp_mid - tp_perp * tp_hw + tp_up * tp_cup
+
+		var c_tb := _scale_flora_linear(col_mid.lerp(col_tip, 0.65),
+			_flora_contact_ao_gain(tp_base.y, 0.85, 0.76, tip_lift, 0.44))
+		var c_tm := _scale_flora_linear(col_mid.lerp(col_tip, 0.85),
+			_flora_contact_ao_gain(tp_a.y, 0.93, 0.76, tip_lift, 0.44))
+		var c_tt := _scale_flora_linear(col_tip,
+			_flora_contact_ao_gain(tp_tip.y, 1.0, 0.76, tip_lift, 0.44))
+
+		var uv2_tb := Vector2(0.85 * bend_sc, phase_01)
+		var uv2_tm := Vector2(0.93 * bend_sc, phase_01)
+		var uv2_tt := Vector2(1.00 * bend_sc, phase_01)
+		_add_foliage_tri(st, tp_base, tp_tip, tp_a, c_tb, c_tt, c_tm,
+			Vector2(0.5, 0.85), Vector2(0.5, 1.0), Vector2(0.25, 0.93), uv2_tb, uv2_tt, uv2_tm)
+		_add_foliage_tri(st, tp_base, tp_b, tp_tip, c_tb, c_tm, c_tt,
+			Vector2(0.5, 0.85), Vector2(0.75, 0.93), Vector2(0.5, 1.0), uv2_tb, uv2_tm, uv2_tt)
 
 	st.generate_normals()
 	return st.commit()
 
 
-# ------------------------------------------------------------------ Mesh 3: Tropical Hibiscus Shrub (12 Leaves + 5 Blossoms)
+# ------------------------------------------------------------------ Mesh 3: Tropical Hibiscus Shrub (16 Sleek Leaves + 6 Blossoms)
 
 static func _build_hibiscus_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 1. Sturdy forked woody coastal shrub stems (baked linear bark brown with soil-contact root AO).
+	# 1. Sturdy forked woody coastal shrub stems (baked linear bark brown with soil-contact root AO, 48 tris).
 	var bark_lo := Color(0.24, 0.16, 0.11, 1.0).srgb_to_linear()
 	var bark_hi := Color(0.36, 0.25, 0.16, 1.0).srgb_to_linear()
 	var stem_tips: Array[Vector3] = [
-		Vector3(0.04, 0.56, 0.02),
-		Vector3(0.34, 0.44, 0.18),
-		Vector3(-0.32, 0.48, 0.22),
-		Vector3(-0.12, 0.42, -0.34),
-		Vector3(0.26, 0.38, -0.26),
+		Vector3(0.05, 0.58, 0.04),
+		Vector3(0.32, 0.44, 0.16),
+		Vector3(-0.30, 0.46, 0.20),
+		Vector3(-0.14, 0.42, -0.30),
+		Vector3(0.26, 0.38, -0.24),
+		Vector3(-0.16, 0.56, -0.10),
 	]
 	for si in stem_tips.size():
 		var tip := stem_tips[si]
@@ -3424,30 +3631,36 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 			_flora_contact_ao_gain(root_off.y, 0.0, 0.75, 1.04, 0.48))
 		var bark_hi_ao := _scale_flora_linear(bark_hi,
 			_flora_contact_ao_gain(tip.y, 0.30, 0.75, 1.04, 0.48))
-		_append_tapered_limb_uv2(st, root_off, tip, 0.065 if si == 0 else 0.048, 0.028, 4,
-			bark_lo_ao, bark_hi_ao, Vector2(0.0, float(si) * 0.19), Vector2(0.18, float(si) * 0.19))
+		_append_tapered_limb_uv2(st, root_off, tip, 0.062 if si == 0 else 0.045, 0.025, 4,
+			bark_lo_ao, bark_hi_ao, Vector2(0.0, float(si) * 0.16), Vector2(0.18, float(si) * 0.16))
 
-	# 2. 12 broad glossy faceted tropical bush leaves radiating organically in 2 tiers.
-	var leaf_base := Color(0.14, 0.44, 0.18, 1.0).srgb_to_linear()
-	var leaf_mid := Color(0.24, 0.65, 0.22, 1.0).srgb_to_linear()
-	var leaf_tip := Color(0.44, 0.78, 0.24, 1.0).srgb_to_linear()
+	# 2. 16 sleek multi-tiered serrated/pointed glossy tropical leaves (lower + mid + upper sunlit tiers, 128 tris).
+	var leaf_base := Color(0.11, 0.38, 0.15, 1.0).srgb_to_linear()
+	var leaf_mid := Color(0.22, 0.62, 0.20, 1.0).srgb_to_linear()
+	var leaf_upper := Color(0.32, 0.72, 0.22, 1.0).srgb_to_linear()
+	var leaf_tip := Color(0.46, 0.80, 0.25, 1.0).srgb_to_linear()
 
 	# [anchor_pos, azimuth, pitch_rad, length, half_w, phase_01]
 	var leaves: Array[Array] = [
-		# Lower full skirt (7 broad leaves)
-		[Vector3(0.24, 0.30, 0.12), 0.32, 0.24, 0.66, 0.25, 0.05],
-		[Vector3(0.12, 0.28, 0.26), 1.18, 0.20, 0.62, 0.24, 0.14],
-		[Vector3(-0.20, 0.32, 0.18), 2.10, 0.22, 0.68, 0.26, 0.24],
-		[Vector3(-0.28, 0.29, -0.04), 3.04, 0.18, 0.64, 0.24, 0.35],
-		[Vector3(-0.14, 0.30, -0.24), 3.92, 0.22, 0.66, 0.25, 0.46],
-		[Vector3(0.12, 0.28, -0.24), 4.86, 0.20, 0.63, 0.24, 0.58],
-		[Vector3(0.26, 0.31, -0.08), 5.68, 0.24, 0.65, 0.25, 0.69],
-		# Upper sunlit crown (5 arching leaves)
-		[Vector3(0.14, 0.54, 0.10), 0.68, 0.54, 0.58, 0.22, 0.18],
-		[Vector3(-0.12, 0.56, 0.14), 1.94, 0.58, 0.56, 0.22, 0.39],
-		[Vector3(-0.16, 0.52, -0.10), 3.24, 0.52, 0.58, 0.22, 0.61],
-		[Vector3(0.06, 0.54, -0.16), 4.52, 0.56, 0.55, 0.21, 0.78],
-		[Vector3(0.04, 0.60, 0.02), 5.76, 0.66, 0.52, 0.20, 0.92],
+		# Lower skirt tier (6 sleek tapered leaves: length 0.51..0.56 m, hw 0.16..0.18 m)
+		[Vector3(0.22, 0.28,  0.10), 0.28, 0.22, 0.55, 0.175, 0.04],
+		[Vector3(0.10, 0.26,  0.22), 1.32, 0.18, 0.52, 0.165, 0.15],
+		[Vector3(-0.18, 0.29,  0.18), 2.34, 0.20, 0.56, 0.180, 0.26],
+		[Vector3(-0.24, 0.27, -0.06), 3.38, 0.17, 0.53, 0.168, 0.37],
+		[Vector3(-0.10, 0.28, -0.22), 4.42, 0.21, 0.54, 0.172, 0.49],
+		[Vector3(0.18, 0.26, -0.16), 5.46, 0.19, 0.51, 0.160, 0.60],
+		# Mid layered tier (6 sleek tapered leaves: length 0.48..0.53 m, hw 0.146..0.165 m)
+		[Vector3(0.20, 0.43,  0.16), 0.78, 0.38, 0.52, 0.162, 0.11],
+		[Vector3(-0.04, 0.45,  0.22), 1.82, 0.42, 0.50, 0.154, 0.23],
+		[Vector3(-0.22, 0.44,  0.04), 2.86, 0.36, 0.53, 0.165, 0.35],
+		[Vector3(-0.18, 0.42, -0.18), 3.90, 0.40, 0.49, 0.150, 0.48],
+		[Vector3(0.06, 0.44, -0.22), 4.94, 0.37, 0.51, 0.158, 0.62],
+		[Vector3(0.22, 0.45, -0.04), 5.96, 0.43, 0.48, 0.146, 0.74],
+		# Upper sunlit crown tier (4 sleek arching leaves: length 0.44..0.48 m, hw 0.132..0.148 m)
+		[Vector3(0.10, 0.58,  0.08), 0.52, 0.56, 0.47, 0.146, 0.20],
+		[Vector3(-0.10, 0.60,  0.10), 2.12, 0.60, 0.46, 0.142, 0.44],
+		[Vector3(-0.12, 0.57, -0.08), 3.68, 0.55, 0.48, 0.148, 0.69],
+		[Vector3(0.08, 0.61, -0.10), 5.24, 0.64, 0.44, 0.132, 0.90],
 	]
 
 	for lspec in leaves:
@@ -3464,47 +3677,68 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		var up_n := side.cross(fwd).normalized()
 
 		var p0 := anchor
-		var p1 := anchor + fwd * (length * 0.46) + up_n * 0.04
-		var p2 := anchor + fwd * length - Vector3(0.0, length * 0.16, 0.0)
-		var l1 := p1 - side * hw + up_n * (hw * 0.22)
-		var r1 := p1 + side * hw + up_n * (hw * 0.22)
-		var c1_m := Color(leaf_mid.r * 0.85, leaf_mid.g * 0.88, leaf_mid.b * 0.85, 1.0)
+		var p1 := anchor + fwd * (length * 0.36) + up_n * 0.036
+		var p2 := anchor + fwd * (length * 0.70) + up_n * 0.014 - Vector3(0.0, length * 0.05, 0.0)
+		var p3 := anchor + fwd * length - Vector3(0.0, length * 0.16, 0.0)
+		var l1 := p1 - side * hw + up_n * (hw * 0.24)
+		var r1 := p1 + side * hw + up_n * (hw * 0.24)
+		var l2 := p2 - side * (hw * 0.68) + up_n * (hw * 0.16)
+		var r2 := p2 + side * (hw * 0.68) + up_n * (hw * 0.16)
+		var c1_m := Color(leaf_mid.r * 0.84, leaf_mid.g * 0.88, leaf_mid.b * 0.84, 1.0)
+		var c2_m := Color(leaf_upper.r * 0.88, leaf_upper.g * 0.92, leaf_upper.b * 0.88, 1.0)
 
-		var leaf_tip_lift := 1.07 if anchor.y >= 0.42 else 1.05
+		var leaf_tip_lift := 1.07 if anchor.y >= 0.52 else (1.06 if anchor.y >= 0.38 else 1.05)
 		var c_p0 := _scale_flora_linear(leaf_base,
-			_flora_contact_ao_gain(p0.y, 0.0, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p0.y, 0.0, 0.75, leaf_tip_lift, 0.56))
 		var c_p1 := _scale_flora_linear(c1_m,
-			_flora_contact_ao_gain(p1.y, 0.46, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p1.y, 0.36, 0.75, leaf_tip_lift, 0.56))
 		var c_l1 := _scale_flora_linear(leaf_mid,
-			_flora_contact_ao_gain(l1.y, 0.50, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(l1.y, 0.40, 0.76, leaf_tip_lift, 0.56))
 		var c_r1 := _scale_flora_linear(leaf_mid,
-			_flora_contact_ao_gain(r1.y, 0.50, 0.76, leaf_tip_lift, 0.56))
-		var c_p2 := _scale_flora_linear(leaf_tip,
-			_flora_contact_ao_gain(p2.y, 1.0, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(r1.y, 0.40, 0.76, leaf_tip_lift, 0.56))
+		var c_p2 := _scale_flora_linear(c2_m,
+			_flora_contact_ao_gain(p2.y, 0.70, 0.76, leaf_tip_lift, 0.56))
+		var c_l2 := _scale_flora_linear(leaf_upper,
+			_flora_contact_ao_gain(l2.y, 0.74, 0.76, leaf_tip_lift, 0.56))
+		var c_r2 := _scale_flora_linear(leaf_upper,
+			_flora_contact_ao_gain(r2.y, 0.74, 0.76, leaf_tip_lift, 0.56))
+		var c_p3 := _scale_flora_linear(leaf_tip,
+			_flora_contact_ao_gain(p3.y, 1.0, 0.76, leaf_tip_lift, 0.56))
 
-		var uv2_a := Vector2(0.18, phase_01)
-		var uv2_b := Vector2(0.38, phase_01)
-		var uv2_c := Vector2(0.56, phase_01)
+		var uv2_a := Vector2(0.16, phase_01)
+		var uv2_b := Vector2(0.32, phase_01)
+		var uv2_c := Vector2(0.46, phase_01)
+		var uv2_d := Vector2(0.58, phase_01)
 
-		# 4-triangle V-creased broad oval tropical leaf.
+		# 8-triangle V-creased serrated/pointed oval glossy tropical leaf.
 		_add_foliage_tri(st, p0, l1, p1, c_p0, c_l1, c_p1,
-			Vector2(0.5, 0.0), Vector2(0.0, 0.5), Vector2(0.5, 0.5), uv2_a, uv2_b, uv2_b)
+			Vector2(0.5, 0.0), Vector2(0.0, 0.36), Vector2(0.5, 0.36), uv2_a, uv2_b, uv2_b)
 		_add_foliage_tri(st, p0, p1, r1, c_p0, c_p1, c_r1,
-			Vector2(0.5, 0.0), Vector2(0.5, 0.5), Vector2(1.0, 0.5), uv2_a, uv2_b, uv2_b)
+			Vector2(0.5, 0.0), Vector2(0.5, 0.36), Vector2(1.0, 0.36), uv2_a, uv2_b, uv2_b)
+		_add_foliage_tri(st, l1, l2, p2, c_l1, c_l2, c_p2,
+			Vector2(0.0, 0.36), Vector2(0.14, 0.70), Vector2(0.5, 0.70), uv2_b, uv2_c, uv2_c)
 		_add_foliage_tri(st, l1, p2, p1, c_l1, c_p2, c_p1,
-			Vector2(0.0, 0.5), Vector2(0.5, 1.0), Vector2(0.5, 0.5), uv2_b, uv2_c, uv2_b)
-		_add_foliage_tri(st, p1, p2, r1, c_p1, c_p2, c_r1,
-			Vector2(0.5, 0.5), Vector2(0.5, 1.0), Vector2(1.0, 0.5), uv2_b, uv2_c, uv2_b)
+			Vector2(0.0, 0.36), Vector2(0.5, 0.70), Vector2(0.5, 0.36), uv2_b, uv2_c, uv2_b)
+		_add_foliage_tri(st, p1, p2, r2, c_p1, c_p2, c_r2,
+			Vector2(0.5, 0.36), Vector2(0.5, 0.70), Vector2(0.86, 0.70), uv2_b, uv2_c, uv2_c)
+		_add_foliage_tri(st, p1, r2, r1, c_p1, c_r2, c_r1,
+			Vector2(0.5, 0.36), Vector2(0.86, 0.70), Vector2(1.0, 0.36), uv2_b, uv2_c, uv2_b)
+		_add_foliage_tri(st, l2, p3, p2, c_l2, c_p3, c_p2,
+			Vector2(0.14, 0.70), Vector2(0.5, 1.0), Vector2(0.5, 0.70), uv2_c, uv2_d, uv2_c)
+		_add_foliage_tri(st, p2, p3, r2, c_p2, c_p3, c_r2,
+			Vector2(0.5, 0.70), Vector2(0.5, 1.0), Vector2(0.86, 0.70), uv2_c, uv2_d, uv2_c)
 
-	# 3. 5 bold sculpted 5-petal tropical Hibiscus blossoms + golden stamen buds!
-	# Slight blue lift on pink/crimson petals offsets foliage_wind.gdshader's warm golden tip tint,
+	# 3. 6 vibrant sculpted 5-petal tropical Hibiscus blossoms + golden stamen stalks (78 tris)!
+	# Slight blue lift on pink/crimson/magenta petals offsets foliage_wind.gdshader's warm golden tip tint,
 	# while 1.05x sunlit petal luminance keeps every bloom crisp & vivid against the shaded canopy.
+	# [pos, axis, radius, throat_srgb, petal_srgb, phase_01, cup_scale]
 	var blossoms: Array[Array] = [
-		[Vector3(0.06, 0.96, 0.05), Vector3(0.18, 0.95, 0.22), 0.26, Color(0.72, 0.08, 0.16), Color(1.00, 0.24, 0.34), 0.12],  # Crimson-coral
-		[Vector3(0.52, 0.72, 0.28), Vector3(0.68, 0.66, 0.32), 0.24, Color(0.78, 0.12, 0.48), Color(1.00, 0.38, 0.78), 0.34],  # Hibiscus-pink
-		[Vector3(-0.48, 0.76, 0.34), Vector3(-0.62, 0.68, 0.38), 0.24, Color(0.84, 0.22, 0.05), Color(1.00, 0.52, 0.16), 0.55], # Sunset-orange
-		[Vector3(-0.24, 0.70, -0.50), Vector3(-0.34, 0.68, -0.65), 0.23, Color(0.88, 0.42, 0.06), Color(1.00, 0.84, 0.24), 0.74], # Tropical gold
-		[Vector3(0.40, 0.64, -0.40), Vector3(0.56, 0.64, -0.52), 0.23, Color(0.76, 0.12, 0.14), Color(1.00, 0.34, 0.28), 0.91], # Bright coral-red
+		[Vector3(0.08, 0.88,  0.08), Vector3(0.20, 0.94,  0.24), 0.23, Color(0.72, 0.08, 0.16), Color(1.00, 0.24, 0.34), 0.10, 1.00],  # Crimson-coral
+		[Vector3(0.42, 0.66,  0.24), Vector3(0.66, 0.68,  0.32), 0.22, Color(0.78, 0.12, 0.48), Color(1.00, 0.38, 0.78), 0.28, 1.00],  # Hibiscus-pink
+		[Vector3(-0.40, 0.70,  0.28), Vector3(-0.62, 0.70,  0.38), 0.22, Color(0.84, 0.22, 0.05), Color(1.00, 0.52, 0.16), 0.46, 1.00], # Sunset-orange
+		[Vector3(-0.22, 0.64, -0.40), Vector3(-0.36, 0.70, -0.62), 0.21, Color(0.88, 0.42, 0.06), Color(1.00, 0.84, 0.24), 0.64, 1.00], # Tropical gold
+		[Vector3(0.36, 0.60, -0.32), Vector3(0.56, 0.66, -0.50), 0.21, Color(0.76, 0.12, 0.14), Color(1.00, 0.34, 0.28), 0.80, 1.00], # Bright coral-red
+		[Vector3(-0.18, 0.86, -0.14), Vector3(-0.34, 0.92, -0.24), 0.19, Color(0.68, 0.06, 0.38), Color(1.00, 0.26, 0.72), 0.93, 1.38], # Magenta-rose crown bud
 	]
 	var stamen_col := _scale_flora_linear(Color(1.00, 0.90, 0.32, 1.0).srgb_to_linear(), 1.05)
 
@@ -3515,6 +3749,7 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		var col_throat := _scale_flora_linear((bspec[3] as Color).srgb_to_linear(), 0.96)
 		var col_petal := _scale_flora_linear((bspec[4] as Color).srgb_to_linear(), 1.05)
 		var phase_01: float = float(bspec[5])
+		var cup_sc: float = float(bspec[6])
 
 		var ref := Vector3.RIGHT if absf(b_axis.dot(Vector3.RIGHT)) < 0.88 else Vector3.FORWARD
 		var u := b_axis.cross(ref).normalized()
@@ -3526,10 +3761,10 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 			var ang := float(pi) / 5.0 * TAU + phase_01 * 2.0
 			var p_dir := u * cos(ang) + v * sin(ang)
 			var p_side := -u * sin(ang) + v * cos(ang)
-			var p_mid := b_pos + p_dir * (b_rad * 0.56) + b_axis * (b_rad * 0.14)
-			var p_tip := b_pos + p_dir * b_rad + b_axis * (b_rad * 0.34)
-			var p_l := p_mid - p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.08)
-			var p_r := p_mid + p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.04)
+			var p_mid := b_pos + p_dir * (b_rad * 0.56) + b_axis * (b_rad * 0.14 * cup_sc)
+			var p_tip := b_pos + p_dir * b_rad + b_axis * (b_rad * 0.34 * cup_sc)
+			var p_l := p_mid - p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.08 * cup_sc)
+			var p_r := p_mid + p_side * (b_rad * 0.44) + b_axis * (b_rad * 0.04 * cup_sc)
 
 			# Broad cupped 2-triangle Hibiscus petal.
 			_add_foliage_tri(st, b_pos, p_l, p_tip, col_throat, col_petal, col_petal,
@@ -3537,9 +3772,9 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 			_add_foliage_tri(st, b_pos, p_tip, p_r, col_throat, col_petal, col_petal,
 				Vector2(0.5, 0.0), Vector2(0.5, 1.0), Vector2(1.0, 0.6), uv2_ctr, uv2_rim, uv2_rim)
 
-		# Protruding golden Hibiscus stamen bud pyramid (3 tris).
-		var st_tip := b_pos + b_axis * (b_rad * 0.66)
-		var sr := b_rad * 0.16
+		# Protruding golden Hibiscus stamen stalk pyramid (3 tris).
+		var st_tip := b_pos + b_axis * (b_rad * 0.68)
+		var sr := b_rad * 0.15
 		var sb0 := b_pos + u * sr
 		var sb1 := b_pos + (-u * 0.5 + v * 0.866) * sr
 		var sb2 := b_pos + (-u * 0.5 - v * 0.866) * sr
@@ -3648,7 +3883,7 @@ static func _build_pebbles_mesh() -> ArrayMesh:
 	# [center_xz, rx, ry, rz, yaw, col_bot, col_top]
 	var cobbles: Array[Array] = [
 		[Vector2(-0.34, -0.18), 0.26, 0.15, 0.21, 0.42, Color(0.54, 0.49, 0.44), Color(0.84, 0.78, 0.70)],
-		[Vector2( 0.22, -0.28), 0.22, 0.13, 0.18, 1.35, Color(0.46, 0.48, 0.50), Color(0.76, 0.78, 0.78)],
+		[Vector2( 0.22, -0.28), 0.22, 0.13, 0.18, 1.35, Color(0.56, 0.49, 0.41), Color(0.84, 0.76, 0.65)],
 		[Vector2(-0.08,  0.34), 0.24, 0.12, 0.19, 2.20, Color(0.62, 0.51, 0.39), Color(0.88, 0.76, 0.60)],
 		[Vector2(-0.52,  0.18), 0.16, 0.10, 0.14, 0.85, Color(0.58, 0.54, 0.48), Color(0.86, 0.82, 0.74)],
 		[Vector2( 0.46,  0.22), 0.18, 0.11, 0.15, 2.85, Color(0.48, 0.45, 0.42), Color(0.79, 0.75, 0.68)],
