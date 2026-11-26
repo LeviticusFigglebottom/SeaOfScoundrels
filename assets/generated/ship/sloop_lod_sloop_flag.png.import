@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bkd03dphy8b0g"
-path="res://.godot/imported/sloop_lod_sloop_flag.png-50f5be59b79886ee488c457737d7bd5e.ctex"
+path.s3tc="res://.godot/imported/sloop_lod_sloop_flag.png-50f5be59b79886ee488c457737d7bd5e.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "9736f0279a3c4b9c653c4572cffbcdfc"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/sloop_lod_sloop_flag.png"
-dest_files=["res://.godot/imported/sloop_lod_sloop_flag.png-50f5be59b79886ee488c457737d7bd5e.ctex"]
+dest_files=["res://.godot/imported/sloop_lod_sloop_flag.png-50f5be59b79886ee488c457737d7bd5e.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

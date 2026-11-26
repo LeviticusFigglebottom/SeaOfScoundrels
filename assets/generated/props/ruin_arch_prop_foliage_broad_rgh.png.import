@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dcubxwmxpxk7"
-path="res://.godot/imported/ruin_arch_prop_foliage_broad_rgh.png-20c2707a2b9eca599551dc5d6d55ee1f.ctex"
+path.s3tc="res://.godot/imported/ruin_arch_prop_foliage_broad_rgh.png-20c2707a2b9eca599551dc5d6d55ee1f.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "b0f9c4cf0edb95fcb8b6dd3778479fc1"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/ruin_arch_prop_foliage_broad_rgh.png"
-dest_files=["res://.godot/imported/ruin_arch_prop_foliage_broad_rgh.png-20c2707a2b9eca599551dc5d6d55ee1f.ctex"]
+dest_files=["res://.godot/imported/ruin_arch_prop_foliage_broad_rgh.png-20c2707a2b9eca599551dc5d6d55ee1f.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

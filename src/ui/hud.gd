@@ -24,14 +24,14 @@ const ITEM_SLICE_HINTS := {
 	&"boarding_axe": "Heavy cleave | Guard crush | RMB parry",
 	&"pistol": "Flintlock shot | RMB aim",
 	&"blunderbuss": "6-pellet spread | Short range | RMB aim",
-	&"compass": "Points true North | RMB raise",
+	&"compass": "True North | Hold RMB count paces",
 	&"spyglass": "RMB zoom & sight horizon",
 	&"lantern": "LMB toggle flame | RMB raise",
 	&"map": "Treasure chart | RMB read",
 	&"shovel": "Dig buried treasure mounds",
-	&"bucket": "Bail bilge water | Splash out",
+	&"bucket": "Bail bilge water | RMB splash",
 	&"planks": "Patch open hull breaches",
-	&"tankard": "Drink grog (+15 HP)",
+	&"tankard": "Drink grog (+15 HP) | RMB cheers",
 	&"instrument": "Strike up a crew shanty",
 }
 
@@ -226,6 +226,10 @@ func _connect_signals() -> void:
 			inventory.shanty_playing_changed.connect(_on_tool_state_changed)
 		if not inventory.shanty_instrument_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_instrument_changed.connect(_on_tool_state_changed)
+		if not inventory.compass_pace_counted.is_connected(_on_compass_pace_counted):
+			inventory.compass_pace_counted.connect(_on_compass_pace_counted)
+		if not inventory.grog_toast_raised.is_connected(_on_grog_toast_raised):
+			inventory.grog_toast_raised.connect(_on_grog_toast_raised)
 	if combat != null:
 		if not combat.hit_landed.is_connected(_on_combat_hit_landed):
 			combat.hit_landed.connect(_on_combat_hit_landed)
@@ -261,6 +265,10 @@ func _disconnect_signals() -> void:
 			inventory.shanty_playing_changed.disconnect(_on_tool_state_changed)
 		if inventory.shanty_instrument_changed.is_connected(_on_tool_state_changed):
 			inventory.shanty_instrument_changed.disconnect(_on_tool_state_changed)
+		if inventory.compass_pace_counted.is_connected(_on_compass_pace_counted):
+			inventory.compass_pace_counted.disconnect(_on_compass_pace_counted)
+		if inventory.grog_toast_raised.is_connected(_on_grog_toast_raised):
+			inventory.grog_toast_raised.disconnect(_on_grog_toast_raised)
 	if combat != null and is_instance_valid(combat):
 		if combat.hit_landed.is_connected(_on_combat_hit_landed):
 			combat.hit_landed.disconnect(_on_combat_hit_landed)
@@ -1486,7 +1494,7 @@ func _refresh_tool_chip() -> void:
 				else:
 					meta = "[LMB] Fire | [RMB] Aim"
 			&"bucket":
-				meta = "Full | [LMB] Throw Water" if inventory.bucket_full else "Empty | [LMB] Scoop / Bail"
+				meta = "[LMB] Throw / Bail | [RMB] Splash" if inventory.bucket_full else "[LMB] Scoop Bilge / Sea"
 			&"planks":
 				if active_ship != null:
 					meta = "Planks: %d | [LMB] Patch Breach" % active_ship.planks_remaining
@@ -1495,7 +1503,10 @@ func _refresh_tool_chip() -> void:
 			&"shovel":
 				meta = "[LMB] Dig Treasure"
 			&"compass":
-				meta = "True North | [RMB] Hold Up"
+				if inventory.is_compass_pacing():
+					meta = "Compass | %d paces (%s)" % [inventory.get_compass_paces(), inventory.get_compass_heading_label()]
+				else:
+					meta = "[Hold RMB] Raise & Count Paces"
 			&"spyglass":
 				meta = "[RMB] Zoom | [LMB] Call Out Sighting"
 			&"lantern":
@@ -1503,7 +1514,7 @@ func _refresh_tool_chip() -> void:
 			&"map":
 				meta = "%s | [RMB] Inspect" % inventory.map_island_name
 			&"tankard":
-				meta = "[LMB] Drink Grog (+HP)"
+				meta = "[LMB] Drink Grog | [RMB] Cheers Toast"
 			&"instrument":
 				var inst_disp := String(Inventory.SHANTY_INSTRUMENT_NAMES.get(
 					inventory.shanty_instrument, String(inventory.shanty_instrument).capitalize()))
@@ -1634,6 +1645,16 @@ func _on_item_equipped(_item_id: StringName) -> void:
 
 
 func _on_tool_state_changed(_v: Variant) -> void:
+	_tool_flash_timer = 2.2
+	_refresh_tool_chip()
+
+
+func _on_compass_pace_counted(_paces: int, _heading: String) -> void:
+	_tool_flash_timer = 2.0
+	_refresh_tool_chip()
+
+
+func _on_grog_toast_raised() -> void:
 	_tool_flash_timer = 2.2
 	_refresh_tool_chip()
 

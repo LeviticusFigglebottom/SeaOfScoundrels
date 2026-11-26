@@ -85,6 +85,14 @@ const LINES := {
 			"If this sloop had a proper kettle, I'd never set foot on dry land again.",
 			"Watch the swell off the bow — she's got a mean little kick today.",
 		],
+		&"toast_ack": [
+			"Cheers, Cap'n! May our hull stay tight and the wind stay fair!",
+			"To gold in the hold and calm seas ahead! Bottoms up, Cap'n!",
+		],
+		&"splashed": [
+			"Blimey, Cap'n! Keep that bilge-water out of me beard!",
+			"Gah! Cold as the Abyss! Watch where ye sling that bucket!",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -135,6 +143,14 @@ const LINES := {
 			"My favourite kind of horizon is one with treasure and zero Drowned.",
 			"That cloud bank looks like a sea-turtle wearing a tricorne.",
 		],
+		&"toast_ack": [
+			"Here's to sharp eyes and fuller coffers, Cap'n! Cheers!",
+			"Raising a mug to the finest Captain on the archipelago!",
+		],
+		&"splashed": [
+			"Hey! You just soaked my spyglass lens, Cap'n!",
+			"Ack -- salty! Save that splash for the deck boards, Cap'n!",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -184,6 +200,14 @@ const LINES := {
 			"I oiled the capstan gears this morning — listen to her purr!",
 			"Do you reckon the Drowned ever get tired of rattling?",
 			"Nothing beats fresh salt air and a hull with zero holes in it.",
+		],
+		&"toast_ack": [
+			"Cheers, Cap'n! First round's on the carpenter!",
+			"To sturdy oak, bright skies, and zero hull leaks! Cheers!",
+		],
+		&"splashed": [
+			"Whoa! Refreshing, Cap'n -- though I just dried me apron!",
+			"Hey now! I bail the bilge, I don't need a bath on deck!",
 		],
 	},
 }

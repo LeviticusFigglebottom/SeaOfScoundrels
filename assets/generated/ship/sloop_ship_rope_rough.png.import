@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bn5lnq727ewti"
-path="res://.godot/imported/sloop_ship_rope_rough.png-744d7034c36795c053675ccf1146442b.ctex"
+path.s3tc="res://.godot/imported/sloop_ship_rope_rough.png-744d7034c36795c053675ccf1146442b.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "54f49c395cc8218a52a670ffd234236b"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/sloop_ship_rope_rough.png"
-dest_files=["res://.godot/imported/sloop_ship_rope_rough.png-744d7034c36795c053675ccf1146442b.ctex"]
+dest_files=["res://.godot/imported/sloop_ship_rope_rough.png-744d7034c36795c053675ccf1146442b.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

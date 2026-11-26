@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cboj3jfg8jl5y"
-path="res://.godot/imported/brigantine_ship_brass_albedo.png-7457b0feff9326484f2ad3c17fc99013.ctex"
+path.s3tc="res://.godot/imported/brigantine_ship_brass_albedo.png-7457b0feff9326484f2ad3c17fc99013.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "280f183ef0a5b7c540008906c2f6af16"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/brigantine_ship_brass_albedo.png"
-dest_files=["res://.godot/imported/brigantine_ship_brass_albedo.png-7457b0feff9326484f2ad3c17fc99013.ctex"]
+dest_files=["res://.godot/imported/brigantine_ship_brass_albedo.png-7457b0feff9326484f2ad3c17fc99013.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

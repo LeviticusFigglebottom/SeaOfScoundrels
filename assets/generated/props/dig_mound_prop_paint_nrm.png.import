@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cm8i83nsml2n7"
-path="res://.godot/imported/dig_mound_prop_paint_nrm.png-3a9064d458fe56bbeeb6d9c0c5e02700.ctex"
+path.s3tc="res://.godot/imported/dig_mound_prop_paint_nrm.png-3a9064d458fe56bbeeb6d9c0c5e02700.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "6f3c522c6d25067580e94d5151a1cd1d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/dig_mound_prop_paint_nrm.png"
-dest_files=["res://.godot/imported/dig_mound_prop_paint_nrm.png-3a9064d458fe56bbeeb6d9c0c5e02700.ctex"]
+dest_files=["res://.godot/imported/dig_mound_prop_paint_nrm.png-3a9064d458fe56bbeeb6d9c0c5e02700.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

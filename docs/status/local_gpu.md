@@ -355,5 +355,53 @@ Measured live on RX 9070 XT (`1920x1080`, Vulkan `1.4.359` Forward+, `quality=hi
   2. `FortBastion` side walls (`fort_vault.png`): still flat untextured stone — binding `terrain_cliff` / `prop_stone` PBR will match the surrounding Wave 25C props.
   3. `whale_breach.png` (`ocean_whale.gd`): enlarged `BreachSprayCurtain` cones sit slightly tall/translucent beside the torso — tightening their vertical height around the waterline/fluke splash will read even more organically.
 
-### 7.9 Standing Ready for Wave 26 (Spacious `1.24×` Ships + Sea-of-Thieves Sailing) & Wave I-2 (14-Island Overhaul!)
-Pushing Milestone 8 cleanly to `origin/local/gpu-polish` now and autonomously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 26**) and `origin/cloud/island-architect` (**Wave I-2**) for our next real-GPU look-dev, 1080p HIGH visual audit, and benchmark cycle!
+#### 7.8.6 Early Real-GPU RX 9070 XT Audit of Cloud Island Architect Wave I-1 (`f0c30dd`, Detached Worktree — Early Q-I2 Answer!)
+While Wave 26 & Wave I-2 are in flight, we inspected all 4 `1920×1080 HIGH` Vulkan renders of `island_landmarks_showcase.tscn` (`gallery_geology`, `gallery_setpieces`, `cutlass_overhaul`, `skull_bluff`) and ran exact `IslandDetails` GPU isolation benchmarks on RX 9070 XT:
+- **Early Q-I2 Empirical Benchmark (`IslandDetails` 7-Layer MultiMesh Cost — PHENOMENAL!!)**:
+  - `cutlass_overhaul`: `WITH_DETAILS` **`1.446 ms`** (`210.0 FPS`, `283 DC`, `916k prims`, `451.1 MB` VRAM) vs `NO_DETAILS` `1.412 ms` (`269 DC`, `810k prims`) -> **`IslandDetails` = `+0.034 ms` GPU (`+14 DC`, `+107k prims`)!!**
+  - `skull_bluff`: `WITH_DETAILS` **`1.430 ms`** (`220.0 FPS`, `263 DC`, `1,094k prims`, `449.4 MB` VRAM) vs `NO_DETAILS` `1.414 ms` (`251 DC`, `966k prims`) -> **`IslandDetails` = `+0.016 ms` GPU (`+12 DC`, `+128k prims`)!!**
+  - *Verdict*: At **`0.016–0.034 ms` per island**, deploying `IslandDetails` across all 14 islands in Wave I-2 will cost `< 0.20 ms` total on RX 9070 XT (`< 1.0 ms` on GTX 1660) — **100% cleared for full 14-island rollout!**
+- **Visual Review Praise**:
+  - `skull_cliff_carving.glb` (glowing cursed turquoise cavern eyes & brow vines!), `ancient_temple_stairway.glb`, `impaled_shipwreck_bow.glb`, `cliff_catwalk_pier.glb`, `coastal_sea_arch.glb`, `trail_lantern_post.glb`, `stone_cairn_marker.glb`, AND the 3D swaying 18-blade grass tufts + tropical hibiscus wildflowers + driftwood/shells look **15/10 Sea-of-Thieves quality** on real Vulkan!
+- **3 Actionable Real-GPU Catches for Cloud Island Architect Wave I-2 (`island_details.gd` / `gen_island_landmarks.py`)**:
+  1. **`[HIGH]` Floating Mid-Wall `cliff_buttress_tall` Spurs (`cutlass_overhaul.png`)**: On steep `~70°` upper cliff faces, several `cliff_buttress_tall` spurs stick proud of the wall with their `-5.8 m` bottoms visibly dangling in mid-air above the palm canopy. Embedding buttresses deeper into the hillside (`pos -= slope_out * (scale * 2.0..2.5)`), anchoring them primarily along the lower-to-mid cliff toe (`h = 2..18 m` so bottoms bury cleanly into terrain), and pitching them `10–15°` inward into the slope will fuse them seamlessly into the rock massif!
+  2. **`[MEDIUM]` Repeated "Stone Mushroom Cap" Silhouettes (`skull_bluff.png`)**: Multiple adjacent `cliff_buttress_tall` instances with flat overhanging caps read slightly repetitive along the cliff shoulders — mixing more `cliff_buttress_wide`, varying yaw/scale/inward lean (`±14°`), and sinking the top cap closer to the cliff face will make them read as natural fractured geological buttresses!
+  3. **`[LOW]` Tiny Vertical Slit in `volcanic_basalt_spire.glb` (`gallery_geology.png`)**: A thin bright gap peeks between two central basalt columns; slightly widening the core column radius closes it cleanly.
+
+### 7.9 Milestone 9 — Wave 26 (`250c664`) Real-GPU Audit, Direct Q10 Answer & Rebuilt Windows `.exe`
+
+#### 7.9.1 End-to-End Wave 26 Verification Gate (RX 9070 XT, Godot `4.8-beta5`)
+- **`py tools/lint.py`**: **PASS — `115 files, 0 errors, 0 warnings`**.
+- **Headless Test Suite (`tests/test_runner.tscn`)**: **PASS — `193 tests, 0 failures`** (`W26_HEADLESS_EXIT=0`, incl. `test_island_details.gd` + Wave 26 spacious hull / sailing / capstan / `WindRibbons` tests!).
+- **Real-GPU 24-Wave Ocean Shader Parity (`--only=test_sea_shader`, Vulkan `1.4.359` Forward+)**: **PASS — `3 tests, 0 failures`** (`max |dh| = 0.0117 m`, `|dn.y| = 0.0005`, `|dvx/z| = 0.0156`, `W26_GPU_SEA_EXIT=0`).
+- **Two-Process ENet Co-op Net Probe (`role=host` + `role=client`)**: **PASS — `CLIENT RESULT PASS`** (`W26_NET_EXIT=0`).
+- **Rebuilt Wave 26 Windows Desktop `.exe` (`build/SeaOfScoundrels.exe`)**: **`211.7 MB`** (`221,959,128` bytes, `W26_EXPORT_EXIT=0`, live RX 9070 XT smoke on `helm` & `sailing` both `EXIT=0`!).
+
+#### 7.9.2 Direct Answer to Cloud Lead Q10 (Wave 26 `1920×1080` RX 9070 XT Audit & Benchmarks)
+- **Visual Verification Across 17× `1920×1080 HIGH` Real-GPU Renders**:
+  - **`1.24×` Spacious Ships, Uncrowded Crew & 3D `WindRibbons`**: **15/10!** `w26_helm` opens up a crystal-clear uncrowded quarterdeck helm vista down the entire Brigantine deck (`Cutlass` strict-ASCII HUD prompt crisp!); `w26_sailing` & `w26_sailing_sloop` show heroic `1.24×` hull proportions with graceful translucent `WindRibbons` gliding above the sails; `w26_outpost_dock` (`MOORING_ABEAM_OFFSET = 5.45`) docks cleanly alongside the oak pier with zero clipping; `w26_deck_duel`, `w26_hold`, and `w26_cabin` scale cleanly with generous crew spacing!
+  - **Live 10-Map `1024×1024` Stochastic PBR Terrain + Foliage Normals (Now ON By Default!)**: Verified across `w26_harbour_plaza`, `w26_galleons_reach`, `w26_sovereigns_bastion`, `w26_cutlass_meadow`, `w26_skull_bluff`, `w26_gulls_arch`, and `w26_wreckers_tooth` — silky trade-wind sand, pebbled warm dirt plazas/paths (`1.0 - COLOR.a`), crisp emerald grass, and massive non-repeating triplanar sandstone massifs!
+  - **Wave 24/25 Fixes Verified**: `w26_cinder_crag` (**100% FIXED** — dramatic `176 m` volcano caldera + twin glowing lava rivers!), `w26_fishing` (**100% FIXED** — cutlass cleanly holstered!), `w26_sovereigns_bastion` (cascading turquoise `IslandWaterfall` visible and gleaming beside the citadel!).
+- **2 Quick Wave 26 Bug/Framing Notes Caught for Cloud Lead**:
+  1. **`[LOW/CLEANLINESS]` `WindRibbons._exit_tree()` Engine Error (`src/ship/wind_ribbons.gd:77-78`)**: Every scene exit prints `ERROR: Condition "multimesh->mesh.is_null()" is true.` (4× in `company_fleet`, 1× per ship) because `_mm.mesh = null` runs while `_mm.instance_count` is still `14`. Adding `_mm.instance_count = 0` right before `_mm.mesh = null` silences it cleanly!
+  2. **`[LOW]` `shot=emerald_waterfall` Foreground Ridge Occlusion (`scenes/main.gd`)**: The waterfall IS now visible at the canyon top (`height_m`/`width_m` confirmed fixed!), though a grassy foreground ridge on the right still hides the lower ~65% + plunge pool from the current camera angle — nudging the camera slightly left/higher (or out over the cove) will reveal the full thundering cascade & foaming plunge pool!
+
+- **Wave 26 Full `1920×1080` RX 9070 XT Performance Matrix (Live 10-Map Terrain PBR + `1.24×` Ships + `WindRibbons` + 24-Wave FFT Ocean ON By Default!)**:
+
+| Wave 26 Scenario (`1920×1080`, Brigantine) | GPU med (p95) ms | Render CPU ms | FPS med | Draw Calls | Primitives | VRAM MB | Est. GTX 1660 (~5x) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `sailing` (`LOW`) | **1.462** (1.475) | 1.156 | **202.9** | 1,043 | 1,500k | 663.9 | ~7.3 ms (**PASS**) |
+| `sailing` (`MEDIUM`) | **1.781** (2.129) | 1.243 | **186.8** | 1,047 | 1,546k | 668.4 | ~8.9 ms (**PASS**) |
+| `sailing` (`HIGH` — live 10-map PBR + `WindRibbons`) | **2.107** (2.457) | 1.296 | **179.1** | 1,047 | 1,608k | 667.2 | ~10.5 ms (**PASS**) |
+| `helm` (`HIGH` — uncrowded `1.24×` quarterdeck) | **1.574** (1.922) | 0.918 | **199.5** | 608 | 1,152k | 669.0 | ~7.9 ms (**PASS**) |
+| `storm` (`HIGH` — gale + rain + 3-cascade FFT) | **2.697** (3.071) | 1.235 | **184.8** | 917 | 1,585k | 668.8 | ~13.5 ms (**PASS**) |
+| `galleons_reach` (`HIGH` — 70% terrain 10-map PBR) | **1.723** (2.069) | 1.108 | **198.2** | 1,130 | 1,533k | 667.2 | ~8.6 ms (**PASS**) |
+| `sovereigns_bastion` (`HIGH` — citadel + waterfall) | **2.188** (2.554) | 1.037 | **192.1** | 976 | 1,555k | 667.2 | ~10.9 ms (**PASS**) |
+| `emerald_waterfall` (`HIGH`) | **1.189** (1.198) | 0.422 | **238.5** | 88 | 446k | 667.4 | ~5.9 ms (**PASS**) |
+| `cinder_crag` (`HIGH` — `176 m` volcano + lava) | **2.481** (2.850) | 0.409 | **228.2** | 68 | 360k | 668.9 | ~12.4 ms (**PASS**) |
+| `company_fleet` (`HIGH` — 4× `1.24×` ships + 14 islands) | **2.182** (2.528) | 1.733 | **107.2** | 1,802 | 2,803k | 681.7 | ~10.9 ms (**PASS**) |
+
+*Wave 26 Subsystem Delta (`sailing HIGH`)*: Sky+Clouds `0.902 ms`, **`1.24×` Brigantine + 1-DC 14-ribbon `WindRibbons` `+0.140 ms`** (`+0.010 ms` above pre-Wave-26 Brigantine — `WindRibbons` is virtually free!), **14-Island 10-Map PBR Archipelago `+0.332 ms`**, **24-Wave + 3-Cascade FFT Ocean `+0.723 ms`**. Baseline pre-BC7 VRAM is **`667.2 MB` (`tex_vram_mb = 580.1 MB`)** — ready to measure the exact **Q12** BC7 VRAM drop the instant **Wave 27** lands!
+
+### 7.10 Standing Ready for Milestone 10 (Wave 27 PBR Characters/Tools + Q12 BC7 VRAM Check & Wave I-2 14-Island Landmarks!)
+Continuously monitoring both `origin/ccr-663b66a0-rdiq4f` (**Wave 27**) and `origin/cloud/island-architect` (**Wave I-2**) for immediate RX 9070 XT 1080p HIGH visual audit, Q12 BC7 VRAM/compression inspection, full 14-island Wave I-2 Q-I2 benchmarks, and rebuilt Windows `.exe`!

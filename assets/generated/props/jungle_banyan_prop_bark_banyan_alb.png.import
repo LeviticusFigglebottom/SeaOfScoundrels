@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bu64wgv72g0rn"
-path="res://.godot/imported/jungle_banyan_prop_bark_banyan_alb.png-c993764bb5490530641b61f959fb6e26.ctex"
+path.s3tc="res://.godot/imported/jungle_banyan_prop_bark_banyan_alb.png-c993764bb5490530641b61f959fb6e26.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "8fd933959276924d96419d02d95bc6b7"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/jungle_banyan_prop_bark_banyan_alb.png"
-dest_files=["res://.godot/imported/jungle_banyan_prop_bark_banyan_alb.png-c993764bb5490530641b61f959fb6e26.ctex"]
+dest_files=["res://.godot/imported/jungle_banyan_prop_bark_banyan_alb.png-c993764bb5490530641b61f959fb6e26.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

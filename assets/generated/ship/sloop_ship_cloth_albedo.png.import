@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cyxb145q5mwv"
-path="res://.godot/imported/sloop_ship_cloth_albedo.png-30fe7524fbb3c0a4ad1caee6deb0b1b8.ctex"
+path.s3tc="res://.godot/imported/sloop_ship_cloth_albedo.png-30fe7524fbb3c0a4ad1caee6deb0b1b8.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "2585d856f6c822f461c7d98ec7070b2d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/sloop_ship_cloth_albedo.png"
-dest_files=["res://.godot/imported/sloop_ship_cloth_albedo.png-30fe7524fbb3c0a4ad1caee6deb0b1b8.ctex"]
+dest_files=["res://.godot/imported/sloop_ship_cloth_albedo.png-30fe7524fbb3c0a4ad1caee6deb0b1b8.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

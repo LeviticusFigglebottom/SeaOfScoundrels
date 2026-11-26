@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bk8e1l0yjy7bw"
-path="res://.godot/imported/brigantine_lod_ship_paint_rough.png-8db790fcdd8d3aeb51350b22758ba8fc.ctex"
+path.s3tc="res://.godot/imported/brigantine_lod_ship_paint_rough.png-8db790fcdd8d3aeb51350b22758ba8fc.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "ba2a09fabe0d8ef5861d992dd9442b25"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/brigantine_lod_ship_paint_rough.png"
-dest_files=["res://.godot/imported/brigantine_lod_ship_paint_rough.png-8db790fcdd8d3aeb51350b22758ba8fc.ctex"]
+dest_files=["res://.godot/imported/brigantine_lod_ship_paint_rough.png-8db790fcdd8d3aeb51350b22758ba8fc.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

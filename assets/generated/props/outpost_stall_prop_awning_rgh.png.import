@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://djs747xbqg4e8"
-path="res://.godot/imported/outpost_stall_prop_awning_rgh.png-009df68a9a9b3d813098415aa301d6a0.ctex"
+path.s3tc="res://.godot/imported/outpost_stall_prop_awning_rgh.png-009df68a9a9b3d813098415aa301d6a0.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "3ae4f1096a71777bc544c97182037d45"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/outpost_stall_prop_awning_rgh.png"
-dest_files=["res://.godot/imported/outpost_stall_prop_awning_rgh.png-009df68a9a9b3d813098415aa301d6a0.ctex"]
+dest_files=["res://.godot/imported/outpost_stall_prop_awning_rgh.png-009df68a9a9b3d813098415aa301d6a0.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

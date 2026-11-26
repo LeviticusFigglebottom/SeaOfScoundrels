@@ -68,6 +68,67 @@ const COL_FLAME := Color(1.0, 0.90, 0.46)
 const COL_BELLOWS_RED := Color(0.68, 0.20, 0.16)
 const COL_BELLOWS_CREAM := Color(0.88, 0.80, 0.62)
 
+# Zero-extra-VRAM ship PBR normal & roughness maps already resident in VRAM.
+const _PBR_FAMILY_SPECS := {
+	&"oak": {
+		"normal": "res://assets/generated/textures/ship_oak_normal.png",
+		"rough": "res://assets/generated/textures/ship_oak_rough.png",
+		"scale": Vector3(2.4, 2.4, 2.4),
+		"normal_scale": 0.52,
+	},
+	&"brass": {
+		"normal": "res://assets/generated/textures/ship_brass_normal.png",
+		"rough": "res://assets/generated/textures/ship_brass_rough.png",
+		"scale": Vector3(3.0, 3.0, 3.0),
+		"normal_scale": 0.50,
+	},
+	&"iron": {
+		"normal": "res://assets/generated/textures/ship_iron_normal.png",
+		"rough": "res://assets/generated/textures/ship_iron_rough.png",
+		"scale": Vector3(3.0, 3.0, 3.0),
+		"normal_scale": 0.56,
+	},
+	&"rope": {
+		"normal": "res://assets/generated/textures/ship_rope_normal.png",
+		"rough": "res://assets/generated/textures/ship_rope_rough.png",
+		"scale": Vector3(3.0, 3.0, 3.0),
+		"normal_scale": 0.58,
+	},
+	&"cloth": {
+		"normal": "res://assets/generated/textures/ship_cloth_normal.png",
+		"rough": "",
+		"scale": Vector3(3.0, 3.0, 3.0),
+		"normal_scale": 0.48,
+	},
+}
+
+## Lazy WeakRef cache of shared ship PBR Texture2D references (zero shutdown leaks).
+static var _pbr_tex_cache: Dictionary = {}
+
+
+## Clear cached shared PBR texture references cleanly on scene teardown.
+static func clear_shared_cache() -> void:
+	_pbr_tex_cache.clear()
+
+
+static func _load_pbr_tex(path: String) -> Texture2D:
+	if path == "":
+		return null
+	if _pbr_tex_cache.has(path):
+		var wr: Variant = _pbr_tex_cache[path]
+		if wr is WeakRef:
+			var obj: Variant = (wr as WeakRef).get_ref()
+			if obj is Texture2D:
+				return obj as Texture2D
+	if not ResourceLoader.exists(path):
+		return null
+	var loaded: Variant = ResourceLoader.load(path)
+	if loaded is Texture2D:
+		var tex := loaded as Texture2D
+		_pbr_tex_cache[path] = weakref(tex)
+		return tex
+	return null
+
 
 ## Return ordered list of all 11 supported held tool IDs.
 static func get_tool_ids() -> Array[StringName]:
@@ -126,7 +187,7 @@ static func apply_map_texture(map_node: Node3D, tex: Texture2D) -> void:
 		return
 	var mat := surf.material_override as StandardMaterial3D
 	if mat == null:
-		mat = _make_mat(Color.WHITE, 0.78, 0.0)
+		mat = _make_mat(Color.WHITE, 0.78, 0.0, Color.BLACK, 0.0, false, &"none")
 		surf.material_override = mat
 	mat.albedo_texture = tex
 
@@ -716,7 +777,7 @@ static func _build_blunderbuss() -> Node3D:
 		Vector2(0.020, 0.340),
 		Vector2(0.0, 0.330),
 	], 14, barrel_xf)
-	root.add_child(_make_mesh_node("BarrelBore", bore_mesh, _make_mat(Color(0.06, 0.06, 0.07), 0.92, 0.15)))
+	root.add_child(_make_mesh_node("BarrelBore", bore_mesh, _make_mat(Color(0.06, 0.06, 0.07), 0.92, 0.15, Color.BLACK, 0.0, false, &"none")))
 
 	# Forged-iron flintlock hammer/cock, flint clamp, flash pan, upright steel frizzen & trigger.
 	var st_iron := SurfaceTool.new()
@@ -787,7 +848,7 @@ static func _build_compass() -> Node3D:
 		Vector2(0.058, 0.008),
 		Vector2(0.0, 0.008),
 	], 18)
-	root.add_child(_make_mesh_node("DialFace", dial_mesh, _make_mat(Color(0.76, 0.67, 0.49), 0.88, 0.0)))
+	root.add_child(_make_mesh_node("DialFace", dial_mesh, _make_mat(Color(0.76, 0.67, 0.49), 0.88, 0.0, Color.BLACK, 0.0, false, &"none")))
 
 	# High-contrast dark navy-ink dial rings, cardinal/intercardinal ticks & wind-rose lines.
 	var st_ticks := SurfaceTool.new()
@@ -819,7 +880,7 @@ static func _build_compass() -> Node3D:
 		var xf := Transform3D(Basis(Vector3.UP, a), Vector3(0.0, 0.0089, 0.0))
 		_append_beveled_box(st_ticks, Vector3(0.0022, 0.0014, 0.050), 0.0003, xf)
 	st_ticks.generate_normals()
-	root.add_child(_make_mesh_node("DialTicks", st_ticks.commit(), _make_mat(Color(0.11, 0.14, 0.22), 0.78, 0.08)))
+	root.add_child(_make_mesh_node("DialTicks", st_ticks.commit(), _make_mat(Color(0.11, 0.14, 0.22), 0.78, 0.08, Color.BLACK, 0.0, false, &"none")))
 
 	# Bold deep-crimson North cardinal wedge & flanking chevron at -Z rim.
 	var st_north := SurfaceTool.new()
@@ -829,7 +890,7 @@ static func _build_compass() -> Node3D:
 	_append_beveled_box(st_north, Vector3(0.0135, 0.0022, 0.0042), 0.0004,
 		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0094, -0.0510)))
 	st_north.generate_normals()
-	root.add_child(_make_mesh_node("NorthMarker", st_north.commit(), _make_mat(Color(0.72, 0.10, 0.09), 0.72, 0.05)))
+	root.add_child(_make_mesh_node("NorthMarker", st_north.commit(), _make_mat(Color(0.72, 0.10, 0.09), 0.72, 0.05, Color.BLACK, 0.0, false, &"none")))
 
 	# Live rotating `Needle` node (local -Z is the crimson North arrow!).
 	var needle := Node3D.new()
@@ -1069,13 +1130,13 @@ static func _build_map() -> Node3D:
 	# Gently bowed front parchment sheet (`MapSurface`) facing +Z with clean [0..1] UVs.
 	var front_mesh := _build_parchment_sheet_mesh(0.35, 0.30, 0.016, false)
 	var default_tex := MapPainter.render_treasure_map("Cutlass Cay", PackedVector2Array(), Vector2(26.0, -18.0), 120.0)
-	var front_mat := _make_mat(Color.WHITE, 0.78, 0.0)
+	var front_mat := _make_mat(Color.WHITE, 0.78, 0.0, Color.BLACK, 0.0, false, &"none")
 	front_mat.albedo_texture = default_tex
 	root.add_child(_make_mesh_node("MapSurface", front_mesh, front_mat))
 
 	# Plain aged parchment backing facing -Z so third-person onlookers see a real scroll!
 	var back_mesh := _build_parchment_sheet_mesh(0.35, 0.30, 0.016, true)
-	root.add_child(_make_mesh_node("MapBack", back_mesh, _make_mat(COL_PARCHMENT_BACK, 0.85, 0.0)))
+	root.add_child(_make_mesh_node("MapBack", back_mesh, _make_mat(COL_PARCHMENT_BACK, 0.85, 0.0, Color.BLACK, 0.0, false, &"none")))
 	return root
 
 
@@ -1242,7 +1303,7 @@ static func _build_planks() -> Node3D:
 	for ry in [-0.014, 0.0, 0.014]:
 		_append_beveled_box(st_rope, Vector3(0.172, 0.011, 0.072), 0.004, Transform3D(Basis.IDENTITY, Vector3(0.005, ry, -0.015)))
 	st_rope.generate_normals()
-	root.add_child(_make_mesh_node("RopeLashing", st_rope.commit(), _make_mat(COL_ROPE, 0.90, 0.0)))
+	root.add_child(_make_mesh_node("RopeLashing", st_rope.commit(), _make_mat(COL_ROPE, 0.90, 0.0, Color.BLACK, 0.0, false, &"rope")))
 	return root
 
 
@@ -1314,7 +1375,7 @@ static func _build_tankard() -> Node3D:
 			Vector2(0.0, h * 0.85),
 		], 8, Transform3D(Basis.IDENTITY, c))
 	st_foam.generate_normals()
-	root.add_child(_make_mesh_node("FoamTop", st_foam.commit(), _make_mat(COL_FOAM, 0.86, 0.0)))
+	root.add_child(_make_mesh_node("FoamTop", st_foam.commit(), _make_mat(COL_FOAM, 0.86, 0.0, Color.BLACK, 0.0, false, &"none")))
 	return root
 
 
@@ -1333,7 +1394,7 @@ static func _build_instrument() -> Node3D:
 		var r := 0.088 if (i % 2 == 1) else 0.068
 		b_prof.append(Vector2(r, x_pos))
 	var bellows_mesh := _lathe_mesh(b_prof, 6, Transform3D(rot_x, Vector3.ZERO))
-	root.add_child(_make_mesh_node("Bellows", bellows_mesh, _make_mat(COL_BELLOWS_RED, 0.74, 0.04)))
+	root.add_child(_make_mesh_node("Bellows", bellows_mesh, _make_mat(COL_BELLOWS_RED, 0.74, 0.04, Color.BLACK, 0.0, false, &"cloth")))
 
 	# Left & Right hexagonal walnut endplates with brass grill bezels & ivory buttons.
 	for side_pair in [["LeftEnd", -1.0], ["RightEnd", 1.0]]:
@@ -1462,7 +1523,7 @@ static func _build_hurdy_gurdy() -> Node3D:
 			Vector2(0.0, 0.0645),
 		], 10, Transform3D(Basis.IDENTITY, Vector3(0.068, 0.0, sz_sign * 0.068)))
 	st_holes.generate_normals()
-	root.add_child(_make_mesh_node("Soundholes", st_holes.commit(), _make_mat(Color(0.08, 0.05, 0.03), 0.94, 0.02)))
+	root.add_child(_make_mesh_node("Soundholes", st_holes.commit(), _make_mat(Color(0.08, 0.05, 0.03), 0.94, 0.02, Color.BLACK, 0.0, false, &"none")))
 
 	# Walnut keybox housing, carved bridge, and tailpiece block.
 	var st_keybox := SurfaceTool.new()
@@ -1719,7 +1780,7 @@ static func _build_whistle() -> Node3D:
 	_append_beveled_box(st_holes, Vector3(0.011, 0.005, 0.016), 0.001,
 		Transform3D(Basis.IDENTITY, Vector3(0.0, 0.020, 0.118)))
 	st_holes.generate_normals()
-	root.add_child(_make_mesh_node("FingerHoles", st_holes.commit(), _make_mat(Color(0.07, 0.04, 0.03), 0.95, 0.02)))
+	root.add_child(_make_mesh_node("FingerHoles", st_holes.commit(), _make_mat(Color(0.07, 0.04, 0.03), 0.95, 0.02, Color.BLACK, 0.0, false, &"none")))
 
 	# Decorative twin-strand braided sailor's lanyard loop hanging from the keel eyelet.
 	var st_rope := SurfaceTool.new()
@@ -1736,7 +1797,7 @@ static func _build_whistle() -> Node3D:
 			loop_pts.append(Vector3(lx, ly, lz))
 		_append_tube(st_rope, loop_pts, 0.0036, 6, false)
 	st_rope.generate_normals()
-	root.add_child(_make_mesh_node("BraidedLanyard", st_rope.commit(), _make_mat(COL_ROPE, 0.88, 0.0)))
+	root.add_child(_make_mesh_node("BraidedLanyard", st_rope.commit(), _make_mat(COL_ROPE, 0.88, 0.0, Color.BLACK, 0.0, false, &"rope")))
 
 	# Crimson sailor's Turks-head whipping knot collar securing the lanyard below the shackle.
 	var knot_mesh := _lathe_mesh([
@@ -1753,13 +1814,39 @@ static func _build_whistle() -> Node3D:
 # Reusable SurfaceTool geometry builders
 # ==============================================================================
 
+static func _infer_pbr_family(
+	color: Color,
+	roughness: float,
+	metallic: float,
+	emission_energy: float,
+	transparent: bool
+) -> StringName:
+	if transparent or color.a < 0.995 or emission_energy > 0.001:
+		return &"none"
+	if metallic >= 0.65:
+		return &"brass" if color.r > color.b + 0.14 else &"iron"
+	if metallic < 0.25 and roughness >= 0.50:
+		# Skip very bright/pale dial, parchment, ivory, and foam surfaces.
+		if color.r > 0.72 and color.g > 0.65 and color.b > 0.46:
+			return &"none"
+		# Warm hemp/manila rope tan.
+		if color.r >= 0.62 and color.g >= 0.50 and color.b >= 0.32 and color.r > color.b + 0.20:
+			return &"rope"
+		# Saturated red/crimson bellows cloth.
+		if color.r > color.g + 0.32 and color.r > color.b + 0.32:
+			return &"cloth"
+		return &"oak"
+	return &"none"
+
+
 static func _make_mat(
 	color: Color,
 	roughness: float = 0.6,
 	metallic: float = 0.0,
 	emission: Color = Color.BLACK,
 	emission_energy: float = 0.0,
-	transparent: bool = false
+	transparent: bool = false,
+	pbr_family: StringName = &""
 ) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
@@ -1771,6 +1858,24 @@ static func _make_mat(
 		m.emission_energy_multiplier = emission_energy
 	if transparent or color.a < 0.995:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
+	var resolved_family := pbr_family
+	if resolved_family == &"":
+		resolved_family = _infer_pbr_family(color, roughness, metallic, emission_energy, transparent)
+	if resolved_family != &"none" and _PBR_FAMILY_SPECS.has(resolved_family):
+		var spec: Dictionary = _PBR_FAMILY_SPECS[resolved_family]
+		var norm_tex := _load_pbr_tex(String(spec["normal"]))
+		var rough_tex := _load_pbr_tex(String(spec["rough"]))
+		if norm_tex != null:
+			# Object-space triplanar mapping prevents texture swimming on held first-person tools!
+			m.uv1_triplanar = true
+			m.uv1_world_triplanar = false
+			m.uv1_scale = spec["scale"] as Vector3
+			m.normal_enabled = true
+			m.normal_scale = float(spec["normal_scale"])
+			m.normal_texture = norm_tex
+			if rough_tex != null:
+				m.roughness_texture = rough_tex
 	return m
 
 

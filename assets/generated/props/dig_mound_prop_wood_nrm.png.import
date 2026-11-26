@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cq5xrybi38t7g"
-path="res://.godot/imported/dig_mound_prop_wood_nrm.png-e984f1d83508899eb2df9005a8fa24ba.ctex"
+path.s3tc="res://.godot/imported/dig_mound_prop_wood_nrm.png-e984f1d83508899eb2df9005a8fa24ba.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "6fb61604b9233e5fb8cec0e085715a18"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/dig_mound_prop_wood_nrm.png"
-dest_files=["res://.godot/imported/dig_mound_prop_wood_nrm.png-e984f1d83508899eb2df9005a8fa24ba.ctex"]
+dest_files=["res://.godot/imported/dig_mound_prop_wood_nrm.png-e984f1d83508899eb2df9005a8fa24ba.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

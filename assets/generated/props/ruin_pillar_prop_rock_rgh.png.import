@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://2m40i1yapfiy"
-path="res://.godot/imported/ruin_pillar_prop_rock_rgh.png-da5f161a764054201a10502fa8ca948f.ctex"
+path.s3tc="res://.godot/imported/ruin_pillar_prop_rock_rgh.png-da5f161a764054201a10502fa8ca948f.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "77b2cf96c2a64e196490a82d0b7d85bb"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/ruin_pillar_prop_rock_rgh.png"
-dest_files=["res://.godot/imported/ruin_pillar_prop_rock_rgh.png-da5f161a764054201a10502fa8ca948f.ctex"]
+dest_files=["res://.godot/imported/ruin_pillar_prop_rock_rgh.png-da5f161a764054201a10502fa8ca948f.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

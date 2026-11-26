@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://lrmwgjk5y8ie"
-path="res://.godot/imported/outpost_tavern_prop_brass_rgh.png-5459e38fa4a7b441964afaebb9f15d6f.ctex"
+path.s3tc="res://.godot/imported/outpost_tavern_prop_brass_rgh.png-5459e38fa4a7b441964afaebb9f15d6f.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "d77a72197e2fb30188fa7ea82a9c86df"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/outpost_tavern_prop_brass_rgh.png"
-dest_files=["res://.godot/imported/outpost_tavern_prop_brass_rgh.png-5459e38fa4a7b441964afaebb9f15d6f.ctex"]
+dest_files=["res://.godot/imported/outpost_tavern_prop_brass_rgh.png-5459e38fa4a7b441964afaebb9f15d6f.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

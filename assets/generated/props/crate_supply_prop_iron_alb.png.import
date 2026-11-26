@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bu28fx6e5go1t"
-path="res://.godot/imported/crate_supply_prop_iron_alb.png-23ed61fa4ffa1e6887e98c17807a8d5a.ctex"
+path.s3tc="res://.godot/imported/crate_supply_prop_iron_alb.png-23ed61fa4ffa1e6887e98c17807a8d5a.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "d6d6a106e4827494d1a5bdd82736006d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/crate_supply_prop_iron_alb.png"
-dest_files=["res://.godot/imported/crate_supply_prop_iron_alb.png-23ed61fa4ffa1e6887e98c17807a8d5a.ctex"]
+dest_files=["res://.godot/imported/crate_supply_prop_iron_alb.png-23ed61fa4ffa1e6887e98c17807a8d5a.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

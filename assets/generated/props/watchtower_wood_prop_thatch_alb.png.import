@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bad8xuyk7lwd6"
-path="res://.godot/imported/watchtower_wood_prop_thatch_alb.png-d53dc25d8dc7c0902838cdb27a615438.ctex"
+path.s3tc="res://.godot/imported/watchtower_wood_prop_thatch_alb.png-d53dc25d8dc7c0902838cdb27a615438.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "c7b33e85c29ba62ef25eb02bcbd9f9a9"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/watchtower_wood_prop_thatch_alb.png"
-dest_files=["res://.godot/imported/watchtower_wood_prop_thatch_alb.png-d53dc25d8dc7c0902838cdb27a615438.ctex"]
+dest_files=["res://.godot/imported/watchtower_wood_prop_thatch_alb.png-d53dc25d8dc7c0902838cdb27a615438.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

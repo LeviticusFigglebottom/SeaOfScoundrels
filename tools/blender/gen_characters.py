@@ -598,11 +598,11 @@ def ellipsoid(mb, c, radii, mat, col, segs=8, rings=5, M=None, smooth=False, wsp
 def cone(mb, base, tip, r0, r1, segs, mat, col, smooth=False, wspec=None):
     tube(mb, [base, tip], [r0, max(r1, 0.002)], segs, mat, col, (True, r1 > 0.003), smooth, wspec=wspec)
 
-# ---------------------------------------------------------------- procedural textures & materials
+# ---------------------------------------------------------------- 512x512 seamless PBR textures & materials
 def tile_noise(rs, w, h, gx, gy):
-    g = rs.rand(gy, gx)
-    ys = np.arange(h) * gy / h
-    xs = np.arange(w) * gx / w
+    g = rs.rand(gy, gx).astype(np.float32)
+    ys = np.arange(h, dtype=np.float32) * gy / h
+    xs = np.arange(w, dtype=np.float32) * gx / w
     y0 = np.floor(ys).astype(int)
     x0 = np.floor(xs).astype(int)
     fy = ys - y0
@@ -617,52 +617,298 @@ def tile_noise(rs, w, h, gx, gy):
     d = g[np.ix_(y1, x1)]
     FX = fx[None, :]
     FY = fy[:, None]
-    return (a * (1 - FX) + b * FX) * (1 - FY) + (c * (1 - FX) + d * FX) * FY
+    return (a * (1.0 - FX) + b * FX) * (1.0 - FY) + (c * (1.0 - FX) + d * FX) * FY
 
-def make_image(name, arr):
+def tile_fbm(rs, w, h, octaves):
+    acc = np.zeros((h, w), dtype=np.float32)
+    wsum = 0.0
+    for gx, gy, amp in octaves:
+        acc += tile_noise(rs, w, h, gx, gy) * amp
+        wsum += amp
+    return acc / max(wsum, 1e-6)
+
+def tile_ridged(rs, w, h, gx, gy):
+    n = tile_noise(rs, w, h, gx, gy)
+    r = 1.0 - np.abs(n * 2.0 - 1.0)
+    return r * r
+
+def tile_worley(rs, w, h, gx, gy):
+    """Fast seamless periodic grid-jittered Worley/Voronoi returning (f1, edge=f2-f1, cell_tone)."""
+    px = rs.uniform(0.14, 0.86, (gy, gx)).astype(np.float32)
+    py = rs.uniform(0.14, 0.86, (gy, gx)).astype(np.float32)
+    ct = rs.rand(gy, gx).astype(np.float32)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    ux = xx * (gx / float(w))
+    uy = yy * (gy / float(h))
+    cx = np.floor(ux).astype(np.int32)
+    cy = np.floor(uy).astype(np.int32)
+    fx = ux - cx
+    fy = uy - cy
+    f1 = np.full((h, w), 1e9, dtype=np.float32)
+    f2 = np.full((h, w), 1e9, dtype=np.float32)
+    best_t = np.zeros((h, w), dtype=np.float32)
+    for oy in (-1, 0, 1):
+        ny = (cy + oy) % gy
+        for ox in (-1, 0, 1):
+            nx = (cx + ox) % gx
+            dx = (ox + px[ny, nx]) - fx
+            dy = (oy + py[ny, nx]) - fy
+            d = np.sqrt(dx * dx + dy * dy)
+            c1 = d < f1
+            c2 = (~c1) & (d < f2)
+            f2 = np.where(c1, f1, np.where(c2, d, f2))
+            f1 = np.where(c1, d, f1)
+            best_t = np.where(c1, ct[ny, nx], best_t)
+    return f1, f2 - f1, best_t
+
+def height_to_normal(height_map, strength=3.2):
+    """Convert seamless scalar heightfield (0..1) into OpenGL (+Y up) tangent-space normal RGB (0..1)."""
+    dh_dx = (np.roll(height_map, -1, axis=1) - np.roll(height_map, 1, axis=1)) * 0.5 * strength
+    dh_dy = (np.roll(height_map, -1, axis=0) - np.roll(height_map, 1, axis=0)) * 0.5 * strength
+    nx = -dh_dx
+    ny = -dh_dy
+    nz = np.ones_like(height_map, dtype=np.float32)
+    inv_l = 1.0 / np.sqrt(nx * nx + ny * ny + nz * nz + 1e-8)
+    return np.stack([nx * inv_l * 0.5 + 0.5, ny * inv_l * 0.5 + 0.5, nz * inv_l * 0.5 + 0.5], axis=-1)
+
+def make_image(name, arr, non_color=False):
     h, w = arr.shape[:2]
     rgba = np.ones((h, w, 4), dtype=np.float32)
-    rgba[..., :3] = np.clip(arr, 0.0, 1.0)
-    img = bpy.data.images.new(name, w, h, alpha=False)
+    if arr.ndim == 2:
+        v = np.clip(arr, 0.0, 1.0)
+        rgba[..., 0] = v
+        rgba[..., 1] = v
+        rgba[..., 2] = v
+    else:
+        rgba[..., :3] = np.clip(arr, 0.0, 1.0)
+    img = bpy.data.images.new(name, w, h, alpha=False, is_data=non_color)
+    if non_color:
+        img.colorspace_settings.name = 'Non-Color'
     img.pixels.foreach_set(rgba.ravel())
     img.file_format = 'PNG'
     img.pack()
     return img
 
-def tex_cloth(rs):
-    w = h = 256
-    yy, xx = np.mgrid[0:h, 0:w] / float(w)
-    weave = 0.96 + 0.04 * np.sin(xx * 2 * pi * 64) * np.sin(yy * 2 * pi * 64)
-    slub = 0.95 + 0.08 * tile_noise(rs, w, h, 8, 24) + 0.05 * tile_noise(rs, w, h, 24, 8)
-    blot = 0.93 + 0.11 * tile_noise(rs, w, h, 5, 5)
-    v = np.clip(weave * slub * blot, 0.72, 1.0)
-    return np.stack([v, v * 0.99, v * 0.97], axis=-1)
+def synth_cloth_pbr(rs, size=512):
+    """512x512 seamless crisp diagonal wool/linen twill weave, painterly slub & soft fold creases.
+    Keeps neutral warm-white luminance (~0.90..0.93 linear) so live CharacterVisual tinting stays bright."""
+    w = h = size
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) / float(size)
+    # 2x2 diagonal twill rib modulated by crisp warp/weft yarn grid
+    twill = 0.5 + 0.5 * np.sin((xx * 72.0 + yy * 72.0) * 2.0 * pi)
+    warp = 0.5 + 0.5 * np.sin(xx * 72.0 * 2.0 * pi)
+    weft = 0.5 + 0.5 * np.sin(yy * 72.0 * 2.0 * pi)
+    weave = 0.52 * twill + 0.24 * warp + 0.24 * weft
+    # Painterly woven yarn slub along both axes
+    slub_u = tile_noise(rs, w, h, 8, 48)
+    slub_v = tile_noise(rs, w, h, 48, 8)
+    slub = 0.55 * slub_u + 0.45 * slub_v
+    # Soft painterly billowing cloth fold creases
+    folds = tile_fbm(rs, w, h, [(4, 6, 0.52), (8, 12, 0.30), (18, 22, 0.18)])
+    drape = 0.5 + 0.5 * np.sin((xx * 3.0 - yy * 2.0 + (folds - 0.5) * 1.1) * 2.0 * pi)
+    fine = tile_noise(rs, w, h, 96, 96)
 
-def tex_leather(rs):
-    w = h = 256
-    pebble = tile_noise(rs, w, h, 28, 28) * 0.55 + tile_noise(rs, w, h, 64, 64) * 0.45
-    crease = tile_noise(rs, w, h, 6, 14)
-    v = 0.80 + 0.16 * pebble + 0.10 * (crease - 0.5)
-    v = np.clip(v, 0.65, 1.0)
-    return np.stack([v, v * 0.97, v * 0.93], axis=-1)
+    hf = np.clip(0.32 + 0.34 * weave + 0.16 * slub + 0.20 * folds + 0.12 * drape + 0.05 * (fine - 0.5), 0.0, 1.0)
+    # Neutral warm-white luminance (lin_mean ~0.88..0.90, srgb_mean ~0.94) for vivid CharacterVisual tinting
+    val = 0.952 + 0.048 * (weave - 0.5) + 0.055 * (slub - 0.5) + 0.070 * (folds - 0.5) + 0.035 * (drape - 0.5)
+    val = np.clip(val, 0.84, 1.0)
+    albedo = np.stack([val, val * 0.992, val * 0.978], axis=-1)
+    rough = np.clip(0.87 - 0.055 * (weave - 0.5) - 0.045 * (slub - 0.5) + 0.065 * (0.5 - folds) + 0.035 * (fine - 0.5), 0.76, 0.96)
+    normal = height_to_normal(hf, strength=2.8)
+    return albedo, normal, rough
 
-def tex_bone(rs):
-    w = h = 256
-    grain = tile_noise(rs, w, h, 6, 36) * 0.5 + tile_noise(rs, w, h, 18, 18) * 0.3 + tile_noise(rs, w, h, 48, 48) * 0.2
-    pits = np.clip((0.26 - tile_noise(rs, w, h, 40, 40)) * 4.5, 0.0, 1.0) * 0.18
-    v = np.clip(0.84 + 0.18 * (grain - 0.5) - pits, 0.62, 1.0)
-    return np.stack([v, v * 0.99, v * 0.94], axis=-1)
+def synth_leather_pbr(rs, size=512):
+    """512x512 seamless pebbled oiled saddle leather with fine organic creases & worn highlight roughness."""
+    w = h = size
+    # Multi-scale organic pebble grain via periodic Worley cells
+    f1_a, ed_a, ct_a = tile_worley(rs, w, h, 34, 34)
+    f1_b, _, _ = tile_worley(rs, w, h, 64, 64)
+    pebble_dome = np.clip(1.0 - f1_a * 1.45, 0.0, 1.0) ** 0.75
+    pebble_groove = np.clip(1.0 - ed_a / 0.14, 0.0, 1.0)
+    micro_pebble = np.clip(1.0 - f1_b * 1.5, 0.0, 1.0)
+
+    # Organic saddle flex creases & supple oiled wear mottling
+    macro = tile_fbm(rs, w, h, [(5, 5, 0.55), (12, 12, 0.30), (24, 24, 0.15)])
+    crease_a = tile_ridged(rs, w, h, 6, 14)
+    crease_b = tile_ridged(rs, w, h, 14, 8)
+    creases = np.clip((0.58 * crease_a + 0.42 * crease_b - 0.62) * 3.0, 0.0, 1.0)
+    fine = tile_noise(rs, w, h, 96, 96)
+
+    hf = np.clip(0.38 + 0.36 * pebble_dome + 0.10 * micro_pebble + 0.14 * (macro - 0.5)
+                 - 0.22 * pebble_groove - 0.28 * creases + 0.04 * (fine - 0.5), 0.0, 1.0)
+    val = (0.895 + 0.095 * (pebble_dome - 0.5) + 0.075 * (ct_a - 0.5) + 0.11 * (macro - 0.5)
+           - 0.10 * pebble_groove - 0.15 * creases)
+    val = np.clip(val, 0.66, 1.0)
+    albedo = np.stack([val * 1.01, val * 0.98, val * 0.935], axis=-1)
+    # Burnished oiled leather crowns sheen smoothly (~0.42..0.52) vs matte creases/pores (~0.70..0.82)
+    rough = np.clip(0.60 - 0.14 * pebble_dome - 0.10 * (macro - 0.5) + 0.12 * pebble_groove + 0.16 * creases + 0.04 * (fine - 0.5), 0.42, 0.84)
+    normal = height_to_normal(hf, strength=3.6)
+    return albedo, normal, rough
+
+def synth_bone_pbr(rs, size=512):
+    """512x512 seamless porous bleached sea-weathered osteon bone grain, hairline fractures & chalky crevices."""
+    w = h = size
+    # Longitudinal osteon fibrous grain (aligned along U/xx to match loft bone shafts & vertical faces)
+    osteon = tile_fbm(rs, w, h, [(6, 28, 0.46), (14, 56, 0.34), (32, 96, 0.20)])
+    macro = tile_fbm(rs, w, h, [(5, 5, 0.55), (12, 12, 0.30), (28, 28, 0.15)])
+    # Crisp angular Voronoi hairline fracture cracks masked into natural clusters
+    _, ed_cr, _ = tile_worley(rs, w, h, 7, 7)
+    crack_wob = (tile_noise(rs, w, h, 24, 24) - 0.5) * 0.025
+    crack_mask = np.clip((tile_noise(rs, w, h, 4, 4) - 0.38) * 3.0, 0.0, 1.0)
+    cracks = np.clip(1.0 - np.clip(ed_cr + crack_wob, 0.0, 1.0) / 0.028, 0.0, 1.0) * crack_mask
+    # Porous sea-weathered micro-pits
+    fine = tile_noise(rs, w, h, 64, 64)
+    fine2 = tile_noise(rs, w, h, 128, 128)
+    pits = np.clip((0.28 - (0.65 * fine + 0.35 * fine2)) * 4.5, 0.0, 1.0)
+
+    hf = np.clip(0.54 + 0.26 * (osteon - 0.5) + 0.18 * (macro - 0.5) - 0.42 * cracks - 0.26 * pits, 0.0, 1.0)
+    val = 0.865 + 0.15 * (osteon - 0.5) + 0.12 * (macro - 0.5) - 0.30 * cracks - 0.18 * pits
+    val = np.clip(val, 0.52, 1.0)
+    albedo = np.stack([val * 1.01, val * 0.995, val * 0.945], axis=-1)
+    # Smooth worn osteon shaft (~0.60) vs chalky sea-weathered crevices & fractures (~0.92)
+    rough = np.clip(0.74 - 0.12 * (osteon - 0.5) - 0.08 * (macro - 0.5) + 0.18 * cracks + 0.14 * pits + 0.05 * (fine - 0.5), 0.58, 0.96)
+    normal = height_to_normal(hf, strength=4.2)
+    return albedo, normal, rough
+
+def synth_coral_pbr(rs, size=512):
+    """512x512 seamless calcified porous marine coral ridges, corallite polyps & ceremonial carved grooves."""
+    w = h = size
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) / float(size)
+    warp = tile_fbm(rs, w, h, [(5, 5, 0.55), (12, 12, 0.30), (24, 24, 0.15)])
+    # Meandering calcified marine coral ridges + rhythmic ceremonial carved grooves
+    ridge_ph = (xx * 9.0 + yy * 4.0 + (warp - 0.5) * 2.2) * 2.0 * pi
+    ridges = 0.5 + 0.5 * np.sin(ridge_ph)
+    carved = 0.5 + 0.5 * np.sin((yy * 14.0 + (warp - 0.5) * 0.85) * 2.0 * pi)
+    # Dense cellular corallite polyp craters
+    f1_p, ed_p, ct_p = tile_worley(rs, w, h, 26, 26)
+    polyp_pit = np.clip(1.0 - f1_p * 2.6, 0.0, 1.0) ** 1.4
+    polyp_rim = np.clip(1.0 - np.abs(f1_p - 0.36) * 5.2, 0.0, 1.0)
+    grit = tile_noise(rs, w, h, 80, 80)
+
+    hf = np.clip(0.42 + 0.28 * ridges + 0.14 * carved + 0.18 * polyp_rim
+                 - 0.34 * polyp_pit + 0.10 * (grit - 0.5), 0.0, 1.0)
+    val = (0.85 + 0.13 * (ridges - 0.5) + 0.08 * (carved - 0.5) + 0.09 * polyp_rim
+           + 0.06 * (ct_p - 0.5) - 0.22 * polyp_pit)
+    val = np.clip(val, 0.54, 1.0)
+    albedo = np.stack([val * 1.015, val * 0.988, val * 0.955], axis=-1)
+    # Calcified ridge tips (~0.52) vs gritty chalky corallite cavities (~0.92)
+    rough = np.clip(0.70 - 0.14 * ridges - 0.08 * polyp_rim + 0.22 * polyp_pit + 0.08 * (grit - 0.5), 0.50, 0.95)
+    normal = height_to_normal(hf, strength=4.6)
+    return albedo, normal, rough
+
+def synth_skin_pbr(rs, size=512):
+    """512x512 seamless warm subtle painterly brushstroke micro-grain.
+    Neutral high luminance (~0.96 sRGB / ~0.91 linear) preserves vertex skin & facial colors cleanly."""
+    w = h = size
+    # Soft criss-crossing painterly oil-brush micro-strokes + delicate organic skin grain
+    brush_a = tile_fbm(rs, w, h, [(6, 16, 0.55), (14, 34, 0.30), (28, 64, 0.15)])
+    brush_b = tile_fbm(rs, w, h, [(16, 6, 0.55), (34, 14, 0.30), (64, 28, 0.15)])
+    brush = 0.55 * brush_a + 0.45 * brush_b
+    pores = tile_noise(rs, w, h, 48, 48) * 0.55 + tile_noise(rs, w, h, 96, 96) * 0.45
+    warmth = tile_fbm(rs, w, h, [(4, 4, 0.60), (10, 10, 0.40)])
+
+    hf = np.clip(0.50 + 0.28 * (brush - 0.5) + 0.18 * (pores - 0.5) + 0.10 * (warmth - 0.5), 0.0, 1.0)
+    # Very gentle neutral high luminance so vertex skin & eye colors remain pristine
+    val = np.clip(0.965 + 0.048 * (brush - 0.5) + 0.040 * (warmth - 0.5) + 0.022 * (pores - 0.5), 0.90, 1.0)
+    albedo = np.stack([val * 1.004, val * 0.996, val * 0.986], axis=-1)
+    rough = np.clip(0.68 + 0.09 * (0.5 - brush) + 0.07 * (pores - 0.5) + 0.05 * (warmth - 0.5), 0.56, 0.82)
+    normal = height_to_normal(hf, strength=2.0)
+    return albedo, normal, rough
+
+def synth_hair_pbr(rs, size=512):
+    """512x512 seamless combed directional hair & beard fiber strands (running along U/xx to follow lofts)."""
+    w = h = size
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) / float(size)
+    # Gentle flowing wave along strand length (xx) modulating combed locks across yy
+    sway = (tile_fbm(rs, w, h, [(3, 6, 0.60), (6, 14, 0.40)]) - 0.5) * 1.35 + 0.18 * np.sin(xx * 2.0 * pi * 2.0)
+    locks = 0.5 + 0.5 * np.sin((yy * 26.0 + sway) * 2.0 * pi)
+    strands = 0.5 + 0.5 * np.sin((yy * 84.0 + sway * 1.8) * 2.0 * pi)
+    fibers = tile_noise(rs, w, h, 5, 72) * 0.55 + tile_noise(rs, w, h, 10, 144) * 0.45
+    sheen_band = tile_noise(rs, w, h, 4, 24)
+
+    hf = np.clip(0.24 + 0.36 * locks + 0.24 * strands + 0.22 * fibers, 0.0, 1.0)
+    # Neutral high luminance so vertex hair tints stay vivid and warm
+    val = 0.935 + 0.10 * (locks - 0.5) + 0.07 * (strands - 0.5) + 0.085 * (fibers - 0.5) + 0.045 * (sheen_band - 0.5)
+    val = np.clip(val, 0.78, 1.0)
+    albedo = np.stack([val * 1.005, val * 0.996, val * 0.985], axis=-1)
+    rough = np.clip(0.78 - 0.13 * locks - 0.06 * strands + 0.09 * (0.5 - fibers) + 0.05 * (0.5 - sheen_band), 0.60, 0.93)
+    normal = height_to_normal(hf, strength=3.4)
+    return albedo, normal, rough
+
+def synth_brass_pbr(rs, size=512):
+    """512x512 seamless brushed & hammered antique marine brass patina (roughness 0.18..0.44)."""
+    w = h = size
+    # Directional brushed polish lines + soft hammered planishing facets + marine tarnish patina
+    brush = tile_noise(rs, w, h, 6, 96) * 0.60 + tile_noise(rs, w, h, 12, 180) * 0.40
+    f1_h, ed_h, ct_h = tile_worley(rs, w, h, 12, 12)
+    hammer_dish = np.clip(f1_h * 1.35, 0.0, 1.0) ** 1.3
+    wear = tile_fbm(rs, w, h, [(8, 8, 0.50), (20, 20, 0.32), (48, 48, 0.18)])
+    patina = np.clip((wear - 0.54) * 2.6, 0.0, 1.0)
+
+    hf = np.clip(0.44 + 0.24 * hammer_dish + 0.16 * (brush - 0.5) + 0.12 * (wear - 0.5) - 0.12 * patina, 0.0, 1.0)
+    val = 0.90 + 0.10 * (brush - 0.5) + 0.08 * (ct_h - 0.5) + 0.08 * (hammer_dish - 0.5) - 0.14 * patina
+    val = np.clip(val, 0.68, 1.0)
+    # Subtle warm antique tarnish / verdigris whisper in patina pockets
+    albedo = np.stack([
+        np.clip(val * (1.015 - 0.08 * patina), 0.0, 1.0),
+        np.clip(val * (0.992 + 0.015 * patina), 0.0, 1.0),
+        np.clip(val * (0.935 + 0.045 * patina), 0.0, 1.0),
+    ], axis=-1)
+    # Brushed antique brass roughness strictly in 0.18..0.44
+    rough = np.clip(0.24 + 0.07 * (0.5 - brush) + 0.05 * (0.5 - hammer_dish) + 0.15 * patina, 0.18, 0.44)
+    normal = height_to_normal(hf, strength=2.6)
+    return albedo, normal, rough
+
+def synth_iron_pbr(rs, size=512):
+    """512x512 seamless forged sea-pitted dark iron/steel with hammered micro-facets (roughness 0.34..0.62)."""
+    w = h = size
+    # Forged blacksmith hammer micro-facets + sea-salt pitting + mill scale
+    f1_h, ed_h, ct_h = tile_worley(rs, w, h, 16, 16)
+    facet_rim = np.clip(1.0 - ed_h / 0.16, 0.0, 1.0)
+    hammer_cup = np.clip(f1_h * 1.35, 0.0, 1.0) ** 1.15
+    scale = tile_fbm(rs, w, h, [(8, 8, 0.45), (24, 24, 0.35), (56, 56, 0.20)])
+    pit_n = tile_noise(rs, w, h, 48, 48) * 0.6 + tile_noise(rs, w, h, 96, 96) * 0.4
+    pits = np.clip((0.30 - pit_n) * 4.2, 0.0, 1.0)
+    rust = np.clip((scale - 0.56) * 2.8, 0.0, 1.0) * np.clip(pits * 0.8 + (1.0 - hammer_cup) * 0.45, 0.0, 1.0)
+
+    hf = np.clip(0.42 + 0.28 * hammer_cup + 0.14 * facet_rim + 0.16 * (scale - 0.5) - 0.34 * pits, 0.0, 1.0)
+    val = 0.84 + 0.14 * (hammer_cup - 0.5) + 0.09 * facet_rim + 0.10 * (ct_h - 0.5) - 0.20 * pits
+    val = np.clip(val, 0.56, 1.0)
+    albedo = np.stack([
+        np.clip(val * (0.99 + 0.14 * rust), 0.0, 1.0),
+        np.clip(val * (0.99 - 0.04 * rust), 0.0, 1.0),
+        np.clip(val * (1.02 - 0.18 * rust), 0.0, 1.0),
+    ], axis=-1)
+    # Forged dark iron roughness strictly in 0.34..0.62
+    rough = np.clip(0.44 - 0.08 * facet_rim - 0.06 * (hammer_cup - 0.5) + 0.12 * pits + 0.11 * rust + 0.05 * (scale - 0.5), 0.34, 0.62)
+    normal = height_to_normal(hf, strength=3.6)
+    return albedo, normal, rough
 
 MATS = {}
 
 def make_materials():
     MATS.clear()
     rs = np.random.RandomState(SEED)
-    img_cloth = make_image('char_cloth', tex_cloth(rs))
-    img_leather = make_image('char_leather', tex_leather(rs))
-    img_bone = make_image('char_bone', tex_bone(rs))
 
-    def mk(key, mat_name, tex=None, rough=0.8, metal=0.0, emit=0.0, emit_col=(0.2, 1.0, 0.8, 1.0), two=False):
+    def pack_pbr(family, triple):
+        alb, nrm, rgh = triple
+        return (
+            make_image('char_%s_albedo' % family, alb, non_color=False),
+            make_image('char_%s_normal' % family, nrm, non_color=True),
+            make_image('char_%s_rough' % family, rgh, non_color=True),
+        )
+
+    pbr_cloth = pack_pbr('cloth', synth_cloth_pbr(rs))
+    pbr_leather = pack_pbr('leather', synth_leather_pbr(rs))
+    pbr_bone = pack_pbr('bone', synth_bone_pbr(rs))
+    pbr_coral = pack_pbr('coral', synth_coral_pbr(rs))
+    pbr_skin = pack_pbr('skin', synth_skin_pbr(rs))
+    pbr_hair = pack_pbr('hair', synth_hair_pbr(rs))
+    pbr_brass = pack_pbr('brass', synth_brass_pbr(rs))
+    pbr_iron = pack_pbr('iron', synth_iron_pbr(rs))
+
+    def mk(key, mat_name, pbr=None, rough=0.8, metal=0.0, emit=0.0,
+           emit_col=(0.2, 1.0, 0.8, 1.0), two=False, normal_str=0.60):
         m = bpy.data.materials.new(mat_name)
         m.use_nodes = True
         nt = m.node_tree
@@ -671,16 +917,29 @@ def make_materials():
         b.inputs['Metallic'].default_value = metal
         ca = nt.nodes.new('ShaderNodeVertexColor')
         ca.layer_name = 'Color'
-        if tex is not None:
-            t = nt.nodes.new('ShaderNodeTexImage')
-            t.image = tex
+        if pbr is not None:
+            img_alb, img_nrm, img_rgh = pbr
+            t_alb = nt.nodes.new('ShaderNodeTexImage')
+            t_alb.image = img_alb
             mx = nt.nodes.new('ShaderNodeMix')
             mx.data_type = 'RGBA'
             mx.blend_type = 'MULTIPLY'
             mx.inputs[0].default_value = 1.0
-            nt.links.new(t.outputs['Color'], mx.inputs[6])
+            nt.links.new(t_alb.outputs['Color'], mx.inputs[6])
             nt.links.new(ca.outputs['Color'], mx.inputs[7])
             nt.links.new(mx.outputs[2], b.inputs['Base Color'])
+
+            t_nrm = nt.nodes.new('ShaderNodeTexImage')
+            t_nrm.image = img_nrm
+            nmap = nt.nodes.new('ShaderNodeNormalMap')
+            nmap.space = 'TANGENT'
+            nmap.inputs['Strength'].default_value = normal_str
+            nt.links.new(t_nrm.outputs['Color'], nmap.inputs['Color'])
+            nt.links.new(nmap.outputs['Normal'], b.inputs['Normal'])
+
+            t_rgh = nt.nodes.new('ShaderNodeTexImage')
+            t_rgh.image = img_rgh
+            nt.links.new(t_rgh.outputs['Color'], b.inputs['Roughness'])
         else:
             nt.links.new(ca.outputs['Color'], b.inputs['Base Color'])
         if emit > 0.0:
@@ -689,23 +948,52 @@ def make_materials():
         m.use_backface_culling = not two
         MATS[key] = m
 
-    mk('skin', 'mat_skin', None, rough=0.72)
-    mk('cloth_base', 'mat_cloth_base', img_cloth, rough=0.88, two=True)
-    mk('cloth_primary', 'mat_cloth_primary', img_cloth, rough=0.86, two=True)
-    mk('cloth_secondary', 'mat_cloth_secondary', img_cloth, rough=0.85, two=True)
-    mk('leather', 'mat_leather', img_leather, rough=0.62)
-    mk('brass', 'mat_brass', None, rough=0.30, metal=0.82)
-    mk('iron', 'mat_iron', None, rough=0.48, metal=0.60)
-    mk('hair', 'mat_hair', None, rough=0.86)
-    mk('bone', 'mat_bone', img_bone, rough=0.78)
-    mk('coral', 'mat_coral', img_bone, rough=0.68, two=True)
+    mk('skin', 'mat_skin', pbr_skin, rough=0.68, normal_str=0.24)
+    mk('cloth_base', 'mat_cloth_base', pbr_cloth, rough=0.88, two=True, normal_str=0.56)
+    mk('cloth_primary', 'mat_cloth_primary', pbr_cloth, rough=0.86, two=True, normal_str=0.56)
+    mk('cloth_secondary', 'mat_cloth_secondary', pbr_cloth, rough=0.85, two=True, normal_str=0.56)
+    mk('leather', 'mat_leather', pbr_leather, rough=0.62, normal_str=0.68)
+    mk('brass', 'mat_brass', pbr_brass, rough=0.30, metal=0.82, normal_str=0.45)
+    mk('iron', 'mat_iron', pbr_iron, rough=0.48, metal=0.60, normal_str=0.62)
+    mk('hair', 'mat_hair', pbr_hair, rough=0.80, normal_str=0.55)
+    mk('bone', 'mat_bone', pbr_bone, rough=0.76, normal_str=0.72)
+    mk('coral', 'mat_coral', pbr_coral, rough=0.68, two=True, normal_str=0.75)
     mk('emissive_sea', 'mat_emissive_sea', None, rough=0.25, emit=3.2, emit_col=(0.20, 1.0, 0.78, 1.0))
     mk('emissive_keg', 'mat_emissive_keg', None, rough=0.30, emit=3.0, emit_col=(1.0, 0.34, 0.08, 1.0))
 
 def build_skinned(mb, arm_obj):
+    # Fan-triangulate any n-gon (len(f) > 4) so MikkTSpace tangent export produces zero warnings!
+    faces = []
+    fmat = []
+    fsm = []
+    fcol = []
+    fuv = []
+    for fi, f in enumerate(mb.faces):
+        m = mb.fmat[fi]
+        sm = mb.fsm[fi]
+        c = mb.fcol[fi]
+        uv = mb.fuv[fi]
+        if len(f) <= 4:
+            faces.append(f)
+            fmat.append(m)
+            fsm.append(sm)
+            fcol.append(c)
+            fuv.append(uv)
+        else:
+            is_list_c = isinstance(c, list)
+            for k in range(1, len(f) - 1):
+                tri = (f[0], f[k], f[k + 1])
+                if len({tri[0], tri[1], tri[2]}) < 3:
+                    continue
+                faces.append(tri)
+                fmat.append(m)
+                fsm.append(sm)
+                fcol.append([c[0], c[k], c[k + 1]] if is_list_c else c)
+                fuv.append([uv[0], uv[k], uv[k + 1]])
+
     me = bpy.data.meshes.new(mb.name)
-    me.from_pydata([conv(v) for v in mb.verts], [], mb.faces)
-    names = sorted(set(mb.fmat))
+    me.from_pydata([conv(v) for v in mb.verts], [], faces)
+    names = sorted(set(fmat))
     for n in names:
         me.materials.append(MATS[n])
     mi = {n: i for i, n in enumerate(names)}
@@ -713,16 +1001,16 @@ def build_skinned(mb, arm_obj):
     ca = me.color_attributes.new('Color', 'FLOAT_COLOR', 'CORNER')
     uvs = []
     cols = []
-    for fi, f in enumerate(mb.faces):
-        c = mb.fcol[fi]
+    for fi, f in enumerate(faces):
+        c = fcol[fi]
         for k in range(len(f)):
-            uvs.extend(mb.fuv[fi][k])
+            uvs.extend(fuv[fi][k])
             cc = c[k] if isinstance(c, list) else c
             cols.extend((cc[0], cc[1], cc[2], 1.0))
     uvl.data.foreach_set('uv', uvs)
     ca.data.foreach_set('color', cols)
-    me.polygons.foreach_set('material_index', [mi[m] for m in mb.fmat])
-    me.polygons.foreach_set('use_smooth', mb.fsm)
+    me.polygons.foreach_set('material_index', [mi[m] for m in fmat])
+    me.polygons.foreach_set('use_smooth', fsm)
     me.update()
 
     ob = bpy.data.objects.new(mb.name, me)
@@ -739,7 +1027,7 @@ def build_skinned(mb, arm_obj):
     ob.parent = arm_obj
     mod = ob.modifiers.new(name='Armature', type='ARMATURE')
     mod.object = arm_obj
-    return ob, mb.tris()
+    return ob, sum(len(f) - 2 for f in faces)
 
 # ================================================================ 1. PIRATE
 def _build_pirate_boot_and_leg(mb, side):
@@ -1856,7 +2144,7 @@ def export_character(outdir, filename, arm_name, builder_fn):
         export_lights=False,
         export_animations=False,
         export_extras=False,
-        export_tangents=False,
+        export_tangents=True,
     )
     print("wrote", path)
 

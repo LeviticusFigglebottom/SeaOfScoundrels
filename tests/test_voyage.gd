@@ -302,6 +302,13 @@ func test_sculpted_treasure_meshes_no_primitives() -> void:
 			var mat := mesh.surface_get_material(si)
 			check(mat is StandardMaterial3D and (mat as StandardMaterial3D).vertex_color_use_as_albedo,
 				"%s surface %d uses vertex_color_use_as_albedo" % [tid, si])
+			if mat is StandardMaterial3D:
+				var smat := mat as StandardMaterial3D
+				if not smat.emission_enabled:
+					check(smat.uv1_triplanar and not smat.uv1_world_triplanar,
+						"%s surface %d uses object-space triplanar PBR" % [tid, si])
+					check(smat.normal_enabled and smat.normal_texture != null and smat.roughness_texture != null,
+						"%s surface %d binds triplanar PBR normal_texture + roughness_texture" % [tid, si])
 
 		# Grounded cleanly at y = 0 with pirate carry proportions (~0.34..0.65 m).
 		var aabb := mesh.get_aabb()

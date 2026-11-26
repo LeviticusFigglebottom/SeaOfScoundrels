@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dewmoow1yxbf4"
-path="res://.godot/imported/ruin_pillar_prop_foliage_broad_alb.png-8637f38b2d9cea29a417114b3bf81fb3.ctex"
+path.s3tc="res://.godot/imported/ruin_pillar_prop_foliage_broad_alb.png-8637f38b2d9cea29a417114b3bf81fb3.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "d0640d904e5f3975cbd41ec98de3dcd3"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/ruin_pillar_prop_foliage_broad_alb.png"
-dest_files=["res://.godot/imported/ruin_pillar_prop_foliage_broad_alb.png-8637f38b2d9cea29a417114b3bf81fb3.ctex"]
+dest_files=["res://.godot/imported/ruin_pillar_prop_foliage_broad_alb.png-8637f38b2d9cea29a417114b3bf81fb3.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

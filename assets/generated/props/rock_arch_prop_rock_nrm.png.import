@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dmb5gf7ci1bjs"
-path="res://.godot/imported/rock_arch_prop_rock_nrm.png-4dbcbc8cc77939acdc93204cfff3e90b.ctex"
+path.s3tc="res://.godot/imported/rock_arch_prop_rock_nrm.png-4dbcbc8cc77939acdc93204cfff3e90b.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "fd40381e43aab16a0f3aac31e136dbea"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/rock_arch_prop_rock_nrm.png"
-dest_files=["res://.godot/imported/rock_arch_prop_rock_nrm.png-4dbcbc8cc77939acdc93204cfff3e90b.ctex"]
+dest_files=["res://.godot/imported/rock_arch_prop_rock_nrm.png-4dbcbc8cc77939acdc93204cfff3e90b.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

@@ -323,3 +323,9 @@ func _update_camera() -> void:
 		var eye := Vector3(pan_x, 3.32, 2.08)
 		var target := Vector3(pan_x * 0.50, 2.34, -0.02)
 		_cam.look_at_from_position(eye, target, Vector3.UP)
+
+
+func _exit_tree() -> void:
+	ToolMeshes.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+

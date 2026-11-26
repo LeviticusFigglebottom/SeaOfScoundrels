@@ -280,7 +280,7 @@ def cbox(mb, c, size, mat, col, ch=0.018, grain=None, M=None, skip=()):
 def box2(mb, lo, hi, mat, col, ch=0.016, grain=None, skip=()):
     cbox(mb, [(lo[i] + hi[i]) * 0.5 for i in range(3)], [abs(hi[i] - lo[i]) for i in range(3)], mat, col, ch, grain, skip=skip)
 
-def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', scols=None, flip=None, suv2=None):
+def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', scols=None, flip=None, suv2=None, swap_uv=False):
     secs = [[Vector(p) for p in s] for s in secs]
     n = len(secs)
     k = len(secs[0])
@@ -305,6 +305,8 @@ def loft(mb, secs, mat, col, closed=True, caps=(True, True), mode='flat', scols=
         flip = vote < 0
     o = mb.newoff()
     def uv(i, j):
+        if swap_uv:
+            return (W[i][j] * SV + o[0], L[i] * SU + o[1])
         return (L[i] * SU + o[0], W[i][j] * SV + o[1])
     shared = mode in ('flat', 'smooth')
     sm = mode != 'flat'
@@ -2707,7 +2709,7 @@ def gen_ruin_pillar(outdir):
         fluted_ring(1.80, 0.61, 0.52),
         fluted_ring(2.64, 0.59, 0.50),
     ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
-        scols=[mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM, C_STONE_PALE])
+        scols=[mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM, C_STONE_PALE], swap_uv=True)
 
     # 3. Inlaid oxidized antique-bronze ring collar (y = 2.64..3.08) with raised gold border bands & studs!
     cyl(mb, 0.635, 2.64, 3.08, 8, 'brass', C_COPPER, False, 0.015, 0.635)
@@ -2724,7 +2726,7 @@ def gen_ruin_pillar(outdir):
         fluted_ring(4.12, 0.55, 0.46),
         fluted_ring(5.05, 0.53, 0.44, tilt_slope=-0.82),
     ], 'stone', C_STONE_PALE, closed=True, caps=(True, True), mode='flat',
-        scols=[C_STONE_WARM, C_STONE_PALE, jit(C_STONE_PALE, rng, 0.04)])
+        scols=[C_STONE_WARM, C_STONE_PALE, jit(C_STONE_PALE, rng, 0.04)], swap_uv=True)
 
     # Jagged chipped limestone fracture shards crowning the diagonal break & 2 fallen stones at foot
     faceted_rock(mb, (-0.18, 5.18, 0.10), (0.34, 0.24, 0.30), 'rock', C_STONE_PALE, C_STONE_WARM, C_STONE_SHADE, rng, subdiv=1, warp=0.18, strata=0.06)
@@ -3030,7 +3032,7 @@ def gen_seawall_bastion(outdir):
         [(-4.50,  0.40, -1.96), (4.50,  0.40, -1.96), (4.50,  0.40, 1.78), (-4.50,  0.40, 1.78)],
         [(-4.50, DECK_Y, -1.68), (4.50, DECK_Y, -1.68), (4.50, DECK_Y, 1.72), (-4.50, DECK_Y, 1.72)],
     ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
-        scols=[mix(C_STONE_DARK, C_SEA_MOSS, 0.45), mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM])
+        scols=[mix(C_STONE_DARK, C_SEA_MOSS, 0.45), mix(C_STONE_WARM, C_SEA_MOSS, 0.18), C_STONE_WARM], swap_uv=True)
 
     # Projecting beveled stone cornice stringcourse along top of seaward wall (y = 2.74..3.04)
     cbox(mb, (0.0, 2.89, -1.74), (9.16, 0.30, 0.36), 'stone', C_STONE_PALE, 0.045)
@@ -3049,7 +3051,7 @@ def gen_seawall_bastion(outdir):
             [(bx - 0.58,  0.50, -2.22), (bx + 0.58,  0.50, -2.22), (bx + 0.58,  0.50, -0.78), (bx - 0.58,  0.50, -0.78)],
             [(bx - 0.54,  3.04, -1.96), (bx + 0.54,  3.04, -1.96), (bx + 0.54,  3.04, -0.82), (bx - 0.54,  3.04, -0.82)],
         ], 'stone', C_STONE_WARM, closed=True, caps=(True, True), mode='flat',
-            scols=[mix(C_STONE_MID, C_SEA_MOSS, 0.35), C_STONE_WARM, C_STONE_PALE])
+            scols=[mix(C_STONE_MID, C_SEA_MOSS, 0.35), C_STONE_WARM, C_STONE_PALE], swap_uv=True)
         # Stepped buttress cap & heavy corner merlon rising to y = 4.20 m
         cbox(mb, (bx, 3.16, -1.42), (1.22, 0.24, 1.24), 'stone', C_STONE_PALE, 0.04)
         cbox(mb, (bx, 3.74, -1.36), (1.06, 0.94, 1.02), 'stone', jit(C_STONE_WARM, rng, 0.05), 0.045)
@@ -3276,4 +3278,5 @@ def main():
         fn(outdir)
     print('gen_props: exported %d props cleanly.' % len(generators))
 
-main()
+if __name__ == '__main__':
+    main()

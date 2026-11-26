@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://d31h0hwq8ud5a"
-path="res://.godot/imported/palm_tall_prop_bark_palm_nrm.png-cfbae135e39c487ecca0b12e85b3ffc6.ctex"
+path.s3tc="res://.godot/imported/palm_tall_prop_bark_palm_nrm.png-cfbae135e39c487ecca0b12e85b3ffc6.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "464572ca2bbc6a702a6e4385642f6f35"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/palm_tall_prop_bark_palm_nrm.png"
-dest_files=["res://.godot/imported/palm_tall_prop_bark_palm_nrm.png-cfbae135e39c487ecca0b12e85b3ffc6.ctex"]
+dest_files=["res://.godot/imported/palm_tall_prop_bark_palm_nrm.png-cfbae135e39c487ecca0b12e85b3ffc6.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

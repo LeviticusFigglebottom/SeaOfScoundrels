@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://d280l2g6xndkc"
-path="res://.godot/imported/sloop_ship_brass_normal.png-bf9ee7ce44917f44351cc23f989852af.ctex"
+path.s3tc="res://.godot/imported/sloop_ship_brass_normal.png-bf9ee7ce44917f44351cc23f989852af.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "40d2665cde9f9dfa8b27204480b15794"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/ship/sloop_ship_brass_normal.png"
-dest_files=["res://.godot/imported/sloop_ship_brass_normal.png-bf9ee7ce44917f44351cc23f989852af.ctex"]
+dest_files=["res://.godot/imported/sloop_ship_brass_normal.png-bf9ee7ce44917f44351cc23f989852af.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

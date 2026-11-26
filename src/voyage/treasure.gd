@@ -21,6 +21,7 @@ const FRAGILE_SUBMERGE_DECAY := 0.06
 ## without retaining strong static GPU Resource references at engine shutdown.
 static var _mesh_cache: Dictionary = {}
 static var _mat_cache: Dictionary = {}
+static var _tex_cache: Dictionary = {}
 
 ## Canonical treasure definitions keyed by StringName id.
 const CATALOG := {
@@ -515,6 +516,26 @@ static func tick_aboard_hazards(items: Array, ship: Node, delta: float) -> Dicti
 static func clear_mesh_cache() -> void:
 	_mesh_cache.clear()
 	_mat_cache.clear()
+	_tex_cache.clear()
+
+
+static func _load_pbr_tex(path: String) -> Texture2D:
+	if path == "":
+		return null
+	if _tex_cache.has(path):
+		var wr: Variant = _tex_cache[path]
+		if wr is WeakRef:
+			var obj: Variant = (wr as WeakRef).get_ref()
+			if obj is Texture2D:
+				return obj as Texture2D
+	if not ResourceLoader.exists(path):
+		return null
+	var loaded: Variant = ResourceLoader.load(path)
+	if loaded is Texture2D:
+		var tex := loaded as Texture2D
+		_tex_cache[path] = weakref(tex)
+		return tex
+	return null
 
 
 ## Return the cached flat-faceted sculpted ArrayMesh for any catalogue entry
@@ -606,6 +627,30 @@ static func _get_vcol_mat(roughness: float, metallic: float,
 		mat.emission_enabled = true
 		mat.emission = emissive_col
 		mat.emission_energy_multiplier = emissive_energy
+	elif metallic >= 0.55:
+		var norm_tex := _load_pbr_tex("res://assets/generated/textures/ship_brass_normal.png")
+		var rough_tex := _load_pbr_tex("res://assets/generated/textures/ship_brass_rough.png")
+		if norm_tex != null:
+			mat.uv1_triplanar = true
+			mat.uv1_world_triplanar = false
+			mat.uv1_scale = Vector3(2.8, 2.8, 2.8)
+			mat.normal_enabled = true
+			mat.normal_scale = 0.52
+			mat.normal_texture = norm_tex
+			if rough_tex != null:
+				mat.roughness_texture = rough_tex
+	elif metallic < 0.25:
+		var norm_tex := _load_pbr_tex("res://assets/generated/textures/ship_oak_normal.png")
+		var rough_tex := _load_pbr_tex("res://assets/generated/textures/ship_oak_rough.png")
+		if norm_tex != null:
+			mat.uv1_triplanar = true
+			mat.uv1_world_triplanar = false
+			mat.uv1_scale = Vector3(2.2, 2.2, 2.2)
+			mat.normal_enabled = true
+			mat.normal_scale = 0.50
+			mat.normal_texture = norm_tex
+			if rough_tex != null:
+				mat.roughness_texture = rough_tex
 	_mat_cache[key] = weakref(mat)
 	return mat
 

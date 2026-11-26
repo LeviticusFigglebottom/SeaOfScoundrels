@@ -491,3 +491,9 @@ func _update_camera(time_s: float) -> void:
 
 	_cam.global_position = eye
 	_cam.look_at(look, Vector3.UP)
+
+
+func _exit_tree() -> void:
+	TreasureCatalog.clear_mesh_cache()
+	ToolMeshes.clear_shared_cache()
+

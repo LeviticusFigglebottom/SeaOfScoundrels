@@ -97,6 +97,8 @@ const SHANTY_ENCORE_LINES := {
 }
 
 const SIGHTING_ACK_COOLDOWN := 4.0
+const TOAST_ACK_COOLDOWN := 4.0
+const SPLASHED_COOLDOWN := 4.5
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -1617,6 +1619,38 @@ func acknowledge_captain_sighting(target_label: String, bearing: String, target_
 	var safe_bearing := bearing if bearing != "" else "ahead"
 	_speak(&"sighting_ack", {"target": target_label, "bearing": safe_bearing}, "sighting_ack", SIGHTING_ACK_COOLDOWN)
 	_play_anim(&"shout", 0.6)
+	return true
+
+
+## Cheer back when the Captain raises a grog tankard toast nearby.
+func acknowledge_captain_toast() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("toast_ack"):
+		return false
+	var on_helm := pawn.station != null and StringName(pawn.station.get(&"kind")) == &"helm"
+	if not on_helm and captain != null and is_instance_valid(captain):
+		var look_d := captain.global_position - pawn.global_position
+		look_d.y = 0.0
+		if look_d.length_squared() > 0.01:
+			pawn.look_yaw = atan2(-look_d.x, -look_d.z)
+	_speak(&"toast_ack", {}, "toast_ack", TOAST_ACK_COOLDOWN)
+	return true
+
+
+## Lighthearted persona reaction when splashed by the Captain's water bucket.
+func react_to_water_splash() -> bool:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return false
+	if _callout_cooldowns.has("splashed"):
+		return false
+	var on_helm := pawn.station != null and StringName(pawn.station.get(&"kind")) == &"helm"
+	if not on_helm and captain != null and is_instance_valid(captain):
+		var look_d := captain.global_position - pawn.global_position
+		look_d.y = 0.0
+		if look_d.length_squared() > 0.01:
+			pawn.look_yaw = atan2(-look_d.x, -look_d.z)
+	_speak(&"splashed", {}, "splashed", SPLASHED_COOLDOWN)
 	return true
 
 

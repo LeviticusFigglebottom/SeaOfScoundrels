@@ -227,7 +227,7 @@ func force_breach_apex() -> void:
 		if is_inside_tree():
 			_spray_curtain_mi.global_position = tail_surf_w
 			_spray_curtain_mi.rotation = Vector3(0.0, _heading_yaw, 0.0)
-		_spray_curtain_mi.scale = Vector3(1.16, 1.15, 1.16)
+		_spray_curtain_mi.scale = Vector3(1.24, 0.68, 1.24)
 		_spray_curtain_mi.visible = true
 	if _breach_spray != null and is_instance_valid(_breach_spray):
 		_breach_spray.one_shot = false
@@ -400,10 +400,12 @@ func _apply_breach_pose(trigger_events: bool) -> void:
 			or phase == Phase.SPLASH_REENTRY
 		_spray_curtain_mi.visible = show_curtain
 		if show_curtain and is_inside_tree():
-			var c_h := clampf((rel_y + 1.4) / 6.2, 0.45, 1.18)
+			var c_t := clampf((rel_y + 1.4) / 6.2, 0.45, 1.18)
+			var c_h := c_t * 0.65
+			var c_w := 1.12 + (1.0 - c_h) * 0.26
 			_spray_curtain_mi.global_position = Vector3(wx - fwd.x * 1.8, sea_y + 0.06, wz - fwd.z * 1.8)
 			_spray_curtain_mi.rotation = Vector3(0.0, _heading_yaw, 0.0)
-			_spray_curtain_mi.scale = Vector3(1.0 + (1.0 - c_h) * 0.25, c_h, 1.0 + (1.0 - c_h) * 0.25)
+			_spray_curtain_mi.scale = Vector3(c_w, c_h, c_w)
 
 	if not trigger_events:
 		return

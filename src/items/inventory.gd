@@ -17,6 +17,8 @@ signal bucket_changed(full: bool)
 signal shanty_playing_changed(playing: bool)
 signal shanty_instrument_changed(instrument: StringName)
 signal weapon_loadout_changed(melee_id: StringName, ranged_id: StringName)
+signal compass_pace_counted(paces: int, heading_str: String)
+signal grog_toast_raised()
 
 const DEFAULT_SLOTS: Array[StringName] = [
 	&"cutlass",
@@ -52,6 +54,8 @@ const BAIL_AMOUNT := 0.16
 const GROG_HEAL := 15.0
 const SPYGLASS_CALLOUT_COOLDOWN := 2.5
 const LANTERN_SIGNAL_COOLDOWN := 2.5
+const COMPASS_PACE_METRES := 0.95
+const GROG_TOAST_COOLDOWN := 4.0
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -104,6 +108,7 @@ var tp_tool_node: Node3D = null
 ## Live tool states.
 var lantern_lit: bool = true
 var bucket_full: bool = false
+var compass_paces: int = 0
 var spyglass_zoom: float = 0.0
 var spyglass_zoomed: bool:
 	get:
@@ -144,6 +149,12 @@ var _bob_phase: float = 0.0
 var _clock: float = 0.0
 var _needle_angle: float = 0.0
 var _needle_vel: float = 0.0
+var _compass_pace_accum: float = 0.0
+var _compass_last_pos: Vector2 = Vector2.ZERO
+var _compass_last_platform: PhysicsBody3D = null
+var _compass_pace_active: bool = false
+var _compass_pace_dip: float = 0.0
+var _grog_toast_cd: float = 0.0
 var _use_cooldown: float = 0.0
 var _burp_timer: float = -1.0
 var _sighting_timer: float = 0.0
@@ -382,6 +393,8 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 	_equip_dip = 1.0
 	_primary_hold_time = 0.0
 	_heavy_fired_this_hold = false
+	if item_id != &"compass" and (_compass_pace_active or compass_paces != 0):
+		_reset_compass_pacing(false)
 	if item_id != &"spyglass" and spyglass_zoom > 0.001:
 		_set_spyglass_zoom(0.0)
 		_was_zooming_spyglass = false
@@ -490,14 +503,42 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 # ==============================================================================
 
 ## Programmatically hold or release `secondary` (raise compass/map/lantern,
-## zoom spyglass, block with cutlass, ADS with pistol, cycle shanty instrument on press).
+## zoom spyglass, block with cutlass, ADS with pistol, toast tankard, splash bucket, cycle shanty instrument).
 func set_secondary_held(held: bool) -> void:
 	var was_held := _secondary_held
 	_secondary_held = held
 	if active_item == &"cutlass" and combat != null:
 		combat.set_blocking(held)
+	elif active_item == &"compass":
+		if held and not was_held:
+			_reset_compass_pacing(true)
+		elif not held:
+			_reset_compass_pacing(false)
+	elif active_item == &"tankard" and held and not was_held:
+		if pawn != null and not pawn.dead and pawn.station == null and pawn.carried == null:
+			raise_grog_toast()
+	elif active_item == &"bucket" and held and not was_held and bucket_full:
+		if pawn != null and not pawn.dead and pawn.station == null and pawn.carried == null:
+			splash_bucket_forward()
 	elif active_item == &"instrument" and held and not was_held:
 		cycle_shanty_instrument(true)
+
+
+## Return the current number of counted steps while raising the compass in pace mode.
+func get_compass_paces() -> int:
+	return compass_paces
+
+
+## Return the Captain's current 16-point compass heading string (N, NNE, NE, ...).
+func get_compass_heading_label() -> String:
+	if pawn == null:
+		return "N"
+	return format_compass_bearing(Vector3.ZERO, pawn.facing())
+
+
+## True while the compass is raised in tactile step-counting pace mode (RMB held).
+func is_compass_pacing() -> bool:
+	return active_item == &"compass" and _secondary_held
 
 
 ## Render & bind a dynamic parchment-and-ink treasure map for the active voyage.
@@ -837,6 +878,66 @@ func use_bucket() -> Dictionary:
 	return {"action": &"empty_swing", "full": false}
 
 
+## Throw carried bucket water straight ahead along view direction (RMB on full bucket).
+## Empties bucket, spawns sculpted splash droplets, adds ocean foam near waterline,
+## and prompts a lighthearted bark from any AI crewmate caught within 4.5 m ahead!
+func splash_bucket_forward() -> Dictionary:
+	if pawn == null or pawn.dead or pawn.station != null or pawn.carried != null or not bucket_full:
+		return {"action": &"none", "full": bucket_full, "splashed_crew": false}
+	_use_cooldown = 0.38
+	bucket_full = false
+	_start_swing(&"splash", 0.44)
+	_play_anim(&"bail", 0.55)
+	if active_item == &"bucket":
+		ToolMeshes.set_bucket_full(fp_tool_node, false)
+		ToolMeshes.set_bucket_full(tp_tool_node, false)
+	var view := pawn.view_dir()
+	var splash_pos := pawn.eye_position() + view * 0.95
+	Audio.play_sfx(&"bucket_splash", splash_pos, -0.5)
+	_spawn_water_splash_puff(splash_pos, view)
+
+	var horiz_v := Vector3(view.x, 0.0, view.z)
+	var fdir := horiz_v.normalized() if horiz_v.length_squared() > 0.01 else pawn.facing()
+	var land_pt := pawn.global_position + fdir * 3.6
+	var sea_y := Sea.height(land_pt.x, land_pt.z)
+	var near_waterline := pawn.is_swimming() \
+		or absf(pawn.global_position.y - sea_y) <= 3.8 \
+		or Sea.depth(land_pt) > -0.6
+	if near_waterline and Ocean.current != null:
+		var foam_pt := Vector3(land_pt.x, sea_y, land_pt.z)
+		Ocean.current.add_foam(foam_pt, 1.35, 0.68)
+
+	var splashed_crew := false
+	var splashed_name := ""
+	if is_inside_tree():
+		var best_brain: CrewBrain = null
+		var best_d := 4.5
+		var my_pos := pawn.global_position
+		for node in get_tree().get_nodes_in_group(&"crew_brains"):
+			var br := node as CrewBrain
+			if br == null or not is_instance_valid(br) or br.pawn == null or br.pawn.dead:
+				continue
+			var to_crew := br.pawn.global_position - my_pos
+			var dist := to_crew.length()
+			if dist < 0.05 or dist > best_d:
+				continue
+			var flat_to := Vector3(to_crew.x, 0.0, to_crew.z)
+			if flat_to.length_squared() > 0.001 and flat_to.normalized().dot(fdir) >= 0.45:
+				best_d = dist
+				best_brain = br
+		if best_brain != null and best_brain.react_to_water_splash():
+			splashed_crew = true
+			splashed_name = best_brain.crew_name()
+
+	bucket_changed.emit(false)
+	return {
+		"action": &"splash_forward",
+		"full": false,
+		"splashed_crew": splashed_crew,
+		"splashed_name": splashed_name,
+	}
+
+
 ## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.8 m).
 func use_planks() -> bool:
 	_use_cooldown = 0.55
@@ -881,6 +982,41 @@ func use_tankard() -> bool:
 	tipsy_changed.emit(tipsy)
 	if tipsy > 0.55 or _rng.randf() < 0.35:
 		_burp_timer = 0.95
+	return true
+
+
+## Raise the held grog tankard in a pirate "Cheers!" toast (4.0 s cooldown) and rally nearby crew.
+func raise_grog_toast() -> bool:
+	if active_item != &"tankard":
+		return false
+	if pawn == null or pawn.dead or pawn.station != null or pawn.carried != null:
+		return false
+	if _grog_toast_cd > 0.0:
+		return false
+	_grog_toast_cd = GROG_TOAST_COOLDOWN
+	_start_swing(&"toast", 0.55)
+	_play_anim(&"drink", 0.65)
+	var sfx_pos := pawn.eye_position()
+	Audio.play_sfx(&"parry_ring", sfx_pos, -12.0, 0.08)
+	Audio.play_sfx(&"crew_shout", sfx_pos, -5.0, 0.06)
+	if Game != null:
+		Game.post_notice("Captain raises a tankard: To fair winds and fat coffers!")
+	grog_toast_raised.emit()
+
+	if is_inside_tree():
+		var nearest_brain: CrewBrain = null
+		var best_d := 14.0
+		var my_pos := pawn.global_position
+		for node in get_tree().get_nodes_in_group(&"crew_brains"):
+			var br := node as CrewBrain
+			if br == null or not is_instance_valid(br) or br.pawn == null or br.pawn.dead:
+				continue
+			var d := my_pos.distance_to(br.pawn.global_position)
+			if d <= best_d:
+				best_d = d
+				nearest_brain = br
+		if nearest_brain != null:
+			nearest_brain.acknowledge_captain_toast()
 	return true
 
 
@@ -1010,6 +1146,7 @@ func _process(delta: float) -> void:
 	_clock += delta
 	_use_cooldown = maxf(0.0, _use_cooldown - delta)
 	_spyglass_callout_cd = maxf(0.0, _spyglass_callout_cd - delta)
+	_grog_toast_cd = maxf(0.0, _grog_toast_cd - delta)
 	if _burp_timer > 0.0:
 		_burp_timer -= delta
 		if _burp_timer <= 0.0:
@@ -1362,9 +1499,63 @@ func _scan_spyglass_sighting() -> void:
 		sighting_updated.emit(spyglass_sighting, spyglass_sighting_dist)
 
 
+func _compass_sample_xz() -> Vector2:
+	if pawn == null:
+		return Vector2.ZERO
+	if pawn.platform != null and is_instance_valid(pawn.platform):
+		var loc := pawn.platform_local_position()
+		return Vector2(loc.x, loc.z)
+	return Vector2(pawn.global_position.x, pawn.global_position.z)
+
+
+func _reset_compass_pacing(start_active: bool) -> void:
+	compass_paces = 0
+	_compass_pace_accum = 0.0
+	_compass_pace_dip = 0.0
+	_compass_pace_active = start_active and pawn != null
+	if _compass_pace_active:
+		_compass_last_platform = pawn.platform if is_instance_valid(pawn.platform) else null
+		_compass_last_pos = _compass_sample_xz()
+	else:
+		_compass_last_platform = null
+		_compass_last_pos = Vector2.ZERO
+
+
 func _tick_compass(delta: float) -> void:
+	_compass_pace_dip = move_toward(_compass_pace_dip, 0.0, delta * 5.5)
 	if active_item != &"compass" or pawn == null:
+		if _compass_pace_active or compass_paces != 0:
+			_reset_compass_pacing(false)
 		return
+
+	# Step-counting pace mode while RMB is held and the Captain walks on ground/deck.
+	var can_pace := _secondary_held and not pawn.dead and pawn.station == null and pawn.carried == null
+	if can_pace:
+		if not _compass_pace_active:
+			_reset_compass_pacing(true)
+		var cur_plat: PhysicsBody3D = pawn.platform if is_instance_valid(pawn.platform) else null
+		var cur_xz := _compass_sample_xz()
+		if cur_plat != _compass_last_platform:
+			_compass_last_platform = cur_plat
+			_compass_last_pos = cur_xz
+		else:
+			var step_dist := cur_xz.distance_to(_compass_last_pos)
+			_compass_last_pos = cur_xz
+			if pawn.is_grounded() and step_dist > 0.002 and step_dist < 4.0:
+				var rv := pawn.get_relative_velocity()
+				var horiz_spd := Vector2(rv.x, rv.z).length()
+				if horiz_spd > 0.12 or step_dist > 0.006:
+					_compass_pace_accum += step_dist
+					while _compass_pace_accum >= COMPASS_PACE_METRES:
+						_compass_pace_accum -= COMPASS_PACE_METRES
+						compass_paces += 1
+						_compass_pace_dip = 1.0
+						var heading_str := get_compass_heading_label()
+						Audio.play_sfx(&"footstep_wood", pawn.eye_position(), -11.0)
+						compass_pace_counted.emit(compass_paces, heading_str)
+	elif _compass_pace_active or compass_paces != 0:
+		_reset_compass_pacing(false)
+
 	# True North is world -Z. Rotate into the compass node's local XZ frame!
 	var ref_node := get_active_tool_node()
 	var target_angle := -pawn.look_yaw
@@ -1480,6 +1671,10 @@ func _tick_viewmodel_pose(delta: float) -> void:
 	var rot_deg := rest_rot.lerp(raise_rot, _raise_blend)
 	pos += Vector3(walk_x, idle_breath - walk_y - _equip_dip * 0.24, _equip_dip * 0.08)
 	rot_deg.x -= _equip_dip * 38.0
+	if active_item == &"compass" and _compass_pace_dip > 0.001:
+		var dip_pulse := sin(_compass_pace_dip * PI)
+		pos += Vector3(0.0, -0.018 * dip_pulse, 0.006 * dip_pulse)
+		rot_deg += Vector3(-5.5 * dip_pulse, 0.0, 0.0)
 	if active_item == &"instrument" and shanty_instrument == &"whistle":
 		rot_deg += _whistle_rot_deg
 
@@ -1515,6 +1710,9 @@ func _tick_viewmodel_pose(delta: float) -> void:
 			&"drink":
 				pos = pos.lerp(Vector3(0.04, -0.02, -0.20), pulse)
 				rot_deg = rot_deg.lerp(Vector3(56.0, -8.0, -14.0), pulse)
+			&"toast":
+				pos += Vector3(-0.04 * pulse, 0.08 * pulse, -0.10 * pulse)
+				rot_deg += Vector3(-16.0 * pulse, -6.0 * pulse, -14.0 * pulse)
 			_:
 				pos += Vector3(0.0, 0.03 * pulse, -0.04 * pulse)
 

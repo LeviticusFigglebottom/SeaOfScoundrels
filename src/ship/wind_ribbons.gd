@@ -75,6 +75,7 @@ func _exit_tree() -> void:
 		_mmi.material_override = null
 		_mmi.multimesh = null
 	if _mm != null:
+		_mm.instance_count = 0
 		_mm.mesh = null
 	_mmi = null
 	_mm = null

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dfk28xxyk7gv2"
-path="res://.godot/imported/watchtower_wood_prop_brass_nrm.png-2217f10ce56d8b8fbbd2060b8e8b14f2.ctex"
+path.s3tc="res://.godot/imported/watchtower_wood_prop_brass_nrm.png-2217f10ce56d8b8fbbd2060b8e8b14f2.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "13e2712f7f33fdc9c3652029adf3326f"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/watchtower_wood_prop_brass_nrm.png"
-dest_files=["res://.godot/imported/watchtower_wood_prop_brass_nrm.png-2217f10ce56d8b8fbbd2060b8e8b14f2.ctex"]
+dest_files=["res://.godot/imported/watchtower_wood_prop_brass_nrm.png-2217f10ce56d8b8fbbd2060b8e8b14f2.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

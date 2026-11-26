@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://4vu4enfd2afp"
-path="res://.godot/imported/seawall_bastion_prop_brass_alb.png-46941062656c80c1a85b684367c3fa31.ctex"
+path.s3tc="res://.godot/imported/seawall_bastion_prop_brass_alb.png-46941062656c80c1a85b684367c3fa31.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "614bf426b1c8db8fc80f1f09dca1a235"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/seawall_bastion_prop_brass_alb.png"
-dest_files=["res://.godot/imported/seawall_bastion_prop_brass_alb.png-46941062656c80c1a85b684367c3fa31.ctex"]
+dest_files=["res://.godot/imported/seawall_bastion_prop_brass_alb.png-46941062656c80c1a85b684367c3fa31.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

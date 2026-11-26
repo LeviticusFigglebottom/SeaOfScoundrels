@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bfqv2ybxm6jna"
-path="res://.godot/imported/beacon_tower_prop_plaster_alb.png-a08b501e58c9da7672b0cb3334de155d.ctex"
+path.s3tc="res://.godot/imported/beacon_tower_prop_plaster_alb.png-a08b501e58c9da7672b0cb3334de155d.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "14b6cf9708141dc8d27672da9694875b"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/beacon_tower_prop_plaster_alb.png"
-dest_files=["res://.godot/imported/beacon_tower_prop_plaster_alb.png-a08b501e58c9da7672b0cb3334de155d.ctex"]
+dest_files=["res://.godot/imported/beacon_tower_prop_plaster_alb.png-a08b501e58c9da7672b0cb3334de155d.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

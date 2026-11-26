@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cjj4pes4mf0v7"
-path="res://.godot/imported/notice_board_prop_shingle_nrm.png-062f0f773a34b53f9d4609bc63a27bb5.ctex"
+path.s3tc="res://.godot/imported/notice_board_prop_shingle_nrm.png-062f0f773a34b53f9d4609bc63a27bb5.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "39f157d1346c5f884f765988396ec54a"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/notice_board_prop_shingle_nrm.png"
-dest_files=["res://.godot/imported/notice_board_prop_shingle_nrm.png-062f0f773a34b53f9d4609bc63a27bb5.ctex"]
+dest_files=["res://.godot/imported/notice_board_prop_shingle_nrm.png-062f0f773a34b53f9d4609bc63a27bb5.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

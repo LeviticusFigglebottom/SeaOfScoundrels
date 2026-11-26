@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://buqxtjfuyw3w1"
-path="res://.godot/imported/bush_fern_prop_bark_banyan_rgh.png-585dd307e81546cc865438dd19d26f8a.ctex"
+path.s3tc="res://.godot/imported/bush_fern_prop_bark_banyan_rgh.png-585dd307e81546cc865438dd19d26f8a.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "77134c61796f3eba56f22a7f46db5500"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/bush_fern_prop_bark_banyan_rgh.png"
-dest_files=["res://.godot/imported/bush_fern_prop_bark_banyan_rgh.png-585dd307e81546cc865438dd19d26f8a.ctex"]
+dest_files=["res://.godot/imported/bush_fern_prop_bark_banyan_rgh.png-585dd307e81546cc865438dd19d26f8a.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

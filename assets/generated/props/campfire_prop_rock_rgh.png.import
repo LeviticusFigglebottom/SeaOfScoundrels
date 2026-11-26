@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cd1lwa540jrrw"
-path="res://.godot/imported/campfire_prop_rock_rgh.png-71b40b3ab9021e1f8a992767b4b36573.ctex"
+path.s3tc="res://.godot/imported/campfire_prop_rock_rgh.png-71b40b3ab9021e1f8a992767b4b36573.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "77b2cf96c2a64e196490a82d0b7d85bb"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/campfire_prop_rock_rgh.png"
-dest_files=["res://.godot/imported/campfire_prop_rock_rgh.png-71b40b3ab9021e1f8a992767b4b36573.ctex"]
+dest_files=["res://.godot/imported/campfire_prop_rock_rgh.png-71b40b3ab9021e1f8a992767b4b36573.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://j6pd5lpuaqkp"
-path="res://.godot/imported/beacon_tower_prop_wood_nrm.png-2aa4bfb66a3eb7abed60877d43168b39.ctex"
+path.s3tc="res://.godot/imported/beacon_tower_prop_wood_nrm.png-2aa4bfb66a3eb7abed60877d43168b39.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "6fb61604b9233e5fb8cec0e085715a18"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/beacon_tower_prop_wood_nrm.png"
-dest_files=["res://.godot/imported/beacon_tower_prop_wood_nrm.png-2aa4bfb66a3eb7abed60877d43168b39.ctex"]
+dest_files=["res://.godot/imported/beacon_tower_prop_wood_nrm.png-2aa4bfb66a3eb7abed60877d43168b39.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

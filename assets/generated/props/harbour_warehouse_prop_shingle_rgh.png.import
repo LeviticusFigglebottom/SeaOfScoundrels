@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://gchfdpiwk6j6"
-path="res://.godot/imported/harbour_warehouse_prop_shingle_rgh.png-4714ce05c01b069c7b5f231fab89e24f.ctex"
+path.s3tc="res://.godot/imported/harbour_warehouse_prop_shingle_rgh.png-4714ce05c01b069c7b5f231fab89e24f.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "b19bb654205849ecc0c642208c8a4197"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/harbour_warehouse_prop_shingle_rgh.png"
-dest_files=["res://.godot/imported/harbour_warehouse_prop_shingle_rgh.png-4714ce05c01b069c7b5f231fab89e24f.ctex"]
+dest_files=["res://.godot/imported/harbour_warehouse_prop_shingle_rgh.png-4714ce05c01b069c7b5f231fab89e24f.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

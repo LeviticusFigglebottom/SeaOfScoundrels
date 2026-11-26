@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bcnkpm5i7sgxk"
-path="res://.godot/imported/notice_board_prop_wood_nrm.png-30930259320ee3298e12c905746bb55b.ctex"
+path.s3tc="res://.godot/imported/notice_board_prop_wood_nrm.png-30930259320ee3298e12c905746bb55b.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "6fb61604b9233e5fb8cec0e085715a18"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/notice_board_prop_wood_nrm.png"
-dest_files=["res://.godot/imported/notice_board_prop_wood_nrm.png-30930259320ee3298e12c905746bb55b.ctex"]
+dest_files=["res://.godot/imported/notice_board_prop_wood_nrm.png-30930259320ee3298e12c905746bb55b.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

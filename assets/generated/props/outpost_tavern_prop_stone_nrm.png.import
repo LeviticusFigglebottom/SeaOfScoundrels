@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cch2q8wgw7cga"
-path="res://.godot/imported/outpost_tavern_prop_stone_nrm.png-95dd6736547195d3d72f3b5a79cf4ae5.ctex"
+path.s3tc="res://.godot/imported/outpost_tavern_prop_stone_nrm.png-95dd6736547195d3d72f3b5a79cf4ae5.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "32ffb20fd34e488233b1e50f8fca451d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/outpost_tavern_prop_stone_nrm.png"
-dest_files=["res://.godot/imported/outpost_tavern_prop_stone_nrm.png-95dd6736547195d3d72f3b5a79cf4ae5.ctex"]
+dest_files=["res://.godot/imported/outpost_tavern_prop_stone_nrm.png-95dd6736547195d3d72f3b5a79cf4ae5.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

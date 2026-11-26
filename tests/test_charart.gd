@@ -402,3 +402,60 @@ func test_charart_showcase_all_shots() -> void:
 					_check_skeleton_finite(cv.skeleton, "showcase_%s_%s" % [sh, cv.archetype])
 	inst.queue_free()
 	await physics_frames(2)
+
+
+func test_wave27_character_pbr_normal_roughness_and_tangents() -> void:
+	for key: StringName in GLB_PATHS.keys():
+		var sc: PackedScene = load(GLB_PATHS[key]) as PackedScene
+		check(sc != null, "Wave 27A: failed to load %s" % GLB_PATHS[key])
+		if sc == null:
+			continue
+		var inst := sc.instantiate() as Node3D
+		add_child(inst)
+
+		var pbr_mats: Dictionary = {}
+		var tangent_surfaces := 0
+		var missing_pbr_tangents := 0
+		var bad_tangents := 0
+
+		for node in inst.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			var mesh := mi.mesh
+			for si in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(si)
+				var tang_var: Variant = arrays[Mesh.ARRAY_TANGENT] if not arrays.is_empty() else null
+				var has_tangents := (tang_var is PackedFloat32Array) and not (tang_var as PackedFloat32Array).is_empty()
+				if has_tangents:
+					tangent_surfaces += 1
+					var tangs: PackedFloat32Array = tang_var
+					for tv in tangs:
+						if not is_finite(tv):
+							bad_tangents += 1
+							break
+
+				var mat: Material = mi.get_active_material(si)
+				if mat == null:
+					mat = mesh.surface_get_material(si)
+				if mat is StandardMaterial3D:
+					var std := mat as StandardMaterial3D
+					if std.normal_enabled and std.normal_texture != null and std.roughness_texture != null:
+						var mat_id := std.resource_name if not std.resource_name.is_empty() else str(std.get_instance_id())
+						pbr_mats[mat_id] = true
+						if not has_tangents:
+							missing_pbr_tangents += 1
+
+		check(pbr_mats.size() >= 4,
+			"Wave 27A: %s expected >= 4 distinct PBR materials with normal_enabled, normal_texture & roughness_texture (got %d: %s)" % [
+				key, pbr_mats.size(), str(pbr_mats.keys())])
+		check(tangent_surfaces >= 1,
+			"Wave 27A: %s expected >= 1 surface carrying Mesh.ARRAY_TANGENT (got %d)" % [key, tangent_surfaces])
+		check_eq(missing_pbr_tangents, 0,
+			"Wave 27A: %s PBR surface(s) missing Mesh.ARRAY_TANGENT" % key)
+		check_eq(bad_tangents, 0,
+			"Wave 27A: %s surface(s) with non-finite Mesh.ARRAY_TANGENT" % key)
+
+		inst.queue_free()
+	await physics_frames(2)
+

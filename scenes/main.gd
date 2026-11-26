@@ -197,6 +197,7 @@ static func _drain_static_visual_caches() -> void:
 	# Release statically cached procedural meshes, materials & textures on main teardown
 	# so live .exe exits cleanly with 0 leaked GPU resources (each class rebuilds lazily on demand).
 	TreasureCatalog.clear_mesh_cache()
+	ToolMeshes.clear_shared_cache()
 	Cannonball.clear_shared_cache()
 	ShipNameplate.clear_shared_cache()
 	HullCrest.clear_shared_cache()
@@ -3866,13 +3867,13 @@ func _apply_hero_shot(mode: String) -> void:
 					out_dir.y = 0.0
 					out_dir = out_dir.normalized() if out_dir.length_squared() > 0.001 else sea_dir
 					var side_dir := (-out_dir).cross(Vector3.UP).normalized()
-					var stand_off := clampf(er * 0.38, 36.0, 54.0)
-					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off - side_dir * 4.0 \
-						+ Vector3(0.0, clampf(epk * 0.22, 11.0, 22.0), 0.0)
-					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 5.0)
-					var wf_mid_y := clampf(maxf(wf_pos.y * 0.58, epk * 0.28), 10.0, 34.0)
+					var stand_off := clampf(er * 0.42, 40.0, 58.0)
+					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off - side_dir * 14.0 \
+						+ Vector3(0.0, clampf(epk * 0.36, 18.0, 30.0), 0.0)
+					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 6.5)
+					var wf_mid_y := clampf(maxf(wf_pos.y * 0.50, epk * 0.24), 9.0, 30.0)
 					var look_p := Vector3(wf_pos.x, wf_mid_y, wf_pos.z).lerp(
-						epos + Vector3(0.0, epk * 0.34, 0.0), 0.22
+						epos + Vector3(0.0, epk * 0.30, 0.0), 0.16
 					)
 					_mount_shot_camera(cam_p, look_p, 56.0)
 				else:

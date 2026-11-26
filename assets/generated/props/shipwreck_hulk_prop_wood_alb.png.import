@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cwusagn4lt768"
-path="res://.godot/imported/shipwreck_hulk_prop_wood_alb.png-e8305ed040a3a3f530a16fe088a37a69.ctex"
+path.s3tc="res://.godot/imported/shipwreck_hulk_prop_wood_alb.png-e8305ed040a3a3f530a16fe088a37a69.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "1865560bb675333a7c5ab5d66e21b5ae"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/shipwreck_hulk_prop_wood_alb.png"
-dest_files=["res://.godot/imported/shipwreck_hulk_prop_wood_alb.png-e8305ed040a3a3f530a16fe088a37a69.ctex"]
+dest_files=["res://.godot/imported/shipwreck_hulk_prop_wood_alb.png-e8305ed040a3a3f530a16fe088a37a69.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

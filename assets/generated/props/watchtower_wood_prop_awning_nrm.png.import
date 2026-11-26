@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bxw47kpi0s480"
-path="res://.godot/imported/watchtower_wood_prop_awning_nrm.png-b517df94f74f50df401a99104ea2b958.ctex"
+path.s3tc="res://.godot/imported/watchtower_wood_prop_awning_nrm.png-b517df94f74f50df401a99104ea2b958.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "48d48a8ab6c181bd3251d616764dab15"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://assets/generated/props/watchtower_wood_prop_awning_nrm.png"
-dest_files=["res://.godot/imported/watchtower_wood_prop_awning_nrm.png-b517df94f74f50df401a99104ea2b958.ctex"]
+dest_files=["res://.godot/imported/watchtower_wood_prop_awning_nrm.png-b517df94f74f50df401a99104ea2b958.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/high_quality_mode=0
 compress/lossy_quality=0.7

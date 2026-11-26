@@ -1595,13 +1595,13 @@ func test_hud_station_and_tool_chip_ascii_control_hints() -> void:
 	# 2. Verify held-tool ASCII control hints for bucket, planks, shovel, compass, and all other slots.
 	inv.bucket_full = false
 	var tool_checks: Array[Array] = [
-		[&"bucket", "Empty | [LMB] Scoop / Bail"],
+		[&"bucket", "[LMB] Scoop Bilge / Sea"],
 		[&"planks", "[LMB] Patch Breach"],
 		[&"shovel", "[LMB] Dig Treasure"],
-		[&"compass", "True North | [RMB] Hold Up"],
+		[&"compass", "[Hold RMB] Raise & Count Paces"],
 		[&"spyglass", "[RMB] Zoom | [LMB] Call Out Sighting"],
 		[&"lantern", "[RMB] Raise"],
-		[&"tankard", "[LMB] Drink Grog (+HP)"],
+		[&"tankard", "[LMB] Drink Grog | [RMB] Cheers Toast"],
 		[&"cutlass", "[RMB] Block"],
 		[&"pistol", "[LMB] Fire | [RMB] Aim"],
 		[&"map", "[RMB] Inspect"],
@@ -1619,8 +1619,8 @@ func test_hud_station_and_tool_chip_ascii_control_hints() -> void:
 	inv.equip(&"bucket", true)
 	inv.bucket_full = true
 	hud._process(0.05)
-	check(hud.get_tool_meta_text().contains("Full | [LMB] Throw Water"),
-		"full bucket shows Throw Water hint (got '%s')" % hud.get_tool_meta_text())
+	check(hud.get_tool_meta_text().contains("[LMB] Throw / Bail | [RMB] Splash"),
+		"full bucket shows Throw / Bail | [RMB] Splash hint (got '%s')" % hud.get_tool_meta_text())
 
 	# 3. Verify SailingTrimPill stays 100% green alongside updated ToolChip!
 	captain.enter_station(helm_st)
@@ -1640,6 +1640,257 @@ func test_hud_station_and_tool_chip_ascii_control_hints() -> void:
 	hud.queue_free()
 	await physics_frames(2)
 	await _end()
+
+
+# ---------------------------------------------------------------------------
+# 15. Wave 27B: Tool Object-Space Triplanar PBR, Compass Paces, Toast & Splash
+# ---------------------------------------------------------------------------
+
+func test_wave27_tool_pbr_compass_paces_toast_and_bucket_splash() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	# 1. Verify object-space triplanar PBR normal & roughness bindings across iconic held tools
+	#    while keeping printed dials, maps, and foam razor-crisp!
+	var check_pbr := func(tool_node: Node3D, mesh_path: NodePath, label: String,
+			expect_pbr: bool, expect_rough: bool = true) -> StandardMaterial3D:
+		var mi := tool_node.get_node_or_null(mesh_path) as MeshInstance3D
+		check(mi != null, "%s exists" % label)
+		var mat := mi.material_override as StandardMaterial3D if mi != null else null
+		check(mat != null, "%s has StandardMaterial3D" % label)
+		if mat == null:
+			return null
+		if expect_pbr:
+			check(mat.uv1_triplanar and not mat.uv1_world_triplanar,
+				"%s uses object-space triplanar (uv1_triplanar=true, world=false)" % label)
+			check(mat.normal_enabled and mat.normal_texture != null,
+				"%s binds PBR normal_texture" % label)
+			if expect_rough:
+				check(mat.roughness_texture != null, "%s binds PBR roughness_texture" % label)
+		else:
+			check(not mat.normal_enabled and mat.normal_texture == null,
+				"%s stays razor-crisp without normal override" % label)
+			check(not mat.uv1_triplanar, "%s disables triplanar override" % label)
+		return mat
+
+	var cutlass := ToolMeshes.build_tool(&"cutlass")
+	var cutlass_blade_mat: StandardMaterial3D = check_pbr.call(cutlass, ^"Blade", "Cutlass.Blade", true)
+	check_pbr.call(cutlass, ^"Grip", "Cutlass.Grip", true)
+	var cutlass_hilt_mat: StandardMaterial3D = check_pbr.call(cutlass, ^"BrassHilt", "Cutlass.BrassHilt", true)
+
+	var pistol := ToolMeshes.build_tool(&"pistol")
+	check_pbr.call(pistol, ^"Stock", "Pistol.Stock", true)
+	check_pbr.call(pistol, ^"BarrelAndLock", "Pistol.BarrelAndLock", true)
+	check_pbr.call(pistol, ^"BrassTrim", "Pistol.BrassTrim", true)
+
+	var compass := ToolMeshes.build_tool(&"compass")
+	check_pbr.call(compass, ^"BrassCase", "Compass.BrassCase", true)
+	check_pbr.call(compass, ^"DialFace", "Compass.DialFace", false)
+	check_pbr.call(compass, ^"DialTicks", "Compass.DialTicks", false)
+	check_pbr.call(compass, ^"NorthMarker", "Compass.NorthMarker", false)
+
+	var lantern := ToolMeshes.build_tool(&"lantern")
+	var lantern_brass_mat: StandardMaterial3D = check_pbr.call(lantern, ^"BrassCage", "Lantern.BrassCage", true)
+	check_pbr.call(lantern, ^"GlassCore", "Lantern.GlassCore", false)
+
+	var shovel := ToolMeshes.build_tool(&"shovel")
+	check_pbr.call(shovel, ^"TimberHandle", "Shovel.TimberHandle", true)
+	var shovel_blade_mat: StandardMaterial3D = check_pbr.call(shovel, ^"SpadeBlade", "Shovel.SpadeBlade", true)
+
+	var bucket := ToolMeshes.build_tool(&"bucket")
+	check_pbr.call(bucket, ^"OakStaves", "Bucket.OakStaves", true)
+	check_pbr.call(bucket, ^"IronBands", "Bucket.IronBands", true)
+
+	var tankard := ToolMeshes.build_tool(&"tankard")
+	check_pbr.call(tankard, ^"OakMug", "Tankard.OakMug", true)
+	check_pbr.call(tankard, ^"PewterBands", "Tankard.PewterBands", true)
+	check_pbr.call(tankard, ^"FoamTop", "Tankard.FoamTop", false)
+
+	var map_tool := ToolMeshes.build_tool(&"map")
+	check_pbr.call(map_tool, ^"ScrollRollers", "Map.ScrollRollers", true)
+	check_pbr.call(map_tool, ^"MapSurface", "Map.MapSurface", false)
+
+	var planks := ToolMeshes.build_tool(&"planks")
+	check_pbr.call(planks, ^"RopeLashing", "Planks.RopeLashing", true)
+
+	var concertina := ToolMeshes.build_tool(&"instrument")
+	check_pbr.call(concertina, ^"Bellows", "Concertina.Bellows", true, false)
+
+	# Verify shared VRAM texture identity across tools using the same PBR family.
+	check(cutlass_hilt_mat != null and lantern_brass_mat != null \
+		and cutlass_hilt_mat.normal_texture == lantern_brass_mat.normal_texture,
+		"Cutlass and Lantern share identical cached ship_brass_normal Texture2D")
+	check(cutlass_blade_mat != null and shovel_blade_mat != null \
+		and cutlass_blade_mat.normal_texture == shovel_blade_mat.normal_texture,
+		"Cutlass and Shovel share identical cached ship_iron_normal Texture2D")
+
+	for tn: Node3D in [cutlass, pistol, compass, lantern, shovel, bucket, tankard, map_tool, planks, concertina]:
+		tn.free()
+
+	# 2. Compass [RMB] step-counting pace mode: counts 0 -> 3+ paces over ~3.2 m and resets cleanly on release!
+	var floor_body := StaticBody3D.new()
+	var floor_col := CollisionShape3D.new()
+	var floor_box := BoxShape3D.new()
+	floor_box.size = Vector3(60.0, 1.0, 60.0)
+	floor_col.shape = floor_box
+	floor_body.add_child(floor_col)
+	floor_body.position = Vector3(0.0, -0.5, 0.0)
+	floor_body.collision_layer = 1
+	_root.add_child(floor_body)
+
+	var rig := _make_player_pawn(Vector3(0.0, 0.2, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(captain, pc, inv, cc, null, null, null)
+	await physics_frames(8)
+
+	check(captain.is_grounded(), "captain stands grounded on test deck floor")
+	captain.look_yaw = -PI * 0.5  # facing due East (+X)
+	inv.equip(&"compass", true)
+	hud._process(0.05)
+	check(hud.get_tool_meta_text().contains("[Hold RMB] Raise & Count Paces"),
+		"lowered compass shows pace-count RMB hint (got '%s')" % hud.get_tool_meta_text())
+
+	var pace_events: Array[Dictionary] = []
+	inv.compass_pace_counted.connect(func(paces: int, heading_str: String) -> void:
+		pace_events.append({"paces": paces, "heading": heading_str})
+	)
+
+	inv.set_secondary_held(true)
+	check_eq(inv.get_compass_paces(), 0, "raising compass resets compass_paces to 0")
+	check_eq(inv.get_compass_heading_label(), "E", "compass heading reads E when facing +X")
+
+	var start_xz := Vector2(captain.global_position.x, captain.global_position.z)
+	captain.wish_dir = Vector3(1.0, 0.0, 0.0)
+	var walked := 0.0
+	for _step in 120:
+		await physics_frames(1)
+		inv._tick_compass(1.0 / 60.0)
+		walked = Vector2(captain.global_position.x, captain.global_position.z).distance_to(start_xz)
+		if walked >= 3.25:
+			break
+	captain.wish_dir = Vector3.ZERO
+
+	check(walked >= 3.1, "captain walked ~3.2 m (got %.2f m)" % walked)
+	check(inv.get_compass_paces() >= 3,
+		"compass pace counter incremented 0 -> 3+ over ~3.2 m (got %d)" % inv.get_compass_paces())
+	check(pace_events.size() >= 3, "compass_pace_counted emitted >= 3 times (got %d)" % pace_events.size())
+	if not pace_events.is_empty():
+		check_eq(String(pace_events[0]["heading"]), "E", "compass_pace_counted reports E heading")
+
+	hud._process(0.05)
+	var pace_hud := hud.get_tool_meta_text()
+	check(pace_hud.contains("Compass | %d paces (E)" % inv.get_compass_paces()),
+		"HUD displays live dynamic pace readout (got '%s')" % pace_hud)
+	for ci in pace_hud.length():
+		check(pace_hud.unicode_at(ci) < 128, "HUD compass pace text is strictly ASCII")
+
+	inv.set_secondary_held(false)
+	check_eq(inv.get_compass_paces(), 0, "releasing RMB resets compass_paces cleanly to 0")
+
+	# 3. Tankard [RMB] pirate toast emits grog_toast_raised and prompts nearby CrewBrain.acknowledge_captain_toast()!
+	var barnaby_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(barnaby_pawn)
+	barnaby_pawn.global_position = captain.global_position + Vector3(2.8, 0.0, 0.0)
+	var barnaby := CrewBrain.new()
+	barnaby.setup(null, captain, &"helmsman")
+	barnaby_pawn.add_child(barnaby)
+
+	var maren_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(maren_pawn)
+	maren_pawn.global_position = captain.global_position + Vector3(-9.0, 0.0, 0.0)
+	var maren := CrewBrain.new()
+	maren.setup(null, captain, &"lookout")
+	maren_pawn.add_child(maren)
+
+	var pip_pawn := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(pip_pawn)
+	pip_pawn.global_position = captain.global_position + Vector3(0.0, 0.0, 11.0)
+	var pip := CrewBrain.new()
+	pip.setup(null, captain, &"carpenter")
+	pip_pawn.add_child(pip)
+	await physics_frames(2)
+
+	var toast_count := [0]
+	inv.grog_toast_raised.connect(func() -> void: toast_count[0] += 1)
+	var crew_toasts: Array[Dictionary] = []
+	var crew_splashes: Array[Dictionary] = []
+	for br: CrewBrain in [barnaby, maren, pip]:
+		br.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+			if cat == &"toast_ack":
+				crew_toasts.append({"speaker": sp, "text": txt})
+			elif cat == &"splashed":
+				crew_splashes.append({"speaker": sp, "text": txt})
+		)
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	inv.equip(&"tankard", true)
+	inv.set_secondary_held(true)
+	check_eq(toast_count[0], 1, "Tankard [RMB] emits grog_toast_raised once")
+	check(notices.has("Captain raises a tankard: To fair winds and fat coffers!"),
+		"Tankard toast posts cheerful Captain notice")
+	check_eq(crew_toasts.size(), 1, "closest living CrewBrain within 14 m acknowledges captain toast")
+	if crew_toasts.size() == 1:
+		check_eq(String(crew_toasts[0]["speaker"]), "Barnaby", "closest crewmate Barnaby cheers back")
+		var ack_txt := String(crew_toasts[0]["text"])
+		for ci in ack_txt.length():
+			check(ack_txt.unicode_at(ci) < 128, "Barnaby toast_ack line is strictly ASCII")
+
+	# Verify 4.0 s anti-spam cooldown on Tankard toast and all 3 persona toast_ack lines.
+	inv.set_secondary_held(false)
+	check(not inv.raise_grog_toast(), "Tankard toast obeys 4.0 s cooldown")
+	check(maren.acknowledge_captain_toast(), "Maren responds to captain toast")
+	check(pip.acknowledge_captain_toast(), "Pip responds to captain toast")
+	check_eq(crew_toasts.size(), 3, "all three personas emit strict-ASCII toast_ack lines")
+	for entry_t: Dictionary in crew_toasts:
+		var line_t := String(entry_t["text"])
+		for ci in line_t.length():
+			check(line_t.unicode_at(ci) < 128, "toast_ack line is strictly ASCII ('%s')" % line_t)
+
+	# 4. Bucket [RMB] forward water splash empties bucket_full and splashes crewmate ahead!
+	captain.look_yaw = -PI * 0.5  # facing +X straight toward Barnaby (2.8 m ahead!)
+	inv.equip(&"bucket", true)
+	inv.bucket_full = true
+	ToolMeshes.set_bucket_full(inv.fp_tool_node, true)
+	var bucket_events: Array[bool] = []
+	inv.bucket_changed.connect(func(full: bool) -> void: bucket_events.append(full))
+
+	inv.set_secondary_held(true)
+	check(not inv.bucket_full, "Bucket [RMB] forward splash empties bucket_full")
+	check(bucket_events.has(false), "Bucket [RMB] forward splash emits bucket_changed(false)")
+	var wf := inv.fp_tool_node.get_node_or_null(^"WaterFill") as Node3D if inv.fp_tool_node != null else null
+	check(wf != null and not wf.visible, "Bucket WaterFill mesh hides cleanly after RMB forward splash")
+	check_eq(crew_splashes.size(), 1, "crewmate within 4.5 m in front reacts to water splash")
+	if crew_splashes.size() == 1:
+		check_eq(String(crew_splashes[0]["speaker"]), "Barnaby", "Barnaby reacts to forward bucket splash")
+	inv.set_secondary_held(false)
+
+	# Also verify Maren & Pip splash reactions & strict ASCII dialogue lines.
+	check(maren.react_to_water_splash(), "Maren reacts to water splash")
+	check(pip.react_to_water_splash(), "Pip reacts to water splash")
+	check_eq(crew_splashes.size(), 3, "all three personas emit splashed barks")
+	for entry_s: Dictionary in crew_splashes:
+		var line_s := String(entry_s["text"])
+		for ci in line_s.length():
+			check(line_s.unicode_at(ci) < 128, "splashed bark is strictly ASCII ('%s')" % line_s)
+
+	Game.notice.disconnect(notice_cb)
+	hud.queue_free()
+	await physics_frames(2)
+	await _end()
+
+	# 5. Clean ToolMeshes.clear_shared_cache() teardown!
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes.clear_shared_cache() clears PBR texture cache cleanly")
+
 
 
 
