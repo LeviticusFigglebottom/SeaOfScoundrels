@@ -53,24 +53,25 @@ void vertex() {
 void fragment() {
 	float t = TIME * flow_speed;
 
-	// Domain-warped dual-velocity silk water ribbons + racing whitewater foam filaments.
+	// Domain-warped dual-velocity silk water ribbons + crisp filamentous whitewater chutes.
 	float flow_accel = 1.0 + UV.y * 0.45;
-	float warp_x = (vnoise2(vec2(UV.x * 5.2, UV.y * 2.4 - t * 0.65)) - 0.5) * 0.32;
-	float n_broad = vnoise2(vec2((UV.x + warp_x) * 7.8, UV.y * 3.6 - t * 1.05 * flow_accel));
-	float n_mid = vnoise2(vec2((UV.x - warp_x * 0.7) * 16.5 + 3.1, UV.y * 6.8 - t * 1.62 * flow_accel + n_broad * 0.48));
-	float n_fine = vnoise2(vec2(UV.x * 34.0 - 1.7 + n_mid * 0.5, UV.y * 12.5 - t * 2.25 * flow_accel));
-	float ribbon = smoothstep(0.36, 0.78, n_broad * 0.55 + n_mid * 0.45);
-	float filament = smoothstep(0.56, 0.86, n_mid * 0.45 + n_fine * 0.55);
+	float warp_x = (vnoise2(vec2(UV.x * 5.2, UV.y * 2.4 - t * 0.65)) - 0.5) * 0.34;
+	float n_broad = vnoise2(vec2((UV.x + warp_x) * 8.4, UV.y * 3.8 - t * 1.05 * flow_accel));
+	float n_mid = vnoise2(vec2((UV.x - warp_x * 0.7) * 18.0 + 3.1, UV.y * 7.2 - t * 1.62 * flow_accel + n_broad * 0.52));
+	float n_fine = vnoise2(vec2(UV.x * 38.0 - 1.7 + n_mid * 0.5, UV.y * 13.5 - t * 2.35 * flow_accel));
+	float ribbon = smoothstep(0.46, 0.84, n_broad * 0.54 + n_mid * 0.46);
+	float filament = smoothstep(0.62, 0.90, n_mid * 0.42 + n_fine * 0.58);
 
-	// Turbulent foaming whitewater at upper cliff crest (UV.y < 0.16) and billowing plunge base (UV.y > 0.72).
-	float lip_foam = smoothstep(0.18, 0.03, UV.y) * (0.68 + 0.32 * n_mid);
-	float plunge_foam = smoothstep(0.70, 0.96, UV.y) * (0.72 + 0.28 * n_broad);
-	float mid_streaks = clamp(ribbon * 0.52 + filament * 0.78, 0.0, 1.0) * (0.58 + 0.42 * v_wave_crest);
+	// Turbulent foaming whitewater at upper cliff crest (UV.y < 0.16) and billowing plunge base (UV.y > 0.72),
+	// preserving deep jewel-like turquoise-emerald water windows between racing foam chutes!
+	float lip_foam = smoothstep(0.16, 0.025, UV.y) * (0.64 + 0.36 * n_mid);
+	float plunge_foam = smoothstep(0.72, 0.96, UV.y) * (0.70 + 0.30 * n_broad);
+	float mid_streaks = clamp(ribbon * 0.40 + filament * 0.82, 0.0, 1.0) * (0.50 + 0.50 * v_wave_crest);
 	float foam_mask = clamp(max(max(lip_foam, plunge_foam), mid_streaks), 0.0, 1.0);
 
-	// Translucent tropical turquoise-aqua water core grading deeper in the curtain center.
+	// Deep tropical emerald-turquoise water core grading richer in thick center chutes.
 	float center_depth = 1.0 - abs(UV.x * 2.0 - 1.0);
-	vec3 water_core = mix(water_color, deep_water_color, clamp(center_depth * 0.62 * (1.0 - n_broad * 0.42), 0.0, 1.0));
+	vec3 water_core = mix(water_color * vec3(0.86, 0.96, 1.00), deep_water_color * vec3(0.78, 0.90, 0.96), clamp(center_depth * 0.74 * (1.0 - n_broad * 0.38), 0.0, 1.0));
 
 	// Dynamic lighting from SkyRig globals (sunlit turquoise translucency + crest sparkle + moonlight readability).
 	vec3 n_w = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);

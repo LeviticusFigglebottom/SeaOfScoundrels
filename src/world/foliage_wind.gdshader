@@ -34,6 +34,32 @@ varying vec3 v_world;
 varying vec3 v_world_normal;
 varying float v_tip_weight;
 varying float v_frond_var;
+varying float v_cam_dist;
+
+float foliage_hash31(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.yzx + 33.33);
+	return fract((p.x + p.y) * p.z);
+}
+
+float foliage_noise3(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	vec3 u = f * f * (3.0 - 2.0 * f);
+	float n000 = foliage_hash31(i);
+	float n100 = foliage_hash31(i + vec3(1.0, 0.0, 0.0));
+	float n010 = foliage_hash31(i + vec3(0.0, 1.0, 0.0));
+	float n110 = foliage_hash31(i + vec3(1.0, 1.0, 0.0));
+	float n001 = foliage_hash31(i + vec3(0.0, 0.0, 1.0));
+	float n101 = foliage_hash31(i + vec3(1.0, 0.0, 1.0));
+	float n011 = foliage_hash31(i + vec3(0.0, 1.0, 1.0));
+	float n111 = foliage_hash31(i + vec3(1.0, 1.0, 1.0));
+	float nx00 = mix(n000, n100, u.x);
+	float nx10 = mix(n010, n110, u.x);
+	float nx01 = mix(n001, n101, u.x);
+	float nx11 = mix(n011, n111, u.x);
+	return mix(mix(nx00, nx10, u.y), mix(nx01, nx11, u.y), u.z);
+}
 
 void vertex() {
 	float w = use_uv2_weight > 0.5
@@ -68,55 +94,95 @@ void vertex() {
 	v_world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	v_tip_weight = w;
 	v_frond_var = fract(UV2.y + sin(tree_phase) * 0.37);
+	v_cam_dist = length(CAMERA_POSITION_WORLD - v_world);
 }
 
 void fragment() {
 	vec3 tex_col = use_albedo_tex > 0.5 ? texture(albedo_tex, UV).rgb : vec3(1.0);
 	vec3 base_col = tex_col * COLOR.rgb * albedo_tint;
 
-	// Painterly tropical frond gradient: deep cool jade at crown/base -> warm sun-kissed golden-lime at frond tips.
-	vec3 jade_base = vec3(0.66, 0.85, 0.74);
-	vec3 gold_tip = vec3(1.18, 1.13, 0.74);
-	vec3 grad_tint = mix(jade_base, gold_tip, smoothstep(0.08, 0.92, v_tip_weight));
-	// Gentle per-frond tonal variety so dense jungle canopies read with lush layered depth.
-	vec3 frond_shift = mix(vec3(0.92, 0.98, 0.96), vec3(1.08, 1.03, 0.88), v_frond_var);
-	vec3 leaf_col = base_col * grad_tint * frond_shift;
+	// Detect green foliage vs vivid hibiscus/floral petals so blossoms stay pure saturated coral/gold!
+	float is_leaf = smoothstep(-0.02, 0.08, base_col.g - max(base_col.r, base_col.b) * 0.78);
+	float near_foliage = smoothstep(85.0, 10.0, v_cam_dist);
+
+	// Procedural pinnate frond midrib, angled leaflet veins & world-space overlapping leaf-cluster breakup.
+	float u_ctr = abs(UV.x * 2.0 - 1.0);
+	float midrib = exp(-u_ctr * 14.0);
+	float vein_phase = (UV.y * 26.0 - u_ctr * 10.5) * PI;
+	float vein_wave = sin(vein_phase);
+	float vein_ridge = smoothstep(-0.2, 0.85, vein_wave);
+	float fine_fiber = sin(UV.x * 22.0 * PI) * 0.5 + 0.5;
+	float cluster_n = foliage_noise3(v_world * 2.55) * 0.64 + foliage_noise3(v_world * 6.20) * 0.36;
+	float cluster_dapple = smoothstep(0.22, 0.82, cluster_n);
+
+	// Deep cool emerald-teal canopy interior self-AO + ground-root contact darkening -> warm sunlit tips.
+	vec3 n_w = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);
+	float up_ao = mix(0.64, 1.08, smoothstep(-0.40, 0.72, n_w.y));
+	float crown_ao = mix(0.60, 1.08, smoothstep(0.04, 0.84, v_tip_weight));
+	float canopy_ao = mix(1.0, clamp(up_ao * crown_ao * mix(0.78, 1.18, cluster_dapple), 0.40, 1.20), is_leaf);
+
+	// Painterly tropical frond gradient: rich deep jade shadow core -> sunlit golden-lime outer leaflets.
+	vec3 jade_base = vec3(0.56, 0.82, 0.72);
+	vec3 gold_tip = vec3(1.24, 1.18, 0.70);
+	vec3 grad_tint = mix(vec3(1.0), mix(jade_base, gold_tip, smoothstep(0.06, 0.90, v_tip_weight)), is_leaf);
+	// Per-frond hue shift + sunlit leaf-cluster & subtle pinnate-vein contrast breakup (zero corduroy striping!).
+	vec3 frond_shift = mix(vec3(0.88, 0.98, 0.96), vec3(1.12, 1.05, 0.84), v_frond_var);
+	vec3 leaf_col = base_col * grad_tint * mix(vec3(1.0), frond_shift, is_leaf) * canopy_ao;
+
+	// Highlight central frond spine & natural pinnate ribs (gentle on close blades, bolder on palm/banyan canopies).
+	float vein_shade = mix(0.92, 1.08, vein_ridge * 0.78 + fine_fiber * 0.22);
+	leaf_col *= mix(1.0, mix(1.0, vein_shade, 0.44 * near_foliage), is_leaf);
+	leaf_col = mix(leaf_col, leaf_col * vec3(1.16, 1.20, 0.78), midrib * 0.28 * is_leaf * near_foliage);
 
 	ALBEDO = leaf_col;
 	float base_rough = use_roughness_tex > 0.5 ? texture(roughness_tex, UV).g : roughness_val;
-	ROUGHNESS = clamp(mix(base_rough + 0.08, max(base_rough - 0.12, 0.28), v_tip_weight), 0.18, 0.96);
+	float waxy_tip = mix(base_rough + 0.10, max(base_rough - 0.16, 0.26), v_tip_weight);
+	float vein_rough = mix(0.08, -0.09, vein_ridge * 0.65 + cluster_dapple * 0.35) * is_leaf * near_foliage;
+	ROUGHNESS = clamp(waxy_tip + vein_rough, 0.20, 0.94);
+
 	if (use_normal_tex > 0.5) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;
-		NORMAL_MAP_DEPTH = normal_scale;
+		NORMAL_MAP_DEPTH = normal_scale * 1.22;
+	} else if (near_foliage > 0.02) {
+		// Analytical pinnate leaflet & canopy cluster micro-normal relief for untextured MultiMesh foliage.
+		vec3 f_t = normalize(cross(abs(n_w.y) < 0.92 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), n_w));
+		vec3 f_b = cross(n_w, f_t);
+		float d_vein = cos(vein_phase) * 0.22 + (cluster_n - 0.5) * 0.34;
+		float d_rib = (UV.x * 2.0 - 1.0) * midrib * 0.32;
+		vec3 n_pert = normalize(n_w + (f_t * (d_vein + d_rib) + f_b * (d_vein * 0.75)) * (near_foliage * is_leaf));
+		NORMAL = normalize((VIEW_MATRIX * vec4(n_pert, 0.0)).xyz);
 	}
 	METALLIC = 0.0;
-	SPECULAR = 0.24;
+	SPECULAR = mix(0.28, 0.36, v_tip_weight * is_leaf);
 
-	// Translucent sunlit palm-frond subsurface backlight (view-dependent forward scatter + thin-tip glow).
-	vec3 n_w = normalize(v_world_normal) * (FRONT_FACING ? 1.0 : -1.0);
+	// Translucent sunlit palm-frond subsurface backlight (veined forward scatter + thin golden-lime rim!).
 	vec3 s_dir = normalize(sun_dir);
 	vec3 view_w = normalize(CAMERA_POSITION_WORLD - v_world);
-	float forward_scatter = pow(clamp(dot(-view_w, s_dir), 0.0, 1.0), 3.0);
+	float forward_scatter = pow(clamp(dot(-view_w, s_dir), 0.0, 1.0), 2.6);
+	float rim_back = pow(1.0 - abs(dot(n_w, view_w)), 2.2) * clamp(dot(view_w, -s_dir) * 0.5 + 0.5, 0.0, 1.0);
 	float back_lit = clamp(-dot(n_w, s_dir) * 0.55 + 0.45, 0.0, 1.0);
 	float sun_sh = cloud_light(v_world.xz);
-	float thinness = 0.35 + 0.65 * smoothstep(0.1, 0.95, v_tip_weight);
+	float thinness = (0.30 + 0.70 * smoothstep(0.08, 0.92, v_tip_weight)) * mix(0.82, 1.24, vein_ridge * 0.55 + cluster_dapple * 0.45);
 	float day_gate = smoothstep(0.02, 0.18, s_dir.y);
-	float sss_factor = (back_lit * 0.42 + forward_scatter * 0.95) * sss_strength * thinness * sun_sh * day_gate;
-	EMISSION = leaf_col * vec3(1.18, 1.24, 0.48) * sun_color * (sss_factor * 0.34);
+	float sss_factor = (back_lit * 0.46 + forward_scatter * 1.15 + rim_back * 0.55) * sss_strength * thinness * sun_sh * day_gate;
+	vec3 sss_tint = mix(vec3(1.22, 0.92, 0.72), vec3(1.24, 1.32, 0.46), is_leaf);
+	EMISSION = leaf_col * sss_tint * sun_color * (sss_factor * 0.44);
 }
 
 void light() {
 	float sun = LIGHT_IS_DIRECTIONAL ? cloud_light(v_world.xz) : 1.0;
 	float ndl = dot(NORMAL, LIGHT);
-	float wrapped = clamp((ndl + 0.34) / 1.34, 0.0, 1.0);
+	float wrapped = clamp((ndl + 0.32) / 1.32, 0.0, 1.0);
 	DIFFUSE_LIGHT += wrapped * ATTENUATION * LIGHT_COLOR * sun / PI;
 	if (LIGHT_IS_DIRECTIONAL) {
-		// Cool turquoise-sky bounce fill on shaded underside of tropical palm canopies.
-		float under = smoothstep(0.15, -0.45, ndl);
-		vec3 sky_fill = mix(ambient_color, sky_horizon_color * vec3(0.62, 0.88, 1.05), 0.55);
-		DIFFUSE_LIGHT += under * sky_fill * (0.16 * clamp(sun, 0.35, 1.1)) / PI;
+		// Rich cool turquoise-sky bounce fill on shaded underside of tropical palm & banyan canopies.
+		float under = smoothstep(0.16, -0.48, ndl);
+		vec3 sky_fill = mix(ambient_color, sky_horizon_color * vec3(0.54, 0.86, 1.08), 0.58);
+		DIFFUSE_LIGHT += under * sky_fill * (0.20 * clamp(sun, 0.35, 1.1)) / PI;
 	}
 	vec3 h_vec = normalize(VIEW + LIGHT);
-	float spec = pow(clamp(dot(NORMAL, h_vec), 0.0, 1.0), 26.0) * 0.16;
-	SPECULAR_LIGHT += spec * clamp(ndl, 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
+	float ndh = clamp(dot(NORMAL, h_vec), 0.0, 1.0);
+	float spec_pow = mix(18.0, 48.0, 1.0 - ROUGHNESS);
+	float spec_amp = mix(0.10, 0.28, 1.0 - ROUGHNESS);
+	SPECULAR_LIGHT += pow(ndh, spec_pow) * spec_amp * clamp(ndl, 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
 }
