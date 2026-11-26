@@ -869,6 +869,140 @@ func test_interactive_ship_bell_swing_signal_and_zero_primitives() -> void:
 		"Ship releases static ShipBell mesh & material caches cleanly when last ship exits tree")
 
 
+func test_sculpted_bow_hull_crest_medallions_liveries_and_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(26.0, 0.0, 0.0)
+
+	var ghost := SLOOP_SCENE.instantiate() as Ship
+	ghost.faction = &"ghost"
+	ghost.enable_effects = false
+	_root.add_child(ghost)
+	ghost.global_position = Vector3(-26.0, 0.0, 0.0)
+
+	var drowned := SLOOP_SCENE.instantiate() as Ship
+	drowned.faction = &"drowned"
+	drowned.enable_effects = false
+	_root.add_child(drowned)
+	drowned.global_position = Vector3(0.0, 0.0, -32.0)
+	await physics_frames(4)
+
+	# 1. Mounted on ALL ships (player Sloop, player Brigantine, Ghost & Drowned enemies),
+	# strictly 1 MeshInstance3D draw call (2 surfaces), zero raw PrimitiveMeshes, >= 240 tris!
+	var sloop_tris := 0
+	var brig_tris := 0
+	for spec: Array in [[sloop, "sloop", -4.25, 1.62], [brig, "brigantine", -6.30, 1.92], [drowned, "drowned", -4.25, 1.62]]:
+		var sh := spec[0] as Ship
+		var lbl := String(spec[1])
+		var exp_z := float(spec[2])
+		var exp_y := float(spec[3])
+		var crest := sh.hull_crest
+		check(crest != null and is_instance_valid(crest), "%s mounts HullCrest node" % lbl)
+		if crest == null:
+			continue
+		var mis := crest.find_children("*", "MeshInstance3D", true, false)
+		check_eq(mis.size(), 1, "%s HullCrest uses strictly 1 MeshInstance3D draw-call node" % lbl)
+		var tris := int(crest.call(&"get_triangle_count"))
+		check(tris >= 240, "%s HullCrest has rich sculpted geometry (%d >= 240 tris)" % [lbl, tris])
+		if lbl == "sloop":
+			sloop_tris = tris
+		elif lbl == "brigantine":
+			brig_tris = tris
+
+		var mi := mis[0] as MeshInstance3D
+		check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"%s HullCrest uses sculpted ArrayMesh (zero PrimitiveMeshes)" % lbl)
+		var am := mi.mesh as ArrayMesh
+		check_eq(am.get_surface_count(), 2, "%s HullCrest has 2 surfaces (frame + runic core)" % lbl)
+
+		# Verify finite unit normals, sRGB vertex colors, and symmetrical Port/Starboard placement on bow cheeks!
+		var bad_normals := 0
+		var srgb_missing := 0
+		for si in am.get_surface_count():
+			var arr := am.surface_get_arrays(si)
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+			var mat := mi.get_surface_override_material(si) as StandardMaterial3D
+			if mat != null and mat.vertex_color_use_as_albedo and not mat.vertex_color_is_srgb:
+				srgb_missing += 1
+		check_eq(bad_normals, 0, "%s HullCrest normals are all finite unit vectors" % lbl)
+		check_eq(srgb_missing, 0, "%s HullCrest materials enable vertex_color_is_srgb = true" % lbl)
+
+		var aabb := am.get_aabb()
+		check(aabb.position.x < -1.0 and aabb.end.x > 1.0,
+			"%s HullCrest spans Port (-X) and Starboard (+X) bow cheeks symmetrically (%s)" % [lbl, aabb])
+		check_near(aabb.get_center().x, 0.0, 0.02, "%s HullCrest is symmetrically centered in X" % lbl)
+		check(absf(aabb.get_center().z - exp_z) < 0.35 and absf(aabb.get_center().y - exp_y) < 0.25,
+			"%s HullCrest hugs forward bow cheek near z=%.2f, y=%.2f (center=%s)" % [lbl, exp_z, exp_y, aabb.get_center()])
+	print("    HullCrest sculpted tris: sloop=%d, brigantine=%d" % [sloop_tris, brig_tris])
+
+	# 2. Verify dynamic apply_livery across ALL emblem_modes 0..7 updates runic core emission cleanly!
+	var core_mat := sloop.hull_crest.call(&"get_core_material") as StandardMaterial3D
+	check(core_mat != null and core_mat.emission_enabled, "HullCrest exposes emissive runic core material")
+	var expected_energies := {
+		0: 0.15,
+		1: 0.85,
+		2: 1.45,
+		3: 1.65,
+		4: 0.45,
+		5: 1.50,
+		6: 0.70,
+		7: 0.75,
+	}
+	for mode_i: int in range(8):
+		sloop.apply_livery(Color.WHITE, Color.WHITE, Color.BLACK, Color.WHITE, mode_i)
+		check_near(core_mat.emission_energy_multiplier, float(expected_energies[mode_i]), 0.02,
+			"HullCrest emblem_mode=%d sets expected core emission energy %.2f (got %.2f)" % [
+				mode_i, float(expected_energies[mode_i]), core_mat.emission_energy_multiplier])
+		if mode_i == 2:
+			check(core_mat.emission.g > 0.85 and core_mat.emission.b > 0.45 and core_mat.emission_energy_multiplier >= 1.4,
+				"emblem_mode 2 (Drowned) produces vivid Concept Art 2 emerald-turquoise runic glow")
+		elif mode_i == 5:
+			check(core_mat.emission.g > 0.85 and core_mat.emission.b > 0.70 and core_mat.emission_energy_multiplier >= 1.45,
+				"emblem_mode 5 (Sunken Archive) produces vivid Concept Art 2 turquoise-emerald arcane seal glow")
+
+	# Auto-faction styling check on Drowned & Ghost ships right out of _ready().
+	var drowned_core := drowned.hull_crest.call(&"get_core_material") as StandardMaterial3D
+	check(drowned_core != null and drowned_core.emission_energy_multiplier >= 1.4 and drowned_core.emission.g > 0.85,
+		"Drowned faction ship auto-styles HullCrest with luminous emerald-turquoise glow on spawn")
+
+	# 3. Verify Ghost Ship spectral phase shift hides & fades HullCrest, then restores cleanly!
+	var ghost_core := ghost.hull_crest.call(&"get_core_material") as StandardMaterial3D
+	check(ghost.hull_crest.visible and ghost_core.emission_energy_multiplier >= 1.6,
+		"Ghost ship HullCrest starts visible with ethereal cyan-jade glow")
+	ghost.set_spectral_phase(0.0)
+	check(not ghost.hull_crest.visible, "set_spectral_phase(0.0) hides Ghost HullCrest")
+	check_near(ghost_core.emission_energy_multiplier, 0.0, 0.01,
+		"set_spectral_phase(0.0) fades Ghost HullCrest core emission to 0.0")
+	ghost.set_spectral_phase(0.5)
+	check(ghost.hull_crest.visible, "set_spectral_phase(0.5) keeps HullCrest visible at half phase")
+	check_near(ghost_core.emission_energy_multiplier, 1.65 * 0.5, 0.03,
+		"set_spectral_phase(0.5) scales Ghost HullCrest emission linearly")
+	ghost.set_spectral_phase(1.0)
+	check(ghost.hull_crest.visible, "set_spectral_phase(1.0) restores Ghost HullCrest visibility")
+	check_near(ghost_core.emission_energy_multiplier, 1.65, 0.02,
+		"set_spectral_phase(1.0) restores full Ghost HullCrest emission")
+
+	# 4. Clean teardown releases all static HullCrest mesh & frame material caches (zero leaks!).
+	await _end()
+	var crest_gd := load(Ship.HULL_CREST_PATH) as GDScript
+	check(crest_gd != null, "HullCrest script loads cleanly for cache audit")
+	if crest_gd != null:
+		check_eq(int(crest_gd.get(&"_active_crests")), 0, "HullCrest _active_crests drops to 0 on teardown")
+		check(crest_gd.get(&"_sloop_mesh") == null and crest_gd.get(&"_brig_mesh") == null \
+			and crest_gd.get(&"_frame_mat") == null,
+			"HullCrest releases static _sloop_mesh, _brig_mesh, and _frame_mat caches on teardown")
+
+
+
 
 
 

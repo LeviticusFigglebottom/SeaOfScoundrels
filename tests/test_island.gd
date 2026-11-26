@@ -1340,6 +1340,172 @@ func test_tavern_bard_interactive_shanty_request_and_teardown() -> void:
 	Audio.stop_shanty(0.05)
 
 
+func test_outpost_tavern_signboard_and_interactive_pier_fog_bell() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.set_weather(0.0, 11.0, 0.2)
+
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	var op0 := arch.get_outpost(0)
+	var op1 := arch.get_outpost(1)
+	check(op0 != null and op1 != null, "Archipelago builds at least two Outposts")
+	if op0 == null or op1 == null:
+		arch.queue_free()
+		Weather.apply_state(saved_weather)
+		return
+
+	# 1. Verify Sculpted Swinging TavernSignboard on OutpostTavern front porch fascia.
+	var sign0 := op0.tavern_sign_node
+	var pivot0 := op0.tavern_sign_pivot
+	check(sign0 != null and sign0.name == "TavernSignboard", "Outpost builds TavernSignboard node")
+	check(pivot0 != null and pivot0.name == "TavernSignPivot", "TavernSignboard builds swinging TavernSignPivot")
+	var bracket_mi := sign0.get_node_or_null(^"TavernSignBracket") as MeshInstance3D if sign0 != null else null
+	var board_mi := pivot0.get_node_or_null(^"TavernSignBoard") as MeshInstance3D if pivot0 != null else null
+	var face_mi := pivot0.get_node_or_null(^"TavernSignFace") as MeshInstance3D if pivot0 != null else null
+	var bracket_mi1 := op1.tavern_sign_node.get_node_or_null(^"TavernSignBracket") as MeshInstance3D if op1.tavern_sign_node != null else null
+	var board_mi1 := op1.tavern_sign_pivot.get_node_or_null(^"TavernSignBoard") as MeshInstance3D if op1.tavern_sign_pivot != null else null
+
+	check(bracket_mi != null and bracket_mi.mesh is ArrayMesh, "TavernSignBracket uses sculpted ArrayMesh")
+	check(board_mi != null and board_mi.mesh is ArrayMesh, "TavernSignBoard uses sculpted ArrayMesh")
+	check(face_mi != null and face_mi.mesh is ArrayMesh, "TavernSignFace uses sculpted double-sided ArrayMesh")
+	if bracket_mi != null and bracket_mi1 != null:
+		check_eq(bracket_mi.mesh, bracket_mi1.mesh, "Outposts share statically cached TavernSignBracket mesh")
+	if board_mi != null and board_mi1 != null:
+		check_eq(board_mi.mesh, board_mi1.mesh, "Outposts share statically cached TavernSignBoard mesh")
+
+	var bracket_tris := _count_array_mesh_tris(bracket_mi.mesh) if bracket_mi != null else 0
+	var board_tris := _count_array_mesh_tris(board_mi.mesh) if board_mi != null else 0
+	var face_tris := _count_array_mesh_tris(face_mi.mesh) if face_mi != null else 0
+	check(bracket_tris >= 220, "TavernSignBracket has forged scrollwork geometry (%d tris >= 220)" % bracket_tris)
+	check(board_tris >= 220, "TavernSignBoard has sculpted chain links, beveled plaque & brass brackets (%d tris >= 220)" % board_tris)
+	check_eq(face_tris, 4, "TavernSignFace is a crisp double-sided 4-tri UV plaque")
+
+	# Verify 256x160 painted crest texture & EMISSION_OP_MULTIPLY warm gold glow mask (dark wood = 0 emission!).
+	var face_mat := face_mi.material_override as StandardMaterial3D if face_mi != null else null
+	check(face_mat != null and face_mat.emission_enabled and face_mat.emission_operator == BaseMaterial3D.EMISSION_OP_MULTIPLY,
+		"TavernSignFace uses EMISSION_OP_MULTIPLY so dark mahogany stays unlit while gold emblem & banner glint")
+	if face_mat != null:
+		var alb_tex := face_mat.albedo_texture as ImageTexture
+		var emit_tex := face_mat.emission_texture as ImageTexture
+		check(alb_tex != null and alb_tex.get_width() == 256 and alb_tex.get_height() == 160,
+			"TavernSignFace paints 256x160 albedo crest ImageTexture")
+		check(emit_tex != null and emit_tex.get_width() == 256 and emit_tex.get_height() == 160,
+			"TavernSignFace paints 256x160 warm gold emission mask ImageTexture")
+		if emit_tex != null:
+			var eimg := emit_tex.get_image()
+			# Plain dark mahogany corner field stays zero emission; bright gold border/text shines!
+			var wood_px := eimg.get_pixel(28, 30)
+			var frame_px := eimg.get_pixel(6, 80)
+			check(wood_px.r < 0.02 and wood_px.g < 0.02 and wood_px.b < 0.02,
+				"Dark mahogany wood field has zero emission in glow mask (got %s)" % str(wood_px))
+			check(frame_px.r > 0.35 and frame_px.g > 0.25,
+				"Gilded border/emblem glows warmly in emission mask (got %s)" % str(frame_px))
+
+	# Verify wind-driven pendulum sway updates tavern_sign_pivot.rotation smoothly across frames!
+	if pivot0 != null:
+		var rot_before := pivot0.rotation
+		for _i in 10:
+			await get_tree().process_frame
+		var rot_delta := pivot0.rotation.distance_to(rot_before)
+		check(rot_delta > 0.005,
+			"TavernSignPivot sways smoothly under harbour wind (delta=%.4f rad)" % rot_delta)
+
+	# 2. Verify Interactive Seaward PierFogBell mounted atop seaward PORT bollard piling (-1.58, 2.23, -15.6).
+	var bell0 := op0.pier_bell_node
+	var bell_piv0 := op0.pier_bell_pivot
+	var bell_it := op0.pier_bell_interactable
+	check(bell0 != null and bell0.name == "PierFogBell", "Outpost builds PierFogBell atop seaward port piling")
+	check(bell_piv0 != null and bell_piv0.name == "PierBellPivot", "PierFogBell builds swinging PierBellPivot")
+	check(bell_it != null and bell_it.name == "PierFogBellInteractable" and bell_it.enabled,
+		"PierFogBell exposes enabled PierFogBellInteractable")
+	if bell_it != null:
+		check_eq(bell_it.prompt, "Ring harbour fog-bell", "PierFogBellInteractable prompt matches")
+		check_near(bell_it.reach, 2.4, 0.01, "PierFogBellInteractable reach is 2.4 m")
+
+	if bell0 != null:
+		var expected_bell_pos := op0.dock_local_transform * Vector3(-1.58, 2.23, -15.6)
+		check(bell0.position.distance_to(expected_bell_pos) < 0.02,
+			"PierFogBell sits squarely atop DockPier seaward PORT bollard piling")
+
+	var frame_mi := bell0.get_node_or_null(^"PierBellFrame") as MeshInstance3D if bell0 != null else null
+	var cup_mi := bell_piv0.get_node_or_null(^"PierBellCup") as MeshInstance3D if bell_piv0 != null else null
+	var frame_mi1 := op1.pier_bell_node.get_node_or_null(^"PierBellFrame") as MeshInstance3D if op1.pier_bell_node != null else null
+	var cup_mi1 := op1.pier_bell_pivot.get_node_or_null(^"PierBellCup") as MeshInstance3D if op1.pier_bell_pivot != null else null
+
+	check(frame_mi != null and frame_mi.mesh is ArrayMesh, "PierBellFrame uses sculpted ArrayMesh")
+	check(cup_mi != null and cup_mi.mesh is ArrayMesh, "PierBellCup uses lathe-turned sculpted ArrayMesh")
+	if frame_mi != null and frame_mi1 != null:
+		check_eq(frame_mi.mesh, frame_mi1.mesh, "Outposts share statically cached PierBellFrame mesh")
+	if cup_mi != null and cup_mi1 != null:
+		check_eq(cup_mi.mesh, cup_mi1.mesh, "Outposts share statically cached PierBellCup mesh")
+
+	var frame_tris := _count_array_mesh_tris(frame_mi.mesh) if frame_mi != null else 0
+	var cup_tris := _count_array_mesh_tris(cup_mi.mesh) if cup_mi != null else 0
+	check(frame_tris >= 280, "PierBellFrame has sculpted gallows yoke & piling collar (%d tris >= 280)" % frame_tris)
+	check(cup_tris >= 380, "PierBellCup has sculpted hollow lathe-turned bronze bell & clapper (%d tris >= 380)" % cup_tris)
+
+	# Confirm ZERO raw PrimitiveMeshes anywhere across TavernSignboard, PierFogBell & the entire Outpost!
+	var raw_prims: Array[String] = []
+	for node in op0.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims.append(mi.name)
+	check(raw_prims.is_empty(), "Outpost has zero raw PrimitiveMeshes (found: %s)" % str(raw_prims))
+
+	# Verify ring_pier_bell() & PierFogBellInteractable impulse pendulum swing, emit pier_bell_rung & post notice!
+	var rung_pawns: Array[Node] = []
+	var rung_cb := func(p: Node) -> void: rung_pawns.append(p)
+	op0.pier_bell_rung.connect(rung_cb)
+	var notices: Array[String] = []
+	var notice_cb := func(txt: String) -> void: notices.append(txt)
+	Game.notice.connect(notice_cb)
+
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	add_child(captain)
+	captain.global_position = bell0.global_position + Vector3(0.8, -0.8, 0.8) if bell0 != null else Vector3.ZERO
+
+	if bell_it != null:
+		bell_it.interact(captain)
+	else:
+		op0.ring_pier_bell(captain)
+	check_eq(rung_pawns.size(), 1, "Interacting with PierFogBell emits pier_bell_rung once")
+	check_eq(rung_pawns[0], captain, "pier_bell_rung passes interacting Pawn")
+	var expected_notice := "Harbour fog-bell tolls across %s! Fair winds, Captain!" % op0.display_name
+	check(notices.has(expected_notice), "ring_pier_bell posts harbour greeting notice (%s)" % expected_notice)
+
+	var max_bell_swing := absf(bell_piv0.rotation.x) if bell_piv0 != null else 0.0
+	for _i in 12:
+		await get_tree().process_frame
+		if bell_piv0 != null:
+			max_bell_swing = maxf(max_bell_swing, absf(bell_piv0.rotation.x))
+	check(max_bell_swing > 0.15,
+		"ring_pier_bell swings PierBellPivot robustly via damped harmonic pendulum (max=%.3f rad)" % max_bell_swing)
+
+	print("    outpost wave21c sculpted tris: TavernSignBracket=%d, TavernSignBoard=%d, TavernSignFace=%d, PierBellFrame=%d, PierBellCup=%d" % [
+		bracket_tris, board_tris, face_tris, frame_tris, cup_tris])
+
+	Game.notice.disconnect(notice_cb)
+	op0.pier_bell_rung.disconnect(rung_cb)
+	captain.queue_free()
+	arch.queue_free()
+	await physics_frames(3)
+
+	# 3. Verify 100% zero-leak teardown of all new static shared meshes, materials & textures!
+	check(not is_instance_valid(sign0) and not is_instance_valid(bell0),
+		"TavernSignboard and PierFogBell freed cleanly with Outpost")
+	check(Outpost._tavern_sign_bracket_mesh == null and Outpost._tavern_sign_board_mesh == null \
+			and Outpost._tavern_sign_face_mesh == null and Outpost._tavern_sign_albedo_tex == null \
+			and Outpost._tavern_sign_emit_tex == null and Outpost._tavern_sign_face_mat == null \
+			and Outpost._pier_bell_frame_mesh == null and Outpost._pier_bell_cup_mesh == null \
+			and Outpost._pier_bell_iron_mat == null and Outpost._pier_bell_bronze_mat == null,
+		"Outpost.clear_shared_cache() releases all TavernSignboard & PierFogBell static resources cleanly")
+	Weather.apply_state(saved_weather)
+
+
+
 
 
 

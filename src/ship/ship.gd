@@ -27,6 +27,7 @@ const SAIL_WIND_SHADER: Shader = preload("res://src/ship/sail_wind.gdshader")
 const HOLD_WATER_SHADER: Shader = preload("res://src/ship/hold_water.gdshader")
 const GHOST_HULL_SHADER: Shader = preload("res://src/ship/ghost_hull.gdshader")
 const SHIP_NAMEPLATE_PATH := "res://src/ship/ship_nameplate.gd"
+const HULL_CREST_PATH := "res://src/ship/hull_crest.gd"
 
 ## Collision layer 2 (ships). Mask deliberately excludes layer 3 (pawns) so
 ## CharacterBody3D pawns never shove the hull (docs/ARCHITECTURE.md).
@@ -202,6 +203,7 @@ var _active_muzzle_vfx: Array[Node] = []
 
 var cabin_furnishings: CaptainCabinFurnishings = null
 var ship_nameplate: Node3D = null
+var hull_crest: Node3D = null
 var ship_name: String = "The Gilded Scoundrel"
 var ship_bell_node: Node3D = null
 var ship_bell_interactable: Interactable = null
@@ -273,6 +275,7 @@ func _ready() -> void:
 	_build_deck_extras()
 	_setup_cabin_furnishings()
 	_setup_ship_nameplate()
+	_setup_hull_crest()
 	if enable_effects:
 		_build_bow_spray()
 		_setup_lookout_glint()
@@ -338,6 +341,7 @@ func _exit_tree() -> void:
 	ship_bell_interactable = null
 	ship_bell_node = null
 	ship_nameplate = null
+	hull_crest = null
 	cabin_furnishings = null
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
@@ -1119,6 +1123,16 @@ func _setup_ship_nameplate() -> void:
 		ship_nameplate = np_gd.call(&"mount_to_ship", self, ship_name) as Node3D
 
 
+func _setup_hull_crest() -> void:
+	if not ResourceLoader.exists(HULL_CREST_PATH):
+		return
+	var crest_gd := load(HULL_CREST_PATH) as GDScript
+	if crest_gd != null and crest_gd.has_method(&"mount_to_ship"):
+		hull_crest = crest_gd.call(&"mount_to_ship", self) as Node3D
+		if hull_crest != null and hull_crest.has_method(&"apply_emblem"):
+			hull_crest.call(&"apply_emblem", get_emblem_mode(), _effective_glow_accent)
+
+
 ## Update the ship's display name and live gilded transom nameplate (if mounted).
 func set_ship_name(new_name: String) -> void:
 	var cleaned := new_name.strip_edges()
@@ -1745,6 +1759,8 @@ func set_spectral_phase(alpha: float, flare: float = 0.0) -> void:
 	for l in _lantern_lights:
 		if is_instance_valid(l):
 			l.visible = _spectral_phase > 0.02
+	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"set_spectral_alpha"):
+		hull_crest.call(&"set_spectral_alpha", _spectral_phase)
 	visible = _spectral_phase > 0.02
 
 
@@ -1830,6 +1846,9 @@ func _apply_current_livery() -> void:
 		else:
 			wm.emission = Color(1.0, 0.72, 0.34)
 			wm.albedo_color = Color(1.0, 1.0, 1.0, 0.30)
+
+	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"apply_emblem"):
+		hull_crest.call(&"apply_emblem", emblem_mode, eff_glow)
 
 	var need_hull_livery := (
 		is_ghost
@@ -3090,6 +3109,8 @@ func _update_lod() -> void:
 			ship_bell_node.visible = not want_lod
 		if ship_nameplate != null and is_instance_valid(ship_nameplate):
 			ship_nameplate.visible = not want_lod
+		if hull_crest != null and is_instance_valid(hull_crest):
+			hull_crest.visible = (not want_lod) and (_spectral_phase > 0.05)
 
 
 func _update_visuals(delta: float) -> void:

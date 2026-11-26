@@ -486,3 +486,89 @@ func test_voyage_board_and_living_sea_events() -> void:
 
 	await _end()
 
+
+# ==============================================================================
+# Test 5: End-to-End Wave 16-20 Living Sea & Captain Craftsmanship Integration
+# ==============================================================================
+
+func test_wave_16_to_20_living_sea_and_captain_features_integration() -> void:
+	_begin(false)
+	var m := _spawn_main()
+	await physics_frames(8)
+
+	var arch: Archipelago = m.get(&"archipelago") as Archipelago
+	var ship: Ship = m.get(&"player_ship") as Ship
+	var player: Pawn = m.get(&"player_pawn") as Pawn
+	var hud: GameHUD = m.get(&"hud") as GameHUD
+	var entities := m.get_node_or_null(^"Entities")
+
+	# 1. ShipNameplate, ShipBell & CaptainCabinFurnishings live on the player ship.
+	check(ship.ship_nameplate != null and is_instance_valid(ship.ship_nameplate),
+		"player ship mounts gilded ShipNameplate on stern transom")
+	ship.set_ship_name("Gilded Sovereign")
+	check_eq(ship.ship_name, "Gilded Sovereign", "ship.set_ship_name updates ship_name live")
+	if ship.ship_nameplate != null:
+		check_eq(String(ship.ship_nameplate.get(&"current_name")), "Gilded Sovereign",
+			"ShipNameplate plaque reflects updated name live")
+	check(ship.ship_bell_node != null and is_instance_valid(ship.ship_bell_node),
+		"player ship mounts sculpted bronze ShipBell")
+	check(ship.cabin_furnishings != null and is_instance_valid(ship.cabin_furnishings),
+		"player ship mounts CaptainCabinFurnishings")
+	var bell_rang := [false]
+	if ship.has_signal(&"bell_rung"):
+		ship.connect(&"bell_rung", func(_p: Node) -> void: bell_rang[0] = true)
+	ship.ring_bell(player)
+	check(bell_rang[0], "ship.ring_bell(player) emits bell_rung cleanly")
+
+	# 2. Port Scoundrel Outpost mounts rotating LighthouseBeam & interactive TavernBard shanty toggle.
+	var port := arch.get_island_by_id("port_scoundrel") as Outpost
+	check(port != null, "Port Scoundrel Outpost present")
+	if port != null:
+		check(port.beacon_beam != null and port.beacon_beam.name == "LighthouseBeam",
+			"Port Scoundrel Outpost mounts volumetric LighthouseBeam")
+		check(port.tavern_bard_node != null and is_instance_valid(port.tavern_bard_node),
+			"Port Scoundrel Outpost mounts campfire TavernBardNPC")
+		var on_state := port.toggle_tavern_bard_shanty(player)
+		check(on_state and port.tavern_bard_playing, "toggle_tavern_bard_shanty turns tavern shanty ON")
+		var off_state := port.toggle_tavern_bard_shanty(player)
+		check(not off_state and not port.tavern_bard_playing, "toggle_tavern_bard_shanty turns tavern shanty OFF")
+
+	# 3. Crescent Atoll hosts full living coral ecosystem: CoralReef, ReefFishSchool & MantaRay.
+	var atoll := arch.get_island_by_id("crescent_atoll")
+	check(atoll != null, "Crescent Atoll present")
+	if atoll != null:
+		check(atoll.get_node_or_null(^"CoralReef") != null, "Crescent Atoll hosts CoralReef")
+		check(atoll.get_node_or_null(^"ReefFishSchool") != null, "Crescent Atoll hosts ReefFishSchool")
+		check(atoll.get_node_or_null(^"MantaRay") != null, "Crescent Atoll hosts gliding MantaRay")
+
+	# 4. OceanWhale spawns a breaching leviathan with BreachSprayCurtain and frees cleanly.
+	var whale := OceanWhale.spawn_breach(entities, Vector3(120.0, 0.0, -240.0), 0.4)
+	check(whale != null and is_instance_valid(whale), "OceanWhale.spawn_breach spawns cleanly in main world")
+	whale.force_breach_apex()
+	var curtain := whale.get_node_or_null(^"BreachSprayCurtain") as MeshInstance3D
+	check(curtain != null and curtain.visible and curtain.mesh is ArrayMesh,
+		"OceanWhale.force_breach_apex displays sculpted BreachSprayCurtain ArrayMesh")
+	whale.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(whale), "OceanWhale cleans up cleanly in live world")
+
+	# 5. GameHUD SailingTrimPill hides while free-roaming, shows ASCII knots/trim at Station_Helm, and hides on leave!
+	var pill := hud.find_child("SailingTrimPill", true, false) as Control
+	check(pill != null, "GameHUD builds SailingTrimPill telemetry widget")
+	await get_tree().process_frame
+	check(not hud.is_sailing_telemetry_visible(), "SailingTrimPill hidden while free-roaming on deck")
+	var helm := ship.get_station(&"helm")
+	check(helm != null and player.enter_station(helm), "player occupies Station_Helm")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(hud.is_sailing_telemetry_visible(), "SailingTrimPill becomes visible at Station_Helm")
+	var pill_txt := hud.get_sailing_telemetry_text()
+	check(pill_txt.contains("kt"), "SailingTrimPill displays ASCII knots telemetry (got '%s')" % pill_txt)
+	player.leave_station()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not hud.is_sailing_telemetry_visible(), "SailingTrimPill hides cleanly on leave_station()")
+
+	await _end()
+
+

@@ -10,6 +10,7 @@ signal treasure_sold(item: Node, gold: int, renown: int)
 signal voyage_board_used(pawn: Node)
 signal ship_restocked(ship: Node)
 signal tavern_toast(pawn: Node)
+signal pier_bell_rung(pawn: Node)
 
 const DOCK_PIER_SCENE: PackedScene = preload("res://assets/generated/props/dock_pier.glb")
 const TAVERN_SCENE: PackedScene = preload("res://assets/generated/props/outpost_tavern.glb")
@@ -31,8 +32,11 @@ const MOORING_ABEAM_OFFSET := 4.45
 const MOORING_ALONG_PIER := -11.5
 
 const BUNTING_WIND_CULL_DIST := 160.0
+const TAVERN_SIGN_SWAY_CULL_DIST := 120.0
 const MIN_BUNTING_ROPE_CLEARANCE := 4.75
 const TAVERN_KEG_HEAL := 35.0
+const SIGN_TEX_W := 256
+const SIGN_TEX_H := 160
 
 # Painterly maritime bunting palette (authored in sRGB).
 const BUNTING_PALETTE: Array[Color] = [
@@ -61,6 +65,19 @@ const COL_PEWTER_SHADE := Color(0.42, 0.46, 0.51)
 const COL_GROG_AMBER := Color(0.58, 0.26, 0.06)
 const COL_GROG_FOAM := Color(0.95, 0.91, 0.80)
 
+# Sculpted Tavern Signboard & Seaward Pier Fog-Bell palette (authored in sRGB).
+const COL_SIGN_IRON_HI := Color(0.24, 0.25, 0.28)
+const COL_SIGN_IRON_LO := Color(0.11, 0.12, 0.14)
+const COL_SIGN_MAHOGANY_HI := Color(0.36, 0.17, 0.085)
+const COL_SIGN_MAHOGANY_MID := Color(0.24, 0.105, 0.052)
+const COL_SIGN_MAHOGANY_LO := Color(0.13, 0.055, 0.026)
+const COL_SIGN_BRASS_HI := Color(0.96, 0.78, 0.28)
+const COL_SIGN_BRASS_LO := Color(0.62, 0.44, 0.12)
+const COL_BELL_BRONZE_HI := Color(0.86, 0.67, 0.28)
+const COL_BELL_BRONZE_MID := Color(0.66, 0.49, 0.21)
+const COL_BELL_BRONZE_DARK := Color(0.34, 0.24, 0.11)
+const COL_BELL_VERDIGRIS := Color(0.36, 0.48, 0.34)
+
 const TAVERN_TOASTS: Array[String] = [
 	"To fair winds and full holds! (+35 HP)",
 	"Raise a mug to Port Scoundrel — may the Kraken take the hindmost! (+35 HP)",
@@ -69,7 +86,7 @@ const TAVERN_TOASTS: Array[String] = [
 	"May your compass stay true and your powder stay dry! (+35 HP)",
 ]
 
-# Statically cached procedural ArrayMeshes & materials shared across Outposts.
+# Statically cached procedural ArrayMeshes, textures & materials shared across Outposts.
 static var _active_outposts: int = 0
 static var _keg_mesh: ArrayMesh = null
 static var _keg_mat: StandardMaterial3D = null
@@ -77,6 +94,18 @@ static var _beacon_halo_mesh: ArrayMesh = null
 static var _beacon_halo_mat: StandardMaterial3D = null
 static var _beacon_beam_mesh: ArrayMesh = null
 static var _beacon_beam_mat: ShaderMaterial = null
+static var _tavern_sign_bracket_mesh: ArrayMesh = null
+static var _tavern_sign_board_mesh: ArrayMesh = null
+static var _tavern_sign_face_mesh: ArrayMesh = null
+static var _tavern_sign_iron_mat: StandardMaterial3D = null
+static var _tavern_sign_board_mat: StandardMaterial3D = null
+static var _tavern_sign_face_mat: StandardMaterial3D = null
+static var _tavern_sign_albedo_tex: ImageTexture = null
+static var _tavern_sign_emit_tex: ImageTexture = null
+static var _pier_bell_frame_mesh: ArrayMesh = null
+static var _pier_bell_cup_mesh: ArrayMesh = null
+static var _pier_bell_iron_mat: StandardMaterial3D = null
+static var _pier_bell_bronze_mat: StandardMaterial3D = null
 
 var dock_yaw: float = 0.0
 var dock_node: Node3D = null
@@ -84,6 +113,11 @@ var dock_local_transform: Transform3D = Transform3D.IDENTITY
 var dock_pier_end_local: Vector3 = Vector3.ZERO
 var tavern_node: Node3D = null
 var tavern_shelter: Area3D = null
+var tavern_sign_node: Node3D = null
+var tavern_sign_pivot: Node3D = null
+var pier_bell_node: Node3D = null
+var pier_bell_pivot: Node3D = null
+var pier_bell_interactable: Interactable = null
 var beacon_node: Node3D = null
 var beacon_light: OmniLight3D = null
 var beacon_beam: MeshInstance3D = null
@@ -105,6 +139,15 @@ var _bunting_mat: ShaderMaterial = null
 var _bunting_clock: float = 0.0
 var _bunting_wind_accum: float = 0.25
 var _toast_index: int = 0
+var _tavern_sign_phase: float = 0.0
+var _tavern_sign_light: OmniLight3D = null
+var _tavern_sign_bracket_mi: MeshInstance3D = null
+var _tavern_sign_board_mi: MeshInstance3D = null
+var _tavern_sign_face_mi: MeshInstance3D = null
+var _pier_bell_frame_mi: MeshInstance3D = null
+var _pier_bell_cup_mi: MeshInstance3D = null
+var _pier_bell_angle: float = 0.0
+var _pier_bell_vel: float = 0.0
 
 
 func _init() -> void:
@@ -142,6 +185,30 @@ func _process(delta: float) -> void:
 
 	# Rotating volumetric lighthouse beacon beam (active at dusk/night or heavy storm mist; 0 ms in clear midday!).
 	_update_beacon_beam(delta)
+
+	# Distance-gated wind-driven pendulum sway for the hanging Tavern Signboard (<= 120 m).
+	if tavern_sign_pivot != null and is_instance_valid(tavern_sign_pivot) \
+			and dist_sq <= TAVERN_SIGN_SWAY_CULL_DIST * TAVERN_SIGN_SWAY_CULL_DIST:
+		var wind_spd := maxf(2.0, Weather.wind_speed if Weather != null else 6.0)
+		var wind_factor := clampf(wind_spd / 12.0, 0.35, 2.2)
+		_tavern_sign_phase += delta * (1.85 + wind_factor * 0.55)
+		var gust := 0.75 + 0.25 * sin(_tavern_sign_phase * 0.43 + dock_yaw)
+		var sway_amp := clampf(0.045 + wind_factor * 0.085, 0.05, 0.24) * gust
+		tavern_sign_pivot.rotation.x = sin(_tavern_sign_phase) * sway_amp
+		tavern_sign_pivot.rotation.z = sin(_tavern_sign_phase * 0.67 + 1.1) * sway_amp * 0.28
+
+	# Damped harmonic pendulum swing for the seaward Pier Fog-Bell (zero cost when at rest).
+	if pier_bell_pivot != null and is_instance_valid(pier_bell_pivot):
+		if absf(_pier_bell_angle) > 0.0005 or absf(_pier_bell_vel) > 0.0005:
+			var step_dt := minf(delta, 0.05)
+			var accel := -34.0 * _pier_bell_angle - 2.35 * _pier_bell_vel
+			_pier_bell_vel += accel * step_dt
+			_pier_bell_angle = clampf(_pier_bell_angle + _pier_bell_vel * step_dt, -0.78, 0.78)
+			pier_bell_pivot.rotation.x = _pier_bell_angle
+		elif pier_bell_pivot.rotation.x != 0.0:
+			_pier_bell_angle = 0.0
+			_pier_bell_vel = 0.0
+			pier_bell_pivot.rotation.x = 0.0
 
 	if _harbour_npcs.is_empty():
 		return
@@ -202,6 +269,27 @@ func _exit_tree() -> void:
 		if Audio != null:
 			Audio.set_shanty_emitter(&"concertina", null)
 			Audio.stop_shanty(0.05)
+	for mi: MeshInstance3D in [
+		_tavern_sign_bracket_mi,
+		_tavern_sign_board_mi,
+		_tavern_sign_face_mi,
+		_pier_bell_frame_mi,
+		_pier_bell_cup_mi,
+	]:
+		if mi != null and is_instance_valid(mi):
+			mi.material_override = null
+			mi.mesh = null
+	_tavern_sign_bracket_mi = null
+	_tavern_sign_board_mi = null
+	_tavern_sign_face_mi = null
+	_pier_bell_frame_mi = null
+	_pier_bell_cup_mi = null
+	tavern_sign_node = null
+	tavern_sign_pivot = null
+	_tavern_sign_light = null
+	pier_bell_node = null
+	pier_bell_pivot = null
+	pier_bell_interactable = null
 	tavern_keg_node = null
 	tavern_keg_interactable = null
 	tavern_bard_interactable = null
@@ -215,7 +303,7 @@ func _exit_tree() -> void:
 		clear_shared_cache()
 
 
-## Release statically cached procedural Outpost meshes & materials cleanly.
+## Release statically cached procedural Outpost meshes, textures & materials cleanly.
 static func clear_shared_cache() -> void:
 	_keg_mesh = null
 	_keg_mat = null
@@ -223,6 +311,21 @@ static func clear_shared_cache() -> void:
 	_beacon_halo_mat = null
 	_beacon_beam_mesh = null
 	_beacon_beam_mat = null
+	if _tavern_sign_face_mat != null:
+		_tavern_sign_face_mat.albedo_texture = null
+		_tavern_sign_face_mat.emission_texture = null
+	_tavern_sign_bracket_mesh = null
+	_tavern_sign_board_mesh = null
+	_tavern_sign_face_mesh = null
+	_tavern_sign_iron_mat = null
+	_tavern_sign_board_mat = null
+	_tavern_sign_face_mat = null
+	_tavern_sign_albedo_tex = null
+	_tavern_sign_emit_tex = null
+	_pier_bell_frame_mesh = null
+	_pier_bell_cup_mesh = null
+	_pier_bell_iron_mat = null
+	_pier_bell_bronze_mat = null
 
 
 ## Build all outpost structures on the sculpted harbour terrain.
@@ -247,6 +350,9 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 	dock_node = _place_outpost_prop(
 		DOCK_PIER_SCENE, "DockPier", dock_local_transform, prop_body, props_root)
 	_attach_lantern_from_empty(dock_node, "Lantern_Dock", Color(1.0, 0.72, 0.34), 2.8, 18.0, 0.10, rng.randf() * TAU)
+	# Interactive sculpted bronze harbour fog-bell crowning the seaward port bollard piling!
+	var bell_xform := dock_local_transform * Transform3D(Basis.IDENTITY, Vector3(-1.58, 2.23, -15.6))
+	_build_pier_fog_bell(bell_xform, props_root)
 
 	# Safe deep-water mooring berth ~4.45 m starboard abeam of pier, bow facing open sea (-Z).
 	var mooring_origin := dock_local_transform * Vector3(MOORING_ABEAM_OFFSET, 0.0, MOORING_ALONG_PIER)
@@ -261,6 +367,9 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		TAVERN_SCENE, "OutpostTavern", tav_xform, prop_body, props_root)
 	_attach_lantern_from_empty(tavern_node, "Lantern_Tavern", Color(1.0, 0.70, 0.30), 3.0, 20.0, 0.12, rng.randf() * TAU)
 	_build_tavern_shelter(tav_xform)
+	# Sculpted wind-swinging carved tavern hanging signboard off the front-left porch fascia!
+	var sign_xform := tav_xform * Transform3D(Basis.IDENTITY, Vector3(-3.10, 3.12, -5.62))
+	_build_tavern_signboard(sign_xform, props_root, rng)
 
 	# 3. Tall iconic Beacon Tower crowning the rocky harbour headland.
 	var bcn_pos: Vector3 = harbour_pt.call(24.0, -6.5)
@@ -409,6 +518,25 @@ func toggle_tavern_bard_shanty(_pawn: Node = null) -> bool:
 			Audio.stop_shanty(0.5)
 		_detach_bard_shanty_motes(true)
 	return tavern_bard_playing
+
+
+## Toll the sculpted seaward harbour pier fog-bell, impulse its damped harmonic
+## pendulum swing, play spatial bronze chime audio, post a harbour greeting, and emit `pier_bell_rung`.
+func ring_pier_bell(pawn: Node = null) -> void:
+	_pier_bell_vel += 9.2
+	if pier_bell_pivot != null and is_instance_valid(pier_bell_pivot):
+		_pier_bell_angle = clampf(_pier_bell_angle + 0.04, -0.78, 0.78)
+		pier_bell_pivot.rotation.x = _pier_bell_angle
+	var sfx_pos := global_position
+	if pier_bell_node != null and is_instance_valid(pier_bell_node) and pier_bell_node.is_inside_tree():
+		sfx_pos = pier_bell_node.global_position
+	if Audio != null:
+		var sfx_id := &"ship_bell" if Audio.has_sound(&"ship_bell") else &"parry_ring"
+		Audio.play_sfx(sfx_id, sfx_pos, -1.0 if sfx_id == &"ship_bell" else -4.0, 0.04)
+	if Game != null:
+		var harbour_name := display_name if not display_name.is_empty() else "the harbour"
+		Game.post_notice("Harbour fog-bell tolls across %s! Fair winds, Captain!" % harbour_name)
+	pier_bell_rung.emit(pawn)
 
 
 func _attach_bard_shanty_motes() -> void:
@@ -765,6 +893,92 @@ func _build_tavern_grog_keg(keg_xform: Transform3D, prop_body: StaticBody3D, pro
 	tavern_keg_node.add_child(tavern_keg_interactable)
 
 
+# ------------------------------------------------------------------ Swinging Carved Tavern Signboard
+
+func _build_tavern_signboard(sign_xform: Transform3D, props_root: Node3D, rng: RandomNumberGenerator) -> void:
+	_ensure_shared_outpost_assets()
+
+	tavern_sign_node = Node3D.new()
+	tavern_sign_node.name = "TavernSignboard"
+	tavern_sign_node.transform = sign_xform
+	props_root.add_child(tavern_sign_node)
+
+	_tavern_sign_bracket_mi = MeshInstance3D.new()
+	_tavern_sign_bracket_mi.name = "TavernSignBracket"
+	_tavern_sign_bracket_mi.mesh = _tavern_sign_bracket_mesh
+	_tavern_sign_bracket_mi.material_override = _tavern_sign_iron_mat
+	tavern_sign_node.add_child(_tavern_sign_bracket_mi)
+
+	tavern_sign_pivot = Node3D.new()
+	tavern_sign_pivot.name = "TavernSignPivot"
+	tavern_sign_pivot.position = Vector3(0.0, -0.16, -0.56)
+	tavern_sign_node.add_child(tavern_sign_pivot)
+
+	_tavern_sign_board_mi = MeshInstance3D.new()
+	_tavern_sign_board_mi.name = "TavernSignBoard"
+	_tavern_sign_board_mi.mesh = _tavern_sign_board_mesh
+	_tavern_sign_board_mi.material_override = _tavern_sign_board_mat
+	tavern_sign_pivot.add_child(_tavern_sign_board_mi)
+
+	_tavern_sign_face_mi = MeshInstance3D.new()
+	_tavern_sign_face_mi.name = "TavernSignFace"
+	_tavern_sign_face_mi.mesh = _tavern_sign_face_mesh
+	_tavern_sign_face_mi.material_override = _tavern_sign_face_mat
+	tavern_sign_pivot.add_child(_tavern_sign_face_mi)
+
+	_tavern_sign_phase = rng.randf() * TAU
+
+	# Soft warm porch-doorway spill light kissing the tavern signboard & front porch at dusk/night.
+	_tavern_sign_light = OmniLight3D.new()
+	_tavern_sign_light.name = "TavernSignSpillLight"
+	_tavern_sign_light.light_color = Color(1.0, 0.70, 0.32)
+	_tavern_sign_light.light_energy = 1.45
+	_tavern_sign_light.omni_range = 8.0
+	_tavern_sign_light.omni_attenuation = 1.5
+	_tavern_sign_light.shadow_enabled = false
+	_tavern_sign_light.position = Vector3(0.18, -0.42, -0.95)
+	tavern_sign_node.add_child(_tavern_sign_light)
+	register_flicker_light(_tavern_sign_light, 1.45, 0.08, rng.randf() * TAU)
+
+
+# ------------------------------------------------------------------ Interactive Seaward Pier Fog-Bell
+
+func _build_pier_fog_bell(bell_xform: Transform3D, props_root: Node3D) -> void:
+	_ensure_shared_outpost_assets()
+
+	pier_bell_node = Node3D.new()
+	pier_bell_node.name = "PierFogBell"
+	pier_bell_node.transform = bell_xform
+	props_root.add_child(pier_bell_node)
+
+	_pier_bell_frame_mi = MeshInstance3D.new()
+	_pier_bell_frame_mi.name = "PierBellFrame"
+	_pier_bell_frame_mi.mesh = _pier_bell_frame_mesh
+	_pier_bell_frame_mi.material_override = _pier_bell_iron_mat
+	pier_bell_node.add_child(_pier_bell_frame_mi)
+
+	pier_bell_pivot = Node3D.new()
+	pier_bell_pivot.name = "PierBellPivot"
+	pier_bell_pivot.position = Vector3(0.0, 0.56, 0.0)
+	pier_bell_node.add_child(pier_bell_pivot)
+
+	_pier_bell_cup_mi = MeshInstance3D.new()
+	_pier_bell_cup_mi.name = "PierBellCup"
+	_pier_bell_cup_mi.mesh = _pier_bell_cup_mesh
+	_pier_bell_cup_mi.material_override = _pier_bell_bronze_mat
+	pier_bell_pivot.add_child(_pier_bell_cup_mi)
+
+	pier_bell_interactable = Interactable.create("Ring harbour fog-bell", 0.72)
+	pier_bell_interactable.name = "PierFogBellInteractable"
+	pier_bell_interactable.position = Vector3(0.0, 0.36, 0.0)
+	pier_bell_interactable.reach = 2.4
+	pier_bell_interactable.target = self
+	pier_bell_interactable.interacted.connect(func(p: Node) -> void:
+		ring_pier_bell(p)
+	)
+	pier_bell_node.add_child(pier_bell_interactable)
+
+
 # ------------------------------------------------------------------ Wind-Blown Harbour Bunting (1 Draw Call)
 
 func _build_harbour_bunting(dock_xform: Transform3D, stall_xform: Transform3D,
@@ -978,6 +1192,57 @@ static func _ensure_shared_outpost_assets() -> void:
 		_beacon_beam_mat.set_shader_parameter(&"beam_intensity", 0.0)
 	if _beacon_beam_mesh == null:
 		_beacon_beam_mesh = _build_beacon_beam_mesh()
+
+	if _tavern_sign_iron_mat == null:
+		_tavern_sign_iron_mat = StandardMaterial3D.new()
+		_tavern_sign_iron_mat.vertex_color_use_as_albedo = true
+		_tavern_sign_iron_mat.vertex_color_is_srgb = true
+		_tavern_sign_iron_mat.roughness = 0.46
+		_tavern_sign_iron_mat.metallic = 0.74
+	if _tavern_sign_board_mat == null:
+		_tavern_sign_board_mat = StandardMaterial3D.new()
+		_tavern_sign_board_mat.vertex_color_use_as_albedo = true
+		_tavern_sign_board_mat.vertex_color_is_srgb = true
+		_tavern_sign_board_mat.roughness = 0.56
+		_tavern_sign_board_mat.metallic = 0.18
+	if _tavern_sign_albedo_tex == null or _tavern_sign_emit_tex == null:
+		var painted: Array[ImageTexture] = _paint_tavern_sign_textures()
+		_tavern_sign_albedo_tex = painted[0]
+		_tavern_sign_emit_tex = painted[1]
+	if _tavern_sign_face_mat == null:
+		_tavern_sign_face_mat = StandardMaterial3D.new()
+		_tavern_sign_face_mat.albedo_color = Color.WHITE
+		_tavern_sign_face_mat.albedo_texture = _tavern_sign_albedo_tex
+		_tavern_sign_face_mat.roughness = 0.40
+		_tavern_sign_face_mat.metallic = 0.20
+		_tavern_sign_face_mat.emission_enabled = true
+		_tavern_sign_face_mat.emission_operator = BaseMaterial3D.EMISSION_OP_MULTIPLY
+		_tavern_sign_face_mat.emission = Color(1.0, 0.86, 0.48)
+		_tavern_sign_face_mat.emission_texture = _tavern_sign_emit_tex
+		_tavern_sign_face_mat.emission_energy_multiplier = 0.48
+	if _tavern_sign_bracket_mesh == null:
+		_tavern_sign_bracket_mesh = _build_tavern_sign_bracket_mesh()
+	if _tavern_sign_board_mesh == null:
+		_tavern_sign_board_mesh = _build_tavern_sign_board_mesh()
+	if _tavern_sign_face_mesh == null:
+		_tavern_sign_face_mesh = _build_tavern_sign_face_mesh()
+
+	if _pier_bell_iron_mat == null:
+		_pier_bell_iron_mat = StandardMaterial3D.new()
+		_pier_bell_iron_mat.vertex_color_use_as_albedo = true
+		_pier_bell_iron_mat.vertex_color_is_srgb = true
+		_pier_bell_iron_mat.roughness = 0.48
+		_pier_bell_iron_mat.metallic = 0.72
+	if _pier_bell_bronze_mat == null:
+		_pier_bell_bronze_mat = StandardMaterial3D.new()
+		_pier_bell_bronze_mat.vertex_color_use_as_albedo = true
+		_pier_bell_bronze_mat.vertex_color_is_srgb = true
+		_pier_bell_bronze_mat.roughness = 0.34
+		_pier_bell_bronze_mat.metallic = 0.80
+	if _pier_bell_frame_mesh == null:
+		_pier_bell_frame_mesh = _build_pier_bell_frame_mesh()
+	if _pier_bell_cup_mesh == null:
+		_pier_bell_cup_mesh = _build_pier_bell_cup_mesh()
 
 
 static func _build_tavern_grog_keg_mesh() -> ArrayMesh:
@@ -1256,7 +1521,581 @@ static func _build_beacon_beam_mesh() -> ArrayMesh:
 	return st.commit()
 
 
+# ------------------------------------------------------------------ Tavern Signboard & Pier Fog-Bell Meshes
+
+static func _build_tavern_sign_bracket_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Beveled forged-iron wall mounting plate & 4 chunky forged dome bolts gripping porch fascia.
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.06, 0.06)),
+		Vector3(0.20, 0.38, 0.045), COL_SIGN_IRON_LO)
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.06, 0.036)),
+		Vector3(0.165, 0.33, 0.022), COL_SIGN_IRON_HI)
+	for bx: float in [-0.062, 0.062]:
+		for by: float in [-0.18, 0.06]:
+			_append_tapered_prism(st, Vector3(bx, by, 0.042), Vector3(bx, by, 0.012),
+				0.020, 0.012, 6, COL_SIGN_IRON_HI, COL_SIGN_IRON_HI.lightened(0.14), Vector2.ZERO)
+
+	# 2. Heavy forged cantilevered arm reaching forward clear of the porch roof lip + curled scroll tip.
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.04, -0.32)),
+		Vector3(0.046, 0.052, 0.76), COL_SIGN_IRON_HI)
+	var tip_scroll: Array[Vector3] = [
+		Vector3(0.0, -0.04, -0.68),
+		Vector3(0.0, -0.02, -0.76),
+		Vector3(0.0, 0.04, -0.80),
+		Vector3(0.0, 0.10, -0.77),
+		Vector3(0.0, 0.12, -0.71),
+		Vector3(0.0, 0.08, -0.68),
+	]
+	_append_tube_path(st, tip_scroll, [0.024, 0.022, 0.020, 0.018, 0.016, 0.013], 6,
+		COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+
+	# 3. Sweeping diagonal wrought-iron S-scroll brace & tucked interior scroll volute.
+	var brace_pts: Array[Vector3] = [
+		Vector3(0.0, -0.24, 0.04),
+		Vector3(0.0, -0.22, -0.10),
+		Vector3(0.0, -0.17, -0.24),
+		Vector3(0.0, -0.10, -0.36),
+		Vector3(0.0, -0.05, -0.46),
+	]
+	_append_tube_path(st, brace_pts, [0.022, 0.020, 0.019, 0.018, 0.018], 6,
+		COL_SIGN_IRON_LO, COL_SIGN_IRON_HI)
+	var volute_pts: Array[Vector3] = [
+		Vector3(0.0, -0.18, -0.18),
+		Vector3(0.0, -0.24, -0.25),
+		Vector3(0.0, -0.22, -0.33),
+		Vector3(0.0, -0.15, -0.33),
+		Vector3(0.0, -0.14, -0.27),
+	]
+	_append_tube_path(st, volute_pts, [0.015, 0.015, 0.014, 0.013, 0.012], 5,
+		COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+
+	# 4. Horizontal hanging crossbar along X at z = -0.56 with forged spear-point finials & twin rings.
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.08, -0.56)),
+		Vector3(0.92, 0.042, 0.042), COL_SIGN_IRON_HI)
+	for sgn: float in [-1.0, 1.0]:
+		_append_tapered_prism(st, Vector3(sgn * 0.46, -0.08, -0.56), Vector3(sgn * 0.54, -0.08, -0.56),
+			0.028, 0.006, 6, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO, Vector2.ZERO)
+		# Small side cheek scroll bracing crossbar to main cantilever arm.
+		_append_tapered_prism(st, Vector3(sgn * 0.24, -0.08, -0.56), Vector3(0.0, -0.05, -0.34),
+			0.014, 0.014, 5, COL_SIGN_IRON_LO, COL_SIGN_IRON_HI, Vector2.ZERO)
+		# Hanging iron ring collar & loop at x = +/-0.31.
+		_append_tapered_prism(st, Vector3(sgn * 0.31, -0.055, -0.56), Vector3(sgn * 0.31, -0.105, -0.56),
+			0.030, 0.028, 6, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO, Vector2.ZERO)
+		_append_torus_ring(st, Vector3(sgn * 0.31, -0.135, -0.56), Vector3.RIGHT,
+			0.036, 0.010, 8, 5, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_tavern_sign_board_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Coordinates relative to TavernSignPivot (0, 0, 0) at bottom of bracket hanging rings.
+	# 1. Twin forged-iron hanging chains (3 interlocking oval links per side) + brass top eye-collars.
+	for sgn: float in [-1.0, 1.0]:
+		var cx := sgn * 0.31
+		_append_torus_ring(st, Vector3(cx, -0.03, 0.0), Vector3.FORWARD,
+			0.026, 0.008, 8, 5, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+		_append_torus_ring(st, Vector3(cx, -0.08, 0.0), Vector3.RIGHT,
+			0.026, 0.008, 8, 5, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+		_append_torus_ring(st, Vector3(cx, -0.13, 0.0), Vector3.FORWARD,
+			0.026, 0.008, 8, 5, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+		_append_tapered_prism(st, Vector3(cx, -0.155, 0.0), Vector3(cx, -0.185, 0.0),
+			0.024, 0.030, 6, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO, Vector2.ZERO)
+
+	# 2. Chunky beveled dark-mahogany hanging plaque (0.96 m wide x 0.60 m tall x 0.06 m thick, y=-0.16..-0.76).
+	var cy := -0.46
+	# Inner core slab.
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, cy, 0.0)),
+		Vector3(0.92, 0.56, 0.056), COL_SIGN_MAHOGANY_MID)
+	# Chunky beveled outer hardwood molding rails (top, bottom, left, right) for rich sculpted relief!
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, cy + 0.285, 0.0)),
+		Vector3(0.96, 0.044, 0.064), COL_SIGN_MAHOGANY_HI)
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, cy - 0.285, 0.0)),
+		Vector3(0.96, 0.044, 0.064), COL_SIGN_MAHOGANY_LO)
+	for sgn: float in [-1.0, 1.0]:
+		_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(sgn * 0.462, cy, 0.0)),
+			Vector3(0.044, 0.58, 0.064), COL_SIGN_MAHOGANY_MID)
+
+	# Decorative pub-sign scalloped crest crown arching at top center + brass accent drop below!
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, cy + 0.322, 0.0)),
+		Vector3(0.42, 0.044, 0.054), COL_SIGN_MAHOGANY_HI)
+	_append_tapered_prism(st, Vector3(0.0, cy + 0.34, 0.0), Vector3(0.0, cy + 0.385, 0.0),
+		0.085, 0.025, 6, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO, Vector2.ZERO)
+	_append_tapered_prism(st, Vector3(0.0, cy - 0.305, 0.0), Vector3(0.0, cy - 0.365, 0.0),
+		0.036, 0.008, 6, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO, Vector2.ZERO)
+
+	# 3. Four ornate gilded-brass corner brackets with embossed corner studs on both faces.
+	for sx: float in [-1.0, 1.0]:
+		for sy: float in [-1.0, 1.0]:
+			var bx := sx * 0.445
+			var by := cy + sy * 0.265
+			_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(bx - sx * 0.04, by + sy * 0.02, 0.0)),
+				Vector3(0.14, 0.038, 0.072), COL_SIGN_BRASS_HI)
+			_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(bx + sx * 0.018, by - sy * 0.032, 0.0)),
+				Vector3(0.038, 0.13, 0.072), COL_SIGN_BRASS_LO)
+			for sz: float in [-1.0, 1.0]:
+				_append_tapered_prism(st, Vector3(bx, by, sz * 0.034), Vector3(bx, by, sz * 0.048),
+					0.016, 0.008, 6, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_HI.lightened(0.12), Vector2.ZERO)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_tavern_sign_face_mesh() -> ArrayMesh:
+	# Clean double-sided UV-mapped plaque faces proud of the beveled mahogany body (zero z-fighting,
+	# readable left-to-right on BOTH seaward -Z and porch-facing +Z sides!).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var hw := 0.435
+	var y_top := -0.46 + 0.258
+	var y_bot := -0.46 - 0.258
+	var z_off := 0.031
+
+	# Front face (-Z outward: viewer looking toward +Z sees +X on left, -X on right).
+	_add_oriented_quad_uv(st,
+		Vector3(hw, y_top, -z_off),
+		Vector3(-hw, y_top, -z_off),
+		Vector3(-hw, y_bot, -z_off),
+		Vector3(hw, y_bot, -z_off),
+		Vector3(0.0, 0.0, -1.0),
+		Color.WHITE,
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0))
+
+	# Rear face (+Z outward: viewer looking toward -Z sees -X on left, +X on right).
+	_add_oriented_quad_uv(st,
+		Vector3(-hw, y_top, z_off),
+		Vector3(hw, y_top, z_off),
+		Vector3(hw, y_bot, z_off),
+		Vector3(-hw, y_bot, z_off),
+		Vector3(0.0, 0.0, 1.0),
+		Color.WHITE,
+		Vector2(0.0, 0.0), Vector2(1.0, 0.0), Vector2(1.0, 1.0), Vector2(0.0, 1.0))
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _paint_tavern_sign_textures() -> Array[ImageTexture]:
+	var albedo := Image.create(SIGN_TEX_W, SIGN_TEX_H, false, Image.FORMAT_RGBA8)
+	var emit_img := Image.create(SIGN_TEX_W, SIGN_TEX_H, false, Image.FORMAT_RGBA8)
+	emit_img.fill(Color(0.0, 0.0, 0.0, 1.0))
+
+	# 1. Warm dark mahogany plank woodgrain background (zero emission -> stays rich dark wood at night!).
+	for y in SIGN_TEX_H:
+		var vy := float(y) / float(SIGN_TEX_H - 1)
+		var bevel_y := 1.0 - 0.36 * pow(absf(vy * 2.0 - 1.0), 2.8)
+		var seam := 0.72 if (y == 38 or y == 78 or y == 118) else (1.07 if (y == 39 or y == 79 or y == 119) else 1.0)
+		var sheen := 0.06 * exp(-pow((vy - 0.28) * 4.2, 2.0))
+		for x in SIGN_TEX_W:
+			var vx := float(x) / float(SIGN_TEX_W - 1)
+			var bevel_x := 1.0 - 0.30 * pow(absf(vx * 2.0 - 1.0), 3.4)
+			var grain := sin(float(y) * 0.42 + sin(float(x) * 0.045) * 2.4) * 0.5 + 0.5
+			var fine := sin(float(y) * 1.35 + float(x) * 0.02) * 0.5 + 0.5
+			var wood_k := (0.64 + 0.24 * grain + 0.12 * fine) * bevel_y * bevel_x * seam
+			var r := clampf(0.27 * wood_k + sheen, 0.0, 1.0)
+			var g := clampf(0.118 * wood_k + sheen * 0.65, 0.0, 1.0)
+			var b := clampf(0.056 * wood_k + sheen * 0.35, 0.0, 1.0)
+			albedo.set_pixel(x, y, Color(r, g, b, 1.0))
+
+	# 2. Gilded double-line border frame + 4 corner brass rivets (subtle gold glint mask).
+	var gold_hi := Color(1.0, 0.92, 0.56, 1.0)
+	var gold_mid := Color(0.92, 0.71, 0.22, 1.0)
+	var gold_lo := Color(0.66, 0.45, 0.11, 1.0)
+	var dark_groove := Color(0.07, 0.03, 0.012, 1.0)
+	var emit_frame := Color(0.56, 0.46, 0.22, 1.0)
+	var emit_gold := Color(0.96, 0.82, 0.42, 1.0)
+	var emit_text := Color(1.0, 0.90, 0.52, 1.0)
+
+	_sign_rect_outline(albedo, emit_img, 5, 5, SIGN_TEX_W - 6, SIGN_TEX_H - 6, 3, gold_mid, emit_frame)
+	_sign_rect_outline(albedo, emit_img, 9, 9, SIGN_TEX_W - 10, SIGN_TEX_H - 10, 1, dark_groove, Color.BLACK)
+	_sign_rect_outline(albedo, emit_img, 11, 11, SIGN_TEX_W - 12, SIGN_TEX_H - 12, 1, gold_lo, emit_frame * 0.7)
+	for cx: int in [17, SIGN_TEX_W - 18]:
+		for cy: int in [17, SIGN_TEX_H - 18]:
+			_sign_fill_circle(albedo, emit_img, cx, cy, 4, gold_hi, emit_gold)
+
+	# 3. Crossed pirate cutlasses behind the central tankard (x = 76..180, y = 20..88).
+	var steel_hi := Color(0.92, 0.94, 0.96, 1.0)
+	var steel_mid := Color(0.68, 0.72, 0.78, 1.0)
+	var emit_steel := Color(0.64, 0.58, 0.40, 1.0)
+	var grip_col := Color(0.18, 0.09, 0.04, 1.0)
+	for sgn: float in [-1.0, 1.0]:
+		# Curved cutlass blade sweeping diagonally from brass guard up to tip.
+		for ti in 46:
+			var t := float(ti) / 45.0
+			var bx := 128.0 + sgn * lerpf(-40.0, 44.0, t)
+			var by := lerpf(78.0, 22.0, t) - sin(t * PI) * 8.5
+			var half_w := lerpf(3.2, 4.8, sin(t * PI * 0.78))
+			if t > 0.86:
+				half_w *= (1.0 - t) / 0.14
+			_sign_fill_circle(albedo, emit_img, int(roundf(bx)), int(roundf(by)), maxi(1, int(roundf(half_w))),
+				steel_mid, emit_steel * 0.55)
+			_sign_fill_circle(albedo, emit_img, int(roundf(bx)), int(roundf(by - 1.5)), maxi(1, int(roundf(half_w * 0.55))),
+				steel_hi, emit_steel)
+		# Brass basket handguard, dark leather grip & gold pommel knob.
+		var gx := int(roundf(128.0 - sgn * 40.0))
+		var gy := 78
+		_sign_fill_circle(albedo, emit_img, gx, gy, 7, gold_mid, emit_gold)
+		_sign_fill_circle(albedo, emit_img, gx - int(sgn * 6.0), gy + 5, 4, grip_col, Color.BLACK)
+		_sign_fill_circle(albedo, emit_img, gx - int(sgn * 11.0), gy + 9, 4, gold_hi, emit_gold)
+
+	# 4. Foaming Golden Tavern Tankard centered over the crossed cutlasses (x = 110..146, y = 26..90).
+	# Dark silhouette shadow halo behind mug so it stands out cleanly against the steel blades.
+	_sign_fill_rect(albedo, emit_img, 108, 42, 148, 91, dark_groove, Color.BLACK)
+	# Curved brass-rimmed tankard D-handle on +X side.
+	_sign_fill_circle(albedo, emit_img, 150, 66, 11, gold_lo, emit_frame)
+	_sign_fill_circle(albedo, emit_img, 149, 66, 6, Color(0.18, 0.08, 0.04, 1.0), Color.BLACK)
+	# Tapered oak tankard barrel body with sunlit warm wood staves.
+	for y in range(44, 89):
+		var ty := float(y - 44) / 44.0
+		var half_w := lerpf(15.0, 18.0, ty)
+		for x in range(int(128.0 - half_w), int(128.0 + half_w) + 1):
+			var u := (float(x) - (128.0 - half_w)) / maxf(1.0, half_w * 2.0)
+			var cyl_lit := 0.58 + 0.42 * sin(u * PI)
+			var stave := 0.88 if (int(u * 5.0) % 2 == 0) else 1.0
+			var c := Color(0.62 * cyl_lit * stave, 0.36 * cyl_lit * stave, 0.14 * cyl_lit * stave, 1.0)
+			albedo.set_pixel(x, y, c)
+			emit_img.set_pixel(x, y, Color(0.18 * cyl_lit, 0.11 * cyl_lit, 0.03 * cyl_lit, 1.0))
+	# Two gleaming horizontal brass tankard bands.
+	_sign_fill_rect(albedo, emit_img, 111, 52, 145, 56, gold_hi, emit_gold)
+	_sign_fill_rect(albedo, emit_img, 110, 76, 146, 80, gold_mid, emit_gold * 0.88)
+	# Billowy creamy-white & pale-gold beer foam crown spilling over the tankard lip!
+	var foam_hi := Color(0.99, 0.96, 0.86, 1.0)
+	var foam_mid := Color(0.92, 0.86, 0.70, 1.0)
+	var emit_foam := Color(0.76, 0.68, 0.44, 1.0)
+	for puff: Array in [[116, 40, 9], [128, 35, 11], [140, 40, 9], [122, 43, 8], [134, 43, 8]]:
+		_sign_fill_circle(albedo, emit_img, int(puff[0]), int(puff[1]), int(puff[2]), foam_mid, emit_foam * 0.8)
+		_sign_fill_circle(albedo, emit_img, int(puff[0]) - 1, int(puff[1]) - 2, maxi(2, int(puff[2]) - 3), foam_hi, emit_foam)
+	# Playful foam drips running down front lip of mug.
+	_sign_fill_rect(albedo, emit_img, 117, 44, 121, 59, foam_hi, emit_foam)
+	_sign_fill_circle(albedo, emit_img, 119, 60, 2, foam_hi, emit_foam)
+	_sign_fill_rect(albedo, emit_img, 134, 44, 137, 54, foam_mid, emit_foam * 0.85)
+
+	# 5. Deep crimson heraldic scroll ribbon banner with gold trim + bold "SCOUNDREL'S REST" lettering!
+	var banner_bg := Color(0.42, 0.09, 0.075, 1.0)
+	var banner_hi := Color(0.54, 0.13, 0.10, 1.0)
+	_sign_fill_rect(albedo, emit_img, 16, 100, SIGN_TEX_W - 17, 140, banner_bg, Color.BLACK)
+	_sign_fill_rect(albedo, emit_img, 18, 104, SIGN_TEX_W - 19, 112, banner_hi, Color.BLACK)
+	_sign_rect_outline(albedo, emit_img, 16, 100, SIGN_TEX_W - 17, 140, 2, gold_mid, emit_frame)
+	# Carved gold-leaf serif lettering "SCOUNDREL'S REST" (16 chars x 10 px + 15 x 3 px = 205 px -> centered!).
+	var title := "SCOUNDREL'S REST"
+	var scale_px := 2
+	var char_adv := 5 * scale_px + 3
+	var total_w := title.length() * (5 * scale_px) + (title.length() - 1) * 3
+	var start_x := int((SIGN_TEX_W - total_w) * 0.5)
+	var start_y := 113
+	# Drop shadow pass (pure umber, zero emission).
+	for ci in title.length():
+		var ch := title.substr(ci, 1)
+		var rows: Array = ShipNameplate.GLYPHS.get(ch, ShipNameplate.GLYPHS[" "])
+		_sign_draw_glyph(albedo, emit_img, rows, start_x + ci * char_adv + 2, start_y + 2, scale_px,
+			dark_groove, dark_groove, dark_groove, Color.BLACK)
+	# Gilded beveled gold-leaf face pass (lights up cleanly through EMISSION_OP_MULTIPLY at night!).
+	for ci in title.length():
+		var ch := title.substr(ci, 1)
+		var rows: Array = ShipNameplate.GLYPHS.get(ch, ShipNameplate.GLYPHS[" "])
+		_sign_draw_glyph(albedo, emit_img, rows, start_x + ci * char_adv, start_y, scale_px,
+			gold_hi, gold_mid, gold_lo, emit_text)
+
+	return [ImageTexture.create_from_image(albedo), ImageTexture.create_from_image(emit_img)]
+
+
+static func _sign_fill_rect(albedo: Image, emit_img: Image, x0: int, y0: int, x1: int, y1: int,
+		col: Color, ecol: Color) -> void:
+	for y in range(maxi(0, y0), mini(SIGN_TEX_H, y1 + 1)):
+		for x in range(maxi(0, x0), mini(SIGN_TEX_W, x1 + 1)):
+			albedo.set_pixel(x, y, col)
+			emit_img.set_pixel(x, y, ecol)
+
+
+static func _sign_rect_outline(albedo: Image, emit_img: Image, x0: int, y0: int, x1: int, y1: int,
+		thick: int, col: Color, ecol: Color) -> void:
+	for t in thick:
+		for x in range(maxi(0, x0 + t), mini(SIGN_TEX_W, x1 - t + 1)):
+			if y0 + t >= 0 and y0 + t < SIGN_TEX_H:
+				albedo.set_pixel(x, y0 + t, col)
+				emit_img.set_pixel(x, y0 + t, ecol)
+			if y1 - t >= 0 and y1 - t < SIGN_TEX_H:
+				albedo.set_pixel(x, y1 - t, col)
+				emit_img.set_pixel(x, y1 - t, ecol)
+		for y in range(maxi(0, y0 + t), mini(SIGN_TEX_H, y1 - t + 1)):
+			if x0 + t >= 0 and x0 + t < SIGN_TEX_W:
+				albedo.set_pixel(x0 + t, y, col)
+				emit_img.set_pixel(x0 + t, y, ecol)
+			if x1 - t >= 0 and x1 - t < SIGN_TEX_W:
+				albedo.set_pixel(x1 - t, y, col)
+				emit_img.set_pixel(x1 - t, y, ecol)
+
+
+static func _sign_fill_circle(albedo: Image, emit_img: Image, cx: int, cy: int, rad: int,
+		col: Color, ecol: Color) -> void:
+	var r2 := rad * rad
+	for dy in range(-rad, rad + 1):
+		var py := cy + dy
+		if py < 0 or py >= SIGN_TEX_H:
+			continue
+		for dx in range(-rad, rad + 1):
+			if dx * dx + dy * dy <= r2:
+				var px := cx + dx
+				if px >= 0 and px < SIGN_TEX_W:
+					albedo.set_pixel(px, py, col)
+					emit_img.set_pixel(px, py, ecol)
+
+
+static func _sign_draw_glyph(albedo: Image, emit_img: Image, rows: Array, ox: int, oy: int, s: int,
+		col_hi: Color, col_mid: Color, col_lo: Color, ecol: Color) -> void:
+	for ry in rows.size():
+		var mask := int(rows[ry])
+		if mask == 0:
+			continue
+		for rx in 5:
+			if (mask & (1 << (4 - rx))) == 0:
+				continue
+			var bx := ox + rx * s
+			var by := oy + ry * s
+			for dy in s:
+				var py := by + dy
+				if py < 0 or py >= SIGN_TEX_H:
+					continue
+				var c := col_mid
+				if dy == 0 and ry <= 2:
+					c = col_hi
+				elif dy == s - 1 and ry >= 4:
+					c = col_lo
+				for dx in s:
+					var px := bx + dx
+					if px >= 0 and px < SIGN_TEX_W:
+						albedo.set_pixel(px, py, c)
+						emit_img.set_pixel(px, py, ecol)
+
+
+static func _build_pier_bell_frame_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 1. Heavy riveted forged-iron piling collar cap gripping atop the 0.175 m bollard piling (y=-0.14..+0.065).
+	_append_tapered_prism(st, Vector3(0.0, -0.14, 0.0), Vector3(0.0, 0.042, 0.0),
+		0.215, 0.205, 10, COL_SIGN_IRON_LO, COL_SIGN_IRON_HI, Vector2.ZERO)
+	_append_tapered_prism(st, Vector3(0.0, 0.032, 0.0), Vector3(0.0, 0.068, 0.0),
+		0.232, 0.218, 10, COL_SIGN_IRON_HI, COL_SIGN_IRON_HI.lightened(0.08), Vector2.ZERO)
+	# Eight forged perimeter cap bolts.
+	for bi in 8:
+		var a := float(bi) / 8.0 * TAU
+		var bp := Vector3(cos(a) * 0.185, 0.064, sin(a) * 0.185)
+		_append_tapered_prism(st, bp, bp + Vector3(0.0, 0.022, 0.0),
+			0.016, 0.011, 6, COL_SIGN_BRASS_LO, COL_SIGN_BRASS_HI, Vector2.ZERO)
+
+	# 2. Sweeping forged-iron arched harbour bell gallows yoke framing the bronze bell cleanly along X.
+	var arch_pts: Array[Vector3] = [
+		Vector3(-0.175, 0.055, 0.0),
+		Vector3(-0.215, 0.19, 0.0),
+		Vector3(-0.245, 0.36, 0.0),
+		Vector3(-0.245, 0.56, 0.0),
+		Vector3(-0.210, 0.70, 0.0),
+		Vector3(-0.115, 0.79, 0.0),
+		Vector3(0.0, 0.825, 0.0),
+		Vector3(0.115, 0.79, 0.0),
+		Vector3(0.210, 0.70, 0.0),
+		Vector3(0.245, 0.56, 0.0),
+		Vector3(0.245, 0.36, 0.0),
+		Vector3(0.215, 0.19, 0.0),
+		Vector3(0.175, 0.055, 0.0),
+	]
+	var arch_rads: Array[float] = [
+		0.030, 0.028, 0.026, 0.028, 0.026, 0.025, 0.028,
+		0.025, 0.026, 0.028, 0.026, 0.028, 0.030,
+	]
+	_append_tube_path(st, arch_pts, arch_rads, 6, COL_SIGN_IRON_LO, COL_SIGN_IRON_HI)
+
+	# 3. Twin lower forged cheek scroll braces & trunnion axle bearing bosses at y = 0.56.
+	for sgn: float in [-1.0, 1.0]:
+		var brace: Array[Vector3] = [
+			Vector3(sgn * 0.125, 0.062, 0.0),
+			Vector3(sgn * 0.165, 0.13, 0.0),
+			Vector3(sgn * 0.228, 0.25, 0.0),
+		]
+		_append_tube_path(st, brace, [0.018, 0.016, 0.015], 5, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO)
+		# Trunnion axle journal cap + brass grease nut.
+		_append_tapered_prism(st, Vector3(sgn * 0.215, 0.56, 0.0), Vector3(sgn * 0.285, 0.56, 0.0),
+			0.044, 0.036, 6, COL_SIGN_IRON_HI, COL_SIGN_IRON_LO, Vector2.ZERO)
+		_append_tapered_prism(st, Vector3(sgn * 0.282, 0.56, 0.0), Vector3(sgn * 0.304, 0.56, 0.0),
+			0.020, 0.014, 6, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO, Vector2.ZERO)
+
+	# Cross-axle iron shaft spanning through PierBellPivot at y = 0.56.
+	_append_tapered_prism(st, Vector3(-0.24, 0.56, 0.0), Vector3(0.24, 0.56, 0.0),
+		0.018, 0.018, 6, COL_SIGN_IRON_LO, COL_SIGN_IRON_HI, Vector2.ZERO)
+
+	# 4. Sculpted forged-iron crown finial spire & mooring ring atop the gallows arch.
+	_append_tapered_prism(st, Vector3(0.0, 0.815, 0.0), Vector3(0.0, 0.915, 0.0),
+		0.036, 0.010, 6, COL_SIGN_IRON_HI, COL_SIGN_BRASS_HI, Vector2.ZERO)
+	_append_torus_ring(st, Vector3(0.0, 0.935, 0.0), Vector3.FORWARD,
+		0.026, 0.008, 8, 5, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_pier_bell_cup_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Coordinates relative to PierBellPivot (0, 0, 0) right on the iron yoke axle!
+	# 1. Heavy cast headstock counterweight yoke block & twin bronze crown cannon loops.
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.008, 0.0)),
+		Vector3(0.32, 0.062, 0.072), COL_SIGN_IRON_HI)
+	_append_box_xform(st, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.048, 0.0)),
+		Vector3(0.20, 0.034, 0.056), COL_SIGN_IRON_LO)
+	for sgn: float in [-1.0, 1.0]:
+		_append_tapered_prism(st, Vector3(sgn * 0.055, 0.01, 0.0), Vector3(sgn * 0.044, -0.055, 0.0),
+			0.022, 0.018, 6, COL_BELL_BRONZE_MID, COL_BELL_BRONZE_DARK, Vector2.ZERO)
+
+	# 2. Lathe-turned weathered-bronze marine fog-bell (16 radial segs, outer profile + hollow interior!).
+	var bell_profile: Array[Array] = [
+		[-0.042, 0.054, COL_BELL_BRONZE_MID],
+		[-0.078, 0.098, COL_BELL_BRONZE_HI],
+		[-0.096, 0.108, COL_BELL_BRONZE_HI.lightened(0.10)],  # Raised shoulder bead ring
+		[-0.114, 0.100, COL_BELL_BRONZE_MID.lerp(COL_BELL_VERDIGRIS, 0.35)],
+		[-0.175, 0.098, COL_BELL_BRONZE_MID.lerp(COL_BELL_VERDIGRIS, 0.45)],  # Verdigris concave waist
+		[-0.238, 0.124, COL_BELL_BRONZE_MID],
+		[-0.292, 0.162, COL_BELL_BRONZE_HI],
+		[-0.326, 0.178, COL_BELL_BRONZE_HI.lightened(0.12)],  # Gleaming flared sound-bow rim
+		[-0.346, 0.168, COL_BELL_BRONZE_MID],                  # Thick beveled lip edge
+		[-0.330, 0.146, COL_BELL_BRONZE_DARK],                 # Inner sound-bow chamber
+		[-0.215, 0.092, COL_BELL_BRONZE_DARK],
+		[-0.088, 0.048, COL_BELL_BRONZE_DARK],                 # Inner crown dome
+	]
+	_append_lathe_profile(st, bell_profile, 16)
+	# Cap inner top dome & outer top crown disc cleanly so mesh is watertight.
+	var crown_ctr := Vector3(0.0, -0.040, 0.0)
+	var dome_ctr := Vector3(0.0, -0.086, 0.0)
+	for k in 16:
+		var a0 := float(k) / 16.0 * TAU
+		var a1 := float(k + 1) / 16.0 * TAU
+		var p0 := Vector3(cos(a0) * 0.054, -0.042, sin(a0) * 0.054)
+		var p1 := Vector3(cos(a1) * 0.054, -0.042, sin(a1) * 0.054)
+		_add_outward_tri(st, crown_ctr, p0, p1, Vector3(0.0, -0.10, 0.0),
+			COL_BELL_BRONZE_MID, COL_BELL_BRONZE_MID, COL_BELL_BRONZE_MID)
+		var d0 := Vector3(cos(a0) * 0.048, -0.088, sin(a0) * 0.048)
+		var d1 := Vector3(cos(a1) * 0.048, -0.088, sin(a1) * 0.048)
+		_add_outward_tri(st, dome_ctr, d0, d1, Vector3(0.0, -0.02, 0.0),
+			COL_BELL_BRONZE_DARK, COL_BELL_BRONZE_DARK, COL_BELL_BRONZE_DARK)
+
+	# 3. Hanging forged-brass clapper rod, chunky strike-ball, knotted hemp lanyard & brass pull-ring!
+	_append_tapered_prism(st, Vector3(0.0, -0.085, 0.0), Vector3(0.0, -0.31, 0.0),
+		0.011, 0.013, 6, COL_SIGN_BRASS_LO, COL_SIGN_BRASS_HI, Vector2.ZERO)
+	# Faceted 8-sided brass strike ball right at the flared sound-bow rim.
+	_append_tapered_prism(st, Vector3(0.0, -0.296, 0.0), Vector3(0.0, -0.326, 0.0),
+		0.018, 0.038, 8, COL_SIGN_BRASS_LO, COL_SIGN_BRASS_HI, Vector2.ZERO)
+	_append_tapered_prism(st, Vector3(0.0, -0.326, 0.0), Vector3(0.0, -0.356, 0.0),
+		0.038, 0.014, 8, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO, Vector2.ZERO)
+	# Knotted hemp bell-pull lanyard & captain's brass pull-ring (clears piling cap by 8+ cm!).
+	_append_tapered_prism(st, Vector3(0.0, -0.354, 0.0), Vector3(0.0, -0.435, 0.0),
+		0.012, 0.016, 6, COL_ROPE_HEMP, COL_ROPE_HEMP.darkened(0.12), Vector2.ZERO)
+	_append_torus_ring(st, Vector3(0.0, -0.462, 0.0), Vector3.FORWARD,
+		0.028, 0.008, 8, 5, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO)
+
+	st.generate_normals()
+	return st.commit()
+
+
 # ------------------------------------------------------------------ SurfaceTool Geometry Helpers
+
+static func _append_torus_ring(st: SurfaceTool, center: Vector3, axis_n: Vector3,
+		major_r: float, minor_r: float, major_segs: int, minor_segs: int,
+		col_hi: Color, col_lo: Color) -> void:
+	var n := axis_n.normalized()
+	var ref := Vector3.UP if absf(n.dot(Vector3.UP)) < 0.85 else Vector3.RIGHT
+	var u := n.cross(ref).normalized()
+	var v := n.cross(u).normalized()
+	var rings: Array[Array] = []
+	var ctrs: Array[Vector3] = []
+	for i in major_segs:
+		var a := float(i) / float(major_segs) * TAU
+		var radial := u * cos(a) + v * sin(a)
+		var ring_c := center + radial * major_r
+		ctrs.append(ring_c)
+		var ring: Array[Vector3] = []
+		for j in minor_segs:
+			var b := float(j) / float(minor_segs) * TAU
+			var off := (radial * cos(b) + n * sin(b)) * minor_r
+			ring.append(ring_c + off)
+		rings.append(ring)
+	for i in major_segs:
+		var ni := (i + 1) % major_segs
+		var r0: Array = rings[i]
+		var r1: Array = rings[ni]
+		var seg_ctr := (ctrs[i] + ctrs[ni]) * 0.5
+		var col := col_hi if i % 2 == 0 else col_lo
+		for j in minor_segs:
+			var nj := (j + 1) % minor_segs
+			_add_outward_quad(st, r0[j], r1[j], r1[nj], r0[nj], seg_ctr, col, col, col, col)
+
+
+static func _append_tube_path(st: SurfaceTool, pts: Array[Vector3], radii: Array[float],
+		sides: int, col_a: Color, col_b: Color) -> void:
+	var count := mini(pts.size(), radii.size())
+	if count < 2:
+		return
+	for i in count - 1:
+		var t0 := float(i) / float(count - 1)
+		var t1 := float(i + 1) / float(count - 1)
+		_append_tapered_prism(st, pts[i], pts[i + 1], radii[i], radii[i + 1], sides,
+			col_a.lerp(col_b, t0), col_a.lerp(col_b, t1), Vector2.ZERO)
+
+
+static func _append_lathe_profile(st: SurfaceTool, stations: Array[Array], radial_segs: int) -> void:
+	var rings: Array[Array] = []
+	var ys: Array[float] = []
+	var rs: Array[float] = []
+	var cols: Array[Color] = []
+	for row in stations:
+		var py: float = float(row[0])
+		var pr: float = float(row[1])
+		var pc: Color = row[2] as Color
+		ys.append(py)
+		rs.append(pr)
+		cols.append(pc)
+		var ring: Array[Vector3] = []
+		for k in radial_segs:
+			var a := float(k) / float(radial_segs) * TAU
+			ring.append(Vector3(cos(a) * pr, py, sin(a) * pr))
+		rings.append(ring)
+	for i in range(rings.size() - 1):
+		var r0: Array = rings[i]
+		var r1: Array = rings[i + 1]
+		var dy := ys[i + 1] - ys[i]
+		var dr := rs[i + 1] - rs[i]
+		var c0 := cols[i]
+		var c1 := cols[i + 1]
+		for k in radial_segs:
+			var nk := (k + 1) % radial_segs
+			var am := (float(k) + 0.5) / float(radial_segs) * TAU
+			var rad_dir := Vector3(cos(am), 0.0, sin(am))
+			var desired_n := rad_dir * (-dy) + Vector3.UP * dr
+			if desired_n.length_squared() < 1e-10:
+				desired_n = rad_dir
+			_add_oriented_quad_uv(st, r0[k], r1[k], r1[nk], r0[nk], desired_n, c0,
+				Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, c1, c1, c0)
+
+
+static func _add_oriented_quad_uv(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		desired_n: Vector3, ca: Color, uva: Vector2, uvb: Vector2, uvc: Vector2, uvd: Vector2,
+		cb: Color = Color(-1.0, -1.0, -1.0), cc: Color = Color(-1.0, -1.0, -1.0), cd: Color = Color(-1.0, -1.0, -1.0)) -> void:
+	var c_b := ca if cb.r < 0.0 else cb
+	var c_c := ca if cc.r < 0.0 else cc
+	var c_d := ca if cd.r < 0.0 else cd
+	var n1 := (c - a).cross(b - a)
+	if n1.dot(desired_n) >= 0.0:
+		_add_flat_tri_uv(st, a, b, c, ca, c_b, c_c, uva, uvb, uvc)
+		_add_flat_tri_uv(st, a, c, d, ca, c_c, c_d, uva, uvc, uvd)
+	else:
+		_add_flat_tri_uv(st, a, c, b, ca, c_c, c_b, uva, uvc, uvb)
+		_add_flat_tri_uv(st, a, d, c, ca, c_d, c_c, uva, uvd, uvc)
 
 static func _append_tapered_prism(st: SurfaceTool, p0: Vector3, p1: Vector3,
 		r0: float, r1: float, sides: int, c0: Color, c1: Color, uv: Vector2) -> void:

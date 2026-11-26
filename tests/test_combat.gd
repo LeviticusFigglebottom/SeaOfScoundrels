@@ -661,5 +661,185 @@ func test_enemy_stagger_stars_and_windup_telegraph_teardown() -> void:
 		"StrikeTelegraph static cache released cleanly to null")
 
 
+func test_blade_slash_arc_boarding_axe_cleave_and_deterministic_hitstop() -> void:
+	_begin()
+	_fast(false)  # Keep Engine.time_scale strictly 1.0 for deterministic hitstop assertions.
+	_ground()
+
+	var atk_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var def_pair := _fighter(Vector3(0.0, 5.05, -1.65), &"drowned", PI)
+	var pa: Pawn = atk_pair[0]
+	var atk_cc: CombatComponent = atk_pair[1]
+	var pb: Pawn = def_pair[0]
+	var def_cc: CombatComponent = def_pair[1]
+	atk_cc.enable_effects = true
+	def_cc.enable_effects = true
+
+	var pc := PlayerController.new()
+	pc.name = "PlayerController"
+	pc.input_enabled = false
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.bob_amount = 0.028
+	pa.add_child(pc)
+	await physics_frames(4)
+
+	# 1. Verify statically cached sculpted 1-DC BladeSlashArc ArrayMesh (>= 32 tris, zero PrimitiveMesh, vertex colors).
+	var arc_mesh_base: Mesh = CombatComponent._get_slash_arc_mesh()
+	check(arc_mesh_base != null and arc_mesh_base is ArrayMesh and not (arc_mesh_base is PrimitiveMesh),
+		"BladeSlashArc uses sculpted ArrayMesh with zero raw PrimitiveMesh")
+	var arc_mesh := arc_mesh_base as ArrayMesh
+	var surf_arrs := arc_mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = surf_arrs[Mesh.ARRAY_VERTEX]
+	var cols: PackedColorArray = surf_arrs[Mesh.ARRAY_COLOR]
+	var tri_count := floori(float(verts.size()) / 3.0)
+	print("    BladeSlashArc sculpted triangles: %d (verts=%d)" % [tri_count, verts.size()])
+	check(tri_count >= 32, "BladeSlashArc mesh must have >= 32 triangles (got %d)" % tri_count)
+	check_eq(cols.size(), verts.size(), "BladeSlashArc encodes per-vertex colors for edge-to-wake fade")
+	var saw_bright_edge := false
+	var saw_translucent_wake := false
+	for vc: Color in cols:
+		if vc.a >= 0.85 and vc.r >= 0.95:
+			saw_bright_edge = true
+		if vc.a <= 0.05:
+			saw_translucent_wake = true
+	check(saw_bright_edge and saw_translucent_wake,
+		"BladeSlashArc vertex colors taper from white-hot leading edge to translucent inner wake")
+
+	# 2. Cutlass 3-hit combo light_1..light_3 spawn distinct BladeSlashArc instances that animate & self-clean.
+	# Move defender temporarily out of range while inspecting combo arc spawning cleanly.
+	pb.global_position = Vector3(12.0, 5.05, -12.0)
+	atk_cc.equip_weapon(&"cutlass")
+	var expected_styles: Array[StringName] = [&"light_1", &"light_2", &"light_3"]
+	var combo_scales: Array[float] = []
+	var combo_tints: Array[Color] = []
+
+	for step_idx in 3:
+		atk_cc.state = CombatComponent.State.IDLE
+		atk_cc._state_timer = 0.0
+		check(atk_cc.primary_attack(), "Cutlass combo step %d starts attack" % (step_idx + 1))
+		for _f in 25:
+			await physics_frames(1)
+			if atk_cc.state == CombatComponent.State.ACTIVE and not atk_cc._slash_arcs.is_empty():
+				break
+		check_eq(atk_cc._slash_arcs.size(), 1, "Cutlass combo %d spawns BladeSlashArc on ACTIVE" % (step_idx + 1))
+		var entry: Dictionary = atk_cc._slash_arcs[0]
+		var arc_mi := entry["node"] as MeshInstance3D
+		check(arc_mi != null and arc_mi.name == "BladeSlashArc", "spawned node is named BladeSlashArc")
+		check_eq(arc_mi.mesh, arc_mesh, "BladeSlashArc reuses shared statically cached ArrayMesh")
+		check_eq(arc_mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "BladeSlashArc disables shadows")
+		check_eq(StringName(arc_mi.get_meta(&"slash_style")), expected_styles[step_idx],
+			"Cutlass combo %d uses style %s" % [step_idx + 1, String(expected_styles[step_idx])])
+		var mat := arc_mi.material_override as StandardMaterial3D
+		check(mat != null and mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+			"BladeSlashArc uses unshaded additive double-sided sRGB vertex-color material")
+		combo_scales.append((arc_mi.get_meta(&"base_scale") as Vector3).x)
+		combo_tints.append(arc_mi.get_meta(&"base_tint") as Color)
+
+		var rot_before := arc_mi.global_basis
+		await physics_frames(4)
+		if is_instance_valid(arc_mi):
+			check(not arc_mi.global_basis.is_equal_approx(rot_before),
+				"BladeSlashArc sweeps rotation smoothly during _process")
+		for _w in 45:
+			await physics_frames(1)
+			if not is_instance_valid(arc_mi):
+				break
+		check(not is_instance_valid(arc_mi) and atk_cc._slash_arcs.is_empty(),
+			"Cutlass combo %d BladeSlashArc self-cleans cleanly after 0.19 s" % (step_idx + 1))
+
+	check(combo_scales[2] > combo_scales[0] + 0.15, "Cutlass combo-3 finisher arc is wider (%.2f vs %.2f)" % [combo_scales[2], combo_scales[0]])
+	check(combo_tints[2].b < combo_tints[0].b - 0.20, "Cutlass combo-3 finisher shifts to warmer golden glow")
+
+	# 3. Boarding Axe heavy cleave spawns bold fiery amber-crimson shockwave crescent (1.55x scale) & self-cleans.
+	atk_cc.equip_weapon(&"boarding_axe")
+	atk_cc.state = CombatComponent.State.IDLE
+	atk_cc.stamina = atk_cc.max_stamina
+	check(atk_cc.heavy_attack(), "Boarding Axe heavy attack starts cleanly")
+	for _f in 45:
+		await physics_frames(1)
+		if atk_cc.state == CombatComponent.State.ACTIVE and not atk_cc._slash_arcs.is_empty():
+			break
+	check_eq(atk_cc._slash_arcs.size(), 1, "Boarding Axe heavy spawns BladeSlashArc on ACTIVE")
+	var axe_arc := atk_cc._slash_arcs[0]["node"] as MeshInstance3D
+	check(axe_arc != null and StringName(axe_arc.get_meta(&"slash_style")) == &"axe_heavy",
+		"Boarding Axe heavy uses axe_heavy cleave style")
+	var axe_tint: Color = axe_arc.get_meta(&"base_tint")
+	var axe_scale: Vector3 = axe_arc.get_meta(&"base_scale")
+	check(axe_tint.r > 0.92 and axe_tint.g < 0.50 and axe_tint.b < 0.20,
+		"Boarding Axe heavy cleave uses fiery amber-crimson tint (%s)" % str(axe_tint))
+	check(axe_scale.x >= 1.50 and axe_scale.x > combo_scales[2] + 0.25,
+		"Boarding Axe heavy cleave is noticeably wider than Cutlass (%.2f vs %.2f)" % [axe_scale.x, combo_scales[2]])
+	for _w in 45:
+		await physics_frames(1)
+		if not is_instance_valid(axe_arc):
+			break
+	check(not is_instance_valid(axe_arc) and atk_cc._slash_arcs.is_empty(),
+		"Boarding Axe heavy BladeSlashArc self-cleans cleanly")
+
+	# 4. Deterministic visual micro-hitstop on light hit & timed parry: NEVER alters Engine.time_scale!
+	pb.global_position = Vector3(0.0, 5.05, -1.65)
+	pb.health = pb.max_health
+	pa.health = pa.max_health
+	atk_cc.equip_weapon(&"cutlass")
+	atk_cc.state = CombatComponent.State.IDLE
+	atk_cc.combo_step = 1
+	def_cc.state = CombatComponent.State.IDLE
+	def_cc.set_blocking(false)
+	pc._trauma = 0.0
+
+	check_near(Engine.time_scale, 1.0, 0.0001, "Engine.time_scale starts at 1.0")
+	var light_res := def_cc.receive_melee_hit(atk_cc, 18.0, false, false)
+	check_eq(light_res, &"hit", "light melee strike connects cleanly")
+	check(atk_cc.get_hitstop_remaining() > 0.0 and atk_cc.get_hitstop_remaining() <= 0.030,
+		"light hit triggers ~0.024 s visual hitstop (got %.4f s)" % atk_cc.get_hitstop_remaining())
+	check(pc.get_camera_trauma() >= 0.14, "light melee hit triggers subtle local camera trauma (got %.3f)" % pc.get_camera_trauma())
+	check_near(Engine.time_scale, 1.0, 0.0001, "Engine.time_scale remains strictly 1.0 during light hitstop")
+
+	# Wait for hitstop to decay cleanly to 0.
+	await physics_frames(6)
+	check_near(atk_cc.get_hitstop_remaining(), 0.0, 0.001, "visual hitstop snaps cleanly back to 0.0")
+
+	# Timed parry triggers longer 0.042 s visual hitstop on both combatants while Engine.time_scale stays 1.0.
+	def_cc.set_blocking(true)
+	def_cc._block_elapsed = 0.04
+	pc._trauma = 0.0
+	var parry_res := def_cc.receive_melee_hit(atk_cc, 24.0, false, false)
+	check_eq(parry_res, &"parried", "timed parry triggers cleanly")
+	check(def_cc.get_hitstop_remaining() >= 0.035 and atk_cc.get_hitstop_remaining() >= 0.035,
+		"timed parry triggers ~0.042 s visual hitstop (def=%.4f atk=%.4f)" % [
+			def_cc.get_hitstop_remaining(), atk_cc.get_hitstop_remaining()])
+	check(pc.get_camera_trauma() >= 0.22, "parry clash adds crisp impact camera trauma (got %.3f)" % pc.get_camera_trauma())
+	check_near(Engine.time_scale, 1.0, 0.0001, "Engine.time_scale remains strictly 1.0 during parry hitstop")
+
+	# Accessibility gate: reduced motion (bob_amount == 0.0) suppresses hitstop & camera trauma cleanly.
+	await physics_frames(8)
+	pc.bob_amount = 0.0
+	pc._trauma = 0.0
+	def_cc.set_blocking(false)
+	def_cc.state = CombatComponent.State.IDLE
+	atk_cc.state = CombatComponent.State.IDLE
+	var rm_res := def_cc.receive_melee_hit(atk_cc, 20.0, true, false)
+	check_eq(rm_res, &"hit", "heavy hit still resolves damage normally under reduced motion")
+	check_near(atk_cc.get_hitstop_remaining(), 0.0, 0.0001, "reduced motion disables visual hitstop jolt on local player")
+	check_near(pc.get_camera_trauma(), 0.0, 0.0001, "reduced motion keeps camera trauma at 0.0")
+
+	# 5. Showcase frozen BladeSlashArc stays visible in place and frees cleanly with 0 static cache leaks!
+	var frozen_arc := atk_cc.spawn_showcase_slash_arc(Vector3(0.0, 6.2, -0.8), Basis.IDENTITY, &"heavy", true)
+	check(frozen_arc != null and frozen_arc.mesh == arc_mesh, "spawn_showcase_slash_arc spawns sculpted frozen arc")
+	await physics_frames(18)
+	check(is_instance_valid(frozen_arc) and frozen_arc.visible,
+		"freeze_in_place showcase BladeSlashArc remains held at mid-clash glow across frames")
+
+	await _end()
+	check(not is_instance_valid(frozen_arc), "frozen showcase BladeSlashArc frees cleanly on _exit_tree()")
+	check_eq(CombatComponent._active_combatants, 0, "all CombatComponents exited cleanly")
+	check(CombatComponent._slash_arc_mesh == null, "BladeSlashArc static ArrayMesh cache released to null (0 leaks)")
+
+
+
 
 

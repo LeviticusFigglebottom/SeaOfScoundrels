@@ -38,6 +38,8 @@ static var _whale_mat: StandardMaterial3D = null
 static var _spray_tex: ImageTexture = null
 static var _spray_mat: StandardMaterial3D = null
 static var _spray_quad: QuadMesh = null
+static var _curtain_mesh: ArrayMesh = null
+static var _curtain_mat: StandardMaterial3D = null
 
 @export var auto_despawn: bool = true
 @export var enable_effects: bool = true
@@ -54,6 +56,7 @@ var _body_mi: MeshInstance3D = null
 var _flipper_l_mi: MeshInstance3D = null
 var _flipper_r_mi: MeshInstance3D = null
 var _fluke_mi: MeshInstance3D = null
+var _spray_curtain_mi: MeshInstance3D = null
 var _breach_spray: GPUParticles3D = null
 var _splash_plume: GPUParticles3D = null
 
@@ -91,6 +94,8 @@ static func clear_shared_cache() -> void:
 	_spray_tex = null
 	_spray_mat = null
 	_spray_quad = null
+	_curtain_mesh = null
+	_curtain_mat = null
 
 
 func _enter_tree() -> void:
@@ -108,7 +113,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	for mi: MeshInstance3D in [_body_mi, _flipper_l_mi, _flipper_r_mi, _fluke_mi]:
+	for mi: MeshInstance3D in [_body_mi, _flipper_l_mi, _flipper_r_mi, _fluke_mi, _spray_curtain_mi]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
 				for si in mi.mesh.get_surface_count():
@@ -128,6 +133,7 @@ func _exit_tree() -> void:
 	_flipper_l_mi = null
 	_flipper_r_mi = null
 	_fluke_mi = null
+	_spray_curtain_mi = null
 	_breach_spray = null
 	_splash_plume = null
 	body_root = null
@@ -203,17 +209,33 @@ func force_breach_apex() -> void:
 	if tail_pivot != null:
 		tail_pivot.rotation = Vector3(-0.26, 0.0, 0.0)
 
-	var surf_w := Vector3(wx, sea_y + 0.08, wz)
+	# Dense 7-plume boiling white foam ring + cascading sculpted spray curtain + pre-warmed dual spray plumes!
+	var tail_surf_w := Vector3(wx - fwd.x * 2.2, sea_y + 0.08, wz - fwd.z * 2.2)
+	var plume_w := Vector3(tail_surf_w.x, sea_y + 0.30, tail_surf_w.z)
 	if Ocean.current != null:
-		Ocean.current.add_foam(surf_w, 6.5, 0.95)
-		for ki in 4:
-			var a := float(ki) * PI * 0.5 + 0.4
-			Ocean.current.add_foam(surf_w + Vector3(cos(a) * 3.8, 0.0, sin(a) * 3.8), 3.4, 0.78)
+		Ocean.current.add_foam(tail_surf_w, 6.8, 1.0)
+		for ki in 6:
+			var a := float(ki) / 6.0 * TAU + 0.25
+			var rad := 3.6 if (ki % 2 == 0) else 5.2
+			Ocean.current.add_foam(tail_surf_w + Vector3(cos(a) * rad, 0.0, sin(a) * rad), 5.2, 1.0)
+	if _spray_curtain_mi != null and is_instance_valid(_spray_curtain_mi):
+		if is_inside_tree():
+			_spray_curtain_mi.global_position = tail_surf_w
+			_spray_curtain_mi.rotation = Vector3(0.0, _heading_yaw, 0.0)
+		_spray_curtain_mi.scale = Vector3.ONE
+		_spray_curtain_mi.visible = true
 	if _breach_spray != null and is_instance_valid(_breach_spray):
-		_breach_spray.global_position = surf_w if is_inside_tree() else Vector3(0.0, -5.5, 0.0)
+		_breach_spray.preprocess = 0.42
+		_breach_spray.global_position = plume_w if is_inside_tree() else Vector3(0.0, -5.3, 0.0)
 		_breach_spray.visible = true
 		_breach_spray.restart()
 		_breach_spray.emitting = true
+	if _splash_plume != null and is_instance_valid(_splash_plume):
+		_splash_plume.preprocess = 0.30
+		_splash_plume.global_position = plume_w if is_inside_tree() else Vector3(0.0, -5.3, 0.0)
+		_splash_plume.visible = true
+		_splash_plume.restart()
+		_splash_plume.emitting = true
 
 
 # ==============================================================================
@@ -273,9 +295,19 @@ func _build_rig() -> void:
 	tail_pivot.add_child(_fluke_mi)
 
 	if enable_effects:
-		_breach_spray = _make_spray_emitter("BreachSpray", 26, 1.15, 2.2, 5.5, 10.5, 0.85)
+		_spray_curtain_mi = MeshInstance3D.new()
+		_spray_curtain_mi.name = "BreachSprayCurtain"
+		_spray_curtain_mi.top_level = true
+		_spray_curtain_mi.mesh = _curtain_mesh
+		_spray_curtain_mi.material_override = _curtain_mat
+		_spray_curtain_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_spray_curtain_mi.visibility_range_end = 420.0
+		_spray_curtain_mi.visible = false
+		add_child(_spray_curtain_mi)
+
+		_breach_spray = _make_spray_emitter("BreachSpray", 34, 1.25, 2.5, 6.5, 12.2, 1.10)
 		add_child(_breach_spray)
-		_splash_plume = _make_spray_emitter("SplashPlume", 42, 1.65, 3.6, 8.0, 16.5, 1.35)
+		_splash_plume = _make_spray_emitter("SplashPlume", 48, 1.70, 3.8, 8.8, 17.5, 1.45)
 		add_child(_splash_plume)
 
 
@@ -352,6 +384,17 @@ func _apply_breach_pose(trigger_events: bool) -> void:
 		right_flipper_pivot.rotation = Vector3(-0.06, -flip_sweep, flip_flap)
 	if tail_pivot != null:
 		tail_pivot.rotation = Vector3(tail_pitch, 0.0, 0.0)
+
+	if _spray_curtain_mi != null and is_instance_valid(_spray_curtain_mi):
+		var show_curtain := (phase == Phase.BREACH_RISE and rel_y > -0.8) \
+			or phase == Phase.APEX_TWIST \
+			or phase == Phase.SPLASH_REENTRY
+		_spray_curtain_mi.visible = show_curtain
+		if show_curtain and is_inside_tree():
+			var c_h := clampf((rel_y + 1.4) / 6.2, 0.45, 1.18)
+			_spray_curtain_mi.global_position = Vector3(wx - fwd.x * 1.8, sea_y + 0.06, wz - fwd.z * 1.8)
+			_spray_curtain_mi.rotation = Vector3(0.0, _heading_yaw, 0.0)
+			_spray_curtain_mi.scale = Vector3(1.0 + (1.0 - c_h) * 0.25, c_h, 1.0 + (1.0 - c_h) * 0.25)
 
 	if not trigger_events:
 		return
@@ -463,6 +506,16 @@ static func _ensure_shared_assets() -> void:
 		_spray_quad = QuadMesh.new()
 		_spray_quad.size = Vector2(1.4, 1.4)
 		_spray_quad.material = _spray_mat
+	if _curtain_mat == null:
+		_curtain_mat = StandardMaterial3D.new()
+		_curtain_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_curtain_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_curtain_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_curtain_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_curtain_mat.vertex_color_use_as_albedo = true
+		_curtain_mat.vertex_color_is_srgb = true
+	if _curtain_mesh == null:
+		_curtain_mesh = _build_spray_curtain_mesh()
 
 	if _body_mesh == null:
 		_body_mesh = _build_whale_body_mesh()
@@ -839,3 +892,59 @@ static func _emit_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector
 	st.set_smooth_group(-1)
 	st.set_color(cc)
 	st.add_vertex(c)
+
+
+static func _build_spray_curtain_mesh() -> ArrayMesh:
+	# Three concentric sculpted feathered splash-curtain crowns (zero raw primitives!)
+	# erupting straight up from the ocean surface beneath the breaching whale's belly & tail.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Row: [base_r, top_r, base_h, peak_h, segs, base_alpha, mid_alpha, wave_amp]
+	var crowns: Array[Array] = [
+		[1.15, 2.55, 0.0, 5.85, 16, 0.84, 0.62, 0.24],
+		[2.25, 4.45, 0.0, 4.15, 18, 0.72, 0.46, 0.28],
+		[3.65, 6.20, 0.0, 2.25, 20, 0.56, 0.30, 0.22],
+	]
+	var col_base := Color(0.92, 0.98, 1.0, 1.0)
+	var col_mid := Color(0.98, 0.99, 1.0, 1.0)
+	var col_tip := Color(1.0, 0.98, 0.94, 0.0)
+
+	for ci in crowns.size():
+		var spec: Array = crowns[ci]
+		var r_bot: float = float(spec[0])
+		var r_top: float = float(spec[1])
+		var h_bot: float = float(spec[2])
+		var h_top: float = float(spec[3])
+		var segs: int = int(spec[4])
+		var a_bot: float = float(spec[5])
+		var a_mid: float = float(spec[6])
+		var w_amp: float = float(spec[7])
+		var phase_off := float(ci) * 1.15
+
+		var c_bot := Color(col_base.r, col_base.g, col_base.b, a_bot)
+		var c_mid := Color(col_mid.r, col_mid.g, col_mid.b, a_mid)
+		var c_tip := col_tip
+
+		for k in segs:
+			var a0 := float(k) / float(segs) * TAU
+			var a1 := float(k + 1) / float(segs) * TAU
+			var j0 := 1.0 + sin(a0 * 5.0 + phase_off) * w_amp + cos(a0 * 3.0 - phase_off) * (w_amp * 0.55)
+			var j1 := 1.0 + sin(a1 * 5.0 + phase_off) * w_amp + cos(a1 * 3.0 - phase_off) * (w_amp * 0.55)
+
+			var d0 := Vector3(cos(a0), 0.0, sin(a0))
+			var d1 := Vector3(cos(a1), 0.0, sin(a1))
+
+			var p00 := d0 * r_bot + Vector3(0.0, h_bot, 0.0)
+			var p01 := d1 * r_bot + Vector3(0.0, h_bot, 0.0)
+			var p10 := d0 * lerpf(r_bot, r_top, 0.52) + Vector3(0.0, lerpf(h_bot, h_top * j0, 0.54), 0.0)
+			var p11 := d1 * lerpf(r_bot, r_top, 0.52) + Vector3(0.0, lerpf(h_bot, h_top * j1, 0.54), 0.0)
+			var p20 := d0 * (r_top * (0.94 + 0.08 * j0)) + Vector3(0.0, h_top * j0, 0.0)
+			var p21 := d1 * (r_top * (0.94 + 0.08 * j1)) + Vector3(0.0, h_top * j1, 0.0)
+
+			var mid_ref := Vector3(0.0, h_top * 0.35, 0.0)
+			_emit_outward_quad(st, p00, p10, p11, p01, mid_ref, c_bot, c_mid, c_mid, c_bot)
+			_emit_outward_quad(st, p10, p20, p21, p11, mid_ref, c_mid, c_tip, c_tip, c_mid)
+
+	st.generate_normals()
+	return st.commit()

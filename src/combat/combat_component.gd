@@ -28,6 +28,10 @@ const DODGE_DURATION := 0.28
 const DODGE_IFRAMES := 0.24
 const STAMINA_REGEN_DELAY := 0.65
 const STAMINA_REGEN_RATE := 30.0
+const SLASH_ARC_DURATION := 0.19
+const SLASH_ARC_SEGMENTS := 16
+const HITSTOP_LIGHT := 0.024
+const HITSTOP_HEAVY := 0.042
 
 const WEAPONS := {
 	&"cutlass": {
@@ -83,18 +87,22 @@ var _buff_timer: float = 0.0
 var _recoil_pulse: float = 0.0
 var _recoil_strength: float = 0.0
 var _recoil_sign: float = 1.0
+var _hitstop_timer: float = 0.0
 var _player_controller: PlayerController = null
+var _inventory: Node = null
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
 var _ray_result: PhysicsIntersectRayResult3D = PhysicsIntersectRayResult3D.new()
 var _shape_params: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
 var _melee_sphere: SphereShape3D = SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
 var _active_vfx: Array[Node] = []
+var _slash_arcs: Array[Dictionary] = []
 
 static var _active_combatants: int = 0
 static var _spark_tex: ImageTexture = null
 static var _flash_tex: GradientTexture2D = null
 static var _ember_tex: ImageTexture = null
+static var _slash_arc_mesh: ArrayMesh = null
 
 
 func _init() -> void:
@@ -110,9 +118,15 @@ func _exit_tree() -> void:
 	_cleanup_all_vfx()
 	_active_combatants = maxi(0, _active_combatants - 1)
 	if _active_combatants == 0:
-		_spark_tex = null
-		_flash_tex = null
-		_ember_tex = null
+		clear_shared_vfx_cache()
+
+
+## Release all statically cached CombatComponent VFX meshes & textures cleanly.
+static func clear_shared_vfx_cache() -> void:
+	_spark_tex = null
+	_flash_tex = null
+	_ember_tex = null
+	_slash_arc_mesh = null
 
 
 func _ready() -> void:
@@ -160,6 +174,11 @@ func is_in_parry_window() -> bool:
 
 func is_invulnerable() -> bool:
 	return _iframe_timer > 0.0
+
+
+## Remaining deterministic visual micro-hitstop duration in seconds (never touches Engine.time_scale).
+func get_hitstop_remaining() -> float:
+	return _hitstop_timer
 
 
 # ------------------------------------------------------------------ player / AI actions
@@ -283,9 +302,9 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		_play_anim(&"parry", 0.35)
 		Audio.play_sfx(&"parry_ring", pawn.eye_position())
 		_spawn_clash_vfx(clash_pos, &"parried")
-		_trigger_recoil_pulse(1.0)
+		_trigger_hitstop(HITSTOP_HEAVY, 0.30, 1.0)
 		if attacker_cc != null:
-			attacker_cc._trigger_recoil_pulse(0.75)
+			attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.26, 0.80)
 			attacker_cc.apply_stagger(STAGGER_DURATION)
 		parried.emit(attacker_pawn)
 		return &"parried"
@@ -297,9 +316,9 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			# Guard broken!
 			Audio.play_sfx(&"sword_clash", pawn.eye_position())
 			_spawn_clash_vfx(clash_pos, &"heavy")
-			_trigger_recoil_pulse(0.85)
+			_trigger_hitstop(HITSTOP_HEAVY, 0.24, 0.85)
 			if attacker_cc != null:
-				attacker_cc._trigger_recoil_pulse(0.85)
+				attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.28, 0.90)
 			apply_stagger(1.1)
 			pawn.apply_damage(raw_damage * 0.55, attacker_pawn)
 			return &"hit"
@@ -307,7 +326,9 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			# Out of stamina -> guard breaks!
 			stamina = 0.0
 			_spawn_clash_vfx(clash_pos, &"heavy")
-			_trigger_recoil_pulse(0.75)
+			_trigger_hitstop(HITSTOP_HEAVY, 0.22, 0.75)
+			if attacker_cc != null:
+				attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.24, 0.80)
 			apply_stagger(1.0)
 			pawn.apply_damage(raw_damage * 0.5, attacker_pawn)
 			return &"hit"
@@ -325,11 +346,20 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	pawn.apply_damage(dmg, attacker_pawn)
 	Audio.play_sfx(&"hit_flesh", pawn.eye_position())
 	var is_combo_finisher := attacker_cc != null and not is_heavy and attacker_cc.combo_step == 3
-	if is_heavy or is_combo_finisher:
+	var is_big_hit := is_heavy or is_combo_finisher
+	if is_big_hit:
 		_spawn_clash_vfx(clash_pos, &"heavy")
-		if attacker_cc != null:
-			attacker_cc._trigger_recoil_pulse(0.85 if is_heavy else 0.55)
-		_trigger_recoil_pulse(0.65 if is_heavy else 0.42)
+	_trigger_hitstop(
+		HITSTOP_HEAVY if is_big_hit else HITSTOP_LIGHT,
+		0.24 if is_heavy else (0.20 if is_combo_finisher else 0.16),
+		0.65 if is_heavy else (0.45 if is_combo_finisher else 0.32)
+	)
+	if attacker_cc != null:
+		attacker_cc._trigger_hitstop(
+			HITSTOP_HEAVY if is_big_hit else HITSTOP_LIGHT,
+			0.28 if is_heavy else (0.22 if is_combo_finisher else 0.16),
+			0.88 if is_heavy else (0.60 if is_combo_finisher else 0.42)
+		)
 	if attacker_pawn != null:
 		var push := pawn.global_position - attacker_pawn.global_position
 		push.y = 0.0
@@ -343,24 +373,41 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 # ------------------------------------------------------------------ simulation
 
 func _process(delta: float) -> void:
-	if _recoil_pulse <= 0.0005:
+	var in_hitstop := _hitstop_timer > 0.0
+	if in_hitstop:
+		_hitstop_timer = maxf(0.0, _hitstop_timer - delta)
+	# Briefly slow active slash-arc sweep during visual hitstop so the blade visually bites on impact.
+	_tick_slash_arcs(delta * 0.18 if in_hitstop else delta)
+
+	if _recoil_pulse <= 0.0005 and not in_hitstop:
 		_recoil_strength = 0.0
 		return
-	_recoil_pulse = maxf(0.0, _recoil_pulse - delta * 6.5)
-	if not _can_spawn_vfx() or pawn == null:
+	if in_hitstop:
+		# Hold recoil kick at peak tension during the micro-hitstop window, then snap into recovery.
+		_recoil_pulse = maxf(_recoil_pulse, 0.56)
+	else:
+		_recoil_pulse = maxf(0.0, _recoil_pulse - delta * 7.2)
+
+	if not _can_spawn_vfx() or pawn == null or _is_reduced_motion():
 		return
-	if _player_controller == null or not is_instance_valid(_player_controller):
-		for c in pawn.get_children():
-			if c is PlayerController:
-				_player_controller = c as PlayerController
-				break
-	if _player_controller == null or _player_controller.camera == null:
-		return
+
 	var kick := sin(_recoil_pulse * PI) * _recoil_strength
-	var xf := _player_controller.camera.transform
-	xf.basis = xf.basis * Basis(Vector3.RIGHT, 0.026 * kick) * Basis(Vector3.BACK, 0.032 * _recoil_sign * kick)
-	xf.origin += xf.basis.z * (0.028 * kick)
-	_player_controller.camera.transform = xf
+	var pc := _get_player_controller()
+	if pc != null and pc.camera != null:
+		var xf := pc.camera.transform
+		xf.basis = xf.basis * Basis(Vector3.RIGHT, 0.026 * kick) * Basis(Vector3.BACK, 0.032 * _recoil_sign * kick)
+		xf.origin += xf.basis.z * (0.028 * kick)
+		pc.camera.transform = xf
+
+	# Layer crisp weapon-tension recoil jolt onto the first-person viewmodel (after Inventory._process).
+	var inv := _get_inventory()
+	if inv != null:
+		var fp_node: Variant = inv.get(&"fp_tool_node")
+		if fp_node is Node3D and is_instance_valid(fp_node):
+			var fp3 := fp_node as Node3D
+			var tense := 1.15 if in_hitstop else 1.0
+			fp3.position += Vector3(-0.024 * _recoil_sign * kick * tense, 0.018 * kick * tense, 0.055 * kick * tense)
+			fp3.rotation_degrees += Vector3(9.5 * kick * tense, -7.0 * _recoil_sign * kick * tense, -11.0 * _recoil_sign * kick * tense)
 
 func _physics_process(delta: float) -> void:
 	if pawn == null or pawn.dead:
@@ -392,6 +439,7 @@ func _physics_process(delta: float) -> void:
 				var lunge := float(spec.get("lunge", 3.5)) * (1.35 if _attack_is_heavy else 1.0)
 				pawn.velocity += pawn.facing() * lunge
 				Audio.play_sfx(&"sword_swing", pawn.eye_position())
+				_spawn_slash_arc(_current_slash_arc_style())
 				_check_melee_hits(spec)
 		State.ACTIVE:
 			var spec: Dictionary = WEAPONS.get(equipped_weapon, WEAPONS[&"cutlass"])
@@ -529,9 +577,14 @@ func _try_melee_hit_damageable(
 			(target as CharacterBody3D).velocity += flat.normalized() * (5.2 if _attack_is_heavy else 2.6)
 
 	if landed:
-		if _attack_is_heavy or combo_step == 3:
+		var is_big := _attack_is_heavy or combo_step == 3
+		if is_big:
 			_spawn_clash_vfx(my_pos.lerp(target_center, 0.65), &"heavy")
-			_trigger_recoil_pulse(0.85 if _attack_is_heavy else 0.50)
+		_trigger_hitstop(
+			HITSTOP_HEAVY if is_big else HITSTOP_LIGHT,
+			0.26 if _attack_is_heavy else (0.22 if combo_step == 3 else 0.16),
+			0.88 if _attack_is_heavy else (0.58 if combo_step == 3 else 0.42)
+		)
 		if target is Pawn:
 			hit_landed.emit(target as Pawn, dmg, _attack_is_heavy)
 		target_hit.emit(target, dmg, _attack_is_heavy)
@@ -560,9 +613,14 @@ func _try_melee_hit_leviathan(
 	_hit_this_swing[tid] = true
 	var t_idx := int(hitbox.get_meta("tentacle_index", -1))
 	(lev as Object).call(&"damage_tentacle", t_idx, dmg)
-	if _attack_is_heavy:
-		_spawn_parry_sparks(my_pos.lerp(hit_pos, 0.6), Color(1.0, 0.92, 0.62), true)
-		_trigger_recoil_pulse(0.85)
+	var is_big := _attack_is_heavy or combo_step == 3
+	if is_big:
+		_spawn_clash_vfx(my_pos.lerp(hit_pos, 0.6), &"heavy")
+	_trigger_hitstop(
+		HITSTOP_HEAVY if is_big else HITSTOP_LIGHT,
+		0.28 if _attack_is_heavy else 0.18,
+		0.88 if _attack_is_heavy else 0.48
+	)
 	if lev is Node:
 		target_hit.emit(lev as Node, dmg, _attack_is_heavy)
 	return true
@@ -733,11 +791,52 @@ func _spend_stamina(cost: float) -> bool:
 
 
 func _trigger_recoil_pulse(strength: float) -> void:
-	if not enable_effects:
+	if not enable_effects or _is_reduced_motion():
 		return
 	_recoil_pulse = 1.0
 	_recoil_strength = maxf(_recoil_strength, clampf(strength, 0.2, 1.3))
 	_recoil_sign = -_recoil_sign
+
+
+func _trigger_hitstop(duration: float, trauma: float, recoil_strength: float) -> void:
+	if not enable_effects or _is_reduced_motion():
+		return
+	_hitstop_timer = maxf(_hitstop_timer, duration)
+	_trigger_recoil_pulse(recoil_strength)
+	var pc := _get_player_controller()
+	if pc != null:
+		pc.add_camera_trauma(trauma)
+
+
+func _is_reduced_motion() -> bool:
+	var pc := _get_player_controller()
+	if pc != null and pc.bob_amount <= 0.001:
+		return true
+	return false
+
+
+func _get_player_controller() -> PlayerController:
+	if pawn == null or not is_instance_valid(pawn):
+		return null
+	if _player_controller == null or not is_instance_valid(_player_controller):
+		_player_controller = null
+		for c in pawn.get_children():
+			if c is PlayerController:
+				_player_controller = c as PlayerController
+				break
+	return _player_controller
+
+
+func _get_inventory() -> Node:
+	if pawn == null or not is_instance_valid(pawn):
+		return null
+	if _inventory == null or not is_instance_valid(_inventory):
+		_inventory = null
+		for c in pawn.get_children():
+			if c.get_script() != null and c.has_method(&"get_resolved_tool_id"):
+				_inventory = c
+				break
+	return _inventory
 
 
 func _can_spawn_vfx() -> bool:
@@ -846,6 +945,319 @@ func _cleanup_all_vfx() -> void:
 	_active_vfx.clear()
 	for fx in pending:
 		_cleanup_vfx_node(fx)
+	var pending_arcs := _slash_arcs.duplicate()
+	_slash_arcs.clear()
+	for entry in pending_arcs:
+		_cleanup_slash_arc_entry(entry)
+
+
+# ==============================================================================
+# Sculpted 1-DC Sweeping `BladeSlashArc` & Boarding-Axe Cleave VFX
+# ==============================================================================
+
+## Build or return the statically cached 16-segment curved crescent BladeSlashArc ArrayMesh.
+static func _get_slash_arc_mesh() -> ArrayMesh:
+	if _slash_arc_mesh != null:
+		return _slash_arc_mesh
+	_slash_arc_mesh = _build_slash_arc_mesh()
+	return _slash_arc_mesh
+
+
+static func _build_slash_arc_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const ARC_RAD := deg_to_rad(132.0)
+	const HALF_ARC := ARC_RAD * 0.5
+	const MAX_CHORD := 0.38
+	var segs := SLASH_ARC_SEGMENTS
+
+	var ring_out: Array[Vector3] = []
+	var ring_mid: Array[Vector3] = []
+	var ring_in: Array[Vector3] = []
+	var col_out: Array[Color] = []
+	var col_mid: Array[Color] = []
+	var col_in: Array[Color] = []
+
+	for i in range(segs + 1):
+		var u := float(i) / float(segs)
+		var theta := lerpf(-HALF_ARC, HALF_ARC, u)
+		var s := sin(theta)
+		var c := cos(theta)
+		# Razor-tapered crescent envelope: thickest (0.38 m) in center, sharp tips at both ends.
+		var env := pow(sin(u * PI), 0.78)
+		var r_out := lerpf(1.26, 1.58, sin(u * PI * 0.74 + 0.12))
+		var chord := MAX_CHORD * env
+		var r_in := r_out - chord
+		var r_mid := lerpf(r_in, r_out, 0.70)
+		# Subtle 3D ribbon camber gives depth from both elevated and eye-level duel cameras.
+		var y_out := 0.008 * env
+		var y_mid := 0.032 * env
+		var y_in := -0.018 * env
+
+		ring_out.append(Vector3(s * r_out, y_out, -c * r_out))
+		ring_mid.append(Vector3(s * r_mid, y_mid, -c * r_mid))
+		ring_in.append(Vector3(s * r_in, y_in, -c * r_in))
+
+		# White-hot leading outer blade rim -> luminous mid body -> soft zero-alpha trailing wake.
+		var tip_fade := pow(sin(u * PI), 0.52)
+		var momentum := lerpf(0.46, 1.0, u)
+		col_out.append(Color(1.0, 1.0, 0.98, clampf(tip_fade * (0.55 + 0.45 * momentum), 0.0, 1.0)))
+		col_mid.append(Color(1.0, 0.94, 0.84, clampf(tip_fade * (0.44 + 0.42 * momentum), 0.0, 0.92)))
+		col_in.append(Color(0.95, 0.80, 0.64, 0.0))
+
+	for i in segs:
+		var ni := i + 1
+		var u0 := float(i) / float(segs)
+		var u1 := float(ni) / float(segs)
+		if i == 0:
+			# Sharp trailing tip wedge (2 non-degenerate triangles).
+			_add_arc_tri(st, ring_out[0], ring_out[1], ring_mid[1], col_out[0], col_out[1], col_mid[1],
+				Vector2(u0, 1.0), Vector2(u1, 1.0), Vector2(u1, 0.7))
+			_add_arc_tri(st, ring_out[0], ring_mid[1], ring_in[1], col_out[0], col_mid[1], col_in[1],
+				Vector2(u0, 0.5), Vector2(u1, 0.7), Vector2(u1, 0.0))
+		elif i == segs - 1:
+			# Sharp leading tip wedge (2 non-degenerate triangles).
+			_add_arc_tri(st, ring_out[i], ring_out[ni], ring_mid[i], col_out[i], col_out[ni], col_mid[i],
+				Vector2(u0, 1.0), Vector2(u1, 1.0), Vector2(u0, 0.7))
+			_add_arc_tri(st, ring_mid[i], ring_out[ni], ring_in[i], col_mid[i], col_out[ni], col_in[i],
+				Vector2(u0, 0.7), Vector2(u1, 0.5), Vector2(u0, 0.0))
+		else:
+			# Outer bright blade strip (2 triangles).
+			_add_arc_tri(st, ring_out[i], ring_out[ni], ring_mid[ni], col_out[i], col_out[ni], col_mid[ni],
+				Vector2(u0, 1.0), Vector2(u1, 1.0), Vector2(u1, 0.7))
+			_add_arc_tri(st, ring_out[i], ring_mid[ni], ring_mid[i], col_out[i], col_mid[ni], col_mid[i],
+				Vector2(u0, 1.0), Vector2(u1, 0.7), Vector2(u0, 0.7))
+			# Inner translucent wake strip (2 triangles).
+			_add_arc_tri(st, ring_mid[i], ring_mid[ni], ring_in[ni], col_mid[i], col_mid[ni], col_in[ni],
+				Vector2(u0, 0.7), Vector2(u1, 0.7), Vector2(u1, 0.0))
+			_add_arc_tri(st, ring_mid[i], ring_in[ni], ring_in[i], col_mid[i], col_in[ni], col_in[i],
+				Vector2(u0, 0.7), Vector2(u1, 0.0), Vector2(u0, 0.0))
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _add_arc_tri(
+	st: SurfaceTool,
+	a: Vector3, b: Vector3, c: Vector3,
+	ca: Color, cb: Color, cc: Color,
+	uva: Vector2, uvb: Vector2, uvc: Vector2
+) -> void:
+	st.set_color(ca); st.set_uv(uva); st.add_vertex(a)
+	st.set_color(cb); st.set_uv(uvb); st.add_vertex(b)
+	st.set_color(cc); st.set_uv(uvc); st.add_vertex(c)
+
+
+func _current_slash_arc_style() -> StringName:
+	if equipped_weapon == &"boarding_axe":
+		return &"axe_heavy" if _attack_is_heavy else &"axe_light"
+	if _attack_is_heavy:
+		return &"heavy"
+	if combo_step == 2:
+		return &"light_2"
+	if combo_step == 3:
+		return &"light_3"
+	return &"light_1"
+
+
+static func _slash_arc_style_spec(style: StringName, combo_hint: int = 1) -> Dictionary:
+	match style:
+		&"light_2":
+			return {
+				"tint": Color(1.0, 0.94, 0.78, 0.92),
+				"scale": Vector3(1.04, 1.0, 1.04),
+				"tilt_deg": -26.0,
+				"flip_x": -1.0,
+				"start_yaw_deg": 42.0,
+				"end_yaw_deg": -44.0,
+				"forward_offset": 0.14,
+			}
+		&"light_3":
+			return {
+				"tint": Color(1.0, 0.86, 0.44, 0.98),
+				"scale": Vector3(1.20, 1.12, 1.20),
+				"tilt_deg": 0.0,
+				"flip_x": 1.0,
+				"start_yaw_deg": -52.0,
+				"end_yaw_deg": 56.0,
+				"forward_offset": 0.22,
+			}
+		&"heavy":
+			return {
+				"tint": Color(1.0, 0.96, 0.68, 1.0),
+				"scale": Vector3(1.32, 1.24, 1.32),
+				"tilt_deg": 12.0,
+				"flip_x": 1.0,
+				"start_yaw_deg": -54.0,
+				"end_yaw_deg": 58.0,
+				"forward_offset": 0.26,
+			}
+		&"axe_light":
+			var flip := -1.0 if combo_hint == 2 else 1.0
+			var tilt := 0.0 if combo_hint == 3 else (20.0 * flip)
+			return {
+				"tint": Color(1.0, 0.56, 0.18, 0.96),
+				"scale": Vector3(1.38, 1.45, 1.38),
+				"tilt_deg": tilt,
+				"flip_x": flip,
+				"start_yaw_deg": -46.0 * flip,
+				"end_yaw_deg": 52.0 * flip,
+				"forward_offset": 0.20,
+			}
+		&"axe_heavy":
+			return {
+				"tint": Color(1.0, 0.36, 0.10, 1.0),
+				"scale": Vector3(1.55, 1.65, 1.55),
+				"tilt_deg": 0.0,
+				"flip_x": 1.0,
+				"start_yaw_deg": -58.0,
+				"end_yaw_deg": 62.0,
+				"forward_offset": 0.28,
+			}
+		_:
+			# &"light_1"
+			return {
+				"tint": Color(1.0, 0.95, 0.80, 0.92),
+				"scale": Vector3(1.0, 1.0, 1.0),
+				"tilt_deg": 26.0,
+				"flip_x": 1.0,
+				"start_yaw_deg": -42.0,
+				"end_yaw_deg": 44.0,
+				"forward_offset": 0.14,
+			}
+
+
+func _create_slash_arc_instance(
+	world_pos: Vector3,
+	arc_basis: Basis,
+	style: StringName,
+	follow_pawn: bool,
+	freeze_in_place: bool
+) -> MeshInstance3D:
+	var host: Node = pawn.get_parent() if (pawn != null and is_instance_valid(pawn)) else get_parent()
+	if host == null:
+		return null
+
+	var spec := _slash_arc_style_spec(style, combo_step)
+	var tint: Color = spec["tint"]
+	var base_scale: Vector3 = spec["scale"]
+	var tilt_rad := deg_to_rad(float(spec["tilt_deg"]))
+	var flip_x := float(spec["flip_x"])
+	var start_yaw := deg_to_rad(float(spec["start_yaw_deg"]))
+	var end_yaw := deg_to_rad(float(spec["end_yaw_deg"]))
+	var fwd_off := float(spec["forward_offset"])
+
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.albedo_color = tint
+
+	var mi := MeshInstance3D.new()
+	mi.name = "BladeSlashArc"
+	mi.mesh = _get_slash_arc_mesh()
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta(&"slash_style", style)
+	mi.set_meta(&"base_tint", tint)
+	mi.set_meta(&"base_scale", base_scale)
+	host.add_child(mi)
+
+	var tilted_basis := arc_basis.orthonormalized() * Basis(Vector3.FORWARD, tilt_rad)
+	var init_yaw := lerpf(start_yaw, end_yaw, 0.52) if freeze_in_place else start_yaw
+	var init_scale := Vector3(base_scale.x * flip_x, base_scale.y, base_scale.z)
+	var init_pos := world_pos - arc_basis.orthonormalized().z * fwd_off
+	mi.global_transform = Transform3D((tilted_basis * Basis(Vector3.UP, init_yaw)).scaled(init_scale), init_pos)
+
+	_slash_arcs.append({
+		"node": mi,
+		"mat": mat,
+		"style": style,
+		"base_basis": tilted_basis,
+		"base_scale": base_scale,
+		"tint": tint,
+		"flip_x": flip_x,
+		"start_yaw": start_yaw,
+		"end_yaw": end_yaw,
+		"forward_offset": fwd_off,
+		"elapsed": 0.0,
+		"duration": SLASH_ARC_DURATION,
+		"follow_pawn": follow_pawn,
+		"frozen": freeze_in_place,
+	})
+	return mi
+
+
+func _spawn_slash_arc(style: StringName) -> MeshInstance3D:
+	if not _can_spawn_vfx() or pawn == null:
+		return null
+	var origin := pawn.global_position + Vector3.UP * 1.18
+	var yaw_basis := Basis(Vector3.UP, pawn.look_yaw)
+	return _create_slash_arc_instance(origin, yaw_basis, style, true, false)
+
+
+## Spawn a sculpted BladeSlashArc at `world_pos`/`arc_basis` for showcases or scripted clashes.
+## When `freeze_in_place` is true, the arc holds mid-sweep at full glow and still cleans up cleanly on `_exit_tree()`.
+func spawn_showcase_slash_arc(
+	world_pos: Vector3,
+	arc_basis: Basis,
+	style: StringName = &"heavy",
+	freeze_in_place: bool = false
+) -> MeshInstance3D:
+	if not is_inside_tree():
+		return null
+	return _create_slash_arc_instance(world_pos, arc_basis, style, false, freeze_in_place)
+
+
+func _tick_slash_arcs(delta: float) -> void:
+	if _slash_arcs.is_empty():
+		return
+	for i in range(_slash_arcs.size() - 1, -1, -1):
+		var entry: Dictionary = _slash_arcs[i]
+		var mi := entry.get("node", null) as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			_slash_arcs.remove_at(i)
+			continue
+		if bool(entry.get("frozen", false)):
+			continue
+		var elapsed := float(entry["elapsed"]) + delta
+		var dur := float(entry["duration"])
+		if elapsed >= dur:
+			_cleanup_slash_arc_entry(entry)
+			_slash_arcs.remove_at(i)
+			continue
+		entry["elapsed"] = elapsed
+		var t := clampf(elapsed / maxf(dur, 0.001), 0.0, 1.0)
+		var sweep_t := 1.0 - pow(1.0 - t, 2.4)
+		var base_b: Basis = entry["base_basis"]
+		var cur_yaw := lerpf(float(entry["start_yaw"]), float(entry["end_yaw"]), sweep_t)
+		var base_sc: Vector3 = entry["base_scale"]
+		var expand := 1.0 + 0.14 * sweep_t
+		var cur_scale := Vector3(base_sc.x * float(entry["flip_x"]) * expand, base_sc.y, base_sc.z * expand)
+		var pos := mi.global_position
+		if bool(entry["follow_pawn"]) and pawn != null and is_instance_valid(pawn):
+			pos = pawn.global_position + Vector3.UP * 1.18 + pawn.facing() * float(entry["forward_offset"])
+		mi.global_transform = Transform3D((base_b * Basis(Vector3.UP, cur_yaw)).scaled(cur_scale), pos)
+
+		var mat := entry.get("mat", null) as StandardMaterial3D
+		if mat != null:
+			var tint: Color = entry["tint"]
+			var alpha_env := smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.65)
+			mat.albedo_color = Color(tint.r, tint.g, tint.b, tint.a * alpha_env)
+
+
+func _cleanup_slash_arc_entry(entry: Dictionary) -> void:
+	var mi := entry.get("node", null) as MeshInstance3D
+	if mi != null and is_instance_valid(mi):
+		mi.material_override = null
+		mi.mesh = null
+		mi.queue_free()
+	entry.clear()
 
 
 func _spawn_parry_sparks(pos: Vector3, _tint: Color = Color(1.0, 0.94, 0.72), intense: bool = true) -> void:
