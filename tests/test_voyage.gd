@@ -517,6 +517,168 @@ func test_voyage_composer_variety_simulation() -> void:
 			check(TreasureCatalog.has_treasure(tid), "chapter %d treasure '%s' valid" % [ch, tid])
 
 
+func test_story_campaign_live_archipelago_alignment() -> void:
+	var composer := VoyageComposer.new(0x7B5702)
+
+	# Live 11-island Archipelago roster: Chapter 2 leads into Smuggler's Cove Grotto,
+	# Chapter 3 targets Ironwatch Fort with fort_siege + ghost_ship ambush.
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(1)
+	var live_map := arch.get_map_data()
+	check_eq(live_map.size(), 11, "live Archipelago exposes 11 islands")
+
+	var live_ch1 := composer.get_story_voyage(1, live_map)
+	check_eq(live_ch1["target_island_id"], &"cutlass_cay", "live Chapter 1 targets cutlass_cay")
+	check_eq(live_ch1["shape"], &"buried_hoard", "live Chapter 1 shape is buried_hoard")
+
+	var live_ch2 := composer.get_story_voyage(2, live_map)
+	check(bool(live_ch2.get("is_story", false)), "live Chapter 2 is_story true")
+	check_eq(int(live_ch2.get("story_chapter", 0)), 2, "live Chapter 2 chapter index == 2")
+	check_eq(live_ch2["target_island_id"], &"smugglers_cove", "live Chapter 2 resolves smugglers_cove")
+	check_eq(String(live_ch2["target_island_name"]), "Smuggler's Cove", "live Chapter 2 targets Smuggler's Cove")
+	check_eq(live_ch2["shape"], &"riddle_trail", "live Chapter 2 shape is riddle_trail")
+	var live_ch2_site: Dictionary = live_ch2.get("site", {})
+	check_eq(live_ch2_site.get("island_id", &""), &"smugglers_cove", "live Chapter 2 site matches smugglers_cove")
+
+	var live_ch3 := composer.get_story_voyage(3, live_map)
+	check(bool(live_ch3.get("is_story", false)), "live Chapter 3 is_story true")
+	check_eq(int(live_ch3.get("story_chapter", 0)), 3, "live Chapter 3 chapter index == 3")
+	check_eq(live_ch3["target_island_id"], &"ironwatch_fort", "live Chapter 3 resolves ironwatch_fort")
+	check_eq(live_ch3["shape"], &"fort_siege", "live Chapter 3 shape is fort_siege")
+	var live_ch3_comp: Dictionary = live_ch3.get("complication", {})
+	check_eq(live_ch3_comp.get("threat_archetype", &""), &"ghost_ship",
+		"live Chapter 3 complication threat_archetype is ghost_ship")
+
+	# Backward compatibility: default_archipelago_roster() keeps coral_spire for Chapter 2.
+	var default_roster := VoyageComposer.default_archipelago_roster()
+	var def_ch2 := composer.get_story_voyage(2, default_roster)
+	check_eq(def_ch2["target_island_id"], &"coral_spire",
+		"default_archipelago_roster() Chapter 2 preserves coral_spire")
+	var def_ch3 := composer.get_story_voyage(3, default_roster)
+	check_eq(def_ch3["target_island_id"], &"ironwatch_fort",
+		"default_archipelago_roster() Chapter 3 preserves ironwatch_fort")
+	check_eq(def_ch3["shape"], &"fort_siege",
+		"default_archipelago_roster() Chapter 3 shape is fort_siege")
+	check_eq((def_ch3.get("complication", {}) as Dictionary).get("threat_archetype", &""), &"ghost_ship",
+		"default_archipelago_roster() Chapter 3 threat_archetype is ghost_ship")
+
+	# Custom minimal roster lacking coral_spire & smugglers_cove falls back to first landmark.
+	var custom_roster: Array[Dictionary] = [
+		{"id": &"port_scoundrel", "name": "Port Scoundrel", "kind": &"outpost", "position": Vector3.ZERO, "landmarks": ["Pier"]},
+		{"id": &"cutlass_cay", "name": "Cutlass Cay", "kind": &"treasure_island", "position": Vector3(200, 0, -200), "landmarks": ["Palm"]},
+		{"id": &"emerald_spire", "name": "Emerald Spire", "kind": &"landmark", "position": Vector3(-500, 0, 100), "landmarks": ["Needles", "Saddle", "East Cove"]},
+	]
+	var fallback_ch2 := composer.get_story_voyage(2, custom_roster)
+	check_eq(fallback_ch2["target_island_id"], &"emerald_spire",
+		"Chapter 2 falls back to first landmark when coral_spire and smugglers_cove absent")
+
+	arch.queue_free()
+	await physics_frames(2)
+
+
+func test_fort_siege_reef_treasures_and_shanty_showcase() -> void:
+	_save_weather()
+	var saved_amp := Sea.amp_scale
+	var saved_profile := Game.profile.data.duplicate(true)
+	Net.start_single_player()
+
+	# 1. Verify live Main scene spawns sunken underwater coral reef dive treasures & Fort Siege activation.
+	var main_packed := load("res://scenes/main.tscn") as PackedScene
+	var main_node := main_packed.instantiate() as Node3D
+	add_child(main_node)
+	Weather.day_length_seconds = 0.0
+	Weather.lightning_enabled = false
+	await physics_frames(4)
+
+	var entities := main_node.get_node_or_null(^"Entities")
+	check(entities != null, "Main Entities root exists")
+	var atoll_loot := entities.get_node_or_null(^"SunkenReefTreasure_crescent_atoll") as Carryable
+	var shoal_loot := entities.get_node_or_null(^"SunkenReefTreasure_wreckers_shoal") as Carryable
+	check(atoll_loot != null, "Crescent Atoll sunken reef treasure spawned")
+	check(shoal_loot != null, "Wrecker's Shoal sunken reef treasure spawned")
+	if atoll_loot != null and shoal_loot != null:
+		check(atoll_loot.global_position.y <= -2.30 and atoll_loot.global_position.y >= -4.90,
+			"Crescent Atoll loot seated on shallow seabed (y=%.2f)" % atoll_loot.global_position.y)
+		check(shoal_loot.global_position.y <= -2.30 and shoal_loot.global_position.y >= -4.90,
+			"Wrecker's Shoal loot seated on shallow seabed (y=%.2f)" % shoal_loot.global_position.y)
+		check(atoll_loot.freeze and shoal_loot.freeze, "sunken reef treasures stay seated until picked up")
+		check_eq(shoal_loot.get_meta(&"treasure_id"), &"wayfarer_chest", "Wrecker's Shoal sunken treasure is wayfarer_chest")
+		check(TreasureCatalog.has_treasure(atoll_loot.get_meta(&"treasure_id")),
+			"Crescent Atoll sunken treasure uses valid catalog id")
+		var atoll_bubbles := atoll_loot.get_node_or_null(^"ReefBubbleColumn") as GPUParticles3D
+		var shoal_bubbles := shoal_loot.get_node_or_null(^"ReefBubbleColumn") as GPUParticles3D
+		check(atoll_bubbles != null and atoll_bubbles.emitting, "Crescent Atoll sunken loot emits bubble column")
+		check(shoal_bubbles != null and shoal_bubbles.emitting, "Wrecker's Shoal sunken loot emits bubble column")
+
+		# Picking up sunken loot stops & frees the bubble column and unfreezes on drop.
+		var player: Pawn = main_node.get(&"player_pawn") as Pawn
+		check(player.pick_up(atoll_loot), "player can pick up sunken reef treasure")
+		await physics_frames(2)
+		check(not is_instance_valid(atoll_bubbles), "bubble column frees cleanly after pickup")
+		player.drop_carried(0.0)
+		check(not atoll_loot.freeze, "dropped reef treasure restores buoyancy")
+
+	# Activate Story Chapter 3 (Fort Siege) -> verifies Ironwatch Fort Bastion & 4 batteries + vault chest.
+	var arch: Archipelago = main_node.get(&"archipelago") as Archipelago
+	var vm: VoyageManager = main_node.get(&"voyage_manager") as VoyageManager
+	var fort := arch.get_island_by_id("ironwatch_fort")
+	var bastion := fort.get_node_or_null(^"FortBastion") as Node3D
+	check(bastion != null and not bool(bastion.get(&"is_siege_beacon_active")),
+		"Ironwatch Fort bastion starts calm before siege")
+	var ch3 := vm.start_story_voyage(3, arch.get_map_data())
+	await physics_frames(2)
+	check_eq(ch3.get("shape", &""), &"fort_siege", "Story Chapter 3 starts as fort_siege")
+	check(bool(bastion.get(&"is_siege_beacon_active")), "FortBastion Signal Brazier activates for Fort Siege voyage")
+	var bats: Array = bastion.call(&"get_batteries")
+	check_eq(bats.size(), 4, "Ironwatch Fort has 4 coastal batteries")
+	for bat in bats:
+		check(bool(bat.get(&"siege_active")), "FortBattery activated for Fort Siege voyage")
+	var found_vault := false
+	for child in entities.get_children():
+		if child is Carryable and child.get_meta(&"treasure_id", &"") == &"sovereign_chest":
+			if (child as Node3D).global_position.distance_to(bastion.global_position) < 2.0:
+				found_vault = true
+				break
+	check(found_vault, "Fort Siege voyage places Sovereign's Strongbox on bastion terrace")
+
+	Audio.stop_shanty(0.01)
+	Audio.stop_music(0.01)
+	main_node.queue_free()
+	await physics_frames(3)
+
+	# 2. Verify crew_showcase shot=shanty equips all 3 crew instruments on solid main deck at sunset.
+	var crew_packed := load("res://scenes/showcase/crew_showcase.tscn") as PackedScene
+	var crew_node := crew_packed.instantiate() as Node3D
+	crew_node.set(&"_shot", "shanty")
+	add_child(crew_node)
+	await physics_frames(12)
+	check_near(Weather.time_of_day, 17.65, 0.01, "shanty showcase sets golden sunset time_of_day = 17.65")
+	var brains := crew_node.find_children("*", "CrewBrain", true, false)
+	check_eq(brains.size(), 3, "shanty showcase spawns all 3 AI crewmates")
+	var seen_instruments: Array[String] = []
+	for b_node in brains:
+		var cb := b_node as CrewBrain
+		check_eq(cb.current_task, &"shanty", "%s enters shanty task" % cb.crew_name())
+		var loc := cb.pawn.platform_local_position()
+		check(loc.y >= 1.0 and loc.y <= 1.35,
+			"%s stands solidly on main deck (y=%.2f)" % [cb.crew_name(), loc.y])
+		var inst := cb.get_held_shanty_instrument()
+		check(inst != null, "%s holds sculpted 3D shanty instrument" % cb.crew_name())
+		if inst != null:
+			seen_instruments.append(inst.name)
+	check(seen_instruments.has("ShantyInstrument_hurdy_gurdy"), "Barnaby holds hurdy-gurdy")
+	check(seen_instruments.has("ShantyInstrument_whistle"), "Maren holds bosun whistle")
+	check(seen_instruments.has("ShantyInstrument_instrument"), "Pip holds concertina")
+
+	Audio.stop_shanty(0.01)
+	crew_node.queue_free()
+	await physics_frames(3)
+	Sea.amp_scale = saved_amp
+	Game.profile.data = saved_profile
+	_restore_weather()
+
+
 # ---------------------------------------------------------------------------
 # 4. VoyageManager vertical-slice starter flow
 # ---------------------------------------------------------------------------

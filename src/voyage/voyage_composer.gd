@@ -366,6 +366,8 @@ func get_story_voyage(chapter: int, archipelago_source: Variant = []) -> Diction
 		2:
 			var spire := _find_island(islands, &"coral_spire")
 			if spire.is_empty():
+				spire = _find_island(islands, &"smugglers_cove")
+			if spire.is_empty():
 				spire = _find_first_of_kind(islands, &"landmark", islands[mini(2, islands.size() - 1)])
 			var spire_id: StringName = spire["id"]
 			var spire_name: String = String(spire["name"])

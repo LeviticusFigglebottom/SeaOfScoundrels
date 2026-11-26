@@ -607,13 +607,14 @@ static func _build_brain_table_mesh() -> ArrayMesh:
 		var nk := (k + 1) % radial_segs
 		_add_outward_tri(st, top_r[k], apex, top_r[nk], dome_ref, top_c[k], col_apex, top_c[nk])
 
-	# 2. Three cantilevered overlapping reef table-coral shelf plates fanning asymmetrically.
-	_append_table_shelf(st, Vector3(0.20, -0.06, 0.08), Vector3(0.48, 0.34, 0.18),
-		0.58, 0.46, 0.11, 0.35, 10)
-	_append_table_shelf(st, Vector3(-0.14, 0.04, 0.18), Vector3(-0.26, 0.54, 0.44),
-		0.50, 0.40, 0.10, 2.05, 10)
-	_append_table_shelf(st, Vector3(0.10, 0.16, -0.14), Vector3(0.24, 0.72, -0.34),
-		0.42, 0.34, 0.09, -1.15, 10)
+	# 2. Three cantilevered overlapping reef table-coral shelf plates fanning asymmetrically,
+	#    each anchored solidly into the brain-coral dome by a chunky tapered coral pedestal stalk.
+	_append_table_shelf(st, Vector3(0.08, -0.06, 0.04), Vector3(0.45, 0.32, 0.17),
+		0.56, 0.45, 0.12, 0.35, 10)
+	_append_table_shelf(st, Vector3(-0.10, 0.02, 0.10), Vector3(-0.24, 0.49, 0.41),
+		0.48, 0.39, 0.11, 2.05, 10)
+	_append_table_shelf(st, Vector3(0.02, 0.10, -0.08), Vector3(0.22, 0.66, -0.31),
+		0.42, 0.34, 0.10, -1.15, 10)
 
 	# 3. Two small companion basal coral knobs nestled into the seabed perimeter.
 	_append_holdfast_base(st, Vector3(0.44, 0.0, -0.44), 0.28, 0.25, 0.24, -0.08, 6,
@@ -627,11 +628,41 @@ static func _build_brain_table_mesh() -> ArrayMesh:
 
 static func _append_table_shelf(st: SurfaceTool, stalk_base: Vector3, shelf_center: Vector3,
 		rx: float, rz: float, thick: float, yaw: float, segs: int) -> void:
-	var stalk_top := shelf_center - Vector3(0.0, thick * 0.9, 0.0)
-	var col_stalk_lo := Color(0.50, 0.50, 0.54, 1.0)
-	var col_stalk_hi := Color(0.62, 0.62, 0.65, 1.0)
-	_append_tapered_limb(st, stalk_base, stalk_top, minf(rx, rz) * 0.30, minf(rx, rz) * 0.42,
-		6, col_stalk_lo, col_stalk_hi, false)
+	# Chunky 2-tier horizontal-ring tapered coral pedestal stalk:
+	# - bot_ring embeds deep inside the brain-coral dome body
+	# - mid_ring forms a sturdy sculpted coral stem waist
+	# - top_ring penetrates strictly horizontal up inside the shelf interior (zero air gap at any angle)
+	const STALK_SIDES := 6
+	var base_r := minf(rx, rz)
+	var r_bot := base_r * 0.44
+	var r_mid := base_r * 0.36
+	var r_top := base_r * 0.48
+	var c_bot := stalk_base
+	var c_top := Vector3(shelf_center.x, shelf_center.y - thick * 0.04, shelf_center.z)
+	var c_mid := c_bot.lerp(c_top, 0.52)
+	var col_stalk_bot := Color(0.56, 0.55, 0.59, 1.0)
+	var col_stalk_mid := Color(0.68, 0.67, 0.70, 1.0)
+	var col_stalk_top := Color(0.76, 0.75, 0.77, 1.0)
+
+	var bot_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var top_ring: Array[Vector3] = []
+	for i in STALK_SIDES:
+		var ang := yaw + float(i) / float(STALK_SIDES) * TAU
+		var jit := 0.94 + 0.10 * sin(ang * 3.0 + yaw)
+		var dir_xz := Vector3(cos(ang), 0.0, sin(ang))
+		bot_ring.append(c_bot + dir_xz * (r_bot * jit))
+		mid_ring.append(c_mid + dir_xz * (r_mid * jit))
+		top_ring.append(c_top + dir_xz * (r_top * jit))
+
+	var ref_lo := c_bot.lerp(c_mid, 0.5)
+	var ref_hi := c_mid.lerp(c_top, 0.5)
+	for i in STALK_SIDES:
+		var ni := (i + 1) % STALK_SIDES
+		_add_outward_quad(st, bot_ring[i], mid_ring[i], mid_ring[ni], bot_ring[ni], ref_lo,
+			col_stalk_bot, col_stalk_mid, col_stalk_mid, col_stalk_bot)
+		_add_outward_quad(st, mid_ring[i], top_ring[i], top_ring[ni], mid_ring[ni], ref_hi,
+			col_stalk_mid, col_stalk_top, col_stalk_top, col_stalk_mid)
 
 	var col_under := Color(0.56, 0.56, 0.60, 1.0)
 	var col_rim := Color(1.00, 0.99, 0.96, 1.0)

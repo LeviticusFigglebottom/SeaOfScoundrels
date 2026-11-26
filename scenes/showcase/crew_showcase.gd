@@ -5,7 +5,7 @@ extends Node3D
 ##   tools/capture.sh res://scenes/showcase/crew_showcase.tscn crew_sail 3 8 -- shot=sailing
 ##
 ## User args (after `--`):
-##   shot=sailing|repair|broadside   (default sailing)
+##   shot=sailing|repair|broadside|shanty   (default sailing)
 
 const SKY_RIG: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -26,9 +26,14 @@ func _ready() -> void:
 	Net.start_single_player()
 	Weather.day_length_seconds = 0.0
 	Weather.lightning_enabled = false
-	Weather.time_of_day = 11.5
-	Weather.set_weather(0.15, 11.0, 0.35, 0.0, 0.42)
-	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.15)
+	if _shot == "shanty":
+		Weather.time_of_day = 17.65
+		Weather.set_weather(0.08, 8.5, 0.35, 0.0, 0.38)
+		Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.10)
+	else:
+		Weather.time_of_day = 11.5
+		Weather.set_weather(0.15, 11.0, 0.35, 0.0, 0.42)
+		Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.15)
 	Sea.time = 18.0
 
 	add_child(SKY_RIG.instantiate())
@@ -39,9 +44,15 @@ func _ready() -> void:
 	_ship.global_position = Vector3(0.0, Sea.height(0.0, 0.0), 0.0)
 	_ship.set_sail_target(1.0)
 	_ship.sail_set = 1.0
-	_ship.set_trim_target(-0.7)
-	_ship.sail_trim = -0.7
-	_ship.linear_velocity = Vector3(0.0, 0.0, -4.5)
+	if _shot == "shanty":
+		var ideal_trim := _ship.ideal_sail_trim()
+		_ship.set_trim_target(ideal_trim)
+		_ship.sail_trim = ideal_trim
+		_ship.linear_velocity = Vector3(0.0, 0.0, -3.6)
+	else:
+		_ship.set_trim_target(-0.7)
+		_ship.sail_trim = -0.7
+		_ship.linear_velocity = Vector3(0.0, 0.0, -4.5)
 
 	var captain := PAWN_SCENE.instantiate() as Pawn
 	add_child(captain)
@@ -52,10 +63,22 @@ func _ready() -> void:
 		[&"lookout", Vector3(0.7, 1.12, -1.6), &"auto"],
 		[&"carpenter", Vector3(0.8, 1.12, 0.6), &"trim"],
 	]
+	if _shot == "shanty":
+		# Cozy semicircle on solid main deck planks facing inward & 3/4 toward the camera.
+		crew_defs = [
+			[&"lookout", Vector3(-0.92, 1.12, -0.95), &"shanty"],
+			[&"helmsman", Vector3(1.12, 1.12, -0.15), &"shanty"],
+			[&"carpenter", Vector3(1.18, 1.12, 1.45), &"shanty"],
+		]
+	var shanty_focus := Vector3(-1.35, 1.12, 1.55)
 	for cd in crew_defs:
 		var mate := PAWN_SCENE.instantiate() as Pawn
 		add_child(mate)
-		mate.board(_ship, cd[1])
+		var local_pos: Vector3 = cd[1]
+		mate.board(_ship, local_pos)
+		if _shot == "shanty":
+			var to_focus := shanty_focus - local_pos
+			mate.look_yaw = atan2(-to_focus.x, -to_focus.z)
 		var brain := CrewBrain.new()
 		brain.setup(_ship, captain, cd[0])
 		mate.add_child(brain)
@@ -73,12 +96,17 @@ func _ready() -> void:
 		foe.apply_livery(Color(0.3, 0.36, 0.33), Color(0.2, 0.6, 0.45), Color(0.18, 0.95, 0.6))
 
 	_cam = Camera3D.new()
-	_cam.fov = 66.0
+	_cam.fov = 56.0 if _shot == "shanty" else 66.0
 	_cam.near = 0.08
 	_cam.far = 5000.0
 	add_child(_cam)
 	_cam.make_current()
 	_update_camera()
+
+
+func _exit_tree() -> void:
+	if Audio != null:
+		Audio.stop_shanty(0.01)
 
 
 func _process(delta: float) -> void:
@@ -91,6 +119,9 @@ func _update_camera() -> void:
 	if _shot == "repair":
 		var eye := xf * Vector3(-0.3, 0.65, 3.8)
 		_cam.look_at_from_position(eye, xf * Vector3(0.4, -0.35, -0.5), Vector3.UP)
+	elif _shot == "shanty":
+		var eye := xf * Vector3(-2.6, 2.85, 2.8)
+		_cam.look_at_from_position(eye, xf * Vector3(0.25, 1.95, 0.2), Vector3.UP)
 	else:
 		var eye := xf * Vector3(-3.8, 4.6, 7.2)
 		_cam.look_at_from_position(eye, xf * Vector3(0.2, 1.8, -1.8), Vector3.UP)

@@ -81,6 +81,7 @@ var _shot_track_world_blend: float = 0.0
 var _shot_track_world_y_off: float = 3.2
 var _shot_combat_timer: float = -1.0
 var _bobbing_props: Array[Dictionary] = []   # {node, base_x, base_z, y_off, phase}
+var _reef_bubble_emitters: Array[GPUParticles3D] = []
 var _peer_pawns: Dictionary = {}             # int peer_id -> Pawn
 var _peer_yielded_crew: Dictionary = {}      # int peer_id -> int crew index
 var _wired_dig_sites: Dictionary = {}        # int instance_id -> true
@@ -158,6 +159,13 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	for bp: GPUParticles3D in _reef_bubble_emitters:
+		if bp != null and is_instance_valid(bp):
+			bp.emitting = false
+			bp.visible = false
+			bp.draw_pass_1 = null
+			bp.process_material = null
+	_reef_bubble_emitters.clear()
 	_disconnect_autoload_signals()
 	if Net != null:
 		Net.unregister_replicated_ship(&"player_sloop")
@@ -241,6 +249,7 @@ func _build_environment_and_world() -> void:
 		Game.profile.discover("port_scoundrel")
 
 	_populate_archipelago_wildlife()
+	_spawn_sunken_reef_treasures()
 
 
 func _populate_archipelago_wildlife() -> void:
@@ -279,6 +288,187 @@ func _populate_archipelago_wildlife() -> void:
 			_entities_root.add_child(eel)
 			eel.global_position = Vector3(eel_world.x, Sea.height(eel_world.x, eel_world.z) - 2.2, eel_world.z)
 			eel.lair_origin = eel.global_position
+
+
+func _spawn_sunken_reef_treasures() -> void:
+	if not Net.is_host() or archipelago == null or _entities_root == null:
+		return
+	var atoll_tid: StringName = &"sunken_amphora" if TreasureCatalog.has_treasure(&"sunken_amphora") else &"archive_chalice"
+	var reef_specs: Array[Dictionary] = [
+		{"island_id": "crescent_atoll", "treasure_id": atoll_tid, "yaw": 0.45},
+		{"island_id": "wreckers_shoal", "treasure_id": &"wayfarer_chest", "yaw": -0.72},
+	]
+	for spec in reef_specs:
+		var isl := archipelago.get_island_by_id(String(spec["island_id"]))
+		if isl == null:
+			continue
+		var local_pos := _find_reef_seabed_spot(isl)
+		var world_pos := isl.global_transform * local_pos
+		var tid: StringName = spec["treasure_id"]
+		var item := TreasureCatalog.create_treasure_carryable(tid, world_pos)
+		item.name = "SunkenReefTreasure_" + isl.island_id
+		# Keep sunken booty cleanly seated on the coral seabed until a diver hauls it up.
+		item.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+		item.freeze = true
+		item.set_meta(&"sunken_reef_treasure", true)
+		_entities_root.add_child(item)
+		item.global_position = world_pos
+		item.rotation = Vector3(0.07, float(spec["yaw"]), -0.05)
+		if item.interactable != null:
+			item.interactable.reach = 3.2
+
+		var depth_m := maxf(1.8, -local_pos.y)
+		var bubbles := _build_reef_bubble_column(depth_m)
+		item.add_child(bubbles)
+		_reef_bubble_emitters.append(bubbles)
+		item.picked_up.connect(func(_pawn: Node) -> void:
+			if is_instance_valid(bubbles):
+				bubbles.emitting = false
+				bubbles.visible = false
+				bubbles.draw_pass_1 = null
+				bubbles.process_material = null
+				bubbles.queue_free()
+		, CONNECT_ONE_SHOT)
+
+
+func _find_reef_seabed_spot(isl: Island) -> Vector3:
+	var moor_xz := Vector2(isl.mooring_transform.origin.x, isl.mooring_transform.origin.z)
+	var reef := isl.get_node_or_null(^"CoralReef") as CoralReef
+	var pts: Array[Transform3D] = reef.get_placed_transforms() if reef != null else []
+	var occupied_xz: Array[Vector2] = []
+	for xf in pts:
+		occupied_xz.append(Vector2(xf.origin.x, xf.origin.z))
+
+	# Prefer an open sandy seabed patch beside a placed coral cluster in -2.4 .. -4.8 m depth.
+	var offsets: Array[Vector2] = [
+		Vector2(2.3, 0.9),
+		Vector2(-2.3, 0.9),
+		Vector2(0.9, 2.3),
+		Vector2(-0.9, -2.3),
+		Vector2(2.6, -1.2),
+		Vector2(-2.6, -1.2),
+	]
+	var scan_limit := mini(pts.size(), 48)
+	for i in scan_limit:
+		var base_xz := Vector2(pts[i].origin.x, pts[i].origin.z)
+		for off in offsets:
+			var cand := base_xz + off
+			if cand.distance_to(moor_xz) < 10.0:
+				continue
+			var h := isl.surface_height(cand.x, cand.y)
+			if h > -2.4 or h < -4.8:
+				continue
+			if isl.surface_normal(cand.x, cand.y).y < 0.78:
+				continue
+			var clear := true
+			for occ in occupied_xz:
+				if cand.distance_squared_to(occ) < 1.35 * 1.35:
+					clear = false
+					break
+			if clear:
+				return Vector3(cand.x, h + 0.04, cand.y)
+
+	# Fallback: scan seaward shallow shelf annulus for a gentle sandy spot.
+	var r_min := maxf(10.0, isl.island_radius * 0.72)
+	var r_max := maxf(r_min + 6.0, isl.seabed_radius * 0.85)
+	for ring in 6:
+		var r := lerpf(r_min, r_max, float(ring) / 5.0)
+		for step in 24:
+			var ang := float(step) / 24.0 * TAU
+			var cand := Vector2(cos(ang) * r, sin(ang) * r)
+			if cand.distance_to(moor_xz) < 10.0:
+				continue
+			var h := isl.surface_height(cand.x, cand.y)
+			if h <= -2.4 and h >= -4.8 and isl.surface_normal(cand.x, cand.y).y >= 0.75:
+				return Vector3(cand.x, h + 0.04, cand.y)
+
+	var fb_z := -(isl.island_radius + 8.0)
+	var fb_h := clampf(isl.surface_height(0.0, fb_z), -4.8, -2.4)
+	return Vector3(0.0, fb_h + 0.04, fb_z)
+
+
+static func _build_reef_bubble_column(column_height: float) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.name = "ReefBubbleColumn"
+	p.position = Vector3(0.0, 0.28, 0.0)
+	p.amount = 14
+	p.lifetime = clampf(column_height / 0.85, 2.2, 5.2)
+	p.preprocess = 2.0
+	p.explosiveness = 0.08
+	p.randomness = 0.35
+	p.local_coords = false
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_range_end = 120.0
+	p.visibility_aabb = AABB(Vector3(-1.2, -0.5, -1.2), Vector3(2.4, column_height + 1.5, 2.4))
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = 0.24
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 14.0
+	proc.initial_velocity_min = 0.65
+	proc.initial_velocity_max = 1.05
+	proc.gravity = Vector3(0.0, 0.08, 0.0)
+	proc.turbulence_enabled = true
+	proc.turbulence_noise_strength = 0.18
+	proc.turbulence_noise_scale = 2.8
+	proc.turbulence_influence_min = 0.15
+	proc.turbulence_influence_max = 0.35
+	proc.scale_min = 0.45
+	proc.scale_max = 1.15
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.35))
+	sc_curve.add_point(Vector2(0.35, 1.0))
+	sc_curve.add_point(Vector2(0.82, 0.92))
+	sc_curve.add_point(Vector2(1.0, 0.20))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc_curve
+	proc.scale_curve = sc_tex
+	var col_grad := Gradient.new()
+	col_grad.offsets = PackedFloat32Array([0.0, 0.16, 0.76, 1.0])
+	col_grad.colors = PackedColorArray([
+		Color(0.84, 0.97, 1.0, 0.0),
+		Color(0.86, 0.98, 1.0, 0.56),
+		Color(0.82, 0.96, 1.0, 0.42),
+		Color(0.92, 0.99, 1.0, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 24
+	ramp.gradient = col_grad
+	proc.color_ramp = ramp
+	p.process_material = proc
+
+	var radial := Gradient.new()
+	radial.offsets = PackedFloat32Array([0.0, 0.34, 0.68, 0.86, 1.0])
+	radial.colors = PackedColorArray([
+		Color(0.96, 1.0, 1.0, 0.72),
+		Color(0.82, 0.96, 1.0, 0.34),
+		Color(0.88, 0.98, 1.0, 0.62),
+		Color(0.94, 1.0, 1.0, 0.30),
+		Color(0.94, 1.0, 1.0, 0.0),
+	])
+	var bubble_tex := GradientTexture2D.new()
+	bubble_tex.width = 32
+	bubble_tex.height = 32
+	bubble_tex.fill = GradientTexture2D.FILL_RADIAL
+	bubble_tex.fill_from = Vector2(0.5, 0.5)
+	bubble_tex.fill_to = Vector2(0.5, 0.0)
+	bubble_tex.gradient = radial
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.14, 0.14)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = bubble_tex
+	quad.material = mat
+	p.draw_pass_1 = quad
+	p.emitting = true
+	return p
 
 
 func _build_player_ship() -> void:
@@ -861,6 +1051,25 @@ func _prepare_active_voyage_world(voyage: Dictionary) -> void:
 				dig_local = live_site.position
 		elif not target_isl.dig_points.is_empty():
 			dig_local = target_isl.dig_points[0]
+
+		# Activate Fort Bastion signal brazier & coastal sea-batteries + place vault treasure for Fort Sieges.
+		if shape == &"fort_siege":
+			var bastion := target_isl.get_node_or_null(^"FortBastion") as Node3D
+			if bastion != null:
+				dig_local = bastion.position
+				if bastion.has_method(&"set_siege_active"):
+					bastion.call(&"set_siege_active", true)
+			if not already_built:
+				var vault_world: Vector3
+				if bastion != null:
+					vault_world = bastion.global_transform * Vector3(0.0, 0.38, 0.0)
+				else:
+					var vault_local := target_isl.dig_points[0] if not target_isl.dig_points.is_empty() else Vector3.ZERO
+					vault_local.y = target_isl.surface_height(vault_local.x, vault_local.z) + 0.35
+					vault_world = target_isl.global_transform * vault_local
+				var vault_chest := TreasureCatalog.create_treasure_carryable(primary_tid, vault_world)
+				_entities_root.add_child(vault_chest)
+				vault_chest.global_position = vault_world
 
 		# Spawn island guardians once per voyage start.
 		if not already_built:
@@ -1963,9 +2172,9 @@ func _apply_hero_shot(mode: String) -> void:
 			if volc != null:
 				var vp := volc.global_position
 				_place_sailing_ship(vp + Vector3(72.0, 0.0, 92.0), 0.55, 0.88, 4.8)
-				var cam_p := vp + Vector3(44.0, 74.0, 78.0)
-				var look_p := vp + Vector3(0.0, 62.0, 0.0)
-				_mount_shot_camera(cam_p, look_p, 56.0)
+				var cam_p := vp + Vector3(34.0, 108.0, 62.0)
+				var look_p := vp + Vector3(0.0, 64.0, 2.0)
+				_mount_shot_camera(cam_p, look_p, 58.0)
 
 		"coral_reef":
 			# Crescent Atoll crystal turquoise underwater coral reef & swaying kelp garden!

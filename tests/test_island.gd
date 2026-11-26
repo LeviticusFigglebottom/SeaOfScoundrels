@@ -614,10 +614,17 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 		if grotto != null:
 			check(grotto.position.y >= 1.1 and grotto.position.y <= 3.0,
 				"SmugglersGrotto mouth elevation %.2f m must sit cleanly on walkable cove beach" % grotto.position.y)
+			var grotto_inland_d := Vector2(grotto.position.x, grotto.position.z).length()
+			check(grotto_inland_d >= 4.5,
+				"SmugglersGrotto must be sunk deeper inland into the amphitheatre cliff wall (dist=%.2f m)" % grotto_inland_d)
 
 			var vault := grotto.get_node_or_null(^"GrottoVaultMesh") as MeshInstance3D
 			check(vault != null and vault.mesh != null and vault.mesh.get_faces().size() >= 300,
 				"SmugglersGrotto must contain sculpted faceted rock vault geometry")
+			if vault != null and vault.material_override is StandardMaterial3D:
+				var vmat := vault.material_override as StandardMaterial3D
+				check(vmat.vertex_color_is_srgb, "GrottoVaultMesh material must interpret warm ochre vertex colors in sRGB")
+				check(vmat.roughness >= 0.90, "GrottoVaultMesh roughness must be >= 0.90 (got %.2f)" % vmat.roughness)
 			if vault != null and vault.mesh != null:
 				var v_arr := vault.mesh.surface_get_arrays(0)
 				var v_norms: PackedVector3Array = v_arr[Mesh.ARRAY_NORMAL]
@@ -631,6 +638,12 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 						v_flat += 1
 				check_eq(v_flat, v_total,
 					"GrottoVaultMesh must be 100%% flat-shaded faceted limestone (%d/%d flat tris)" % [v_flat, v_total])
+			var brow_ferns := cove.find_children("GrottoBrowFern_*", "Node3D", true, false)
+			check(brow_ferns.size() >= 2,
+				"SmugglersGrotto brow must be dressed with >= 2 lush fern clumps (got %d)" % brow_ferns.size())
+			var flank_boulders := cove.find_children("GrottoFlankBoulder_*", "Node3D", true, false)
+			check(flank_boulders.size() >= 2,
+				"SmugglersGrotto shoulders must be anchored by flanking coastal boulders (got %d)" % flank_boulders.size())
 			var table := grotto.get_node_or_null(^"ContrabandStashTable") as MeshInstance3D
 			check(table != null and table.mesh != null,
 				"SmugglersGrotto must contain a raised timber ContrabandStashTable")
@@ -683,7 +696,7 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 					% [eye_in_shelter, half])
 			explorer.queue_free()
 
-	# 3. Verify Cinder Crag generates VolcanoCaldera with glowing magma, light & rising ash/ember plume!
+	# 3. Verify Cinder Crag generates VolcanoCaldera with glowing magma, fissures, rim light & lean plumes!
 	var crag := arch.get_island_by_id("cinder_crag")
 	check(crag != null, "missing cinder_crag in Archipelago")
 	if crag != null:
@@ -714,18 +727,33 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 			check(crust != null and crust.mesh != null and crust.mesh.get_faces().size() >= 100,
 				"VolcanoCaldera must contain cracked faceted ObsidianCrust mesh")
 
+			var fissures := caldera.get_node_or_null(^"LavaFissureMesh") as MeshInstance3D
+			check(fissures != null and fissures.mesh != null and fissures.mesh.get_faces().size() >= 200,
+				"VolcanoCaldera must contain sculpted LavaFissureMesh cascading down the basalt flank")
+			if fissures != null and fissures.mesh != null:
+				var f_aabb := fissures.mesh.get_aabb()
+				check(f_aabb.size.z >= 22.0 and f_aabb.size.y >= 20.0,
+					"LavaFissureMesh must snake >= 22 m seaward and descend >= 20 m down Cinder Crag (aabb=%s)" % f_aabb.size)
+				var fmat := fissures.material_override as StandardMaterial3D
+				check(fmat != null and fmat.emission_enabled and fmat.emission_energy_multiplier >= 2.5,
+					"LavaFissureMesh must have glowing emissive material (energy >= 2.5)")
+
 			var cal_light := caldera.get_node_or_null(^"CalderaMagmaLight") as OmniLight3D
-			check(cal_light != null and cal_light.omni_range >= 40.0,
-				"VolcanoCaldera must include warm CalderaMagmaLight with omni_range >= 40 m")
+			check(cal_light != null and cal_light.position.y >= 7.0 and cal_light.omni_range >= 70.0 and cal_light.light_energy >= 9.0,
+				"CalderaMagmaLight must sit high (y>=7m) with wide bounce range (>=70m) and bright energy (>=9)")
 
 			var ash_plume := caldera.get_node_or_null(^"VolcanoAshPlume") as GPUParticles3D
 			var ember_plume := caldera.get_node_or_null(^"VolcanoEmberPlume") as GPUParticles3D
 			check(ash_plume != null and ash_plume.emitting and ash_plume.draw_pass_1 != null and ash_plume.process_material != null,
 				"VolcanoCaldera must emit a towering VolcanoAshPlume GPUParticles3D")
+			check(ash_plume != null and ash_plume.amount <= 28,
+				"VolcanoAshPlume must stay lean <= 28 particles (got %d)" % (ash_plume.amount if ash_plume != null else -1))
 			check(ember_plume != null and ember_plume.emitting and ember_plume.draw_pass_1 != null and ember_plume.process_material != null,
 				"VolcanoCaldera must emit rising VolcanoEmberPlume GPUParticles3D")
+			check(ember_plume != null and ember_plume.amount <= 24,
+				"VolcanoEmberPlume must stay lean <= 24 particles (got %d)" % (ember_plume.amount if ember_plume != null else -1))
 
-			# Let _process pulse molten magma glow, then verify clean _exit_tree particle teardown.
+			# Let _process pulse molten magma & fissure glow, then verify clean _exit_tree particle teardown.
 			await physics_frames(4)
 			crag.remove_child(caldera)
 			check(ash_plume != null and not ash_plume.emitting and ash_plume.draw_pass_1 == null and ash_plume.process_material == null,
@@ -733,6 +761,21 @@ func test_smugglers_grotto_and_volcano_caldera() -> void:
 			check(ember_plume != null and not ember_plume.emitting and ember_plume.draw_pass_1 == null and ember_plume.process_material == null,
 				"VolcanoCaldera._exit_tree must stop ember_plume and null draw_pass_1/process_material")
 			caldera.free()
+
+	# 4. Verify BrainTableCorals stays strictly <= 420 tris and <= 3 MultiMeshes total on CoralReef.
+	var atoll := arch.get_island_by_id("crescent_atoll")
+	if atoll != null:
+		var reef := atoll.get_node_or_null(^"CoralReef") as CoralReef
+		check(reef != null and reef.get_multimesh_count() == 3,
+			"Crescent Atoll CoralReef must maintain strictly 3 MultiMesh draw calls")
+		if reef != null:
+			var brain_mmi := reef.get_node_or_null(^"BrainTableCorals") as MultiMeshInstance3D
+			check(brain_mmi != null and brain_mmi.multimesh != null and brain_mmi.multimesh.mesh != null,
+				"CoralReef must contain BrainTableCorals MultiMesh")
+			if brain_mmi != null and brain_mmi.multimesh != null and brain_mmi.multimesh.mesh != null:
+				var brain_tris := int(brain_mmi.multimesh.mesh.get_faces().size() / 3.0)
+				check(brain_tris > 0 and brain_tris <= 420,
+					"BrainTableCorals mesh must stay lean <= 420 tris (got %d tris)" % brain_tris)
 
 	arch.queue_free()
 	await physics_frames(3)
