@@ -203,3 +203,129 @@ func test_company_heraldic_sail_liveries_and_emblem_modes() -> void:
 	await physics_frames(2)
 
 
+func test_crew_uniform_cosmetics_persistence_and_live_retinting() -> void:
+	var pawn_scene: PackedScene = preload("res://src/characters/pawn.tscn")
+	var uniform_path := "user://test_crew_uniform_profile.json"
+	var p := Profile.new()
+
+	check_eq(Economy.get_equipped(p, &"crew_uniform"), &"",
+		"default crew_uniform is empty for backward compatibility")
+	check_eq(Economy.get_ship_modifiers(p).get("crew_uniform_id"), &"",
+		"default get_ship_modifiers exposes empty crew_uniform_id")
+
+	var uniforms := Economy.get_unlocks_by_slot(&"crew_uniform")
+	check_eq(uniforms.size(), 4, "Economy registers 4 crew_uniform cosmetics")
+	for uid: StringName in [
+		&"crew_gilded_admiral",
+		&"crew_crimson_corsair",
+		&"crew_archive_mystic",
+		&"crew_sovereign_velvet",
+	]:
+		var u := Economy.get_unlock(uid)
+		check(not u.is_empty(), "Economy registers %s" % String(uid))
+		check(u.get("tint") is Color and u.get("accent_tint") is Color,
+			"%s defines primary tint and accent_tint" % String(uid))
+
+	# Rank-gating check: Sovereign Velvet & Gold requires Gilded Compass Rank 4.
+	p.add_gold(2000)
+	var blocked := Economy.purchase_unlock(p, &"crew_sovereign_velvet")
+	check(not bool(blocked.get("ok", false)), "Rank-4 crew_sovereign_velvet blocked at Rank 1")
+
+	# Rank-1 Gilded Admiral Coats purchases and equips immediately.
+	var buy_adm := Economy.purchase_unlock(p, &"crew_gilded_admiral")
+	check(bool(buy_adm.get("ok", false)), "Rank-1 crew_gilded_admiral purchases cleanly")
+	check(Economy.equip_loadout(p, &"crew_uniform", &"crew_gilded_admiral"), "equip crew_gilded_admiral")
+
+	# Reach Gilded Compass Rank 4 and purchase + equip Sovereign Velvet & Gold.
+	p.add_renown("gilded_compass", Economy.rank_threshold(4))
+	var buy_sov := Economy.purchase_unlock(p, &"crew_sovereign_velvet")
+	check(bool(buy_sov.get("ok", false)), "Rank-4 crew_sovereign_velvet purchases after rank-up")
+	check(Economy.equip_loadout(p, &"crew_uniform", &"crew_sovereign_velvet"), "equip crew_sovereign_velvet")
+	check_eq(Economy.get_ship_modifiers(p).get("crew_uniform_id"), &"crew_sovereign_velvet",
+		"get_ship_modifiers exposes crew_uniform_id")
+
+	# Save & reload JSON persistence check.
+	check_eq(p.save(uniform_path), OK, "profile saves crew_uniform loadout cleanly")
+	var loaded := Profile.new()
+	check(loaded.load_from(uniform_path), "profile reloads crew_uniform loadout cleanly")
+	check(loaded.has_unlock("crew_sovereign_velvet"), "reloaded profile keeps crew_sovereign_velvet unlock")
+	check_eq(Economy.get_equipped(loaded, &"crew_uniform"), &"crew_sovereign_velvet",
+		"reloaded profile restores equipped crew_uniform")
+
+	# Live re-tinting across 3 crewmates with subtle per-persona variation & clean restore!
+	Net.start_single_player()
+	var personas: Array[StringName] = [&"helmsman", &"lookout", &"carpenter"]
+	var pawns: Array[Pawn] = []
+	var brains: Array[CrewBrain] = []
+	var visuals: Array[CharacterVisual] = []
+	var defaults_p: Array[Color] = []
+	var defaults_a: Array[Color] = []
+
+	for i in personas.size():
+		var cp := pawn_scene.instantiate() as Pawn
+		add_child(cp)
+		var cv := cp.get_node(^"Visual/CharacterVisual") as CharacterVisual
+		cv.set_archetype(personas[i])
+		var orig_p := cv._primary_tint
+		var orig_a := cv._secondary_tint
+		var br := CrewBrain.new()
+		br.persona_id = personas[i]
+		cp.add_child(br)
+		pawns.append(cp)
+		brains.append(br)
+		visuals.append(cv)
+		defaults_p.append(orig_p)
+		defaults_a.append(orig_a)
+	await physics_frames(1)
+
+	ShipwrightMenu.apply_economy_to_ship(null, loaded, brains)
+	var sov_entry := Economy.get_unlock(&"crew_sovereign_velvet")
+	var sov_p: Color = sov_entry["tint"] as Color
+	var sov_a: Color = sov_entry["accent_tint"] as Color
+	check(visuals[0]._primary_tint.is_equal_approx(sov_p) and visuals[0]._secondary_tint.is_equal_approx(sov_a),
+		"helmsman receives exact Sovereign Velvet primary & accent tints")
+	check(visuals[1]._primary_tint.is_equal_approx(sov_p.lightened(0.10)),
+		"lookout receives subtle lightened uniform coat variation")
+	check(visuals[2]._primary_tint.is_equal_approx(sov_p.darkened(0.10)),
+		"carpenter receives subtle deepened uniform coat variation")
+	check(not visuals[0]._primary_tint.is_equal_approx(visuals[1]._primary_tint),
+		"crewmates retain subtle individual tonal distinction")
+
+	# Clearing crew_uniform back to default restores each persona's original palette!
+	check(Economy.equip_loadout(loaded, &"crew_uniform", &""), "clear crew_uniform to default")
+	ShipwrightMenu.apply_economy_to_ship(null, loaded, brains)
+	for i in visuals.size():
+		check(visuals[i]._primary_tint.is_equal_approx(defaults_p[i])
+				and visuals[i]._secondary_tint.is_equal_approx(defaults_a[i]),
+			"clearing crew_uniform restores persona %d default tints" % i)
+
+	# Verify ShipwrightMenu renders dual-tone primary + accent swatch chips for crew uniforms.
+	var menu := ShipwrightMenu.new()
+	add_child(menu)
+	menu.refresh()
+	for uid_str: String in [
+		"crew_gilded_admiral",
+		"crew_crimson_corsair",
+		"crew_archive_mystic",
+		"crew_sovereign_velvet",
+	]:
+		var sw := menu.find_child("Swatch_" + uid_str, true, false) as PanelContainer
+		var sw_acc := menu.find_child("SwatchAccent_" + uid_str, true, false) as PanelContainer
+		check(sw != null and sw_acc != null, "ShipwrightMenu builds dual-tone swatch chips for %s" % uid_str)
+		if sw != null and sw_acc != null:
+			var r_p := sw.get_node_or_null(^"SwatchColor") as ColorRect
+			var r_a := sw_acc.get_node_or_null(^"SwatchAccentColor") as ColorRect
+			var u := Economy.get_unlock(StringName(uid_str))
+			check(r_p != null and r_p.color.is_equal_approx(u["tint"] as Color),
+				"Primary swatch matches %s tint" % uid_str)
+			check(r_a != null and r_a.color.is_equal_approx(u["accent_tint"] as Color),
+				"Accent swatch matches %s accent_tint" % uid_str)
+
+	menu.queue_free()
+	for cp in pawns:
+		cp.queue_free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(uniform_path))
+	await physics_frames(2)
+
+
+

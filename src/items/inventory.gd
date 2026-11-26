@@ -91,7 +91,8 @@ var spyglass_sighting_dist: float = 0.0
 var tipsy: float = 0.0
 var playing_shanty: bool = false
 
-## Cached held treasure map data & rendered ImageTexture.
+## Cached held parchment mode (&"treasure", &"riddle", &"bounty") & rendered ImageTexture.
+var map_mode: StringName = &"treasure"
 var map_island_name: String = "Cutlass Cay"
 var map_contour: PackedVector2Array = PackedVector2Array()
 var map_dig_local: Vector2 = Vector2(26.0, -18.0)
@@ -149,6 +150,7 @@ func _load_weapon_loadout_from_profile() -> void:
 func _exit_tree() -> void:
 	if playing_shanty:
 		set_playing_shanty(false)
+	treasure_map_texture = null
 
 
 ## Explicitly bind references if constructing dynamically before tree entry.
@@ -417,6 +419,7 @@ func set_treasure_map(
 	dig_local_pos: Variant,
 	island_radius: float = 120.0
 ) -> ImageTexture:
+	map_mode = &"treasure"
 	map_island_name = island_name
 	map_contour = contour_points.duplicate()
 	if dig_local_pos is Vector3:
@@ -427,6 +430,38 @@ func set_treasure_map(
 	map_island_radius = maxf(island_radius, 12.0)
 	treasure_map_texture = MapPainter.render_treasure_map(
 		map_island_name, map_contour, map_dig_local, map_island_radius)
+	if active_item == &"map":
+		ToolMeshes.apply_map_texture(fp_tool_node, treasure_map_texture)
+		ToolMeshes.apply_map_texture(tp_tool_node, treasure_map_texture)
+	return treasure_map_texture
+
+
+## Render & bind a hand-inked rhyming Riddle Scroll onto the held 3D parchment map.
+func set_riddle_scroll(
+	island_name: String,
+	stanzas: Array,
+	revealed_count: int = 1,
+	seed_val: int = 1
+) -> ImageTexture:
+	map_mode = &"riddle"
+	map_island_name = island_name
+	treasure_map_texture = MapPainter.paint_riddle_scroll(island_name, stanzas, revealed_count, seed_val)
+	if active_item == &"map":
+		ToolMeshes.apply_map_texture(fp_tool_node, treasure_map_texture)
+		ToolMeshes.apply_map_texture(tp_tool_node, treasure_map_texture)
+	return treasure_map_texture
+
+
+## Render & bind an illustrated Skull-Portrait WANTED Bounty Poster onto the held 3D parchment map.
+func set_bounty_poster(
+	captain_name: String,
+	island_name: String,
+	gold_reward: int,
+	seed_val: int = 1
+) -> ImageTexture:
+	map_mode = &"bounty"
+	map_island_name = island_name
+	treasure_map_texture = MapPainter.paint_bounty_poster(captain_name, island_name, gold_reward, seed_val)
 	if active_item == &"map":
 		ToolMeshes.apply_map_texture(fp_tool_node, treasure_map_texture)
 		ToolMeshes.apply_map_texture(tp_tool_node, treasure_map_texture)

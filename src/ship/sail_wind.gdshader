@@ -619,39 +619,47 @@ void fragment() {
 				base_col *= billow_mod;
 			}
 		} else if (emblem_mode == 5) {
-			// SUNKEN ARCHIVE: dramatic midnight-obsidian canvas + weathered bronze outer stripes +
+			// SUNKEN ARCHIVE: dramatic midnight-obsidian canvas + warm weathered bronze outer stripes +
 			// luminous bioluminescent turquoise/emerald Archive Crest + glowing emerald stitched hem trim!
 			if (is_sail_canvas) {
-				float bronze_side = smoothstep(0.195, 0.180, UV.x) + smoothstep(0.805, 0.820, UV.x);
+				float bronze_side = smoothstep(0.215, 0.198, UV.x) + smoothstep(0.785, 0.802, UV.x);
+				float bronze_seam = smoothstep(0.010, 0.004, abs(abs(UV.x - 0.5) - 0.295));
 				float border_dist = min(min(UV.x, 1.0 - UV.x), min(UV.y, 1.0 - UV.y));
-				float stitch = 0.72 + 0.28 * step(0.30, fract((UV.x + UV.y) * 28.0));
-				float hem_trim = smoothstep(0.028, 0.014, border_dist) * stitch;
+				float stitch = 0.75 + 0.25 * step(0.32, fract((UV.x + UV.y) * 28.0));
+				float hem_trim = smoothstep(0.026, 0.012, border_dist) * stitch;
 
 				vec2 q = vec2((UV.x - 0.5) * 1.14, UV.y - 0.45);
 				vec2 crest = sunken_archive_crest(q);
-				float crest_halo = smoothstep(0.30, 0.06, length(q)) * 0.14;
-				float pulse = 0.86 + 0.14 * sin(sail_time * 2.2 + UV.y * 3.5);
+				// Tight localized glow halo strictly around the octagonal crest edges (keeps obsidian dark!).
+				float oct_r = max(max(abs(q.x), abs(q.y)), (abs(q.x) + abs(q.y)) * 0.70710678);
+				float crest_halo = smoothstep(0.055, 0.0, abs(oct_r - 0.188)) * 0.18;
+				float pulse = 0.88 + 0.12 * sin(sail_time * 2.2 + UV.y * 3.5);
 
-				vec3 obsidian = vec3(0.08, 0.10, 0.14) * linen;
-				vec3 bronze = vec3(0.46, 0.31, 0.15) * linen;
-				vec3 teal_paint = vec3(0.16, 0.90, 0.74) * linen;
-				vec3 teal_hot = vec3(0.54, 1.00, 0.90);
+				vec3 obsidian = vec3(0.07, 0.09, 0.13) * linen;
+				vec3 bronze = vec3(0.54, 0.36, 0.16) * linen;
+				vec3 teal_paint = vec3(0.14, 0.92, 0.76) * linen;
+				vec3 teal_hot = vec3(0.56, 1.00, 0.92);
+				vec3 archive_glow = emission_strength > 0.04
+					? mix(vec3(0.12, 0.96, 0.78), emission_tint, 0.45)
+					: vec3(0.12, 0.96, 0.78);
 
 				vec3 painted = mix(obsidian, bronze, clamp(bronze_side, 0.0, 1.0));
-				painted = mix(painted, mix(teal_paint, teal_hot, crest.y * 0.45), crest.x);
-				painted = mix(painted, teal_paint, hem_trim * 0.90);
+				painted = mix(painted, obsidian * 0.65, bronze_seam * 0.85);
+				painted = mix(painted, mix(teal_paint, teal_hot, crest.y * 0.50), crest.x);
+				painted = mix(painted, teal_paint, hem_trim * 0.92);
 
-				float face_k = is_back_face > 0.5 ? 0.78 : 1.0;
+				float face_k = is_back_face > 0.5 ? 0.80 : 1.0;
 				base_col = mix(obsidian, painted, face_k) * billow_mod;
-				extra_emission += vec3(0.12, 0.96, 0.78) * ((crest.x * 0.78 + crest_halo * 0.30 + hem_trim * 0.55) * face_k * pulse);
+				// Strictly illuminate ONLY the turquoise Archive crest and thin luminous emerald stitched border hem!
+				extra_emission += archive_glow * ((crest.x * 0.95 + crest_halo * 0.28 + hem_trim * 0.72) * face_k * pulse);
 			} else if (is_flag > 0.5 && use_albedo_tex < 0.5) {
 				float stripe = step(0.5, fract(UV.x * 6.5 - UV.y * 0.35));
 				float edge = smoothstep(0.35, 0.44, abs(UV.y - 0.5));
-				vec3 c_a = vec3(0.14, 0.10, 0.16);
-				vec3 c_b = vec3(0.14, 0.72, 0.58);
-				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.22, 0.96, 0.78), edge * 0.85);
-				base_col = scol * mix(vec3(1.0), albedo_tint, 0.20) * billow_mod;
-				extra_emission += vec3(0.14, 0.92, 0.74) * (edge * 0.45 + stripe * 0.15);
+				vec3 c_a = vec3(0.08, 0.09, 0.13);
+				vec3 c_b = vec3(0.14, 0.74, 0.60);
+				vec3 scol = mix(mix(c_a, c_b, stripe), vec3(0.20, 0.96, 0.78), edge * 0.85);
+				base_col = scol * mix(vec3(1.0), albedo_tint, 0.18) * billow_mod;
+				extra_emission += vec3(0.12, 0.94, 0.76) * (edge * 0.52 + stripe * 0.14);
 			} else {
 				base_col *= billow_mod;
 			}
@@ -768,6 +776,9 @@ void fragment() {
 	vec3 trans_glow = emblem_mode == 3
 		? vec3(0.10, 0.55, 0.54) * sss * 0.28
 		: base_col * sun_color * sss;
-	EMISSION = emission_tint * emission_strength + trans_glow + extra_emission;
+	// Suppress blanket flat sail glow on Trading Company heraldic sails (emblem_mode 4..7)
+	// so dark obsidian, cobalt, war-crimson & plum fields stay high-contrast while crests glow!
+	float flat_em_scale = (emblem_mode >= 4) ? 0.0 : 1.0;
+	EMISSION = emission_tint * (emission_strength * flat_em_scale) + trans_glow + extra_emission;
 }
 

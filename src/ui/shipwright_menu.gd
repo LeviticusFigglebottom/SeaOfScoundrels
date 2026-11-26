@@ -26,6 +26,7 @@ const SLOT_SECTIONS: Array[Array] = [
 	[&"hull_livery", "Hull Paint"],
 	[&"sail_cosmetic", "Sail Livery"],
 	[&"flag", "Masthead Pennant"],
+	[&"crew_uniform", "Crew Uniform"],
 ]
 
 const SHAPE_LABELS := {
@@ -398,10 +399,77 @@ static func apply_economy_to_ship(
 		if b != null and is_instance_valid(b):
 			b.apply_modifiers(mods)
 
+	var crew_uniform_id := StringName(String(mods.get("crew_uniform_id", &"")))
+	_apply_crew_uniform(crew_brains, crew_uniform_id)
+
 	if director != null and is_instance_valid(director):
 		director.lookout_scale = float(mods.get("lookout_scale", 1.0))
 
 	return bridged
+
+
+static func _apply_crew_uniform(crew_brains: Array[CrewBrain], uniform_id: StringName) -> void:
+	var has_uniform := uniform_id != &""
+	var base_primary := Color.WHITE
+	var base_accent := Color.WHITE
+	if has_uniform:
+		var ue := Economy.get_unlock(uniform_id)
+		if ue.is_empty() or not (ue.get("tint") is Color):
+			has_uniform = false
+		else:
+			base_primary = ue["tint"] as Color
+			base_accent = (ue["accent_tint"] as Color) if (ue.get("accent_tint") is Color) else base_primary.lightened(0.25)
+
+	for idx in crew_brains.size():
+		var b := crew_brains[idx]
+		if b == null or not is_instance_valid(b):
+			continue
+		if b.pawn == null or not is_instance_valid(b.pawn):
+			continue
+		var cv := _character_visual_of(b.pawn)
+		if cv == null:
+			continue
+		if not cv.has_meta(&"default_primary_tint"):
+			cv.set_meta(&"default_primary_tint", cv._primary_tint)
+			cv.set_meta(&"default_secondary_tint", cv._secondary_tint)
+		if not has_uniform:
+			var def_p: Color = cv.get_meta(&"default_primary_tint", cv._primary_tint) as Color
+			var def_a: Color = cv.get_meta(&"default_secondary_tint", cv._secondary_tint) as Color
+			cv.set_tint(def_p, def_a)
+			continue
+		# Subtle per-persona tonal offset so Barnaby, Maren & Pip keep individual charm
+		# while reading unmistakably as a unified pirate crew.
+		var p_col := base_primary
+		var a_col := base_accent
+		match b.persona_id:
+			&"helmsman":
+				pass
+			&"lookout":
+				p_col = base_primary.lightened(0.10)
+				a_col = base_accent.lightened(0.06)
+			&"carpenter":
+				p_col = base_primary.darkened(0.10)
+				a_col = base_accent.darkened(0.06)
+			_:
+				if idx % 3 == 1:
+					p_col = base_primary.lightened(0.08)
+					a_col = base_accent.lightened(0.05)
+				elif idx % 3 == 2:
+					p_col = base_primary.darkened(0.08)
+					a_col = base_accent.darkened(0.05)
+		cv.set_tint(p_col, a_col)
+
+
+static func _character_visual_of(p: Pawn) -> CharacterVisual:
+	if p == null:
+		return null
+	var cv := p.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
+	if cv != null:
+		return cv
+	var found := p.find_children("*", "CharacterVisual", true, false)
+	if not found.is_empty():
+		return found[0] as CharacterVisual
+	return null
 
 
 # ==============================================================================
@@ -856,7 +924,15 @@ func _rebuild_shipwright_tab() -> void:
 			text_v.add_child(desc)
 
 			if entry.has("tint") and entry["tint"] is Color:
-				h.add_child(_make_swatch_chip(entry["tint"] as Color, String(uid)))
+				if entry.has("accent_tint") and entry["accent_tint"] is Color:
+					var swatch_box := HBoxContainer.new()
+					swatch_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+					swatch_box.add_theme_constant_override("separation", 3)
+					swatch_box.add_child(_make_swatch_chip(entry["tint"] as Color, String(uid)))
+					swatch_box.add_child(_make_accent_swatch_chip(entry["accent_tint"] as Color, String(uid)))
+					h.add_child(swatch_box)
+				else:
+					h.add_child(_make_swatch_chip(entry["tint"] as Color, String(uid)))
 
 			var act_btn := Button.new()
 			act_btn.name = "UnlockBtn_" + String(uid)
@@ -1046,6 +1122,27 @@ static func _make_swatch_chip(swatch_color: Color, uid_str: String) -> PanelCont
 	chip.name = "SwatchColor"
 	chip.custom_minimum_size = Vector2(18.0, 18.0)
 	chip.color = swatch_color
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.add_child(chip)
+	return frame
+
+
+static func _make_accent_swatch_chip(accent_color: Color, uid_str: String) -> PanelContainer:
+	var frame := PanelContainer.new()
+	frame.name = "SwatchAccent_" + uid_str
+	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.13, 0.08, 1.0)
+	sb.border_color = HudIcons.COL_INK
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(3)
+	sb.set_content_margin_all(2)
+	frame.add_theme_stylebox_override("panel", sb)
+
+	var chip := ColorRect.new()
+	chip.name = "SwatchAccentColor"
+	chip.custom_minimum_size = Vector2(12.0, 18.0)
+	chip.color = accent_color
 	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	frame.add_child(chip)
 	return frame

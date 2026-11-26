@@ -13,20 +13,20 @@ const OPEN_DURATION := 1.35
 const OPEN_ANGLE_RAD := deg_to_rad(108.0)
 const GATE_HALF_SPAN := 1.52
 
-# Warm buff coral-limestone, weathered iron, and gleaming pirate-brass palette.
-const COL_STONE_LIGHT := Color(0.73, 0.65, 0.52)
-const COL_STONE_MID := Color(0.58, 0.51, 0.40)
-const COL_STONE_SHADOW := Color(0.37, 0.34, 0.29)
-const COL_STONE_MOSS := Color(0.35, 0.42, 0.27)
+# Warm buff coral-limestone, dark soot-black wrought iron, and gleaming pirate-brass palette (sRGB).
+const COL_STONE_LIGHT := Color(0.80, 0.70, 0.52)
+const COL_STONE_MID := Color(0.66, 0.56, 0.40)
+const COL_STONE_SHADOW := Color(0.43, 0.36, 0.26)
+const COL_STONE_MOSS := Color(0.40, 0.44, 0.26)
 
-const COL_IRON_HI := Color(0.28, 0.29, 0.32)
-const COL_IRON_MID := Color(0.16, 0.17, 0.19)
-const COL_IRON_DARK := Color(0.09, 0.10, 0.12)
-const COL_RIVET := Color(0.34, 0.35, 0.38)
+const COL_IRON_HI := Color(0.20, 0.19, 0.21)
+const COL_IRON_MID := Color(0.11, 0.11, 0.13)
+const COL_IRON_DARK := Color(0.065, 0.062, 0.072)
+const COL_RIVET := Color(0.22, 0.21, 0.23)
 
-const COL_BRASS_HI := Color(0.95, 0.76, 0.28)
-const COL_BRASS_MID := Color(0.78, 0.58, 0.18)
-const COL_BRASS_DARK := Color(0.48, 0.34, 0.11)
+const COL_BRASS_HI := Color(0.98, 0.78, 0.26)
+const COL_BRASS_MID := Color(0.82, 0.60, 0.16)
+const COL_BRASS_DARK := Color(0.50, 0.34, 0.09)
 
 static var _active_vaults: int = 0
 static var _frame_mesh: ArrayMesh = null
@@ -266,18 +266,21 @@ static func _ensure_shared_assets() -> void:
 	if _stone_mat == null:
 		_stone_mat = StandardMaterial3D.new()
 		_stone_mat.vertex_color_use_as_albedo = true
+		_stone_mat.vertex_color_is_srgb = true
 		_stone_mat.roughness = 0.90
 		_stone_mat.metallic = 0.02
 	if _iron_mat == null:
 		_iron_mat = StandardMaterial3D.new()
 		_iron_mat.vertex_color_use_as_albedo = true
-		_iron_mat.roughness = 0.44
-		_iron_mat.metallic = 0.78
+		_iron_mat.vertex_color_is_srgb = true
+		_iron_mat.roughness = 0.46
+		_iron_mat.metallic = 0.64
 	if _brass_mat == null:
 		_brass_mat = StandardMaterial3D.new()
 		_brass_mat.vertex_color_use_as_albedo = true
+		_brass_mat.vertex_color_is_srgb = true
 		_brass_mat.roughness = 0.26
-		_brass_mat.metallic = 0.88
+		_brass_mat.metallic = 0.78
 	if _frame_mesh == null:
 		_frame_mesh = _build_stone_arch_frame_mesh()
 	if _gate_left_mesh == null:

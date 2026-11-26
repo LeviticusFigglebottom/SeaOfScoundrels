@@ -1063,5 +1063,100 @@ func _count_array_mesh_tris(mesh: Mesh) -> int:
 	return total
 
 
+func test_bonus_island_supply_barrels_and_teardown() -> void:
+	_init_host()
+	var barrel_gd: GDScript = preload("res://src/world/supply_barrel.gd")
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	# 1. Verify tropical islands (including Cutlass Cay) spawn bonus SupplyBarrels and outposts do not.
+	var cutlass := arch.get_island_by_id("cutlass_cay")
+	var outpost := arch.get_island_by_id("port_scoundrel")
+	check(cutlass != null and outpost != null, "archipelago builds cutlass_cay and port_scoundrel")
+
+	var cutlass_barrels: Array[Node3D] = []
+	for c in cutlass.get_children():
+		if c is Node3D and c.is_in_group(&"supply_barrels"):
+			cutlass_barrels.append(c as Node3D)
+	check(cutlass_barrels.size() >= 1 and cutlass_barrels.size() <= 2,
+		"Cutlass Cay spawns 1-2 bonus SupplyBarrels (got %d)" % cutlass_barrels.size())
+
+	var outpost_barrels := 0
+	for c in outpost.get_children():
+		if c.is_in_group(&"supply_barrels"):
+			outpost_barrels += 1
+	check_eq(outpost_barrels, 0, "outposts do not spawn island bonus SupplyBarrels")
+
+	var all_barrels := get_tree().get_nodes_in_group(&"supply_barrels")
+	check(all_barrels.size() >= 6, "archipelago spawns bonus SupplyBarrels across non-outpost islands (got %d)" % all_barrels.size())
+
+	# 2. Verify zero raw primitives, grounded placement, sculpted golden emblem & shared static cache.
+	var b0 := cutlass_barrels[0]
+	var b1 := all_barrels[all_barrels.size() - 1] as Node3D
+	var surf_y := cutlass.surface_height(b0.position.x, b0.position.z)
+	check_near(b0.position.y, surf_y, 0.12, "Cutlass Cay SupplyBarrel snaps cleanly to terrain surface")
+	for dp in cutlass.dig_points:
+		check(Vector2(b0.position.x - dp.x, b0.position.z - dp.z).length() >= 3.0,
+			"SupplyBarrel keeps clear of island dig_points")
+
+	var emblem0 := b0.find_child("SupplyTagEmblem", true, false) as MeshInstance3D
+	var emblem1 := b1.find_child("SupplyTagEmblem", true, false) as MeshInstance3D
+	check(emblem0 != null and emblem0.mesh is ArrayMesh and emblem0.visible,
+		"SupplyBarrel crowns lid with visible sculpted SupplyTagEmblem ArrayMesh")
+	if emblem0 != null and emblem1 != null:
+		check_eq(emblem0.mesh, emblem1.mesh, "SupplyBarrels share statically cached emblem ArrayMesh")
+		check(_count_array_mesh_tris(emblem0.mesh) >= 120,
+			"SupplyTagEmblem has sculpted flat-faceted geometry (%d tris)" % _count_array_mesh_tris(emblem0.mesh))
+
+	var raw_prims: Array[String] = []
+	for node in b0.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims.append(mi.name)
+	check(raw_prims.is_empty(), "SupplyBarrel contains zero raw PrimitiveMeshes (found: %s)" % str(raw_prims))
+
+	# 3. Verify one-press take-all heals wounded pawn, emits supplies_taken once, hides emblem & stays idempotent.
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	add_child(captain)
+	captain.global_position = b0.global_position + Vector3(0.0, 0.1, -1.2)
+	captain.apply_damage(35.0)
+	var hp_before := captain.health
+
+	var taken_events: Array[Dictionary] = []
+	b0.connect(&"supplies_taken", func(bar: Node, p_node: Node, loot: Dictionary) -> void:
+		taken_events.append({"barrel": bar, "pawn": p_node, "loot": loot})
+	)
+
+	var it := b0.get(&"interactable") as Interactable
+	check(it != null and it.enabled and it.prompt == "Take all supplies (+6 balls, +3 planks)",
+		"SupplyBarrel exposes one-press take-all Interactable prompt")
+	it.interact(captain)
+
+	check_eq(taken_events.size(), 1, "supplies_taken emits once on interact")
+	check(bool(b0.get(&"looted")), "SupplyBarrel marks looted = true")
+	check(not it.enabled, "looted SupplyBarrel disables interactable")
+	check(emblem0 != null and not emblem0.visible, "looted SupplyBarrel hides golden SupplyTagEmblem")
+	check_near(captain.health, hp_before + 18.0, 0.05, "SupplyBarrel heals wounded captain (+18 HP)")
+	if taken_events.size() == 1:
+		var loot: Dictionary = taken_events[0]["loot"] as Dictionary
+		check_eq(int(loot.get("cannonballs", 0)), 6, "loot awards +6 cannonballs")
+		check_eq(int(loot.get("planks", 0)), 3, "loot awards +3 planks")
+
+	# Repeat interact / take_all must be strictly idempotent.
+	it.interact(captain)
+	var repeat_loot: Dictionary = b0.call(&"take_all", captain) as Dictionary
+	check(repeat_loot.is_empty(), "repeat take_all() returns empty dict idempotently")
+	check_eq(taken_events.size(), 1, "supplies_taken never fires twice")
+	captain.queue_free()
+
+	# 4. Zero-leak teardown releases static SupplyBarrel mesh/material cache.
+	arch.queue_free()
+	await physics_frames(3)
+	check(barrel_gd.get(&"_emblem_mesh") == null and barrel_gd.get(&"_brass_mat") == null,
+		"SupplyBarrel releases static shared cache cleanly when all barrels exit tree")
+
+
+
 
 

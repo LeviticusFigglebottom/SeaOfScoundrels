@@ -524,4 +524,67 @@ func test_emissary_streamer_and_trading_company_sail_emblems() -> void:
 		"Ship releases static EmissaryStreamer mesh caches cleanly when last ship exits tree")
 
 
+func test_anchor_turn_swinging_stop_rotates_hull() -> void:
+	_begin()
+	Weather.set_weather(0.0, 11.0, 0.0)
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	var s_straight := _spawn_sloop(Vector3(-25.0, 0.0, 0.0))
+	var s_turn := _spawn_sloop(Vector3(25.0, 0.0, 0.0))
+	await physics_frames(20)
+
+	# Accelerate both sloops briskly downwind past 5 m/s.
+	for sh: Ship in [s_straight, s_turn]:
+		sh.set_sail_target(1.0)
+		sh.set_trim_target(0.0)
+		sh.set_helm_target(0.0)
+	await physics_frames(220)
+	check(s_turn.forward_speed() >= 4.5, "sloop reaches speed >= 4.5 m/s before anchor drop (got %.2f)" % s_turn.forward_speed())
+
+	var straight_events: Array[Array] = []
+	var turn_events: Array[Array] = []
+	s_straight.anchor_turn_triggered.connect(func(spd: float, ydir: float) -> void: straight_events.append([spd, ydir]))
+	s_turn.anchor_turn_triggered.connect(func(spd: float, ydir: float) -> void: turn_events.append([spd, ydir]))
+
+	var yaw_straight0 := s_straight.rotation.y
+	var yaw_turn0 := s_turn.rotation.y
+
+	# Straight-ahead anchor drop vs hard-starboard anchor-turn drop!
+	s_straight.set_helm_target(0.0)
+	s_straight.set_anchor(true)
+	s_turn.set_helm_target(1.0)
+	s_turn.set_anchor(true)
+
+	await physics_frames(240)
+
+	var dyaw_straight := absf(angle_difference(yaw_straight0, s_straight.rotation.y))
+	var dyaw_turn_signed := angle_difference(yaw_turn0, s_turn.rotation.y)
+	var dyaw_turn := absf(dyaw_turn_signed)
+	var stop_spd_turn := Vector2(s_turn.linear_velocity.x, s_turn.linear_velocity.z).length()
+	var stop_spd_straight := Vector2(s_straight.linear_velocity.x, s_straight.linear_velocity.z).length()
+	print("    anchor-turn: straight_dyaw=%.2f rad, turn_dyaw=%.2f rad (signed=%.2f), stop_spd=%.2f m/s" % [
+		dyaw_straight, dyaw_turn, dyaw_turn_signed, stop_spd_turn])
+
+	check_eq(straight_events.size(), 0, "straight-ahead anchor drop does not emit anchor_turn_triggered")
+	check_eq(turn_events.size(), 1, "hard-rudder high-speed anchor drop emits anchor_turn_triggered once")
+	if not turn_events.is_empty():
+		check(float(turn_events[0][0]) >= 3.0, "anchor_turn_triggered reports entry speed >= 3.0 m/s")
+		check(float(turn_events[0][1]) < 0.0, "starboard anchor-turn reports negative Y yaw_dir")
+	check(dyaw_turn > dyaw_straight + 0.55 and dyaw_turn_signed < -0.55,
+		"anchor-turn swings bow sharply to starboard vs straight drop (%.2f vs %.2f rad)" % [dyaw_turn, dyaw_straight])
+	check(stop_spd_turn < 0.9 and stop_spd_straight < 0.9,
+		"both ships settle cleanly to a stop after anchor bite (turn=%.2f, straight=%.2f m/s)" % [stop_spd_turn, stop_spd_straight])
+
+	# Verify Sunken Archive (emblem_mode 5) does not flood non-archive flag/sail mats with bright blanket glow.
+	s_turn.apply_livery(Color.WHITE, Color(0.16, 0.88, 0.74), Color(0.16, 0.88, 0.74), Color(0.58, 0.94, 0.84), 5)
+	check_eq(s_turn.get_emblem_mode(), 5, "Sunken Archive sets emblem_mode 5")
+	for fm in s_turn._flag_mats:
+		check_near(float(fm.get_shader_parameter(&"emission_strength")), 0.0, 0.01,
+			"Trading Company mode 5 suppresses blanket flat emission on flags/streamer")
+
+	await _end()
+
+
+
 

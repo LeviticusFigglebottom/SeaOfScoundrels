@@ -18,6 +18,7 @@ signal cannon_fired(side: StringName, cannonball: Cannonball)
 signal bell_rung(pawn: Node)
 signal supplies_taken(pawn: Node)
 signal wind_caught(efficiency: float)
+signal anchor_turn_triggered(speed: float, yaw_dir: float)
 
 const SLOOP_SCENE: PackedScene = preload("res://assets/generated/ship/sloop.glb")
 const SLOOP_LOD_SCENE: PackedScene = preload("res://assets/generated/ship/sloop_lod.glb")
@@ -1148,9 +1149,9 @@ func set_anchor(down: bool) -> void:
 	anchor_down = down
 	if down:
 		Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
-		if forward_speed() > 1.8:
-			_anchor_swing_dir = 1.0 if helm >= 0.0 else -1.0
-			_anchor_swing_timer = 2.6
+	else:
+		_anchor_swing_timer = 0.0
+		_anchor_swing_dir = 0.0
 
 
 ## Forward speed along the ship's -Z bow axis in m/s (negative = astern).
@@ -1334,11 +1335,13 @@ func _apply_current_livery() -> void:
 			eff_paint = Color.WHITE
 
 	_effective_glow_accent = eff_glow
+	var emblem_mode := get_emblem_mode()
 	var glow_mag := eff_glow.get_luminance()
 	var sail_glow_strength := 0.0
-	if glow_mag > 0.01:
+	if glow_mag > 0.01 and emblem_mode < 4:
 		# Ghost sails drive their own Fresnel + drifting wisp emission in sail_wind.gdshader;
-		# keep base flat emission modest so the deep abyssal core stays rich.
+		# Trading Company sails (emblem_mode >= 4) glow strictly on their crests/hems so dark
+		# obsidian & crimson fields never wash out.
 		if is_ghost:
 			sail_glow_strength = 0.04
 		elif faction == &"drowned":
@@ -1346,16 +1349,18 @@ func _apply_current_livery() -> void:
 		else:
 			sail_glow_strength = clampf(glow_mag * 0.78, 0.14, 0.82)
 
-	var emblem_mode := get_emblem_mode()
-
 	for sm in _sail_mats:
 		sm.set_shader_parameter(&"albedo_tint", _livery_sail_tint)
 		sm.set_shader_parameter(&"emblem_mode", emblem_mode)
 		sm.set_shader_parameter(&"phase_alpha", _spectral_phase)
 		sm.set_shader_parameter(&"phase_flare", _spectral_flare)
-		if glow_mag > 0.01:
+		if glow_mag > 0.01 and emblem_mode < 4:
 			sm.set_shader_parameter(&"emission_tint", eff_glow)
 			sm.set_shader_parameter(&"emission_strength", sail_glow_strength)
+		elif glow_mag > 0.01 and emblem_mode == 5:
+			# Pass archive accent tint for crest/hem emission while shader masks flat sail glow to 0.
+			sm.set_shader_parameter(&"emission_tint", eff_glow)
+			sm.set_shader_parameter(&"emission_strength", 0.25)
 		else:
 			var is_back := float(sm.get_shader_parameter(&"is_back_face")) > 0.5
 			sm.set_shader_parameter(&"emission_tint", Color(1.0, 0.86, 0.6))
@@ -1365,7 +1370,7 @@ func _apply_current_livery() -> void:
 		fmat.set_shader_parameter(&"emblem_mode", emblem_mode)
 		fmat.set_shader_parameter(&"phase_alpha", _spectral_phase)
 		fmat.set_shader_parameter(&"phase_flare", _spectral_flare)
-		if glow_mag > 0.01:
+		if glow_mag > 0.01 and emblem_mode < 4:
 			fmat.set_shader_parameter(&"emission_tint", eff_glow)
 			fmat.set_shader_parameter(&"emission_strength", sail_glow_strength)
 		else:
@@ -2357,6 +2362,26 @@ func _tick_controls(delta: float) -> void:
 		Audio.play_sfx(&"anchor_splash", _anchor_world_pos())
 	_was_anchor_submerged = anc_sub
 
+	# Signature DESIGN.md Anchor-Turn Swinging Stop: when anchor hits bottom at speed with wheel turned!
+	if prev_anc < 0.96 and anchor_progress >= 0.96 and not is_sinking:
+		var fwd_spd := forward_speed()
+		if fwd_spd >= 3.0 and absf(helm) >= 0.14:
+			var yaw_dir := -signf(helm)
+			var speed_frac := clampf((fwd_spd - 2.2) / 5.2, 0.38, 1.0)
+			var turn_frac := clampf(absf(helm), 0.25, 1.0)
+			var max_yaw := 0.85 if ship_class == &"brigantine" else 1.05
+			var yaw_impulse := yaw_dir * max_yaw * speed_frac * (0.65 + 0.35 * turn_frac)
+			angular_velocity.y = clampf(angular_velocity.y + yaw_impulse, -1.25, 1.25)
+			# Brief lateral stern skid outward around the taut bow anchor hawser.
+			var skid_spd := clampf(fwd_spd * 0.28, 0.85, 2.2) * (0.85 if ship_class == &"brigantine" else 1.0)
+			linear_velocity += global_basis.x * (yaw_dir * skid_spd)
+			_anchor_swing_dir = signf(helm)
+			_anchor_swing_timer = 1.95
+			Audio.play_sfx(&"hull_creak", global_position, 1.0)
+			hull_impacted.emit(_anchor_world_pos(), 0.28)
+			_stamp_anchor_turn_foam(1.0)
+			anchor_turn_triggered.emit(fwd_spd, yaw_dir)
+
 	if _anchor_swing_timer > 0.0:
 		_anchor_swing_timer = maxf(0.0, _anchor_swing_timer - delta)
 
@@ -2512,7 +2537,8 @@ func _tick_hydrodynamics(delta: float) -> void:
 		var min_headway := 0.16 * close_hauled_modifier
 		var drive_coeff := lerpf(min_headway, 1.0, catch)
 		var flood_slow := lerpf(1.0, 0.65, water_level)
-		var thrust := sail_set * wind_factor * drive_coeff * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow
+		var anchor_hold := 1.0 - clampf((anchor_progress - 0.92) / 0.08, 0.0, 0.94)
+		var thrust := sail_set * wind_factor * drive_coeff * 17500.0 * _class_thrust_mult * speed_modifier * flood_slow * anchor_hold
 		var fwd_horiz := Vector3(-b.z.x, 0.0, -b.z.z)
 		if fwd_horiz.length_squared() > 0.001:
 			apply_central_force(fwd_horiz.normalized() * thrust)
@@ -2533,11 +2559,18 @@ func _tick_hydrodynamics(delta: float) -> void:
 
 	# 6. Anchor drag and swinging stop.
 	if anchor_progress > 0.65:
-		var hold_frac := clampf((anchor_progress - 0.65) / 0.35, 0.0, 1.0)
 		var hv := Vector3(linear_velocity.x, 0.0, linear_velocity.z)
-		apply_central_force(-hv * (18500.0 * hold_frac))
-		if _anchor_swing_timer > 0.0 and hv.length() > 0.45:
-			var swing := -_anchor_swing_dir * clampf(hv.length() / 5.0, 0.2, 1.2) * 34000.0 * hold_frac
+		if anchor_progress < 0.94:
+			# Gentle water drag while anchor chain & flukes sink toward the seabed.
+			var fall_frac := clampf((anchor_progress - 0.65) / 0.29, 0.0, 1.0)
+			apply_central_force(-hv * (2200.0 * fall_frac * mass_ratio))
+		else:
+			# Full seabed anchor bite braking!
+			var bite_frac := clampf((anchor_progress - 0.94) / 0.06, 0.35, 1.0)
+			apply_central_force(-hv * (21000.0 * bite_frac * mass_ratio))
+		if _anchor_swing_timer > 0.0 and anchor_progress >= 0.94:
+			var swing_env := clampf(_anchor_swing_timer / 1.95, 0.0, 1.0)
+			var swing := -_anchor_swing_dir * (0.35 + 0.65 * swing_env) * 36000.0 * mass_ratio
 			apply_torque(Vector3.UP * swing)
 
 	# Update hold water slosh target from local roll/pitch & angular motion.
@@ -2766,6 +2799,8 @@ func _update_wake(delta: float) -> void:
 				Ocean.current.add_foam(xf_sink * Vector3(-wobble * 0.55, 0.0, 0.2 * len_sc), lerpf(4.8, 5.5, 1.0 - pulse), 0.92)
 				Ocean.current.add_foam(xf_sink * Vector3(wobble * 0.35, 0.0, 5.0 * len_sc), lerpf(4.3, 5.0, pulse), 0.92)
 		return
+	if _anchor_swing_timer > 0.0:
+		_stamp_anchor_turn_foam(clampf(_anchor_swing_timer / 1.95, 0.15, 0.85))
 	if spd < 0.35:
 		# Subtle waterline collar foam even while gently bobbing at anchor.
 		Ocean.current.add_foam(global_transform * Vector3(0.0, 0.0, -5.6 * len_sc), 1.4 * beam_sc, 0.14)
@@ -2780,6 +2815,21 @@ func _update_wake(delta: float) -> void:
 	Ocean.current.add_foam(xf * Vector3(-2.1 * beam_sc, 0.0, 0.8 * len_sc), 1.3 * beam_sc, 0.25 * s_norm)
 	Ocean.current.add_foam(xf * Vector3(2.1 * beam_sc, 0.0, 0.8 * len_sc), 1.3 * beam_sc, 0.25 * s_norm)
 	Ocean.current.add_foam(xf * Vector3(0.0, 0.0, 6.7 * len_sc), 2.5 * beam_sc, 0.56 * s_norm)
+
+
+func _stamp_anchor_turn_foam(strength: float) -> void:
+	if Ocean.current == null or strength <= 0.01:
+		return
+	var is_brig := (ship_class == &"brigantine")
+	var len_sc := 1.32 if is_brig else 1.0
+	var beam_sc := 1.24 if is_brig else 1.0
+	var xf := global_transform
+	# Outward drifting flank sweeps a broad curved arc of churning white foam!
+	var out_side := -_anchor_swing_dir if absf(_anchor_swing_dir) > 0.1 else 1.0
+	Ocean.current.add_foam(_anchor_world_pos(), 2.2 * beam_sc, 0.72 * strength)
+	Ocean.current.add_foam(xf * Vector3(out_side * 2.2 * beam_sc, 0.0, 1.2 * len_sc), 2.4 * beam_sc, 0.65 * strength)
+	Ocean.current.add_foam(xf * Vector3(out_side * 2.8 * beam_sc, 0.0, 4.0 * len_sc), 3.0 * beam_sc, 0.82 * strength)
+	Ocean.current.add_foam(xf * Vector3(out_side * 2.0 * beam_sc, 0.0, 6.6 * len_sc), 3.4 * beam_sc, 0.88 * strength)
 
 
 func _anchor_world_pos() -> Vector3:

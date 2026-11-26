@@ -769,4 +769,97 @@ func test_map_table_course_bearing_wind_pins_and_threats() -> void:
 	await _end()
 
 
+# ---------------------------------------------------------------------------
+# 7. Diegetic Riddle Scroll & WANTED Bounty Poster parchment modes
+# ---------------------------------------------------------------------------
+
+func test_riddle_scroll_and_bounty_poster_parchment_modes() -> void:
+	_begin()
+	var stanzas := [
+		"Where twin palms lean above the cove,",
+		"Walk seven paces toward the stony alcove,",
+		"Strike spade where shadows guard the trove.",
+	]
+
+	# 1. MapPainter.paint_riddle_scroll produces a rich 512x512 parchment with ink, wax seal & progressive reveal.
+	var riddle_1 := MapPainter.paint_riddle_scroll("Cutlass Cay", stanzas, 1, 17)
+	var riddle_3 := MapPainter.paint_riddle_scroll("Cutlass Cay", stanzas, 3, 17)
+	check(riddle_1 != null and riddle_3 != null, "paint_riddle_scroll returns ImageTexture")
+	var r1_img := riddle_1.get_image()
+	var r3_img := riddle_3.get_image()
+	check_eq(r1_img.get_width(), 512, "riddle scroll width is 512")
+	check_eq(r1_img.get_height(), 512, "riddle scroll height is 512")
+
+	var r1_ink := 0
+	var r3_ink := 0
+	var r1_wax := 0
+	for y in range(0, 512, 2):
+		for x in range(0, 512, 2):
+			var c1 := r1_img.get_pixel(x, y)
+			var c3 := r3_img.get_pixel(x, y)
+			if c1.r < 0.34 and c1.g < 0.24 and c1.b < 0.16:
+				r1_ink += 1
+			if c3.r < 0.34 and c3.g < 0.24 and c3.b < 0.16:
+				r3_ink += 1
+			if x > 360 and y > 380 and c1.r > 0.58 and c1.g < 0.24 and c1.b < 0.20:
+				r1_wax += 1
+	check(r1_ink > 500, "riddle scroll contains crisp hand-inked typography & border (%d ink samples)" % r1_ink)
+	check(r3_ink > r1_ink + 200, "revealing all 3 stanzas inks visibly more text (%d > %d)" % [r3_ink, r1_ink])
+	check(r1_wax > 120, "riddle scroll stamps crimson wax seal at bottom-right (%d wax samples)" % r1_wax)
+
+	# 2. MapPainter.paint_bounty_poster produces a rich 512x512 WANTED bill with skull portrait, glowing eyes & wax seal.
+	var bounty_tex := MapPainter.paint_bounty_poster("Captain Vane", "Skull Bluff", 1250, 29)
+	check(bounty_tex != null, "paint_bounty_poster returns ImageTexture")
+	var b_img := bounty_tex.get_image()
+	check_eq(b_img.get_width(), 512, "bounty poster width is 512")
+	check_eq(b_img.get_height(), 512, "bounty poster height is 512")
+
+	var b_ink := 0
+	var b_wax := 0
+	var b_glow_eyes := 0
+	var b_diff_from_riddle := 0
+	for y in range(0, 512, 2):
+		for x in range(0, 512, 2):
+			var cb := b_img.get_pixel(x, y)
+			var cr := r3_img.get_pixel(x, y)
+			if cb.r < 0.32 and cb.g < 0.24 and cb.b < 0.18:
+				b_ink += 1
+			if x > 370 and y > 385 and cb.r > 0.58 and cb.g < 0.24 and cb.b < 0.20:
+				b_wax += 1
+			if x > 210 and x < 302 and y > 230 and y < 270 and cb.r > 0.88 and cb.g > 0.30 and cb.b < 0.55:
+				b_glow_eyes += 1
+			if absf(cb.r - cr.r) + absf(cb.g - cr.g) + absf(cb.b - cr.b) > 0.25:
+				b_diff_from_riddle += 1
+	check(b_ink > 1800, "bounty poster renders bold WANTED header, tricorn hat & portrait ink (%d samples)" % b_ink)
+	check(b_wax > 120, "bounty poster stamps crimson wax seal (%d wax samples)" % b_wax)
+	check(b_glow_eyes > 20, "bounty poster renders glowing skull eyes (%d glow samples)" % b_glow_eyes)
+	check(b_diff_from_riddle > 4000, "bounty poster is visually distinct from riddle scroll (%d differing pixels)" % b_diff_from_riddle)
+
+	# 3. Inventory swaps held 3D MapSurface texture across treasure -> riddle -> bounty -> treasure seamlessly.
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+	inv.equip(&"map", true)
+	check_eq(inv.map_mode, &"treasure", "Inventory starts in treasure map_mode")
+
+	var surf := inv.get_active_tool_node().get_node_or_null(^"MapSurface") as MeshInstance3D
+	check(surf != null, "equipped map tool has MapSurface")
+	var mat := surf.material_override as StandardMaterial3D
+
+	var r_tex := inv.set_riddle_scroll("Cutlass Cay", stanzas, 2)
+	check_eq(inv.map_mode, &"riddle", "set_riddle_scroll switches map_mode to riddle")
+	check(r_tex != null and mat.albedo_texture == r_tex, "held MapSurface displays Riddle Scroll texture")
+
+	var b_tex := inv.set_bounty_poster("Captain Vane", "Skull Bluff", 1250)
+	check_eq(inv.map_mode, &"bounty", "set_bounty_poster switches map_mode to bounty")
+	check(b_tex != null and mat.albedo_texture == b_tex, "held MapSurface displays WANTED Bounty Poster texture")
+
+	var t_tex := inv.set_treasure_map("Cutlass Cay", PackedVector2Array(), Vector2(18.0, -12.0), 100.0)
+	check_eq(inv.map_mode, &"treasure", "set_treasure_map resets map_mode to treasure")
+	check(t_tex != null and mat.albedo_texture == t_tex, "held MapSurface restores Treasure Map texture")
+
+	await _end()
+
+
+
 

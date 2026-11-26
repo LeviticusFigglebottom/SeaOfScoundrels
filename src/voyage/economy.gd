@@ -17,6 +17,7 @@ const DEFAULT_LOADOUT := {
 	&"flag": &"",
 	&"sail_cosmetic": &"",
 	&"hull_livery": &"",
+	&"crew_uniform": &"",
 }
 
 const COMPANIES := {
@@ -419,6 +420,64 @@ const UNLOCKS := {
 		"glow_accent": Color(0.95, 0.68, 0.22),
 		"modifiers": {},
 	},
+
+	# --- Crew uniform cosmetics -----------------------------------------
+	&"crew_gilded_admiral": {
+		"id": &"crew_gilded_admiral",
+		"name": "Gilded Admiral Coats",
+		"slot": &"crew_uniform",
+		"category": &"cosmetic",
+		"cost": 320,
+		"company_id": &"gilded_compass",
+		"req_rank": 1,
+		"is_default": false,
+		"summary": "Crisp navy-cobalt maritime coats trimmed in burnished compass-guild gold.",
+		"tint": Color(0.16, 0.30, 0.56),
+		"accent_tint": Color(0.92, 0.74, 0.24),
+		"modifiers": {},
+	},
+	&"crew_crimson_corsair": {
+		"id": &"crew_crimson_corsair",
+		"name": "Privateer Crimson Gear",
+		"slot": &"crew_uniform",
+		"category": &"cosmetic",
+		"cost": 420,
+		"company_id": &"iron_tide",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Deep privateer-crimson waistcoats paired with gilded iron-tide sashes.",
+		"tint": Color(0.62, 0.14, 0.16),
+		"accent_tint": Color(0.90, 0.70, 0.26),
+		"modifiers": {},
+	},
+	&"crew_archive_mystic": {
+		"id": &"crew_archive_mystic",
+		"name": "Archive Sea-Jade Cloaks",
+		"slot": &"crew_uniform",
+		"category": &"cosmetic",
+		"cost": 420,
+		"company_id": &"sunken_archive",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Abyssal sea-teal navigator cloaks accented in luminous archive turquoise.",
+		"tint": Color(0.12, 0.32, 0.36),
+		"accent_tint": Color(0.20, 0.84, 0.70),
+		"modifiers": {},
+	},
+	&"crew_sovereign_velvet": {
+		"id": &"crew_sovereign_velvet",
+		"name": "Sovereign Velvet & Gold",
+		"slot": &"crew_uniform",
+		"category": &"cosmetic",
+		"cost": 680,
+		"company_id": &"gilded_compass",
+		"req_rank": 4,
+		"is_default": false,
+		"summary": "Royal plum-velvet captain's livery embroidered with bright sovereign gold.",
+		"tint": Color(0.24, 0.15, 0.28),
+		"accent_tint": Color(0.96, 0.76, 0.22),
+		"modifiers": {},
+	},
 }
 
 
@@ -652,6 +711,7 @@ static func get_ship_modifiers(profile: Profile) -> Dictionary:
 		"sail_cosmetic_id": get_equipped(profile, &"sail_cosmetic"),
 		"sail_emblem_mode": 0,
 		"hull_livery_id": get_equipped(profile, &"hull_livery"),
+		"crew_uniform_id": get_equipped(profile, &"crew_uniform"),
 	}
 	var sail_cos_id: StringName = mods["sail_cosmetic_id"]
 	if sail_cos_id != &"" and UNLOCKS.has(sail_cos_id):

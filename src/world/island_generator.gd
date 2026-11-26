@@ -21,6 +21,7 @@ const SHIPWRECK_SCENE: PackedScene = preload("res://assets/generated/props/shipw
 const BARREL_SCENE: PackedScene = preload("res://assets/generated/props/barrel_prop.glb")
 const CRATE_SCENE: PackedScene = preload("res://assets/generated/props/crate_supply.glb")
 const CAMPFIRE_SCENE: PackedScene = preload("res://assets/generated/props/campfire.glb")
+const SUPPLY_BARREL_SCRIPT: GDScript = preload("res://src/world/supply_barrel.gd")
 
 const ARCHETYPES: Array[StringName] = [
 	&"outpost",
@@ -1242,6 +1243,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 	if not island.is_outpost and BOTTLE_ARCHETYPES.has(arch):
 		_spawn_beach_message_bottle(island, landing_yaw, placed, keepout_zones)
 
+	# 7. Interactive bonus SupplyBarrels near beach campfires & cove landings (one-press take-all).
+	if not island.is_outpost:
+		_spawn_island_supply_barrels(island, arch, landing_yaw, placed, keepout_zones, props_root, rng)
+
 
 static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
 		placed: Array[Vector3], keepout_zones: Array[Vector3]) -> MessageBottle:
@@ -1307,6 +1312,94 @@ static func _spawn_beach_message_bottle(island: Island, landing_yaw: float,
 	placed.append(Vector3(chosen.x, chosen.z, 2.5))
 	keepout_zones.append(Vector3(chosen.x, chosen.z, 2.5))
 	return bottle
+
+
+static func _spawn_island_supply_barrels(
+	island: Island,
+	arch: StringName,
+	landing_yaw: float,
+	placed: Array[Vector3],
+	keepout_zones: Array[Vector3],
+	props_root: Node3D,
+	rng: RandomNumberGenerator
+) -> Array[Node3D]:
+	var spawned: Array[Node3D] = []
+	var want_count := 2 if arch in [&"treasure_peak", &"smuggler_cove", &"fort_rock", &"wreck_shoal", &"crescent_lagoon"] else 1
+	var basis := Basis(Vector3.UP, landing_yaw)
+
+	# Pass 1: Place a bonus SupplyBarrel near the island's BeachCampfire clearing (just outside its keepout ring).
+	var campfire := props_root.get_node_or_null(^"BeachCampfire") as Node3D
+	if campfire != null and spawned.size() < want_count:
+		var camp_p := campfire.position
+		for rad: float in [5.2, 5.9, 6.6]:
+			if spawned.size() >= 1:
+				break
+			for ai in 12:
+				var ang := float(ai) / 12.0 * TAU + 0.35
+				var cx := camp_p.x + cos(ang) * rad
+				var cz := camp_p.z + sin(ang) * rad
+				if _in_exclusion(cx, cz, keepout_zones) or _in_exclusion(cx, cz, placed):
+					continue
+				if not _far_from_all(Vector3(cx, 0.0, cz), island.dig_points, 3.2):
+					continue
+				var h := island.surface_height(cx, cz)
+				if h < 0.55 or h > 9.0 or island.surface_normal(cx, cz).y < 0.84:
+					continue
+				var barrel := _create_island_supply_barrel(island, spawned.size(), Vector3(cx, h, cz), rng, placed, keepout_zones)
+				spawned.append(barrel)
+				break
+
+	# Pass 2: Place remaining bonus SupplyBarrel(s) along welcoming sandy cove landings & beach flanks.
+	var sweeps: Array[Array] = [
+		[0.55, 3.60, 0.86, 1.35, 19],
+		[0.45, 5.20, 0.80, PI, 28],
+	]
+	for sweep_cfg: Array in sweeps:
+		if spawned.size() >= want_count:
+			break
+		var h_min: float = float(sweep_cfg[0])
+		var h_max: float = float(sweep_cfg[1])
+		var n_min: float = float(sweep_cfg[2])
+		var half_arc: float = float(sweep_cfg[3])
+		var steps_a: int = int(sweep_cfg[4])
+		for ring_frac: float in [0.72, 0.80, 0.64, 0.86, 0.56]:
+			if spawned.size() >= want_count:
+				break
+			var r_cand := island.island_radius * ring_frac
+			for ai in range(steps_a):
+				if spawned.size() >= want_count:
+					break
+				var u := 0.0 if steps_a <= 1 else (float(ai) / float(steps_a - 1)) * 2.0 - 1.0
+				var ang := -PI * 0.5 + u * half_arc
+				var lp := basis * Vector3(cos(ang) * r_cand, 0.0, sin(ang) * r_cand)
+				if _in_exclusion(lp.x, lp.z, keepout_zones) or _in_exclusion(lp.x, lp.z, placed):
+					continue
+				if not _far_from_all(Vector3(lp.x, 0.0, lp.z), island.dig_points, 3.4):
+					continue
+				var h := island.surface_height(lp.x, lp.z)
+				if h < h_min or h > h_max or island.surface_normal(lp.x, lp.z).y < n_min:
+					continue
+				var barrel := _create_island_supply_barrel(island, spawned.size(), Vector3(lp.x, h, lp.z), rng, placed, keepout_zones)
+				spawned.append(barrel)
+	return spawned
+
+
+static func _create_island_supply_barrel(
+	island: Island,
+	idx: int,
+	pos: Vector3,
+	rng: RandomNumberGenerator,
+	placed: Array[Vector3],
+	keepout_zones: Array[Vector3]
+) -> Node3D:
+	var barrel := SUPPLY_BARREL_SCRIPT.new() as Node3D
+	barrel.name = "SupplyBarrel_%d" % idx
+	barrel.position = pos
+	barrel.rotation = Vector3(0.0, rng.randf() * TAU, 0.0)
+	island.add_child(barrel)
+	placed.append(Vector3(pos.x, pos.z, 2.0))
+	keepout_zones.append(Vector3(pos.x, pos.z, 2.0))
+	return barrel
 
 
 static func _spawn_campfire(island: Island, node_name: String, pos: Vector3,

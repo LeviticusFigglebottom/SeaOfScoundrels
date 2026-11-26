@@ -995,14 +995,16 @@ func _wire_world_signals() -> void:
 		)
 		outpost.treasure_sold.connect(_on_outpost_treasure_sold)
 
-	# Wire every DigSite currently on every island + emergent beach MessageBottles.
+	# Wire every DigSite currently on every island + emergent beach MessageBottles & SupplyBarrels.
 	for isl in archipelago.get_islands():
 		for ds in isl.get_dig_sites():
 			_wire_dig_site(ds)
 	_wire_message_bottles()
+	_wire_supply_barrels()
 
 	# VoyageManager signals.
 	voyage_manager.voyage_started.connect(_on_voyage_started)
+	voyage_manager.voyage_stage_changed.connect(_on_voyage_stage_changed)
 	voyage_manager.voyage_completed.connect(_on_voyage_completed)
 
 	# WorldDirector living-sea event signals.
@@ -1273,6 +1275,12 @@ func _on_voyage_started(voyage: Dictionary) -> void:
 	_prepare_active_voyage_world(voyage)
 
 
+func _on_voyage_stage_changed(_stage_index: int, _objective_text: String) -> void:
+	if voyage_manager == null or not voyage_manager.has_active_voyage():
+		return
+	_sync_voyage_to_hud_and_maps(voyage_manager.active_voyage)
+
+
 func _prepare_active_voyage_world(voyage: Dictionary) -> void:
 	if voyage.is_empty() or archipelago == null:
 		return
@@ -1324,17 +1332,8 @@ func _prepare_active_voyage_world(voyage: Dictionary) -> void:
 		if not already_built:
 			_spawn_voyage_guardians(target_isl, voyage)
 
-		# Sync held treasure map & MapTableView.
-		if inventory != null:
-			inventory.set_treasure_map(
-				target_isl.display_name,
-				target_isl.contour_points,
-				dig_local,
-				target_isl.island_radius
-			)
-		if map_table != null:
-			map_table.set_voyage_target(target_isl.global_position)
-			map_table.refresh_now()
+		# Sync held treasure map / riddle scroll / wanted poster & MapTableView.
+		_sync_voyage_to_hud_and_maps(voyage, target_isl, dig_local)
 
 	if not already_built:
 		if shape == &"cargo_run":
@@ -1343,6 +1342,60 @@ func _prepare_active_voyage_world(voyage: Dictionary) -> void:
 			var hunt_pos: Vector3 = voyage.get("target_position", Vector3(300.0, 0.0, -300.0))
 			var threat := StringName(String(voyage.get("complication", {}).get("threat_archetype", &"drowned_sloop")))
 			_spawn_enemy_vessel(threat, hunt_pos)
+
+
+func _sync_voyage_to_hud_and_maps(
+	voyage: Dictionary,
+	target_isl: Island = null,
+	dig_local: Vector3 = Vector3.ZERO
+) -> void:
+	if voyage.is_empty():
+		return
+	var target_id := String(voyage.get("target_island_id", ""))
+	if target_isl == null and archipelago != null and target_id != "":
+		target_isl = archipelago.get_island_by_id(target_id)
+	var target_name := target_isl.display_name if target_isl != null else String(voyage.get("target_island_name", "Unknown Isle"))
+	var shape := StringName(String(voyage.get("shape", &"buried_hoard")))
+	var hook: Dictionary = voyage.get("hook", {})
+	var hook_kind := StringName(String(hook.get("kind", &"")))
+
+	if inventory != null:
+		if (shape == &"riddle_trail" or hook_kind == &"riddle_clues") and inventory.has_method(&"set_riddle_scroll"):
+			var stanzas: Array[String] = []
+			var raw_clues: Variant = hook.get("clues", [])
+			if raw_clues is Array:
+				for c in (raw_clues as Array):
+					stanzas.append(String(c))
+			var revealed_count := 1
+			if voyage_manager != null and voyage_manager.has_active_voyage():
+				var st_idx := voyage_manager.current_stage_index
+				if st_idx >= 2:
+					revealed_count = maxi(1, stanzas.size())
+				elif st_idx == 1:
+					revealed_count = clampi(1 + voyage_manager.stage_progress, 1, maxi(1, stanzas.size()))
+			inventory.call(&"set_riddle_scroll", target_name, stanzas, revealed_count)
+		elif (shape == &"drowned_bounty" or hook_kind == &"bounty_poster") and inventory.has_method(&"set_bounty_poster"):
+			var site_dict: Dictionary = voyage.get("site", {})
+			var captain_name := String(site_dict.get("captain_name", ""))
+			if captain_name == "":
+				captain_name = String(voyage.get("title", "Drowned Captain")).trim_prefix("Bounty: ")
+			var payoff_dict: Dictionary = voyage.get("payoff", {})
+			var bounty_gold := int(payoff_dict.get("estimated_gold", payoff_dict.get("bonus_gold", 450)))
+			inventory.call(&"set_bounty_poster", captain_name, target_name, bounty_gold)
+		elif target_isl != null:
+			var resolved_dig := dig_local
+			if resolved_dig.is_zero_approx() and not target_isl.dig_points.is_empty():
+				resolved_dig = target_isl.dig_points[0]
+			inventory.set_treasure_map(
+				target_isl.display_name,
+				target_isl.contour_points,
+				resolved_dig,
+				target_isl.island_radius
+			)
+
+	if map_table != null and target_isl != null:
+		map_table.set_voyage_target(target_isl.global_position)
+		map_table.refresh_now()
 
 
 func _ensure_island_dig_site(isl: Island, tid: StringName) -> DigSite:
@@ -1624,6 +1677,30 @@ static func _collect_bastion_batteries(bastion: Node3D) -> Array[FortBattery]:
 		if child is FortBattery and is_instance_valid(child) and not out.has(child as FortBattery):
 			out.append(child as FortBattery)
 	return out
+
+
+func _wire_supply_barrels() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	for barrel in tree.get_nodes_in_group(&"supply_barrels"):
+		if barrel == null or not is_instance_valid(barrel):
+			continue
+		if barrel.has_meta(&"supply_barrel_wired") or not barrel.has_signal(&"supplies_taken"):
+			continue
+		barrel.set_meta(&"supply_barrel_wired", true)
+		barrel.connect(&"supplies_taken", _on_supply_barrel_taken)
+
+
+func _on_supply_barrel_taken(_barrel: Node, _pawn: Node, loot: Dictionary) -> void:
+	if not Net.is_host():
+		return
+	var balls := int(loot.get("cannonballs", 6))
+	var planks := int(loot.get("planks", 3))
+	if player_ship != null and is_instance_valid(player_ship):
+		player_ship.cannonballs_remaining = mini(Ship.MAX_CANNONBALLS, player_ship.cannonballs_remaining + balls)
+		player_ship.planks_remaining = mini(Ship.MAX_PLANKS, player_ship.planks_remaining + planks)
+	Game.post_notice("Bonus barrel looted: +%d cannonballs & +%d planks!" % [balls, planks])
 
 
 func _wire_message_bottles() -> void:
