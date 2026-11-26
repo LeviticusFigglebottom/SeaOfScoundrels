@@ -25,6 +25,15 @@ const SETPIECE_LANDMARKS: Array[String] = [
 	"stone_cairn_marker.glb",
 ]
 
+const STORYTELLING_LANDMARKS: Array[String] = [
+	"ancient_sea_god_idol.glb",
+	"volcanic_obsidian_arch.glb",
+	"leviathan_ribcage_bones.glb",
+	"beached_rowboat_wreck.glb",
+	"pirate_warning_gibbet.glb",
+	"coastal_signal_brazier.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -38,6 +47,12 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"impaled_shipwreck_bow.glb": 2,
 	"trail_lantern_post.glb": 1,
 	"stone_cairn_marker.glb": 1,
+	"ancient_sea_god_idol.glb": 2,
+	"volcanic_obsidian_arch.glb": 3,
+	"leviathan_ribcage_bones.glb": 2,
+	"beached_rowboat_wreck.glb": 1,
+	"pirate_warning_gibbet.glb": 1,
+	"coastal_signal_brazier.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -45,6 +60,11 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"cliff_catwalk_pier.glb": ["Lantern_Catwalk"],
 	"impaled_shipwreck_bow.glb": ["Lantern_WreckBow"],
 	"trail_lantern_post.glb": ["Lantern_Trail"],
+	"ancient_sea_god_idol.glb": ["Lantern_IdolEyeL", "Lantern_IdolEyeR"],
+	"volcanic_obsidian_arch.glb": ["Lantern_MagmaArch"],
+	"beached_rowboat_wreck.glb": ["Lantern_Rowboat"],
+	"pirate_warning_gibbet.glb": ["Lantern_Gallows"],
+	"coastal_signal_brazier.glb": ["Lantern_Brazier"],
 }
 
 const COMPACT_LANDMARKS: Array[String] = [
@@ -119,7 +139,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	var all_landmarks: Array[String] = []
 	all_landmarks.append_array(GEOLOGY_LANDMARKS)
 	all_landmarks.append_array(SETPIECE_LANDMARKS)
-	check_eq(all_landmarks.size(), 12, "expected 12 sculpted landmark GLBs")
+	all_landmarks.append_array(STORYTELLING_LANDMARKS)
+	check_eq(all_landmarks.size(), 18, "expected 18 sculpted landmark GLBs")
 
 	for filename in all_landmarks:
 		var path := LANDMARK_DIR + filename
@@ -636,6 +657,48 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		var spires_c := cinder_isl.find_children("VolcanicBasaltSpire*", "Node3D", true, false)
 		check(spires_c.size() >= 4,
 			"Cinder Crag spawns >= 4 VolcanicBasaltSpire* landmarks (got %d)" % spires_c.size())
+		var varch_c := cinder_isl.find_children("VolcanicObsidianArch*", "Node3D", true, false)
+		check(varch_c.size() >= 1,
+			"Cinder Crag spawns >= 1 VolcanicObsidianArch* portal landmark (got %d)" % varch_c.size())
+
+	# 2b. Verify Wave I-3 storytelling landmarks across the 14-island archipelago + triplanar PBR vaults!
+	var idol_total := 0
+	var ribcage_total := 0
+	var rowboat_total := 0
+	var gibbet_total := 0
+	var brazier_total := 0
+	for isl_i3 in all_islands:
+		idol_total += isl_i3.find_children("SeaGodIdol*", "Node3D", true, false).size()
+		ribcage_total += isl_i3.find_children("LeviathanRibcage*", "Node3D", true, false).size()
+		rowboat_total += isl_i3.find_children("BeachedRowboat*", "Node3D", true, false).size()
+		gibbet_total += isl_i3.find_children("PirateGibbet*", "Node3D", true, false).size()
+		brazier_total += isl_i3.find_children("SignalBrazier*", "Node3D", true, false).size()
+	print("    wave_i3 storytelling landmarks: idols=%d ribcages=%d rowboats=%d gibbets=%d braziers=%d" % [
+		idol_total, ribcage_total, rowboat_total, gibbet_total, brazier_total])
+	check(idol_total >= 3, "Wave I-3 spawns >= 3 SeaGodIdol* landmarks (got %d)" % idol_total)
+	check(ribcage_total >= 3, "Wave I-3 spawns >= 3 LeviathanRibcage* landmarks (got %d)" % ribcage_total)
+	check(rowboat_total >= 4, "Wave I-3 spawns >= 4 BeachedRowboat* landmarks (got %d)" % rowboat_total)
+	check(gibbet_total >= 3, "Wave I-3 spawns >= 3 PirateGibbet* landmarks (got %d)" % gibbet_total)
+	check(brazier_total >= 5, "Wave I-3 spawns >= 5 SignalBrazier* landmarks (got %d)" % brazier_total)
+
+	# Verify zero-VRAM triplanar cliff PBR wired onto FortBastion & SmugglersGrotto stone meshes.
+	var fort_isl := archipelago.get_island_by_id("ironwatch_fort")
+	if fort_isl != null:
+		var bst_mi := fort_isl.find_child("BastionStonework", true, false) as MeshInstance3D
+		check(bst_mi != null and bst_mi.material_override is StandardMaterial3D,
+			"Ironwatch Fort BastionStonework uses StandardMaterial3D")
+		if bst_mi != null and bst_mi.material_override is StandardMaterial3D:
+			var sm := bst_mi.material_override as StandardMaterial3D
+			check(sm.uv1_triplanar and sm.albedo_texture != null and sm.normal_texture != null,
+				"FortBastion stonework binds triplanar cliff albedo & normal PBR")
+	if smug_isl != null:
+		var grt_mi := smug_isl.find_child("GrottoVaultMesh", true, false) as MeshInstance3D
+		check(grt_mi != null and grt_mi.material_override is StandardMaterial3D,
+			"Smuggler's Cove GrottoVaultMesh uses StandardMaterial3D")
+		if grt_mi != null and grt_mi.material_override is StandardMaterial3D:
+			var gm := grt_mi.material_override as StandardMaterial3D
+			check(gm.uv1_triplanar and gm.albedo_texture != null and gm.normal_texture != null,
+				"SmugglersGrotto vault binds triplanar cliff albedo & normal PBR")
 
 	# 3. Verify ALL 10 Wave 25B 1024x1024 PBR terrain textures exist on disk and load cleanly.
 	var pbr_paths := IslandGenerator.get_terrain_pbr_texture_paths()

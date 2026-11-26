@@ -572,90 +572,98 @@ def gen_cliff_buttress_wide(outdir):
     main_pts = []
     shelf_pts = []
 
-    # Solid monolithic flared coastal headland core plunging to y = -5.5 m and back to z = +4.8 m (ZERO air slots!)
+    # Solid bottom-heavy A-frame coastal headland massif: WIDEST & furthest forward at base (y = -5.5..+2.0 m),
+    # stepping organically BACK into the cliff (+Z) as it climbs to a mossy crag terrace (ZERO overhanging roof lip!).
     main_pts += _sculpt_crag_rib(
-        mb, (-3.60, -5.50, 0.90), (-3.10, 7.20, -0.35),
-        4.60, 3.60, 3.85, 3.05, 7, rng,
+        mb, (-3.90, -5.50, -0.45), (-3.15, 6.75, 1.45),
+        4.75, 4.10, 2.85, 2.55, 7, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=0.10, rings=6, arch_z=-0.50,
+        twist=0.08, rings=6, arch_z=0.35,
     )
     main_pts += _sculpt_crag_rib(
-        mb, (3.60, -5.50, 0.90), (3.10, 7.15, -0.35),
-        4.65, 3.60, 3.90, 3.05, 7, rng,
+        mb, (3.90, -5.50, -0.40), (3.15, 6.65, 1.45),
+        4.80, 4.15, 2.90, 2.55, 7, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=-0.10, rings=6, arch_z=-0.50,
+        twist=-0.08, rings=6, arch_z=0.35,
     )
     main_pts += _sculpt_crag_rib(
-        mb, (0.05, -5.40, -0.20), (-0.10, 7.45, -1.15),
-        4.10, 3.15, 3.55, 2.75, 7, rng,
+        mb, (0.05, -5.50, -1.35), (-0.10, 7.25, 0.75),
+        4.45, 3.85, 2.65, 2.40, 7, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_MID,
-        twist=0.06, rings=6, arch_z=-0.65,
+        twist=0.05, rings=6, arch_z=0.40,
     )
 
-    # Outer angular headland shoulder spurs pushing width cleanly to ~16.5 m
+    # Flared outer coastal shoulder toes widening the base cleanly to ~16.5 m & tapering inward uphill
     main_pts += _sculpt_crag_rib(
-        mb, (-6.20, -4.80, 0.85), (-5.50, 5.90, 0.15),
-        2.55, 2.75, 2.05, 2.25, 6, rng,
+        mb, (-6.55, -5.00, 0.45), (-5.20, 4.85, 2.15),
+        2.95, 3.10, 1.65, 1.85, 6, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=0.16, rings=5, arch_z=-0.35,
+        twist=0.14, rings=5, arch_z=0.25,
     )
     main_pts += _sculpt_crag_rib(
-        mb, (6.20, -4.80, 0.85), (5.50, 5.85, 0.20),
-        2.55, 2.75, 2.05, 2.25, 6, rng,
+        mb, (6.55, -5.00, 0.45), (5.20, 4.75, 2.15),
+        2.95, 3.10, 1.65, 1.85, 6, rng,
         mat='limestone', col_top=C_LIME_PALE, col_mid=C_LIME_WARM, col_bot=C_LIME_SHADE,
-        twist=-0.16, rings=5, arch_z=-0.35,
+        twist=-0.14, rings=5, arch_z=0.25,
     )
 
-    # Stepped forward rocky outcrop cheekbones welded seamlessly across the mid face
+    # Heavy grounded lower talus & stepped toe benches anchoring the forward base firmly into the slope
     main_pts += sculpt_rock_mass(
-        mb, (-2.85, 2.80, -1.65), (3.45, 3.55, 2.25), 'limestone',
+        mb, (-2.85, 0.65, -2.05), (3.65, 3.85, 2.35), 'limestone',
         C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.18, strata=0.14, overhang=(-0.10, -0.60),
-        base_flare=0.22, rot_deg=(0, 8, 0), crag_ribs=6, rib_amp=0.13,
+        subdiv=2, warp=0.18, strata=0.16,
+        base_flare=0.28, rot_deg=(0, 8, 0), crag_ribs=6, rib_amp=0.14,
     )
     main_pts += sculpt_rock_mass(
-        mb, (3.05, 2.65, -1.60), (3.45, 3.50, 2.25), 'limestone',
+        mb, (3.05, 0.55, -1.95), (3.65, 3.80, 2.35), 'limestone',
         C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.18, strata=0.14, overhang=(0.12, -0.55),
-        base_flare=0.22, rot_deg=(0, -10, 0), crag_ribs=6, rib_amp=0.13,
+        subdiv=2, warp=0.18, strata=0.16,
+        base_flare=0.28, rot_deg=(0, -10, 0), crag_ribs=6, rib_amp=0.14,
+    )
+    # Deep rear cliff-weld massif backing the upper shoulder solidly to z = +5.4 m (zero hollow back!)
+    main_pts += sculpt_rock_mass(
+        mb, (0.0, 2.20, 3.25), (6.40, 5.40, 2.35), 'limestone',
+        C_LIME_WARM, C_LIME_MID, C_LIME_SHADE, rng,
+        subdiv=2, warp=0.16, strata=0.14,
+        base_flare=0.18, rot_deg=(0, 4, 0), crag_ribs=5, rib_amp=0.11,
     )
 
-    # Broad mossy walkable cliff terrace crown welded seamlessly across top (y ≈ 7.95 m, moss_cap=0.60)
+    # Recessed mossy walkable upper rock shoulder tucked BEHIND the flared base (z = +0.1..+3.6 m — zero lip!)
     shelf_pts += _sculpt_faceted_slab(
-        mb, (-3.05, 6.75, -0.95), (4.65, 2.15, 2.75), 'limestone_moss',
+        mb, (-2.55, 6.25, 1.35), (3.45, 2.05, 2.25), 'limestone_moss',
         C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=3, warp=0.16, strata=0.12, flat_top=0.52,
-        rot_deg=(0, -5, 0), crag_ribs=6, rib_amp=0.11, moss_cap=0.62,
+        subdiv=2, warp=0.16, strata=0.14, flat_top=0.44,
+        rot_deg=(4, -6, 3), crag_ribs=6, rib_amp=0.12, moss_cap=0.66,
     )
     shelf_pts += _sculpt_faceted_slab(
-        mb, (3.05, 6.70, -0.90), (4.65, 2.15, 2.75), 'limestone_moss',
+        mb, (2.60, 6.15, 1.40), (3.45, 2.00, 2.25), 'limestone_moss',
         C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.16, strata=0.12, flat_top=0.52,
-        rot_deg=(0, 7, 0), crag_ribs=6, rib_amp=0.11, moss_cap=0.62,
+        subdiv=2, warp=0.16, strata=0.14, flat_top=0.44,
+        rot_deg=(4, 7, -3), crag_ribs=6, rib_amp=0.12, moss_cap=0.66,
     )
     shelf_pts += _sculpt_faceted_slab(
-        mb, (0.05, 6.60, 1.35), (6.05, 2.40, 2.35), 'limestone_moss',
+        mb, (0.05, 6.70, 2.35), (4.65, 2.15, 2.15), 'limestone_moss',
         C_LIME_PALE, C_LIME_WARM, C_LIME_MID, rng,
-        subdiv=2, warp=0.15, strata=0.12, flat_top=0.56,
-        rot_deg=(0, 3, 0), crag_ribs=5, rib_amp=0.10, moss_cap=0.66,
+        subdiv=2, warp=0.15, strata=0.12, flat_top=0.48,
+        rot_deg=(3, 2, 0), crag_ribs=5, rib_amp=0.11, moss_cap=0.72,
     )
 
-    # Subtle hanging vines draped along the upper moss lip
-    add_vine_drape(mb, (-3.85, 6.85, -3.55), 2.55, 0.34, (-0.10, 0.0, -1.0), rng, phase=0.22)
-    add_vine_drape(mb, ( 2.65, 6.80, -3.48), 2.85, 0.36, ( 0.08, 0.0, -1.0), rng, phase=0.74)
+    # Subtle short vines hugging the upper stepped limestone face (flush against rock, never floating!)
+    add_vine_drape(mb, (-3.15, 6.15, -0.55), 2.15, 0.30, (-0.10, 0.0, -1.0), rng, phase=0.22)
+    add_vine_drape(mb, ( 2.45, 6.10, -0.50), 2.35, 0.32, ( 0.08, 0.0, -1.0), rng, phase=0.74)
 
     build(mb)
 
     # Collider 1: Main grounded coastal cliff massif
     col_piece('col_buttress_wide_main', main_pts)
 
-    # Collider 2: Flat-topped walkable upper mossy cliff terrace shelf
-    top_y = max(p.y for p in shelf_pts) - 0.10
+    # Collider 2: Walkable upper mossy cliff shoulder shelf
+    top_y = max(p.y for p in shelf_pts) - 0.12
     shelf_col_pts = [
-        (-7.05, 5.40, -3.35), ( 7.05, 5.40, -3.35),
-        (-7.25, 5.40,  3.15), ( 7.25, 5.40,  3.15),
-        (-6.90, top_y, -3.50), ( 6.90, top_y, -3.50),
-        (-7.15, top_y,  3.15), ( 7.15, top_y,  3.15),
+        (-5.40, 4.90, -0.60), ( 5.40, 4.90, -0.60),
+        (-5.80, 4.90,  4.20), ( 5.80, 4.90,  4.20),
+        (-5.10, top_y, -0.35), ( 5.10, top_y, -0.35),
+        (-5.50, top_y,  4.20), ( 5.50, top_y,  4.20),
     ]
     col_piece('col_buttress_wide_shelf', shelf_col_pts)
     export_landmark_glb(outdir, 'cliff_buttress_wide.glb')
@@ -964,6 +972,13 @@ def gen_volcanic_basalt_spire(outdir):
         C_BASALT_TOP, C_BASALT_MID, C_BASALT_DARK, rng,
         subdiv=2, warp=0.22, strata=0.14, base_flare=0.26,
         rot_deg=(0, 14, 0), crag_ribs=7, rib_amp=0.18,
+    )
+    # Low-mid obsidian core wedge bridging front-lower column junctions (seals final 3-px slit!)
+    col_pts += sculpt_rock_mass(
+        mb, (0.20, 3.20, -0.30), (3.15, 3.55, 3.05), 'basalt',
+        C_BASALT_TOP, C_BASALT_MID, C_BASALT_DARK, rng,
+        subdiv=2, warp=0.18, strata=0.12, base_flare=0.18,
+        rot_deg=(-2, 32, 3), crag_ribs=6, rib_amp=0.14,
     )
     # Upper fractured volcanic shoulder crag wedging the tall inner columns solidly together (zero sky slits!)
     col_pts += sculpt_rock_mass(
