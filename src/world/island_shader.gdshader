@@ -549,9 +549,10 @@ void fragment() {
 		basalt = mix(basalt, basalt_scorch, smoothstep(0.52, 0.88, ochre_wash) * smoothstep(7.0, 28.0, h) * 0.50);
 		basalt *= mix(0.84, 1.16, pebble_n);
 		cliff_base = mix(cliff_base, basalt, volc * 0.88);
-		// Subtle glowing incandescent magma cracks inside deep upper basalt fissures.
+		// Living geothermal incandescent magma cracks breathing gently inside deep upper basalt fissures.
 		float crack_hot = smoothstep(0.70, 0.91, fracture) * smoothstep(6.0, 22.0, h) * smoothstep(0.45, 0.80, macro_n + 0.28);
-		magma_emit = crack_hot * volc * 1.95;
+		float magma_pulse = 0.84 + 0.16 * sin(TIME * 1.45 + h * 0.18 + macro_n * 5.2);
+		magma_emit = crack_hot * volc * 1.95 * magma_pulse;
 		magma_core = crack_hot;
 	}
 

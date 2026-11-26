@@ -456,15 +456,20 @@ void fragment() {
 		float vdepth = has_seabed ? max(v_world.y - scene_world.y, 0.0) : 120.0;
 		vec3 behind = has_seabed ? texture(screen_tex, uv_r).rgb : vec3(0.0);
 
-		// Caustic light dancing on shallow seabeds (modulated by cloud shadow).
+		// Luminous Caribbean caustic light webs dancing across shallow harbours, reefs & beaches
+		// (uses abs(floor_n.y) so refracted depth-derivative sign flips never drop caustics; 0 cost on open sea!).
 		if (has_seabed && quality > 0 && vdepth < 14.0 && dist < 120.0) {
 			float sun_up = max(L.y, 0.15);
 			vec2 cq = scene_world.xz + L.xz * (vdepth / sun_up);
-			float caus = ocean_caustic(cq) * exp(-vdepth * 0.21) * smoothstep(0.0, 0.45, vdepth);
-			caus *= smoothstep(120.0, 30.0, dist);
+			float caus_raw = ocean_caustic(cq);
+			float caus_sharp = smoothstep(0.24, 1.35, caus_raw) * caus_raw;
+			float caus = (caus_raw * 0.55 + caus_sharp * 0.65) * exp(-vdepth * 0.19) * smoothstep(0.0, 0.35, vdepth);
+			caus *= smoothstep(120.0, 26.0, dist);
 			vec3 floor_n = normalize(cross(dFdy(scene_world), dFdx(scene_world)));
-			caus = min(caus, 2.5) * smoothstep(0.25, 0.7, floor_n.y);
-			behind *= 1.0 + caus * 1.75 * smoothstep(0.0, 0.3, L.y) * (sun_light.g + 0.08);
+			caus = min(caus, 2.4) * smoothstep(0.16, 0.56, abs(floor_n.y));
+			float caus_sun = smoothstep(0.04, 0.26, L.y) * (1.0 - storm * 0.72) * (sun_light.g + 0.05);
+			behind *= 1.0 + caus * 1.85 * caus_sun;
+			behind += vec3(0.46, 0.96, 0.92) * (caus_sharp * exp(-vdepth * 0.24) * smoothstep(0.0, 0.35, vdepth) * smoothstep(95.0, 18.0, dist) * smoothstep(0.18, 0.58, abs(floor_n.y)) * caus_sun * 0.26);
 		}
 		behind *= 0.70 + 0.30 * exp(-thick * 4.0);
 		behind *= mix(vec3(1.0), vec3(0.38, 0.94, 0.96), 1.0 - exp(-thick * 1.3));

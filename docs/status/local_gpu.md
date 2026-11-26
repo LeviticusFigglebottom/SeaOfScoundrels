@@ -1135,3 +1135,9 @@ Audited `origin/cloud/island-architect` Wave I-11 (`30e294a`, now cleanly rebase
 | `cutlass_meadow` (46 GLBs + pinnate ferns/plumed grass + Q5A rocks + M22C) | **1.721** (2.059) | 1.046 | **102.1** | 621 | 1,347k | **396.1** (`289.3`) | ~8.6 ms (**PASS**) |
 | `galleons_reach` (Capital harbour + 46 GLBs + Q5A masonry/docks/beacon) | **2.157** (2.517) | 1.711 | **97.1** | 1,657 | 3,033k | **394.3** (`289.3`) | ~10.8 ms (**PASS**) |
 | `title_menu` (Live-3D Harbour + Macaw + Crab + Q5A Ivy Bastion + Bell + Crane) | **2.291** (2.639) | 2.485 | **82.3** | 1,946 | 2,792k | **398.4** (`289.3`) | ~11.5 ms (**PASS**) |
+
+### 7.28 Milestone 23C — Above-Water Sunlit Lagoon Caustics (`ocean.gdshader`) & Geothermal Magma Pulse (`island_shader.gdshader`)
+- **Dancing Caribbean Shallow-Seabed Caustics (`src/ocean/ocean.gdshader`, `+0.00 ms` GPU — `title_menu` `2.153 ms`, `sailing` `2.225 ms`!)**:
+  - Fixed refracted `dFdy/dFdx` seabed-normal sign-flip dropouts (`abs(floor_n.y)`) and added daylight/clear-sky-gated turquoise-aqua caustic web shimmer (`caus_sharp`) across shallow harbours, reefs, and lagoons (`vdepth < 14 m`, `dist < 120 m`, zero cost on open ocean, 100% dark-safe in `caust_night_harbour.png`!).
+  - Verified live across `caust_title_menu`, `caust_outpost`, `caust_beach`, `caust_fort_siege`, & `caust_night_harbour` (`5/5` `rc=0, errs=0`, `141/0/0` lint, `14/14` `test_sea`, `3/3` real-GPU `test_sea_shader`).
+- **Volcanic Geothermal Magma Pulse (`src/world/island_shader.gdshader`)**: Added a slow breathing geothermal shimmer (`0.84 + 0.16 * sin(...)`) on Cinder Crag's incandescent upper basalt magma seams (`if (volc > 0.01)` — `0.00 ms` on non-volcanic islands).
