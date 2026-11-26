@@ -76,6 +76,31 @@ const BOTTLE_ARCHETYPES: Array[StringName] = [
 	&"grand_citadel",
 ]
 
+## Rocky headland archetypes that carve stepped coastal limestone tide-shelf benches
+## away from smooth sandy landing coves (`h in [0.6, 4.2 m]`, `ang_from_landing > 0.65`).
+const TIDE_SHELF_ARCHETYPES: Array[StringName] = [
+	&"skull_bluff",
+	&"fort_rock",
+	&"grand_citadel",
+	&"twin_spires",
+	&"smuggler_cove",
+	&"sea_arch",
+	&"volcano_crag",
+]
+
+## Tier 2-4 scenic cliff, arch, lagoon & capital port archetypes that mount a lightweight
+## ambient circling `SeabirdFlock` overhead (Port Scoundrel & Cutlass Cay spawn theirs in main.gd).
+const AMBIENT_SEABIRD_ARCHETYPES: Array[StringName] = [
+	&"sea_arch",
+	&"twin_spires",
+	&"crescent_lagoon",
+	&"skull_bluff",
+	&"smuggler_cove",
+	&"fort_rock",
+	&"grand_citadel",
+	&"grand_outpost",
+]
+
 ## Deterministic washed-up bottle clues pointing to other archipelago islands & high-value loot.
 const BOTTLE_CLUE_TARGETS: Array[Dictionary] = [
 	{
@@ -480,6 +505,11 @@ static func build_island(spec: Dictionary) -> Island:
 	if arch != &"volcano_crag":
 		_build_island_fireflies(island, arch, landing_yaw)
 
+	# Ambient circling coastal seabirds above Tier 2-4 scenic cliffs, arches, lagoons & capital ports
+	# (Port Scoundrel & Cutlass Cay spawn theirs in scenes/main.gd; zero-leak teardown with Island).
+	if AMBIENT_SEABIRD_ARCHETYPES.has(arch):
+		_build_island_seabirds(island, arch, landing_yaw, seed_val)
+
 	return island
 
 
@@ -504,7 +534,143 @@ static func _generate_height_grid(arch: StringName, radius: float, seabed_r: flo
 			var u := lx * cos_y - lz * sin_y
 			var v := lx * sin_y + lz * cos_y
 			grid[iz * stride + ix] = _eval_height(arch, u, v, radius, seabed_r, target_peak, seed_val)
-	return grid
+	return _apply_midslope_and_tideshelf_relief(grid, arch, radius, yaw, seed_val, grid_res, grid_half)
+
+
+static func _apply_midslope_and_tideshelf_relief(base_grid: PackedFloat32Array, arch: StringName,
+		radius: float, yaw: float, seed_val: int, grid_res: int, grid_half: float) -> PackedFloat32Array:
+	var stride := grid_res + 1
+	var out_grid := base_grid.duplicate()
+	var span := grid_half * 2.0
+	var step := span / float(grid_res)
+	var cos_y := cos(yaw)
+	var sin_y := sin(yaw)
+	var s := float(seed_val % 4096) * 0.137
+	var scale_r := radius / 60.0
+	var tier_t := clampf((radius - 38.0) / 144.0, 0.0, 1.0)
+	var gully_amp := lerpf(0.55, 1.15, tier_t)
+	var strata_amp := lerpf(0.35, 0.72, tier_t)
+	var shelf_amp := lerpf(0.32, 0.65, tier_t)
+	var r_ring := clampf(radius * 0.62, 26.0, 96.0)
+	var has_tide_shelf := TIDE_SHELF_ARCHETYPES.has(arch)
+
+	for iz in stride:
+		var lz := -grid_half + step * float(iz)
+		var iz0 := maxi(iz - 1, 0)
+		var iz1 := mini(iz + 1, grid_res)
+		var dz_step := float(iz1 - iz0) * step
+		for ix in stride:
+			var idx := iz * stride + ix
+			var h := base_grid[idx]
+			# CRITICAL INVARIANT: never alter h <= 0.45 m (ocean bathymetry, mooring depths,
+			# outpost dock channel & island coastline contour remain 100% untouched!).
+			if h <= 0.45 or h >= 30.0:
+				continue
+
+			var lx := -grid_half + step * float(ix)
+			var u := lx * cos_y - lz * sin_y
+			var v := lx * sin_y + lz * cos_y
+			# Angular offset from the seaward landing cove / pier direction (-v in canonical frame).
+			var ang_from_landing := absf(atan2(u, -v))
+
+			var ix0 := maxi(ix - 1, 0)
+			var ix1 := mini(ix + 1, grid_res)
+			var dx_step := float(ix1 - ix0) * step
+			var dhdx := (base_grid[iz * stride + ix1] - base_grid[iz * stride + ix0]) / dx_step
+			var dhdz := (base_grid[iz1 * stride + ix] - base_grid[iz0 * stride + ix]) / dz_step
+			var slope := sqrt(dhdx * dhdx + dhdz * dhdz)
+
+			var delta_h := 0.0
+
+			# 1. Crisp Mid-Slope Sedimentary Terraces & Rain-Runoff Erosion Gullies (h in [4.2, 30.0 m]).
+			if h > 4.2:
+				var mid_w := _smoothstep(4.2, 8.5, h) * (1.0 - _smoothstep(22.0, 30.0, h))
+				# Gate away from flat village/fort/terrace crowns (slope < 0.16 stays 100% flat!).
+				var slope_w := _smoothstep(0.16, 0.42, slope)
+				# Gate away from the landing beach approach sector for lower elevations (h < 10..13 m).
+				var low_elev_w := 1.0 - _smoothstep(8.5, 13.0, h)
+				var approach_w := lerpf(1.0, _smoothstep(0.36, 0.56, ang_from_landing), low_elev_w)
+				var plateau_safe := _midslope_plateau_gate(arch, u, v, h, scale_r)
+				var relief_w := mid_w * slope_w * approach_w * plateau_safe
+				if relief_w > 0.002:
+					# Domain-warped radial/tangential rain-runoff gully grooves (seamless 360 deg).
+					var wx := (_fbm2(u * 0.036 + s * 0.71, v * 0.036 - s * 1.13) - 0.5) * 14.0
+					var wz := (_fbm2(u * 0.036 - s * 1.27, v * 0.036 + s * 0.53) - 0.5) * 14.0
+					var wu := u + wx
+					var wv := v + wz
+					var wr := maxf(sqrt(wu * wu + wv * wv), 6.0)
+					var proj_u := (wu / wr) * r_ring
+					var proj_v := (wv / wr) * r_ring
+					var gully_r := _ridged_fbm2(proj_u * 0.092 + wr * 0.011 + s * 0.4,
+						proj_v * 0.092 - wr * 0.009 - s * 0.6)
+					var gully_signed := clampf((gully_r - 0.34) * 2.35, -1.0, 1.0)
+
+					# Sharper horizontal sedimentary strata benches (sin(h * 1.45 + warp) stepped shaping).
+					var bed_warp := (u * 0.020 - v * 0.016) + (_fbm2(u * 0.030 - s * 0.85, v * 0.030 + s * 1.15) - 0.5) * 2.4
+					var phase := h * 1.45 + bed_warp
+					var strata_wave := sin(phase) * 0.72 + sin(phase * 2.0 - 0.45) * 0.28
+					var strata_mod := 0.78 + 0.22 * gully_r
+
+					delta_h += (gully_signed * gully_amp + strata_wave * strata_amp * strata_mod) * relief_w
+
+			# 2. Coastal Limestone Tide-Shelf Ledges (h in [0.6, 4.2 m], non-landing rocky headlands ONLY).
+			if has_tide_shelf and h > 0.55 and h < 4.45 and ang_from_landing > 0.65:
+				var tide_h_w := _smoothstep(0.55, 1.15, h) * (1.0 - _smoothstep(3.40, 4.35, h))
+				var tide_ang_w := _smoothstep(0.65, 0.96, ang_from_landing)
+				var shelf_n := _fbm2(u * 0.048 + s * 1.67, v * 0.048 - s * 0.83)
+				var outcrop_w := _smoothstep(0.30, 0.62, shelf_n)
+				var shelf_w := tide_h_w * tide_ang_w * outcrop_w
+				if shelf_w > 0.002:
+					var shelf_frac := clampf((h - 0.60) / 3.60, 0.0, 1.0)
+					# Two crisp stepped coastal limestone tide-shelf benches (splash bench + upper headland shelf).
+					var step2 := _smoothstep(0.06, 0.24, shelf_frac) * 0.55 + _smoothstep(0.46, 0.66, shelf_frac) * 0.45
+					var crack_r := _ridged_fbm2(u * 0.095 - s * 0.55, v * 0.095 + s * 1.35)
+					delta_h += step2 * (0.65 + 0.35 * crack_r) * shelf_amp * shelf_w
+
+			# Pin post-relief land vertices cleanly above 0.48 m so shore waterline & bathymetry never shift.
+			if delta_h != 0.0:
+				out_grid[idx] = maxf(0.48, h + delta_h)
+
+	return out_grid
+
+
+static func _midslope_plateau_gate(arch: StringName, u: float, v: float, h: float, scale_r: float) -> float:
+	var gate := 1.0
+	match arch:
+		&"outpost", &"grand_outpost":
+			# Keep Beacon Tower headland mesa & harbour village terrace untouched.
+			var bcn_d := Vector2(u - 24.0, v + 6.5).length()
+			gate *= _smoothstep(10.5, 15.5, bcn_d)
+			var plaza_m := _smoothstep(28.0, 20.0, absf(u + 1.5)) * _smoothstep(10.0, 2.0, v)
+			gate *= (1.0 - plaza_m)
+		&"fort_rock":
+			# Keep FortBastion courtyard plateau & walkable assault ramp 100% smooth.
+			var flat_out := maxf(18.5, 16.2 * scale_r)
+			var mesa_d := Vector2(u, v - 2.0 * scale_r).length()
+			gate *= _smoothstep(flat_out + 1.5, flat_out + 7.0, mesa_d)
+			var ramp_m := _smoothstep(18.0 * scale_r, 11.0 * scale_r, absf(u)) * _smoothstep(-4.0 * scale_r, -12.0 * scale_r, v)
+			gate *= (1.0 - ramp_m)
+		&"grand_citadel":
+			# Keep Sovereign's Bastion courtyard & grand coastal highway smooth.
+			var cit_d := Vector2(u, v - 18.0).length()
+			gate *= _smoothstep(29.0, 36.0, cit_d)
+			var g_ramp_m := _smoothstep(24.0, 14.0, absf(u)) * _smoothstep(8.0, -4.0, v)
+			gate *= (1.0 - g_ramp_m)
+		&"smuggler_cove":
+			# Keep SmugglersGrotto mouth & cliff collar flush with vault stonework.
+			var v_grotto := 6.0 * scale_r
+			var grot_m := _smoothstep(15.0, 9.5, absf(u)) \
+				* _smoothstep(v_grotto - 10.0, v_grotto - 3.0, v) \
+				* _smoothstep(v_grotto + 20.0, v_grotto + 13.0, v) \
+				* (1.0 - _smoothstep(9.0, 14.0, h))
+			gate *= (1.0 - grot_m)
+		&"twin_spires":
+			# Keep the walkable emerald canyon floor gentle for bridge & stairway landings.
+			var can_m := _smoothstep(15.0 * scale_r, 8.0 * scale_r, absf(u)) \
+				* _smoothstep(18.0 * scale_r, 9.0 * scale_r, v) \
+				* (1.0 - _smoothstep(11.5, 16.5, h))
+			gate *= (1.0 - can_m)
+	return gate
 
 
 static func _eval_height(arch: StringName, u: float, v: float, radius: float,
@@ -1150,6 +1316,7 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 	var cos_y := cos(landing_yaw)
 	var sin_y := sin(landing_yaw)
 	var peak_ref := maxf(island.peak_height, 24.0)
+	var has_tide_shelf := TIDE_SHELF_ARCHETYPES.has(arch)
 
 	# Compute winding walkable trail polylines & expose lightweight metadata for IslandDetails trail parting.
 	var trail_polylines: Array[PackedVector2Array] = IslandTrails.get_trail_polylines(arch, island.island_radius, island.island_id)
@@ -1188,15 +1355,15 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 			var n := Vector3((hx0 - hx1) / dx_step, 1.0, (hz0 - hz1) / dz_step).normalized()
 			normals[idx] = n
 
-			# 2-ring crevice AO darkening in ravines & inner terrace corners + ridge highlight pop.
+			# 2-ring crevice AO darkening in erosion gullies, ravines & terrace corners + ridge highlight pop.
 			var ix0b := maxi(ix - 2, 0)
 			var ix1b := mini(ix + 2, grid_res)
 			var iz0b := maxi(iz - 2, 0)
 			var iz1b := mini(iz + 2, grid_res)
 			var avg1 := 0.25 * (hx0 + hx1 + hz0 + hz1)
 			var avg2 := 0.25 * (grid[iz * stride + ix0b] + grid[iz * stride + ix1b] + grid[iz0b * stride + ix] + grid[iz1b * stride + ix])
-			var curv := clampf((y - avg1) * 0.14 + (y - avg2) * 0.08, -0.22, 0.11)
-			var shade := clampf(1.0 + curv, 0.78, 1.09)
+			var curv := clampf((y - avg1) * 0.17 + (y - avg2) * 0.09, -0.25, 0.12)
+			var shade := clampf(1.0 + curv, 0.75, 1.10)
 			var c_vert := Color(shade, shade, shade, 1.0)
 
 			# Subtle biome rock richness & warm sun-bleached coastal approach path tinting.
@@ -1212,6 +1379,11 @@ static func _build_terrain_mesh_and_collider(island: Island, grid: PackedFloat32
 			elif arch == &"sea_stack" or arch == &"skull_bluff":
 				if y > -1.5 and y < 4.0 and n.y < 0.72:
 					c_vert *= Color(0.84, 0.87, 0.86)
+			if has_tide_shelf and y > 0.55 and y < 4.35 and n.y < 0.88:
+				var ang_off := absf(atan2(u, -v))
+				if ang_off > 0.65:
+					var shelf_tint_w := _smoothstep(0.65, 1.05, ang_off) * _smoothstep(0.88, 0.68, n.y) * 0.55
+					c_vert = c_vert.lerp(c_vert * Color(0.88, 0.90, 0.86), shelf_tint_w)
 
 			# Organic winding walkable dirt/cobble footpaths across all 14 islands (1.0 - COLOR.a)
 			# plus warm pebbled harbour plaza clearing on outposts (drives 1024x1024 pebbled dirt PBR).
@@ -1506,9 +1678,10 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 	# 1d. Duck-typed Wave 24A architecture/jungle props & Wave 24B waterfalls/fumaroles.
 	var area_scale := clampf(pow(island.island_radius / 60.0, 1.35), 0.75, 3.6)
 	var opt_prop_cache: Dictionary = {}
+	var banyan_positions: Array[Vector3] = []
 	_populate_wave24_landmarks_and_architecture(
 		island, arch, landing_yaw, area_scale, placed, keepout_zones,
-		rng, prop_body, props_root, foliage_cache, opt_prop_cache)
+		rng, prop_body, props_root, foliage_cache, opt_prop_cache, banyan_positions)
 
 	# 1e. Bespoke Wave I-2 signature 3D landmarks & trail storytelling markers across all 14 islands.
 	var landmark_cache: Dictionary = {}
@@ -1537,114 +1710,182 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		placed.append(Vector3(sp.x, sp.z, 7.0))
 		keepout_zones.append(Vector3(sp.x, sp.z, 5.8))
 
-	# 3. Area-scaled lush tropical palm groves leaning over beaches & highland green terraces.
-	var base_palms := 22.0
-	if arch in [&"crescent_lagoon", &"palm_atoll", &"treasure_peak", &"grand_citadel"]:
-		base_palms = 26.0
+	# 3. Area-scaled lush multi-height tropical palm groves framing coves, trail backdrops & terraces (+25% density).
+	var base_palms := 27.5
+	if arch in [&"crescent_lagoon", &"palm_atoll", &"treasure_peak", &"grand_citadel", &"twin_spires"]:
+		base_palms = 32.5
 	elif arch == &"volcano_crag":
-		base_palms = 10.0
+		base_palms = 12.5
 	elif arch == &"sea_stack":
-		base_palms = 10.0
+		base_palms = 12.5
 	elif arch == &"outpost" or arch == &"grand_outpost":
-		base_palms = 20.0
-	var palm_target := clampi(int(round(base_palms * area_scale)), 8, 84)
-	var max_palm_h := 28.0 if island.island_radius > 105.0 else 16.5
+		base_palms = 25.0
+	var palm_target := clampi(int(round(base_palms * area_scale)), 10, 108)
+	var max_palm_h := 30.0 if island.island_radius > 105.0 else 18.0
 
 	var palms_placed := 0
 	var palm_positions: Array[Vector3] = []
-	for _attempt in palm_target * 12:
-		if palms_placed >= palm_target:
+
+	# 3a. Trail-backdrop & cove-shoulder framing palm groves (strictly clear of trail centerlines).
+	var trail_palm_cap := int(palm_target * 0.24)
+	var trail_palm_spots := _collect_trail_border_points(island, 1.30, 2.55, rng, maxi(12, int(palm_target * 0.45)))
+	for tp in trail_palm_spots:
+		if palms_placed >= trail_palm_cap:
 			break
-		var ang := rng.randf() * TAU
-		var rad := rng.randf_range(island.island_radius * 0.20, island.island_radius * 0.96)
-		var px := cos(ang) * rad
-		var pz := sin(ang) * rad
+		var px := tp.x
+		var pz := tp.y
 		if _in_exclusion(px, pz, placed):
 			continue
-		if _is_point_on_trail(island, px, pz, 0.92):
+		if _is_point_on_trail(island, px, pz, 1.08):
 			continue
 		var h := island.surface_height(px, pz)
 		if h < 1.35 or h > max_palm_h:
 			continue
 		var n := island.surface_normal(px, pz)
-		if n.y < 0.79:
+		if n.y < 0.78:
 			continue
-		# Curved palms favour beach verges and lean picturesquely toward the sea!
-		var use_curved := (h < 3.8 and rng.randf() < 0.74) or rng.randf() < 0.44
+		var use_curved := (h < 4.0 and rng.randf() < 0.76) or rng.randf() < 0.48
 		var scene := PALM_CURVED_SCENE if use_curved else PALM_TALL_SCENE
 		var outward_yaw := atan2(px, pz) - PI * 0.5 + rng.randf_range(-0.55, 0.55)
-		var sc_p := rng.randf_range(0.86, 1.24)
+		var sc_p := rng.randf_range(0.88, 1.28)
+		var p_sink := 0.16 + 0.18 * clampf((0.88 - n.y) / 0.25, 0.0, 1.0)
 		var xform := Transform3D(
-			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.92, 1.14), sc_p)),
-			Vector3(px, h - 0.16, pz))
+			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.92, 1.18), sc_p)),
+			Vector3(px, h - p_sink, pz))
 		_spawn_prop(island, scene, "Palm_%d" % palms_placed, xform, prop_body, props_root, foliage_cache)
-		placed.append(Vector3(px, pz, 4.6))
+		placed.append(Vector3(px, pz, 4.4))
 		palm_positions.append(Vector3(px, h, pz))
 		palms_placed += 1
 
-		# Cluster 1-2 companion palms around beach & grass-verge trunks for lush groves.
-		if palms_placed < palm_target and h < 14.0 and rng.randf() < 0.68:
-			var companions := mini(rng.randi_range(1, 2), palm_target - palms_placed)
+		if palms_placed < trail_palm_cap and rng.randf() < 0.65:
+			var t_ang := atan2(pz, px)
+			for _ct in 4:
+				var c_ang := t_ang + rng.randf_range(-1.8, 1.8)
+				var c_dist := rng.randf_range(2.2, 3.6)
+				var cx := px + cos(c_ang) * c_dist
+				var cz := pz + sin(c_ang) * c_dist
+				if _in_exclusion(cx, cz, keepout_zones):
+					continue
+				if _is_point_on_trail(island, cx, cz, 1.05):
+					continue
+				if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.95):
+					continue
+				var ch := island.surface_height(cx, cz)
+				if ch < 1.35 or ch > max_palm_h:
+					continue
+				var cn := island.surface_normal(cx, cz)
+				if cn.y < 0.78:
+					continue
+				var c_curved := (ch < 4.2 and rng.randf() < 0.78) or rng.randf() < 0.52
+				var c_scene := PALM_CURVED_SCENE if c_curved else PALM_TALL_SCENE
+				var c_yaw := atan2(cx, cz) - PI * 0.5 + rng.randf_range(-0.65, 0.65)
+				var c_sc := rng.randf_range(0.68, 1.06)
+				var c_sink := 0.16 + 0.18 * clampf((0.88 - cn.y) / 0.25, 0.0, 1.0)
+				var c_xf := Transform3D(
+					Basis(Vector3.UP, c_yaw) * Basis.from_scale(Vector3(c_sc, c_sc * rng.randf_range(0.86, 1.08), c_sc)),
+					Vector3(cx, ch - c_sink, cz))
+				_spawn_prop(island, c_scene, "Palm_%d" % palms_placed, c_xf, prop_body, props_root, foliage_cache)
+				placed.append(Vector3(cx, cz, 2.5))
+				palm_positions.append(Vector3(cx, ch, cz))
+				palms_placed += 1
+				break
+
+	# 3b. Island-wide multi-height tropical palm groves across beaches, cove shoulders & hillside benches.
+	for _attempt in palm_target * 14:
+		if palms_placed >= palm_target:
+			break
+		var ang := rng.randf() * TAU
+		var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.96)
+		var px := cos(ang) * rad
+		var pz := sin(ang) * rad
+		if _in_exclusion(px, pz, placed):
+			continue
+		if _is_point_on_trail(island, px, pz, 0.95):
+			continue
+		var h := island.surface_height(px, pz)
+		if h < 1.35 or h > max_palm_h:
+			continue
+		var n := island.surface_normal(px, pz)
+		if n.y < 0.78:
+			continue
+		# Curved palms favour beach verges and lean picturesquely toward the sea!
+		var use_curved := (h < 3.8 and rng.randf() < 0.74) or rng.randf() < 0.45
+		var scene := PALM_CURVED_SCENE if use_curved else PALM_TALL_SCENE
+		var outward_yaw := atan2(px, pz) - PI * 0.5 + rng.randf_range(-0.55, 0.55)
+		var sc_p := rng.randf_range(0.86, 1.30)
+		var p_sink := 0.16 + 0.18 * clampf((0.88 - n.y) / 0.25, 0.0, 1.0)
+		var xform := Transform3D(
+			Basis(Vector3.UP, outward_yaw) * Basis.from_scale(Vector3(sc_p, sc_p * rng.randf_range(0.90, 1.18), sc_p)),
+			Vector3(px, h - p_sink, pz))
+		_spawn_prop(island, scene, "Palm_%d" % palms_placed, xform, prop_body, props_root, foliage_cache)
+		placed.append(Vector3(px, pz, 4.3))
+		palm_positions.append(Vector3(px, h, pz))
+		palms_placed += 1
+
+		# Cluster 1-3 multi-height companion palms around beach, cove & hillside-bench trunks for lush groves.
+		if palms_placed < palm_target and h < 18.0 and rng.randf() < 0.76:
+			var companions := mini(rng.randi_range(1, 3), palm_target - palms_placed)
 			for ci in companions:
 				for _c_try in 5:
-					var c_ang := ang + rng.randf_range(-1.9, 1.9) + float(ci) * 2.1
-					var c_dist := rng.randf_range(2.2, 3.6)
+					var c_ang := ang + rng.randf_range(-1.9, 1.9) + float(ci) * 2.05
+					var c_dist := rng.randf_range(2.15, 3.75)
 					var cx := px + cos(c_ang) * c_dist
 					var cz := pz + sin(c_ang) * c_dist
 					if _in_exclusion(cx, cz, keepout_zones):
 						continue
-					if _is_point_on_trail(island, cx, cz, 0.92):
+					if _is_point_on_trail(island, cx, cz, 0.95):
 						continue
-					if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.95):
+					if not _far_from_all(Vector3(cx, 0.0, cz), palm_positions, 1.90):
 						continue
 					var ch := island.surface_height(cx, cz)
 					if ch < 1.35 or ch > max_palm_h:
 						continue
 					var cn := island.surface_normal(cx, cz)
-					if cn.y < 0.79:
+					if cn.y < 0.78:
 						continue
-					var c_curved := (ch < 4.0 and rng.randf() < 0.78) or rng.randf() < 0.50
+					var c_curved := (ch < 4.0 and rng.randf() < 0.78) or rng.randf() < 0.52
 					var c_scene := PALM_CURVED_SCENE if c_curved else PALM_TALL_SCENE
-					var c_yaw := atan2(cx, cz) - PI * 0.5 + (0.48 if ci == 0 else -0.48) + rng.randf_range(-0.28, 0.28)
-					var c_sc := rng.randf_range(0.74, 1.08)
+					var c_yaw := atan2(cx, cz) - PI * 0.5 + (0.48 if ci % 2 == 0 else -0.48) + rng.randf_range(-0.30, 0.30)
+					var c_sc := rng.randf_range(0.66, 1.10)
+					var c_sink := 0.16 + 0.18 * clampf((0.88 - cn.y) / 0.25, 0.0, 1.0)
 					var c_xf := Transform3D(
-						Basis(Vector3.UP, c_yaw) * Basis.from_scale(Vector3(c_sc, c_sc * rng.randf_range(0.88, 1.08), c_sc)),
-						Vector3(cx, ch - 0.16, cz))
+						Basis(Vector3.UP, c_yaw) * Basis.from_scale(Vector3(c_sc, c_sc * rng.randf_range(0.86, 1.10), c_sc)),
+						Vector3(cx, ch - c_sink, cz))
 					_spawn_prop(island, c_scene, "Palm_%d" % palms_placed, c_xf, prop_body, props_root, foliage_cache)
-					placed.append(Vector3(cx, cz, 2.6))
+					placed.append(Vector3(cx, cz, 2.5))
 					palm_positions.append(Vector3(cx, ch, cz))
 					palms_placed += 1
 					break
 
-	# 4. Area-scaled lush tropical bush ferns tucked around palms & highland grassy shelves.
-	var base_ferns := 28.0 if arch != &"volcano_crag" else 8.0
-	if arch == &"outpost" or arch == &"grand_outpost":
-		base_ferns = 24.0
+	# 4. Area-scaled lush tropical undergrowth bush ferns tucked around banyans, palms, trails & benches.
+	var base_ferns := 36.0 if arch != &"volcano_crag" else 10.0
+	if arch in [&"twin_spires", &"grand_citadel", &"crescent_lagoon", &"skull_bluff"]:
+		base_ferns = 40.0
+	elif arch == &"outpost" or arch == &"grand_outpost":
+		base_ferns = 30.0
 	elif arch == &"sea_stack":
-		base_ferns = 12.0
-	var fern_target := clampi(int(round(base_ferns * area_scale)), 8, 92)
-	var max_fern_h := 30.0 if island.island_radius > 105.0 else 17.5
+		base_ferns = 15.0
+	var fern_target := clampi(int(round(base_ferns * area_scale)), 10, 124)
+	var max_fern_h := 32.0 if island.island_radius > 105.0 else 18.5
 	var ferns_placed := 0
 	var fern_positions: Array[Vector3] = []
-	var palm_fern_cap := int(fern_target * 0.55)
 
-	# First tuck 1-2 ferns around palm bases near the beach/grass transition rim.
-	for palm_p in palm_positions:
-		if ferns_placed >= palm_fern_cap:
+	# 4a. Lush root-base fern rings hugging hero JungleBanyan buttress roots!
+	var banyan_fern_cap := int(fern_target * 0.24)
+	for banyan_p in banyan_positions:
+		if ferns_placed >= banyan_fern_cap:
 			break
-		if palm_p.y < 1.65 or palm_p.y > max_fern_h:
-			continue
-		var tuft_n := rng.randi_range(1, 2)
-		for _ti in tuft_n:
-			if ferns_placed >= palm_fern_cap:
+		var b_tufts := rng.randi_range(2, 4)
+		for bi in b_tufts:
+			if ferns_placed >= banyan_fern_cap:
 				break
-			var f_ang := rng.randf() * TAU
-			var f_dist := rng.randf_range(1.15, 2.55)
-			var fx := palm_p.x + cos(f_ang) * f_dist
-			var fz := palm_p.z + sin(f_ang) * f_dist
-			if _in_exclusion(fx, fz, keepout_zones):
+			var f_ang := (TAU * float(bi) / float(b_tufts)) + rng.randf_range(-0.45, 0.45)
+			var f_dist := rng.randf_range(2.45, 4.35)
+			var fx := banyan_p.x + cos(f_ang) * f_dist
+			var fz := banyan_p.z + sin(f_ang) * f_dist
+			if _in_exclusion_except(fx, fz, keepout_zones, banyan_p.x, banyan_p.z):
 				continue
-			if _is_point_on_trail(island, fx, fz, 0.85):
+			if _is_point_on_trail(island, fx, fz, 0.92):
 				continue
 			if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.35):
 				continue
@@ -1652,9 +1893,9 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			if fh < 1.75 or fh > max_fern_h:
 				continue
 			var fn := island.surface_normal(fx, fz)
-			if fn.y < 0.77:
+			if fn.y < 0.76:
 				continue
-			var sc_f := rng.randf_range(0.78, 1.35)
+			var sc_f := rng.randf_range(0.92, 1.48)
 			var slope_sink := 0.20 * clampf((0.86 - fn.y) / 0.30, 0.0, 1.0)
 			var xform := Transform3D(
 				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
@@ -1663,7 +1904,72 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 			fern_positions.append(Vector3(fx, fh, fz))
 			ferns_placed += 1
 
-	# Fill remaining ferns along beach/grass rims and highland benches.
+	# 4b. Tuck 1-3 lush ferns around palm grove bases near the beach/grass transition rim & hillside benches.
+	var palm_fern_cap := int(fern_target * 0.58)
+	for palm_p in palm_positions:
+		if ferns_placed >= palm_fern_cap:
+			break
+		if palm_p.y < 1.60 or palm_p.y > max_fern_h:
+			continue
+		var tuft_n := rng.randi_range(1, 3)
+		for _ti in tuft_n:
+			if ferns_placed >= palm_fern_cap:
+				break
+			var f_ang := rng.randf() * TAU
+			var f_dist := rng.randf_range(1.15, 2.65)
+			var fx := palm_p.x + cos(f_ang) * f_dist
+			var fz := palm_p.z + sin(f_ang) * f_dist
+			if _in_exclusion(fx, fz, keepout_zones):
+				continue
+			if _is_point_on_trail(island, fx, fz, 0.92):
+				continue
+			if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.30):
+				continue
+			var fh := island.surface_height(fx, fz)
+			if fh < 1.75 or fh > max_fern_h:
+				continue
+			var fn := island.surface_normal(fx, fz)
+			if fn.y < 0.76:
+				continue
+			var sc_f := rng.randf_range(0.78, 1.40)
+			var slope_sink := 0.20 * clampf((0.86 - fn.y) / 0.30, 0.0, 1.0)
+			var xform := Transform3D(
+				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
+				Vector3(fx, fh - 0.10 - slope_sink, fz))
+			_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
+			fern_positions.append(Vector3(fx, fh, fz))
+			ferns_placed += 1
+
+	# 4c. Trail-border undergrowth fern fringes framing footpaths while keeping trail centerlines strictly clear!
+	var trail_fern_cap := int(fern_target * 0.80)
+	var trail_fern_spots := _collect_trail_border_points(island, 1.06, 1.72, rng, maxi(18, int(fern_target * 0.48)))
+	for tf in trail_fern_spots:
+		if ferns_placed >= trail_fern_cap:
+			break
+		var fx := tf.x
+		var fz := tf.y
+		if _in_exclusion(fx, fz, keepout_zones):
+			continue
+		if _is_point_on_trail(island, fx, fz, 0.94):
+			continue
+		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.45):
+			continue
+		var fh := island.surface_height(fx, fz)
+		if fh < 1.75 or fh > max_fern_h:
+			continue
+		var fn := island.surface_normal(fx, fz)
+		if fn.y < 0.76:
+			continue
+		var sc_f := rng.randf_range(0.80, 1.36)
+		var slope_sink := 0.20 * clampf((0.86 - fn.y) / 0.30, 0.0, 1.0)
+		var xform := Transform3D(
+			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
+			Vector3(fx, fh - 0.10 - slope_sink, fz))
+		_spawn_prop(island, BUSH_FERN_SCENE, "Fern_%d" % ferns_placed, xform, prop_body, props_root, foliage_cache)
+		fern_positions.append(Vector3(fx, fh, fz))
+		ferns_placed += 1
+
+	# 4d. Fill remaining ferns along beach/grass rims and highland benches.
 	for _attempt in fern_target * 10:
 		if ferns_placed >= fern_target:
 			break
@@ -1673,17 +1979,17 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 		var fz := sin(ang) * rad
 		if _in_exclusion(fx, fz, keepout_zones):
 			continue
-		if _is_point_on_trail(island, fx, fz, 0.85):
+		if _is_point_on_trail(island, fx, fz, 0.92):
 			continue
-		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.8):
+		if not _far_from_all(Vector3(fx, 0.0, fz), fern_positions, 1.70):
 			continue
 		var h := island.surface_height(fx, fz)
 		if h < 1.85 or h > max_fern_h:
 			continue
 		var n := island.surface_normal(fx, fz)
-		if n.y < 0.77:
+		if n.y < 0.76:
 			continue
-		var sc_f := rng.randf_range(0.80, 1.38)
+		var sc_f := rng.randf_range(0.80, 1.40)
 		var slope_sink := 0.20 * clampf((0.86 - n.y) / 0.30, 0.0, 1.0)
 		var xform := Transform3D(
 			Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3.ONE * sc_f),
@@ -1782,7 +2088,8 @@ static func _spawn_optional_at(island: Island, filename: String, node_name: Stri
 static func _populate_wave24_landmarks_and_architecture(island: Island, arch: StringName,
 		landing_yaw: float, area_scale: float, placed: Array[Vector3],
 		keepout_zones: Array[Vector3], rng: RandomNumberGenerator, prop_body: StaticBody3D,
-		props_root: Node3D, foliage_cache: Dictionary, prop_cache: Dictionary) -> void:
+		props_root: Node3D, foliage_cache: Dictionary, prop_cache: Dictionary,
+		banyan_positions: Array[Vector3] = []) -> void:
 	var basis := Basis(Vector3.UP, landing_yaw)
 
 	# A. Outposts & Massive Capital Port (harbour warehouses, seawall bastions, watchtowers, banyans & overlooks).
@@ -1949,33 +2256,46 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 				basis * Vector3(0.0, 0.0, -26.0 * s_r), landing_yaw + 0.18, Vector3(1.08, 1.0, 1.08),
 				0.24, 6.2, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 22.0, 0.74)
 
-	# D. Lush `jungle_banyan.glb` groves crowning upper green terraces & jungles!
+	# D. Lush `jungle_banyan.glb` hero canopy groves crowning spacious inland glades & upper terraces!
 	var banyan_scene := _load_optional_prop("jungle_banyan.glb", prop_cache)
 	if banyan_scene != null and arch != &"volcano_crag" and arch != &"sea_stack" and arch != &"wreck_shoal":
 		var banyan_base := 5.0 if arch in [&"grand_citadel", &"twin_spires", &"skull_bluff", &"grand_outpost"] else 3.0
-		var banyan_target := clampi(int(round(banyan_base * clampf(area_scale, 0.8, 3.2))), 2, 16)
+		var banyan_bonus := 0
+		if arch in [&"grand_citadel", &"twin_spires", &"grand_outpost"]:
+			banyan_bonus = 3
+		elif arch in [&"skull_bluff", &"crescent_lagoon"]:
+			banyan_bonus = 2
+		elif arch in [&"smuggler_cove", &"outpost"]:
+			banyan_bonus = 1
+		var banyan_target := clampi(int(round(banyan_base * clampf(area_scale, 0.8, 3.2))) + banyan_bonus, 2, 20)
+		var min_bh := 3.4 if arch == &"crescent_lagoon" else 4.2
 		var banyans_placed := 0
-		for _bi in banyan_target * 14:
+		for _bi in banyan_target * 22:
 			if banyans_placed >= banyan_target:
 				break
 			var ang := rng.randf() * TAU
-			var rad := rng.randf_range(island.island_radius * 0.18, island.island_radius * 0.82)
+			var rad := rng.randf_range(island.island_radius * 0.16, island.island_radius * 0.84)
 			var bx := cos(ang) * rad
 			var bz := sin(ang) * rad
 			if _in_exclusion(bx, bz, placed):
 				continue
+			if _is_point_on_trail(island, bx, bz, 1.25):
+				continue
 			var bh := island.surface_height(bx, bz)
-			if bh < 4.5 or bh > 32.0:
+			if bh < min_bh or bh > 34.0:
 				continue
-			if island.surface_normal(bx, bz).y < 0.80:
+			var bn := island.surface_normal(bx, bz)
+			if bn.y < 0.78:
 				continue
-			var b_sc := rng.randf_range(0.90, 1.35)
+			var b_sc := rng.randf_range(0.92, 1.38)
+			var b_sink := 0.28 + 0.18 * clampf((0.86 - bn.y) / 0.25, 0.0, 1.0)
 			var b_xf := Transform3D(
-				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(b_sc, b_sc * rng.randf_range(0.92, 1.12), b_sc)),
-				Vector3(bx, bh - 0.28, bz))
+				Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(b_sc, b_sc * rng.randf_range(0.92, 1.14), b_sc)),
+				Vector3(bx, bh - b_sink, bz))
 			_spawn_prop(island, banyan_scene, "JungleBanyan_%d" % banyans_placed, b_xf, prop_body, props_root, foliage_cache)
-			placed.append(Vector3(bx, bz, 8.2))
-			keepout_zones.append(Vector3(bx, bz, 6.4))
+			placed.append(Vector3(bx, bz, 7.6))
+			keepout_zones.append(Vector3(bx, bz, 6.2))
+			banyan_positions.append(Vector3(bx, bh, bz))
 			banyans_placed += 1
 
 	# E. Massive Volcano active `VolcanicFumarole` steam vents around basalt terraces & ash cove!
@@ -2332,6 +2652,20 @@ static func _in_exclusion(x: float, z: float, exclusions: Array[Vector3]) -> boo
 	return false
 
 
+static func _in_exclusion_except(x: float, z: float, exclusions: Array[Vector3],
+		skip_x: float, skip_z: float) -> bool:
+	for ex in exclusions:
+		var sdx := ex.x - skip_x
+		var sdz := ex.y - skip_z
+		if sdx * sdx + sdz * sdz < 0.04:
+			continue
+		var dx := x - ex.x
+		var dz := z - ex.y
+		if dx * dx + dz * dz < ex.z * ex.z:
+			return true
+	return false
+
+
 static func _far_from_all(pos: Vector3, existing: Array[Vector3], min_dist: float) -> bool:
 	var d2 := min_dist * min_dist
 	for p in existing:
@@ -2397,6 +2731,51 @@ static func _is_point_on_trail(island: Island, local_x: float, local_z: float,
 	return min_dist_sq < clear_r_sq
 
 
+## Collects deterministic candidate local XZ points framing island footpath borders
+## at `[min_mult, max_mult] * trail_half_width` outside each polyline segment.
+static func _collect_trail_border_points(island: Island, min_mult: float, max_mult: float,
+		rng: RandomNumberGenerator, max_samples: int) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	if island == null or not island.has_meta(&"trail_polylines") or max_samples <= 0:
+		return out
+	var raw_trails: Variant = island.get_meta(&"trail_polylines", [])
+	if not (raw_trails is Array):
+		return out
+	var trail_hw := maxf(2.2, float(island.get_meta(&"trail_half_width", 3.0)))
+	var basis := Basis(Vector3.UP, float(island.get_meta(&"landing_yaw", 0.0)))
+	var side_toggle := 1.0
+
+	for poly_var: Variant in (raw_trails as Array):
+		var pts := PackedVector2Array()
+		if poly_var is PackedVector2Array:
+			pts = poly_var as PackedVector2Array
+		elif poly_var is Array:
+			for p_var: Variant in (poly_var as Array):
+				if p_var is Vector2:
+					pts.append(p_var as Vector2)
+		var count := pts.size()
+		if count < 2:
+			continue
+		for i in range(count - 1):
+			var a := pts[i]
+			var b := pts[i + 1]
+			var seg := b - a
+			var seg_len := seg.length()
+			if seg_len < 0.25:
+				continue
+			var perp := Vector2(-seg.y / seg_len, seg.x / seg_len)
+			var mid := a.lerp(b, rng.randf_range(0.20, 0.80))
+			for _side_i in 2:
+				if out.size() >= max_samples:
+					return out
+				var off_d := trail_hw * rng.randf_range(min_mult, max_mult)
+				var uv_pt := mid + perp * (side_toggle * off_d)
+				side_toggle = -side_toggle
+				var local_p := basis * Vector3(uv_pt.x, 0.0, uv_pt.y)
+				out.append(Vector2(local_p.x, local_p.z))
+	return out
+
+
 static func _smoothstep(edge0: float, edge1: float, x: float) -> float:
 	if is_equal_approx(edge0, edge1):
 		return 1.0 if x >= edge1 else 0.0
@@ -2438,6 +2817,25 @@ static func _fbm2(x: float, z: float) -> float:
 		pz = nz
 		amp *= 0.5
 	return val
+
+
+static func _ridged_fbm2(x: float, z: float) -> float:
+	var val := 0.0
+	var amp := 0.58
+	var weight := 1.0
+	var px := x
+	var pz := z
+	for _i in 2:
+		var n := 1.0 - absf(_vnoise2(px, pz) * 2.0 - 1.0)
+		n = n * n * weight
+		weight = clampf(n * 1.8, 0.25, 1.0)
+		val += amp * n
+		var nx := px * 1.72 - pz * 1.18 + 13.7
+		var nz := px * 1.18 + pz * 1.72 + 7.9
+		px = nx
+		pz = nz
+		amp *= 0.42
+	return clampf(val, 0.0, 1.0)
 
 
 static func _stable_hash(text: String) -> int:
@@ -4458,4 +4856,77 @@ static func _build_island_fireflies(island: Island, arch: StringName, landing_ya
 
 	island.add_child(p)
 	island.register_fireflies(p)
+
+
+static func _build_island_seabirds(island: Island, arch: StringName,
+		landing_yaw: float, seed_val: int) -> void:
+	var r := island.island_radius
+	var anchor_uv := Vector2(0.0, -r * 0.25)
+	var orbit_r := 22.0
+	var min_h := 24.0
+	var count := 5
+
+	match arch:
+		&"sea_arch":
+			anchor_uv = Vector2(0.0, -r * 0.42)
+			orbit_r = 20.0
+			min_h = 22.0
+			count = 5
+		&"twin_spires":
+			anchor_uv = Vector2(0.0, -r * 0.10)
+			orbit_r = 24.0
+			min_h = 36.0
+			count = 6
+		&"crescent_lagoon":
+			anchor_uv = Vector2(0.0, -r * 0.14)
+			orbit_r = 26.0
+			min_h = 21.0
+			count = 5
+		&"skull_bluff":
+			anchor_uv = Vector2(0.0, -r * 0.34)
+			orbit_r = 24.0
+			min_h = 32.0
+			count = 5
+		&"smuggler_cove":
+			anchor_uv = Vector2(0.0, -r * 0.22)
+			orbit_r = 19.0
+			min_h = 24.0
+			count = 5
+		&"fort_rock":
+			anchor_uv = Vector2(0.0, -r * 0.26)
+			orbit_r = 22.0
+			min_h = 30.0
+			count = 4
+		&"grand_citadel":
+			anchor_uv = Vector2(26.0, -r * 0.26)
+			orbit_r = 30.0
+			min_h = 38.0
+			count = 6
+		&"grand_outpost":
+			anchor_uv = Vector2(0.0, -r * 0.44)
+			orbit_r = 28.0
+			min_h = 26.0
+			count = 6
+
+	var lb := Basis(Vector3.UP, landing_yaw)
+	var anchor_xz := lb * Vector3(anchor_uv.x, 0.0, anchor_uv.y)
+	# Ensure the elliptical gull flight ring clears every cliff ridge & coastal arch cleanly.
+	var max_ground_h := maxf(0.0, island.surface_height(anchor_xz.x, anchor_xz.z))
+	var sample_r := orbit_r * 1.15
+	for si in 8:
+		var ang := TAU * float(si) / 8.0
+		var sx := anchor_xz.x + cos(ang) * sample_r
+		var sz := anchor_xz.z + sin(ang) * sample_r
+		max_ground_h = maxf(max_ground_h, island.surface_height(sx, sz))
+
+	var flock := SeabirdFlock.new()
+	flock.name = "IslandSeabirds"
+	flock.orbit_radius = orbit_r
+	flock.orbit_height = maxf(min_h, max_ground_h + 7.5)
+	flock.bird_count = count
+	flock.is_loot_marker = false
+	flock.flock_seed = seed_val + 911
+	flock.position = Vector3(anchor_xz.x, 0.0, anchor_xz.z)
+	island.add_child(flock)
+
 

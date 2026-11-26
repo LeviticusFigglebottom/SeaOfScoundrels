@@ -158,6 +158,8 @@ const GROUND_COVER_LAYERS: Array[String] = [
 	"CoastalDriftwood",
 	"ShorePebblesShells",
 	"TidalOutcrops",
+	"TrailSteppingStones",
+	"IslandButterflies",
 ]
 
 const FOLIAGE_WIND_LAYERS: Array[String] = [
@@ -412,6 +414,10 @@ func _collect_leaked_detail_caches() -> Array[String]:
 		leaked_fields.append("_fallback_buttress_mesh")
 	if IslandDetailsCls._fallback_buttress_wide_mesh != null:
 		leaked_fields.append("_fallback_buttress_wide_mesh")
+	if IslandDetailsCls._stepping_stone_mesh != null:
+		leaked_fields.append("_stepping_stone_mesh")
+	if IslandDetailsCls._butterfly_mesh != null:
+		leaked_fields.append("_butterfly_mesh")
 	if IslandDetailsCls._foliage_material != null:
 		leaked_fields.append("_foliage_material")
 	if IslandDetailsCls._wood_stone_material != null:
@@ -422,6 +428,10 @@ func _collect_leaked_detail_caches() -> Array[String]:
 		leaked_fields.append("_tidal_rock_material")
 	if IslandDetailsCls._buttress_fallback_material != null:
 		leaked_fields.append("_buttress_fallback_material")
+	if IslandDetailsCls._stepping_stone_mat != null:
+		leaked_fields.append("_stepping_stone_mat")
+	if IslandDetailsCls._butterfly_mat != null:
+		leaked_fields.append("_butterfly_mat")
 	if not IslandDetailsCls._glb_mesh_cache.is_empty():
 		leaked_fields.append("_glb_mesh_cache(%d)" % IslandDetailsCls._glb_mesh_cache.size())
 	return leaked_fields
@@ -456,8 +466,8 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 			"IslandDetails registers in island_details group on " + String(arch))
 
 		var mm_count := details.get_multimesh_count()
-		check(mm_count >= 5 and mm_count <= 8,
-			"archetype %s MultiMesh draw-call count must be 5..8 (got %d)" % [arch, mm_count])
+		check(mm_count >= 5 and mm_count <= 10,
+			"archetype %s MultiMesh draw-call count must be 5..10 (got %d)" % [arch, mm_count])
 
 		# Ensure ZERO unstripped col_* helper geometry or collider nodes inside IslandDetails.
 		var leaked_cols := details.find_children("col_*", "", true, false)
@@ -521,26 +531,36 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 		var hibiscus_n := details.get_hibiscus_count()
 		var coastal_n := details.get_coastal_detail_count()
 		var buttress_n := details.get_cliff_buttress_count()
+		var stone_n := details.get_stepping_stone_count()
+		var butterfly_n := details.get_butterfly_count()
 		var total_n := details.get_total_instance_count()
 
-		print("    details %-16s r=%5.1fm  DC=%d  total=%4d  grass=%3d  fern=%3d  hib=%3d  coast=%3d  butt=%2d" % [
-			String(arch), isl.island_radius, mm_count, total_n, grass_n, fern_n, hibiscus_n, coastal_n, buttress_n])
+		print("    details %-16s r=%5.1fm  DC=%d  total=%4d  grass=%3d  fern=%3d  hib=%3d  coast=%3d  butt=%2d  stone=%2d  bf=%2d" % [
+			String(arch), isl.island_radius, mm_count, total_n, grass_n, fern_n, hibiscus_n, coastal_n, buttress_n, stone_n, butterfly_n])
 
 		if arch != &"volcano_crag" and arch != &"sea_stack" and isl.island_radius >= 50.0:
-			check(grass_n >= 180 and grass_n <= 550,
-				"archetype %s grass count out of 180..550 (got %d)" % [arch, grass_n])
-			check(fern_n + hibiscus_n >= 80 and fern_n + hibiscus_n <= 260,
-				"archetype %s fern+hibiscus count out of 80..260 (got %d)" % [arch, fern_n + hibiscus_n])
+			check(grass_n >= 180 and grass_n <= 720,
+				"archetype %s grass count out of 180..720 (got %d)" % [arch, grass_n])
+			check(fern_n + hibiscus_n >= 80 and fern_n + hibiscus_n <= 380,
+				"archetype %s fern+hibiscus count out of 80..380 (got %d)" % [arch, fern_n + hibiscus_n])
 			check(coastal_n >= 40,
 				"archetype %s coastal detail count < 40 (got %d)" % [arch, coastal_n])
 			check(buttress_n >= 8,
 				"archetype %s cliff buttress count < 8 (got %d)" % [arch, buttress_n])
 		elif arch == &"volcano_crag" or arch == &"sea_stack":
+			check(grass_n >= 110 and grass_n <= 720,
+				"archetype %s grass count out of 110..720 (got %d)" % [arch, grass_n])
+			check(fern_n + hibiscus_n >= 40 and fern_n + hibiscus_n <= 380,
+				"archetype %s fern+hibiscus count out of 40..380 (got %d)" % [arch, fern_n + hibiscus_n])
 			check(buttress_n >= 8,
 				"archetype %s cliff buttress count < 8 (got %d)" % [arch, buttress_n])
 			check(total_n >= 100,
 				"archetype %s total detail count < 100 (got %d)" % [arch, total_n])
 		else:
+			check(grass_n >= 110 and grass_n <= 720,
+				"archetype %s compact grass count out of 110..720 (got %d)" % [arch, grass_n])
+			check(fern_n + hibiscus_n >= 40 and fern_n + hibiscus_n <= 380,
+				"archetype %s compact fern+hibiscus count out of 40..380 (got %d)" % [arch, fern_n + hibiscus_n])
 			check(total_n >= 80,
 				"archetype %s compact island total detail count < 80 (got %d)" % [arch, total_n])
 
@@ -579,6 +599,10 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 				"archetype %s deterministic coastal detail count" % arch)
 			check_eq(details_b.get_cliff_buttress_count(), buttress_n,
 				"archetype %s deterministic cliff buttress count" % arch)
+			check_eq(details_b.get_stepping_stone_count(), stone_n,
+				"archetype %s deterministic stepping stone count" % arch)
+			check_eq(details_b.get_butterfly_count(), butterfly_n,
+				"archetype %s deterministic butterfly count" % arch)
 
 		isl.queue_free()
 		isl_b.queue_free()
@@ -678,16 +702,23 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		"all 14 Archipelago islands register live IslandDetails (_active_details=%d)" % IslandDetailsCls._active_details)
 
 	var total_trail_markers := 0
+	var total_trail_verts := 0
+	var total_stepping_stones := 0
+	var total_butterflies := 0
+	var total_overhang_ledges := 0
 
-	# 1. Verify EVERY island across all 14 carries batched IslandDetails, painted trails, and zero visible col_*.
+	# 1. Verify EVERY island across all 14 carries batched IslandDetails, painted trails, stepping stones,
+	#    tropical butterflies on lush islands, zero visible col_*, and zero flat CliffOverhangLedge shelves.
 	for isl in all_islands:
 		var details := isl.get_node_or_null(^"IslandDetails") as IslandDetails
 		check(details != null, "island %s missing native IslandDetails child" % isl.island_id)
+		var stone_n := 0
+		var bf_n := 0
 		if details != null:
 			var dc := details.get_multimesh_count()
 			var inst_n := details.get_total_instance_count()
-			check(dc >= 5 and dc <= 8,
-				"island %s IslandDetails draw calls must be 5..8 (got %d)" % [isl.island_id, dc])
+			check(dc >= 5 and dc <= 10,
+				"island %s IslandDetails draw calls must be 5..10 (got %d)" % [isl.island_id, dc])
 			check(inst_n >= 200,
 				"island %s IslandDetails total instance count must be >= 200 (got %d)" % [isl.island_id, inst_n])
 
@@ -702,6 +733,26 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					prim_count += 1
 			check_eq(prim_count, 0, "island %s IslandDetails has zero PrimitiveMeshes" % isl.island_id)
 
+			stone_n = details.get_stepping_stone_count()
+			bf_n = details.get_butterfly_count()
+			total_stepping_stones += stone_n
+			total_butterflies += bf_n
+			var min_stones := 4 if isl.archetype == &"sea_stack" else 10
+			check(stone_n >= min_stones,
+				"island %s TrailSteppingStones count must be >= %d (got %d)" % [isl.island_id, min_stones, stone_n])
+			var stone_mmi := details.get_node_or_null(^"TrailSteppingStones") as MultiMeshInstance3D
+			check(stone_mmi != null and stone_mmi.multimesh != null and stone_mmi.multimesh.mesh != null
+				and not (stone_mmi.multimesh.mesh is PrimitiveMesh),
+				"island %s TrailSteppingStones MultiMesh uses sculpted non-PrimitiveMesh" % isl.island_id)
+
+			if isl.archetype != &"volcano_crag" and isl.archetype != &"sea_stack":
+				check(bf_n >= 12,
+					"lush island %s IslandButterflies count must be >= 12 (got %d)" % [isl.island_id, bf_n])
+				var bf_mmi := details.get_node_or_null(^"IslandButterflies") as MultiMeshInstance3D
+				check(bf_mmi != null and bf_mmi.multimesh != null and bf_mmi.multimesh.mesh != null
+					and not (bf_mmi.multimesh.mesh is PrimitiveMesh),
+					"lush island %s IslandButterflies MultiMesh uses sculpted non-PrimitiveMesh" % isl.island_id)
+
 		# Verify painted walkable trail vertices in TerrainMesh ARRAY_COLOR (1.0 - COLOR.a).
 		var terrain_mi := isl.get_node_or_null(^"TerrainMesh") as MeshInstance3D
 		check(terrain_mi != null and terrain_mi.mesh != null,
@@ -714,8 +765,9 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 				for c: Color in cols_var as PackedColorArray:
 					if c.a < 0.75:
 						trail_vert_count += 1
-		check(trail_vert_count >= 10,
-			"island %s TerrainMesh must have >= 10 painted trail vertices (c.a < 0.75, got %d)" % [
+		total_trail_verts += trail_vert_count
+		check(trail_vert_count >= 18,
+			"island %s TerrainMesh must have >= 18 painted trail vertices (c.a < 0.75, got %d)" % [
 				isl.island_id, trail_vert_count])
 
 		# Verify ZERO visible col_* collider meshes anywhere on the island.
@@ -727,16 +779,51 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check_eq(visible_cols, 0,
 			"island %s has %d visible col_* collider mesh(es)" % [isl.island_id, visible_cols])
 
+		var overhang_n := isl.find_children("CliffOverhangLedge*", "Node3D", true, false).size()
+		total_overhang_ledges += overhang_n
+
 		var lanterns := isl.find_children("TrailLantern*", "Node3D", true, false).size()
 		var cairns := isl.find_children("StoneCairn*", "Node3D", true, false).size()
 		total_trail_markers += lanterns + cairns
 
-		print("    arch14  %-20s r=%5.1fm  trail_v=%4d  markers=%2d (L=%d C=%d)  det=%4d" % [
+		print("    arch14  %-20s r=%5.1fm  trail_v=%4d  markers=%2d (L=%d C=%d)  stone=%2d  bf=%2d  det=%4d" % [
 			isl.island_id, isl.island_radius, trail_vert_count, lanterns + cairns, lanterns, cairns,
-			details.get_total_instance_count() if details != null else 0])
+			stone_n, bf_n, details.get_total_instance_count() if details != null else 0])
 
 	check(total_trail_markers >= 20,
 		"archipelago must place >= 20 trail storytelling markers (TrailLantern*/StoneCairn*, got %d)" % total_trail_markers)
+	check(total_trail_verts >= 1000,
+		"Wave I-8 wider trails: total painted trail vertices across 14 islands must be >= 1000 (got %d)" % total_trail_verts)
+	check(total_stepping_stones >= 400,
+		"Wave I-8 stepping stones: total sculpted stepping stones across 14 islands must be >= 400 (got %d)" % total_stepping_stones)
+	check_eq(total_overhang_ledges, 0,
+		"Wave I-8 full overhang sweep: zero CliffOverhangLedge* flat shelves across all 14 live islands (got %d)" % total_overhang_ledges)
+
+	# Verify Wave I-8 living tropical butterflies daytime visibility & nighttime sleep hiding.
+	var port_isl := archipelago.get_island_by_id("port_scoundrel")
+	check(port_isl != null, "Port Scoundrel exists in Archipelago")
+	if port_isl != null:
+		var port_details := port_isl.get_node_or_null(^"IslandDetails") as IslandDetails
+		var port_bf_mmi := port_details.get_node_or_null(^"IslandButterflies") as MultiMeshInstance3D if port_details != null else null
+		check(port_details != null and port_bf_mmi != null,
+			"Port Scoundrel mounts IslandButterflies MultiMesh for day/night cycle contract")
+		if port_details != null and port_bf_mmi != null:
+			var prev_storm := Weather.storminess
+			Weather.time_of_day = 11.0
+			Weather.storminess = 0.0
+			port_details._process(0.25)
+			check(port_bf_mmi.visible,
+				"IslandButterflies must be visible during calm daytime (tod=11.0, storm=0.0)")
+			Weather.time_of_day = 0.5
+			port_details._process(0.25)
+			check(not port_bf_mmi.visible,
+				"IslandButterflies must hide cleanly to sleep at night (tod=0.5)")
+			Weather.time_of_day = 11.0
+			Weather.storminess = prev_storm
+			port_details._process(0.25)
+
+	print("    wave_i8 pass_iq1: trail_verts=%d stepping_stones=%d butterflies=%d overhang_shelves=%d" % [
+		total_trail_verts, total_stepping_stones, total_butterflies, total_overhang_ledges])
 
 	# 2. Verify bespoke Wave I-2 signature 3D landmarks spawned on their assigned islands!
 	var skull_isl := archipelago.get_island_by_id("skull_bluff")

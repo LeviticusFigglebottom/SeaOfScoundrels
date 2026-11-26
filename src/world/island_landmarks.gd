@@ -212,15 +212,16 @@ static func _populate_skull_bluff(island: Island, basis: Basis, landing_yaw: flo
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache) != null:
 		count += 1
 
-	# 2 flanking cantilevered cliff overhangs on western & eastern bluff slopes.
-	var overhang_specs: Array[Array] = [
-		["CliffOverhangLedge_West", -28.0 * scale_r, -4.0 * scale_r, Vector3(-0.78, 0.0, -0.62), 1.06],
-		["CliffOverhangLedge_East", 28.0 * scale_r, -4.0 * scale_r, Vector3(0.78, 0.0, -0.62), 1.04],
+	# Wave I-8 (Pass I-Q1 full overhang sweep): 2 bottom-heavy A-frame cliff buttresses locking cleanly
+	# into Skull Bluff's western & eastern bluff slopes (zero flat-underside cantilevered shelves!).
+	var flank_buttress_specs: Array[Array] = [
+		["CliffButtressWide_West", -28.0 * scale_r, -4.0 * scale_r, Vector3(-0.78, 0.0, -0.62), 1.06],
+		["CliffButtressWide_East", 28.0 * scale_r, -4.0 * scale_r, Vector3(0.78, 0.0, -0.62), 1.04],
 	]
-	for spec: Array in overhang_specs:
+	for spec: Array in flank_buttress_specs:
 		var pref_dir := (basis * (spec[3] as Vector3)).normalized()
-		if _place_cliff_overhang(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
-				16.0, 14.0, 10.0, 42.0, pref_dir, float(spec[4]), 5.5,
+		if _place_cliff_buttress_wide(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
+				16.0, 14.0, 6.0, 36.0, pref_dir, float(spec[4]), 5.5,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
 
@@ -379,9 +380,11 @@ static func _populate_twin_spires(island: Island, basis: Basis, landing_yaw: flo
 			-5.5 * scale_r, -24.0 * scale_r, landing_yaw + 0.35, 1.04, 18.0,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
-	var canyon_shrine_dir := (basis * Vector3(-0.85, 0.0, -0.52)).normalized()
+	# Wave I-8 (Local-GPU M19B catch): seat CascadeShrine_Cascade on the western canyon flank,
+	# keeping scenes/main.gd shot=emerald_waterfall foreground camera completely unobstructed!
+	var canyon_shrine_dir := (basis * Vector3(0.85, 0.0, -0.52)).normalized()
 	if _place_waterfall_shrine(island, basis, "CascadeShrine_Cascade",
-			5.5 * scale_r, -1.0 * scale_r, 14.0, 18.0, 2.5, 32.0, canyon_shrine_dir, 1.02,
+			-22.0 * scale_r, -8.0 * scale_r, 14.0, 18.0, 2.5, 28.0, canyon_shrine_dir, 1.02,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 
@@ -432,15 +435,16 @@ static func _populate_grand_citadel(island: Island, basis: Basis, landing_yaw: f
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 
-	# 3 CliffOverhangLedges + 2 CliffButtressWides fortifying outer citadel headlands & promontories.
-	var overhang_specs: Array[Array] = [
-		["CliffOverhangLedge_West", -86.0, -36.0, Vector3(-0.75, 0.0, -0.66), 1.12],
-		["CliffOverhangLedge_East", 86.0, -36.0, Vector3(0.75, 0.0, -0.66), 1.12],
-		["CliffOverhangLedge_Prom", -74.0, -76.0, Vector3(-0.45, 0.0, -0.89), 1.08],
+	# Wave I-8 (Pass I-Q1 full overhang sweep): 3 headland + 2 rear bottom-heavy CliffButtressWides
+	# fortifying outer citadel headlands & promontories (zero flat-underside overhang shelves!).
+	var headland_buttress_specs: Array[Array] = [
+		["CliffButtressWide_HeadlandW", -86.0, -36.0, Vector3(-0.75, 0.0, -0.66), 1.12],
+		["CliffButtressWide_HeadlandE", 86.0, -36.0, Vector3(0.75, 0.0, -0.66), 1.12],
+		["CliffButtressWide_Prom", -74.0, -76.0, Vector3(-0.45, 0.0, -0.89), 1.08],
 	]
-	for spec: Array in overhang_specs:
+	for spec: Array in headland_buttress_specs:
 		var pref_dir := (basis * (spec[3] as Vector3)).normalized()
-		if _place_cliff_overhang(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
+		if _place_cliff_buttress_wide(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
 				20.0, 18.0, 7.5, 42.0, pref_dir, float(spec[4]), 6.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
@@ -483,6 +487,11 @@ static func _populate_grand_citadel(island: Island, basis: Basis, landing_yaw: f
 		count += 1
 	if _place_ruin_aqueduct(island, basis, "RuinAqueduct_CitadelEast",
 			54.0, 44.0, 32.0, 26.0, landing_yaw - 0.35, 1.12, 16.0, 46.0,
+			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
+		count += 1
+	var citadel_wp_dir := (basis * Vector3(-0.35, 0.0, -0.94)).normalized()
+	if _place_pirate_watchpost(island, basis, "PirateWatchpost_Citadel",
+			-74.0, -34.0, 26.0, 24.0, 14.0, 46.0, citadel_wp_dir, 1.06,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 	var citadel_rib_specs: Array[Array] = [
@@ -559,14 +568,15 @@ static func _populate_grand_outpost(island: Island, basis: Basis, landing_yaw: f
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 
-	# 2 CliffOverhangLedges on the outer fjord headland cliffs.
-	var overhang_specs: Array[Array] = [
-		["CliffOverhangLedge_West", -72.0, -76.0, Vector3(0.55, 0.0, -0.84), 1.08],
-		["CliffOverhangLedge_East", 70.0, -70.0, Vector3(-0.55, 0.0, -0.84), 1.08],
+	# Wave I-8 (Pass I-Q1 full overhang sweep): 2 bottom-heavy CliffButtressWides on outer fjord headlands
+	# (zero flat-underside overhang shelves!).
+	var headland_buttress_specs: Array[Array] = [
+		["CliffButtressWide_West", -72.0, -76.0, Vector3(0.55, 0.0, -0.84), 1.08],
+		["CliffButtressWide_East", 70.0, -70.0, Vector3(-0.55, 0.0, -0.84), 1.08],
 	]
-	for spec: Array in overhang_specs:
+	for spec: Array in headland_buttress_specs:
 		var pref_dir := (basis * (spec[3] as Vector3)).normalized()
-		if _place_cliff_overhang(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
+		if _place_cliff_buttress_wide(island, basis, String(spec[0]), float(spec[1]), float(spec[2]),
 				20.0, 18.0, 8.0, 38.0, pref_dir, float(spec[4]), 6.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
@@ -644,9 +654,10 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 	var is_port_scoundrel := island.island_id == "port_scoundrel"
 
 	if is_port_scoundrel:
-		# Port Scoundrel: dramatic overhang anchored onto the western cliff arm behind the tavern!
+		# Wave I-8 (Pass I-Q1 full overhang sweep): bottom-heavy CliffButtressWide anchored onto
+		# Port Scoundrel's western cliff arm behind the tavern (zero flat-underside overhang shelf!).
 		var pref_dir := (basis * Vector3(0.75, 0.0, -0.66)).normalized()
-		if _place_cliff_overhang(island, basis, "CliffOverhangLedge_TavernBluff",
+		if _place_cliff_buttress_wide(island, basis, "CliffButtressWide_TavernBluff",
 				-34.0, 3.0, 12.0, 12.0, 8.0, 30.0, pref_dir, 1.0, 6.5,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
@@ -664,10 +675,11 @@ static func _populate_outpost(island: Island, basis: Basis, landing_yaw: float,
 				60.0, -52.0, landing_yaw - 0.65, 1.02, 18.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
-		# Wave I-6 harbour & smuggler choreography: eastern harbour quay cargo crane & hidden western bluff hoard!
-		var port_crane_dir := (basis * Vector3(-0.70, 0.0, -0.71)).normalized()
+		# Wave I-8 Title-Screen starboard harbour staging: place cargo crane on the unobstructed right-hand
+		# (starboard-view, u < 0) waterfront quay aiming its jib over the channel toward the moored Brigantine!
+		var port_crane_dir := (basis * Vector3(0.96, 0.0, 0.28)).normalized()
 		if _place_harbour_crane(island, basis, "HarbourCrane_Quay",
-				23.0, -38.0, 16.0, port_crane_dir, 1.0,
+				-23.0, -42.0, 8.0, port_crane_dir, 1.0,
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
 		if _place_smuggler_hoard(island, basis, "SmugglerHoard_Bluff",
@@ -857,11 +869,11 @@ static func _populate_treasure_peak(island: Island, basis: Basis, landing_yaw: f
 		foliage_cache: Dictionary, landmark_cache: Dictionary) -> int:
 	var count := 0
 
-	# HERO: Grounded bottom-heavy A-frame CliffButtressWide anchoring Golden Cove's western flank
-	# (seamless across all 24h sun angles including low rose-gold dawn; Local-GPU a525777 catch #2).
+	# HERO: Grounded bottom-heavy A-frame CliffButtressWide anchored right at the grassy cliff foot
+	# (seamless across all 24h sun angles & on-foot close-ups; Local-GPU M19B polish).
 	var pref_dir := (basis * Vector3(0.45, 0.0, -0.89)).normalized()
 	if _place_cliff_buttress_wide(island, basis, "CliffButtressWide_Cove",
-			-14.0 * scale_r, -4.0 * scale_r, 14.0, 14.0, 4.5, 22.0, pref_dir, 0.92, 4.8,
+			-18.0 * scale_r, -10.0 * scale_r, 14.0, 14.0, 3.0, 9.5, pref_dir, 0.88, 4.8,
 			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 		count += 1
 
@@ -882,13 +894,8 @@ static func _populate_treasure_peak(island: Island, basis: Basis, landing_yaw: f
 				placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
 			count += 1
 
-	# Wave I-4 skyline choreography: cliffside pirate lookout & stepped upper limestone rib!
-	var peak_wp_dir := (basis * Vector3(0.0, 0.0, -1.0)).normalized()
-	if _place_pirate_watchpost(island, basis, "PirateWatchpost_Peak",
-			-10.0 * scale_r, -2.0 * scale_r, 34.0 * scale_r, 20.0 * scale_r,
-			10.0, 42.0, peak_wp_dir, 0.90,
-			placed, keepout_zones, rng, prop_body, props_root, foliage_cache, landmark_cache):
-		count += 1
+	# Wave I-4/I-8 skyline choreography: keep Cutlass Cay's sheer central spire pure & un-stilted
+	# (watchpost relocated to Sovereign's Bastion's spacious terrace per Local-GPU M19B), with stepped limestone rib!
 	var peak_rib_dir := (basis * Vector3(0.15, 0.0, -0.99)).normalized()
 	if _place_upper_strata_rib(island, basis, "UpperStrataRib_Main",
 			2.0 * scale_r, 6.0 * scale_r, 20.0 * scale_r, 16.0 * scale_r,

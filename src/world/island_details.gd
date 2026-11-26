@@ -1,12 +1,13 @@
 class_name IslandDetails
 extends Node3D
-## Batched MultiMesh 3D ground cover, coastal shoreline dressing, and steep-slope
-## sculptural cliff buttresses for every island across the archipelago.
+## Batched MultiMesh 3D ground cover, coastal shoreline dressing, walkable 3D trail
+## flagstones/curbs, living tropical butterflies, and steep-slope sculptural cliff
+## buttresses for every island across the archipelago.
 ##
-## Replaces bare flat 2D terrain slopes and smooth cliff cones with 7–8 strictly
+## Replaces bare flat 2D terrain slopes and smooth cliff cones with 7–10 strictly
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
-##   1. `GrassClumps`          — 10-blade arched swaying tropical grass tufts (`foliage_wind.gdshader`)
+##   1. `GrassClumps`          — 18-blade arched swaying tropical grass tufts (`foliage_wind.gdshader`)
 ##   2. `JungleFerns`          — 8-frond 2-tier serrated fern rosettes (`foliage_wind.gdshader`)
 ##   3. `HibiscusShrubs`       — 12-leaf tropical bushes crowned with 5 vivid 5-petal blossoms (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs aligned to coastline contours
@@ -14,6 +15,8 @@ extends Node3D
 ##   6. `TidalOutcrops`        — barnacle-ringed coastal rock triads emerging from tide pools & surf
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
+##   9. `TrailSteppingStones`  — beveled flat coastal trail flagstones & tilted border curb stones framing walkable paths
+##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
 
 const GROUP := &"island_details"
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -29,11 +32,12 @@ const PIER_KEEPOUT_RADIUS := 6.0
 const BUTTRESS_MIN_NORMAL_Y := 0.12
 const BUTTRESS_MAX_NORMAL_Y := 0.72
 const WIDE_BUTTRESS_MIN_RADIUS := 75.0
+const BUTTERFLY_CULL_DIST := 160.0
 
 # ------------------------------------------------------------------ sRGB palettes
 # Note: `foliage_wind.gdshader` reads COLOR.rgb directly in LINEAR space, so all
 # foliage vertex/instance colors are converted via `.srgb_to_linear()` before upload.
-# Coastal & fallback rock meshes use `StandardMaterial3D` with `vertex_color_is_srgb = true`.
+# Coastal, trail stone, butterfly & fallback rock meshes use `StandardMaterial3D` with `vertex_color_is_srgb = true`.
 
 const GRASS_TROPICAL_PALETTE: Array[Color] = [
 	Color(0.22, 0.60, 0.18, 1.0),  # Rich tropical emerald
@@ -160,6 +164,40 @@ const BUTTRESS_FALLBACK_VOLCANIC: Array[Color] = [
 	Color(0.48, 0.36, 0.32, 1.0),  # Rust-scorched caldera crag
 ]
 
+const STEPPING_STONE_TROPICAL_PALETTE: Array[Color] = [
+	Color(0.92, 0.84, 0.69, 1.0),  # Warm sandy coastal limestone
+	Color(0.96, 0.90, 0.78, 1.0),  # Sun-bleached pale sandstone flagstone
+	Color(0.86, 0.76, 0.60, 1.0),  # Golden ochre weathered paver
+	Color(0.82, 0.77, 0.68, 1.0),  # Salt-worn coastal travertine
+]
+
+const STEPPING_STONE_VOLCANIC_PALETTE: Array[Color] = [
+	Color(0.33, 0.32, 0.36, 1.0),  # Dark volcanic basalt slab
+	Color(0.42, 0.40, 0.43, 1.0),  # Ash-dusted charcoal flagstone
+	Color(0.27, 0.26, 0.30, 1.0),  # Deep obsidian trail paver
+	Color(0.46, 0.38, 0.36, 1.0),  # Scorched iron-basalt curb stone
+]
+
+const STEPPING_STONE_SLATE_PALETTE: Array[Color] = [
+	Color(0.56, 0.63, 0.54, 1.0),  # Mossy carved highland slate
+	Color(0.62, 0.65, 0.63, 1.0),  # Ancient temple blue-grey flagstone
+	Color(0.66, 0.68, 0.58, 1.0),  # Lichen-dusted citadel ashlar
+	Color(0.49, 0.57, 0.50, 1.0),  # Deep shaded ruin moss-slate
+]
+
+const STEPPING_SLATE_ARCHETYPES: Array[StringName] = [
+	&"twin_spires",
+	&"grand_citadel",
+	&"fort_rock",
+]
+
+const BUTTERFLY_PALETTE: Array[Color] = [
+	Color(1.0, 0.58, 0.14, 1.0),  # Monarch-orange
+	Color(0.22, 0.72, 1.0, 1.0),  # Tropical morpho-blue
+	Color(1.0, 0.92, 0.28, 1.0),  # Sunlit sulphur-yellow
+	Color(1.0, 0.40, 0.58, 1.0),  # Hibiscus-coral
+]
+
 # Biome-specific micro-foliage & coastal accent modulators (pure spatial-hash driven, +0 DC).
 const DUNE_SEA_OATS_COLOR := Color(1.06, 0.98, 0.72, 1.0)     # Warm sun-bleached golden sea-oats
 const DUNE_COASTAL_SAGE_COLOR := Color(0.78, 0.82, 0.54, 1.0) # Dry salt-misted coastal sage
@@ -211,11 +249,15 @@ static var _pebbles_mesh: ArrayMesh = null
 static var _tidal_rock_mesh: ArrayMesh = null
 static var _fallback_buttress_mesh: ArrayMesh = null
 static var _fallback_buttress_wide_mesh: ArrayMesh = null
+static var _stepping_stone_mesh: ArrayMesh = null
+static var _butterfly_mesh: ArrayMesh = null
 static var _foliage_material: ShaderMaterial = null
 static var _wood_stone_material: StandardMaterial3D = null
 static var _pebble_material: StandardMaterial3D = null
 static var _tidal_rock_material: StandardMaterial3D = null
 static var _buttress_fallback_material: StandardMaterial3D = null
+static var _stepping_stone_mat: StandardMaterial3D = null
+static var _butterfly_mat: StandardMaterial3D = null
 static var _glb_mesh_cache: Dictionary = {}  # String path -> Mesh or null
 
 # ------------------------------------------------------------------ instance state
@@ -229,6 +271,8 @@ var _pebbles_mmi: MultiMeshInstance3D = null
 var _tidal_mmi: MultiMeshInstance3D = null
 var _buttress_mmi: MultiMeshInstance3D = null
 var _buttress_wide_mmi: MultiMeshInstance3D = null
+var _stepping_stone_mmi: MultiMeshInstance3D = null
+var _butterfly_mmi: MultiMeshInstance3D = null
 
 var _grass_count: int = 0
 var _fern_count: int = 0
@@ -238,9 +282,14 @@ var _pebbles_count: int = 0
 var _tidal_count: int = 0
 var _buttress_count: int = 0
 var _buttress_wide_count: int = 0
+var _stepping_stone_count: int = 0
+var _butterfly_count: int = 0
 
 var _placed_buttress_normals_y: PackedFloat32Array = PackedFloat32Array()
 var _placed_grass_positions: PackedVector3Array = PackedVector3Array()
+var _butterfly_orbits: Array[Dictionary] = []
+var _butterfly_clock: float = 0.0
+var _island_radius: float = 60.0
 
 
 func _enter_tree() -> void:
@@ -262,11 +311,40 @@ func _exit_tree() -> void:
 	_tidal_mmi = null
 	_buttress_mmi = null
 	_buttress_wide_mmi = null
+	_stepping_stone_mmi = null
+	_butterfly_mmi = null
 	_placed_buttress_normals_y = PackedFloat32Array()
 	_placed_grass_positions = PackedVector3Array()
+	_butterfly_orbits.clear()
+	_butterfly_clock = 0.0
 	_active_details = maxi(0, _active_details - 1)
 	if _active_details == 0:
 		clear_shared_cache()
+
+
+func _process(delta: float) -> void:
+	if _butterfly_mmi == null or not is_instance_valid(_butterfly_mmi) or _butterfly_orbits.is_empty():
+		return
+	var tod := fposmod(Weather.time_of_day, 24.0)
+	var is_active := tod >= 6.0 and tod <= 18.8 and Weather.storminess < 0.55
+	if not is_active:
+		_butterfly_mmi.visible = false
+		return
+	_butterfly_mmi.visible = true
+
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
+	if cam != null:
+		var cull_dist := maxf(BUTTERFLY_CULL_DIST, _island_radius + 105.0)
+		if global_position.distance_squared_to(cam.global_position) > cull_dist * cull_dist:
+			return
+
+	_butterfly_clock += clampf(delta, 0.0, 0.15)
+	var mm := _butterfly_mmi.multimesh
+	if mm == null:
+		return
+	var count := mini(_butterfly_orbits.size(), mm.instance_count)
+	for i in count:
+		mm.set_instance_transform(i, _compute_butterfly_transform(_butterfly_orbits[i], _butterfly_clock))
 
 
 ## Release all statically cached procedural meshes, materials, and extracted GLB meshes cleanly.
@@ -279,21 +357,27 @@ static func clear_shared_cache() -> void:
 	_tidal_rock_mesh = null
 	_fallback_buttress_mesh = null
 	_fallback_buttress_wide_mesh = null
+	_stepping_stone_mesh = null
+	_butterfly_mesh = null
 	_foliage_material = null
 	_wood_stone_material = null
 	_pebble_material = null
 	_tidal_rock_material = null
 	_buttress_fallback_material = null
+	_stepping_stone_mat = null
+	_butterfly_mat = null
 	_glb_mesh_cache.clear()
 
 
 ## Deterministically populate batched 3D ground cover, coastal shoreline dressing,
-## and steep-slope cliff buttresses across `island`, attaching the `IslandDetails` child.
+## walkable 3D trail stepping stones/curbs, living tropical butterflies, and
+## steep-slope cliff buttresses across `island`, attaching the `IslandDetails` child.
 static func populate_for_island(island: Island, archetype: StringName = &"",
 		rng_seed: int = 0, exclusions: Array[Vector3] = []) -> IslandDetails:
 	var details := IslandDetails.new()
 	details.name = "IslandDetails"
 	if island == null:
+		details.set_process(false)
 		return details
 
 	var arch: StringName = archetype if archetype != &"" else island.archetype
@@ -310,6 +394,7 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var radius := maxf(18.0, island.island_radius)
 	var radius_t := clampf((radius - 45.0) / 137.0, 0.0, 1.0)
 	var all_radius_t := clampf((radius - 38.0) / 144.0, 0.0, 1.0)
+	details._island_radius = radius
 
 	# 1. Build automatic keepout zones (outpost pier/plaza/tavern/stall/beacon, mooring,
 	#    dig points, major structures, Wave I-2 signature landmarks, plus caller exclusions)
@@ -330,6 +415,9 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var pebble_target := clampi(int(roundf(lerpf(50.0, 130.0, all_radius_t) * (0.78 if is_volcanic else 1.0))), 45, 135)
 	var tidal_target := clampi(int(roundf(lerpf(26.0, 68.0, all_radius_t) * (1.06 if arch == &"sea_stack" or is_volcanic else 1.0))), 24, 72)
 	var buttress_total_target := clampi(int(roundf(lerpf(18.0, 52.0, all_radius_t) * (1.08 if arch in [&"volcano_crag", &"twin_spires", &"sea_stack", &"grand_citadel"] else 1.0))), 14, 56)
+	var butterfly_target := 0
+	if not is_volcanic and arch != &"sea_stack" and not is_tiny:
+		butterfly_target = clampi(int(roundf(lerpf(14.0, 36.0, radius_t))), 14, 36)
 
 	var max_grass_h := maxf(24.0, island.peak_height * 0.80)
 	var max_fern_h := maxf(22.0, island.peak_height * 0.72)
@@ -350,11 +438,12 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var fern_col: Array[Color] = []
 	var hibiscus_xf: Array[Transform3D] = []
 	var hibiscus_col: Array[Color] = []
+	var hibiscus_pos := PackedVector3Array()
 	var bush_grid: Dictionary = {}
 	_place_jungle_ferns(island, arch, rng, fern_target, radius, max_fern_h, is_volcanic,
 		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, fern_xf, fern_col)
 	_place_hibiscus_shrubs(island, arch, rng, hibiscus_target, radius, max_shrub_h, is_volcanic,
-		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, hibiscus_xf, hibiscus_col)
+		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, hibiscus_xf, hibiscus_col, hibiscus_pos)
 
 	# 6. Populate Layers 4, 5, 6: CoastalDriftwood, ShorePebblesShells, TidalOutcrops (sRGB vertex colors).
 	var driftwood_xf: Array[Transform3D] = []
@@ -392,7 +481,22 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 		keepouts, has_pier, pier_a, pier_b,
 		buttress_xf, buttress_col, buttress_wide_xf, buttress_wide_col, buttress_normals_y)
 
-	# 8. Build strictly batched MultiMeshInstance3D children & register live foliage wind!
+	# 8. Populate Layer 9: 3D Trail Stepping Stones & Trail-Edge Curb Rocks (sRGB vertex colors).
+	var stepping_xf: Array[Transform3D] = []
+	var stepping_col: Array[Color] = []
+	_place_trail_stepping_stones(island, arch, rng, is_volcanic, keepouts,
+		has_pier, pier_a, pier_b, trail_ctx, stepping_xf, stepping_col)
+
+	# 9. Populate Layer 10: Living Sculpted Tropical Butterflies (lush islands only, sRGB colors).
+	var butterfly_xf: Array[Transform3D] = []
+	var butterfly_col: Array[Color] = []
+	var butterfly_orbits: Array[Dictionary] = []
+	if butterfly_target > 0:
+		_place_butterflies(island, rng, butterfly_target, radius, hibiscus_pos,
+			meadow_centers, grass_pos, trail_ctx, keepouts, has_pier, pier_a, pier_b,
+			butterfly_xf, butterfly_col, butterfly_orbits)
+
+	# 10. Build strictly batched MultiMeshInstance3D children & register live foliage wind!
 	var foliage_mat := _get_foliage_material()
 	island.register_foliage_material(foliage_mat)
 
@@ -403,6 +507,8 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var pebble_vis := maxf(175.0, island.island_radius + 95.0)
 	var tidal_vis := maxf(310.0, island.island_radius + 185.0)
 	var buttress_vis := clampf(island.island_radius * 6.0 + 1200.0, 1800.0, 2400.0)
+	var stepping_vis := maxf(210.0, island.island_radius + 125.0)
+	var butterfly_vis := maxf(175.0, island.island_radius + 115.0)
 
 	details._grass_mmi = _create_multimesh_node(
 		"GrassClumps", _get_grass_mesh(), foliage_mat, grass_xf, grass_col, 1.0, grass_vis, 20.0)
@@ -435,6 +541,20 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 			"CliffButtressesWide", wide_mesh, wide_mat_override, buttress_wide_xf, buttress_wide_col, 0.0, buttress_vis, 45.0)
 		details._attach_layer(details._buttress_wide_mmi)
 
+	if not stepping_xf.is_empty():
+		details._stepping_stone_mmi = _create_multimesh_node(
+			"TrailSteppingStones", _get_stepping_stone_mesh(), _get_stepping_stone_material(),
+			stepping_xf, stepping_col, 0.0, stepping_vis, 18.0)
+		details._attach_layer(details._stepping_stone_mmi)
+
+	if not butterfly_xf.is_empty():
+		details._butterfly_mmi = _create_multimesh_node(
+			"IslandButterflies", _get_butterfly_mesh(), _get_butterfly_material(),
+			butterfly_xf, butterfly_col, 4.0, butterfly_vis, 18.0)
+		var init_tod := fposmod(Weather.time_of_day, 24.0)
+		details._butterfly_mmi.visible = init_tod >= 6.0 and init_tod <= 18.8 and Weather.storminess < 0.55
+		details._attach_layer(details._butterfly_mmi)
+
 	details._grass_count = grass_xf.size()
 	details._fern_count = fern_xf.size()
 	details._hibiscus_count = hibiscus_xf.size()
@@ -443,8 +563,12 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	details._tidal_count = tidal_xf.size()
 	details._buttress_count = buttress_xf.size()
 	details._buttress_wide_count = buttress_wide_xf.size()
+	details._stepping_stone_count = stepping_xf.size()
+	details._butterfly_count = butterfly_xf.size()
 	details._placed_buttress_normals_y = buttress_normals_y
 	details._placed_grass_positions = grass_pos
+	details._butterfly_orbits = butterfly_orbits
+	details.set_process(not butterfly_orbits.is_empty())
 
 	island.add_child(details)
 	return details
@@ -459,7 +583,7 @@ func _attach_layer(mmi: MultiMeshInstance3D) -> void:
 
 # ------------------------------------------------------------------ inspection API
 
-## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (<= 7 small/volcanic, <= 8 med/large).
+## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (7..10 across archetypes).
 func get_multimesh_count() -> int:
 	var count := 0
 	for child in get_children():
@@ -500,6 +624,16 @@ func get_cliff_buttress_count() -> int:
 	return _buttress_count + _buttress_wide_count
 
 
+## Placed walkable path flagstones + trail-edge border curb stones in `TrailSteppingStones`.
+func get_stepping_stone_count() -> int:
+	return _stepping_stone_count
+
+
+## Placed animated tropical swallowtail butterflies in `IslandButterflies`.
+func get_butterfly_count() -> int:
+	return _butterfly_count
+
+
 ## Copy of terrain `normal.y` values recorded at every placed cliff buttress (reliable under `--headless`).
 func get_placed_buttress_normals_y() -> PackedFloat32Array:
 	return _placed_buttress_normals_y.duplicate()
@@ -515,43 +649,43 @@ func get_placed_grass_positions() -> PackedVector3Array:
 static func _compute_grass_target(arch: StringName, radius: float, radius_t: float,
 		is_volcanic: bool, is_tiny: bool) -> int:
 	if is_volcanic:
-		return clampi(int(roundf(lerpf(190.0, 232.0, radius_t))), 180, 240)
+		return clampi(int(roundf(lerpf(225.0, 285.0, radius_t))), 215, 295)
 	if is_tiny:
-		return clampi(int(roundf(lerpf(85.0, 140.0, clampf((radius - 28.0) / 17.0, 0.0, 1.0)))), 72, 160)
+		return clampi(int(roundf(lerpf(105.0, 172.0, clampf((radius - 28.0) / 17.0, 0.0, 1.0)))), 90, 190)
 	var lush_k := 1.0
 	match arch:
 		&"grand_citadel", &"twin_spires", &"skull_bluff":
-			lush_k = 1.08
+			lush_k = 1.07
 		&"crescent_lagoon", &"palm_atoll", &"treasure_peak", &"smuggler_cove":
 			lush_k = 1.04
 		&"outpost", &"grand_outpost", &"fort_rock":
 			lush_k = 0.96
 		&"wreck_shoal":
 			lush_k = 0.98
-	var base := lerpf(205.0, 525.0, radius_t) * lush_k
-	return clampi(int(roundf(base)), 185, 545)
+	var base := lerpf(256.0, 650.0, radius_t) * lush_k
+	return clampi(int(roundf(base)), 230, 675)
 
 
 static func _compute_fern_hibiscus_targets(arch: StringName, radius_t: float,
 		is_volcanic: bool, is_tiny: bool) -> Vector2i:
 	var combined := 0
 	if is_volcanic:
-		combined = clampi(int(roundf(lerpf(48.0, 74.0, radius_t))), 36, 84)
-		var ferns_v := int(roundf(float(combined) * 0.66))
-		return Vector2i(ferns_v, maxi(10, combined - ferns_v))
+		combined = clampi(int(roundf(lerpf(58.0, 90.0, radius_t))), 46, 100)
+		var ferns_v := int(roundf(float(combined) * 0.65))
+		return Vector2i(ferns_v, maxi(12, combined - ferns_v))
 	if is_tiny:
-		combined = 44
-		return Vector2i(26, 18)
+		combined = 54
+		return Vector2i(32, 22)
 	var lush_k := 1.0
 	match arch:
 		&"grand_citadel", &"twin_spires", &"smuggler_cove", &"skull_bluff":
-			lush_k = 1.08
+			lush_k = 1.07
 		&"crescent_lagoon", &"palm_atoll", &"treasure_peak":
 			lush_k = 1.04
 		&"outpost", &"grand_outpost":
 			lush_k = 0.95
-	combined = clampi(int(roundf(lerpf(96.0, 248.0, radius_t) * lush_k)), 84, 256)
-	var fern_n := int(roundf(float(combined) * 0.61))
+	combined = clampi(int(roundf(lerpf(124.0, 316.0, radius_t) * lush_k)), 112, 336)
+	var fern_n := int(roundf(float(combined) * 0.60))
 	return Vector2i(fern_n, combined - fern_n)
 
 
@@ -689,8 +823,11 @@ static func _prop_keepout_radius(cname: String) -> float:
 static func _collect_trail_context(island: Island) -> Dictionary:
 	var seg_a := PackedVector2Array()
 	var seg_b := PackedVector2Array()
+	var polylines: Array[PackedVector2Array] = []
 	var empty_ctx := {
 		"active": false,
+		"half_width": 0.0,
+		"landing_yaw": 0.0,
 		"cos_y": 1.0,
 		"sin_y": 0.0,
 		"clear_r_sq": 0.0,
@@ -698,18 +835,23 @@ static func _collect_trail_context(island: Island) -> Dictionary:
 		"max_u": 0.0,
 		"min_v": 0.0,
 		"max_v": 0.0,
+		"raw_min_u": 0.0,
+		"raw_max_u": 0.0,
+		"raw_min_v": 0.0,
+		"raw_max_v": 0.0,
+		"polylines": polylines,
 		"seg_a": seg_a,
 		"seg_b": seg_b,
 	}
 	if not island.has_meta(&"trail_polylines"):
 		return empty_ctx
 
-	# Part tall foliage strictly inside 72% of painted footpath half-width so grass & wildflowers
-	# hug and frame the edges of every winding dirt trail while keeping the walking tread clear.
+	# Keep tall foliage strictly outside the walkable trail centerline (`half_w + 0.20 m`) while
+	# dedicated trail-edge framing passes pack lush grass, ferns & curb stones right along both shoulders.
 	var half_w := maxf(0.0, float(island.get_meta(&"trail_half_width", 2.8)))
-	var clear_r := half_w * 0.72
-	if clear_r <= 0.001:
+	if half_w <= 0.001:
 		return empty_ctx
+	var clear_r := half_w + 0.20
 
 	var raw_trails: Variant = island.get_meta(&"trail_polylines", [])
 	var min_u := INF
@@ -728,6 +870,7 @@ static func _collect_trail_context(island: Island) -> Dictionary:
 						pts.append(p_var as Vector2)
 			if pts.size() < 2:
 				continue
+			polylines.append(pts)
 			for i in range(pts.size() - 1):
 				var a: Vector2 = pts[i]
 				var b: Vector2 = pts[i + 1]
@@ -746,6 +889,8 @@ static func _collect_trail_context(island: Island) -> Dictionary:
 	var landing_yaw := float(island.get_meta(&"landing_yaw", 0.0))
 	return {
 		"active": true,
+		"half_width": half_w,
+		"landing_yaw": landing_yaw,
 		"cos_y": cos(landing_yaw),
 		"sin_y": sin(landing_yaw),
 		"clear_r_sq": clear_r * clear_r,
@@ -753,9 +898,34 @@ static func _collect_trail_context(island: Island) -> Dictionary:
 		"max_u": max_u + clear_r,
 		"min_v": min_v - clear_r,
 		"max_v": max_v + clear_r,
+		"raw_min_u": min_u,
+		"raw_max_u": max_u,
+		"raw_min_v": min_v,
+		"raw_max_v": max_v,
+		"polylines": polylines,
 		"seg_a": seg_a,
 		"seg_b": seg_b,
 	}
+
+
+static func _uv_to_local_xz(uv: Vector2, cos_y: float, sin_y: float) -> Vector2:
+	return Vector2(uv.x * cos_y + uv.y * sin_y, -uv.x * sin_y + uv.y * cos_y)
+
+
+static func _trail_distance(pt: Vector2, trail_ctx: Dictionary) -> float:
+	if not bool(trail_ctx["active"]):
+		return INF
+	var cos_y: float = float(trail_ctx["cos_y"])
+	var sin_y: float = float(trail_ctx["sin_y"])
+	var uv := Vector2(pt.x * cos_y - pt.y * sin_y, pt.x * sin_y + pt.y * cos_y)
+	var seg_a: PackedVector2Array = trail_ctx["seg_a"] as PackedVector2Array
+	var seg_b: PackedVector2Array = trail_ctx["seg_b"] as PackedVector2Array
+	var min_sq := INF
+	for i in seg_a.size():
+		var d_sq := _point_segment_dist_sq(uv, seg_a[i], seg_b[i])
+		if d_sq < min_sq:
+			min_sq = d_sq
+	return sqrt(min_sq) if min_sq < INF else INF
 
 
 static func _is_on_trail(pt: Vector2, trail_ctx: Dictionary) -> bool:
@@ -939,20 +1109,20 @@ static func _place_grass_clumps(island: Island, arch: StringName, rng: RandomNum
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
-	var base_spacing := clampf(radius * 0.017, 0.95, 2.55)
-	var cell_size := maxf(1.8, base_spacing)
+	var base_spacing := clampf(radius * 0.015, 0.85, 2.25)
+	var cell_size := maxf(1.6, base_spacing)
 	var grid: Dictionary = {}
 
 	# Pass 0 (Highland Cliff-Ledge Scrub): Zero-extra-DC bold alpine-tropical tufts across stepped
 	# upper mountain benches (h = 18..68 m, 0.48 <= n.y <= 0.94) on tall non-volcanic islands!
 	if island.peak_height >= 26.0 and not is_volcanic:
-		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.16)), 18, 84))
+		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.15)), 20, 96))
 		var hl_h_min := 18.0
 		var hl_h_max := minf(68.0, island.peak_height * 0.88)
 		if hl_h_max > hl_h_min + 0.5:
 			var hl_r_min := radius * 0.08
 			var hl_r_max := radius * 0.86
-			var hl_sep := maxf(1.8, base_spacing * 0.92)
+			var hl_sep := maxf(1.65, base_spacing * 0.90)
 			var hl_candidates := _scan_highland_ledge_candidates(island, rng, hl_r_min, hl_r_max,
 				hl_h_min, hl_h_max, 0.48, 0.94, keepouts, has_pier, pier_a, pier_b, trail_ctx)
 			for cand in hl_candidates:
@@ -994,22 +1164,101 @@ static func _place_grass_clumps(island: Island, arch: StringName, rng: RandomNum
 						continue
 					_append_highland_grass_tuft(arch, rng, cpt, ch, cn, grid, cell_size, out_xf, out_col, out_pos)
 
-			if out_xf.size() < highland_cap and hl_sep > 1.8:
+			if out_xf.size() < highland_cap and hl_sep > 1.65:
 				for cand in hl_candidates:
 					if out_xf.size() >= highland_cap:
 						break
 					var pt: Vector2 = cand["pt"] as Vector2
-					if not _grid_is_clear(grid, cell_size, pt, 1.8):
+					if not _grid_is_clear(grid, cell_size, pt, 1.65):
 						continue
 					var h: float = float(cand["h"])
 					var n: Vector3 = cand["n"] as Vector3
 					_append_highland_grass_tuft(arch, rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
 
-	# Pass 1: Lush green meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 1.95..4.4 m).
+	# Pass 0.5 (Trail-Edge Grass Framing Pass): Lush golden-sage & emerald grass ribbons framing
+	# both shoulders of every walkable trail (`d in [half_w + 0.25, half_w + 1.45]`, strictly
+	# keeping the trail centerline `d < half_w + 0.20` 100% clear!).
+	if bool(trail_ctx["active"]) and out_xf.size() < target:
+		var half_w: float = float(trail_ctx["half_width"])
+		var cos_y: float = float(trail_ctx["cos_y"])
+		var sin_y: float = float(trail_ctx["sin_y"])
+		var polylines: Array[PackedVector2Array] = trail_ctx["polylines"] as Array[PackedVector2Array]
+		var trail_cap := mini(target, out_xf.size() + clampi(int(roundf(float(target) * 0.20)), 24, 120))
+		var verge_sep := maxf(0.72, base_spacing * 0.52)
+		var min_trail_clear := half_w + 0.20
+
+		for poly in polylines:
+			if out_xf.size() >= trail_cap:
+				break
+			var accum := 0.0
+			var next_arc := rng.randf_range(0.6, 1.8)
+			for i in range(poly.size() - 1):
+				if out_xf.size() >= trail_cap:
+					break
+				var a := poly[i]
+				var b := poly[i + 1]
+				var seg := b - a
+				var seg_len := seg.length()
+				if seg_len < 0.001:
+					continue
+				var dir_uv := seg / seg_len
+				var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+				while next_arc <= accum + seg_len and out_xf.size() < trail_cap:
+					var t := (next_arc - accum) / seg_len
+					var base_uv := a + seg * t
+					for side: float in [-1.0, 1.0]:
+						if out_xf.size() >= trail_cap:
+							break
+						var off := half_w + rng.randf_range(0.25, 1.45)
+						var pt_uv := base_uv + perp_uv * (side * off)
+						var pt := _uv_to_local_xz(pt_uv, cos_y, sin_y)
+						if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+							continue
+						if _trail_distance(pt, trail_ctx) < min_trail_clear:
+							continue
+						if not _grid_is_clear(grid, cell_size, pt, verge_sep):
+							continue
+						var h := island.surface_height(pt.x, pt.y)
+						if h < 1.55 or h > max_grass_h + 2.0:
+							continue
+						var n := island.surface_normal(pt.x, pt.y)
+						if n.y < 0.66:
+							continue
+
+						var is_tall_accent := rng.randf() < 0.42
+						var sx := rng.randf_range(1.06, 1.74) if is_tall_accent else rng.randf_range(0.92, 1.44)
+						var sz := sx * rng.randf_range(0.86, 1.15)
+						var sy := rng.randf_range(1.18, 1.66) if is_tall_accent else rng.randf_range(0.80, 1.16)
+						if is_volcanic:
+							sx *= 0.80
+							sz *= 0.80
+							sy *= 0.74
+						var slope_sink := 0.14 * clampf((0.84 - n.y) / 0.34, 0.0, 1.0)
+						var origin := Vector3(pt.x, h - 0.06 - slope_sink, pt.y)
+						var xf := _grounded_transform(origin, n, 0.62, rng.randf() * TAU, Vector3(sx, sy, sz))
+
+						var srgb_col: Color
+						if is_volcanic:
+							srgb_col = _pick_jittered_color(rng, GRASS_VOLCANIC_PALETTE, 0.02, 0.10)
+						else:
+							var em_col := _pick_jittered_color(rng, GRASS_TROPICAL_PALETTE, 0.022, 0.10)
+							var sg_col := _pick_jittered_color(rng, GRASS_VERGE_PALETTE, 0.018, 0.08)
+							var verge_blend := rng.randf_range(0.24, 0.70)
+							srgb_col = em_col.lerp(sg_col, verge_blend)
+						srgb_col = _apply_grass_biome_tint(srgb_col, arch, is_volcanic, pt, h)
+
+						out_xf.append(xf)
+						out_col.append(srgb_col.srgb_to_linear())
+						out_pos.append(origin)
+						_grid_insert(grid, cell_size, pt)
+					next_arc += rng.randf_range(2.0, 3.5)
+				accum += seg_len
+
+	# Pass 1: Lush multi-height meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 1.95..4.4 m).
 	var passes: Array[Array] = [
-		[2.75, max_grass_h, 0.72, base_spacing, 0.56, target * 14 + 260],
-		[2.30, max_grass_h + 4.0, 0.72, base_spacing * 0.68, 0.35, target * 12 + 220],
-		[1.95, max_grass_h + 6.0, 0.66, 0.65, 0.20, target * 14 + 300],
+		[2.75, max_grass_h, 0.72, base_spacing, 0.56, target * 14 + 280],
+		[2.30, max_grass_h + 4.0, 0.70, base_spacing * 0.66, 0.36, target * 12 + 240],
+		[1.95, max_grass_h + 6.0, 0.64, 0.60, 0.22, target * 14 + 320],
 	]
 
 	for cfg in passes:
@@ -1041,9 +1290,12 @@ static func _place_grass_clumps(island: Island, arch: StringName, rng: RandomNum
 			if n.y < n_min:
 				continue
 
-			var sx := rng.randf_range(1.12, 1.82)
+			# Layered multi-height meadow silhouette: low dense ground tufts + tall swaying tussocks.
+			var height_tier := rng.randf()
+			var sx := rng.randf_range(1.06, 1.88)
 			var sz := sx * rng.randf_range(0.86, 1.15)
-			var sy := rng.randf_range(0.95, 1.52)
+			var sy := rng.randf_range(0.80, 1.12) if height_tier < 0.34 else (
+				rng.randf_range(1.12, 1.48) if height_tier < 0.78 else rng.randf_range(1.45, 1.74))
 			if is_volcanic:
 				sx *= 0.82
 				sz *= 0.82
@@ -1090,24 +1342,44 @@ static func _place_grass_clumps(island: Island, arch: StringName, rng: RandomNum
 			_grid_insert(grid, cell_size, pt)
 
 
+static func _append_jungle_fern_instance(arch: StringName, rng: RandomNumberGenerator, pt: Vector2,
+		h: float, n: Vector3, is_volcanic: bool, bush_grid: Dictionary, cell_size: float,
+		out_xf: Array[Transform3D], out_col: Array[Color], scale_mul: float = 1.0) -> void:
+	var sc := rng.randf_range(0.86, 1.60) * scale_mul * (0.76 if is_volcanic else 1.0)
+	var sy := sc * rng.randf_range(0.86, 1.18)
+	if not is_volcanic and arch in LUSH_JUNGLE_TEMPLE_ARCHETYPES and h < 20.0:
+		var lush_t := clampf((20.0 - h) / 14.0, 0.0, 1.0)
+		sc *= 1.0 + 0.08 * lush_t
+		sy *= 1.0 + 0.06 * lush_t
+	var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
+	var origin := Vector3(pt.x, h - 0.07 - slope_sink, pt.y)
+	var xf := _grounded_transform(origin, n, 0.52, rng.randf() * TAU, Vector3(sc, sy, sc))
+	var srgb_col := _pick_jittered_color(rng,
+		FERN_VOLCANIC_PALETTE if is_volcanic else FERN_TROPICAL_PALETTE, 0.022, 0.10)
+	srgb_col = _apply_fern_biome_tint(srgb_col, arch, is_volcanic, pt, h)
+	out_xf.append(xf)
+	out_col.append(srgb_col.srgb_to_linear())
+	_grid_insert(bush_grid, cell_size, pt)
+
+
 static func _place_jungle_ferns(island: Island, arch: StringName, rng: RandomNumberGenerator,
 		target: int, radius: float, max_fern_h: float, is_volcanic: bool,
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, bush_grid: Dictionary,
 		out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
-	var min_sep := clampf(radius * 0.026, 1.45, 3.4)
-	var cell_size := 2.6
+	var min_sep := clampf(radius * 0.022, 1.25, 2.95)
+	var cell_size := 2.4
 
 	# Pass 0 (Highland Cliff-Ledge Cascading Ferns): Bold emerald cliff-edge rosettes gripping
 	# stepped canyon ledges & upper mountain terraces (h = 18..64 m, n.y >= 0.48) with +0 DC!
 	if island.peak_height >= 26.0 and not is_volcanic:
-		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.18)), 10, 30))
+		var highland_cap := mini(target, clampi(int(roundf(float(target) * 0.17)), 12, 36))
 		var hl_h_min := 18.0
 		var hl_h_max := minf(64.0, island.peak_height * 0.86)
 		if hl_h_max > hl_h_min + 0.5:
 			var hl_r_min := radius * 0.08
 			var hl_r_max := radius * 0.86
-			var hl_sep := maxf(2.0, min_sep * 0.85)
+			var hl_sep := maxf(1.85, min_sep * 0.84)
 			var hl_candidates := _scan_highland_ledge_candidates(island, rng, hl_r_min, hl_r_max,
 				hl_h_min, hl_h_max, 0.48, 1.01, keepouts, has_pier, pier_a, pier_b, trail_ctx)
 			for cand in hl_candidates:
@@ -1140,21 +1412,66 @@ static func _place_jungle_ferns(island: Island, arch: StringName, rng: RandomNum
 							if cn.y >= 0.48:
 								_append_highland_fern_rosette(arch, rng, cpt, ch, cn, bush_grid, cell_size, out_xf, out_col)
 
-			if out_xf.size() < highland_cap and hl_sep > 1.8:
+			if out_xf.size() < highland_cap and hl_sep > 1.75:
 				for cand in hl_candidates:
 					if out_xf.size() >= highland_cap:
 						break
 					var pt: Vector2 = cand["pt"] as Vector2
-					if not _grid_is_clear(bush_grid, cell_size, pt, 1.8):
+					if not _grid_is_clear(bush_grid, cell_size, pt, 1.75):
 						continue
 					var h: float = float(cand["h"])
 					var n: Vector3 = cand["n"] as Vector3
 					_append_highland_fern_rosette(arch, rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
 
+	# Pass 0.5 (Trail-Border Lush Ferns): Frame footpath edges with arching fern clusters.
+	if bool(trail_ctx["active"]) and out_xf.size() < target:
+		var half_w: float = float(trail_ctx["half_width"])
+		var cos_y: float = float(trail_ctx["cos_y"])
+		var sin_y: float = float(trail_ctx["sin_y"])
+		var polylines: Array[PackedVector2Array] = trail_ctx["polylines"] as Array[PackedVector2Array]
+		var trail_cap := mini(target, out_xf.size() + clampi(int(roundf(float(target) * 0.22)), 10, 48))
+		var verge_sep := maxf(1.15, min_sep * 0.68)
+		var min_clear := half_w + 0.35
+
+		for poly in polylines:
+			if out_xf.size() >= trail_cap:
+				break
+			var accum := 0.0
+			var next_arc := rng.randf_range(1.4, 3.0)
+			for i in range(poly.size() - 1):
+				if out_xf.size() >= trail_cap:
+					break
+				var a := poly[i]
+				var b := poly[i + 1]
+				var seg := b - a
+				var seg_len := seg.length()
+				if seg_len < 0.001:
+					continue
+				var dir_uv := seg / seg_len
+				var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+				while next_arc <= accum + seg_len and out_xf.size() < trail_cap:
+					var t := (next_arc - accum) / seg_len
+					var base_uv := a + seg * t
+					var side := 1.0 if rng.randf() < 0.5 else -1.0
+					var off := half_w + rng.randf_range(0.55, 2.30)
+					var pt := _uv_to_local_xz(base_uv + perp_uv * (side * off), cos_y, sin_y)
+					if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b) \
+							and _trail_distance(pt, trail_ctx) >= min_clear \
+							and _grid_is_clear(bush_grid, cell_size, pt, verge_sep):
+						var h := island.surface_height(pt.x, pt.y)
+						if h >= 2.15 and h <= max_fern_h + 3.0:
+							var n := island.surface_normal(pt.x, pt.y)
+							if n.y >= 0.64:
+								_append_jungle_fern_instance(arch, rng, pt, h, n, is_volcanic,
+									bush_grid, cell_size, out_xf, out_col, rng.randf_range(0.92, 1.12))
+					next_arc += rng.randf_range(3.6, 5.8)
+				accum += seg_len
+
+	# Pass 1: Shady inland glades, cove pockets & layered companion fern clusters.
 	var passes: Array[Array] = [
-		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 180],
-		[2.35, max_fern_h + 5.0, 0.66, min_sep * 0.68, 0.30, target * 12 + 160],
-		[2.05, max_fern_h + 8.0, 0.62, maxf(0.95, min_sep * 0.50), 0.18, target * 14 + 220],
+		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 200],
+		[2.35, max_fern_h + 5.0, 0.66, min_sep * 0.66, 0.32, target * 12 + 180],
+		[2.05, max_fern_h + 8.0, 0.62, maxf(0.90, min_sep * 0.48), 0.20, target * 14 + 240],
 	]
 
 	for cfg in passes:
@@ -1172,7 +1489,7 @@ static func _place_jungle_ferns(island: Island, arch: StringName, rng: RandomNum
 			if out_xf.size() >= target:
 				break
 			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.06, radius * 0.92,
-				cluster_prob, 1.6, patch_max)
+				cluster_prob, 1.5, patch_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
 				continue
 			if _is_on_trail(pt, trail_ctx):
@@ -1186,34 +1503,102 @@ static func _place_jungle_ferns(island: Island, arch: StringName, rng: RandomNum
 			if n.y < n_min:
 				continue
 
-			var sc := rng.randf_range(0.92, 1.54) * (0.76 if is_volcanic else 1.0)
-			var sy := sc * rng.randf_range(0.88, 1.16)
-			if not is_volcanic and arch in LUSH_JUNGLE_TEMPLE_ARCHETYPES and h < 20.0:
-				var lush_t := clampf((20.0 - h) / 14.0, 0.0, 1.0)
-				sc *= 1.0 + 0.08 * lush_t
-				sy *= 1.0 + 0.06 * lush_t
-			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
-			var origin := Vector3(pt.x, h - 0.07 - slope_sink, pt.y)
-			var xf := _grounded_transform(origin, n, 0.52, rng.randf() * TAU, Vector3(sc, sy, sc))
-			var srgb_col := _pick_jittered_color(rng,
-				FERN_VOLCANIC_PALETTE if is_volcanic else FERN_TROPICAL_PALETTE, 0.022, 0.10)
-			srgb_col = _apply_fern_biome_tint(srgb_col, arch, is_volcanic, pt, h)
-			out_xf.append(xf)
-			out_col.append(srgb_col.srgb_to_linear())
-			_grid_insert(bush_grid, cell_size, pt)
+			_append_jungle_fern_instance(arch, rng, pt, h, n, is_volcanic, bush_grid, cell_size, out_xf, out_col)
+
+			# Cluster a companion layered fern in lush cove pockets & shady inland glades!
+			if not is_volcanic and out_xf.size() < target and h <= 18.0 and rng.randf() < 0.34:
+				var c_ang := rng.randf() * TAU
+				var c_dist := rng.randf_range(1.45, 2.95)
+				var cpt := pt + Vector2(cos(c_ang) * c_dist, sin(c_ang) * c_dist)
+				if not _is_in_keepout(cpt, keepouts, has_pier, pier_a, pier_b) \
+						and not _is_on_trail(cpt, trail_ctx) \
+						and _grid_is_clear(bush_grid, cell_size, cpt, maxf(1.05, sep * 0.62)):
+					var ch := island.surface_height(cpt.x, cpt.y)
+					if ch >= h_min and ch <= h_max:
+						var cn := island.surface_normal(cpt.x, cpt.y)
+						if cn.y >= n_min:
+							_append_jungle_fern_instance(arch, rng, cpt, ch, cn, is_volcanic,
+								bush_grid, cell_size, out_xf, out_col, rng.randf_range(0.76, 1.04))
+
+
+static func _append_hibiscus_instance(arch: StringName, rng: RandomNumberGenerator, pt: Vector2,
+		h: float, n: Vector3, is_volcanic: bool, bush_grid: Dictionary, cell_size: float,
+		out_xf: Array[Transform3D], out_col: Array[Color], out_pos: PackedVector3Array,
+		scale_mul: float = 1.0) -> void:
+	var sc := rng.randf_range(0.82, 1.44) * scale_mul * (0.74 if is_volcanic else 1.0)
+	var sy := sc * rng.randf_range(0.88, 1.18)
+	if not is_volcanic and arch in LAGOON_ATOLL_ARCHETYPES:
+		sc *= 1.05
+		sy *= 1.04
+	var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
+	var origin := Vector3(pt.x, h - 0.08 - slope_sink, pt.y)
+	var xf := _grounded_transform(origin, n, 0.42, rng.randf() * TAU, Vector3(sc, sy, sc))
+	var tint_srgb := _pick_jittered_color(rng,
+		HIBISCUS_VOLCANIC_TINTS if is_volcanic else HIBISCUS_TROPICAL_TINTS, 0.015, 0.05)
+	tint_srgb = _apply_hibiscus_biome_tint(tint_srgb, arch, is_volcanic, pt)
+	out_xf.append(xf)
+	out_col.append(tint_srgb.srgb_to_linear())
+	out_pos.append(origin)
+	_grid_insert(bush_grid, cell_size, pt)
 
 
 static func _place_hibiscus_shrubs(island: Island, arch: StringName, rng: RandomNumberGenerator,
 		target: int, radius: float, max_shrub_h: float, is_volcanic: bool,
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, bush_grid: Dictionary,
-		out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
-	var min_sep := clampf(radius * 0.032, 1.75, 4.0)
-	var cell_size := 2.6
+		out_xf: Array[Transform3D], out_col: Array[Color], out_pos: PackedVector3Array) -> void:
+	var min_sep := clampf(radius * 0.027, 1.50, 3.45)
+	var cell_size := 2.4
+
+	# Pass 0 (Trail-Border Flowering Hibiscus): Frame sunlit trail shoulders with vibrant blossoms!
+	if bool(trail_ctx["active"]) and out_xf.size() < target:
+		var half_w: float = float(trail_ctx["half_width"])
+		var cos_y: float = float(trail_ctx["cos_y"])
+		var sin_y: float = float(trail_ctx["sin_y"])
+		var polylines: Array[PackedVector2Array] = trail_ctx["polylines"] as Array[PackedVector2Array]
+		var trail_cap := mini(target, clampi(int(roundf(float(target) * 0.24)), 8, 34))
+		var verge_sep := maxf(1.30, min_sep * 0.72)
+		var min_clear := half_w + 0.45
+
+		for poly in polylines:
+			if out_xf.size() >= trail_cap:
+				break
+			var accum := 0.0
+			var next_arc := rng.randf_range(2.2, 4.4)
+			for i in range(poly.size() - 1):
+				if out_xf.size() >= trail_cap:
+					break
+				var a := poly[i]
+				var b := poly[i + 1]
+				var seg := b - a
+				var seg_len := seg.length()
+				if seg_len < 0.001:
+					continue
+				var dir_uv := seg / seg_len
+				var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+				while next_arc <= accum + seg_len and out_xf.size() < trail_cap:
+					var t := (next_arc - accum) / seg_len
+					var base_uv := a + seg * t
+					var side := 1.0 if rng.randf() < 0.5 else -1.0
+					var off := half_w + rng.randf_range(0.65, 2.55)
+					var pt := _uv_to_local_xz(base_uv + perp_uv * (side * off), cos_y, sin_y)
+					if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b) \
+							and _trail_distance(pt, trail_ctx) >= min_clear \
+							and _grid_is_clear(bush_grid, cell_size, pt, verge_sep):
+						var h := island.surface_height(pt.x, pt.y)
+						if h >= 2.55 and h <= max_shrub_h + 2.0:
+							var n := island.surface_normal(pt.x, pt.y)
+							if n.y >= 0.66:
+								_append_hibiscus_instance(arch, rng, pt, h, n, is_volcanic,
+									bush_grid, cell_size, out_xf, out_col, out_pos, rng.randf_range(0.92, 1.12))
+					next_arc += rng.randf_range(4.6, 7.2)
+				accum += seg_len
+
+	# Pass 1: Sunlit meadow glades, cove pockets & paired flowering hibiscus clusters.
 	var passes: Array[Array] = [
-		[3.05, max_shrub_h, 0.74, min_sep, 0.52, target * 18 + 160],
-		[2.85, max_shrub_h + 5.0, 0.68, min_sep * 0.68, 0.28, target * 14 + 140],
-		[2.85, max_shrub_h + 8.0, 0.64, maxf(1.05, min_sep * 0.50), 0.16, target * 16 + 220],
+		[3.05, max_shrub_h, 0.74, min_sep, 0.54, target * 18 + 180],
+		[2.85, max_shrub_h + 5.0, 0.68, min_sep * 0.66, 0.30, target * 14 + 160],
+		[2.85, max_shrub_h + 8.0, 0.64, maxf(1.00, min_sep * 0.48), 0.18, target * 16 + 240],
 	]
 
 	for cfg in passes:
@@ -1231,7 +1616,7 @@ static func _place_hibiscus_shrubs(island: Island, arch: StringName, rng: Random
 			if out_xf.size() >= target:
 				break
 			var pt := _sample_clustered_xz(rng, meadow_centers, radius * 0.08, radius * 0.90,
-				cluster_prob, 1.8, patch_max)
+				cluster_prob, 1.7, patch_max)
 			if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
 				continue
 			if _is_on_trail(pt, trail_ctx):
@@ -1245,20 +1630,302 @@ static func _place_hibiscus_shrubs(island: Island, arch: StringName, rng: Random
 			if n.y < n_min:
 				continue
 
-			var sc := rng.randf_range(0.86, 1.38) * (0.74 if is_volcanic else 1.0)
-			var sy := sc * rng.randf_range(0.90, 1.15)
-			if not is_volcanic and arch in LAGOON_ATOLL_ARCHETYPES:
-				sc *= 1.05
-				sy *= 1.04
-			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
-			var origin := Vector3(pt.x, h - 0.08 - slope_sink, pt.y)
-			var xf := _grounded_transform(origin, n, 0.42, rng.randf() * TAU, Vector3(sc, sy, sc))
-			var tint_srgb := _pick_jittered_color(rng,
-				HIBISCUS_VOLCANIC_TINTS if is_volcanic else HIBISCUS_TROPICAL_TINTS, 0.015, 0.05)
-			tint_srgb = _apply_hibiscus_biome_tint(tint_srgb, arch, is_volcanic, pt)
-			out_xf.append(xf)
-			out_col.append(tint_srgb.srgb_to_linear())
-			_grid_insert(bush_grid, cell_size, pt)
+			_append_hibiscus_instance(arch, rng, pt, h, n, is_volcanic, bush_grid, cell_size, out_xf, out_col, out_pos)
+
+			# Pair occasional companion hibiscus shrub in lush cove pockets & sunlit meadow glades!
+			if not is_volcanic and out_xf.size() < target and h <= 16.0 and rng.randf() < 0.28:
+				var c_ang := rng.randf() * TAU
+				var c_dist := rng.randf_range(1.75, 3.35)
+				var cpt := pt + Vector2(cos(c_ang) * c_dist, sin(c_ang) * c_dist)
+				if not _is_in_keepout(cpt, keepouts, has_pier, pier_a, pier_b) \
+						and not _is_on_trail(cpt, trail_ctx) \
+						and _grid_is_clear(bush_grid, cell_size, cpt, maxf(1.20, sep * 0.65)):
+					var ch := island.surface_height(cpt.x, cpt.y)
+					if ch >= h_min and ch <= h_max:
+						var cn := island.surface_normal(cpt.x, cpt.y)
+						if cn.y >= n_min:
+							_append_hibiscus_instance(arch, rng, cpt, ch, cn, is_volcanic,
+								bush_grid, cell_size, out_xf, out_col, out_pos, rng.randf_range(0.76, 1.02))
+
+
+# ------------------------------------------------------------------ placement: 3D trail stepping stones & curbs
+
+static func _place_trail_stepping_stones(island: Island, arch: StringName, rng: RandomNumberGenerator,
+		is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		trail_ctx: Dictionary, out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
+	if not bool(trail_ctx["active"]):
+		return
+	var polylines: Array[PackedVector2Array] = trail_ctx["polylines"] as Array[PackedVector2Array]
+	if polylines.is_empty():
+		return
+
+	var half_w: float = float(trail_ctx["half_width"])
+	var cos_y: float = float(trail_ctx["cos_y"])
+	var sin_y: float = float(trail_ctx["sin_y"])
+	var palette: Array[Color] = STEPPING_STONE_VOLCANIC_PALETTE if is_volcanic else (
+		STEPPING_STONE_SLATE_PALETTE if arch in STEPPING_SLATE_ARCHETYPES else STEPPING_STONE_TROPICAL_PALETTE)
+
+	var cell_size := 2.4
+	var stone_grid: Dictionary = {}
+
+	# 1. Path Stepping Stones: wide beveled flagstones stepping up walkable trail stretches!
+	var step_side_alt := 1.0
+	for poly in polylines:
+		var accum := 0.0
+		var next_arc := rng.randf_range(1.0, 2.2)
+		for i in range(poly.size() - 1):
+			var a := poly[i]
+			var b := poly[i + 1]
+			var seg := b - a
+			var seg_len := seg.length()
+			if seg_len < 0.001:
+				continue
+			var dir_uv := seg / seg_len
+			var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+			var tan_local := _uv_to_local_xz(dir_uv, cos_y, sin_y).normalized()
+			var base_yaw := atan2(-tan_local.x, -tan_local.y)
+
+			while next_arc <= accum + seg_len:
+				var t := (next_arc - accum) / seg_len
+				var lat := step_side_alt * rng.randf_range(0.08, minf(0.65, half_w * 0.24))
+				step_side_alt = -step_side_alt
+				var pt_uv := a + seg * t + perp_uv * lat
+				var pt := _uv_to_local_xz(pt_uv, cos_y, sin_y)
+
+				if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b) \
+						and _grid_is_clear(stone_grid, cell_size, pt, 2.4):
+					var h := island.surface_height(pt.x, pt.y)
+					if h >= 0.85:
+						var n := island.surface_normal(pt.x, pt.y)
+						if n.y >= 0.72:
+							var sx := rng.randf_range(0.88, 1.34)
+							var sz := rng.randf_range(0.78, 1.18)
+							var sy := rng.randf_range(0.68, 0.92)
+							var slope_sink := 0.08 * clampf((0.96 - n.y) / 0.24, 0.0, 1.0)
+							var origin := Vector3(pt.x, h - 0.04 - slope_sink, pt.y)
+							var yaw := base_yaw + rng.randf_range(-0.28, 0.28)
+							var xf := _grounded_transform(origin, n, 0.92, yaw, Vector3(sx, sy, sz))
+							out_xf.append(xf)
+							out_col.append(_pick_jittered_color(rng, palette, 0.014, 0.08))
+							_grid_insert(stone_grid, cell_size, pt)
+				next_arc += rng.randf_range(3.4, 4.8)
+			accum += seg_len
+
+	# 2. Trail-Edge Curb Rocks: chunkier slightly tilted border stones staggered along both shoulders!
+	var min_curb_clear := half_w + 0.15
+	for side_idx in 2:
+		var side := -1.0 if side_idx == 0 else 1.0
+		for poly in polylines:
+			var accum := 0.0
+			var next_arc := rng.randf_range(1.1, 2.7) if side_idx == 0 else rng.randf_range(3.0, 4.8)
+			for i in range(poly.size() - 1):
+				var a := poly[i]
+				var b := poly[i + 1]
+				var seg := b - a
+				var seg_len := seg.length()
+				if seg_len < 0.001:
+					continue
+				var dir_uv := seg / seg_len
+				var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+				var tan_local := _uv_to_local_xz(dir_uv, cos_y, sin_y).normalized()
+				var base_yaw := atan2(-tan_local.x, -tan_local.y)
+
+				while next_arc <= accum + seg_len:
+					var t := (next_arc - accum) / seg_len
+					var off := half_w + rng.randf_range(0.35, 0.85)
+					var pt_uv := a + seg * t + perp_uv * (side * off)
+					var pt := _uv_to_local_xz(pt_uv, cos_y, sin_y)
+
+					if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b) \
+							and _trail_distance(pt, trail_ctx) >= min_curb_clear \
+							and _grid_is_clear(stone_grid, cell_size, pt, 1.95):
+						var h := island.surface_height(pt.x, pt.y)
+						if h >= 0.65:
+							var n := island.surface_normal(pt.x, pt.y)
+							if n.y >= 0.62:
+								var sx := rng.randf_range(0.58, 0.98)
+								var sz := rng.randf_range(0.84, 1.38)
+								var sy := rng.randf_range(1.30, 2.25)
+								var slope_sink := 0.14 * clampf((0.92 - n.y) / 0.30, 0.0, 1.0)
+								var origin := Vector3(pt.x, h - 0.07 - slope_sink, pt.y)
+								# Gently tilt border rock slightly toward/away from trail shoulder.
+								var tilt_n := (n + Vector3(rng.randf_range(-0.18, 0.18), 0.0, rng.randf_range(-0.18, 0.18))).normalized()
+								var yaw := base_yaw + rng.randf_range(-0.34, 0.34)
+								var xf := _grounded_transform(origin, tilt_n, 0.72, yaw, Vector3(sx, sy, sz))
+								var curb_c := _pick_jittered_color(rng, palette, 0.015, 0.09)
+								var shade := rng.randf_range(0.88, 0.96)
+								out_xf.append(xf)
+								out_col.append(Color(curb_c.r * shade, curb_c.g * shade, curb_c.b * shade, 1.0))
+								_grid_insert(stone_grid, cell_size, pt)
+					next_arc += rng.randf_range(4.0, 5.8)
+				accum += seg_len
+
+
+# ------------------------------------------------------------------ placement & animation: living tropical butterflies
+
+static func _shuffle_vec2_array(rng: RandomNumberGenerator, arr: Array[Vector2]) -> void:
+	for i in range(arr.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp: Vector2 = arr[i]
+		arr[i] = arr[j]
+		arr[j] = tmp
+
+
+static func _place_butterflies(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, hibiscus_pos: PackedVector3Array, meadow_centers: Array[Vector2],
+		grass_pos: PackedVector3Array, trail_ctx: Dictionary, keepouts: Array[Vector3],
+		has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		out_xf: Array[Transform3D], out_col: Array[Color],
+		out_orbits: Array[Dictionary]) -> void:
+	if target <= 0:
+		return
+
+	# Build deterministic anchor pools prioritizing flowering hibiscus shrubs, trail borders, and sunlit meadows.
+	var hib_pool: Array[Vector2] = []
+	for hp in hibiscus_pos:
+		hib_pool.append(Vector2(hp.x, hp.z))
+	_shuffle_vec2_array(rng, hib_pool)
+
+	var trail_pool: Array[Vector2] = []
+	if bool(trail_ctx["active"]):
+		var half_w: float = float(trail_ctx["half_width"])
+		var cos_y: float = float(trail_ctx["cos_y"])
+		var sin_y: float = float(trail_ctx["sin_y"])
+		var polylines: Array[PackedVector2Array] = trail_ctx["polylines"] as Array[PackedVector2Array]
+		for poly in polylines:
+			var accum := 0.0
+			var next_arc := rng.randf_range(3.0, 6.0)
+			for i in range(poly.size() - 1):
+				var a := poly[i]
+				var b := poly[i + 1]
+				var seg := b - a
+				var seg_len := seg.length()
+				if seg_len < 0.001:
+					continue
+				var dir_uv := seg / seg_len
+				var perp_uv := Vector2(-dir_uv.y, dir_uv.x)
+				while next_arc <= accum + seg_len:
+					var t := (next_arc - accum) / seg_len
+					var side := 1.0 if rng.randf() < 0.5 else -1.0
+					var off := half_w + rng.randf_range(0.6, 2.4)
+					var pt := _uv_to_local_xz(a + seg * t + perp_uv * (side * off), cos_y, sin_y)
+					if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
+						trail_pool.append(pt)
+					next_arc += rng.randf_range(5.5, 9.5)
+				accum += seg_len
+	_shuffle_vec2_array(rng, trail_pool)
+
+	var meadow_pool: Array[Vector2] = []
+	for mc in meadow_centers:
+		meadow_pool.append(mc)
+	var grass_stride := maxi(1, int(float(grass_pos.size()) / 48.0))
+	var gi := 0
+	while gi < grass_pos.size():
+		meadow_pool.append(Vector2(grass_pos[gi].x, grass_pos[gi].z))
+		gi += grass_stride
+	_shuffle_vec2_array(rng, meadow_pool)
+
+	# Interleave candidates: ~55% hibiscus, ~25% trail borders, ~20% sunlit meadows.
+	var candidates: Array[Vector2] = []
+	var hi := 0
+	var ti := 0
+	var mi := 0
+	while hi < hib_pool.size() or ti < trail_pool.size() or mi < meadow_pool.size():
+		for _k in 3:
+			if hi < hib_pool.size():
+				candidates.append(hib_pool[hi])
+				hi += 1
+		if ti < trail_pool.size():
+			candidates.append(trail_pool[ti])
+			ti += 1
+		if mi < meadow_pool.size():
+			candidates.append(meadow_pool[mi])
+			mi += 1
+
+	var cell_size := maxf(4.0, radius * 0.08)
+	var bf_grid: Dictionary = {}
+	var spacing_passes: Array[float] = [clampf(radius * 0.075, 4.5, 11.5), 2.4, 0.8]
+
+	for min_sep in spacing_passes:
+		if out_orbits.size() >= target:
+			break
+		for pt in candidates:
+			if out_orbits.size() >= target:
+				break
+			if not _grid_is_clear(bf_grid, cell_size, pt, min_sep):
+				continue
+			var ground_h := island.surface_height(pt.x, pt.y)
+			if ground_h < 1.0:
+				continue
+			var orbit_rx := rng.randf_range(1.4, 3.1)
+			var orbit_rz := rng.randf_range(1.1, 2.4)
+			var safe_ground := ground_h
+			safe_ground = maxf(safe_ground, island.surface_height(pt.x + orbit_rx, pt.y))
+			safe_ground = maxf(safe_ground, island.surface_height(pt.x - orbit_rx, pt.y))
+			safe_ground = maxf(safe_ground, island.surface_height(pt.x, pt.y + orbit_rz))
+			safe_ground = maxf(safe_ground, island.surface_height(pt.x, pt.y - orbit_rz))
+			var hover_h := rng.randf_range(0.8, 3.4)
+			var home := Vector3(pt.x, maxf(ground_h + hover_h, safe_ground + 0.65), pt.y)
+
+			var orbit := {
+				"home": home,
+				"radius_x": orbit_rx,
+				"radius_z": orbit_rz,
+				"yaw_frame": rng.randf() * TAU,
+				"phase": rng.randf() * TAU,
+				"speed": rng.randf_range(0.55, 1.05),
+				"bob_amp": rng.randf_range(0.22, 0.52),
+				"bob_freq": rng.randf_range(1.5, 2.7),
+				"flap_freq": rng.randf_range(7.8, 11.6),
+				"flap_phase": rng.randf() * TAU,
+				"scale": rng.randf_range(0.85, 1.35),
+			}
+			out_orbits.append(orbit)
+			out_xf.append(_compute_butterfly_transform(orbit, 0.0))
+			out_col.append(_pick_jittered_color(rng, BUTTERFLY_PALETTE, 0.012, 0.05))
+			_grid_insert(bf_grid, cell_size, pt)
+
+
+static func _compute_butterfly_transform(orbit: Dictionary, clock: float) -> Transform3D:
+	var home: Vector3 = orbit["home"] as Vector3
+	var rx: float = float(orbit["radius_x"])
+	var rz: float = float(orbit["radius_z"])
+	var yaw_frame: float = float(orbit["yaw_frame"])
+	var phase: float = float(orbit["phase"])
+	var speed: float = float(orbit["speed"])
+	var bob_amp: float = float(orbit["bob_amp"])
+	var bob_freq: float = float(orbit["bob_freq"])
+	var flap_freq: float = float(orbit["flap_freq"])
+	var flap_phase: float = float(orbit["flap_phase"])
+	var sc: float = float(orbit["scale"])
+
+	var theta := phase + clock * speed
+	var lx := sin(theta) * rx
+	var lz := sin(theta * 2.0) * 0.5 * rz
+	var dlx := cos(theta) * rx * speed
+	var dlz := cos(theta * 2.0) * rz * speed
+
+	var cf := cos(yaw_frame)
+	var sf := sin(yaw_frame)
+	var dx := lx * cf - lz * sf
+	var dz := lx * sf + lz * cf
+	var vx := dlx * cf - dlz * sf
+	var vz := dlx * sf + dlz * cf
+
+	var flap := sin(clock * flap_freq + flap_phase)
+	var bob := sin(clock * bob_freq + phase) * bob_amp + flap * 0.045
+	var vy := cos(clock * bob_freq + phase) * bob_amp * bob_freq
+	var pos := home + Vector3(dx, bob, dz)
+
+	var horiz_sq := vx * vx + vz * vz
+	var heading_yaw := atan2(-vx, -vz) if horiz_sq > 1e-6 else yaw_frame
+	var pitch := clampf(atan2(vy, maxf(sqrt(horiz_sq), 0.35)), -0.35, 0.35)
+	var roll := flap * 0.34 + cos(theta) * 0.14
+
+	var sx_flap := sc * (1.0 - maxf(0.0, flap) * 0.22)
+	var sy_flap := sc * (1.0 + flap * 0.60)
+	var rot := Basis(Vector3.UP, heading_yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.BACK, roll)
+	return Transform3D(rot.scaled(Vector3(sx_flap, sy_flap, sc)), pos)
 
 
 # ------------------------------------------------------------------ placement: coastal shoreline layers
@@ -2076,6 +2743,31 @@ static func _get_buttress_fallback_material() -> StandardMaterial3D:
 	return _buttress_fallback_material
 
 
+static func _get_stepping_stone_material() -> StandardMaterial3D:
+	if _stepping_stone_mat == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 0.88
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.22
+		_stepping_stone_mat = mat
+	return _stepping_stone_mat
+
+
+static func _get_butterfly_material() -> StandardMaterial3D:
+	if _butterfly_mat == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.roughness = 0.55
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.25
+		_butterfly_mat = mat
+	return _butterfly_mat
+
+
 static func _get_grass_mesh() -> ArrayMesh:
 	if _grass_mesh == null:
 		_grass_mesh = _build_grass_mesh()
@@ -2122,6 +2814,18 @@ static func _get_fallback_buttress_wide_mesh() -> ArrayMesh:
 	if _fallback_buttress_wide_mesh == null:
 		_fallback_buttress_wide_mesh = _build_fallback_buttress_wide_mesh()
 	return _fallback_buttress_wide_mesh
+
+
+static func _get_stepping_stone_mesh() -> ArrayMesh:
+	if _stepping_stone_mesh == null:
+		_stepping_stone_mesh = _build_stepping_stone_mesh()
+	return _stepping_stone_mesh
+
+
+static func _get_butterfly_mesh() -> ArrayMesh:
+	if _butterfly_mesh == null:
+		_butterfly_mesh = _build_butterfly_mesh()
+	return _butterfly_mesh
 
 
 # ------------------------------------------------------------------ Mesh 1: Sculpted 10-Blade Tropical Grass Clump
@@ -2835,6 +3539,135 @@ static func _append_crag_column(st: SurfaceTool, center: Vector3, rx: float, rz:
 		var nk := (k + 1) % sides
 		_add_outward_tri(st, rings[top_i][k], apex, rings[top_i][nk], ref,
 			rcols[top_i][k], col_ledge, rcols[top_i][nk])
+
+
+# ------------------------------------------------------------------ Mesh 9: Sculpted Coastal Trail Flagstone / Curb Slab
+
+static func _build_stepping_stone_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Chunky 8-sided beveled weathered coastal flagstone (~40 tris): flat walkable top,
+	# faceted rocky sides, and a recessed -0.16 m buried bottom skirt so it never floats on slopes.
+	const SIDES := 8
+	const RX := 0.56
+	const RZ := 0.44
+
+	var col_skirt := Color(0.54, 0.50, 0.46, 1.0)
+	var col_side := Color(0.79, 0.76, 0.71, 1.0)
+	var col_bevel := Color(0.95, 0.93, 0.89, 1.0)
+	var col_top := Color(0.99, 0.97, 0.93, 1.0)
+
+	var bot_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var top_ring: Array[Vector3] = []
+	var side_cols: Array[Color] = []
+	var top_cols: Array[Color] = []
+
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU + 0.22
+		# Irregular hand-hewn flagstone silhouette (no mechanical cylinder/box symmetry).
+		var facet := 0.88 + 0.13 * sin(ang * 2.0 + 0.65) + 0.08 * cos(ang * 3.0 - 0.45)
+		var px := cos(ang) * RX * facet
+		var pz := sin(ang) * RZ * facet
+		var top_jit := 0.008 * sin(ang * 3.0 + 0.9)
+
+		bot_ring.append(Vector3(px * 0.90, -0.16, pz * 0.90))
+		mid_ring.append(Vector3(px, 0.045 + top_jit * 0.5, pz))
+		top_ring.append(Vector3(px * 0.78, 0.115 + top_jit, pz * 0.78))
+
+		var shade := clampf(0.93 + 0.08 * sin(ang * 2.0 + 1.1), 0.86, 1.04)
+		side_cols.append(Color(
+			clampf(col_side.r * shade, 0.0, 1.0),
+			clampf(col_side.g * shade, 0.0, 1.0),
+			clampf(col_side.b * shade, 0.0, 1.0),
+			1.0))
+		top_cols.append(Color(
+			clampf(col_bevel.r * (0.96 + 0.04 * shade), 0.0, 1.0),
+			clampf(col_bevel.g * (0.96 + 0.04 * shade), 0.0, 1.0),
+			clampf(col_bevel.b * (0.96 + 0.04 * shade), 0.0, 1.0),
+			1.0))
+
+	var top_center := Vector3(0.0, 0.125, 0.0)
+	var ref_center := Vector3(0.0, -0.04, 0.0)
+
+	# 8 * 2 (skirt -> shoulder) + 8 * 2 (shoulder -> top bevel) + 8 (flat top cap) = 40 tris.
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_quad(st, bot_ring[k], mid_ring[k], mid_ring[nk], bot_ring[nk], ref_center,
+			col_skirt, side_cols[k], side_cols[nk], col_skirt)
+		_add_outward_quad(st, mid_ring[k], top_ring[k], top_ring[nk], mid_ring[nk], ref_center,
+			side_cols[k], top_cols[k], top_cols[nk], side_cols[nk])
+		_add_outward_tri(st, top_ring[k], top_center, top_ring[nk], ref_center,
+			top_cols[k], col_top, top_cols[nk])
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 10: Sculpted Swallowtail Tropical Butterfly
+
+static func _build_butterfly_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 24-tri sculpted swallowtail butterfly facing local -Z:
+	# tapered 3D thorax/abdomen body (8 tris) + 4 angled faceted wings (16 tris) with
+	# velvety dark wingtips & luminous inner wing panels multiplied by per-instance species tint.
+	var col_body := Color(0.14, 0.12, 0.15, 1.0)
+	var col_body_hi := Color(0.24, 0.21, 0.25, 1.0)
+	var col_root := Color(0.24, 0.22, 0.26, 1.0)
+	var col_panel_hi := Color(1.00, 0.99, 0.96, 1.0)
+	var col_panel_lo := Color(0.94, 0.93, 0.89, 1.0)
+	var col_margin := Color(0.20, 0.18, 0.22, 1.0)
+	var col_tip := Color(0.13, 0.12, 0.16, 1.0)
+
+	# 1. Tapered 3D thorax/body (8 tris).
+	var head := Vector3(0.0, 0.012, -0.105)
+	var tail := Vector3(0.0, -0.004, 0.115)
+	var body_ring: Array[Vector3] = [
+		Vector3(0.0, 0.024, -0.020),
+		Vector3(0.018, 0.004, -0.020),
+		Vector3(0.0, -0.014, -0.020),
+		Vector3(-0.018, 0.004, -0.020),
+	]
+	var body_ref := Vector3(0.0, 0.004, 0.0)
+	for k in 4:
+		var nk := (k + 1) % 4
+		var ck := col_body_hi if k == 0 else col_body
+		var cnk := col_body_hi if nk == 0 else col_body
+		_add_outward_tri(st, head, body_ring[k], body_ring[nk], body_ref, col_body, ck, cnk)
+		_add_outward_tri(st, tail, body_ring[nk], body_ring[k], body_ref, col_body, cnk, ck)
+
+	# 2. Left & right swept forewings + swallowtail hindwings (16 tris, upward +Y normals).
+	var wing_ref := Vector3(0.0, -1.0, 0.0)
+	for side: float in [-1.0, 1.0]:
+		# Swept angled forewing (4 tris).
+		var fw_rf := Vector3(side * 0.014, 0.010, -0.055)
+		var fw_rr := Vector3(side * 0.014, 0.006, 0.012)
+		var fw_mf := Vector3(side * 0.115, 0.052, -0.052)
+		var fw_mr := Vector3(side * 0.105, 0.042, 0.018)
+		var fw_tip := Vector3(side * 0.215, 0.092, -0.095)
+		var fw_out := Vector3(side * 0.188, 0.068, 0.010)
+		_add_outward_tri(st, fw_rf, fw_mf, fw_rr, wing_ref, col_root, col_panel_hi, col_root)
+		_add_outward_tri(st, fw_rr, fw_mf, fw_mr, wing_ref, col_root, col_panel_hi, col_panel_lo)
+		_add_outward_tri(st, fw_mf, fw_tip, fw_out, wing_ref, col_panel_hi, col_tip, col_margin)
+		_add_outward_tri(st, fw_mf, fw_out, fw_mr, wing_ref, col_panel_hi, col_margin, col_panel_lo)
+
+		# Swallowtail hindwing with pointed streamer tip (4 tris).
+		var hw_rf := Vector3(side * 0.013, 0.006, 0.006)
+		var hw_rr := Vector3(side * 0.010, 0.002, 0.072)
+		var hw_mo := Vector3(side * 0.128, 0.036, 0.038)
+		var hw_mr := Vector3(side * 0.072, 0.020, 0.096)
+		var hw_rim := Vector3(side * 0.146, 0.030, 0.088)
+		var hw_tail := Vector3(side * 0.086, 0.014, 0.168)
+		_add_outward_tri(st, hw_rf, hw_mo, hw_rr, wing_ref, col_root, col_panel_hi, col_root)
+		_add_outward_tri(st, hw_rr, hw_mo, hw_mr, wing_ref, col_root, col_panel_hi, col_panel_lo)
+		_add_outward_tri(st, hw_mo, hw_rim, hw_mr, wing_ref, col_panel_hi, col_margin, col_panel_lo)
+		_add_outward_tri(st, hw_mr, hw_rim, hw_tail, wing_ref, col_panel_lo, col_margin, col_tip)
+
+	st.generate_normals()
+	return st.commit()
 
 
 # ------------------------------------------------------------------ SurfaceTool geometry primitives
