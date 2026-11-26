@@ -174,3 +174,114 @@ func test_pawn_walks_whole_ship_upright() -> void:
 	pawn.queue_free()
 	body.queue_free()
 	s.queue_free()
+
+func test_world_and_ship_pbr_texture_quality() -> void:
+	const TEX_ROOT := "res://assets/generated/textures/"
+	# [filename, min_lum, max_lum, min_std]
+	const ALBEDO_SPECS := [
+		["terrain_grass_albedo.png", 0.30, 0.46, 0.055],
+		["terrain_dirt_albedo.png", 0.32, 0.48, 0.050],
+		["terrain_sand_albedo.png", 0.64, 0.80, 0.055],
+		["terrain_cliff_albedo.png", 0.50, 0.68, 0.080],
+		["terrain_volcanic_albedo.png", 0.13, 0.25, 0.050],
+		["ship_oak_albedo.png", 0.80, 0.89, 0.100],
+		["ship_paint_albedo.png", 0.84, 0.93, 0.025],
+		["ship_iron_albedo.png", 0.77, 0.86, 0.024],
+		["ship_brass_albedo.png", 0.85, 0.94, 0.024],
+		["ship_rope_albedo.png", 0.81, 0.90, 0.110],
+		["ship_cloth_albedo.png", 0.88, 0.97, 0.035],
+	]
+	const NORMAL_FILES := [
+		"terrain_grass_normal.png", "terrain_dirt_normal.png", "terrain_sand_normal.png",
+		"terrain_cliff_normal.png", "terrain_volcanic_normal.png", "ship_oak_normal.png",
+		"ship_paint_normal.png", "ship_iron_normal.png", "ship_brass_normal.png",
+		"ship_rope_normal.png", "ship_cloth_normal.png",
+	]
+	const ROUGH_FILES := [
+		"ship_oak_rough.png", "ship_paint_rough.png", "ship_iron_rough.png",
+		"ship_brass_rough.png", "ship_rope_rough.png",
+	]
+
+	for spec: Array in ALBEDO_SPECS:
+		var fname: String = String(spec[0])
+		var path: String = TEX_ROOT + fname
+		check(ResourceLoader.exists(path), "missing PBR albedo: " + path)
+		var tex := load(path) as Texture2D
+		check(tex != null and tex.get_width() == 1024 and tex.get_height() == 1024,
+			"%s imported size is 1024x1024 (got %s)" % [fname, Vector2i(tex.get_width(), tex.get_height()) if tex else Vector2i.ZERO])
+		var img := Image.load_from_file(ProjectSettings.globalize_path(path))
+		check(img != null and img.get_width() == 1024 and img.get_height() == 1024, "%s source PNG loads 1024x1024" % fname)
+		if img == null:
+			continue
+		var sum_l := 0.0
+		var sum_l2 := 0.0
+		var n := 0
+		for py in range(3, 1024, 13):
+			for px in range(3, 1024, 13):
+				var c := img.get_pixel(px, py)
+				var lum := 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+				sum_l += lum
+				sum_l2 += lum * lum
+				n += 1
+		var mean_l := sum_l / float(n)
+		var std_l := sqrt(maxf(0.0, sum_l2 / float(n) - mean_l * mean_l))
+		check(mean_l >= float(spec[1]) and mean_l <= float(spec[2]),
+			"%s mean lum %.3f in [%.2f, %.2f]" % [fname, mean_l, float(spec[1]), float(spec[2])])
+		check(std_l >= float(spec[3]), "%s contrast std %.3f >= %.3f" % [fname, std_l, float(spec[3])])
+
+		var lr_diff := 0.0
+		var tb_diff := 0.0
+		var b_cnt := 0
+		for i in range(0, 1024, 4):
+			var cl := img.get_pixel(0, i)
+			var cr := img.get_pixel(1023, i)
+			lr_diff += (absf(cl.r - cr.r) + absf(cl.g - cr.g) + absf(cl.b - cr.b)) / 3.0
+			var ct := img.get_pixel(i, 0)
+			var cb := img.get_pixel(i, 1023)
+			tb_diff += (absf(ct.r - cb.r) + absf(ct.g - cb.g) + absf(ct.b - cb.b)) / 3.0
+			b_cnt += 1
+		lr_diff /= float(b_cnt)
+		tb_diff /= float(b_cnt)
+		check(lr_diff < 0.04 and tb_diff < 0.04,
+			"%s seamless borders LR=%.4f TB=%.4f (< 0.04)" % [fname, lr_diff, tb_diff])
+
+	for fname: String in NORMAL_FILES:
+		var path: String = TEX_ROOT + fname
+		check(ResourceLoader.exists(path), "missing PBR normal: " + path)
+		var tex := load(path) as Texture2D
+		check(tex != null and tex.get_width() == 1024 and tex.get_height() == 1024,
+			"%s imported size is 1024x1024" % fname)
+		var img := Image.load_from_file(ProjectSettings.globalize_path(path))
+		if img == null:
+			continue
+		var sum_r := 0.0
+		var sum_g := 0.0
+		var sum_b := 0.0
+		var sum_r2 := 0.0
+		var sum_g2 := 0.0
+		var n := 0
+		for py in range(3, 1024, 13):
+			for px in range(3, 1024, 13):
+				var c := img.get_pixel(px, py)
+				sum_r += c.r
+				sum_g += c.g
+				sum_b += c.b
+				sum_r2 += c.r * c.r
+				sum_g2 += c.g * c.g
+				n += 1
+		var mr := sum_r / float(n)
+		var mg := sum_g / float(n)
+		var mb := sum_b / float(n)
+		var sr := sqrt(maxf(0.0, sum_r2 / float(n) - mr * mr))
+		var sg := sqrt(maxf(0.0, sum_g2 / float(n) - mg * mg))
+		check(mr > 0.45 and mr < 0.55 and mg > 0.45 and mg < 0.55 and mb > 0.85,
+			"%s tangent-space normal mean (%.3f, %.3f, %.3f)" % [fname, mr, mg, mb])
+		check(maxf(sr, sg) >= 0.03, "%s crisp relief normal std (%.3f, %.3f >= 0.03)" % [fname, sr, sg])
+
+	for fname: String in ROUGH_FILES:
+		var path: String = TEX_ROOT + fname
+		check(ResourceLoader.exists(path), "missing PBR roughness: " + path)
+		var tex := load(path) as Texture2D
+		check(tex != null and tex.get_width() == 1024 and tex.get_height() == 1024,
+			"%s imported size is 1024x1024" % fname)
+

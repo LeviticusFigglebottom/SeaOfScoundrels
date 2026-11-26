@@ -2416,6 +2416,18 @@ static func build_fp_hands_for_tool(tool_id: StringName) -> Node3D:
 	return root
 
 
+## Build a dynamic sculpted first-person pirate hand pair (`LeftHand` + `RightHand`)
+## for ship stations (helm, capstan, sails, bilge pump, rowboat oars) and carried items.
+## Reuses the exact WeakRef-cached zero-primitive, zero-extra-VRAM hand meshes & materials
+## cleared by `clear_shared_cache()`.
+static func build_fp_hand_pair(grip_style: StringName = &"fist_grip") -> Node3D:
+	var root := Node3D.new()
+	root.name = "FPActionHands"
+	_attach_fp_hand(root, true, grip_style, Vector3(-0.24, -0.26, -0.46), Vector3.ZERO)
+	_attach_fp_hand(root, false, grip_style, Vector3(0.24, -0.26, -0.46), Vector3.ZERO)
+	return root
+
+
 static func _attach_fp_hand(
 	parent: Node3D,
 	is_left: bool,

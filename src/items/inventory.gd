@@ -89,6 +89,16 @@ const FP_POSES := {
 	&"speaking_trumpet": [Vector3(0.20, -0.21, -0.40), Vector3(8.0, -10.0, 4.0), Vector3(0.0, -0.10, -0.28), Vector3(-3.0, 0.0, 0.0), 0.92],
 }
 
+## Ship/dinghy station kinds that display sculpted dynamic first-person action hands.
+const ACTION_HAND_STATIONS: Array[StringName] = [
+	&"helm",
+	&"anchor",
+	&"sail_length",
+	&"sail_angle",
+	&"bilge",
+	&"rowboat_oars",
+]
+
 ## Ordered tool/weapon slots in the player's belt.
 var slots: Array[StringName] = DEFAULT_SLOTS.duplicate()
 var active_index: int = 0
@@ -109,6 +119,7 @@ var map_table: MapTableView = null
 
 var viewmodel_root: Node3D = null
 var fp_tool_node: Node3D = null
+var fp_action_hands: Node3D = null
 var tp_mount: Node3D = null
 var tp_tool_node: Node3D = null
 
@@ -194,6 +205,28 @@ var _trumpet_cooldown: float = 0.0
 var _trumpet_display_timer: float = 0.0
 var _fp_trumpet_node: Node3D = null
 var _trumpet_pulses: Array[Dictionary] = []
+var _fp_action_left: Node3D = null
+var _fp_action_right: Node3D = null
+var _action_mode: StringName = &""
+var _action_pose_init: bool = false
+var _action_enter_blend: float = 0.0
+var _action_prev_helm: float = 0.0
+var _action_helm_vel: float = 0.0
+var _action_helm_cycle: float = 0.0
+var _action_prev_anchor: float = 0.0
+var _action_anchor_phase: float = 0.0
+var _action_anchor_effort: float = 0.0
+var _action_prev_sail_set: float = 0.0
+var _action_prev_sail_trim: float = 0.0
+var _action_rope_phase: float = 0.0
+var _action_rope_effort: float = 0.0
+var _action_bilge_phase: float = 0.0
+var _action_bilge_effort: float = 0.0
+var _action_prev_water: float = 0.0
+var _action_oar_phase_l: float = 0.0
+var _action_oar_phase_r: float = 0.0
+var _action_oar_effort_l: float = 0.0
+var _action_oar_effort_r: float = 0.0
 var _rng := RandomNumberGenerator.new()
 
 # Statically cached zero-primitive sculpted particle ArrayMeshes (released when _active_inventories hits 0).
@@ -259,6 +292,16 @@ func apply_tool_modifiers(mods: Dictionary) -> void:
 func _exit_tree() -> void:
 	_clear_speaking_trumpet_fx(false)
 	_detach_captain_shanty_motes(false)
+	if pawn != null and is_instance_valid(pawn):
+		if pawn.station_changed.is_connected(_on_pawn_action_state_changed):
+			pawn.station_changed.disconnect(_on_pawn_action_state_changed)
+		if pawn.carried_changed.is_connected(_on_pawn_action_state_changed):
+			pawn.carried_changed.disconnect(_on_pawn_action_state_changed)
+	if fp_action_hands != null and is_instance_valid(fp_action_hands):
+		fp_action_hands.queue_free()
+	fp_action_hands = null
+	_fp_action_left = null
+	_fp_action_right = null
 	if playing_shanty:
 		set_playing_shanty(false)
 	treasure_map_texture = null
@@ -319,6 +362,11 @@ func _discover_siblings() -> void:
 
 
 func _connect_bindings() -> void:
+	if pawn != null and is_instance_valid(pawn):
+		if not pawn.station_changed.is_connected(_on_pawn_action_state_changed):
+			pawn.station_changed.connect(_on_pawn_action_state_changed)
+		if not pawn.carried_changed.is_connected(_on_pawn_action_state_changed):
+			pawn.carried_changed.connect(_on_pawn_action_state_changed)
 	if combat != null:
 		if not combat.attack_started.is_connected(_on_combat_attack_started):
 			combat.attack_started.connect(_on_combat_attack_started)
@@ -326,6 +374,12 @@ func _connect_bindings() -> void:
 			combat.parried.connect(_on_combat_parried)
 	if visual != null and not visual.rig_changed.is_connected(_on_visual_rig_changed):
 		visual.rig_changed.connect(_on_visual_rig_changed)
+
+
+func _on_pawn_action_state_changed(_arg: Node3D) -> void:
+	_ensure_mounts()
+	_tick_action_hands(0.0)
+	_sync_visibility()
 
 
 func _on_visual_rig_changed(_skel: Skeleton3D) -> void:
@@ -342,6 +396,17 @@ func _ensure_mounts() -> void:
 				viewmodel_root = Node3D.new()
 				viewmodel_root.name = "ViewmodelRig"
 				player_controller.camera.add_child(viewmodel_root)
+		if fp_action_hands == null or not is_instance_valid(fp_action_hands):
+			fp_action_hands = viewmodel_root.get_node_or_null(^"FPActionHands") as Node3D
+			if fp_action_hands == null:
+				fp_action_hands = ToolMeshes.build_fp_hand_pair(&"fist_grip")
+				_configure_fp_node(fp_action_hands)
+				fp_action_hands.visible = false
+				viewmodel_root.add_child(fp_action_hands)
+			else:
+				_configure_fp_node(fp_action_hands)
+			_fp_action_left = fp_action_hands.get_node_or_null(^"LeftHand") as Node3D
+			_fp_action_right = fp_action_hands.get_node_or_null(^"RightHand") as Node3D
 	if visual != null and visual.hand_right != null:
 		if tp_mount == null or not is_instance_valid(tp_mount):
 			tp_mount = visual.hand_right.get_node_or_null(^"ToolMount") as Node3D
@@ -441,6 +506,8 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 		if not silent:
 			Audio.play_sfx(&"ui_tick", Vector3.INF, -5.0, 0.06)
 	_tick_viewmodel_pose(0.0)
+	_tick_action_hands(0.0)
+	_sync_visibility()
 	item_equipped.emit(active_item)
 	return true
 
@@ -1557,7 +1624,7 @@ func _process(delta: float) -> void:
 			var pos := pawn.eye_position() if pawn != null else Vector3.INF
 			Audio.play_sfx(&"burp", pos, -2.5)
 
-	if pawn == null or player_controller == null or viewmodel_root == null:
+	if pawn == null or player_controller == null or viewmodel_root == null or (viewmodel_root != null and fp_action_hands == null):
 		_discover_siblings()
 
 	_poll_input(delta)
@@ -1568,6 +1635,7 @@ func _process(delta: float) -> void:
 	_tick_lantern_flicker(delta)
 	_tick_speaking_trumpet_fx(delta)
 	_tick_viewmodel_pose(delta)
+	_tick_action_hands(delta)
 	_sync_visibility()
 
 
@@ -2515,6 +2583,395 @@ static func _eval_tool_swing(
 	return [pos, rot]
 
 
+func _get_station_kind() -> StringName:
+	if pawn == null or not is_instance_valid(pawn) or pawn.station == null or not is_instance_valid(pawn.station):
+		return &""
+	var kind_v: Variant = pawn.station.get(&"kind")
+	return StringName(kind_v) if kind_v != null else &""
+
+
+func _get_station_ship() -> Node3D:
+	if pawn == null or not is_instance_valid(pawn) or pawn.station == null or not is_instance_valid(pawn.station):
+		return null
+	var st_ship: Variant = pawn.station.get(&"ship")
+	if st_ship is Node3D and is_instance_valid(st_ship):
+		return st_ship as Node3D
+	if pawn.platform is Node3D and is_instance_valid(pawn.platform):
+		return pawn.platform as Node3D
+	return null
+
+
+func _get_action_hand_mode() -> StringName:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead:
+		return &""
+	var showing_trumpet := _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node) and _trumpet_display_timer > 0.0
+	if showing_trumpet and pawn.station == null:
+		return &""
+	if pawn.carried != null and is_instance_valid(pawn.carried):
+		return &"carry"
+	if pawn.station != null and is_instance_valid(pawn.station):
+		var sk := _get_station_kind()
+		if ACTION_HAND_STATIONS.has(sk):
+			return sk
+	return &""
+
+
+func _tick_action_hands(delta: float) -> void:
+	if fp_action_hands == null or not is_instance_valid(fp_action_hands):
+		return
+	if _fp_action_left == null or not is_instance_valid(_fp_action_left):
+		_fp_action_left = fp_action_hands.get_node_or_null(^"LeftHand") as Node3D
+	if _fp_action_right == null or not is_instance_valid(_fp_action_right):
+		_fp_action_right = fp_action_hands.get_node_or_null(^"RightHand") as Node3D
+	if _fp_action_left == null or _fp_action_right == null:
+		return
+
+	var mode := _get_action_hand_mode()
+	if mode == &"":
+		_action_mode = &""
+		_action_pose_init = false
+		_action_enter_blend = 0.0
+		return
+
+	var dt := clampf(delta, 0.0, 0.05)
+	var st_ship := _get_station_ship()
+	if mode != _action_mode or not _action_pose_init:
+		_action_mode = mode
+		_action_pose_init = true
+		_action_enter_blend = 0.0
+		_action_helm_vel = 0.0
+		_action_helm_cycle = 0.0
+		_action_anchor_phase = 0.0
+		_action_anchor_effort = 0.0
+		_action_rope_phase = 0.0
+		_action_rope_effort = 0.0
+		_action_bilge_phase = 0.0
+		_action_bilge_effort = 0.0
+		_action_oar_phase_l = 0.0
+		_action_oar_phase_r = 0.0
+		_action_oar_effort_l = 0.0
+		_action_oar_effort_r = 0.0
+		if st_ship != null:
+			var h_v: Variant = st_ship.get(&"helm")
+			_action_prev_helm = float(h_v) if h_v != null else 0.0
+			var a_v: Variant = st_ship.get(&"anchor_progress")
+			_action_prev_anchor = float(a_v) if a_v != null else 0.0
+			var ss_v: Variant = st_ship.get(&"sail_set")
+			_action_prev_sail_set = float(ss_v) if ss_v != null else 0.0
+			var st_v: Variant = st_ship.get(&"sail_trim")
+			_action_prev_sail_trim = float(st_v) if st_v != null else 0.0
+			var w_v: Variant = st_ship.get(&"water_level")
+			_action_prev_water = float(w_v) if w_v != null else 0.0
+		else:
+			_action_prev_helm = 0.0
+			_action_prev_anchor = 0.0
+			_action_prev_sail_set = 0.0
+			_action_prev_sail_trim = 0.0
+			_action_prev_water = 0.0
+
+	if dt > 0.0:
+		_action_enter_blend = move_toward(_action_enter_blend, 1.0, dt * 7.2)
+	else:
+		_action_enter_blend = 1.0
+	var enter_s := smoothstep(0.0, 1.0, _action_enter_blend)
+	var enter_drop := (1.0 - enter_s) * 0.082
+	var breath := sin(_clock * 1.9) + 0.35 * sin(_clock * 3.8 + 0.4)
+	var smooth_dt := maxf(dt, 0.016)
+
+	var l_pos := Vector3(-0.24, -0.26, -0.46)
+	var r_pos := Vector3(0.24, -0.26, -0.46)
+	var l_rot := Vector3(12.0, -14.0, 0.0)
+	var r_rot := Vector3(12.0, 14.0, 0.0)
+
+	match mode:
+		&"helm":
+			# 1. Ship's Wheel: grip left & right rim cleanly in lower corners so the
+			#    center King Spoke & fixed brass rudder-indicator arch stay 100% clear.
+			var helm_val := 0.0
+			if st_ship != null:
+				var hv: Variant = st_ship.get(&"helm")
+				if hv != null:
+					helm_val = clampf(float(hv), -1.0, 1.0)
+			var d_helm := clampf(helm_val - _action_prev_helm, -0.35, 0.35)
+			_action_prev_helm = helm_val
+			var inst_vel := (d_helm / maxf(dt, 0.008)) if dt > 0.0 else 0.0
+			_action_helm_vel = lerpf(_action_helm_vel, clampf(inst_vel, -1.6, 1.6), 1.0 - exp(-10.0 * smooth_dt))
+			_action_helm_cycle = wrapf(_action_helm_cycle + d_helm * 15.0, -PI, PI)
+
+			var turn_dir := clampf(_action_helm_vel / 0.55, -1.0, 1.0)
+			var turn_mag := absf(turn_dir)
+			var s_turn := 1.0 if turn_dir >= 0.0 else -1.0
+			var rim_r := 0.240
+			var wheel_center := Vector3(0.0, -0.305, -0.455)
+
+			var theta_r := clampf(helm_val * 0.16 + sin(_action_helm_cycle) * 0.22 * turn_mag + turn_dir * 0.05, -0.36, 0.36)
+			var theta_l := clampf(helm_val * 0.16 + sin(_action_helm_cycle + PI) * 0.22 * turn_mag + turn_dir * 0.05, -0.36, 0.36)
+			var reach_r := clampf(-cos(_action_helm_cycle) * s_turn, 0.0, 1.0) * turn_mag
+			var reach_l := clampf(cos(_action_helm_cycle) * s_turn, 0.0, 1.0) * turn_mag
+
+			var roll_x := clampf(_ship_roll_lag * 0.022, -0.018, 0.018)
+			var roll_z_deg := -_ship_roll_lag * 10.5
+			var sway_x := clampf(_sway_yaw * 0.012, -0.015, 0.015)
+			var sway_y := clampf(-_sway_pitch * 0.010, -0.012, 0.012)
+			var breath_y := breath * 0.0032
+
+			l_pos = Vector3(
+				wheel_center.x - rim_r * cos(theta_l) - 0.020 * reach_l + roll_x + sway_x,
+				wheel_center.y + rim_r * sin(theta_l) + breath_y + sway_y,
+				wheel_center.z + 0.022 * reach_l - 0.010 * turn_mag * (1.0 - reach_l)
+			)
+			r_pos = Vector3(
+				wheel_center.x + rim_r * cos(theta_r) + 0.020 * reach_r + roll_x + sway_x,
+				wheel_center.y - rim_r * sin(theta_r) + breath_y + sway_y,
+				wheel_center.z + 0.022 * reach_r - 0.010 * turn_mag * (1.0 - reach_r)
+			)
+			l_rot = Vector3(
+				14.0 + rad_to_deg(theta_l) * 0.28 - reach_l * 6.0,
+				-14.0 + _sway_yaw * 3.0,
+				-18.0 - rad_to_deg(theta_l) * 0.65 + roll_z_deg
+			)
+			r_rot = Vector3(
+				14.0 - rad_to_deg(theta_r) * 0.28 - reach_r * 6.0,
+				14.0 + _sway_yaw * 3.0,
+				18.0 - rad_to_deg(theta_r) * 0.65 + roll_z_deg
+			)
+
+		&"anchor":
+			# 2. Anchor Capstan: both hands braced forward over wooden capstan bar with
+			#    rhythmic forward heaving-strain thrusts synced to Ship.anchor_progress.
+			var anc := _action_prev_anchor
+			var heaving := false
+			if st_ship != null:
+				var av: Variant = st_ship.get(&"anchor_progress")
+				if av != null:
+					anc = clampf(float(av), 0.0, 1.0)
+				var hv: Variant = st_ship.get(&"_capstan_heaving_this_tick")
+				if hv is bool and (hv as bool):
+					heaving = true
+			var d_anc := absf(anc - _action_prev_anchor)
+			_action_prev_anchor = anc
+			if d_anc > 0.00005:
+				heaving = true
+			if heaving:
+				_action_anchor_effort = lerpf(_action_anchor_effort, 1.0, 1.0 - exp(-10.0 * smooth_dt))
+				_action_anchor_phase = fmod(_action_anchor_phase + clampf(d_anc * 34.0, 0.0, 0.9) + dt * 5.2, TAU)
+			else:
+				_action_anchor_effort = lerpf(_action_anchor_effort, 0.0, 1.0 - exp(-7.0 * smooth_dt))
+
+			var brace := pow(maxf(0.0, sin(_action_anchor_phase)), 1.5) * _action_anchor_effort
+			var rock := cos(_action_anchor_phase * 0.5) * 0.016 * _action_anchor_effort
+			var tremor := sin(_clock * 42.0) * 0.0022 * brace
+			var push_z := -0.056 * brace
+			var heave_y := -0.028 * brace + breath * 0.0038
+			var roll_x := _ship_roll_lag * 0.020
+
+			l_pos = Vector3(-0.19 + rock + tremor + roll_x, -0.22 + heave_y, -0.44 + push_z)
+			r_pos = Vector3(0.19 + rock - tremor + roll_x, -0.22 + heave_y, -0.44 + push_z)
+			l_rot = Vector3(12.0 - 13.0 * brace, -8.0 + _sway_yaw * 2.5, -76.0 - _ship_roll_lag * 8.0)
+			r_rot = Vector3(12.0 - 13.0 * brace, 8.0 + _sway_yaw * 2.5, 76.0 - _ship_roll_lag * 8.0)
+
+		&"sail_length", &"sail_angle":
+			# 3. Sail Hoist / Sail Braces: alternating opposite-phase hand-over-hand rope pulling
+			#    driven by Ship.sail_set or Ship.sail_trim, resting gripped when belayed.
+			var is_brace := (mode == &"sail_angle")
+			var d_val := 0.0
+			if st_ship != null:
+				if is_brace:
+					var tv: Variant = st_ship.get(&"sail_trim")
+					if tv != null:
+						var cur_t := float(tv)
+						d_val = cur_t - _action_prev_sail_trim
+						_action_prev_sail_trim = cur_t
+				else:
+					var sv: Variant = st_ship.get(&"sail_set")
+					if sv != null:
+						var cur_s := float(sv)
+						d_val = cur_s - _action_prev_sail_set
+						_action_prev_sail_set = cur_s
+			if absf(d_val) > 0.00005:
+				var dir_s := 1.0 if d_val >= 0.0 else -1.0
+				_action_rope_effort = lerpf(_action_rope_effort, 1.0, 1.0 - exp(-11.0 * smooth_dt))
+				_action_rope_phase = wrapf(_action_rope_phase + dir_s * (clampf(absf(d_val) * 28.0, 0.0, 0.85) + dt * 5.8), -PI, PI)
+			else:
+				_action_rope_effort = lerpf(_action_rope_effort, 0.0, 1.0 - exp(-7.5 * smooth_dt))
+
+			var eff := _action_rope_effort
+			var pl := _action_rope_phase
+			var pr := _action_rope_phase + PI
+			var l_base := Vector3(-0.21, -0.21, -0.45) if is_brace else Vector3(-0.18, -0.19, -0.44)
+			var r_base := Vector3(0.21, -0.25, -0.44) if is_brace else Vector3(0.18, -0.27, -0.45)
+			var y_amp := 0.072 if is_brace else 0.088
+			var roll_x := _ship_roll_lag * 0.020
+
+			var l_dx := -(maxf(0.0, cos(pl)) * 0.026 + (absf(sin(pl)) * 0.020 if is_brace else 0.0)) * eff
+			var r_dx := (maxf(0.0, cos(pr)) * 0.026 + (absf(sin(pr)) * 0.020 if is_brace else 0.0)) * eff
+			l_pos = l_base + Vector3(l_dx + roll_x, sin(pl) * y_amp * eff + breath * 0.0035, cos(pl) * 0.044 * eff)
+			r_pos = r_base + Vector3(r_dx + roll_x, sin(pr) * y_amp * eff + breath * 0.0035, cos(pr) * 0.044 * eff)
+			var base_roll := 34.0 if is_brace else 24.0
+			var base_yaw := 18.0 if is_brace else 24.0
+			l_rot = Vector3(15.0 + sin(pl) * 14.0 * eff, -base_yaw + _sway_yaw * 3.0, -base_roll - _ship_roll_lag * 8.0)
+			r_rot = Vector3(13.0 + sin(pr) * 14.0 * eff, base_yaw + _sway_yaw * 3.0, base_roll - _ship_roll_lag * 8.0)
+
+		&"bilge":
+			# 4. Bilge Pump: both hands gripping the oak pump lever, synced to ShipDamageVisuals
+			#    pump stroke angle or active bailing / swing timer.
+			var pump_active := _swing_timer > 0.0
+			if input_enabled and Input.is_action_pressed(&"primary"):
+				pump_active = true
+			var pump_angle := 0.0
+			var has_live_pump := false
+			if st_ship != null:
+				var wv: Variant = st_ship.get(&"water_level")
+				if wv != null:
+					var w_cur := float(wv)
+					if _action_prev_water - w_cur > 0.00005:
+						pump_active = true
+					_action_prev_water = w_cur
+				if st_ship.has_method(&"get_damage_visuals"):
+					var dv: Variant = st_ship.call(&"get_damage_visuals")
+					if dv is Node and is_instance_valid(dv):
+						var t_v: Variant = (dv as Object).get(&"_pump_active_timer")
+						var a_v: Variant = (dv as Object).get(&"_pump_handle_angle")
+						if t_v != null and float(t_v) > 0.001:
+							pump_active = true
+						if a_v != null:
+							pump_angle = float(a_v)
+							has_live_pump = true
+
+			var lever_y := 0.0
+			var arc_z := 0.0
+			var pitch_off := 0.0
+			if has_live_pump and absf(pump_angle) > 0.002:
+				var stroke := clampf(-pump_angle / 0.50, -1.0, 1.0)
+				lever_y = stroke * 0.095
+				arc_z = (1.0 - cos(pump_angle)) * 0.055
+				pitch_off = stroke * 18.0
+			else:
+				if pump_active:
+					_action_bilge_effort = lerpf(_action_bilge_effort, 1.0, 1.0 - exp(-12.0 * smooth_dt))
+					_action_bilge_phase = fmod(_action_bilge_phase + dt * 10.5, TAU)
+				else:
+					_action_bilge_effort = lerpf(_action_bilge_effort, 0.0, 1.0 - exp(-7.5 * smooth_dt))
+				var stroke := sin(_action_bilge_phase) * _action_bilge_effort
+				lever_y = stroke * 0.090
+				arc_z = (1.0 - absf(cos(_action_bilge_phase))) * 0.032 * _action_bilge_effort
+				pitch_off = stroke * 18.0
+
+			var roll_x := _ship_roll_lag * 0.016
+			l_pos = Vector3(-0.165 + roll_x, -0.23 + lever_y + breath * 0.0035, -0.45 + arc_z)
+			r_pos = Vector3(0.165 + roll_x, -0.23 + lever_y + breath * 0.0035, -0.41 + arc_z)
+			l_rot = Vector3(12.0 + pitch_off, -14.0 + _sway_yaw * 2.5, -72.0 - _ship_roll_lag * 7.0)
+			r_rot = Vector3(10.0 + pitch_off, 14.0 + _sway_yaw * 2.5, 72.0 - _ship_roll_lag * 7.0)
+
+		&"rowboat_oars":
+			# 5. Rowboat Oars: wide-set twin oar handles tracking independent port/starboard oar phase.
+			if st_ship != null:
+				var pp_v: Variant = st_ship.get(&"_port_oar_phase")
+				var sp_v: Variant = st_ship.get(&"_stbd_oar_phase")
+				var pe_v: Variant = st_ship.get(&"_port_oar_effort")
+				var se_v: Variant = st_ship.get(&"_stbd_oar_effort")
+				if pp_v != null:
+					_action_oar_phase_l = float(pp_v)
+				if sp_v != null:
+					_action_oar_phase_r = float(sp_v)
+				var k_oar := 1.0 - exp(-11.0 * smooth_dt)
+				_action_oar_effort_l = lerpf(_action_oar_effort_l, absf(float(pe_v)) if pe_v != null else 0.0, k_oar)
+				_action_oar_effort_r = lerpf(_action_oar_effort_r, absf(float(se_v)) if se_v != null else 0.0, k_oar)
+
+			var el := clampf(_action_oar_effort_l, 0.0, 1.0)
+			var er := clampf(_action_oar_effort_r, 0.0, 1.0)
+			var l_dx := -(1.0 - cos(_action_oar_phase_l)) * 0.016 * el
+			var r_dx := (1.0 - cos(_action_oar_phase_r)) * 0.016 * er
+			l_pos = Vector3(
+				-0.28 + l_dx + _sway_yaw * 0.014,
+				-0.24 + cos(_action_oar_phase_l) * 0.036 * el + breath * 0.004,
+				-0.42 + sin(_action_oar_phase_l) * 0.082 * el
+			)
+			r_pos = Vector3(
+				0.28 + r_dx + _sway_yaw * 0.014,
+				-0.24 + cos(_action_oar_phase_r) * 0.036 * er + breath * 0.004,
+				-0.42 + sin(_action_oar_phase_r) * 0.082 * er
+			)
+			l_rot = Vector3(
+				10.0 - cos(_action_oar_phase_l) * 15.0 * el,
+				-12.0 + sin(_action_oar_phase_l) * 10.0 * el + _sway_yaw * 3.0,
+				-78.0
+			)
+			r_rot = Vector3(
+				10.0 - cos(_action_oar_phase_r) * 15.0 * er,
+				12.0 - sin(_action_oar_phase_r) * 10.0 * er + _sway_yaw * 3.0,
+				78.0
+			)
+
+		&"carry":
+			# 6. Heavy Carry: symmetrical pirate hands gripping the left & right sides/handles
+			#    of carried Treasure Chests, Relics, Powder Kegs, and Supply/Trade Crates.
+			var grip_x := 0.318
+			var grip_y := -0.245
+			var grip_z := -0.49
+			if pawn != null and pawn.carried != null and is_instance_valid(pawn.carried):
+				if pawn.carried is PowderKeg:
+					grip_x = 0.235
+					grip_y = -0.245
+					grip_z = -0.46
+				elif pawn.carried.has_meta(&"treasure_id"):
+					var tid := StringName(pawn.carried.get_meta(&"treasure_id"))
+					var entry := TreasureCatalog.get_entry(tid)
+					var shape_v: Variant = entry.get("shape", &"chest")
+					var shape_k := StringName(shape_v) if shape_v != null else &"chest"
+					if shape_k == &"skull" or shape_k == &"chalice":
+						grip_x = 0.185
+						grip_y = -0.235
+						grip_z = -0.46
+					elif shape_k == &"crate":
+						grip_x = 0.305
+
+			var move_spd := 0.0
+			var grounded := false
+			if pawn != null and is_instance_valid(pawn):
+				var rv := pawn.get_relative_velocity()
+				move_spd = Vector2(rv.x, rv.z).length()
+				grounded = pawn.is_grounded()
+			var is_moving := move_spd > 0.30 and grounded
+			var move_w := clampf(move_spd / 3.4, 0.0, 1.15) if is_moving else 0.0
+			var fig8_x := cos(_bob_phase) * 0.016 * move_w
+			var fig8_y := sin(_bob_phase * 2.0) * 0.014 * move_w
+			var fig8_roll := -cos(_bob_phase) * 2.4 * move_w
+			var fig8_pitch := sin(_bob_phase * 2.0) * 1.6 * move_w
+			var heavy_breath := sin(_clock * 2.15) + 0.35 * sin(_clock * 4.3 + 0.5)
+			var pitch_follow := clampf(-pawn.look_pitch * 0.06, -0.045, 0.055) if pawn != null else 0.0
+
+			var common_off := Vector3(
+				fig8_x + _sway_yaw * 0.026 + _ship_roll_lag * 0.036,
+				heavy_breath * 0.0052 + fig8_y - _sway_pitch * 0.020 - absf(_ship_roll_lag) * 0.012 + pitch_follow,
+				0.0
+			)
+			var common_rot := Vector3(
+				heavy_breath * 0.85 + fig8_pitch - _sway_pitch * 4.5,
+				_sway_yaw * 5.2,
+				fig8_roll - _sway_yaw * 4.0 - _ship_roll_lag * 9.5
+			)
+			l_pos = Vector3(-grip_x, grip_y, grip_z) + common_off
+			r_pos = Vector3(grip_x, grip_y, grip_z) + common_off
+			l_rot = Vector3(14.0, -16.0, 24.0) + common_rot
+			r_rot = Vector3(14.0, 16.0, -24.0) + common_rot
+
+	if enter_drop > 0.0001:
+		var drop_v := Vector3(0.0, -enter_drop, enter_drop * 0.38)
+		l_pos += drop_v
+		r_pos += drop_v
+		l_rot.x -= enter_drop * 145.0
+		r_rot.x -= enter_drop * 145.0
+
+	fp_action_hands.position = Vector3.ZERO
+	fp_action_hands.rotation_degrees = Vector3.ZERO
+	fp_action_hands.scale = Vector3.ONE
+	_fp_action_left.position = l_pos
+	_fp_action_left.rotation_degrees = l_rot
+	_fp_action_right.position = r_pos
+	_fp_action_right.rotation_degrees = r_rot
+
+
 func _sync_visibility() -> void:
 	var hide_tools := pawn != null and (pawn.dead or pawn.station != null or pawn.carried != null)
 	var showing_trumpet := _fp_trumpet_node != null and is_instance_valid(_fp_trumpet_node) and _trumpet_display_timer > 0.0
@@ -2524,6 +2981,8 @@ func _sync_visibility() -> void:
 	if fp_tool_node != null and is_instance_valid(fp_tool_node):
 		var hide_for_lens := (active_item == &"spyglass" and spyglass_zoom > 0.62)
 		fp_tool_node.visible = (not hide_tools) and (not hide_for_lens) and (not showing_trumpet)
+	if fp_action_hands != null and is_instance_valid(fp_action_hands):
+		fp_action_hands.visible = _get_action_hand_mode() != &""
 	if tp_tool_node != null and is_instance_valid(tp_tool_node):
 		var fp_hidden := visual != null and visual.first_person_hidden
 		tp_tool_node.visible = (not hide_tools) and (not fp_hidden)

@@ -71,6 +71,7 @@ func _ready() -> void:
 	add_child(_archipelago)
 	_outpost = _archipelago.get_outpost(0)
 	_cutlass = _archipelago.get_starter_treasure_island()
+	IslandWildlife.populate_archipelago(self, _archipelago, null)
 
 	# Moor a real Sloop cleanly beside Port Scoundrel's dock pier for scale & harbour charm.
 	if String(_args.get("ship", "1")) != "0" and _outpost != null:
@@ -109,6 +110,7 @@ func _exit_tree() -> void:
 	CoralReef.clear_shared_cache()
 	ReefFishSchool.clear_shared_cache()
 	MantaRay.clear_shared_cache()
+	IslandWildlife.clear_shared_cache()
 
 
 func _update_camera() -> void:

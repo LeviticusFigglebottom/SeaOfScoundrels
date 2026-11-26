@@ -1704,3 +1704,244 @@ func test_sculpted_high_detail_flora_and_rock_props() -> void:
 			fname, vis_tris, foliage_tris, col_count, foliage_max_w])
 		inst.free()
 
+
+func test_q3b_living_island_wildlife_species_behaviors_grounding_and_teardown() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 11.5
+
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	add_child(pawn)
+	# Park pawn near Cutlass Cay outer reef so Cutlass is active while distant islands cull.
+	var cutlass := arch.get_island_by_id("cutlass_cay")
+	var port := arch.get_island_by_id("port_scoundrel")
+	var volcano := arch.get_island_by_id("cinder_crag")
+	var galleons := arch.get_island_by_id("galleons_reach")
+	check(cutlass != null and port != null and volcano != null and galleons != null,
+		"Archipelago must provide cutlass_cay, port_scoundrel, cinder_crag, and galleons_reach")
+	if cutlass == null or port == null or volcano == null or galleons == null:
+		pawn.queue_free()
+		arch.queue_free()
+		Weather.apply_state(saved_weather)
+		return
+
+	pawn.global_position = cutlass.global_position + Vector3(0.0, 2.0, -78.0)
+
+	var wildlifes := IslandWildlife.populate_archipelago(self, arch, pawn)
+	await physics_frames(1)
+	check_eq(wildlifes.size(), 14, "IslandWildlife must populate all 14 archipelago islands")
+
+	# 1. Verify group membership, zero PrimitiveMeshes, sRGB vertex colors, & flush grounding across ALL 14 islands.
+	var raw_prims: Array[String] = []
+	var bad_mats: Array[String] = []
+	var total_turtles := 0
+	var total_crabs := 0
+	var total_parrots := 0
+	var total_insects := 0
+	for w in wildlifes:
+		check(w.is_in_group(&"island_wildlife"), "IslandWildlife %s must belong to group island_wildlife" % w.get_parent().name)
+		var isl := w.get_parent() as Island
+		check(isl != null, "IslandWildlife must attach directly as child of Island")
+		if isl == null:
+			continue
+
+		for node in w.find_children("*", "MeshInstance3D", true, false):
+			var mi := node as MeshInstance3D
+			if mi == null:
+				continue
+			if mi.mesh is PrimitiveMesh:
+				raw_prims.append("%s/%s" % [isl.island_id, mi.name])
+			var mat := mi.material_override as StandardMaterial3D
+			if mat == null or not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb or mat.uv1_world_triplanar:
+				bad_mats.append("%s/%s" % [isl.island_id, mi.name])
+
+		for t_node in w.get_turtles():
+			total_turtles += 1
+			var gh := isl.surface_height(t_node.position.x, t_node.position.z)
+			check(t_node.position.y > 0.10, "SeaTurtle on %s must stay above water (y=%.3f)" % [isl.island_id, t_node.position.y])
+			check(absf(t_node.position.y - gh) < 0.12,
+				"SeaTurtle on %s must sit flush on terrain (y=%.3f vs h=%.3f)" % [isl.island_id, t_node.position.y, gh])
+
+		for c_node in w.get_crabs():
+			total_crabs += 1
+			var gh := isl.surface_height(c_node.position.x, c_node.position.z)
+			check(c_node.position.y > 0.10, "CoralCrab on %s must stay above water (y=%.3f)" % [isl.island_id, c_node.position.y])
+			check(absf(c_node.position.y - gh) < 0.12,
+				"CoralCrab on %s must sit flush on terrain (y=%.3f vs h=%.3f)" % [isl.island_id, c_node.position.y, gh])
+
+		total_parrots += w.get_parrots().size()
+		total_insects += w.get_insects().size()
+
+	check(raw_prims.is_empty(), "IslandWildlife must have ZERO PrimitiveMeshes (found: %s)" % str(raw_prims))
+	check(bad_mats.is_empty(), "All IslandWildlife materials must use vertex_color_is_srgb=true (bad: %s)" % str(bad_mats))
+
+	# 2. Verify sculpted triangle counts for all 4 species (body + articulated appendages).
+	var parrot_scarlet_tris := _count_array_mesh_tris(IslandWildlife._parrot_scarlet_body) \
+		+ _count_array_mesh_tris(IslandWildlife._parrot_scarlet_wing_l) \
+		+ _count_array_mesh_tris(IslandWildlife._parrot_scarlet_wing_r)
+	var parrot_emerald_tris := _count_array_mesh_tris(IslandWildlife._parrot_emerald_body) \
+		+ _count_array_mesh_tris(IslandWildlife._parrot_emerald_wing_l) \
+		+ _count_array_mesh_tris(IslandWildlife._parrot_emerald_wing_r)
+	var turtle_tris := _count_array_mesh_tris(IslandWildlife._turtle_body_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._turtle_head_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._turtle_flipper_l_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._turtle_flipper_r_mesh)
+	var crab_tris := _count_array_mesh_tris(IslandWildlife._crab_body_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._crab_claw_l_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._crab_claw_r_mesh)
+	var butterfly_tris := _count_array_mesh_tris(IslandWildlife._butterfly_body_mesh) \
+		+ _count_array_mesh_tris(IslandWildlife._butterfly_morpho_wing_l) \
+		+ _count_array_mesh_tris(IslandWildlife._butterfly_morpho_wing_r)
+	var firefly_tris := _count_array_mesh_tris(IslandWildlife._firefly_mesh)
+
+	check(parrot_scarlet_tris >= 380 and parrot_emerald_tris >= 380,
+		"Parrot sculpted tris must be >= 380 (scarlet=%d, emerald=%d)" % [parrot_scarlet_tris, parrot_emerald_tris])
+	check(turtle_tris >= 440, "SeaTurtle sculpted tris must be >= 440 (got %d)" % turtle_tris)
+	check(crab_tris >= 280, "CoralCrab sculpted tris must be >= 280 (got %d)" % crab_tris)
+	check(butterfly_tris >= 48, "Butterfly sculpted tris must be >= 48 (got %d)" % butterfly_tris)
+	check(firefly_tris >= 16, "Firefly sculpted tris must be >= 16 (got %d)" % firefly_tris)
+
+	# 3. Verify biome rules & guaranteed Cutlass Cay + Port Scoundrel beach showcase fauna.
+	var cw := cutlass.get_node_or_null(^"IslandWildlife") as IslandWildlife
+	var pw := port.get_node_or_null(^"IslandWildlife") as IslandWildlife
+	var vw := volcano.get_node_or_null(^"IslandWildlife") as IslandWildlife
+	var gw := galleons.get_node_or_null(^"IslandWildlife") as IslandWildlife
+	check(cw != null and pw != null and vw != null and gw != null, "Key islands must mount IslandWildlife")
+	check_eq(vw.get_turtles().size(), 0, "Volcanic Cinder Crag must skip sea turtles")
+	check_eq(vw.get_insects().size(), 0, "Volcanic Cinder Crag must skip meadow butterflies")
+	for showcase_pair: Array in [[cutlass, cw], [port, pw]]:
+		var s_isl := showcase_pair[0] as Island
+		var s_w := showcase_pair[1] as IslandWildlife
+		check(s_w.get_turtles().size() >= 1, "%s must place >= 1 basking sea turtle" % s_isl.display_name)
+		check(s_w.get_crabs().size() >= 2, "%s must place >= 2 coral sand-crabs" % s_isl.display_name)
+		check(s_w.get_insects().size() >= 2, "%s must place >= 2 butterflies/fireflies" % s_isl.display_name)
+		check(s_w.get_parrots().size() >= 1, "%s must place >= 1 Scarlet Macaw" % s_isl.display_name)
+
+	# 4. Verify distance culling (> island_radius + 180 m skips distant islands, keeps near Cutlass active).
+	cw._process(0.05)
+	gw._process(0.05)
+	check(not cw.distance_culled, "Near Cutlass Cay wildlife must remain active")
+	check(gw.distance_culled, "Distant Galleon's Reach wildlife (> radius + 180 m) must distance-cull")
+
+	# 5. Verify live behaviors: crab scuttling, turtle crawling/flippers, butterfly flapping & figure-8 path!
+	var turtle0 := cw.get_turtles()[0]
+	var turtle0_start := turtle0.position
+	var turtle0_fl := turtle0.get_node_or_null(^"FrontLeftFlipper") as Node3D
+	var turtle0_fl_rot0 := turtle0_fl.rotation if turtle0_fl != null else Vector3.ZERO
+
+	var crab_starts: Array[Vector3] = []
+	for c_node in cw.get_crabs():
+		crab_starts.append(c_node.position)
+
+	var insect0 := cw.get_insects()[0]
+	var insect0_start := insect0.position
+	var bf_vis0 := insect0.get_node_or_null(^"ButterflyVisual") as Node3D
+	var ff_vis0 := insect0.get_node_or_null(^"FireflyVisual") as Node3D
+	var bf_wl := bf_vis0.get_node_or_null(^"LeftWing") as Node3D if bf_vis0 != null else null
+	var bf_wl_rot0 := bf_wl.rotation if bf_wl != null else Vector3.ZERO
+	check(bf_vis0 != null and bf_vis0.visible and ff_vis0 != null and not ff_vis0.visible,
+		"Daytime (11:30) must show sculpted ButterflyVisual and hide FireflyVisual")
+
+	var max_bf_wing_delta := 0.0
+	var max_fl_delta := 0.0
+	for _step in 36:
+		cw._process(0.05)
+		if bf_wl != null:
+			max_bf_wing_delta = maxf(max_bf_wing_delta, bf_wl.rotation.distance_to(bf_wl_rot0))
+		if turtle0_fl != null:
+			max_fl_delta = maxf(max_fl_delta, turtle0_fl.rotation.distance_to(turtle0_fl_rot0))
+
+	var crab_moved := false
+	for ci in cw.get_crabs().size():
+		var cn := cw.get_crabs()[ci]
+		if cn.position.distance_to(crab_starts[ci]) > 0.15:
+			crab_moved = true
+		var gh := cutlass.surface_height(cn.position.x, cn.position.z)
+		check(absf(cn.position.y - gh) < 0.12 and cn.position.y > 0.10,
+			"Scuttling CoralCrab must stay flush on terrain & above water (y=%.3f vs h=%.3f)" % [cn.position.y, gh])
+	check(crab_moved, "Stepping _process() must advance CoralCrab scuttling across beach")
+
+	var turtle_moved := turtle0.position.distance_to(turtle0_start) > 0.12
+	var t_gh := cutlass.surface_height(turtle0.position.x, turtle0.position.z)
+	check(turtle_moved, "Stepping _process() must advance SeaTurtle crawling along shore arc")
+	check(max_fl_delta > 0.15, "SeaTurtle front flippers must stroke smoothly while crawling (delta=%.3f)" % max_fl_delta)
+	check(absf(turtle0.position.y - t_gh) < 0.12 and turtle0.position.y > 0.10,
+		"Crawling SeaTurtle must stay flush on terrain & above water (y=%.3f vs h=%.3f)" % [turtle0.position.y, t_gh])
+
+	check(insect0.position.distance_to(insect0_start) > 0.15,
+		"Stepping _process() must advance Butterfly along its figure-8 glade path")
+	check(max_bf_wing_delta > 0.25,
+		"Butterfly wings must flap smoothly during daytime flight (delta=%.3f)" % max_bf_wing_delta)
+
+	# 6. Verify Parrot startle into soaring circular flight when player approaches < 5 m, then glides back to perch!
+	var parrot0 := cw.get_parrots()[0]
+	var perch_pos0 := parrot0.position
+	check(not cw.is_parrot_flying(0), "Scarlet Macaw 0 should start perched calmly")
+	pawn.global_position = cutlass.global_transform * (perch_pos0 + Vector3(2.2, 0.0, 1.5))
+	cw._process(0.05)
+	check(cw.is_parrot_flying(0), "Parrot must startle into soaring flight when player approaches < 5 m")
+
+	# Step pawn back out of startle zone so parrot completes its 6..9 s soaring flight and glides back to perch.
+	pawn.global_position = cutlass.global_position + Vector3(0.0, 2.0, -78.0)
+	var peak_flight_y := parrot0.position.y
+	var max_orbit_dist := 0.0
+	for _step in 60:
+		cw._process(0.05)
+		peak_flight_y = maxf(peak_flight_y, parrot0.position.y)
+		max_orbit_dist = maxf(max_orbit_dist, Vector2(parrot0.position.x - perch_pos0.x, parrot0.position.z - perch_pos0.z).length())
+	check(peak_flight_y > perch_pos0.y + 1.8,
+		"Startled parrot must climb into soaring flight (peak_y=%.2f vs perch=%.2f)" % [peak_flight_y, perch_pos0.y])
+	check(max_orbit_dist > 5.0,
+		"Startled parrot must soar outward in circular flight (max_dist=%.2f m)" % max_orbit_dist)
+
+	for _step in 180:
+		cw._process(0.05)
+		if not cw.is_parrot_flying(0):
+			break
+	check(not cw.is_parrot_flying(0), "Startled parrot must smoothly glide back down to perch after flight")
+	check(parrot0.position.distance_to(perch_pos0) < 0.15,
+		"Returning parrot must alight accurately on its original perch")
+
+	# 7. Verify turtle shy head-tucking when player approaches < 3.5 m.
+	var t_head := turtle0.get_node_or_null(^"HeadPivot") as Node3D
+	var head_z_calm := t_head.position.z if t_head != null else -0.50
+	pawn.global_position = cutlass.global_transform * (turtle0.position + Vector3(1.5, 0.0, 0.0))
+	for _step in 16:
+		cw._process(0.05)
+	if t_head != null:
+		check(t_head.position.z > head_z_calm + 0.06,
+			"SeaTurtle must pull head inward when player steps within 3.5 m (z=%.3f -> %.3f)" % [head_z_calm, t_head.position.z])
+
+	# 8. Verify seamless Day -> Dusk/Night butterfly-to-firefly swap!
+	Weather.time_of_day = 21.5
+	cw._process(0.05)
+	check(bf_vis0 != null and not bf_vis0.visible and ff_vis0 != null and ff_vis0.visible,
+		"Nighttime (21:30) must swap ButterflyVisual off and show glowing FireflyVisual")
+
+	print("    q3b island wildlife: 14 islands (%d parrots, %d turtles, %d crabs, %d insects), tris=[parrot:%d/%d, turtle:%d, crab:%d, butterfly:%d, firefly:%d]" % [
+		total_parrots, total_turtles, total_crabs, total_insects,
+		parrot_scarlet_tris, parrot_emerald_tris, turtle_tris, crab_tris, butterfly_tris, firefly_tris])
+
+	# 9. Verify 100% clean teardown and static shared cache release (0 ObjectDB leaks).
+	pawn.queue_free()
+	arch.queue_free()
+	await physics_frames(3)
+	IslandWildlife.clear_shared_cache()
+
+	check(not is_instance_valid(cw), "IslandWildlife nodes must free cleanly on Archipelago teardown")
+	check_eq(IslandWildlife._active_instances, 0, "IslandWildlife active instance counter must return to 0")
+	check(IslandWildlife._parrot_scarlet_body == null and IslandWildlife._parrot_emerald_body == null \
+			and IslandWildlife._turtle_body_mesh == null and IslandWildlife._crab_body_mesh == null \
+			and IslandWildlife._butterfly_body_mesh == null and IslandWildlife._firefly_mesh == null \
+			and IslandWildlife._feather_mat == null and IslandWildlife._shell_mat == null \
+			and IslandWildlife._butterfly_mat == null and IslandWildlife._firefly_mat == null,
+		"IslandWildlife.clear_shared_cache() must release all static meshes and materials cleanly")
+
+	Weather.apply_state(saved_weather)
+
+

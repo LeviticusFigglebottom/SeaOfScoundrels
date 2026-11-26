@@ -244,6 +244,7 @@ func _ready() -> void:
 		var helm_pos := _ship.ship_point(Vector3(0.0, 2.25, 7.2) if _is_brig else Vector3(0.0, 2.02, 5.9))
 		_pawn.board(_ship, helm_pos)
 		_pawn.enter_station(helm_st)
+	var fp_pc: PlayerController = null
 	if _shot == "helm_fp":
 		var vis := _pawn.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
 		if vis != null:
@@ -255,6 +256,19 @@ func _ready() -> void:
 			var rv := clampf(float(_args["rudder"]), -1.0, 1.0)
 			_ship.set_helm_target(rv)
 			_ship.helm = rv
+		_pawn.look_yaw = 0.0
+		_pawn.look_pitch = float(_args.get("pitch_drop", "-0.14"))
+		fp_pc = PlayerController.new()
+		fp_pc.input_enabled = false
+		fp_pc.capture_mouse = false
+		fp_pc.make_current = true
+		_pawn.add_child(fp_pc)
+		var inv := Inventory.new()
+		inv.input_enabled = false
+		_pawn.add_child(inv)
+		inv.bind(_pawn, fp_pc, null, vis)
+		inv.call(&"_sync_visibility")
+		inv.call(&"_tick_action_hands", 0.0)
 	elif _shot == "foredeck_audit":
 		_ship.linear_velocity = Vector3.ZERO
 		_ship.set_sail_target(0.0)
@@ -272,19 +286,24 @@ func _ready() -> void:
 		_ship.add_child(audit_light)
 		audit_light.position = _ship.ship_point(Vector3(0.0, 0.85, 1.4) if _is_brig else Vector3(0.0, 0.72, 0.8))
 
-	_cam = Camera3D.new()
-	if _shot == "helm_fp":
+	if fp_pc != null and fp_pc.camera != null:
+		_cam = fp_pc.camera
 		_cam.fov = 80.0
-	elif _shot == "harpoon" and _is_brig:
-		_cam.fov = 78.0
-	elif _shot == "foredeck_audit" or _shot == "hold_audit":
-		_cam.fov = 72.0
+		_cam.near = 0.06
+		_cam.far = 6000.0
+		_cam.make_current()
 	else:
-		_cam.fov = 66.0
-	_cam.near = 0.06
-	_cam.far = 6000.0
-	add_child(_cam)
-	_cam.make_current()
+		_cam = Camera3D.new()
+		if _shot == "harpoon" and _is_brig:
+			_cam.fov = 78.0
+		elif _shot == "foredeck_audit" or _shot == "hold_audit":
+			_cam.fov = 72.0
+		else:
+			_cam.fov = 66.0
+		_cam.near = 0.06
+		_cam.far = 6000.0
+		add_child(_cam)
+		_cam.make_current()
 	_update_camera()
 
 
@@ -312,11 +331,9 @@ func _update_camera() -> void:
 			var look := xf * _ship.ship_point(Vector3(-0.15, 2.95, -12.0))
 			_cam.look_at_from_position(eye, look, Vector3.UP)
 		"helm_fp":
-			# True first-person Captain eye view at Stand_Helm (80 deg FOV) for wheel clearance & King Spoke / indicator audit.
-			var eye := _pawn.eye_position()
-			var pitch_drop := float(_args.get("pitch_drop", "-0.14"))
-			var fwd := (xf.basis * Vector3(0.0, pitch_drop, -1.0)).normalized()
-			_cam.look_at_from_position(eye, eye + fwd * 12.0, Vector3.UP)
+			# True first-person Captain eye view driven directly by PlayerController & Inventory FPActionHands!
+			_pawn.look_yaw = 0.0
+			_pawn.look_pitch = float(_args.get("pitch_drop", "-0.14"))
 		"foredeck_audit":
 			# High wide inspection shot looking down the entire deck from quarterdeck to bowsprit (sails furled).
 			var angle := String(_args.get("angle", "aft"))

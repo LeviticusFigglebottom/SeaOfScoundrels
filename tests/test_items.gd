@@ -2661,3 +2661,301 @@ func test_q2a_fp_hands_animations_and_discoverable_item_radial() -> void:
 	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes._pbr_tex_cache clears cleanly")
 	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "ToolMeshes._fp_hand_mesh_cache clears cleanly")
 	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "ToolMeshes._fp_hand_mat_cache clears cleanly")
+
+
+# ---------------------------------------------------------------------------
+# 19. Pass Q4A: Animated Sculpted FP Hands for Ship Stations & Heavy Carry
+# ---------------------------------------------------------------------------
+
+func test_q4a_fp_station_and_carry_hands_visibility_animation_and_teardown() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	# 1. Verify ToolMeshes.build_fp_hand_pair() geometry, PBR flags, 0 primitives & zero extra VRAM!
+	var pair := ToolMeshes.build_fp_hand_pair(&"fist_grip")
+	check(pair != null and pair.name == "FPActionHands",
+		"ToolMeshes.build_fp_hand_pair() returns Node3D named FPActionHands")
+	var pair_lh := pair.get_node_or_null(^"LeftHand") as Node3D
+	var pair_rh := pair.get_node_or_null(^"RightHand") as Node3D
+	check(pair_lh != null and pair_rh != null, "FPActionHands includes both LeftHand and RightHand")
+
+	var mesh_cache_before := ToolMeshes._fp_hand_mesh_cache.size()
+	var mat_cache_before := ToolMeshes._fp_hand_mat_cache.size()
+	var pbr_cache_before := ToolMeshes._pbr_tex_cache.size()
+
+	for hu: Node3D in [pair_lh, pair_rh]:
+		var meshes := hu.find_children("*", "MeshInstance3D", true, false)
+		check(meshes.size() >= 4, "FPActionHands/%s has HandSkin, LeatherBracer, BrassAccents, CoatSleeve" % hu.name)
+		var hand_tris := 0
+		for m_node in meshes:
+			var mi := m_node as MeshInstance3D
+			check(mi.mesh != null, "FPActionHands/%s/%s has mesh" % [hu.name, mi.name])
+			check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+				"FPActionHands/%s/%s uses sculpted ArrayMesh (0 primitives)" % [hu.name, mi.name])
+			if mi.mesh != null:
+				hand_tris += int(roundf(float(mi.mesh.get_faces().size()) / 3.0))
+			var mat := mi.material_override as StandardMaterial3D
+			check(mat != null, "FPActionHands/%s/%s has StandardMaterial3D" % [hu.name, mi.name])
+			if mat != null:
+				check(mat.vertex_color_is_srgb, "FPActionHands/%s/%s has vertex_color_is_srgb == true" % [hu.name, mi.name])
+				check(not mat.uv1_world_triplanar, "FPActionHands/%s/%s has uv1_world_triplanar == false" % [hu.name, mi.name])
+				check(mat.vertex_color_use_as_albedo, "FPActionHands/%s/%s has vertex_color_use_as_albedo == true" % [hu.name, mi.name])
+		check(hand_tris >= 1800, "FPActionHands/%s has >= 1800 sculpted tris (got %d)" % [hu.name, hand_tris])
+
+	# Building a second pair shares exact cached meshes/materials with 0 extra VRAM allocations!
+	var pair2 := ToolMeshes.build_fp_hand_pair(&"fist_grip")
+	check_eq(ToolMeshes._fp_hand_mesh_cache.size(), mesh_cache_before,
+		"build_fp_hand_pair reuses cached ArrayMeshes without extra allocations")
+	check_eq(ToolMeshes._fp_hand_mat_cache.size(), mat_cache_before,
+		"build_fp_hand_pair reuses cached StandardMaterial3Ds without extra allocations")
+	check_eq(ToolMeshes._pbr_tex_cache.size(), pbr_cache_before,
+		"build_fp_hand_pair adds zero extra VRAM PBR textures")
+	pair.free()
+	pair2.free()
+
+	# 2. Spawn Ship + Captain Pawn + Inventory and verify persistent FPActionHands mount & shadows OFF!
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+
+	var rig := _make_player_pawn(Vector3.ZERO)
+	var captain: Pawn = rig["pawn"]
+	var inv: Inventory = rig["inv"]
+	var hs := _ship_scale(ship)
+	captain.board(ship, Vector3(0.0, 2.02, 4.9) * hs)
+	await physics_frames(2)
+	inv._process(0.016)
+
+	check(inv.fp_action_hands != null and inv.fp_action_hands.name == "FPActionHands",
+		"Inventory mounts persistent FPActionHands under viewmodel_root")
+	check(inv.fp_action_hands.get_parent() == inv.viewmodel_root,
+		"FPActionHands is a direct child of viewmodel_root")
+	check(not inv.fp_action_hands.visible,
+		"FPActionHands starts hidden while holding normal tools")
+	check(inv.fp_tool_node != null and inv.fp_tool_node.visible,
+		"fp_tool_node is visible while holding normal tools")
+	for gi_node in inv.fp_action_hands.find_children("*", "GeometryInstance3D", true, false):
+		check_eq((gi_node as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"FPActionHands mesh '%s' disables shadow casting" % gi_node.name)
+
+	var lh := inv.fp_action_hands.get_node(^"LeftHand") as Node3D
+	var rh := inv.fp_action_hands.get_node(^"RightHand") as Node3D
+
+	# 3. Ship's Wheel (&"helm"): hides tool, shows hands, animates smoothly on helm turn,
+	#    and keeps center King Spoke / brass rudder-indicator arch 100% unobstructed (|x| >= 0.16)!
+	var helm_st := ship.get_station(&"helm")
+	check(helm_st != null and captain.enter_station(helm_st), "captain enters Station_Helm")
+	ship.helm = 0.0
+	ship.helm_target = 0.0
+	for _i in 12:
+		inv._process(0.016)
+	check(not inv.fp_tool_node.visible, "fp_tool_node hides on Station_Helm")
+	check(inv.fp_action_hands.visible, "fp_action_hands shows on Station_Helm")
+	check(lh.position.is_finite() and rh.position.is_finite() and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+		"helm rest hand transforms are finite")
+	check(absf(lh.position.x) >= 0.16 and absf(rh.position.x) >= 0.16 and lh.position.x < 0.0 and rh.position.x > 0.0,
+		"helm rest hands frame wheel rim cleanly without blocking center (L=%.3f R=%.3f)" % [lh.position.x, rh.position.x])
+
+	var helm_l0 := lh.position
+	var helm_r0 := rh.position
+	var helm_lr0 := lh.rotation_degrees
+	var helm_rr0 := rh.rotation_degrees
+	var helm_l_max_delta := 0.0
+	var helm_r_max_delta := 0.0
+	var helm_l_rot_delta := 0.0
+	var helm_r_rot_delta := 0.0
+
+	# Turn wheel smoothly starboard (0 -> +0.85) then port (+0.85 -> -0.75) checking every frame!
+	for step in 24:
+		ship.helm = lerpf(0.0, 0.85, float(step + 1) / 24.0)
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite() and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+			"starboard helm turn transforms remain finite at step %d" % step)
+		check(absf(lh.position.x) >= 0.16 and absf(rh.position.x) >= 0.16 and lh.position.x < 0.0 and rh.position.x > 0.0,
+			"starboard helm turn keeps center clear at step %d (L=%.3f R=%.3f)" % [step, lh.position.x, rh.position.x])
+		helm_l_max_delta = maxf(helm_l_max_delta, lh.position.distance_to(helm_l0))
+		helm_r_max_delta = maxf(helm_r_max_delta, rh.position.distance_to(helm_r0))
+		helm_l_rot_delta = maxf(helm_l_rot_delta, lh.rotation_degrees.distance_to(helm_lr0))
+		helm_r_rot_delta = maxf(helm_r_rot_delta, rh.rotation_degrees.distance_to(helm_rr0))
+
+	for step in 24:
+		ship.helm = lerpf(0.85, -0.75, float(step + 1) / 24.0)
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite() and lh.rotation_degrees.is_finite() and rh.rotation_degrees.is_finite(),
+			"port helm turn transforms remain finite at step %d" % step)
+		check(absf(lh.position.x) >= 0.16 and absf(rh.position.x) >= 0.16 and lh.position.x < 0.0 and rh.position.x > 0.0,
+			"port helm turn keeps center clear at step %d (L=%.3f R=%.3f)" % [step, lh.position.x, rh.position.x])
+
+	check(helm_l_max_delta > 0.03 and helm_r_max_delta > 0.03,
+		"changing ship.helm animates left & right hand positions along wheel rim (dL=%.3f dR=%.3f)" % [helm_l_max_delta, helm_r_max_delta])
+	check(helm_l_rot_delta > 4.0 and helm_r_rot_delta > 4.0,
+		"changing ship.helm animates left & right wrist roll/pitch (dRL=%.1f dRR=%.1f)" % [helm_l_rot_delta, helm_r_rot_delta])
+	captain.leave_station()
+	inv._process(0.016)
+	check(not inv.fp_action_hands.visible and inv.fp_tool_node.visible,
+		"leaving Station_Helm hides fp_action_hands and restores fp_tool_node")
+
+	# 4. Anchor Capstan (&"anchor"): hands braced forward + heave thrust synced to anchor_progress.
+	var anchor_st := ship.get_station(&"anchor")
+	check(anchor_st != null and captain.enter_station(anchor_st), "captain enters Station_Anchor")
+	ship.anchor_progress = 1.0
+	for _i in 10:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"Station_Anchor shows fp_action_hands and hides fp_tool_node")
+	var anc_l0 := lh.position
+	var anc_max_delta := 0.0
+	for step in 16:
+		ship.anchor_progress = maxf(0.0, 1.0 - float(step + 1) * 0.04)
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite(), "anchor heave transforms finite")
+		anc_max_delta = maxf(anc_max_delta, lh.position.distance_to(anc_l0))
+	check(anc_max_delta > 0.015, "heaving anchor_progress animates capstan thrust (delta=%.3f)" % anc_max_delta)
+	captain.leave_station()
+
+	# 5. Sail Hoist (&"sail_length") & Sail Braces (&"sail_angle"): alternating hand-over-hand rope pulls!
+	var sail_len_st := ship.get_station(&"sail_length")
+	check(sail_len_st != null and captain.enter_station(sail_len_st), "captain enters Station_SailLength")
+	ship.sail_set = 0.0
+	for _i in 10:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"Station_SailLength shows fp_action_hands")
+	var hoist_l0 := lh.position
+	var hoist_r0 := rh.position
+	var hoist_l_delta := 0.0
+	var hoist_r_delta := 0.0
+	for step in 16:
+		ship.sail_set = clampf(float(step + 1) * 0.05, 0.0, 1.0)
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite(), "sail_length transforms finite")
+		hoist_l_delta = maxf(hoist_l_delta, lh.position.distance_to(hoist_l0))
+		hoist_r_delta = maxf(hoist_r_delta, rh.position.distance_to(hoist_r0))
+	check(hoist_l_delta > 0.02 and hoist_r_delta > 0.02,
+		"changing sail_set animates hand-over-hand hoist pulls (dL=%.3f dR=%.3f)" % [hoist_l_delta, hoist_r_delta])
+	captain.leave_station()
+
+	var sail_ang_st := ship.get_station(&"sail_angle")
+	check(sail_ang_st != null and captain.enter_station(sail_ang_st), "captain enters Station_SailAngle")
+	ship.sail_trim = 0.0
+	for _i in 10:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"Station_SailAngle shows fp_action_hands")
+	var brace_l0 := lh.position
+	var brace_max_delta := 0.0
+	for step in 16:
+		ship.sail_trim = float(step + 1) * 0.04
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite(), "sail_angle transforms finite")
+		brace_max_delta = maxf(brace_max_delta, lh.position.distance_to(brace_l0))
+	check(brace_max_delta > 0.02, "changing sail_trim animates brace rope pulls (delta=%.3f)" % brace_max_delta)
+	captain.leave_station()
+
+	# 6. Bilge Pump (&"bilge"): pumps smoothly up and down while bailing!
+	var bilge_st := ship.get_station(&"bilge")
+	check(bilge_st != null and captain.enter_station(bilge_st), "captain enters Station_Bilge")
+	ship.water_level = 0.50
+	for _i in 10:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"Station_Bilge shows fp_action_hands")
+	var bilge_y_min := 99.0
+	var bilge_y_max := -99.0
+	inv._start_swing(&"scoop", 0.55)
+	for step in 18:
+		ship.water_level = maxf(0.0, ship.water_level - 0.015)
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite(), "bilge pump transforms finite")
+		bilge_y_min = minf(bilge_y_min, lh.position.y)
+		bilge_y_max = maxf(bilge_y_max, lh.position.y)
+	check(bilge_y_max - bilge_y_min > 0.04,
+		"bilge pumping animates hands vertically on pump lever (span=%.3f)" % (bilge_y_max - bilge_y_min))
+	captain.leave_station()
+
+	# 7. Rowboat Oars (&"rowboat_oars"): wide-set twin oar hands stroke smoothly!
+	var rowboat := Rowboat.new()
+	_root.add_child(rowboat)
+	rowboat.attach_to_ship(ship)
+	check(rowboat.launch(captain, true), "rowboat launches and seats captain on Station_RowboatOars")
+	for _i in 10:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"Station_RowboatOars shows fp_action_hands")
+	check(lh.position.x < -0.24 and rh.position.x > 0.24,
+		"rowboat oars position hands wide-set on twin oar handles (L=%.3f R=%.3f)" % [lh.position.x, rh.position.x])
+	var oar_z_min := 99.0
+	var oar_z_max := -99.0
+	for step in 16:
+		rowboat._port_oar_effort = 1.0
+		rowboat._stbd_oar_effort = 1.0
+		rowboat._port_oar_phase = float(step) * 0.42
+		rowboat._stbd_oar_phase = float(step) * 0.42
+		inv._process(0.016)
+		check(lh.position.is_finite() and rh.position.is_finite(), "rowboat oar transforms finite")
+		oar_z_min = minf(oar_z_min, lh.position.z)
+		oar_z_max = maxf(oar_z_max, lh.position.z)
+	check(oar_z_max - oar_z_min > 0.05,
+		"rowboat oar strokes pull hands forward-and-back smoothly (span=%.3f)" % (oar_z_max - oar_z_min))
+	captain.leave_station()
+
+	# 8. Non-action stations (&"cannon", &"map_table") MUST keep fp_action_hands hidden!
+	for hidden_kind: StringName in [&"cannon", &"map_table"]:
+		var h_st := ship.get_station(hidden_kind)
+		if h_st != null:
+			check(captain.enter_station(h_st), "captain enters non-action station %s" % hidden_kind)
+			inv._process(0.016)
+			check(not inv.fp_action_hands.visible,
+				"fp_action_hands stays hidden on station %s" % hidden_kind)
+			check(not inv.fp_tool_node.visible,
+				"fp_tool_node stays hidden on station %s" % hidden_kind)
+			captain.leave_station()
+
+	# 9. Heavy Carry (pawn.carried != null): symmetrical gripping hands + clean restore on drop!
+	captain.board(ship, Vector3(0.0, 2.02, 4.9) * hs)
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	inv._sway_yaw = 0.0
+	inv._sway_pitch = 0.0
+	inv._ship_roll_lag = 0.0
+	var chest := Carryable.new()
+	chest.item_name = "Test Treasure Chest"
+	_root.add_child(chest)
+	chest.global_position = captain.global_position + Vector3(0.0, 0.5, -1.0)
+	check(captain.pick_up(chest), "captain picks up Carryable chest")
+	for _i in 12:
+		inv._process(0.016)
+	check(inv.fp_action_hands.visible and not inv.fp_tool_node.visible,
+		"carrying a Carryable shows fp_action_hands and hides fp_tool_node")
+	check(lh.position.is_finite() and rh.position.is_finite(), "carry hand positions are finite")
+	check(lh.position.x < -0.18 and rh.position.x > 0.18,
+		"carry hands wrap left & right sides of chest (L=%.3f R=%.3f)" % [lh.position.x, rh.position.x])
+	check_near(lh.position.x, -rh.position.x, 0.025, "carry hands are horizontally symmetrical")
+	check_near(lh.position.y, rh.position.y, 0.005, "carry hands are level vertically")
+	check_near(lh.position.z, rh.position.z, 0.005, "carry hands match depth cleanly")
+
+	# Speaking Trumpet hail while carrying hides fp_action_hands temporarily!
+	var hail_res := inv.hail_with_speaking_trumpet()
+	if bool(hail_res.get("ok", false)):
+		inv._process(0.016)
+		check(not inv.fp_action_hands.visible,
+			"fp_action_hands hides while brief Speaking Trumpet viewmodel is raised")
+		inv._clear_speaking_trumpet_fx(true)
+		inv._process(0.016)
+		check(inv.fp_action_hands.visible,
+			"fp_action_hands restores cleanly once Speaking Trumpet finishes")
+
+	# Dropping the carried item hides fp_action_hands and restores fp_tool_node!
+	captain.drop_carried()
+	inv._process(0.016)
+	check(not inv.fp_action_hands.visible, "dropping Carryable hides fp_action_hands")
+	check(inv.fp_tool_node.visible, "dropping Carryable restores fp_tool_node")
+
+	# 10. Clean exit teardown & zero-leak shared cache clear!
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "Q4A teardown clears ToolMeshes._pbr_tex_cache cleanly")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q4A teardown clears ToolMeshes._fp_hand_mesh_cache cleanly")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q4A teardown clears ToolMeshes._fp_hand_mat_cache cleanly")
+

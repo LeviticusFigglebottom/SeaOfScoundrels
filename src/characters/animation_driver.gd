@@ -43,6 +43,7 @@ var demo_dead: bool = false
 var demo_station_kind: StringName = &""
 var demo_look_pitch: float = 0.0
 var demo_steer: float = 0.0
+var demo_turn_rate: float = 0.0
 
 var visual: CharacterVisual = null
 var pawn: Pawn = null
@@ -89,6 +90,14 @@ var _ladder_phase: float = 0.0
 var _station_phase: float = 0.0
 var _prev_pawn_y: float = 0.0
 var _have_prev_y: bool = false
+var _prev_yaw: float = 0.0
+var _have_prev_yaw: bool = false
+var _prev_yaw_plat_id: int = 0
+var _turn_rate: float = 0.0
+var _ship_roll: float = 0.0
+var _ship_pitch: float = 0.0
+var _gaze_yaw: float = 0.0
+var _gaze_pitch: float = 0.0
 var _move_blend: float = 0.0
 var _sprint_blend: float = 0.0
 var _crouch_blend: float = 0.0
@@ -119,6 +128,14 @@ func bind(target_visual: CharacterVisual, target_pawn: Pawn = null) -> void:
 		pawn.landed.disconnect(_on_pawn_landed)
 	visual = target_visual
 	pawn = target_pawn
+	_have_prev_y = false
+	_have_prev_yaw = false
+	_prev_yaw_plat_id = 0
+	_turn_rate = 0.0
+	_ship_roll = 0.0
+	_ship_pitch = 0.0
+	_gaze_yaw = 0.0
+	_gaze_pitch = 0.0
 	if visual != null:
 		if not visual.rig_changed.is_connected(_on_rig_changed):
 			visual.rig_changed.connect(_on_rig_changed)
@@ -198,7 +215,7 @@ func update_pose(delta: float, snap: bool = false) -> void:
 	var dt := clampf(delta, 0.0, 0.1)
 	_time += dt
 
-	var st := _sample_state(dt)
+	var st := _sample_state(dt, snap)
 	_reset_targets_to_rest()
 
 	if st.dead:
@@ -212,7 +229,7 @@ func update_pose(delta: float, snap: bool = false) -> void:
 			Pawn.Mode.STATION:
 				_pose_station(dt, st)
 			_:
-				_pose_walk(dt, st)
+				_pose_walk(dt, st, snap)
 
 		_apply_look_pitch(st)
 
@@ -370,9 +387,14 @@ class _AnimState:
 	var parent_scale_y: float = 1.0
 	var walk_ref: float = 3.6
 	var sprint_ref: float = 5.8
+	var ship_roll: float = 0.0
+	var ship_pitch: float = 0.0
+	var turn_rate: float = 0.0
+	var row_effort: float = 1.0
+	var row_turn: float = 0.0
 
 
-func _sample_state(dt: float) -> _AnimState:
+func _sample_state(dt: float, snap: bool = false) -> _AnimState:
 	var st := _AnimState.new()
 	if visual != null:
 		var vp := visual.get_parent() as Node3D
@@ -384,7 +406,7 @@ func _sample_state(dt: float) -> _AnimState:
 		st.mode = pawn.mode
 		st.dead = pawn.dead
 		st.crouched = pawn.crouched
-		st.grounded = pawn.is_grounded()
+		st.grounded = pawn.is_grounded() or st.mode == Pawn.Mode.STATION
 		st.carrying = pawn.carried != null
 		st.sprint = pawn.wish_sprint
 		st.look_pitch = pawn.look_pitch
@@ -406,10 +428,56 @@ func _sample_state(dt: float) -> _AnimState:
 				st.station_kind = k
 			elif k != null:
 				st.station_kind = StringName(str(k))
+			if st.station_kind == &"rowboat_oars":
+				var st_ship: Variant = pawn.station.get(&"ship")
+				if st_ship is Node and is_instance_valid(st_ship):
+					var pe: Variant = (st_ship as Node).get(&"_port_oar_effort")
+					var se: Variant = (st_ship as Node).get(&"_stbd_oar_effort")
+					if (pe is float or pe is int) and (se is float or se is int):
+						var pf := float(pe)
+						var sf := float(se)
+						st.row_effort = clampf(maxf(absf(pf), absf(sf)), 0.0, 1.0)
+						st.row_turn = clampf((pf - sf) * 0.5, -1.0, 1.0)
+
+		var target_ship_roll := 0.0
+		var target_ship_pitch := 0.0
+		var plat_id := 0
+		var cur_yaw := pawn.look_yaw
 		if pawn.platform != null and is_instance_valid(pawn.platform):
+			plat_id = pawn.platform.get_instance_id()
 			var h: Variant = pawn.platform.get(&"helm")
 			if h is float or h is int:
 				st.steer = clampf(float(h), -1.0, 1.0)
+			if pawn.platform is Ship:
+				var deck_up_raw := pawn.platform.global_transform.basis.y
+				if deck_up_raw.length_squared() > 1e-6:
+					var deck_up := deck_up_raw.normalized()
+					var up_y := maxf(deck_up.y, 0.15)
+					target_ship_roll = clampf(atan2(deck_up.dot(right), up_y), -0.65, 0.65)
+					target_ship_pitch = clampf(atan2(deck_up.dot(fwd), up_y), -0.65, 0.65)
+			var pfwd := -pawn.platform.global_transform.basis.z
+			if pfwd.x * pfwd.x + pfwd.z * pfwd.z > 1e-4:
+				var plat_yaw := atan2(-pfwd.x, -pfwd.z)
+				cur_yaw = wrapf(cur_yaw - plat_yaw, -PI, PI)
+
+		var deck_alpha := 1.0 if (snap or dt <= 0.0001) else (1.0 - exp(-6.5 * dt))
+		_ship_roll = lerpf(_ship_roll, target_ship_roll, deck_alpha)
+		_ship_pitch = lerpf(_ship_pitch, target_ship_pitch, deck_alpha)
+		st.ship_roll = _ship_roll
+		st.ship_pitch = _ship_pitch
+
+		if snap or not _have_prev_yaw or plat_id != _prev_yaw_plat_id:
+			_prev_yaw = cur_yaw
+			_have_prev_yaw = true
+			_prev_yaw_plat_id = plat_id
+			_turn_rate = 0.0
+		elif dt > 0.0001:
+			var dyaw := angle_difference(_prev_yaw, cur_yaw)
+			var raw_rate := clampf(dyaw / dt, -8.0, 8.0)
+			var turn_alpha := 1.0 - exp(-9.0 * dt)
+			_turn_rate = lerpf(_turn_rate, raw_rate, turn_alpha)
+			_prev_yaw = cur_yaw
+		st.turn_rate = _turn_rate
 
 		if _have_prev_y and dt > 0.0001:
 			st.climb_vel = (pawn.global_position.y - _prev_pawn_y) / dt
@@ -429,17 +497,97 @@ func _sample_state(dt: float) -> _AnimState:
 		st.station_kind = demo_station_kind
 		st.look_pitch = demo_look_pitch
 		st.steer = demo_steer
+		st.turn_rate = demo_turn_rate
+		st.row_effort = 1.0
+		st.row_turn = clampf(demo_steer, -1.0, 1.0)
 		st.vert_vel = demo_velocity.y
 		st.fwd_speed = -demo_velocity.z
 		st.right_speed = demo_velocity.x
 		st.horiz_speed = Vector2(demo_velocity.x, demo_velocity.z).length()
 		st.climb_vel = demo_velocity.y if absf(demo_velocity.y) > 0.01 else 1.8
+		_ship_roll = 0.0
+		_ship_pitch = 0.0
+		_turn_rate = demo_turn_rate
 
 	_land_dip = move_toward(_land_dip, 0.0, dt * 1.1)
 	return st
 
 
+func _find_nearby_player_pawn(max_dist: float) -> Pawn:
+	if pawn == null or not is_instance_valid(pawn) or not is_inside_tree():
+		return null
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var my_pos := pawn.global_position
+	var max_d2 := max_dist * max_dist
+	var best: Pawn = null
+	var best_d2 := max_d2
+
+	# Primary O(1)-group path: any Pawn in group &"player".
+	for node in tree.get_nodes_in_group(&"player"):
+		var candidate: Pawn = null
+		if node is Pawn:
+			candidate = node as Pawn
+		elif node != null and node.get_parent() is Pawn:
+			candidate = node.get_parent() as Pawn
+		if candidate == null or candidate == pawn or not is_instance_valid(candidate) or candidate.dead:
+			continue
+		var d2 := my_pos.distance_squared_to(candidate.global_position)
+		if d2 > 0.12 and d2 < best_d2:
+			best_d2 = d2
+			best = candidate
+	if best != null:
+		return best
+
+	# Live-scene fallback: sibling CrewBrain captain ref or active PlayerController camera Pawn.
+	for ch in pawn.get_children():
+		var cap_v: Variant = ch.get(&"captain")
+		if cap_v is Pawn:
+			var cap := cap_v as Pawn
+			if cap != pawn and is_instance_valid(cap) and not cap.dead:
+				var d2 := my_pos.distance_squared_to(cap.global_position)
+				if d2 > 0.12 and d2 < best_d2:
+					return cap
+	var vp := get_viewport()
+	if vp != null:
+		var cam := vp.get_camera_3d()
+		if cam != null and is_instance_valid(cam):
+			var pc := cam.get_parent()
+			if pc != null and pc.get_parent() is Pawn:
+				var cam_pawn := pc.get_parent() as Pawn
+				if cam_pawn != pawn and is_instance_valid(cam_pawn) and not cam_pawn.dead:
+					var d2 := my_pos.distance_squared_to(cam_pawn.global_position)
+					if d2 > 0.12 and d2 < best_d2:
+						return cam_pawn
+	return null
+
+
 # ------------------------------------------------------------------ bone pose helpers
+
+## Fast-out anticipation ramp (0 -> 1 over [0, 1]).
+static func _ease_out_pow(t: float, p: float = 2.2) -> float:
+	var c := clampf(t, 0.0, 1.0)
+	return 1.0 - pow(1.0 - c, p)
+
+
+## Crisp asymmetric strike snap (0 -> 1 over [t0, t1]) with punchy mid-swing whip.
+static func _snap_step(u: float, t0: float, t1: float) -> float:
+	var t := clampf((u - t0) / maxf(t1 - t0, 0.001), 0.0, 1.0)
+	var a := pow(t, 1.55)
+	var b := pow(1.0 - t, 2.85)
+	return clampf(a / maxf(a + b, 1e-6), 0.0, 1.0)
+
+
+## Early-peaking post-impact follow-through pulse (0 -> peak -> 0 over [t0, t1]).
+static func _follow_pulse(u: float, t0: float, t1: float, peak: float = 1.0) -> float:
+	if u <= t0 or u >= t1:
+		return 0.0
+	var t := clampf((u - t0) / maxf(t1 - t0, 0.001), 0.0, 1.0)
+	var rise := pow(t, 0.65)
+	var fall := pow(1.0 - t, 1.65)
+	return clampf(rise * fall * 3.93, 0.0, 1.0) * peak
+
 
 func _reset_targets_to_rest() -> void:
 	for i in _bone_count:
@@ -576,7 +724,7 @@ func _apply_grounded_leg_flexion(st: _AnimState) -> void:
 		return
 	if st.mode == Pawn.Mode.SWIM or st.mode == Pawn.Mode.LADDER:
 		return
-	if st.station_kind == &"sit" or st.station_kind == &"seat":
+	if st.station_kind == &"sit" or st.station_kind == &"seat" or st.station_kind == &"rowboat_oars":
 		return
 	if _target_hips_offset.y >= -0.002 or _b_hips < 0:
 		return
@@ -675,7 +823,7 @@ func _apply_grounded_leg_flexion(st: _AnimState) -> void:
 
 # ------------------------------------------------------------------ locomotion modes
 
-func _pose_walk(dt: float, st: _AnimState) -> void:
+func _pose_walk(dt: float, st: _AnimState, snap: bool = false) -> void:
 	var target_move := clampf(st.horiz_speed / (st.walk_ref * 0.72), 0.0, 1.0)
 	var target_sprint := clampf((st.horiz_speed - st.walk_ref * 1.05) / maxf(st.sprint_ref - st.walk_ref, 0.5), 0.0, 1.0)
 	if not st.sprint:
@@ -687,6 +835,9 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 	_crouch_blend = move_toward(_crouch_blend, target_crouch, dt * 9.0)
 
 	if not st.grounded:
+		var air_decay := 1.0 if snap else (1.0 - exp(-4.5 * dt))
+		_gaze_yaw = lerpf(_gaze_yaw, 0.0, air_decay)
+		_gaze_pitch = lerpf(_gaze_pitch, 0.0, air_decay)
 		_pose_airborne(st)
 		return
 
@@ -696,46 +847,97 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 	if _move_blend > 0.02:
 		_walk_phase = fmod(_walk_phase + dir_sign * st.horiz_speed * stride_rate * dt + TAU * 4.0, TAU)
 
-	var breath := sin(_time * 2.15)
-	var sway := sin(_time * 0.95)
+	# Organic multi-harmonic idle breathing & unhurried pirate weight-shift sway.
+	var breath := (sin(_time * 1.9) + 0.35 * sin(_time * 3.8)) * 0.78
+	var sway := sin(_time * 0.65)
 	var sp := sin(_walk_phase)
 	var cp := cos(_walk_phase)
 	var mv := _move_blend
 	var spr := _sprint_blend
 	var cr := _crouch_blend
+	var idle_w := 1.0 - mv
 
-	# ---- Hips bounce, lateral shift, crouch drop & landing compression ----
+	# Living "sea legs" deck counter-balance & walk turn-lean banking.
+	var sea_roll := clampf(st.ship_roll * 0.68, -0.14, 0.14)
+	var sea_pitch := clampf(st.ship_pitch * 0.42, -0.10, 0.10)
+	var sea_crouch := minf(absf(st.ship_roll) + absf(st.ship_pitch) * 0.6, 0.45) * 0.045
+	var turn_scale := mv * lerpf(0.68, 1.0, spr)
+	var turn_bank := clampf(st.turn_rate * 0.055, -0.10, 0.10) * turn_scale
+	var head_turn_lead := clampf(st.turn_rate * 0.095, -0.18, 0.18) * turn_scale
+
+	# ---- Hips bounce, lateral weight-shift, crouch drop & landing compression ----
 	var stride_bounce := (absf(sp) * lerpf(0.042, 0.072, spr) - lerpf(0.028, 0.048, spr)) * mv
 	var crouch_drop := -0.36 * cr
-	var idle_settle := -0.014 + breath * 0.006
-	var hip_y := lerpf(idle_settle, stride_bounce, mv) + crouch_drop - _land_dip
-	var hip_x := sway * 0.016 * (1.0 - mv) + sp * 0.024 * mv
+	var idle_settle := -0.018 + breath * 0.005 - sea_crouch
+	var hip_y := lerpf(idle_settle, stride_bounce - sea_crouch * 0.5, mv) + crouch_drop - _land_dip
+	var hip_x := sway * 0.022 * idle_w + sp * 0.024 * mv
 	_target_hips_offset = Vector3(hip_x, hip_y, 0.0)
 
 	var strafe_lean := clampf(st.right_speed / st.walk_ref, -1.0, 1.0) * 0.09
-	var hips_pitch := -lerpf(0.02, lerpf(0.07, 0.14, spr), mv) - 0.14 * cr - _land_dip * 0.5
-	var hips_yaw := sp * lerpf(0.08, 0.14, spr) * mv + sway * 0.03 * (1.0 - mv)
-	var hips_roll := -sp * lerpf(0.048, 0.068, spr) * mv - strafe_lean
+	var hips_pitch := -lerpf(0.02, lerpf(0.07, 0.14, spr), mv) - 0.14 * cr - _land_dip * 0.5 + sea_pitch * 0.15
+	var hips_yaw := sp * lerpf(0.08, 0.14, spr) * mv + sway * 0.032 * idle_w
+	var hips_roll := (
+		-sp * lerpf(0.048, 0.068, spr) * mv
+		- strafe_lean
+		+ turn_bank * 0.45
+		+ sway * 0.016 * idle_w
+		- sea_roll * 0.14 * idle_w
+	)
 	_set_char_rot(_b_hips, _euler_char(hips_pitch, hips_yaw, hips_roll))
 
 	# ---- Spine, Chest, Neck, Head ----
-	var spine_pitch := -lerpf(0.0, lerpf(0.05, 0.16, spr), mv) - 0.22 * cr + breath * 0.018 * (1.0 - mv)
-	var chest_pitch := -lerpf(0.0, lerpf(0.04, 0.12, spr), mv) - 0.18 * cr + breath * 0.026 * (1.0 - mv)
-	var chest_yaw := -sp * lerpf(0.16, 0.28, spr) * mv - sway * 0.035 * (1.0 - mv)
+	var spine_pitch := -lerpf(0.0, lerpf(0.05, 0.16, spr), mv) - 0.22 * cr + breath * 0.020 * idle_w + sea_pitch * 0.45
+	var chest_pitch := -lerpf(0.0, lerpf(0.04, 0.12, spr), mv) - 0.18 * cr + breath * 0.028 * idle_w + sea_pitch * 0.55
+	var chest_yaw := -sp * lerpf(0.16, 0.28, spr) * mv - sway * 0.038 * idle_w
 	var chest_roll := sp * lerpf(0.035, 0.055, spr) * mv
-	_set_char_rot(_b_spine, _euler_char(spine_pitch, chest_yaw * 0.45, chest_roll * 0.45))
-	_set_char_rot(_b_chest, _euler_char(chest_pitch, chest_yaw * 0.55, chest_roll * 0.55))
+	var torso_roll_extra := sea_roll + turn_bank * 0.55 - sway * 0.020 * idle_w
+	_set_char_rot(_b_spine, _euler_char(spine_pitch, chest_yaw * 0.45, chest_roll * 0.45 + torso_roll_extra * 0.45))
+	_set_char_rot(_b_chest, _euler_char(chest_pitch, chest_yaw * 0.55, chest_roll * 0.55 + torso_roll_extra * 0.55))
 
-	# Counter-pitch head/neck so eyes stay level during sprint & crouch.
+	# Subtle idle Captain glance (within 7.5 m) or calm horizon scan when stationary.
+	var want_gaze_yaw := 0.0
+	var want_gaze_pitch := 0.0
+	var horizon_scan := (sin(_time * 0.62) * 0.065 + sin(_time * 0.27) * 0.030) * idle_w
+	if mv < 0.12 and not st.dead and _action == &"":
+		want_gaze_yaw = horizon_scan
+		if not manual_mode and pawn != null and is_instance_valid(pawn):
+			var target_p := _find_nearby_player_pawn(7.5)
+			if target_p != null:
+				var to_tgt := target_p.eye_position() - pawn.eye_position()
+				var fwd_v := pawn.facing()
+				var right_v := Vector3(-fwd_v.z, 0.0, fwd_v.x)
+				var f_comp := to_tgt.dot(fwd_v)
+				var r_comp := to_tgt.dot(right_v)
+				var raw_yaw := atan2(-r_comp, f_comp)
+				if absf(raw_yaw) < 1.85:
+					var h_dist := sqrt(f_comp * f_comp + r_comp * r_comp)
+					want_gaze_yaw = clampf(raw_yaw, -0.45, 0.45)
+					want_gaze_pitch = clampf(atan2(to_tgt.y, maxf(h_dist, 0.25)), -0.20, 0.20)
+	var gaze_alpha := 1.0 if snap else (1.0 - exp(-4.5 * dt))
+	_gaze_yaw = lerpf(_gaze_yaw, want_gaze_yaw, gaze_alpha)
+	_gaze_pitch = lerpf(_gaze_pitch, want_gaze_pitch, gaze_alpha)
+	var eff_gaze_yaw := clampf(_gaze_yaw, -0.45, 0.45) * idle_w
+	var eff_gaze_pitch := clampf(_gaze_pitch, -0.20, 0.20) * idle_w
+
+	# Counter-pitch head/neck so eyes stay level during sprint, crouch, & swells while leading turns.
 	var head_counter := -(hips_pitch + spine_pitch + chest_pitch) * 0.72
-	var head_scan := sin(_time * 0.62) * 0.06 * (1.0 - mv)
-	_set_char_rot(_b_neck, _euler_char(head_counter * 0.38, -chest_yaw * 0.25, 0.0))
-	_set_char_rot(_b_head, _euler_char(head_counter * 0.62 + breath * 0.015, head_scan - chest_yaw * 0.35, sway * 0.025 * (1.0 - mv)))
+	var head_roll_stab := -sea_roll * 0.35 + sway * 0.024 * idle_w
+	_set_char_rot(_b_neck, _euler_char(
+		head_counter * 0.38 + eff_gaze_pitch * 0.38,
+		-chest_yaw * 0.25 + eff_gaze_yaw * 0.38 + head_turn_lead * 0.38,
+		head_roll_stab * 0.35
+	))
+	_set_char_rot(_b_head, _euler_char(
+		head_counter * 0.62 + breath * 0.015 * idle_w + eff_gaze_pitch * 0.62,
+		-chest_yaw * 0.35 + eff_gaze_yaw * 0.62 + head_turn_lead * 0.62,
+		head_roll_stab * 0.65
+	))
 
-	# ---- Legs (Left & Right) ----
+	# ---- Legs (Left & Right, widening stance subtly on rolling ship decks) ----
 	var swing_amp := lerpf(0.56, 0.94, spr) * lerpf(1.0, 0.72, cr)
 	var knee_lift := lerpf(0.76, 1.24, spr)
-	var base_thigh_out := lerpf(0.08, 0.04, mv) + 0.08 * cr
+	var sea_stance := minf(0.18 * absf(st.ship_roll), 0.075)
+	var base_thigh_out := lerpf(0.08, 0.04, mv) + 0.08 * cr + sea_stance
 	var base_knee := 0.08 + 1.38 * cr + _land_dip * 2.2
 	var base_thigh_fwd := 0.04 + 0.74 * cr + _land_dip * 1.1
 
@@ -757,7 +959,7 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 		var side := -1.0 if side_i == 0 else 1.0
 		var s := -sp if side_i == 0 else sp # opposite to same-side leg
 		var idle_fwd := 0.14 if side > 0.0 else -0.02
-		var idle_out := (0.06 if side > 0.0 else 0.10) + breath * 0.014
+		var idle_out := (0.06 if side > 0.0 else 0.10) + breath * 0.015 + sea_stance * 0.45
 		var idle_elb := 0.42 if side > 0.0 else 0.30
 
 		var walk_fwd := s * arm_amp + lerpf(0.04, 0.24, spr) + 0.28 * cr
@@ -769,7 +971,7 @@ func _pose_walk(dt: float, st: _AnimState) -> void:
 		var out := lerpf(idle_out + 0.14 * cr, walk_out, mv)
 		var inward := lerpf((0.06 if side > 0.0 else 0.02) + 0.12 * cr, walk_inward, mv)
 		var elb := lerpf(idle_elb + 0.72 * cr, walk_elb, mv)
-		var sh_l := breath * 0.025 * (1.0 - mv) + 0.05 * spr * mv
+		var sh_l := breath * 0.028 * idle_w + 0.05 * spr * mv
 		if is_powder and side > 0.0:
 			# Powder-Carrier braces his right arm up to hold the explosive keg on his right shoulder!
 			_set_arm(1.0, 1.18 + s * 0.06 * mv, 0.42, 0.24, 1.72, -0.18, 0.15, 0.16, 0.08)
@@ -898,18 +1100,91 @@ func _pose_station(dt: float, st: _AnimState) -> void:
 
 	match st.station_kind:
 		&"helm":
-			var steer := st.steer if absf(st.steer) > 0.02 else sin(_time * 1.1) * 0.45
-			_target_hips_offset = Vector3(0.0, -0.04, 0.0)
-			_set_char_rot(_b_hips, _euler_char(-0.04, -steer * 0.08, -steer * 0.04))
-			_set_char_rot(_b_spine, _euler_char(-0.05, -steer * 0.12, 0.0))
-			_set_char_rot(_b_chest, _euler_char(-0.04 + breath * 0.02, -steer * 0.16, -steer * 0.05))
-			_set_char_rot(_b_neck, _euler_char(0.06, steer * 0.12, 0.0))
-			_set_char_rot(_b_head, _euler_char(0.06, steer * 0.14, 0.0))
-			_set_leg(-1.0, 0.12, 0.16, 0.18, 0.06, 0.14)
-			_set_leg(1.0, 0.06, 0.16, 0.16, 0.08, 0.14)
-			# Hands gripping opposite wheel spokes, shifting up/down with helm angle
-			_set_arm(-1.0, 1.08 + steer * 0.26, 0.16, 0.14, 0.48 - steer * 0.12, 0.12, -0.25)
-			_set_arm(1.0, 1.08 - steer * 0.26, 0.16, 0.14, 0.48 + steer * 0.12, 0.12, -0.25)
+			var steer_active := smoothstep(0.02, 0.10, absf(st.steer))
+			var helm_turn := clampf(st.steer, -1.0, 1.0) * steer_active
+			var calm_breath := sin(_time * 1.8) * 0.04 * (1.0 - steer_active * 0.65)
+			var horizon_scan := (sin(_time * 0.52) * 0.11 + sin(_time * 1.15) * 0.03) * (1.0 - steer_active * 0.85)
+			var sea_roll := clampf(st.ship_roll * 0.45, -0.10, 0.10)
+			var sea_stance := minf(absf(st.ship_roll) * 0.18, 0.06)
+
+			_target_hips_offset = Vector3(-helm_turn * 0.032, -0.042 - absf(helm_turn) * 0.018 + calm_breath * 0.08, 0.0)
+			_set_char_rot(_b_hips, _euler_char(-0.04, -helm_turn * 0.10, -helm_turn * 0.045))
+			_set_char_rot(_b_spine, _euler_char(-0.05 + calm_breath * 0.22, -helm_turn * 0.14, -helm_turn * 0.03 + sea_roll * 0.45))
+			_set_char_rot(_b_chest, _euler_char(-0.04 + calm_breath * 0.35, -helm_turn * 0.20, -helm_turn * 0.07 + sea_roll * 0.55))
+			_set_char_rot(_b_neck, _euler_char(0.05, helm_turn * 0.14 + horizon_scan * 0.40, -sea_roll * 0.25))
+			_set_char_rot(_b_head, _euler_char(0.05 + calm_breath * 0.18, helm_turn * 0.20 + horizon_scan * 0.60, -sea_roll * 0.35))
+			_set_leg(-1.0, 0.12, 0.16 + sea_stance, 0.18, 0.06, 0.14)
+			_set_leg(1.0, 0.06, 0.16 + sea_stance, 0.16, 0.08, 0.14)
+			# Hands reach forward & slightly down to grip Q1A waist-to-chest wheel handles (0.843 m hub);
+			# calm confident hold with sea-breathing on steady course, expressive weight-shifted turn when steering!
+			var arm_out := 0.20 + absf(helm_turn) * 0.05
+			_set_arm(
+				-1.0,
+				0.86 + helm_turn * 0.30 + calm_breath * 0.40,
+				arm_out,
+				0.14 + helm_turn * 0.07,
+				0.56 - helm_turn * 0.16 - calm_breath * 0.30,
+				0.08,
+				-0.28,
+				helm_turn * 0.10 + calm_breath * 0.18,
+				helm_turn * 0.12
+			)
+			_set_arm(
+				1.0,
+				0.86 - helm_turn * 0.30 + calm_breath * 0.40,
+				arm_out,
+				0.14 - helm_turn * 0.07,
+				0.56 + helm_turn * 0.16 - calm_breath * 0.30,
+				0.08,
+				-0.28,
+				-helm_turn * 0.10 + calm_breath * 0.18,
+				-helm_turn * 0.12
+			)
+
+		&"rowboat_oars":
+			# Seated dinghy rowing stroke: forward catch reach -> weighty lean-back pull -> feathered recovery!
+			var effort := clampf(st.row_effort, 0.0, 1.0)
+			var cycle_u := clampf(_station_phase / TAU, 0.0, 1.0)
+			var drive := _snap_step(cycle_u, 0.16, 0.50) * (1.0 - smoothstep(0.56, 0.96, cycle_u))
+			var pull := lerpf(0.38 + breath * 0.05, drive, effort)
+			var row_turn := clampf(st.row_turn, -1.0, 1.0)
+			var l_pull := clampf(pull + row_turn * 0.22, 0.0, 1.0)
+			var r_pull := clampf(pull - row_turn * 0.22, 0.0, 1.0)
+
+			_target_hips_offset = Vector3(0.0, -0.34, 0.04 + pull * 0.04)
+			var torso_pitch := lerpf(-0.24, 0.16, pull)
+			var torso_yaw := -row_turn * 0.14
+			_set_char_rot(_b_hips, _euler_char(torso_pitch * 0.25, torso_yaw * 0.25, 0.0))
+			_set_char_rot(_b_spine, _euler_char(torso_pitch * 0.42, torso_yaw * 0.35, 0.0))
+			_set_char_rot(_b_chest, _euler_char(torso_pitch * 0.48 + breath * 0.015, torso_yaw * 0.45, 0.0))
+			var head_lvl := -(torso_pitch * 1.15) * 0.65
+			_set_char_rot(_b_neck, _euler_char(head_lvl * 0.40, -torso_yaw * 0.35, 0.0))
+			_set_char_rot(_b_head, _euler_char(head_lvl * 0.60, -torso_yaw * 0.45 + sin(_time * 0.55) * 0.05, 0.0))
+			# Seated knee bend planted cleanly on rowboat duckboards.
+			_set_leg(-1.0, 1.32, 0.18, 1.38, 0.14, 0.12)
+			_set_leg(1.0, 1.32, 0.18, 1.38, 0.14, 0.12)
+			_set_arm(
+				-1.0,
+				lerpf(1.22, 0.48, l_pull),
+				lerpf(0.22, 0.34, l_pull),
+				lerpf(0.08, -0.04, l_pull),
+				lerpf(0.28, 1.40, l_pull),
+				lerpf(-0.16, 0.22, l_pull),
+				-0.25,
+				lerpf(0.02, 0.08, l_pull),
+				lerpf(0.14, -0.12, l_pull)
+			)
+			_set_arm(
+				1.0,
+				lerpf(1.22, 0.48, r_pull),
+				lerpf(0.22, 0.34, r_pull),
+				lerpf(0.08, -0.04, r_pull),
+				lerpf(0.28, 1.40, r_pull),
+				lerpf(-0.16, 0.22, r_pull),
+				-0.25,
+				lerpf(0.02, 0.08, r_pull),
+				lerpf(0.14, -0.12, r_pull)
+			)
 
 		&"sail_length":
 			# Hand-over-hand vertical halyard hauling
@@ -1069,8 +1344,8 @@ func _tick_and_layer_action(dt: float) -> void:
 			stop_action()
 			return
 		u = clampf(_action_time / maxf(_action_dur, 0.001), 0.0, 1.0)
-		var fade_in := smoothstep(0.0, 0.14, u)
-		var fade_out := 1.0 - smoothstep(0.80, 1.0, u)
+		var fade_in := smoothstep(0.0, 0.10, u)
+		var fade_out := 1.0 - smoothstep(0.78, 1.0, u)
 		env = fade_in * fade_out
 	if env <= 0.001:
 		return
@@ -1111,57 +1386,111 @@ func _tick_and_layer_action(dt: float) -> void:
 
 
 func _act_slash_1(u: float, w: float) -> void:
-	# Energetic forehand cutlass cleave: high-right windup -> sweeping slash across to low-left!
-	var sw := smoothstep(0.18, 0.62, u)
-	var twist := lerpf(-0.48, 0.56, sw)
-	var pitch := lerpf(0.06, -0.18, sw)
-	_set_char_rot(_b_spine, _euler_char(pitch * 0.45, twist * 0.42, -0.06 * sw), w)
-	_set_char_rot(_b_chest, _euler_char(pitch * 0.55, twist * 0.58, lerpf(-0.10, 0.14, sw)), w)
+	# Multi-phase forehand cleave: coiled high-right windup -> snappy diagonal whip -> follow-through -> recovery!
+	var coil := _ease_out_pow(u / 0.22, 2.0)
+	var sw := _snap_step(u, 0.20, 0.48)
+	var ft := _follow_pulse(u, 0.44, 0.76, 1.0)
+	var rec := smoothstep(0.72, 1.0, u)
+	var drive := clampf(sw + ft * 0.14 - rec * 0.22, 0.0, 1.16)
+	var wind_hold := coil * (1.0 - sw)
+	var twist := lerpf(-0.54 * coil, 0.60, drive)
+	var pitch := lerpf(0.08 * coil, -0.20, drive)
+	_target_hips_offset += Vector3(0.0, (0.015 * wind_hold - 0.045 * sw * (1.0 - rec * 0.5)) * w, -0.025 * sw * (1.0 - rec * 0.5) * w)
+	_set_char_rot(_b_spine, _euler_char(pitch * 0.45, twist * 0.42, lerpf(-0.04 * coil, -0.06, drive)), w)
+	_set_char_rot(_b_chest, _euler_char(pitch * 0.55, twist * 0.58, lerpf(-0.12 * coil, 0.16, drive)), w)
 	_set_char_rot(_b_head, _euler_char(0.06, -twist * 0.45, 0.0), w)
-	_set_arm(1.0, lerpf(1.65, 0.92, sw), lerpf(0.75, 0.14, sw), lerpf(-0.55, 0.88, sw), lerpf(1.10, 0.34, sw), lerpf(-0.25, 0.45, sw), lerpf(-0.4, 0.5, sw), 0.12, lerpf(-0.10, 0.22, sw), w)
-	_set_arm(-1.0, lerpf(0.52, -0.25, sw), lerpf(0.28, 0.62, sw), lerpf(0.18, -0.25, sw), lerpf(0.95, 0.58, sw), 0.0, 0.0, 0.05, 0.0, w)
+	_set_arm(
+		1.0,
+		lerpf(1.72, 0.88, drive),
+		lerpf(0.80, 0.12, drive),
+		lerpf(-0.62, 0.92, drive),
+		clampf(lerpf(1.16, 0.30, sw) + ft * 0.12 + rec * 0.18, 0.24, 1.35),
+		lerpf(-0.32, 0.50, drive),
+		lerpf(-0.45, 0.55, drive),
+		0.14 * (1.0 - sw * 0.4),
+		lerpf(-0.14, 0.24, drive),
+		w
+	)
+	_set_arm(-1.0, lerpf(0.56, -0.28, drive), lerpf(0.28, 0.66, drive), lerpf(0.20, -0.26, drive), lerpf(0.98, 0.56, drive), 0.0, 0.0, 0.06, 0.0, w)
 
 
 func _act_slash_2(u: float, w: float) -> void:
-	# Snappy backhand return slash: coiled left-low -> whips across to high-right!
-	var sw := smoothstep(0.16, 0.64, u)
-	var twist := lerpf(0.54, -0.52, sw)
-	_set_char_rot(_b_spine, _euler_char(-0.08, twist * 0.42, 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(lerpf(-0.12, 0.10, sw), twist * 0.58, lerpf(0.12, -0.14, sw)), w)
+	# Multi-phase backhand return: tight left-low coil -> whipping backhand snap -> high-right follow-through -> recovery!
+	var coil := _ease_out_pow(u / 0.20, 2.0)
+	var sw := _snap_step(u, 0.18, 0.46)
+	var ft := _follow_pulse(u, 0.42, 0.76, 1.0)
+	var rec := smoothstep(0.72, 1.0, u)
+	var drive := clampf(sw + ft * 0.14 - rec * 0.22, 0.0, 1.16)
+	var twist := lerpf(0.58 * coil, -0.56, drive)
+	_target_hips_offset += Vector3(0.0, (-0.035 * coil * (1.0 - sw) - 0.025 * sw * (1.0 - rec * 0.5)) * w, 0.0)
+	_set_char_rot(_b_spine, _euler_char(lerpf(-0.10 * coil, 0.04, drive), twist * 0.42, 0.0), w)
+	_set_char_rot(_b_chest, _euler_char(lerpf(-0.14 * coil, 0.12, drive), twist * 0.58, lerpf(0.14 * coil, -0.16, drive)), w)
 	_set_char_rot(_b_head, _euler_char(0.05, -twist * 0.48, 0.0), w)
-	_set_arm(1.0, lerpf(0.88, 1.52, sw), lerpf(0.08, 0.88, sw), lerpf(0.92, -0.68, sw), lerpf(1.08, 0.28, sw), lerpf(0.35, -0.25, sw), lerpf(0.45, -0.45, sw), 0.14, lerpf(0.20, -0.14, sw), w)
-	_set_arm(-1.0, lerpf(-0.12, 0.62, sw), lerpf(0.55, 0.32, sw), 0.08, 0.72, 0.0, 0.0, 0.04, 0.0, w)
+	_set_arm(
+		1.0,
+		lerpf(0.84, 1.56, drive),
+		lerpf(0.08, 0.92, drive),
+		lerpf(0.96, -0.72, drive),
+		clampf(lerpf(1.14, 0.26, sw) + ft * 0.10 + rec * 0.20, 0.24, 1.32),
+		lerpf(0.40, -0.32, drive),
+		lerpf(0.48, -0.50, drive),
+		0.14,
+		lerpf(0.22, -0.16, drive),
+		w
+	)
+	_set_arm(-1.0, lerpf(-0.14, 0.66, drive), lerpf(0.56, 0.30, drive), 0.08, 0.74, 0.0, 0.0, 0.04, 0.0, w)
 
 
 func _act_slash_3(u: float, w: float) -> void:
-	# Dramatic overhead lunging finisher cleave with full upper-body drive!
-	var sw := smoothstep(0.24, 0.66, u)
-	var twist := lerpf(-0.34, 0.62, sw)
-	var lean := lerpf(0.16, -0.34, sw)
-	_target_hips_offset += Vector3(0.0, lerpf(0.03, -0.10, sw) * w, lerpf(0.02, -0.06, sw) * w)
+	# Multi-phase overhead finisher: soaring gather -> explosive vertical chop -> heavy lunge squash -> smooth rise!
+	var wind := _ease_out_pow(u / 0.26, 2.1)
+	var sw := _snap_step(u, 0.24, 0.52)
+	var ft := _follow_pulse(u, 0.48, 0.80, 1.0)
+	var rec := smoothstep(0.76, 1.0, u)
+	var drive := clampf(sw + ft * 0.12 - rec * 0.24, 0.0, 1.14)
+	var twist := lerpf(-0.38 * wind, 0.66, drive)
+	var lean := lerpf(0.20 * wind, -0.36, drive)
+	var hip_y := (0.035 * wind * (1.0 - sw) - (0.11 * sw + 0.035 * ft) * (1.0 - rec * 0.45)) * w
+	var hip_z := (0.02 * wind * (1.0 - sw) - 0.065 * sw * (1.0 - rec * 0.45)) * w
+	_target_hips_offset += Vector3(0.0, hip_y, hip_z)
 	_set_char_rot(_b_spine, _euler_char(lean * 0.45, twist * 0.40, 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(lean * 0.55, twist * 0.60, lerpf(-0.10, 0.16, sw)), w)
+	_set_char_rot(_b_chest, _euler_char(lean * 0.55, twist * 0.60, lerpf(-0.12 * wind, 0.18, drive)), w)
 	_set_char_rot(_b_head, _euler_char(-lean * 0.55, -twist * 0.45, 0.0), w)
-	_set_arm(1.0, lerpf(2.38, 0.58, sw), lerpf(0.38, 0.18, sw), lerpf(-0.22, 0.74, sw), lerpf(1.18, 0.24, sw), lerpf(-0.35, 0.55, sw), 0.25, lerpf(0.22, 0.04, sw), lerpf(-0.08, 0.24, sw), w)
-	_set_arm(-1.0, lerpf(0.75, -0.42, sw), lerpf(0.42, 0.68, sw), lerpf(0.18, -0.30, sw), lerpf(0.82, 0.48, sw), 0.0, 0.0, 0.10, 0.0, w)
+	_set_arm(
+		1.0,
+		lerpf(2.42, 0.52, drive),
+		lerpf(0.40, 0.16, drive),
+		lerpf(-0.24, 0.78, drive),
+		clampf(lerpf(1.24, 0.22, sw) + ft * 0.10 + rec * 0.24, 0.22, 1.38),
+		lerpf(-0.40, 0.60, drive),
+		0.26,
+		lerpf(0.24, 0.04, drive),
+		lerpf(-0.10, 0.26, drive),
+		w
+	)
+	_set_arm(-1.0, lerpf(0.80, -0.46, drive), lerpf(0.42, 0.72, drive), lerpf(0.20, -0.32, drive), lerpf(0.86, 0.46, drive), 0.0, 0.0, 0.10, 0.0, w)
 
 
 func _act_heavy(u: float, w: float) -> void:
-	# Telegraphed high windup (0..0.44), explosive forward lunge cleave (0.44..0.72), heavy follow-through!
-	var wind := smoothstep(0.0, 0.36, u)
-	var strike := smoothstep(0.42, 0.68, u)
-	var twist := lerpf(0.0, -0.72, wind) * (1.0 - strike) + 0.72 * strike
-	var pitch := lerpf(0.0, 0.24, wind) * (1.0 - strike) - 0.38 * strike
-	_target_hips_offset += Vector3(0.0, (0.04 * wind * (1.0 - strike) - 0.15 * strike) * w, 0.0)
+	# Multi-phase telegraphed power cleave: deep coil (0..0.38) -> apex poise -> explosive lunge cleave (0.40..0.64) -> weighty follow-through -> recovery!
+	var wind := _ease_out_pow(u / 0.36, 2.2)
+	var strike := _snap_step(u, 0.40, 0.64)
+	var ft := _follow_pulse(u, 0.60, 0.88, 1.0)
+	var rec := smoothstep(0.80, 1.0, u)
+	var drive := clampf(strike + ft * 0.12 - rec * 0.24, 0.0, 1.14)
+	var twist := lerpf(0.0, -0.76, wind) * (1.0 - strike) + 0.76 * drive
+	var pitch := lerpf(0.0, 0.26, wind) * (1.0 - strike) - 0.40 * drive
+	var hip_y := (0.045 * wind * (1.0 - strike) - (0.15 * strike + 0.04 * ft) * (1.0 - rec * 0.45)) * w
+	_target_hips_offset += Vector3(0.0, hip_y, -0.05 * strike * (1.0 - rec * 0.45) * w)
 	_set_char_rot(_b_spine, _euler_char(pitch * 0.45, twist * 0.42, 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(pitch * 0.55, twist * 0.58, lerpf(-0.14, 0.18, strike)), w)
+	_set_char_rot(_b_chest, _euler_char(pitch * 0.55, twist * 0.58, lerpf(-0.16 * wind, 0.20, drive)), w)
 	_set_char_rot(_b_head, _euler_char(-pitch * 0.45, -twist * 0.55, 0.0), w)
-	var r_fwd := lerpf(2.26, 0.48, strike)
-	var r_out := lerpf(0.88, 0.12, strike)
-	var r_in := lerpf(-0.68, 0.96, strike)
-	var r_elb := lerpf(1.26, 0.22, strike)
-	_set_arm(1.0, r_fwd, r_out, r_in, r_elb, lerpf(-0.40, 0.60, strike), 0.35, 0.22 * (1.0 - strike), lerpf(-0.16, 0.26, strike), w)
-	_set_arm(-1.0, lerpf(1.15, -0.48, strike), lerpf(0.32, 0.78, strike), lerpf(0.35, -0.35, strike), lerpf(0.65, 0.42, strike), 0.0, 0.0, 0.10, 0.0, w)
+	var r_fwd := lerpf(2.30, 0.44, drive)
+	var r_out := lerpf(0.90, 0.12, drive)
+	var r_in := lerpf(-0.72, 0.98, drive)
+	var r_elb := clampf(lerpf(1.30, 0.20, strike) + ft * 0.10 + rec * 0.24, 0.20, 1.40)
+	_set_arm(1.0, r_fwd, r_out, r_in, r_elb, lerpf(-0.44, 0.64, drive), 0.36, 0.24 * (1.0 - strike), lerpf(-0.18, 0.28, drive), w)
+	_set_arm(-1.0, lerpf(1.18, -0.50, drive), lerpf(0.32, 0.80, drive), lerpf(0.36, -0.36, drive), lerpf(0.68, 0.42, drive), 0.0, 0.0, 0.10, 0.0, w)
 
 
 func _act_block(u: float, w: float) -> void:
@@ -1222,56 +1551,118 @@ func _act_fire_pistol(u: float, w: float) -> void:
 
 
 func _act_dig(u: float, w: float) -> void:
-	# Two-handed shovel drive downward -> scoop & heave dirt up over left shoulder!
-	var thrust := smoothstep(0.0, 0.35, u) * (1.0 - smoothstep(0.45, 0.78, u))
-	var heave := smoothstep(0.42, 0.82, u)
-	var lean := -0.44 * thrust + 0.12 * heave
-	var twist := -0.22 * thrust + 0.46 * heave
-	_target_hips_offset += Vector3(0.0, -0.16 * thrust * w, 0.0)
+	# Multi-phase shovel dig: poised lift -> crisp downward stab -> brief load -> snappy shoulder heave -> recovery!
+	var prep := _ease_out_pow(u / 0.16, 2.0)
+	var stab := _snap_step(u, 0.14, 0.34)
+	var heave := _snap_step(u, 0.46, 0.72)
+	var ft := _follow_pulse(u, 0.68, 0.92, 1.0)
+	var rec := smoothstep(0.84, 1.0, u)
+	var plunge := stab * (1.0 - heave)
+	var toss := clampf(heave + ft * 0.14 - rec * 0.25, 0.0, 1.15)
+	var lean := 0.06 * prep * (1.0 - stab) - 0.48 * plunge + 0.14 * toss
+	var twist := -0.26 * plunge + 0.50 * toss
+	_target_hips_offset += Vector3(0.0, (-0.18 * plunge + 0.025 * toss * (1.0 - rec)) * w, -0.04 * plunge * w)
 	_set_char_rot(_b_spine, _euler_char(lean * 0.48, twist * 0.45, 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(lean * 0.52, twist * 0.55, 0.08 * heave), w)
+	_set_char_rot(_b_chest, _euler_char(lean * 0.52, twist * 0.55, 0.09 * toss), w)
 	_set_char_rot(_b_head, _euler_char(-lean * 0.35, -twist * 0.35, 0.0), w)
-	_set_arm(1.0, lerpf(0.68, 1.38, heave), 0.16, lerpf(0.32, 0.52, heave), lerpf(0.55, 1.05, heave), 0.15, 0.0, 0.08, 0.12, w)
-	_set_arm(-1.0, lerpf(0.54, 1.24, heave), 0.22, lerpf(0.36, -0.10, heave), lerpf(0.62, 0.82, heave), 0.15, 0.0, 0.06, 0.10, w)
+	_set_arm(
+		1.0,
+		lerpf(lerpf(0.92, 0.62, stab), 1.44, toss),
+		0.16 + 0.04 * ft,
+		lerpf(0.32, 0.56, toss),
+		clampf(lerpf(0.76, 0.48, stab) * (1.0 - toss) + 1.08 * toss, 0.36, 1.24),
+		lerpf(0.24, -0.22, toss),
+		0.0,
+		0.08 + 0.08 * toss,
+		lerpf(0.14, 0.06, toss),
+		w
+	)
+	_set_arm(
+		-1.0,
+		lerpf(lerpf(0.78, 0.48, stab), 1.28, toss),
+		0.22 + 0.05 * ft,
+		lerpf(0.38, -0.14, toss),
+		clampf(lerpf(0.74, 0.54, stab) * (1.0 - toss) + 0.86 * toss, 0.38, 1.12),
+		lerpf(0.20, -0.18, toss),
+		0.0,
+		0.06 + 0.06 * toss,
+		0.10,
+		w
+	)
 
 
 func _act_hammer(u: float, w: float) -> void:
-	# Energetic plank-repair hammering strike with right hand while left hand braces plank!
-	var strike := smoothstep(0.28, 0.58, u)
-	var rebound := smoothstep(0.62, 0.95, u)
-	var swing := strike * (1.0 - 0.55 * rebound)
-	_set_char_rot(_b_spine, _euler_char(-0.08 - 0.14 * swing, lerpf(-0.18, 0.16, swing), 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(-0.06 - 0.14 * swing, lerpf(-0.22, 0.20, swing), 0.0), w)
+	# Multi-phase plank-repair hammering: high cocked backswing -> fast snap nail strike -> crisp rebound -> reset!
+	var cock := _ease_out_pow(u / 0.24, 2.0)
+	var hit := _snap_step(u, 0.24, 0.44)
+	var bounce := _follow_pulse(u, 0.44, 0.72, 1.0)
+	var rec := smoothstep(0.72, 1.0, u)
+	var drive := clampf(hit - bounce * 0.22 - rec * 0.34, 0.0, 1.06)
+	var backswing := cock * (1.0 - hit)
+	_target_hips_offset += Vector3(0.0, (-0.038 * hit * (1.0 - bounce * 0.45) * (1.0 - rec * 0.6)) * w, 0.0)
+	_set_char_rot(_b_spine, _euler_char(-0.06 + 0.08 * backswing - 0.16 * drive, lerpf(-0.22 * cock, 0.18, drive), 0.0), w)
+	_set_char_rot(_b_chest, _euler_char(-0.05 + 0.10 * backswing - 0.16 * drive, lerpf(-0.26 * cock, 0.22, drive), lerpf(-0.06 * backswing, 0.06, drive)), w)
 	_set_char_rot(_b_head, _euler_char(0.08, 0.0, 0.0), w)
-	_set_arm(1.0, lerpf(2.10, 0.94, swing), lerpf(0.26, 0.12, swing), lerpf(-0.12, 0.22, swing), lerpf(1.48, 0.42, swing), lerpf(-0.35, 0.40, swing), 0.0, 0.16 * (1.0 - swing), 0.10, w)
-	_set_arm(-1.0, 0.98, 0.16, 0.22, 0.52, -0.25, 0.0, 0.0, 0.12, w)
+	_set_arm(
+		1.0,
+		lerpf(2.18, 0.90, drive),
+		lerpf(0.28, 0.12, drive),
+		lerpf(-0.16, 0.24, drive),
+		clampf(lerpf(1.56, 0.40, drive) + bounce * 0.16, 0.34, 1.66),
+		lerpf(-0.44, 0.48, drive),
+		0.0,
+		0.18 * (1.0 - drive),
+		lerpf(-0.06, 0.14, drive),
+		w
+	)
+	_set_arm(-1.0, 0.98 + bounce * 0.05, 0.16, 0.22, 0.52 + bounce * 0.06, -0.25, 0.0, 0.0, 0.12, w)
 
 
 func _act_bail(u: float, w: float) -> void:
-	# Two-handed bucket scoop low in front -> energetic forward-upward water toss!
-	var heave := smoothstep(0.34, 0.72, u)
-	var lean := lerpf(-0.46, 0.14, heave)
-	_target_hips_offset += Vector3(0.0, lerpf(-0.16, 0.03, heave) * w, 0.0)
-	_set_char_rot(_b_spine, _euler_char(lean * 0.48, lerpf(-0.12, 0.24, heave), 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(lean * 0.52, lerpf(-0.14, 0.28, heave), 0.0), w)
-	_set_char_rot(_b_head, _euler_char(-lean * 0.4, 0.0, 0.0), w)
-	var af := lerpf(0.46, 1.56, heave)
-	var ae := lerpf(0.42, 0.64, heave)
-	_set_arm(-1.0, af, 0.16, 0.28, ae, lerpf(0.25, -0.30, heave), -0.25, 0.10 * heave, 0.12, w)
-	_set_arm(1.0, af, 0.16, 0.28, ae, lerpf(0.25, -0.30, heave), -0.25, 0.10 * heave, 0.12, w)
+	# Multi-phase bucket bail: brisk low bilge scoop -> loaded pause -> explosive water fling -> flick follow-through -> recovery!
+	var stoop := _ease_out_pow(u / 0.26, 2.0)
+	var heave := _snap_step(u, 0.36, 0.66)
+	var ft := _follow_pulse(u, 0.62, 0.88, 1.0)
+	var rec := smoothstep(0.80, 1.0, u)
+	var toss := clampf(heave + ft * 0.14 - rec * 0.24, 0.0, 1.14)
+	var lean := lerpf(-0.48 * stoop, 0.16, toss)
+	var hip_y := (lerpf(-0.18 * stoop, 0.035, toss) + 0.018 * ft) * (1.0 - rec * 0.4) * w
+	_target_hips_offset += Vector3(0.0, hip_y, -0.03 * stoop * (1.0 - heave) * w)
+	_set_char_rot(_b_spine, _euler_char(lean * 0.48, lerpf(-0.14 * stoop, 0.26, toss), 0.0), w)
+	_set_char_rot(_b_chest, _euler_char(lean * 0.52, lerpf(-0.16 * stoop, 0.30, toss), 0.0), w)
+	_set_char_rot(_b_head, _euler_char(-lean * 0.40, 0.0, 0.0), w)
+	var af := lerpf(0.42, 1.62, toss)
+	var ae := clampf(lerpf(0.38, 0.66, heave) + ft * 0.14, 0.34, 0.95)
+	var wp := lerpf(0.28, -0.40, toss)
+	_set_arm(-1.0, af, 0.16 + 0.04 * ft, 0.28, ae, wp, -0.25, 0.12 * toss, 0.12, w)
+	_set_arm(1.0, af, 0.16 + 0.04 * ft, 0.28, ae, wp, -0.25, 0.12 * toss, 0.12, w)
 
 
 func _act_drink(u: float, w: float) -> void:
-	# Hearty tankard swig: raise mug to mouth, tilt head back in gulp, lower with flair!
-	var lift := smoothstep(0.06, 0.30, u) * (1.0 - smoothstep(0.72, 0.94, u))
-	var gulp := smoothstep(0.26, 0.46, u) * (1.0 - smoothstep(0.66, 0.84, u))
-	_set_char_rot(_b_spine, _euler_char(0.10 * gulp, -0.06 * lift, 0.0), w)
-	_set_char_rot(_b_chest, _euler_char(0.12 * gulp, -0.10 * lift, -0.05 * lift), w)
-	_set_char_rot(_b_neck, _euler_char(0.16 * gulp, 0.0, 0.0), w)
-	_set_char_rot(_b_head, _euler_char(0.34 * gulp, 0.06 * lift, -0.06 * gulp), w)
-	_set_arm(1.0, 0.96 + 0.36 * lift, 0.14 + 0.18 * gulp, 0.46 * lift, 1.52 + 0.42 * lift, -0.28 * gulp, -0.40 * lift, 0.12 * lift, 0.10 * lift, w)
+	# Multi-phase tankard swig: brisk lift to lips -> hearty head-back gulp with swallow nods -> jaunty flourish lower!
+	var lift := _snap_step(u, 0.04, 0.24) * (1.0 - smoothstep(0.70, 0.94, u))
+	var gulp := _snap_step(u, 0.22, 0.38) * (1.0 - smoothstep(0.64, 0.82, u))
+	var gulp_t := clampf((u - 0.26) / 0.42, 0.0, 1.0)
+	var swig_nod := sin(gulp_t * TAU * 1.5) * 0.075 * gulp
+	var flourish := _follow_pulse(u, 0.72, 0.96, 1.0)
+	_set_char_rot(_b_spine, _euler_char(0.11 * gulp - 0.04 * flourish, -0.07 * lift, 0.0), w)
+	_set_char_rot(_b_chest, _euler_char(0.13 * gulp - 0.05 * flourish, -0.11 * lift, -0.05 * lift), w)
+	_set_char_rot(_b_neck, _euler_char(0.17 * gulp + swig_nod * 0.45, 0.0, 0.0), w)
+	_set_char_rot(_b_head, _euler_char(0.36 * gulp + swig_nod, 0.06 * lift, -0.06 * gulp), w)
+	_set_arm(
+		1.0,
+		0.94 + 0.38 * lift + 0.08 * flourish,
+		0.14 + 0.20 * gulp + 0.12 * flourish,
+		0.48 * lift - 0.10 * flourish,
+		clampf(1.48 + 0.46 * lift - 0.30 * flourish, 0.35, 2.02),
+		-0.32 * gulp + swig_nod * 0.8 + 0.14 * flourish,
+		-0.42 * lift,
+		0.13 * lift,
+		0.10 * lift,
+		w
+	)
 	# Off-hand rests jauntily on hip!
-	_set_arm(-1.0, 0.12, 0.42 * lift, -0.10, 1.15 * lift, 0.10, 0.0, 0.0, 0.0, w)
+	_set_arm(-1.0, 0.12, 0.42 * lift, -0.10, clampf(0.28 + 0.90 * lift, 0.24, 1.28), 0.10, 0.0, 0.0, 0.0, w)
 
 
 func _act_play_instrument(u: float, w: float) -> void:

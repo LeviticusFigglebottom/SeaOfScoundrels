@@ -216,11 +216,19 @@ func _setup_hud_shot(sky: Node) -> void:
 	captain.add_child(_inventory)
 	_inventory.bind(captain, pc, cc, vis)
 	_inventory.set_treasure_map("Cutlass Cay", PackedVector2Array(), Vector2(28.0, -18.0), 120.0)
-	_inventory.equip(_fp_item, true)
-	if _fp_item == &"compass" or _fp_item == &"map":
-		_inventory.set_secondary_held(true)
-		_inventory.set(&"_raise_blend", 1.0)
-		_inventory.call(&"_tick_viewmodel_pose", 0.0)
+	if _fp_item == &"carry_chest":
+		_inventory.equip(&"cutlass", true)
+		var chest := TreasureCatalog.create_treasure_carryable(&"captains_chest", captain.global_position + Vector3(0.0, 0.5, -0.5))
+		add_child(chest)
+		captain.pick_up(chest)
+		_inventory.call(&"_sync_visibility")
+		_inventory.call(&"_tick_action_hands", 0.0)
+	else:
+		_inventory.equip(_fp_item, true)
+		if _fp_item == &"compass" or _fp_item == &"map":
+			_inventory.set_secondary_held(true)
+			_inventory.set(&"_raise_blend", 1.0)
+			_inventory.call(&"_tick_viewmodel_pose", 0.0)
 
 	if Game != null and Game.profile != null:
 		Game.profile.data["gold"] = 420
