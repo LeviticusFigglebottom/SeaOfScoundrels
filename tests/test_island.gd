@@ -574,3 +574,167 @@ func test_fort_bastion_and_sea_batteries() -> void:
 	arch.queue_free()
 	await physics_frames(3)
 
+
+func test_smugglers_grotto_and_volcano_caldera() -> void:
+	_init_host()
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	# 1. Verify FortBastion warm faceted weathered limestone polish.
+	var fort := arch.get_island_by_id("ironwatch_fort")
+	check(fort != null, "missing ironwatch_fort")
+	if fort != null:
+		var stone_mi := fort.get_node_or_null(^"FortBastion/BastionStonework") as MeshInstance3D
+		check(stone_mi != null and stone_mi.material_override is StandardMaterial3D,
+			"FortBastion BastionStonework must have StandardMaterial3D override")
+		if stone_mi != null and stone_mi.material_override is StandardMaterial3D:
+			var smat := stone_mi.material_override as StandardMaterial3D
+			check(smat.roughness >= 0.895, "FortBastion stone roughness should be >= 0.90 (got %.2f)" % smat.roughness)
+		if stone_mi != null and stone_mi.mesh != null:
+			var s_arr := stone_mi.mesh.surface_get_arrays(0)
+			var s_norms: PackedVector3Array = s_arr[Mesh.ARRAY_NORMAL]
+			var flat_tris := 0
+			var total_tris := int(s_norms.size() / 3.0)
+			for ti in total_tris:
+				var n0 := s_norms[ti * 3]
+				var n1 := s_norms[ti * 3 + 1]
+				var n2 := s_norms[ti * 3 + 2]
+				if n0.dot(n1) > 0.999 and n0.dot(n2) > 0.999:
+					flat_tris += 1
+			check_eq(flat_tris, total_tris,
+				"BastionStonework must be 100%% flat-shaded faceted masonry (%d/%d flat tris)" % [flat_tris, total_tris])
+
+	# 2. Verify Smuggler's Cove generates walkable SmugglersGrotto sea cave!
+	var cove := arch.get_island_by_id("smugglers_cove")
+	check(cove != null, "missing smugglers_cove in Archipelago")
+	if cove != null:
+		var grotto := cove.get_node_or_null(^"SmugglersGrotto") as Node3D
+		check(grotto != null, "Smuggler's Cove must generate a SmugglersGrotto child node")
+		if grotto != null:
+			check(grotto.position.y >= 1.1 and grotto.position.y <= 3.0,
+				"SmugglersGrotto mouth elevation %.2f m must sit cleanly on walkable cove beach" % grotto.position.y)
+
+			var vault := grotto.get_node_or_null(^"GrottoVaultMesh") as MeshInstance3D
+			check(vault != null and vault.mesh != null and vault.mesh.get_faces().size() >= 300,
+				"SmugglersGrotto must contain sculpted faceted rock vault geometry")
+			if vault != null and vault.mesh != null:
+				var v_arr := vault.mesh.surface_get_arrays(0)
+				var v_norms: PackedVector3Array = v_arr[Mesh.ARRAY_NORMAL]
+				var v_flat := 0
+				var v_total := int(v_norms.size() / 3.0)
+				for ti in v_total:
+					var n0 := v_norms[ti * 3]
+					var n1 := v_norms[ti * 3 + 1]
+					var n2 := v_norms[ti * 3 + 2]
+					if n0.dot(n1) > 0.999 and n0.dot(n2) > 0.999:
+						v_flat += 1
+				check_eq(v_flat, v_total,
+					"GrottoVaultMesh must be 100%% flat-shaded faceted limestone (%d/%d flat tris)" % [v_flat, v_total])
+			var table := grotto.get_node_or_null(^"ContrabandStashTable") as MeshInstance3D
+			check(table != null and table.mesh != null,
+				"SmugglersGrotto must contain a raised timber ContrabandStashTable")
+
+			# Real rain shelter Area3D in group `shelter` with BoxShape3D enclosing cave interior.
+			var shelter := grotto.get_node_or_null(^"GrottoShelter") as Area3D
+			check(shelter != null and shelter.is_in_group(&"shelter"),
+				"SmugglersGrotto must include GrottoShelter Area3D in group 'shelter'")
+			var shelter_cs := shelter.get_node_or_null(^"ShelterBox") as CollisionShape3D if shelter != null else null
+			var shelter_box := shelter_cs.shape as BoxShape3D if shelter_cs != null else null
+			check(shelter_box != null and shelter_box.size.x >= 5.0 and shelter_box.size.y >= 4.0 and shelter_box.size.z >= 9.0,
+				"GrottoShelter BoxShape3D must enclose the walkable sea cave interior")
+
+			# Two hanging flickering smuggler brass lanterns.
+			var lanterns := grotto.find_children("SmugglerLanternLight_*", "OmniLight3D", true, false)
+			check_eq(lanterns.size(), 2, "SmugglersGrotto must hang 2 warm brass OmniLight3D lanterns")
+
+			# Verify a real Pawn walks cleanly from outside the cove mouth deep into the sheltered cave!
+			var explorer := PAWN_SCENE.instantiate() as Pawn
+			add_child(explorer)
+			var start_pos := grotto.global_transform * Vector3(0.0, 0.25, -4.0)
+			start_pos.y = cove.world_surface_height(start_pos) + 0.14
+			explorer.global_position = start_pos
+			var into_cave := grotto.global_basis.z
+			into_cave.y = 0.0
+			explorer.wish_dir = into_cave.normalized()
+			explorer.wish_sprint = true
+
+			var reached_interior := false
+			for _tick in 180:
+				await physics_frames(1)
+				var lp := grotto.to_local(explorer.global_position)
+				if lp.z >= 3.8 and absf(lp.x) < 2.8 and explorer.is_grounded():
+					reached_interior = true
+					break
+			check(reached_interior,
+				"Pawn must walk cleanly through SmugglersGrotto mouth into interior (final local=%s, grounded=%s)"
+				% [grotto.to_local(explorer.global_position), explorer.is_grounded()])
+
+			# Stand inside the grotto and confirm Pawn remains grounded and sheltered from rain.
+			explorer.wish_dir = Vector3.ZERO
+			explorer.wish_sprint = false
+			await physics_frames(12)
+			check(explorer.is_grounded(), "Pawn must remain stably grounded inside SmugglersGrotto")
+			if shelter_cs != null and shelter_box != null:
+				var eye_in_shelter := shelter_cs.global_transform.affine_inverse() * (explorer.global_position + Vector3(0.0, 1.5, 0.0))
+				var half := shelter_box.size * 0.5
+				check(absf(eye_in_shelter.x) < half.x and absf(eye_in_shelter.y) < half.y and absf(eye_in_shelter.z) < half.z,
+					"Pawn standing inside SmugglersGrotto must be enclosed by GrottoShelter box (local=%s, half=%s)"
+					% [eye_in_shelter, half])
+			explorer.queue_free()
+
+	# 3. Verify Cinder Crag generates VolcanoCaldera with glowing magma, light & rising ash/ember plume!
+	var crag := arch.get_island_by_id("cinder_crag")
+	check(crag != null, "missing cinder_crag in Archipelago")
+	if crag != null:
+		check(crag.peak_height >= 80.0,
+			"Cinder Crag basalt caldera rim must tower >= 80 m (got %.1f m)" % crag.peak_height)
+		var caldera := crag.get_node_or_null(^"VolcanoCaldera") as Node3D
+		check(caldera != null, "Cinder Crag must generate a VolcanoCaldera child node")
+		if caldera != null:
+			check(caldera.global_position.y > 55.0 and caldera.global_position.y < crag.peak_height - 8.0,
+				"VolcanoCaldera (y=%.1f m) must sit recessed inside Cinder Crag's %.1f m summit caldera bowl"
+				% [caldera.global_position.y, crag.peak_height])
+
+			# Confirm the jagged basalt caldera rim surrounds & rises higher than the magma pool.
+			var scale_r := crag.island_radius / 60.0
+			var higher_rim_pts := 0
+			for ri in 8:
+				var ang := TAU * float(ri) / 8.0
+				var rim_w := caldera.global_transform * Vector3(cos(ang) * 14.5 * scale_r, 0.0, sin(ang) * 14.5 * scale_r)
+				if crag.world_surface_height(rim_w) > caldera.global_position.y + 4.0:
+					higher_rim_pts += 1
+			check(higher_rim_pts >= 7,
+				"Caldera rim walls must cradle VolcanoCaldera around its perimeter (%d/8 rim points elevated)" % higher_rim_pts)
+
+			var magma := caldera.get_node_or_null(^"MagmaPool") as MeshInstance3D
+			check(magma != null and magma.mesh != null and magma.mesh.get_faces().size() >= 100,
+				"VolcanoCaldera must contain sculpted glowing MagmaPool mesh")
+			var crust := caldera.get_node_or_null(^"ObsidianCrust") as MeshInstance3D
+			check(crust != null and crust.mesh != null and crust.mesh.get_faces().size() >= 100,
+				"VolcanoCaldera must contain cracked faceted ObsidianCrust mesh")
+
+			var cal_light := caldera.get_node_or_null(^"CalderaMagmaLight") as OmniLight3D
+			check(cal_light != null and cal_light.omni_range >= 40.0,
+				"VolcanoCaldera must include warm CalderaMagmaLight with omni_range >= 40 m")
+
+			var ash_plume := caldera.get_node_or_null(^"VolcanoAshPlume") as GPUParticles3D
+			var ember_plume := caldera.get_node_or_null(^"VolcanoEmberPlume") as GPUParticles3D
+			check(ash_plume != null and ash_plume.emitting and ash_plume.draw_pass_1 != null and ash_plume.process_material != null,
+				"VolcanoCaldera must emit a towering VolcanoAshPlume GPUParticles3D")
+			check(ember_plume != null and ember_plume.emitting and ember_plume.draw_pass_1 != null and ember_plume.process_material != null,
+				"VolcanoCaldera must emit rising VolcanoEmberPlume GPUParticles3D")
+
+			# Let _process pulse molten magma glow, then verify clean _exit_tree particle teardown.
+			await physics_frames(4)
+			crag.remove_child(caldera)
+			check(ash_plume != null and not ash_plume.emitting and ash_plume.draw_pass_1 == null and ash_plume.process_material == null,
+				"VolcanoCaldera._exit_tree must stop ash_plume and null draw_pass_1/process_material")
+			check(ember_plume != null and not ember_plume.emitting and ember_plume.draw_pass_1 == null and ember_plume.process_material == null,
+				"VolcanoCaldera._exit_tree must stop ember_plume and null draw_pass_1/process_material")
+			caldera.free()
+
+	arch.queue_free()
+	await physics_frames(3)
+
+

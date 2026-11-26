@@ -40,17 +40,36 @@ const LAYER_WORLD_STATIC := 1
 const SEA_FLOOR_Y := -20.0
 const CONTOUR_SAMPLES := 36
 
-# Coral-limestone bastion, weathered sea-oak gantry, and forged iron brazier palette.
-const COL_FORT_STONE_LIGHT := Color(0.84, 0.79, 0.70)
-const COL_FORT_STONE_MID := Color(0.71, 0.66, 0.58)
-const COL_FORT_STONE_SHADOW := Color(0.50, 0.48, 0.45)
-const COL_FORT_STONE_MOSS := Color(0.41, 0.47, 0.33)
+# Warm weathered coral-limestone bastion, sea-oak gantry, and forged iron brazier palette.
+const COL_FORT_STONE_LIGHT := Color(0.70, 0.63, 0.51)
+const COL_FORT_STONE_MID := Color(0.56, 0.50, 0.40)
+const COL_FORT_STONE_SHADOW := Color(0.36, 0.34, 0.30)
+const COL_FORT_STONE_MOSS := Color(0.34, 0.41, 0.27)
 const COL_FORT_WOOD_LIGHT := Color(0.53, 0.36, 0.21)
 const COL_FORT_WOOD_MID := Color(0.40, 0.26, 0.15)
 const COL_FORT_WOOD_DARK := Color(0.25, 0.16, 0.09)
 const COL_FORT_IRON_HI := Color(0.25, 0.26, 0.29)
 const COL_FORT_IRON_LO := Color(0.11, 0.12, 0.14)
 const COL_FORT_BANNER := Color(0.66, 0.14, 0.13)
+
+# Smuggler's Sea Cave Grotto warm limestone brow -> mossy interior shadow -> damp slate floor palette.
+const COL_GROTTO_LIMESTONE_SUN := Color(0.76, 0.67, 0.52)
+const COL_GROTTO_LIMESTONE_MID := Color(0.56, 0.49, 0.39)
+const COL_GROTTO_MOSS := Color(0.30, 0.39, 0.24)
+const COL_GROTTO_SHADOW := Color(0.24, 0.27, 0.30)
+const COL_GROTTO_DEEP := Color(0.17, 0.20, 0.24)
+const COL_GROTTO_SLATE := Color(0.27, 0.29, 0.32)
+const COL_GROTTO_STALACTITE := Color(0.46, 0.43, 0.38)
+const COL_GROTTO_BRASS_HI := Color(0.84, 0.64, 0.26)
+const COL_GROTTO_BRASS_LO := Color(0.48, 0.34, 0.12)
+
+# Cinder Crag obsidian basalt crust & incandescent magma caldera palette.
+const COL_CALDERA_MAGMA_CORE := Color(1.0, 0.90, 0.36)
+const COL_CALDERA_MAGMA_MID := Color(1.0, 0.42, 0.06)
+const COL_CALDERA_MAGMA_RIM := Color(0.68, 0.10, 0.02)
+const COL_CALDERA_OBSIDIAN_TOP := Color(0.11, 0.11, 0.13)
+const COL_CALDERA_OBSIDIAN_EDGE := Color(0.20, 0.19, 0.22)
+const COL_CALDERA_OBSIDIAN_SCORCH := Color(0.46, 0.14, 0.05)
 
 static var _beacon_puff_tex: ImageTexture = null
 
@@ -73,10 +92,14 @@ class FortBastion:
 	var _clock: float = 0.0
 
 	func _exit_tree() -> void:
-		if _beacon_smoke != null and is_instance_valid(_beacon_smoke):
-			_beacon_smoke.emitting = false
-		if _beacon_embers != null and is_instance_valid(_beacon_embers):
-			_beacon_embers.emitting = false
+		for p: GPUParticles3D in [_beacon_smoke, _beacon_embers]:
+			if p != null and is_instance_valid(p):
+				p.emitting = false
+				p.visible = false
+				p.draw_pass_1 = null
+				p.process_material = null
+		_beacon_smoke = null
+		_beacon_embers = null
 
 	func _process(delta: float) -> void:
 		_clock += delta
@@ -143,6 +166,45 @@ class FortBastion:
 			if bat != null and is_instance_valid(bat):
 				out.append(bat)
 		return out
+
+
+## Glowing volcanic magma caldera & towering ash/ember plume controller node mounted
+## inside the summit crater bowl of `volcano_crag` islands (e.g. Cinder Crag).
+class VolcanoCaldera:
+	extends Node3D
+
+	var magma_mesh: MeshInstance3D = null
+	var obsidian_mesh: MeshInstance3D = null
+	var caldera_light: OmniLight3D = null
+	var ash_plume: GPUParticles3D = null
+	var ember_plume: GPUParticles3D = null
+
+	var _magma_mat: StandardMaterial3D = null
+	var _clock: float = 0.0
+
+	func _exit_tree() -> void:
+		for p: GPUParticles3D in [ash_plume, ember_plume]:
+			if p != null and is_instance_valid(p):
+				p.emitting = false
+				p.visible = false
+				p.draw_pass_1 = null
+				p.process_material = null
+		ash_plume = null
+		ember_plume = null
+		_magma_mat = null
+		magma_mesh = null
+		obsidian_mesh = null
+		caldera_light = null
+
+	func _process(delta: float) -> void:
+		_clock += delta
+		var pulse := 1.0 + 0.22 * sin(_clock * 1.85) + 0.09 * sin(_clock * 4.2 + 0.8)
+		if _magma_mat != null:
+			_magma_mat.albedo_color = Color(2.15 * pulse, 1.80 * pulse, 1.45 * pulse, 1.0)
+			_magma_mat.emission_energy_multiplier = 4.2 * pulse
+		if magma_mesh != null and is_instance_valid(magma_mesh):
+			magma_mesh.position.y = 0.06 * sin(_clock * 1.65)
+
 
 
 ## Build a complete procedural `Island` (or `Outpost` when `archetype == &"outpost"`).
@@ -256,6 +318,15 @@ static func build_island(spec: Dictionary) -> Island:
 			var wp := bastion_pos + lb * local_sp
 			wp.y = island.surface_height(wp.x, wp.z)
 			fort_courtyard_spawns.append(wp)
+	elif arch == &"smuggler_cove":
+		# Reserve clean cave vault & cove mouth approach before placing dig sites/campfires/enemies.
+		var sc_r := radius / 60.0
+		var sc_b := Basis(Vector3.UP, landing_yaw)
+		var sc_mid := sc_b * Vector3(0.0, 0.0, 7.0 * sc_r)
+		var sc_mouth := sc_b * Vector3(0.0, 0.0, -1.0 * sc_r)
+		exclusions.append(Vector3(sc_mid.x, sc_mid.z, 10.2))
+		exclusions.append(Vector3(sc_mouth.x, sc_mouth.z, 6.8))
+
 
 	# Gather verified walkable beach/clearing spots for buried treasure & enemy spawns.
 	_populate_gameplay_points(island, landing_yaw, exclusions, rng)
@@ -471,15 +542,23 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			h = maxf(h, lerpf(-3.2, 1.8, shoal) + detail_n * 0.6)
 
 		&"volcano_crag":
-			# Towering jagged basalt volcanic cone with breached summit caldera rim!
-			var v_dist := Vector2(u, v - 4.0 * scale_r).length()
-			var cone := _faceted_spire(u, v, 0.0, 4.0 * scale_r, 48.0 * scale_r, 46.0 * scale_r, target_peak * 1.12, 0.18, 7.0, 1.18)
-			# Carve summit caldera depression so the jagged caldera rim stands bold against the sky!
-			var caldera := _smoothstep(18.0 * scale_r, 5.0 * scale_r, v_dist)
-			cone -= caldera * (target_peak * 0.34)
+			# Towering jagged basalt volcanic cone with a true recessed summit caldera bowl
+			# ringed by jagged basalt fangs (and a subtle seaward breach toward -v)!
+			var cv := v - 4.0 * scale_r
+			var v_dist := Vector2(u, cv).length()
+			var v_ang := atan2(cv, u)
+			var cone := _faceted_spire(u, v, 0.0, 4.0 * scale_r, 50.0 * scale_r, 48.0 * scale_r, target_peak * 1.14, 0.18, 7.0, 1.08)
+			var rim_band := exp(-pow((v_dist - 14.5 * scale_r) / (6.8 * scale_r), 2.0))
+			var rim_jags := 1.0 + 0.16 * cos(v_ang * 5.0 + 0.4) + 0.10 * sin(v_ang * 3.0 - 0.7)
+			var breach := _smoothstep(0.35, 0.95, -sin(v_ang)) * 0.24
+			cone += rim_band * (target_peak * 0.30) * rim_jags * (1.0 - breach)
+			var bowl_mask := _smoothstep(13.8 * scale_r, 8.8 * scale_r, v_dist)
+			var bowl_t := clampf((v_dist - 6.5 * scale_r) / (5.5 * scale_r), 0.0, 1.0)
+			var bowl_floor := target_peak * (0.68 + 0.09 * bowl_t * bowl_t)
+			cone = lerpf(cone, minf(cone, bowl_floor), bowl_mask)
 			var spur := _faceted_spire(u, v, 26.0 * scale_r, 16.0 * scale_r, 18.0 * scale_r, 16.0 * scale_r, target_peak * 0.48, -0.6, 5.0, 1.42)
 			h = maxf(h, maxf(cone, spur))
-			h += ridge_n * 4.2 * _smoothstep(12.0, 40.0, h)
+			h += ridge_n * 4.2 * _smoothstep(12.0, 40.0, h) * (1.0 - bowl_mask * 0.80)
 			# Narrow walkable pocket beach on the -v landing flank.
 			var pock := _smoothstep(20.0 * scale_r, 8.0 * scale_r, absf(u)) * _smoothstep(-14.0 * scale_r, -36.0 * scale_r, v)
 			h = lerpf(h, minf(h, 2.2), pock * 0.72)
@@ -519,6 +598,14 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			var mouth := _smoothstep(13.0 * scale_r, 5.0 * scale_r, absf(u)) * _smoothstep(-2.0 * scale_r, -28.0 * scale_r, v)
 			var target_cov := lerpf(-2.4, 2.6, clampf((v + 24.0 * scale_r) / (26.0 * scale_r), 0.0, 1.0))
 			h = lerpf(h, minf(h, target_cov), clampf(maxf(cov, mouth), 0.0, 1.0) * 0.88)
+			# Carve a smooth walkable sea-cave grotto recess tucked into the amphitheatre cliff foot
+			# so SmugglersGrotto sits flush at ~1.9..2.35 m with a 100% open walkable floor.
+			var grotto_u := _smoothstep(10.8 * scale_r, 5.4 * scale_r, absf(u))
+			var grotto_v := _smoothstep(-5.5 * scale_r, 0.5 * scale_r, v) * _smoothstep(20.5 * scale_r, 14.0 * scale_r, v)
+			var grotto_mask := grotto_u * grotto_v
+			if grotto_mask > 0.001:
+				var grotto_floor := lerpf(1.92, 2.34, clampf((v - 0.5 * scale_r) / (12.5 * scale_r), 0.0, 1.0))
+				h = lerpf(h, minf(h, grotto_floor), grotto_mask)
 
 	# Keep outer skirt pinned cleanly to SEA_FLOOR_Y so islands blend seamlessly into deep ocean.
 	var outer_t := _smoothstep(seabed_r - 12.0, seabed_r + 2.0, r)
@@ -875,6 +962,31 @@ static func _populate_archetype_props(island: Island, arch: StringName, landing_
 						_spawn_prop(island, sc, "CoveSupply_%d" % ci,
 							Transform3D(Basis(Vector3.UP, rng.randf() * TAU), cp),
 							prop_body, props_root, foliage_cache)
+
+	# 1b. Walkable Smuggler's Sea Cave Grotto tucked against the amphitheatre cliff mouth.
+	if arch == &"smuggler_cove":
+		var scale_r := island.island_radius / 60.0
+		var grotto_xz := basis * Vector3(0.0, 0.0, 1.5 * scale_r)
+		var grotto_y := island.surface_height(grotto_xz.x, grotto_xz.z)
+		var grotto_xform := Transform3D(basis, Vector3(grotto_xz.x, grotto_y, grotto_xz.z))
+		_build_smugglers_grotto(island, grotto_xform, landing_yaw, prop_body, props_root, foliage_cache, rng)
+		var grotto_mid := grotto_xform * Vector3(0.0, 0.0, 5.5)
+		var grotto_mouth := grotto_xform * Vector3(0.0, 0.0, -1.8)
+		placed.append(Vector3(grotto_mid.x, grotto_mid.z, 10.5))
+		keepout_zones.append(Vector3(grotto_mid.x, grotto_mid.z, 10.5))
+		placed.append(Vector3(grotto_mouth.x, grotto_mouth.z, 7.2))
+		keepout_zones.append(Vector3(grotto_mouth.x, grotto_mouth.z, 7.2))
+
+	# 1c. Glowing Volcanic Magma Caldera & towering rising ash/ember plume on volcanic peaks.
+	if arch == &"volcano_crag":
+		var scale_r := island.island_radius / 60.0
+		var cal_xz := basis * Vector3(0.0, 0.0, 4.0 * scale_r)
+		var cal_y := island.surface_height(cal_xz.x, cal_xz.z) + 1.8
+		var cal_xform := Transform3D(basis, Vector3(cal_xz.x, cal_y, cal_xz.z))
+		_build_volcano_caldera(island, cal_xform, scale_r, rng)
+		placed.append(Vector3(cal_xz.x, cal_xz.z, 16.0 * scale_r))
+		keepout_zones.append(Vector3(cal_xz.x, cal_xz.z, 16.0 * scale_r))
+
 
 	# 2. Dramatic offshore sea stacks (`rock_spire.glb`) for iconic horizon silhouettes (like image.png!).
 	var spire_count := 3 if arch in [&"treasure_peak", &"twin_spires", &"volcano_crag", &"skull_bluff"] else 2
@@ -1330,6 +1442,7 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 
 	var stone_st := SurfaceTool.new()
 	stone_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	stone_st.set_smooth_group(-1)
 	var wood_st := SurfaceTool.new()
 	wood_st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var iron_st := SurfaceTool.new()
@@ -1403,7 +1516,7 @@ static func _build_fort_bastion(island: Island, landing_yaw: float, bastion_pos:
 	stone_mi.mesh = stone_st.commit()
 	var stone_mat := StandardMaterial3D.new()
 	stone_mat.vertex_color_use_as_albedo = true
-	stone_mat.roughness = 0.89
+	stone_mat.roughness = 0.90
 	stone_mat.metallic = 0.0
 	stone_mi.material_override = stone_mat
 	bastion.add_child(stone_mi)
@@ -2055,3 +2168,714 @@ static func _bastion_add_beam(st: SurfaceTool, a: Vector3, b: Vector3, radius: f
 		_bastion_quad(st, a + off0, b + off0, b + off1, a + off1, c0, c0, c1, c1)
 		_bastion_tri(st, a, a + off0, a + off1, col_lo, c0, c1)
 		_bastion_tri(st, b, b + off1, b + off0, col_hi, c1, c0)
+
+
+# ============================================================ smuggler's sea cave grotto
+
+## Build the walkable faceted-limestone Smuggler's Sea Cave Grotto (`SmugglersGrotto`)
+## tucked into the amphitheatre cliff foot of `&"smuggler_cove"`, with hanging stalactites,
+## rain shelter Area3D (`GrottoShelter`), 2 warm flickering brass smuggler lanterns,
+## a raised timber Contraband Stash Table, and tucked rum barrels & crates.
+static func _build_smugglers_grotto(island: Island, grotto_xform: Transform3D,
+		landing_yaw: float, prop_body: StaticBody3D, props_root: Node3D,
+		foliage_cache: Dictionary, rng: RandomNumberGenerator) -> Node3D:
+	var grotto := Node3D.new()
+	grotto.name = "SmugglersGrotto"
+	grotto.transform = grotto_xform
+	island.add_child(grotto)
+
+	# 1. Sculpted faceted limestone cavern vault, arch ribs, overhanging brow, stalactites & floor rim.
+	var vault_mi := MeshInstance3D.new()
+	vault_mi.name = "GrottoVaultMesh"
+	vault_mi.mesh = _build_grotto_vault_mesh(rng)
+	var vault_mat := StandardMaterial3D.new()
+	vault_mat.vertex_color_use_as_albedo = true
+	vault_mat.roughness = 0.90
+	vault_mat.metallic = 0.0
+	vault_mi.material_override = vault_mat
+	grotto.add_child(vault_mi)
+
+	# 2. Left/right/rear BoxShape3D colliders ONLY (entire mouth & central floor stay 100% walkable!).
+	_add_grotto_box_collider(prop_body, grotto_xform, "WallL",
+		Transform3D(Basis.IDENTITY, Vector3(-3.95, 2.5, 5.5)), Vector3(1.5, 5.4, 11.4))
+	_add_grotto_box_collider(prop_body, grotto_xform, "WallR",
+		Transform3D(Basis.IDENTITY, Vector3(3.95, 2.5, 5.5)), Vector3(1.5, 5.4, 11.4))
+	_add_grotto_box_collider(prop_body, grotto_xform, "WallRear",
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 2.5, 11.55)), Vector3(7.6, 5.4, 1.5))
+
+	# 3. Rain Shelter Area3D in group `shelter` enclosing the walkable cavern interior.
+	var shelter := Area3D.new()
+	shelter.name = "GrottoShelter"
+	shelter.collision_layer = 1 << 6
+	shelter.collision_mask = 0
+	shelter.monitoring = false
+	shelter.monitorable = false
+	shelter.add_to_group(&"shelter")
+	shelter.position = Vector3(0.0, 2.55, 5.6)
+	var shelter_cs := CollisionShape3D.new()
+	shelter_cs.name = "ShelterBox"
+	var shelter_box := BoxShape3D.new()
+	shelter_box.size = Vector3(6.8, 5.1, 10.8)
+	shelter_cs.shape = shelter_box
+	shelter.add_child(shelter_cs)
+	grotto.add_child(shelter)
+
+	# 4. Raised timber Contraband Stash Table near the rear alcove + iron/brass lantern hardware.
+	var table_local_xz := Vector3(0.0, 0.0, 8.75)
+	var table_island := grotto_xform * table_local_xz
+	var table_floor_y := island.surface_height(table_island.x, table_island.z) - grotto_xform.origin.y
+	var table_origin := Vector3(table_local_xz.x, table_floor_y, table_local_xz.z)
+
+	var wood_st := SurfaceTool.new()
+	wood_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	wood_st.set_smooth_group(-1)
+	var metal_st := SurfaceTool.new()
+	metal_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	metal_st.set_smooth_group(-1)
+	_build_contraband_stash_table(wood_st, metal_st, table_origin)
+
+	_add_grotto_box_collider(prop_body, grotto_xform, "StashTable",
+		Transform3D(Basis.IDENTITY, table_origin + Vector3(0.0, 0.44, 0.0)), Vector3(2.34, 0.88, 1.06))
+
+	# 5. Two hanging warm glowing smuggler brass lanterns inside the cave arch.
+	var lantern_specs: Array[Array] = [
+		[Vector3(2.25, 3.30, 2.35), 4.55],
+		[Vector3(-2.05, 3.15, 7.65), 4.42],
+	]
+	for li in lantern_specs.size():
+		var l_pos: Vector3 = lantern_specs[li][0] as Vector3
+		var ceil_y: float = float(lantern_specs[li][1])
+		# Hanging brass chain, domed lantern cap, oil dish, and 4 vertical cage rods.
+		_bastion_add_beam(metal_st, Vector3(l_pos.x, ceil_y, l_pos.z), l_pos + Vector3(0.0, 0.24, 0.0),
+			0.026, 6, COL_GROTTO_BRASS_HI, COL_GROTTO_BRASS_LO)
+		_bastion_add_tapered_prism(metal_st, l_pos + Vector3(0.0, 0.14, 0.0),
+			Vector2(0.24, 0.24), Vector2(0.10, 0.10), 0.16, PI * 0.25,
+			COL_GROTTO_BRASS_HI, COL_GROTTO_BRASS_HI, COL_GROTTO_BRASS_LO)
+		_bastion_add_tapered_prism(metal_st, l_pos + Vector3(0.0, -0.26, 0.0),
+			Vector2(0.15, 0.15), Vector2(0.22, 0.22), 0.10, PI * 0.25,
+			COL_GROTTO_BRASS_HI, COL_GROTTO_BRASS_LO, COL_GROTTO_BRASS_LO)
+		for ci in 4:
+			var ca := float(ci) * (PI * 0.5) + PI * 0.25
+			var off := Vector3(cos(ca) * 0.17, 0.0, sin(ca) * 0.17)
+			_bastion_add_beam(metal_st, l_pos + off + Vector3(0.0, -0.18, 0.0),
+				l_pos + off + Vector3(0.0, 0.16, 0.0), 0.018, 5, COL_GROTTO_BRASS_HI, COL_GROTTO_BRASS_LO)
+
+		# Glowing warm amber lantern glass core.
+		var glow_st := SurfaceTool.new()
+		glow_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		glow_st.set_smooth_group(-1)
+		_bastion_add_tapered_prism(glow_st, Vector3(0.0, -0.16, 0.0),
+			Vector2(0.13, 0.13), Vector2(0.14, 0.14), 0.30, PI * 0.25,
+			Color(1.0, 0.94, 0.66), Color(1.0, 0.74, 0.30), Color(0.95, 0.50, 0.14))
+		glow_st.generate_normals()
+		var glow_mi := MeshInstance3D.new()
+		glow_mi.name = "SmugglerLanternGlow_%d" % li
+		glow_mi.mesh = glow_st.commit()
+		glow_mi.position = l_pos
+		glow_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var glow_mat := StandardMaterial3D.new()
+		glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		glow_mat.vertex_color_use_as_albedo = true
+		glow_mat.albedo_color = Color(2.1, 1.55, 0.75)
+		glow_mat.emission_enabled = true
+		glow_mat.emission = Color(1.0, 0.70, 0.24)
+		glow_mat.emission_energy_multiplier = 3.8
+		glow_mi.material_override = glow_mat
+		grotto.add_child(glow_mi)
+
+		# Warm flickering OmniLight3D registered via island distance-gated flicker!
+		var light := OmniLight3D.new()
+		light.name = "SmugglerLanternLight_%d" % li
+		light.light_color = Color(1.0, 0.66, 0.24)
+		light.light_energy = 3.8
+		light.omni_range = 16.0
+		light.omni_attenuation = 1.35
+		light.shadow_enabled = false
+		light.position = l_pos + Vector3(0.0, -0.05, 0.0)
+		grotto.add_child(light)
+		island.register_flicker_light(light, 3.8, 0.16, rng.randf() * TAU)
+
+	wood_st.generate_normals()
+	var table_mi := MeshInstance3D.new()
+	table_mi.name = "ContrabandStashTable"
+	table_mi.mesh = wood_st.commit()
+	var table_mat := StandardMaterial3D.new()
+	table_mat.vertex_color_use_as_albedo = true
+	table_mat.roughness = 0.86
+	table_mat.metallic = 0.02
+	table_mi.material_override = table_mat
+	grotto.add_child(table_mi)
+
+	metal_st.generate_normals()
+	var metal_mi := MeshInstance3D.new()
+	metal_mi.name = "GrottoLanternHardware"
+	metal_mi.mesh = metal_st.commit()
+	var metal_mat := StandardMaterial3D.new()
+	metal_mat.vertex_color_use_as_albedo = true
+	metal_mat.roughness = 0.38
+	metal_mat.metallic = 0.78
+	metal_mi.material_override = metal_mat
+	grotto.add_child(metal_mi)
+
+	# 6. Tucked smuggler rum barrels & supply crates along the cave sidewalls (center stays open!).
+	var grotto_props: Array[Array] = [
+		[BARREL_SCENE, "GrottoBarrel_L1", Vector3(-2.38, 0.0, 3.4), 0.45],
+		[CRATE_SCENE, "GrottoCrate_L1", Vector3(-2.32, 0.0, 5.1), 0.18],
+		[BARREL_SCENE, "GrottoBarrel_L2", Vector3(-2.26, 0.0, 6.7), 1.65],
+		[CRATE_SCENE, "GrottoCrate_R1", Vector3(2.38, 0.0, 4.1), -0.22],
+		[BARREL_SCENE, "GrottoBarrel_R1", Vector3(2.32, 0.0, 5.8), 2.10],
+		[CRATE_SCENE, "GrottoCrate_R2", Vector3(2.18, 0.0, 7.8), 0.35],
+	]
+	for gp in grotto_props:
+		var lp := grotto_xform * (gp[2] as Vector3)
+		lp.y = island.surface_height(lp.x, lp.z)
+		var prop_xf := Transform3D(Basis(Vector3.UP, landing_yaw + float(gp[3])), lp)
+		_spawn_prop(island, gp[0] as PackedScene, String(gp[1]), prop_xf, prop_body, props_root, foliage_cache)
+
+	return grotto
+
+
+static func _build_grotto_vault_mesh(rng: RandomNumberGenerator) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+
+	# 7 sculpted longitudinal arch stations from flared rock mouth (z=-0.75) to rear alcove (z=11.0).
+	var z_stops: Array[float] = [-0.75, 0.0, 2.0, 4.3, 6.6, 8.9, 11.0]
+	var in_rx: Array[float] = [3.55, 3.30, 3.48, 3.68, 3.62, 3.30, 2.88]
+	var in_ry: Array[float] = [5.45, 5.22, 5.08, 4.92, 4.74, 4.44, 4.02]
+	var out_rx: Array[float] = [5.65, 5.55, 5.90, 6.35, 6.65, 6.85, 7.00]
+	var out_ry: Array[float] = [6.45, 6.85, 7.35, 7.90, 8.45, 9.05, 9.55]
+
+	const ARCH_SEGS := 10
+	const RING_PTS := ARCH_SEGS + 3  # footing_L + 11 arch stops + footing_R
+	var inner_rings: Array = []
+	var outer_rings: Array = []
+	var inner_cols: Array = []
+	var outer_cols: Array = []
+
+	for si in z_stops.size():
+		var z := z_stops[si]
+		var depth_t := clampf((z + 0.75) / 11.75, 0.0, 1.0)
+		var iring: Array[Vector3] = []
+		var oring: Array[Vector3] = []
+		var icol: Array[Color] = []
+		var ocol: Array[Color] = []
+
+		for pi in RING_PTS:
+			var ix: float
+			var iy: float
+			var ox: float
+			var oy: float
+			var crown_w := 0.0
+			if pi == 0:
+				ix = -in_rx[si] * 1.06
+				iy = -1.35
+				ox = -out_rx[si] * 1.16
+				oy = -2.20
+			elif pi == RING_PTS - 1:
+				ix = in_rx[si] * 1.06
+				iy = -1.35
+				ox = out_rx[si] * 1.16
+				oy = -2.20
+			else:
+				var theta := PI * float(pi - 1) / float(ARCH_SEGS)
+				crown_w = sin(theta)
+				# Organic faceted rock jitter (keep lower floor jambs wide so cave stays >= 6.5 m clear!).
+				var j_in := rng.randf_range(-0.16, 0.18) * crown_w
+				var j_out := rng.randf_range(-0.32, 0.45) * (0.45 + 0.55 * crown_w)
+				ix = -cos(theta) * (in_rx[si] + j_in)
+				iy = sin(theta) * (in_ry[si] + j_in * 0.9)
+				ox = -cos(theta) * (out_rx[si] + j_out)
+				oy = sin(theta) * (out_ry[si] + j_out * 1.1)
+
+			iring.append(Vector3(ix, iy, z))
+			oring.append(Vector3(ox, oy, z + (0.25 if si == 0 and crown_w < 0.35 else 0.0)))
+
+			# Inner cavern color: sunlit limestone lip -> cool mossy shadow -> damp slate floor & deep alcove.
+			var c_in := COL_GROTTO_LIMESTONE_MID.lerp(COL_GROTTO_SHADOW, smoothstep(0.02, 0.34, depth_t))
+			c_in = c_in.lerp(COL_GROTTO_DEEP, smoothstep(0.55, 1.0, depth_t) * 0.72)
+			if iy < 0.85:
+				c_in = c_in.lerp(COL_GROTTO_SLATE, 0.58)
+			elif crown_w > 0.65 and depth_t < 0.45:
+				c_in = c_in.lerp(COL_GROTTO_MOSS, 0.28)
+			icol.append(c_in)
+
+			# Outer cliff shell color: warm sunlit ochre-limestone crown + sea-moss brow + damp flank base.
+			var c_out := COL_GROTTO_LIMESTONE_MID.lerp(COL_GROTTO_LIMESTONE_SUN, smoothstep(0.25, 0.85, crown_w))
+			if crown_w > 0.62:
+				c_out = c_out.lerp(COL_GROTTO_MOSS, 0.22 + 0.16 * float((si + pi) % 2))
+			if oy < 0.6:
+				c_out = c_out.lerp(COL_GROTTO_SLATE, 0.48)
+			ocol.append(c_out)
+
+		inner_rings.append(iring)
+		outer_rings.append(oring)
+		inner_cols.append(icol)
+		outer_cols.append(ocol)
+
+	# Connect inner vault shell (normals facing inward toward cave centerline) & outer shell (outward).
+	for si in z_stops.size() - 1:
+		var ir0: Array[Vector3] = inner_rings[si]
+		var ir1: Array[Vector3] = inner_rings[si + 1]
+		var ic0: Array[Color] = inner_cols[si]
+		var ic1: Array[Color] = inner_cols[si + 1]
+		var or0: Array[Vector3] = outer_rings[si]
+		var or1: Array[Vector3] = outer_rings[si + 1]
+		var oc0: Array[Color] = outer_cols[si]
+		var oc1: Array[Color] = outer_cols[si + 1]
+		var mid_z := 0.5 * (z_stops[si] + z_stops[si + 1])
+		var center_ref := Vector3(0.0, 1.6, mid_z)
+
+		for pi in RING_PTS - 1:
+			var q_in_mid := 0.25 * (ir0[pi] + ir0[pi + 1] + ir1[pi + 1] + ir1[pi])
+			_grotto_quad_oriented(st, ir0[pi], ir0[pi + 1], ir1[pi + 1], ir1[pi],
+				ic0[pi], ic0[pi + 1], ic1[pi + 1], ic1[pi], center_ref - q_in_mid)
+
+			var q_out_mid := 0.25 * (or0[pi] + or0[pi + 1] + or1[pi + 1] + or1[pi])
+			_grotto_quad_oriented(st, or0[pi], or0[pi + 1], or1[pi + 1], or1[pi],
+				oc0[pi], oc0[pi + 1], oc1[pi + 1], oc1[pi], q_out_mid - center_ref)
+
+	# Sculpted thick front rock portal arch face joining inner & outer rings at z = -0.75 (faces seaward -Z).
+	var fr_in: Array[Vector3] = inner_rings[0]
+	var fr_out: Array[Vector3] = outer_rings[0]
+	var fc_in: Array[Color] = inner_cols[0]
+	var fc_out: Array[Color] = outer_cols[0]
+	for pi in RING_PTS - 1:
+		var lip_c0 := fc_in[pi].lerp(COL_GROTTO_LIMESTONE_SUN, 0.35)
+		var lip_c1 := fc_in[pi + 1].lerp(COL_GROTTO_LIMESTONE_SUN, 0.35)
+		_grotto_quad_oriented(st, fr_out[pi], fr_out[pi + 1], fr_in[pi + 1], fr_in[pi],
+			fc_out[pi], fc_out[pi + 1], lip_c1, lip_c0, Vector3(0.0, 0.0, -1.0))
+
+	# Closed sculpted rear rock wall (inner face toward -Z, outer rear rock buttress buried into cliff +Z).
+	var bk_in: Array[Vector3] = inner_rings[z_stops.size() - 1]
+	var bk_ic: Array[Color] = inner_cols[z_stops.size() - 1]
+	var rear_apex := Vector3(0.0, 1.95, 11.45)
+	for pi in RING_PTS - 1:
+		_grotto_tri_oriented(st, bk_in[pi], bk_in[pi + 1], rear_apex,
+			bk_ic[pi], bk_ic[pi + 1], COL_GROTTO_DEEP, Vector3(0.0, 0.0, -1.0))
+	var bk_out: Array[Vector3] = outer_rings[z_stops.size() - 1]
+	var bk_oc: Array[Color] = outer_cols[z_stops.size() - 1]
+	var outer_rear_apex := Vector3(0.0, 4.8, 14.6)
+	for pi in RING_PTS - 1:
+		_grotto_tri_oriented(st, bk_out[pi], bk_out[pi + 1], outer_rear_apex,
+			bk_oc[pi], bk_oc[pi + 1], COL_GROTTO_LIMESTONE_MID, Vector3(0.0, 0.25, 1.0))
+
+	# 4 heavy jagged limestone arch ribs protruding subtly inside the vault for painterly stone depth.
+	var rib_z_list: Array[float] = [-0.20, 2.75, 5.75, 8.65]
+	for ri in rib_z_list.size():
+		var rz := rib_z_list[ri]
+		var rt := clampf((rz + 0.5) / 11.0, 0.0, 1.0)
+		var r_rx := lerpf(3.26, 3.12, rt)
+		var r_ry := lerpf(5.12, 4.35, rt)
+		var c_rib_top := COL_GROTTO_LIMESTONE_MID.lerp(COL_GROTTO_SHADOW, 0.28 + 0.52 * rt)
+		var c_rib_bot := COL_GROTTO_SHADOW.lerp(COL_GROTTO_DEEP, 0.45 * rt)
+		for seg_i in 7:
+			var a := lerpf(0.18, PI - 0.18, float(seg_i) / 6.0)
+			var bx := -cos(a) * (r_rx - 0.12)
+			var by := sin(a) * (r_ry - 0.12)
+			var roll := a - PI * 0.5
+			var rib_xf := Transform3D(Basis(Vector3.BACK, roll), Vector3(bx, by, rz))
+			_bastion_add_oriented_prism(st, rib_xf,
+				Vector2(0.54, 0.42), Vector2(0.44, 0.34), 0.48,
+				c_rib_top, c_rib_bot, COL_GROTTO_SLATE)
+
+	# Overhanging jagged limestone rocky brow crowning the cave mouth (dramatic coastal silhouette!).
+	var brow_blocks: Array[Array] = [
+		[Vector3(-2.75, 4.65, -1.15), Vector2(1.45, 1.35), 1.65, 0.22],
+		[Vector3(-1.05, 5.25, -1.55), Vector2(1.55, 1.50), 1.85, 0.08],
+		[Vector3(0.85, 5.30, -1.45), Vector2(1.50, 1.45), 1.80, -0.06],
+		[Vector3(2.65, 4.70, -1.05), Vector2(1.40, 1.30), 1.60, -0.20],
+		[Vector3(0.0, 6.15, -0.80), Vector2(2.35, 1.45), 1.45, 0.02],
+	]
+	for bb in brow_blocks:
+		var bp: Vector3 = bb[0] as Vector3
+		var b_half: Vector2 = bb[1] as Vector2
+		var b_h: float = float(bb[2])
+		var b_roll: float = float(bb[3])
+		var b_xf := Transform3D(Basis(Vector3.BACK, b_roll), bp)
+		_bastion_add_oriented_prism(st, b_xf, b_half, b_half * 0.78, b_h,
+			COL_GROTTO_MOSS.lerp(COL_GROTTO_LIMESTONE_SUN, 0.55),
+			COL_GROTTO_LIMESTONE_SUN, COL_GROTTO_SHADOW)
+
+	# 10 hanging faceted stalactites along the brow arch and vaulted cavern ceiling (all tips >= 3.0 m!).
+	var stalactites: Array[Array] = [
+		[Vector3(-2.10, 4.65, -0.60), 0.28, 1.15],
+		[Vector3(-0.85, 5.35, -0.82), 0.32, 1.45],
+		[Vector3(0.70, 5.38, -0.65), 0.30, 1.35],
+		[Vector3(2.05, 4.72, -0.45), 0.26, 1.05],
+		[Vector3(-1.55, 4.78, 2.15), 0.28, 1.30],
+		[Vector3(1.25, 4.92, 2.95), 0.26, 1.25],
+		[Vector3(-0.35, 5.02, 4.65), 0.31, 1.50],
+		[Vector3(1.68, 4.50, 5.95), 0.25, 1.15],
+		[Vector3(-1.40, 4.48, 7.55), 0.27, 1.20],
+		[Vector3(0.45, 4.46, 9.20), 0.24, 1.08],
+	]
+	for st_spec in stalactites:
+		var s_base: Vector3 = st_spec[0] as Vector3
+		var s_rad: float = float(st_spec[1])
+		var s_len: float = float(st_spec[2])
+		var dt := clampf((s_base.z + 0.8) / 11.0, 0.0, 1.0)
+		var c_base := COL_GROTTO_LIMESTONE_MID.lerp(COL_GROTTO_SHADOW, 0.45 * dt)
+		var c_tip := COL_GROTTO_STALACTITE.lerp(COL_GROTTO_SLATE, 0.35 * dt)
+		_grotto_add_stalactite(st, s_base, s_rad, s_len, c_base, c_tip, rng.randf() * TAU)
+
+	# Low damp-slate floor curbing rims along outer left & right wall bases (central 5.6 m stays clear!).
+	for side: float in [-1.0, 1.0]:
+		for seg_z: float in [0.8, 3.2, 5.6, 8.0, 9.8]:
+			var rim_xf := Transform3D(Basis(Vector3.UP, side * 0.08), Vector3(side * 3.18, -0.25, seg_z))
+			_bastion_add_oriented_prism(st, rim_xf,
+				Vector2(0.48, 1.28), Vector2(0.34, 1.16), 0.56,
+				COL_GROTTO_SLATE, COL_GROTTO_SHADOW, COL_GROTTO_DEEP)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_contraband_stash_table(wood_st: SurfaceTool, metal_st: SurfaceTool,
+		origin: Vector3) -> void:
+	# Chunky beveled weathered sea-oak plank tabletop (2.30 m x 1.02 m at y = 0.86 m).
+	for pi in 4:
+		var pz := -0.375 + float(pi) * 0.25
+		var c_plank := COL_FORT_WOOD_LIGHT.lerp(COL_FORT_WOOD_MID, 0.24 * float(pi % 3))
+		_bastion_add_tapered_prism(wood_st, origin + Vector3(0.0, 0.76, pz),
+			Vector2(1.14, 0.115), Vector2(1.12, 0.110), 0.10, 0.0,
+			c_plank, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+	# Twin splayed timber trestle legs + lower stretcher beam + iron corner straps.
+	for sgn: float in [-1.0, 1.0]:
+		var lx := sgn * 0.88
+		_bastion_add_tapered_prism(wood_st, origin + Vector3(lx, 0.0, 0.0),
+			Vector2(0.11, 0.44), Vector2(0.09, 0.36), 0.76, 0.0,
+			COL_FORT_WOOD_MID, COL_FORT_WOOD_MID, COL_FORT_WOOD_DARK)
+		_bastion_add_tapered_prism(metal_st, origin + Vector3(sgn * 1.13, 0.75, 0.0),
+			Vector2(0.03, 0.48), Vector2(0.03, 0.48), 0.12, 0.0,
+			COL_FORT_IRON_HI, COL_FORT_IRON_HI, COL_FORT_IRON_LO)
+	_bastion_add_beam(wood_st, origin + Vector3(-0.88, 0.24, 0.0), origin + Vector3(0.88, 0.24, 0.0),
+		0.068, 6, COL_FORT_WOOD_LIGHT, COL_FORT_WOOD_DARK)
+
+	# Environmental storytelling contraband props on the tabletop:
+	# Unrolled parchment chart + stacked brass/gold ingots + tall emerald rum bottle.
+	var col_parch := Color(0.86, 0.78, 0.56)
+	var col_parch_edge := Color(0.72, 0.62, 0.40)
+	_bastion_add_tapered_prism(wood_st, origin + Vector3(-0.28, 0.86, 0.02),
+		Vector2(0.46, 0.32), Vector2(0.46, 0.32), 0.02, 0.14,
+		col_parch, col_parch_edge, col_parch_edge)
+	# Stacked contraband gold bars on the starboard half of the table.
+	var col_gold_hi := Color(0.96, 0.78, 0.24)
+	var col_gold_lo := Color(0.64, 0.46, 0.10)
+	_bastion_add_tapered_prism(metal_st, origin + Vector3(0.52, 0.86, -0.06),
+		Vector2(0.18, 0.09), Vector2(0.14, 0.06), 0.08, -0.20, col_gold_hi, col_gold_hi, col_gold_lo)
+	_bastion_add_tapered_prism(metal_st, origin + Vector3(0.56, 0.86, 0.12),
+		Vector2(0.18, 0.09), Vector2(0.14, 0.06), 0.08, 0.15, col_gold_hi, col_gold_hi, col_gold_lo)
+	_bastion_add_tapered_prism(metal_st, origin + Vector3(0.54, 0.94, 0.03),
+		Vector2(0.17, 0.08), Vector2(0.13, 0.05), 0.08, -0.05, col_gold_hi, col_gold_hi, col_gold_lo)
+	# Rum bottle on the port corner.
+	var col_bottle_hi := Color(0.22, 0.52, 0.26)
+	var col_bottle_lo := Color(0.10, 0.28, 0.14)
+	_bastion_add_tapered_prism(wood_st, origin + Vector3(-0.84, 0.86, -0.22),
+		Vector2(0.065, 0.065), Vector2(0.055, 0.055), 0.22, 0.3, col_bottle_hi, col_bottle_hi, col_bottle_lo)
+	_bastion_add_tapered_prism(wood_st, origin + Vector3(-0.84, 1.08, -0.22),
+		Vector2(0.030, 0.030), Vector2(0.024, 0.024), 0.10, 0.3, col_bottle_hi, col_bottle_lo, col_bottle_lo)
+
+
+static func _add_grotto_box_collider(prop_body: StaticBody3D, grotto_xform: Transform3D,
+		col_name: String, local_xf: Transform3D, size: Vector3) -> void:
+	var cs := CollisionShape3D.new()
+	cs.name = "Col_Grotto_" + col_name
+	var box := BoxShape3D.new()
+	box.size = size
+	cs.shape = box
+	cs.transform = grotto_xform * local_xf
+	prop_body.add_child(cs)
+
+
+static func _grotto_add_stalactite(st: SurfaceTool, base_center: Vector3, base_r: float,
+		length: float, col_base: Color, col_tip: Color, yaw_off: float) -> void:
+	const SIDES := 5
+	var mid_y := base_center.y - length * 0.45
+	var tip := Vector3(base_center.x, base_center.y - length, base_center.z)
+	var top_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	for i in SIDES:
+		var ang := yaw_off + TAU * float(i) / float(SIDES)
+		top_ring.append(base_center + Vector3(cos(ang) * base_r, 0.22, sin(ang) * base_r))
+		mid_ring.append(Vector3(base_center.x + cos(ang) * base_r * 0.56, mid_y, base_center.z + sin(ang) * base_r * 0.56))
+	var col_mid := col_base.lerp(col_tip, 0.5)
+	for i in SIDES:
+		var j := (i + 1) % SIDES
+		var out_dir := (0.5 * (top_ring[i] + top_ring[j]) - base_center)
+		out_dir.y = -0.25
+		_grotto_quad_oriented(st, top_ring[i], top_ring[j], mid_ring[j], mid_ring[i],
+			col_base, col_base, col_mid, col_mid, out_dir)
+		_grotto_tri_oriented(st, mid_ring[i], mid_ring[j], tip, col_mid, col_mid, col_tip, out_dir)
+
+
+static func _grotto_tri_oriented(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		ca: Color, cb: Color, cc: Color, desired_normal: Vector3) -> void:
+	var n := (c - a).cross(b - a)
+	if n.dot(desired_normal) >= 0.0:
+		_bastion_tri(st, a, b, c, ca, cb, cc)
+	else:
+		_bastion_tri(st, a, c, b, ca, cc, cb)
+
+
+static func _grotto_quad_oriented(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
+		ca: Color, cb: Color, cc: Color, cd: Color, desired_normal: Vector3) -> void:
+	_grotto_tri_oriented(st, a, b, c, ca, cb, cc, desired_normal)
+	_grotto_tri_oriented(st, a, c, d, ca, cc, cd, desired_normal)
+
+
+# ============================================================ volcanic magma caldera & plume
+
+## Build the glowing molten magma caldera, cracked charcoal-obsidian crust plates,
+## crimson-amber caldera rim bounce light, and towering ash/ember volcanic plume
+## inside the summit crater of `&"volcano_crag"` islands (e.g. Cinder Crag).
+static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
+		scale_r: float, rng: RandomNumberGenerator) -> VolcanoCaldera:
+	var caldera := VolcanoCaldera.new()
+	caldera.name = "VolcanoCaldera"
+	caldera.transform = cal_xform
+	island.add_child(caldera)
+
+	var pool_r := 9.6 * scale_r
+
+	# 1. Glowing Molten Magma Basin with radiating incandescent gold/orange/crimson fissures.
+	var magma_st := SurfaceTool.new()
+	magma_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	magma_st.set_smooth_group(-1)
+	const SPOKES := 16
+	var r_fracs: Array[float] = [0.24, 0.56, 0.84, 1.06]
+	var center_pt := Vector3(0.0, 0.34, 0.0)
+	var rings: Array = []
+	var ring_cols: Array = []
+
+	for ri in r_fracs.size():
+		var rf := r_fracs[ri]
+		var r_pts: Array[Vector3] = []
+		var r_cls: Array[Color] = []
+		for si in SPOKES:
+			var ang := TAU * float(si) / float(SPOKES)
+			var wobble := 1.0 + 0.11 * sin(ang * 3.0 + 0.4) + 0.07 * cos(ang * 5.0 - 0.8)
+			var rad := pool_r * rf * wobble
+			var fissure := pow(maxf(0.0, cos(ang * 6.0 + rf * 2.1)), 3.2)
+			var py := 0.24 * (1.0 - rf) + 0.16 * fissure
+			if ri == r_fracs.size() - 1:
+				py = -1.65  # Skirt plunges cleanly into the basalt caldera walls.
+			r_pts.append(Vector3(cos(ang) * rad, py, sin(ang) * rad))
+
+			var heat := clampf((1.0 - rf * 0.82) * 0.72 + fissure * 0.62, 0.0, 1.0)
+			var c_lava := COL_CALDERA_MAGMA_RIM.lerp(COL_CALDERA_MAGMA_MID, smoothstep(0.05, 0.55, heat))
+			c_lava = c_lava.lerp(COL_CALDERA_MAGMA_CORE, smoothstep(0.58, 0.96, heat))
+			r_cls.append(c_lava)
+		rings.append(r_pts)
+		ring_cols.append(r_cls)
+
+	var r0: Array[Vector3] = rings[0]
+	var c0: Array[Color] = ring_cols[0]
+	for si in SPOKES:
+		var sn := (si + 1) % SPOKES
+		_grotto_tri_oriented(magma_st, center_pt, r0[si], r0[sn],
+			COL_CALDERA_MAGMA_CORE, c0[si], c0[sn], Vector3.UP)
+	for ri in rings.size() - 1:
+		var a_r: Array[Vector3] = rings[ri]
+		var b_r: Array[Vector3] = rings[ri + 1]
+		var a_c: Array[Color] = ring_cols[ri]
+		var b_c: Array[Color] = ring_cols[ri + 1]
+		for si in SPOKES:
+			var sn := (si + 1) % SPOKES
+			_grotto_quad_oriented(magma_st, a_r[si], a_r[sn], b_r[sn], b_r[si],
+				a_c[si], a_c[sn], b_c[sn], b_c[si], Vector3.UP)
+
+	magma_st.generate_normals()
+	var magma_mat := StandardMaterial3D.new()
+	magma_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	magma_mat.vertex_color_use_as_albedo = true
+	magma_mat.albedo_color = Color(2.15, 1.80, 1.45, 1.0)
+	magma_mat.emission_enabled = true
+	magma_mat.emission = Color(1.0, 0.36, 0.06)
+	magma_mat.emission_energy_multiplier = 4.2
+	var magma_mi := MeshInstance3D.new()
+	magma_mi.name = "MagmaPool"
+	magma_mi.mesh = magma_st.commit()
+	magma_mi.material_override = magma_mat
+	magma_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	caldera.add_child(magma_mi)
+	caldera.magma_mesh = magma_mi
+	caldera._magma_mat = magma_mat
+
+	# 2. Cracked faceted charcoal-obsidian crust plates + scorched volcanic rim collar slabs.
+	var crust_st := SurfaceTool.new()
+	crust_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	crust_st.set_smooth_group(-1)
+	# 9 floating jagged obsidian crust islands seated between the glowing radial fissures.
+	for pi in 9:
+		var p_ang := (TAU * float(pi) / 9.0) + 0.28 + rng.randf_range(-0.14, 0.14)
+		var p_rad := pool_r * rng.randf_range(0.32, 0.72)
+		var p_pos := Vector3(cos(p_ang) * p_rad, -0.25, sin(p_ang) * p_rad)
+		var p_hx := rng.randf_range(1.15, 2.05) * scale_r
+		var p_hz := rng.randf_range(0.95, 1.75) * scale_r
+		var p_h := rng.randf_range(0.62, 1.02)
+		_bastion_add_tapered_prism(crust_st, p_pos,
+			Vector2(p_hx, p_hz), Vector2(p_hx * 0.74, p_hz * 0.72), p_h, p_ang + rng.randf_range(-0.4, 0.4),
+			COL_CALDERA_OBSIDIAN_TOP, COL_CALDERA_OBSIDIAN_EDGE, COL_CALDERA_OBSIDIAN_SCORCH)
+
+	# 12 tilted jagged obsidian basalt rim slabs anchoring the magma basin into the crater walls.
+	for r_idx in 12:
+		var ra := TAU * float(r_idx) / 12.0 + rng.randf_range(-0.08, 0.08)
+		var rr := pool_r * rng.randf_range(0.90, 1.06)
+		var r_pos := Vector3(cos(ra) * rr, -2.2, sin(ra) * rr)
+		var r_w := rng.randf_range(1.85, 2.85) * scale_r
+		var r_d := rng.randf_range(1.35, 2.05) * scale_r
+		var r_h := rng.randf_range(3.2, 4.8)
+		var tilt := Basis(Vector3.UP, -ra) * Basis(Vector3.BACK, rng.randf_range(-0.22, -0.06))
+		_bastion_add_oriented_prism(crust_st, Transform3D(tilt, r_pos),
+			Vector2(r_d, r_w), Vector2(r_d * 0.62, r_w * 0.72), r_h,
+			COL_CALDERA_OBSIDIAN_TOP, COL_CALDERA_OBSIDIAN_EDGE, COL_CALDERA_OBSIDIAN_SCORCH)
+
+	crust_st.generate_normals()
+	var crust_mi := MeshInstance3D.new()
+	crust_mi.name = "ObsidianCrust"
+	crust_mi.mesh = crust_st.commit()
+	var crust_mat := StandardMaterial3D.new()
+	crust_mat.vertex_color_use_as_albedo = true
+	crust_mat.roughness = 0.86
+	crust_mat.metallic = 0.06
+	crust_mi.material_override = crust_mat
+	caldera.add_child(crust_mi)
+	caldera.obsidian_mesh = crust_mi
+
+	# 3. Warm crimson-amber volcanic rim bounce light (omni_range = 42 m, distance-gated flicker).
+	var cal_light := OmniLight3D.new()
+	cal_light.name = "CalderaMagmaLight"
+	cal_light.light_color = Color(1.0, 0.32, 0.08)
+	cal_light.light_energy = 11.5
+	cal_light.omni_range = 42.0
+	cal_light.omni_attenuation = 1.15
+	cal_light.shadow_enabled = false
+	cal_light.position = Vector3(0.0, 5.5, 0.0)
+	caldera.add_child(cal_light)
+	caldera.caldera_light = cal_light
+	island.register_flicker_light(cal_light, 11.5, 0.18, rng.randf() * TAU)
+
+	# 4. Towering rising volcanic ash plume (reaches ~45-65 m above peak, visible across archipelago!).
+	var ash_p := GPUParticles3D.new()
+	ash_p.name = "VolcanoAshPlume"
+	ash_p.amount = 44
+	ash_p.lifetime = 11.5
+	ash_p.preprocess = 6.0
+	ash_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	ash_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ash_p.visibility_aabb = AABB(Vector3(-42.0, -4.0, -42.0), Vector3(84.0, 108.0, 84.0))
+	ash_p.position = Vector3(0.0, 3.2, 0.0)
+	var ash_proc := ParticleProcessMaterial.new()
+	ash_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	ash_proc.emission_ring_radius = 6.2 * scale_r
+	ash_proc.emission_ring_inner_radius = 1.4 * scale_r
+	ash_proc.emission_ring_height = 1.0
+	ash_proc.emission_ring_axis = Vector3.UP
+	ash_proc.direction = Vector3(0.14, 1.0, 0.08).normalized()
+	ash_proc.spread = 11.0
+	ash_proc.initial_velocity_min = 4.6
+	ash_proc.initial_velocity_max = 6.8
+	ash_proc.gravity = Vector3(0.32, 0.14, 0.16)
+	ash_proc.scale_min = 3.2
+	ash_proc.scale_max = 5.4
+	var ash_curve := Curve.new()
+	ash_curve.add_point(Vector2(0.0, 0.55))
+	ash_curve.add_point(Vector2(0.35, 1.35))
+	ash_curve.add_point(Vector2(0.75, 2.25))
+	ash_curve.add_point(Vector2(1.0, 3.10))
+	var ash_curve_tex := CurveTexture.new()
+	ash_curve_tex.curve = ash_curve
+	ash_proc.scale_curve = ash_curve_tex
+	ash_proc.color_ramp = _make_volcano_ash_ramp()
+	ash_p.process_material = ash_proc
+	var ash_quad := QuadMesh.new()
+	ash_quad.size = Vector2(4.2, 4.2)
+	var ash_mat := StandardMaterial3D.new()
+	ash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ash_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	ash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ash_mat.vertex_color_use_as_albedo = true
+	ash_mat.albedo_texture = _get_beacon_puff_texture()
+	ash_quad.material = ash_mat
+	ash_p.draw_pass_1 = ash_quad
+	ash_p.emitting = true
+	caldera.add_child(ash_p)
+	caldera.ash_plume = ash_p
+
+	# 5. Soaring incandescent volcanic lava embers rising out of the caldera throat.
+	var ember_p := GPUParticles3D.new()
+	ember_p.name = "VolcanoEmberPlume"
+	ember_p.amount = 36
+	ember_p.lifetime = 5.2
+	ember_p.preprocess = 2.6
+	ember_p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	ember_p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ember_p.visibility_aabb = AABB(Vector3(-28.0, -2.0, -28.0), Vector3(56.0, 72.0, 56.0))
+	ember_p.position = Vector3(0.0, 2.2, 0.0)
+	var emb_proc := ParticleProcessMaterial.new()
+	emb_proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	emb_proc.emission_ring_radius = 6.8 * scale_r
+	emb_proc.emission_ring_inner_radius = 1.0 * scale_r
+	emb_proc.emission_ring_height = 0.6
+	emb_proc.emission_ring_axis = Vector3.UP
+	emb_proc.direction = Vector3(0.10, 1.0, 0.06).normalized()
+	emb_proc.spread = 22.0
+	emb_proc.initial_velocity_min = 6.5
+	emb_proc.initial_velocity_max = 12.5
+	emb_proc.gravity = Vector3(0.30, -0.35, 0.15)
+	emb_proc.scale_min = 0.65
+	emb_proc.scale_max = 1.55
+	emb_proc.color_ramp = _make_volcano_ember_ramp()
+	ember_p.process_material = emb_proc
+	var emb_quad := QuadMesh.new()
+	emb_quad.size = Vector2(0.85, 0.85)
+	var emb_mat := StandardMaterial3D.new()
+	emb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	emb_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	emb_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	emb_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	emb_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	emb_mat.vertex_color_use_as_albedo = true
+	emb_mat.albedo_texture = _get_beacon_puff_texture()
+	emb_quad.material = emb_mat
+	ember_p.draw_pass_1 = emb_quad
+	ember_p.emitting = true
+	caldera.add_child(ember_p)
+	caldera.ember_plume = ember_p
+
+	return caldera
+
+
+static func _make_volcano_ash_ramp() -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.10, 0.34, 0.72, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.40, 0.10, 0.0),
+		Color(0.68, 0.28, 0.16, 0.64),
+		Color(0.24, 0.21, 0.22, 0.62),
+		Color(0.30, 0.29, 0.32, 0.36),
+		Color(0.36, 0.36, 0.40, 0.0),
+	])
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+
+
+static func _make_volcano_ember_ramp() -> GradientTexture1D:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.25, 0.68, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.96, 0.68, 1.0),
+		Color(1.0, 0.56, 0.12, 0.95),
+		Color(0.92, 0.18, 0.04, 0.62),
+		Color(0.48, 0.05, 0.01, 0.0),
+	])
+	var tex := GradientTexture1D.new()
+	tex.width = 32
+	tex.gradient = grad
+	return tex
+

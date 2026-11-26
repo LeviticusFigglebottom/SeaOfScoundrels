@@ -542,3 +542,146 @@ func test_player_controller_focus_station_and_carry() -> void:
 	Input.action_release(&"secondary")
 	check(p.carried == null, "secondary drops")
 	await _end()
+
+func test_player_controller_camera_trauma_and_accessibility_gate() -> void:
+	_begin()
+	_fast(false)
+	_ground(Vector3(0, 100, 0))
+	var p: Pawn = PAWN.instantiate()
+	_root.add_child(p)
+	p.global_position = Vector3(0, 100.05, 0)
+	var pc := PlayerController.new()
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.input_enabled = false
+	p.add_child(pc)
+	await physics_frames(10)
+	pc._update_camera(0.0)
+
+	var rest_xf := pc.camera.transform
+	check_near(pc.get_camera_trauma(), 0.0, 0.0001, "camera trauma starts at 0.0")
+
+	# Adding trauma applies a crisp bounded micro-impulse and decays smoothly to 0 over ~0.6 s.
+	pc.add_camera_trauma(0.75)
+	check(pc.get_camera_trauma() > 0.7, "add_camera_trauma(0.75) sets trauma > 0.7 (got %.3f)" % pc.get_camera_trauma())
+	pc._update_camera(1.0 / 60.0)
+	var shaken_xf := pc.camera.transform
+	var pos_delta := shaken_xf.origin.distance_to(rest_xf.origin)
+	var rot_delta := (shaken_xf.basis.z - rest_xf.basis.z).length() + (shaken_xf.basis.x - rest_xf.basis.x).length()
+	check(pos_delta > 0.0005 and pos_delta < 0.08, "camera trauma applies bounded position shake (%.4f m)" % pos_delta)
+	check(rot_delta > 0.0005 and rot_delta < 0.12, "camera trauma applies bounded pitch/roll shake (%.4f)" % rot_delta)
+
+	var prev_trauma := pc.get_camera_trauma()
+	for _i in 36:
+		pc._update_camera(1.0 / 60.0)
+		var cur_trauma := pc.get_camera_trauma()
+		check(cur_trauma <= prev_trauma + 0.0001, "camera trauma decays monotonically")
+		prev_trauma = cur_trauma
+	check_near(pc.get_camera_trauma(), 0.0, 0.0001, "camera trauma decays cleanly to 0.0 over ~0.6 s")
+	check(pc.camera.transform.origin.distance_to(rest_xf.origin) < 0.0001, "camera position returns cleanly to rest")
+	check(pc.camera.transform.basis.is_equal_approx(rest_xf.basis), "camera basis returns cleanly to rest")
+
+	# Accessibility gate: disabling head-bob (bob_amount = 0.0) makes add_camera_trauma a complete no-op.
+	pc.bob_amount = 0.0
+	pc.add_camera_trauma(0.9)
+	check_near(pc.get_camera_trauma(), 0.0, 0.0001, "bob_amount = 0.0 suppresses add_camera_trauma completely")
+	pc._update_camera(1.0 / 60.0)
+	check(pc.camera.transform.origin.distance_to(rest_xf.origin) < 0.0001, "camera stays still when accessibility motion is off")
+	check(pc.camera.transform.basis.is_equal_approx(rest_xf.basis), "camera orientation stays still when accessibility motion is off")
+
+	# Diegetic Voyage Title Card: shows, eases in/holds/fades out cleanly, and auto-hides on overlays.
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	_root.add_child(hud)
+	hud.bind(p, pc)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	check(not hud.is_voyage_title_visible(), "voyage title card starts hidden")
+	hud.show_voyage_title("SEA OF SCOUNDRELS", "Chapter I -- The Salt-King's Ledger", 0.4)
+	check(hud.is_voyage_title_visible(), "show_voyage_title shows card immediately")
+	var card := hud.find_child("VoyageTitleCard", true, false) as PanelContainer
+	check(card != null and card.mouse_filter == Control.MOUSE_FILTER_IGNORE, "voyage title card is non-blocking")
+
+	# Ease-in (0.45 s), hold (0.40 s), ease-out (0.90 s).
+	hud._process(0.225)
+	check(hud.is_voyage_title_visible() and card.modulate.a > 0.35 and card.modulate.a < 0.75,
+		"voyage title eases in smoothly (alpha=%.2f)" % card.modulate.a)
+	hud._process(0.30)
+	check(hud.is_voyage_title_visible() and card.modulate.a >= 0.99,
+		"voyage title holds at full alpha (alpha=%.2f)" % card.modulate.a)
+	hud._process(0.775)
+	check(hud.is_voyage_title_visible() and card.modulate.a > 0.1 and card.modulate.a < 0.85,
+		"voyage title eases out smoothly (alpha=%.2f)" % card.modulate.a)
+	hud._process(0.55)
+	check(not hud.is_voyage_title_visible() and not card.visible, "voyage title hides cleanly after fade-out")
+
+	# Opening pause, item radial, or crew command wheel immediately hides active voyage title card.
+	hud.show_voyage_title("PORT SCOUNDREL", "Morning Watch", 4.0)
+	check(hud.is_voyage_title_visible(), "voyage title shows again cleanly")
+	hud.set_pause_open(true)
+	check(not hud.is_voyage_title_visible(), "opening pause overlay dismisses voyage title card")
+	var log_panel := hud.find_child("CaptainLogPanel", true, false) as PanelContainer
+	var ctrl_strip := hud.find_child("CaptainControlsStrip", true, false) as VBoxContainer
+	check(log_panel != null and ctrl_strip != null and ctrl_strip.get_child_count() == 2,
+		"pause overlay includes 2-line Captain's Controls strip")
+	if log_panel != null:
+		var min_sz := log_panel.get_combined_minimum_size()
+		check(min_sz.x <= 1200.0 and min_sz.y <= 680.0,
+			"pause overlay fits comfortably inside 1280x720 (min_size=%s)" % str(min_sz))
+	hud.set_pause_open(false)
+
+	hud.show_voyage_title("CUTLASS CAY", "Buried Hoard", 4.0)
+	hud.open_item_radial()
+	check(not hud.is_voyage_title_visible(), "opening item radial dismisses voyage title card")
+	hud.close_item_radial(false)
+
+	hud.show_voyage_title("IRONWATCH FORT", "Sea Bastion", 4.0)
+	hud.open_command_wheel()
+	check(not hud.is_voyage_title_visible(), "opening crew command wheel dismisses voyage title card")
+	hud.close_command_wheel(false)
+	await _end()
+
+func test_ship_cannon_recoil_trauma_and_hull_impact_signal() -> void:
+	_begin()
+	_fast(false)
+	Net.start_single_player()
+	var sloop_scene: PackedScene = load("res://src/ship/sloop.tscn")
+	var ship := sloop_scene.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+
+	var p: Pawn = PAWN.instantiate()
+	_root.add_child(p)
+	p.board(ship, Vector3(-1.5, 1.12, -1.5))
+	var pc := PlayerController.new()
+	pc.name = "PlayerController"
+	pc.capture_mouse = false
+	pc.make_current = false
+	pc.input_enabled = false
+	p.add_child(pc)
+	await physics_frames(2)
+
+	# Firing a ship cannon triggers subtle recoil trauma on the firing player's PlayerController.
+	var ball := ship.fire_cannon(&"port", p)
+	check(ball != null, "cannon fires cleanly with shooter pawn")
+	check(pc.get_camera_trauma() >= 0.30 and pc.get_camera_trauma() <= 0.42,
+		"cannon fire adds subtle 0.36 recoil trauma (got %.3f)" % pc.get_camera_trauma())
+	if ball != null and is_instance_valid(ball):
+		ball.queue_free()
+
+	# Hull damage emits hull_impacted(world_pos, intensity) cleanly.
+	var impacts: Array[Dictionary] = []
+	ship.hull_impacted.connect(func(wpos: Vector3, intensity: float) -> void:
+		impacts.append({"pos": wpos, "intensity": intensity})
+	)
+	var hit_pos := ship.global_transform * Vector3(2.0, -0.35, 0.2)
+	var slot := ship.apply_hull_damage(hit_pos, 0.5)
+	check(slot >= 0, "apply_hull_damage opens breach slot")
+	check_eq(impacts.size(), 1, "hull_impacted emitted once on hull breach")
+	if not impacts.is_empty():
+		check((impacts[0]["pos"] as Vector3).distance_to(hit_pos) < 0.01, "hull_impacted reports world impact pos")
+		check_near(float(impacts[0]["intensity"]), 1.0, 0.01, "hull_impacted intensity scales cleanly with radius")
+	await _end()
+

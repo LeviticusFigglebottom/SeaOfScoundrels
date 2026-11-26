@@ -5,6 +5,8 @@ extends TestCase
 ##   windup-interrupt stagger, apply_damage, defeated signal & edible/cookable crab-claw drop.
 ## - ReefEel: 7-segment underwater ambush predator, sinusoidal body undulation, swimmer
 ##   detection & bite + retreat, retreat on damage, apply_damage & defeated signal.
+## - CoralReef: strictly 3 batched MultiMeshInstance3D draw calls, distance culling,
+##   underwater depth placement, mooring keepout, static mesh sharing, clean teardown.
 
 const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 const SPEEDUP := 6
@@ -279,3 +281,139 @@ func test_reef_eel_lurks_ambushes_swimmer_retreats_and_dies() -> void:
 	check_near(eel2.health, 0.0, 0.01, "dead eel health clamps to 0")
 	check_eq(defeated_eel[0], eel2, "defeated signal emits defeated eel reference")
 	await _end()
+
+
+func test_coral_reef_multimesh_budget_and_depth_placement() -> void:
+	_begin()
+
+	var lagoon := IslandGenerator.build_island({
+		"id": "test_crescent_reef",
+		"name": "Crescent Reef",
+		"archetype": &"crescent_lagoon",
+		"seed": 8803,
+	})
+	_root.add_child(lagoon)
+
+	var reef := CoralReef.populate_for_island(lagoon, 4242, 1.0)
+	check(reef != null, "populate_for_island returns a valid CoralReef node")
+	check_eq(reef.get_parent(), lagoon, "CoralReef attaches cleanly as child of Island")
+	check(reef.is_in_group(CoralReef.GROUP), "CoralReef registers in coral_reefs group")
+	check_eq(reef.get_multimesh_count(), 3, "CoralReef uses strictly 3 MultiMeshInstance3D draw calls")
+	check(reef.find_children("*", "MeshInstance3D", true, false).is_empty(),
+		"CoralReef spawns zero per-coral MeshInstance3D nodes")
+
+	var total := reef.get_total_instance_count()
+	check(total >= 100, "CoralReef populates >= 100 underwater instances (got %d)" % total)
+	check(reef.get_staghorn_count() >= 30,
+		"StaghornCorals populates rich branching clusters (got %d)" % reef.get_staghorn_count())
+	check(reef.get_brain_coral_count() >= 24,
+		"BrainTableCorals populates fluted reef mounds (got %d)" % reef.get_brain_coral_count())
+	check(reef.get_kelp_count() >= 70,
+		"KelpFronds populates swaying kelp tufts (got %d)" % reef.get_kelp_count())
+
+	var depth_range := reef.get_reef_bounds_depth_range()
+	check(depth_range.y <= -0.55,
+		"all reef roots sit strictly underwater (max_y=%.2f <= -0.55)" % depth_range.y)
+	check(depth_range.x >= -11.0,
+		"all reef roots stay above deep abyss (min_y=%.2f >= -11.0)" % depth_range.x)
+	check(depth_range.x < depth_range.y,
+		"reef spans natural underwater depth shelf (%.2f .. %.2f)" % [depth_range.x, depth_range.y])
+
+	# Inspect all 3 MultiMeshes directly: culling, shadows, mesh surfaces, shader binding.
+	var mooring_xz := Vector2(lagoon.mooring_transform.origin.x, lagoon.mooring_transform.origin.z)
+	var expected_names: Array[String] = ["StaghornCorals", "BrainTableCorals", "KelpFronds"]
+	var mm_instance_sum := 0
+
+	for mm_name in expected_names:
+		var mmi := reef.get_node_or_null(NodePath(mm_name)) as MultiMeshInstance3D
+		check(mmi != null, "CoralReef creates MultiMeshInstance3D '%s'" % mm_name)
+		if mmi == null:
+			continue
+		check_eq(mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadow casting for zero shadow-pass cost" % mm_name)
+		check_near(mmi.visibility_range_end, 155.0, 0.01,
+			"%s culls cleanly at 155 m visibility range" % mm_name)
+		check_eq(mmi.visibility_range_fade_mode, GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED,
+			"%s uses hard visibility range cutoff" % mm_name)
+		check(mmi.multimesh != null and mmi.multimesh.mesh != null,
+			"%s owns a valid MultiMesh with sculpted procedural mesh" % mm_name)
+		check(mmi.multimesh.use_colors, "%s enables per-instance MultiMesh color tinting" % mm_name)
+		check(mmi.multimesh.mesh.get_surface_count() == 1,
+			"%s procedural mesh has 1 batched surface" % mm_name)
+		if mm_name == "KelpFronds":
+			var sm := mmi.material_override as ShaderMaterial
+			check(sm != null and sm.shader == CoralReef.KELP_SHADER,
+				"KelpFronds uses coral_kelp.gdshader")
+		mm_instance_sum += mmi.multimesh.instance_count
+
+	check_eq(mm_instance_sum, total, "MultiMesh instance_count sum matches get_total_instance_count()")
+
+	# Inspect every single placed instance transform for depth, grounding, slope, mooring keepout, handedness.
+	var placed := reef.get_placed_transforms()
+	check_eq(placed.size(), total, "get_placed_transforms() matches total MultiMesh instance count")
+	var max_root_y := -INF
+	var min_root_y := INF
+	var min_mooring_dist := INF
+	var max_ground_err := 0.0
+	var min_normal_y := INF
+	var inverted_count := 0
+
+	for xf in placed:
+		var p := xf.origin
+		max_root_y = maxf(max_root_y, p.y)
+		min_root_y = minf(min_root_y, p.y)
+		min_mooring_dist = minf(min_mooring_dist, Vector2(p.x, p.z).distance_to(mooring_xz))
+		var expected_y := lagoon.surface_height(p.x, p.z) - CoralReef.ROOT_EMBED_Y
+		max_ground_err = maxf(max_ground_err, absf(p.y - expected_y))
+		min_normal_y = minf(min_normal_y, lagoon.surface_normal(p.x, p.z).y)
+		if xf.basis.determinant() <= 0.0:
+			inverted_count += 1
+
+	check(max_root_y <= -0.55, "every single coral/kelp instance root <= -0.55 (max=%.2f)" % max_root_y)
+	check(min_root_y >= -11.0, "every single coral/kelp instance root >= -11.0 (min=%.2f)" % min_root_y)
+	check(min_mooring_dist >= 9.49,
+		"all reef instances respect 9.5 m mooring keepout (min=%.2f m)" % min_mooring_dist)
+	check(max_ground_err < 0.02,
+		"all reef roots are grounded into seabed heightfield (max_err=%.4f m)" % max_ground_err)
+	check(min_normal_y >= CoralReef.MIN_NORMAL_Y - 0.01,
+		"all reef roots rest on gentle seabed slopes (min_ny=%.3f)" % min_normal_y)
+	check_eq(inverted_count, 0, "all MultiMesh instance transforms have positive determinant")
+	if DisplayServer.get_name() != "headless":
+		var stag_mmi := reef.get_node(^"StaghornCorals") as MultiMeshInstance3D
+		if stag_mmi != null and stag_mmi.multimesh.instance_count > 0:
+			var gpu_origin := stag_mmi.multimesh.get_instance_transform(0).origin
+			check(gpu_origin.distance_to(placed[0].origin) < 0.001,
+				"GPU MultiMesh buffer transform matches placed transform")
+
+	# Verify a second archetype (wreck_shoal) shares the exact 3 static cached meshes and is deterministic.
+	var shoal := IslandGenerator.build_island({
+		"id": "test_wreck_shoal_reef",
+		"name": "Wrecker Reef",
+		"archetype": &"wreck_shoal",
+		"seed": 10903,
+	})
+	_root.add_child(shoal)
+	var shoal_reef := CoralReef.populate_for_island(shoal, 7777, 1.0)
+	check_eq(shoal_reef.get_multimesh_count(), 3, "wreck_shoal reef uses strictly 3 MultiMeshes")
+	check(shoal_reef.get_total_instance_count() >= 100,
+		"wreck_shoal reef populates >= 100 instances (got %d)" % shoal_reef.get_total_instance_count())
+	var shoal_depth := shoal_reef.get_reef_bounds_depth_range()
+	check(shoal_depth.y <= -0.55 and shoal_depth.x >= -11.0,
+		"wreck_shoal reef depth range stays strictly underwater (%.2f .. %.2f)" % [shoal_depth.x, shoal_depth.y])
+
+	for mm_name in expected_names:
+		var mmi_a := reef.get_node(NodePath(mm_name)) as MultiMeshInstance3D
+		var mmi_b := shoal_reef.get_node(NodePath(mm_name)) as MultiMeshInstance3D
+		check_eq(mmi_a.multimesh.mesh, mmi_b.multimesh.mesh,
+			"islands share static cached ArrayMesh for %s" % mm_name)
+
+	var shoal_reef_dup := CoralReef.populate_for_island(shoal, 7777, 1.0)
+	check_eq(shoal_reef_dup.get_total_instance_count(), shoal_reef.get_total_instance_count(),
+		"identical rng_seed yields deterministic instance count")
+	check_near(shoal_reef_dup.get_reef_bounds_depth_range().x, shoal_depth.x, 0.0001,
+		"identical rng_seed yields deterministic min depth")
+	check_near(shoal_reef_dup.get_reef_bounds_depth_range().y, shoal_depth.y, 0.0001,
+		"identical rng_seed yields deterministic max depth")
+
+	await _end()
+

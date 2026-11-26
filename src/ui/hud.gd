@@ -8,10 +8,11 @@ extends CanvasLayer
 ## - Contextual interaction prompt ribbon driven by `PlayerController.focus_prompt`
 ## - Subtle active tool / ammo / ship supplies chip
 ## - Queued top-center Crew Callout & Notice parchment banner (`Game.notice`)
+## - Upper-sky first-launch / chapter Diegetic Voyage Title Card (`show_voyage_title`)
 ## - Quiet top-right Gold & Voyage Objective whisper slip
 ## - Circular brass Spyglass vignette + horizon sighting readout
 ## - 11-wedge Item Radial (`Tab`) and 9-wedge Crew Command Wheel (`Q`)
-## - Pause / Save / Quality Presets / Audio Sliders / LAN Co-op overlay (`Escape`)
+## - Pause / Save / Quality Presets / Audio Sliders / LAN Co-op / Controls overlay (`Escape`)
 
 signal crew_order_issued(order: StringName)
 signal pause_changed(open: bool)
@@ -44,6 +45,9 @@ const CREW_COMMAND_SLICES: Array[Dictionary] = [
 	{"id": &"fetch_treasure", "label": "Fetch Loot", "hint": "Haul chests aboard", "icon": &"fetch_treasure"},
 	{"id": &"shanty", "label": "Play Shanty", "hint": "Join in a sea reel", "icon": &"shanty"},
 ]
+
+const VOYAGE_TITLE_FADE_IN := 0.45
+const VOYAGE_TITLE_FADE_OUT := 0.90
 
 @export var input_enabled: bool = true
 @export var force_show_vitals: bool = false
@@ -84,6 +88,16 @@ var _boss_label: Label = null
 var _boss_bar: ProgressBar = null
 var _boss_active: bool = false
 var _boss_alpha: float = 0.0
+
+# Diegetic Voyage Title Card (upper-middle sky; non-blocking)
+var _voyage_card_panel: PanelContainer = null
+var _voyage_card_title_label: Label = null
+var _voyage_card_rule: ColorRect = null
+var _voyage_card_subtitle_label: Label = null
+var _voyage_card_active: bool = false
+var _voyage_card_elapsed: float = 0.0
+var _voyage_card_hold: float = 4.2
+var _voyage_card_alpha: float = 0.0
 
 # Context prompt (bottom-center)
 var _prompt_panel: PanelContainer = null
@@ -261,6 +275,7 @@ static func _collect_crew_brains(node: Node, out: Array[CrewBrain]) -> void:
 func open_item_radial() -> void:
 	if pause_open or item_radial == null:
 		return
+	dismiss_voyage_title()
 	if command_wheel != null and command_wheel.is_open:
 		command_wheel.close_wheel(false)
 	_refresh_item_radial_entries()
@@ -281,6 +296,7 @@ func close_item_radial(confirm: bool = true) -> StringName:
 func open_command_wheel() -> void:
 	if pause_open or command_wheel == null:
 		return
+	dismiss_voyage_title()
 	if item_radial != null and item_radial.is_open:
 		item_radial.close_wheel(false)
 	_update_hold_fire_hint()
@@ -316,6 +332,7 @@ func set_pause_open(open: bool) -> void:
 	if pause_open == open:
 		return
 	if open:
+		dismiss_voyage_title()
 		if item_radial != null and item_radial.is_open:
 			item_radial.close_wheel(false)
 		if command_wheel != null and command_wheel.is_open:
@@ -405,6 +422,48 @@ func set_voyage_whisper(title: String, objective: String, hold_seconds: float = 
 	_refresh_whisper_labels()
 
 
+## Display a non-blocking diegetic parchment Voyage Title Card in the upper-middle sky.
+func show_voyage_title(title: String, subtitle: String, duration: float = 4.2) -> void:
+	var clean_title := _to_ascii(title.strip_edges())
+	var clean_sub := _to_ascii(subtitle.strip_edges())
+	if clean_title == "" and clean_sub == "":
+		dismiss_voyage_title()
+		return
+	if is_any_overlay_open():
+		dismiss_voyage_title()
+		return
+	if _voyage_card_title_label != null:
+		_voyage_card_title_label.text = clean_title
+		_voyage_card_title_label.visible = clean_title != ""
+	if _voyage_card_subtitle_label != null:
+		_voyage_card_subtitle_label.text = clean_sub
+		_voyage_card_subtitle_label.visible = clean_sub != ""
+	if _voyage_card_rule != null:
+		_voyage_card_rule.visible = clean_title != "" and clean_sub != ""
+	_voyage_card_active = true
+	_voyage_card_elapsed = 0.0
+	_voyage_card_hold = maxf(duration, 0.0)
+	_voyage_card_alpha = 0.0
+	if _voyage_card_panel != null:
+		_voyage_card_panel.modulate.a = 0.0
+		_voyage_card_panel.visible = true
+
+
+## True while the diegetic Voyage Title Card is active and visible on screen.
+func is_voyage_title_visible() -> bool:
+	return _voyage_card_active and _voyage_card_panel != null and _voyage_card_panel.visible
+
+
+## Immediately dismiss and hide the diegetic Voyage Title Card.
+func dismiss_voyage_title() -> void:
+	_voyage_card_active = false
+	_voyage_card_elapsed = 0.0
+	_voyage_card_alpha = 0.0
+	if _voyage_card_panel != null:
+		_voyage_card_panel.modulate.a = 0.0
+		_voyage_card_panel.visible = false
+
+
 ## Return true if any radial wheel or pause menu currently holds focus.
 func is_any_overlay_open() -> bool:
 	return pause_open \
@@ -434,9 +493,10 @@ func _build_ui() -> void:
 	_crosshair_view.name = "Crosshair"
 	_root.add_child(_crosshair_view)
 
-	# 3. Top-center Crew Callout & Notice parchment scroll banner + hidden Boss Bar.
+	# 3. Top-center Crew Callout & Notice parchment scroll banner, Boss Bar, and Voyage Title Card.
 	_build_banner()
 	_build_boss_bar()
+	_build_voyage_title_card()
 
 	# 4. Top-right Gold & Voyage Objective whisper card.
 	_build_whisper_card()
@@ -579,6 +639,87 @@ func set_boss_encounter(title: String, hp_ratio: float, active: bool = true) -> 
 		_boss_bar.value = clampf(hp_ratio, 0.0, 1.0)
 
 
+func _build_voyage_title_card() -> void:
+	var holder := CenterContainer.new()
+	holder.name = "VoyageTitleHolder"
+	holder.anchor_left = 0.0
+	holder.anchor_right = 1.0
+	holder.anchor_top = 0.20
+	holder.anchor_bottom = 0.20
+	holder.offset_top = 0.0
+	holder.offset_bottom = 132.0
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(holder)
+
+	_voyage_card_panel = PanelContainer.new()
+	_voyage_card_panel.name = "VoyageTitleCard"
+	_voyage_card_panel.custom_minimum_size = Vector2(360.0, 0.0)
+	_voyage_card_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var outer_sb := HudIcons.make_parchment_box(
+		Color(0.93, 0.86, 0.71, 0.88),
+		Color(0.74, 0.16, 0.14, 0.94),
+		2,
+		8,
+		5,
+		5
+	)
+	outer_sb.shadow_size = 7
+	outer_sb.shadow_offset = Vector2(0.0, 3.0)
+	_voyage_card_panel.add_theme_stylebox_override("panel", outer_sb)
+	_voyage_card_panel.modulate.a = 0.0
+	_voyage_card_panel.visible = false
+	holder.add_child(_voyage_card_panel)
+
+	var inner_frame := PanelContainer.new()
+	inner_frame.name = "VoyageTitleInnerFrame"
+	inner_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var inner_sb := StyleBoxFlat.new()
+	inner_sb.bg_color = Color(0.96, 0.90, 0.78, 0.14)
+	inner_sb.border_color = Color(0.84, 0.64, 0.22, 0.92)
+	inner_sb.set_border_width_all(1)
+	inner_sb.set_corner_radius_all(5)
+	inner_sb.content_margin_left = 34
+	inner_sb.content_margin_right = 34
+	inner_sb.content_margin_top = 13
+	inner_sb.content_margin_bottom = 13
+	inner_frame.add_theme_stylebox_override("panel", inner_sb)
+	_voyage_card_panel.add_child(inner_frame)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inner_frame.add_child(vbox)
+
+	_voyage_card_title_label = Label.new()
+	_voyage_card_title_label.name = "VoyageTitleText"
+	_voyage_card_title_label.text = ""
+	_voyage_card_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_voyage_card_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voyage_card_title_label.add_theme_font_size_override("font_size", 28)
+	_voyage_card_title_label.add_theme_color_override("font_color", HudIcons.COL_INK)
+	_voyage_card_title_label.add_theme_color_override("font_shadow_color", Color(0.20, 0.13, 0.08, 0.30))
+	_voyage_card_title_label.add_theme_constant_override("shadow_offset_x", 1)
+	_voyage_card_title_label.add_theme_constant_override("shadow_offset_y", 1)
+	vbox.add_child(_voyage_card_title_label)
+
+	_voyage_card_rule = ColorRect.new()
+	_voyage_card_rule.name = "VoyageTitleRule"
+	_voyage_card_rule.custom_minimum_size = Vector2(220.0, 1.0)
+	_voyage_card_rule.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_voyage_card_rule.color = Color(0.76, 0.16, 0.14, 0.56)
+	_voyage_card_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(_voyage_card_rule)
+
+	_voyage_card_subtitle_label = Label.new()
+	_voyage_card_subtitle_label.name = "VoyageSubtitleText"
+	_voyage_card_subtitle_label.text = ""
+	_voyage_card_subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_voyage_card_subtitle_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voyage_card_subtitle_label.add_theme_font_size_override("font_size", 16)
+	_voyage_card_subtitle_label.add_theme_color_override("font_color", Color(0.42, 0.28, 0.16, 0.94))
+	vbox.add_child(_voyage_card_subtitle_label)
+
+
 func _build_whisper_card() -> void:
 	_whisper_panel = PanelContainer.new()
 	_whisper_panel.name = "VoyageWhisper"
@@ -703,13 +844,13 @@ func _build_pause_overlay() -> void:
 
 	var book := PanelContainer.new()
 	book.name = "CaptainLogPanel"
-	book.custom_minimum_size = Vector2(540.0, 0.0)
+	book.custom_minimum_size = Vector2(580.0, 0.0)
 	book.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.72, 0.98), HudIcons.COL_INK, 3, 10, 26, 20))
+		HudIcons.make_parchment_box(Color(0.93, 0.86, 0.72, 0.98), HudIcons.COL_INK, 3, 10, 26, 16))
 	center.add_child(book)
 
 	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 12)
+	root_v.add_theme_constant_override("separation", 8)
 	book.add_child(root_v)
 
 	var title := Label.new()
@@ -838,6 +979,25 @@ func _build_pause_overlay() -> void:
 	_coop_status_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 	root_v.add_child(_coop_status_label)
 
+	root_v.add_child(_make_section_divider("CAPTAIN'S CONTROLS"))
+
+	var controls_box := VBoxContainer.new()
+	controls_box.name = "CaptainControlsStrip"
+	controls_box.add_theme_constant_override("separation", 2)
+	root_v.add_child(controls_box)
+
+	var ctrl_lines: Array[String] = [
+		"[WASD] Move  [Space] Jump  [Shift] Sprint  [F] Interact  [X] Leave Station",
+		"[Tab] Tools  [Q] Crew Orders  [B] Shipwright  [LMB/RMB] Use & Aim  [Esc] Pause",
+	]
+	for line_txt in ctrl_lines:
+		var ctrl_lbl := Label.new()
+		ctrl_lbl.text = line_txt
+		ctrl_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		ctrl_lbl.add_theme_font_size_override("font_size", 13)
+		ctrl_lbl.add_theme_color_override("font_color", HudIcons.COL_INK)
+		controls_box.add_child(ctrl_lbl)
+
 
 func _make_section_divider(heading: String) -> Label:
 	var l := Label.new()
@@ -908,6 +1068,7 @@ func _input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	_tick_banner(delta)
 	_tick_boss_bar(delta)
+	_tick_voyage_title(delta)
 	_tick_vitals(delta)
 	_tick_context_prompt(delta)
 	_tick_tool_chip(delta)
@@ -921,6 +1082,34 @@ func _tick_boss_bar(delta: float) -> void:
 	if _boss_panel != null:
 		_boss_panel.modulate.a = _boss_alpha
 		_boss_panel.visible = _boss_alpha > 0.01
+
+
+func _tick_voyage_title(delta: float) -> void:
+	if not _voyage_card_active:
+		return
+	if is_any_overlay_open():
+		dismiss_voyage_title()
+		return
+	_voyage_card_elapsed += maxf(delta, 0.0)
+	var fade_out_start := VOYAGE_TITLE_FADE_IN + _voyage_card_hold
+	var total := fade_out_start + VOYAGE_TITLE_FADE_OUT
+	if _voyage_card_elapsed >= total:
+		dismiss_voyage_title()
+		return
+	if _voyage_card_elapsed < VOYAGE_TITLE_FADE_IN:
+		var t_in := clampf(_voyage_card_elapsed / VOYAGE_TITLE_FADE_IN, 0.0, 1.0)
+		_voyage_card_alpha = smoothstep(0.0, 1.0, t_in)
+	elif _voyage_card_elapsed < fade_out_start:
+		_voyage_card_alpha = 1.0
+	else:
+		var t_out := clampf((_voyage_card_elapsed - fade_out_start) / VOYAGE_TITLE_FADE_OUT, 0.0, 1.0)
+		_voyage_card_alpha = 1.0 - smoothstep(0.0, 1.0, t_out)
+		if _voyage_card_alpha <= 0.001:
+			dismiss_voyage_title()
+			return
+	if _voyage_card_panel != null:
+		_voyage_card_panel.modulate.a = _voyage_card_alpha
+		_voyage_card_panel.visible = true
 
 
 func _tick_banner(delta: float) -> void:

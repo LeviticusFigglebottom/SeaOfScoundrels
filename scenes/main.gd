@@ -145,6 +145,13 @@ func _ready() -> void:
 
 	if active_shot_mode != "":
 		_apply_hero_shot(active_shot_mode)
+	elif hud != null and DisplayServer.get_name() != "headless":
+		var subtitle := "Port Scoundrel - Set Sail for Cutlass Cay"
+		if voyage_manager != null and voyage_manager.has_active_voyage():
+			var vt := String(voyage_manager.active_voyage.get("title", "")).strip_edges()
+			if vt != "":
+				subtitle = "Port Scoundrel - %s" % vt
+		hud.show_voyage_title("SEA OF SCOUNDRELS", subtitle, 4.4)
 
 	_update_live_audio(true)
 	_update_adaptive_music(true)
@@ -573,6 +580,7 @@ func _wire_world_signals() -> void:
 
 	# Ship sinking -> zero-wipe salvage wreck & restore at last outpost.
 	player_ship.sunk.connect(_on_player_ship_sunk)
+	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
 
 	# Autoload signals (cleaned up in _exit_tree).
 	if not Weather.thunder_heard.is_connected(_on_thunder_heard):
@@ -1450,6 +1458,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 	_mount_fishing_station(player_ship)
 	Net.register_replicated_ship(&"player_sloop", player_ship)
 	player_ship.sunk.connect(_on_player_ship_sunk)
+	player_ship.hull_impacted.connect(_on_player_ship_hull_impacted)
 
 	if player_pawn != null and is_instance_valid(player_pawn):
 		if player_pawn.station != null:
@@ -1648,10 +1657,24 @@ func _update_live_audio(snap: bool) -> void:
 		Audio.snap_ambience()
 
 
+func _on_player_ship_hull_impacted(world_pos: Vector3, intensity: float) -> void:
+	if player_controller == null or not is_instance_valid(player_controller):
+		return
+	if player_pawn == null or not is_instance_valid(player_pawn):
+		return
+	var d := player_pawn.global_position.distance_to(world_pos)
+	if player_pawn.platform == player_ship or d < 22.0:
+		var atten := 1.0 if player_pawn.platform == player_ship else clampf(1.0 - d / 22.0, 0.25, 1.0)
+		player_controller.add_camera_trauma(clampf(intensity * 0.68 * atten, 0.22, 0.85))
+
+
 func _on_thunder_heard(_direction: Vector3, distance: float, intensity: float) -> void:
 	var sfx_id := &"thunder_near" if distance < 900.0 else &"thunder_far"
 	var db := lerpf(-8.0, 0.0, clampf(intensity, 0.0, 1.0))
 	Audio.play_sfx(sfx_id, Vector3.INF, db, 0.04)
+	if distance < 420.0 and player_controller != null and is_instance_valid(player_controller):
+		var shake := clampf((1.0 - distance / 420.0) * intensity * 0.42, 0.0, 0.42)
+		player_controller.add_camera_trauma(shake)
 
 
 func _update_adaptive_music(force: bool) -> void:
@@ -1734,7 +1757,8 @@ func _apply_hero_shot(mode: String) -> void:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "leviathan", "fleet",
-			"fort_siege", "harbour_plaza"
+			"fort_siege", "harbour_plaza", "smugglers_grotto",
+			"cinder_crag", "coral_reef"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -1913,6 +1937,54 @@ func _apply_hero_shot(mode: String) -> void:
 				var cam_p := pier_xf * Vector3(-2.5, 5.4, -7.5)
 				var look_p := pier_xf * Vector3(2.2, 3.2, 12.0)
 				_mount_shot_camera(cam_p, look_p, 58.0)
+
+		"smugglers_grotto":
+			# Smuggler's Cove walkable limestone Sea Cave Grotto with glowing lanterns & contraband stash!
+			Weather.time_of_day = 16.8 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.18, 9.0, -0.20, 0.0, 0.45)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			var smug := archipelago.get_island_by_id("smugglers_cove")
+			if smug != null:
+				var grotto := smug.get_node_or_null(^"SmugglersGrotto") as Node3D
+				if grotto != null:
+					var g_xf := grotto.global_transform
+					var cam_p := g_xf * Vector3(-3.2, 3.6, -13.5)
+					var look_p := g_xf * Vector3(0.0, 2.4, 2.0)
+					_mount_shot_camera(cam_p, look_p, 58.0)
+				else:
+					_mount_shot_camera(smug.global_position + Vector3(0.0, 12.0, 28.0), smug.global_position + Vector3(0.0, 4.0, 0.0), 58.0)
+
+		"cinder_crag":
+			# Cinder Crag volcanic summit: glowing cracked basalt magma caldera & towering ash/ember plume!
+			Weather.time_of_day = 17.85 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.36, 13.0, -0.30, 0.0, 0.62)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.30)
+			var volc := archipelago.get_island_by_id("cinder_crag")
+			if volc != null:
+				var vp := volc.global_position
+				_place_sailing_ship(vp + Vector3(72.0, 0.0, 92.0), 0.55, 0.88, 4.8)
+				var cam_p := vp + Vector3(44.0, 74.0, 78.0)
+				var look_p := vp + Vector3(0.0, 62.0, 0.0)
+				_mount_shot_camera(cam_p, look_p, 56.0)
+
+		"coral_reef":
+			# Crescent Atoll crystal turquoise underwater coral reef & swaying kelp garden!
+			Weather.time_of_day = 12.4 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.02, 7.0, -0.25, 0.0, 0.28)
+			Sea.amp_scale = Sea.AMP_CALM
+			var atoll := archipelago.get_island_by_id("crescent_atoll")
+			if atoll != null:
+				var reef := atoll.get_node_or_null(^"CoralReef") as CoralReef
+				var target_w := atoll.global_position + Vector3(0.0, -3.2, -32.0)
+				if reef != null:
+					var pts := reef.get_placed_transforms()
+					if not pts.is_empty():
+						target_w = atoll.global_transform * pts[0].origin
+				var dir_out := Vector3(target_w.x - atoll.global_position.x, 0.0, target_w.z - atoll.global_position.z)
+				dir_out = dir_out.normalized() if dir_out.length_squared() > 0.01 else Vector3(0.0, 0.0, -1.0)
+				var cam_p := target_w + dir_out * 6.5 + Vector3(0.0, 1.35, 0.0)
+				cam_p.y = minf(cam_p.y, -1.15)
+				_mount_shot_camera(cam_p, target_w + Vector3(0.0, 0.45, 0.0), 66.0)
 
 
 func _enable_ship_track_shot(cam_local: Vector3, look_local: Vector3, fov_deg: float) -> void:

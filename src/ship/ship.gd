@@ -10,6 +10,7 @@ extends RigidBody3D
 ## firing mutate state only where `Net.is_host()`. Clients interpolate from `apply_net_state()`.
 
 signal hull_breached(slot_index: int, world_pos: Vector3)
+signal hull_impacted(world_pos: Vector3, intensity: float)
 signal hole_patched(slot_index: int)
 signal bailed(amount: float)
 signal sunk
@@ -153,6 +154,7 @@ var _cannons: Dictionary = {}  # StringName (&"port" / &"starboard" / &"port_aft
 
 var _sink_timer: float = 0.0
 var _sink_list_dir: float = 1.0
+var _sink_foam_accum: float = 0.0
 var _sail_time: float = 0.0
 var _slosh_time: float = 0.0
 var _slosh_tilt: Vector2 = Vector2.ZERO
@@ -1430,6 +1432,7 @@ func apply_hull_damage(world_pos: Vector3, radius: float = 0.45) -> int:
 	_sync_hole_visuals(slot)
 	var breach_world := global_transform * (slot["local_pos"] as Vector3)
 	hull_breached.emit(chosen, breach_world)
+	hull_impacted.emit(world_pos, clampf(radius / 0.5, 0.35, 1.0))
 	return chosen
 
 
@@ -1550,6 +1553,16 @@ func fire_cannon(side: StringName, shooter_pawn: Node = null) -> Cannonball:
 
 	# Subtle ship recoil impulse.
 	apply_impulse(-muzzle_dir * 2600.0, muzzle_pos - global_position)
+
+	if shooter_pawn != null:
+		var pc := shooter_pawn.get_node_or_null(^"PlayerController") as PlayerController
+		if pc == null:
+			for child in shooter_pawn.get_children():
+				if child is PlayerController:
+					pc = child as PlayerController
+					break
+		if pc != null:
+			pc.add_camera_trauma(0.36)
 
 	if enable_effects:
 		_spawn_muzzle_flash(muzzle_pos, muzzle_dir)
@@ -1968,6 +1981,7 @@ func _begin_sinking() -> void:
 		return
 	is_sinking = true
 	_sink_timer = 0.0
+	_sink_foam_accum = 0.18
 	_sink_list_dir = 1.0 if global_basis.x.y <= 0.0 else -1.0
 	Audio.play_sfx(&"hull_creak", global_position, 2.0)
 	if faction == &"player":
@@ -2129,7 +2143,7 @@ func _process(delta: float) -> void:
 	_register_ocean_mask()
 	_update_lod()
 	_update_visuals(delta)
-	_update_wake()
+	_update_wake(delta)
 
 
 func _update_lod() -> void:
@@ -2284,7 +2298,7 @@ func _aim_ropes() -> void:
 		rope.global_transform = Transform3D(Basis(x, y, d), a)
 
 
-func _update_wake() -> void:
+func _update_wake(delta: float) -> void:
 	var spd := Vector2(linear_velocity.x, linear_velocity.z).length()
 	var phased_present := visible and _spectral_phase > 0.15
 	var spray_on := phased_present and (not is_sinking) and (spd > 2.4) and (_last_submerged_frac > 0.12)
@@ -2293,11 +2307,24 @@ func _update_wake() -> void:
 		if spray != null:
 			spray.emitting = spray_on
 			spray.amount_ratio = spray_ratio
-	if Ocean.current == null or is_sinking or not phased_present:
+	if Ocean.current == null or not phased_present:
 		return
 	var is_brig := (ship_class == &"brigantine")
 	var len_sc := 1.32 if is_brig else 1.0
 	var beam_sc := 1.24 if is_brig else 1.0
+	if is_sinking:
+		if enable_effects and global_position.y > -5.5:
+			_sink_foam_accum += delta
+			if _sink_foam_accum >= 0.18:
+				_sink_foam_accum = 0.0
+				var xf_sink := global_transform
+				var pulse := 0.5 + 0.5 * sin(_sink_timer * 5.2)
+				var wobble := sin(_sink_timer * 7.1) * 1.15 * beam_sc
+				# Boiling white sinking-bubble foam rings around bow, midship, and stern.
+				Ocean.current.add_foam(xf_sink * Vector3(wobble * 0.45, 0.0, -4.8 * len_sc), lerpf(4.2, 4.9, pulse), 0.92)
+				Ocean.current.add_foam(xf_sink * Vector3(-wobble * 0.55, 0.0, 0.2 * len_sc), lerpf(4.8, 5.5, 1.0 - pulse), 0.92)
+				Ocean.current.add_foam(xf_sink * Vector3(wobble * 0.35, 0.0, 5.0 * len_sc), lerpf(4.3, 5.0, pulse), 0.92)
+		return
 	if spd < 0.35:
 		# Subtle waterline collar foam even while gently bobbing at anchor.
 		Ocean.current.add_foam(global_transform * Vector3(0.0, 0.0, -5.6 * len_sc), 1.4 * beam_sc, 0.14)

@@ -191,6 +191,10 @@ func build_archipelago() -> void:
 		var isl := IslandGenerator.build_island(spec)
 		isl.position = spec["position"] as Vector3
 		add_child(isl)
+		# Populate shallow underwater coral & swaying kelp gardens (<= 3 MultiMesh DC, distance-culled > 155 m).
+		if isl.archetype != &"volcano_crag":
+			var reef_density := 1.15 if isl.archetype in [&"crescent_lagoon", &"wreck_shoal", &"palm_atoll"] else 0.80
+			CoralReef.populate_for_island(isl, int(spec.get("seed", 1000)) + 77, reef_density)
 		islands.append(isl)
 		_by_id[isl.island_id] = isl
 		if isl is Outpost:

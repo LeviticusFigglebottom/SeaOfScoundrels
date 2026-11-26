@@ -41,6 +41,8 @@ var _bob_phase: float = 0.0
 var _bob_weight: float = 0.0
 var _dip: float = 0.0
 var _dip_vel: float = 0.0
+var _trauma: float = 0.0
+var _trauma_clock: float = 0.0
 
 func _init() -> void:
 	# Run before the pawn so intent is applied in the same tick.
@@ -189,6 +191,16 @@ func _usable(it: Interactable) -> bool:
 
 # ------------------------------------------------------------------ camera
 
+## Add accessibility-gated camera shake trauma (0..1). Ignored when head-bob is disabled.
+func add_camera_trauma(amount: float) -> void:
+	if bob_amount <= 0.001:
+		return
+	_trauma = clampf(_trauma + maxf(amount, 0.0), 0.0, 1.0)
+
+## Current normalized camera shake trauma (0..1).
+func get_camera_trauma() -> float:
+	return _trauma
+
 func _on_landed(impact_speed: float) -> void:
 	_dip_vel -= clampf(impact_speed * 0.11, 0.2, 1.3)
 
@@ -212,4 +224,18 @@ func _update_camera(delta: float) -> void:
 	var bob_x := cos(_bob_phase) * bob_amount * 0.6 * _bob_weight
 	position = Vector3(0.0, pawn.current_eye_height + pawn.visual_offset_y, 0.0)
 	var b := Basis(Vector3.UP, pawn.look_yaw) * Basis(Vector3.RIGHT, pawn.look_pitch)
-	camera.transform = Transform3D(b, Vector3(0.0, bob_y + _dip, 0.0) + b.x * bob_x)
+	var cam_pos := Vector3(0.0, bob_y + _dip, 0.0) + b.x * bob_x
+	_trauma = maxf(0.0, _trauma - delta * 1.85)
+	if _trauma > 0.001 and bob_amount > 0.001:
+		var sh := _trauma * _trauma
+		_trauma_clock += delta * 26.0
+		var t := _trauma_clock
+		var shake_pitch := (sin(t * 1.13 + 0.4) * 0.65 + cos(t * 2.37) * 0.35) * 0.022 * sh
+		var shake_roll := (cos(t * 1.41 + 1.1) * 0.65 + sin(t * 2.83) * 0.35) * 0.028 * sh
+		var shake_x := (sin(t * 1.73 + 2.0) * 0.65 + cos(t * 3.11) * 0.35) * 0.045 * sh
+		var shake_y := (cos(t * 1.29 + 0.7) * 0.65 + sin(t * 2.61) * 0.35) * 0.027 * sh
+		b = b * Basis(Vector3.RIGHT, shake_pitch) * Basis(Vector3.BACK, shake_roll)
+		cam_pos += b.x * shake_x + b.y * shake_y
+	elif _trauma_clock > 10000.0:
+		_trauma_clock = 0.0
+	camera.transform = Transform3D(b, cam_pos)
