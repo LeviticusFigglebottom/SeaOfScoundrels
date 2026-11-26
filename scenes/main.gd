@@ -233,6 +233,46 @@ func _build_environment_and_world() -> void:
 	if Game != null and Game.profile != null:
 		Game.profile.discover("port_scoundrel")
 
+	_populate_archipelago_wildlife()
+
+
+func _populate_archipelago_wildlife() -> void:
+	if archipelago == null or _entities_root == null:
+		return
+	var port := archipelago.get_outpost(0)
+	if port != null:
+		var port_gulls := SeabirdFlock.spawn_over(
+			_entities_root, port.global_position + Vector3(0.0, 0.0, -24.0), 22.0, 18.0, 6)
+		port_gulls.is_loot_marker = false
+
+	for isl in archipelago.get_islands():
+		if isl is Outpost:
+			continue
+		# Circling gulls above major treasure/wreck islands mark distant loot sites.
+		if isl.island_id == "cutlass_cay" or isl.archetype == &"wreck_reef" or isl.archetype == &"atoll":
+			var flock := SeabirdFlock.spawn_over(_entities_root, isl.global_position, 16.0, 19.0, 5)
+			flock.is_loot_marker = true
+		# Host-only guarding IslandCrabs on beaches & ReefEels in coastal shallows.
+		if not Net.is_host():
+			continue
+		if not isl.dig_points.is_empty():
+			var dp: Vector3 = isl.dig_points[0]
+			var crab_local := dp + Vector3(4.2, 0.0, -2.5)
+			crab_local.y = maxf(0.25, isl.surface_height(crab_local.x, crab_local.z)) + 0.08
+			var crab := IslandCrab.new()
+			crab.name = "IslandCrab_" + isl.island_id
+			_entities_root.add_child(crab)
+			crab.global_position = isl.global_transform * crab_local
+			crab.guard_origin = crab.global_position
+		if isl.island_id == "cutlass_cay" or isl.archetype == &"arch" or isl.archetype == &"wreck_reef":
+			var eel_offset := Vector3(isl.island_radius + 12.0, 0.0, -8.0)
+			var eel_world := isl.global_transform * eel_offset
+			var eel := ReefEel.new()
+			eel.name = "ReefEel_" + isl.island_id
+			_entities_root.add_child(eel)
+			eel.global_position = Vector3(eel_world.x, Sea.height(eel_world.x, eel_world.z) - 2.2, eel_world.z)
+			eel.lair_origin = eel.global_position
+
 
 func _build_player_ship() -> void:
 	var ship_scene := _resolve_ship_scene(_cli_ship_class)
@@ -1015,6 +1055,10 @@ func _on_director_spawn_flotsam(pos: Vector3, count: int) -> void:
 	_entities_root.add_child(chest)
 	chest.global_position = chest_pos
 
+	# Circling gulls mark floating flotsam from the horizon ("gulls that mark loot").
+	var flotsam_gulls := SeabirdFlock.spawn_over(_entities_root, Vector3(pos.x, 0.0, pos.z), 11.0, 14.0, 5)
+	flotsam_gulls.is_loot_marker = true
+
 
 func _on_director_spawn_fort_siege(fort_pos: Vector3, _bearing: String) -> void:
 	if not Net.is_host():
@@ -1156,11 +1200,13 @@ func _spawn_wreck_salvage_marker(wreck: Dictionary) -> void:
 	var wpos: Vector3 = wreck.get("position", Vector3.ZERO)
 	var items: Array = wreck.get("items", [])
 
-	# Floating red-and-brass salvage buoy so the wreck is readable from afar.
+	# Floating red-and-brass salvage buoy + circling gulls so the wreck is readable from afar.
 	var buoy := Node3D.new()
 	buoy.name = "SalvageBuoy_" + String(wreck.get("id", "wreck"))
 	_entities_root.add_child(buoy)
 	buoy.global_position = Vector3(wpos.x, Sea.height(wpos.x, wpos.z), wpos.z)
+	var wreck_gulls := SeabirdFlock.spawn_over(_entities_root, Vector3(wpos.x, 0.0, wpos.z), 13.0, 15.0, 6)
+	wreck_gulls.is_loot_marker = true
 
 	var body := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()

@@ -28,6 +28,7 @@ var interactable: Interactable = null
 var _mound_node: Node3D = null
 var _chest_preview: Node3D = null
 var _dirt_particles: CPUParticles3D = null
+var _gold_particles: CPUParticles3D = null
 
 
 func _enter_tree() -> void:
@@ -84,6 +85,31 @@ func _build_particles() -> void:
 
 	add_child(p)
 	_dirt_particles = p
+
+	var g := CPUParticles3D.new()
+	g.name = "TreasureGlintParticles"
+	g.emitting = false
+	g.one_shot = true
+	g.amount = 16
+	g.lifetime = 0.95
+	g.explosiveness = 0.88
+	g.position = Vector3(0.0, 0.38, 0.0)
+	g.direction = Vector3(0.0, 1.0, 0.0)
+	g.spread = 65.0
+	g.initial_velocity_min = 1.6
+	g.initial_velocity_max = 3.8
+	g.gravity = Vector3(0.0, -3.5, 0.0)
+	g.scale_amount_min = 0.05
+	g.scale_amount_max = 0.12
+	var spark := BoxMesh.new()
+	spark.size = Vector3(0.55, 0.55, 0.55)
+	var gmat := StandardMaterial3D.new()
+	gmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gmat.albedo_color = Color(1.0, 0.88, 0.35)
+	spark.material = gmat
+	g.mesh = spark
+	add_child(g)
+	_gold_particles = g
 
 
 func _build_interactable() -> void:
@@ -181,6 +207,9 @@ func dig(world_pos: Vector3, digger: Node = null) -> Dictionary:
 
 	Audio.play_sfx(&"chest_thump", global_position)
 	Audio.play_stinger(&"treasure_found")
+	if _gold_particles != null:
+		_gold_particles.restart()
+		_gold_particles.emitting = true
 	dug.emit(dig_count, 0, digger)
 	unearthed.emit(chest)
 
