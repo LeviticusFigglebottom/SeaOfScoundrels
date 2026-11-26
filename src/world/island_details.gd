@@ -1,10 +1,10 @@
 class_name IslandDetails
 extends Node3D
 ## Batched MultiMesh 3D ground cover, coastal shoreline dressing, walkable 3D trail
-## flagstones/curbs, living tropical butterflies, and steep-slope sculptural cliff
-## buttresses for every island across the archipelago.
+## flagstones/curbs, living tropical butterflies, scuttling tidepool crabs, and
+## steep-slope sculptural cliff buttresses for every island across the archipelago.
 ##
-## Replaces bare flat 2D terrain slopes and smooth cliff cones with 7–10 strictly
+## Replaces bare flat 2D terrain slopes and smooth cliff cones with 8–11 strictly
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
 ##   1. `GrassClumps`          — 18-blade arched swaying tropical grass tufts (`foliage_wind.gdshader`)
@@ -15,8 +15,9 @@ extends Node3D
 ##   6. `TidalOutcrops`        — barnacle-ringed coastal rock triads emerging from tide pools & surf
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
-##   9. `TrailSteppingStones`  — beveled flat coastal trail flagstones & tilted border curb stones framing walkable paths
+##   9. `TrailSteppingStones`  — beveled coastal trail flagstones, sloped terrace stair-slabs & border curb stones
 ##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
+##  11. `ShoreCrabs`           — animated sculpted coastal tidepool crabs scuttling sideways along wet sandy beaches
 
 const GROUP := &"island_details"
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -33,6 +34,7 @@ const BUTTRESS_MIN_NORMAL_Y := 0.12
 const BUTTRESS_MAX_NORMAL_Y := 0.72
 const WIDE_BUTTRESS_MIN_RADIUS := 75.0
 const BUTTERFLY_CULL_DIST := 160.0
+const CRAB_CULL_DIST := 135.0
 
 # ------------------------------------------------------------------ sRGB palettes
 # Note: `foliage_wind.gdshader` reads COLOR.rgb directly in LINEAR space, so all
@@ -165,10 +167,10 @@ const BUTTRESS_FALLBACK_VOLCANIC: Array[Color] = [
 ]
 
 const STEPPING_STONE_TROPICAL_PALETTE: Array[Color] = [
-	Color(0.92, 0.84, 0.69, 1.0),  # Warm sandy coastal limestone
-	Color(0.96, 0.90, 0.78, 1.0),  # Sun-bleached pale sandstone flagstone
-	Color(0.86, 0.76, 0.60, 1.0),  # Golden ochre weathered paver
-	Color(0.82, 0.77, 0.68, 1.0),  # Salt-worn coastal travertine
+	Color(0.79, 0.71, 0.56, 1.0),  # Dusty ochre coastal sandstone
+	Color(0.83, 0.76, 0.62, 1.0),  # Sun-warmed weathered flagstone
+	Color(0.74, 0.64, 0.49, 1.0),  # Deep earth-toned trail paver
+	Color(0.72, 0.66, 0.56, 1.0),  # Salt-worn dusty coastal travertine
 ]
 
 const STEPPING_STONE_VOLCANIC_PALETTE: Array[Color] = [
@@ -196,6 +198,13 @@ const BUTTERFLY_PALETTE: Array[Color] = [
 	Color(0.22, 0.72, 1.0, 1.0),  # Tropical morpho-blue
 	Color(1.0, 0.92, 0.28, 1.0),  # Sunlit sulphur-yellow
 	Color(1.0, 0.40, 0.58, 1.0),  # Hibiscus-coral
+]
+
+const CRAB_PALETTE: Array[Color] = [
+	Color(1.0, 0.42, 0.24, 1.0),  # Sunset-coral
+	Color(1.0, 0.56, 0.22, 1.0),  # Bright tide-orange
+	Color(0.88, 0.28, 0.24, 1.0), # Mottled reef-crimson
+	Color(0.92, 0.74, 0.48, 1.0), # Warm sandy-ochre
 ]
 
 # Biome-specific micro-foliage & coastal accent modulators (pure spatial-hash driven, +0 DC).
@@ -251,6 +260,7 @@ static var _fallback_buttress_mesh: ArrayMesh = null
 static var _fallback_buttress_wide_mesh: ArrayMesh = null
 static var _stepping_stone_mesh: ArrayMesh = null
 static var _butterfly_mesh: ArrayMesh = null
+static var _crab_mesh: ArrayMesh = null
 static var _foliage_material: ShaderMaterial = null
 static var _wood_stone_material: StandardMaterial3D = null
 static var _pebble_material: StandardMaterial3D = null
@@ -258,6 +268,7 @@ static var _tidal_rock_material: StandardMaterial3D = null
 static var _buttress_fallback_material: StandardMaterial3D = null
 static var _stepping_stone_mat: StandardMaterial3D = null
 static var _butterfly_mat: StandardMaterial3D = null
+static var _crab_mat: StandardMaterial3D = null
 static var _glb_mesh_cache: Dictionary = {}  # String path -> Mesh or null
 
 # ------------------------------------------------------------------ instance state
@@ -273,6 +284,7 @@ var _buttress_mmi: MultiMeshInstance3D = null
 var _buttress_wide_mmi: MultiMeshInstance3D = null
 var _stepping_stone_mmi: MultiMeshInstance3D = null
 var _butterfly_mmi: MultiMeshInstance3D = null
+var _crab_mmi: MultiMeshInstance3D = null
 
 var _grass_count: int = 0
 var _fern_count: int = 0
@@ -284,11 +296,14 @@ var _buttress_count: int = 0
 var _buttress_wide_count: int = 0
 var _stepping_stone_count: int = 0
 var _butterfly_count: int = 0
+var _crab_count: int = 0
 
 var _placed_buttress_normals_y: PackedFloat32Array = PackedFloat32Array()
 var _placed_grass_positions: PackedVector3Array = PackedVector3Array()
 var _butterfly_orbits: Array[Dictionary] = []
 var _butterfly_clock: float = 0.0
+var _crab_orbits: Array[Dictionary] = []
+var _crab_clock: float = 0.0
 var _island_radius: float = 60.0
 
 
@@ -313,38 +328,49 @@ func _exit_tree() -> void:
 	_buttress_wide_mmi = null
 	_stepping_stone_mmi = null
 	_butterfly_mmi = null
+	_crab_mmi = null
 	_placed_buttress_normals_y = PackedFloat32Array()
 	_placed_grass_positions = PackedVector3Array()
 	_butterfly_orbits.clear()
 	_butterfly_clock = 0.0
+	_crab_orbits.clear()
+	_crab_clock = 0.0
 	_active_details = maxi(0, _active_details - 1)
 	if _active_details == 0:
 		clear_shared_cache()
 
 
 func _process(delta: float) -> void:
-	if _butterfly_mmi == null or not is_instance_valid(_butterfly_mmi) or _butterfly_orbits.is_empty():
-		return
-	var tod := fposmod(Weather.time_of_day, 24.0)
-	var is_active := tod >= 6.0 and tod <= 18.8 and Weather.storminess < 0.55
-	if not is_active:
-		_butterfly_mmi.visible = false
-		return
-	_butterfly_mmi.visible = true
-
+	var dt := clampf(delta, 0.0, 0.15)
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
-	if cam != null:
-		var cull_dist := maxf(BUTTERFLY_CULL_DIST, _island_radius + 105.0)
-		if global_position.distance_squared_to(cam.global_position) > cull_dist * cull_dist:
-			return
+	var dist_sq := global_position.distance_squared_to(cam.global_position) if cam != null else 0.0
 
-	_butterfly_clock += clampf(delta, 0.0, 0.15)
-	var mm := _butterfly_mmi.multimesh
-	if mm == null:
-		return
-	var count := mini(_butterfly_orbits.size(), mm.instance_count)
-	for i in count:
-		mm.set_instance_transform(i, _compute_butterfly_transform(_butterfly_orbits[i], _butterfly_clock))
+	if _butterfly_mmi != null and is_instance_valid(_butterfly_mmi) and not _butterfly_orbits.is_empty():
+		var tod := fposmod(Weather.time_of_day, 24.0)
+		var bf_active := tod >= 6.0 and tod <= 18.8 and Weather.storminess < 0.55
+		_butterfly_mmi.visible = bf_active
+		if bf_active:
+			var bf_cull := maxf(BUTTERFLY_CULL_DIST, _island_radius + 105.0)
+			if cam == null or dist_sq <= bf_cull * bf_cull:
+				_butterfly_clock += dt
+				var mm := _butterfly_mmi.multimesh
+				if mm != null:
+					var count := mini(_butterfly_orbits.size(), mm.instance_count)
+					for i in count:
+						mm.set_instance_transform(i, _compute_butterfly_transform(_butterfly_orbits[i], _butterfly_clock))
+
+	if _crab_mmi != null and is_instance_valid(_crab_mmi) and not _crab_orbits.is_empty():
+		var crab_active := Weather.storminess < 0.75
+		_crab_mmi.visible = crab_active
+		if crab_active:
+			var crab_cull := maxf(CRAB_CULL_DIST, _island_radius + 80.0)
+			if cam == null or dist_sq <= crab_cull * crab_cull:
+				_crab_clock += dt
+				var cmm := _crab_mmi.multimesh
+				if cmm != null:
+					var c_count := mini(_crab_orbits.size(), cmm.instance_count)
+					for i in c_count:
+						cmm.set_instance_transform(i, _compute_crab_transform(_crab_orbits[i], _crab_clock))
 
 
 ## Release all statically cached procedural meshes, materials, and extracted GLB meshes cleanly.
@@ -359,6 +385,7 @@ static func clear_shared_cache() -> void:
 	_fallback_buttress_wide_mesh = null
 	_stepping_stone_mesh = null
 	_butterfly_mesh = null
+	_crab_mesh = null
 	_foliage_material = null
 	_wood_stone_material = null
 	_pebble_material = null
@@ -366,12 +393,14 @@ static func clear_shared_cache() -> void:
 	_buttress_fallback_material = null
 	_stepping_stone_mat = null
 	_butterfly_mat = null
+	_crab_mat = null
 	_glb_mesh_cache.clear()
 
 
 ## Deterministically populate batched 3D ground cover, coastal shoreline dressing,
-## walkable 3D trail stepping stones/curbs, living tropical butterflies, and
-## steep-slope cliff buttresses across `island`, attaching the `IslandDetails` child.
+## walkable 3D trail stepping stones/curbs, living tropical butterflies, scuttling
+## tidepool crabs, and steep-slope cliff buttresses across `island`, attaching the
+## `IslandDetails` child.
 static func populate_for_island(island: Island, archetype: StringName = &"",
 		rng_seed: int = 0, exclusions: Array[Vector3] = []) -> IslandDetails:
 	var details := IslandDetails.new()
@@ -418,6 +447,9 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var butterfly_target := 0
 	if not is_volcanic and arch != &"sea_stack" and not is_tiny:
 		butterfly_target = clampi(int(roundf(lerpf(14.0, 36.0, radius_t))), 14, 36)
+	var crab_target := 0
+	if not is_volcanic:
+		crab_target = clampi(int(roundf(lerpf(10.0, 26.0, all_radius_t))), 10, 26)
 
 	var max_grass_h := maxf(24.0, island.peak_height * 0.80)
 	var max_fern_h := maxf(22.0, island.peak_height * 0.72)
@@ -481,7 +513,7 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 		keepouts, has_pier, pier_a, pier_b,
 		buttress_xf, buttress_col, buttress_wide_xf, buttress_wide_col, buttress_normals_y)
 
-	# 8. Populate Layer 9: 3D Trail Stepping Stones & Trail-Edge Curb Rocks (sRGB vertex colors).
+	# 8. Populate Layer 9: 3D Trail Stepping Stones, Sloped Stair-Slabs & Curb Rocks (sRGB vertex colors).
 	var stepping_xf: Array[Transform3D] = []
 	var stepping_col: Array[Color] = []
 	_place_trail_stepping_stones(island, arch, rng, is_volcanic, keepouts,
@@ -496,6 +528,14 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 			meadow_centers, grass_pos, trail_ctx, keepouts, has_pier, pier_a, pier_b,
 			butterfly_xf, butterfly_col, butterfly_orbits)
 
+	# 9b. Populate Layer 11: Living Scuttling Shoreline Tidepool Crabs (all non-volcanic islands).
+	var crab_xf: Array[Transform3D] = []
+	var crab_col: Array[Color] = []
+	var crab_orbits: Array[Dictionary] = []
+	if crab_target > 0:
+		_place_shore_crabs(island, rng, crab_target, radius, keepouts,
+			has_pier, pier_a, pier_b, crab_xf, crab_col, crab_orbits)
+
 	# 10. Build strictly batched MultiMeshInstance3D children & register live foliage wind!
 	var foliage_mat := _get_foliage_material()
 	island.register_foliage_material(foliage_mat)
@@ -507,8 +547,11 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var pebble_vis := maxf(175.0, island.island_radius + 95.0)
 	var tidal_vis := maxf(310.0, island.island_radius + 185.0)
 	var buttress_vis := clampf(island.island_radius * 6.0 + 1200.0, 1800.0, 2400.0)
-	var stepping_vis := maxf(210.0, island.island_radius + 125.0)
-	var butterfly_vis := maxf(175.0, island.island_radius + 115.0)
+	# Wave I-9 (Local-GPU M20A GPU optimization): cull close-range micro-details cleanly offshore
+	# so sailing at 150-300 m drops ~180k+ micro-prim triangles & keeps Archipelago GPU < 0.45 ms!
+	var stepping_vis := clampf(island.island_radius + 58.0, 102.0, 225.0)
+	var butterfly_vis := clampf(island.island_radius + 32.0, 74.0, 185.0)
+	var crab_vis := clampf(island.island_radius + 26.0, 72.0, 175.0)
 
 	details._grass_mmi = _create_multimesh_node(
 		"GrassClumps", _get_grass_mesh(), foliage_mat, grass_xf, grass_col, 1.0, grass_vis, 20.0)
@@ -555,6 +598,13 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 		details._butterfly_mmi.visible = init_tod >= 6.0 and init_tod <= 18.8 and Weather.storminess < 0.55
 		details._attach_layer(details._butterfly_mmi)
 
+	if not crab_xf.is_empty():
+		details._crab_mmi = _create_multimesh_node(
+			"ShoreCrabs", _get_crab_mesh(), _get_crab_material(),
+			crab_xf, crab_col, 3.5, crab_vis, 16.0)
+		details._crab_mmi.visible = Weather.storminess < 0.75
+		details._attach_layer(details._crab_mmi)
+
 	details._grass_count = grass_xf.size()
 	details._fern_count = fern_xf.size()
 	details._hibiscus_count = hibiscus_xf.size()
@@ -565,10 +615,12 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	details._buttress_wide_count = buttress_wide_xf.size()
 	details._stepping_stone_count = stepping_xf.size()
 	details._butterfly_count = butterfly_xf.size()
+	details._crab_count = crab_xf.size()
 	details._placed_buttress_normals_y = buttress_normals_y
 	details._placed_grass_positions = grass_pos
 	details._butterfly_orbits = butterfly_orbits
-	details.set_process(not butterfly_orbits.is_empty())
+	details._crab_orbits = crab_orbits
+	details.set_process((not butterfly_orbits.is_empty()) or (not crab_orbits.is_empty()))
 
 	island.add_child(details)
 	return details
@@ -583,7 +635,7 @@ func _attach_layer(mmi: MultiMeshInstance3D) -> void:
 
 # ------------------------------------------------------------------ inspection API
 
-## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (7..10 across archetypes).
+## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (8..11 across archetypes).
 func get_multimesh_count() -> int:
 	var count := 0
 	for child in get_children():
@@ -632,6 +684,11 @@ func get_stepping_stone_count() -> int:
 ## Placed animated tropical swallowtail butterflies in `IslandButterflies`.
 func get_butterfly_count() -> int:
 	return _butterfly_count
+
+
+## Placed animated shoreline tidepool crabs in `ShoreCrabs`.
+func get_shore_crab_count() -> int:
+	return _crab_count
 
 
 ## Copy of terrain `normal.y` values recorded at every placed cliff buttress (reliable under `--headless`).
@@ -1692,23 +1749,39 @@ static func _place_trail_stepping_stones(island: Island, arch: StringName, rng: 
 				var pt_uv := a + seg * t + perp_uv * lat
 				var pt := _uv_to_local_xz(pt_uv, cos_y, sin_y)
 
-				if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b) \
-						and _grid_is_clear(stone_grid, cell_size, pt, 2.4):
+				var is_sloped_step := false
+				if not _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b):
 					var h := island.surface_height(pt.x, pt.y)
 					if h >= 0.85:
 						var n := island.surface_normal(pt.x, pt.y)
-						if n.y >= 0.72:
+						is_sloped_step = n.y < 0.93 and h > 3.2
+						var min_stone_sep := 2.05 if is_sloped_step else 2.4
+						if n.y >= 0.72 and _grid_is_clear(stone_grid, cell_size, pt, min_stone_sep):
 							var sx := rng.randf_range(0.88, 1.34)
 							var sz := rng.randf_range(0.78, 1.18)
 							var sy := rng.randf_range(0.68, 0.92)
 							var slope_sink := 0.08 * clampf((0.96 - n.y) / 0.24, 0.0, 1.0)
-							var origin := Vector3(pt.x, h - 0.04 - slope_sink, pt.y)
-							var yaw := base_yaw + rng.randf_range(-0.28, 0.28)
-							var xf := _grounded_transform(origin, n, 0.92, yaw, Vector3(sx, sy, sz))
+							var yaw: float
+							var origin: Vector3
+							var xf: Transform3D
+							if is_sloped_step:
+								# Widen/thicken slab & level tilt toward horizontal so sloped climbs read
+								# as hand-laid pirate stone terrace steps (+0 extra DCs, 0 extra VRAM).
+								sx *= 1.32
+								sy *= 1.38
+								sz *= 1.15
+								var up_dir := n.lerp(Vector3.UP, 0.42).normalized()
+								origin = Vector3(pt.x, h - 0.04 - slope_sink - 0.08, pt.y)
+								yaw = base_yaw + rng.randf_range(-0.18, 0.18)
+								xf = _grounded_transform(origin, up_dir, 1.0, yaw, Vector3(sx, sy, sz))
+							else:
+								origin = Vector3(pt.x, h - 0.04 - slope_sink, pt.y)
+								yaw = base_yaw + rng.randf_range(-0.28, 0.28)
+								xf = _grounded_transform(origin, n, 0.92, yaw, Vector3(sx, sy, sz))
 							out_xf.append(xf)
 							out_col.append(_pick_jittered_color(rng, palette, 0.014, 0.08))
 							_grid_insert(stone_grid, cell_size, pt)
-				next_arc += rng.randf_range(3.4, 4.8)
+				next_arc += rng.randf_range(2.6, 3.6) if is_sloped_step else rng.randf_range(3.6, 5.0)
 			accum += seg_len
 
 	# 2. Trail-Edge Curb Rocks: chunkier slightly tilted border stones staggered along both shoulders!
@@ -1926,6 +1999,214 @@ static func _compute_butterfly_transform(orbit: Dictionary, clock: float) -> Tra
 	var sy_flap := sc * (1.0 + flap * 0.60)
 	var rot := Basis(Vector3.UP, heading_yaw) * Basis(Vector3.RIGHT, pitch) * Basis(Vector3.BACK, roll)
 	return Transform3D(rot.scaled(Vector3(sx_flap, sy_flap, sc)), pos)
+
+
+# ------------------------------------------------------------------ placement & animation: shoreline tidepool crabs
+
+static func _place_shore_crabs(island: Island, rng: RandomNumberGenerator, target: int,
+		radius: float, keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
+		out_xf: Array[Transform3D], out_col: Array[Color],
+		out_orbits: Array[Dictionary]) -> void:
+	if target <= 0:
+		return
+
+	var r_min := maxf(4.0, radius * 0.14)
+	var r_max := maxf(r_min + 10.0, island.seabed_radius * 0.92)
+	var base_sep := clampf(radius * 0.085, 3.2, 9.5)
+	var cell_size := maxf(3.0, base_sep * 0.6)
+	var crab_grid: Dictionary = {}
+
+	# Passes 1 & 2: Stochastic shoreline sampling along wet sandy beaches, pocket coves & tidepool shelves.
+	var random_passes: Array[Array] = [
+		[base_sep, target * 48 + 420],
+		[maxf(2.0, base_sep * 0.52), target * 40 + 360],
+	]
+	for cfg in random_passes:
+		if out_orbits.size() >= target:
+			break
+		var sep: float = float(cfg[0])
+		var attempts: int = int(cfg[1])
+		for _i in attempts:
+			if out_orbits.size() >= target:
+				break
+			var pt0 := _sample_annulus_xz(rng, r_min, r_max)
+			if _is_in_keepout(pt0, keepouts, has_pier, pier_a, pier_b, 0.5):
+				continue
+			if not _grid_is_clear(crab_grid, cell_size, pt0, sep):
+				continue
+			var h0 := island.surface_height(pt0.x, pt0.y)
+			if h0 < 0.28 or h0 > 2.35:
+				continue
+			var n0 := island.surface_normal(pt0.x, pt0.y)
+			if n0.y < 0.80:
+				continue
+			var orbit := _try_build_crab_track(island, rng, pt0, h0, n0, keepouts, has_pier, pier_a, pier_b)
+			if orbit.is_empty():
+				continue
+			out_orbits.append(orbit)
+			out_xf.append(_compute_crab_transform(orbit, 0.0))
+			out_col.append(_pick_jittered_color(rng, CRAB_PALETTE, 0.014, 0.06))
+			_grid_insert(crab_grid, cell_size, pt0)
+
+	# Pass 3 (Deterministic Shoreline Scan Fallback): Guarantee pocket coves & tidepool shelves are
+	# discovered even on compact steep islands (e.g. sea_stack / fort_rock).
+	if out_orbits.size() < target:
+		var scan_pts: Array[Vector2] = []
+		var radial_steps := clampi(int(roundf((r_max - r_min) / 1.8)), 16, 32)
+		var arc_step := clampf(radius * 0.042, 1.4, 3.6)
+		for ri in range(1, radial_steps + 1):
+			var frac := float(ri) / float(radial_steps)
+			var r_ring := lerpf(r_min, r_max, frac)
+			var ring_n := maxi(20, int(roundf(TAU * r_ring / arc_step)))
+			var phase_ang := float(ri) * 0.383
+			for ai in ring_n:
+				var ang := phase_ang + float(ai) / float(ring_n) * TAU
+				var pt := Vector2(cos(ang) * r_ring, sin(ang) * r_ring)
+				if _is_in_keepout(pt, keepouts, has_pier, pier_a, pier_b, 0.5):
+					continue
+				var h_s := island.surface_height(pt.x, pt.y)
+				if h_s < 0.28 or h_s > 2.35:
+					continue
+				if island.surface_normal(pt.x, pt.y).y < 0.80:
+					continue
+				scan_pts.append(pt)
+		_shuffle_vec2_array(rng, scan_pts)
+
+		for fallback_sep: float in [1.8, 1.1]:
+			if out_orbits.size() >= target:
+				break
+			for pt0 in scan_pts:
+				if out_orbits.size() >= target:
+					break
+				if not _grid_is_clear(crab_grid, cell_size, pt0, fallback_sep):
+					continue
+				var h0 := island.surface_height(pt0.x, pt0.y)
+				var n0 := island.surface_normal(pt0.x, pt0.y)
+				var orbit := _try_build_crab_track(island, rng, pt0, h0, n0, keepouts, has_pier, pier_a, pier_b)
+				if orbit.is_empty():
+					continue
+				out_orbits.append(orbit)
+				out_xf.append(_compute_crab_transform(orbit, 0.0))
+				out_col.append(_pick_jittered_color(rng, CRAB_PALETTE, 0.014, 0.06))
+				_grid_insert(crab_grid, cell_size, pt0)
+
+
+static func _try_build_crab_track(island: Island, rng: RandomNumberGenerator, pt0: Vector2,
+		h0: float, n0: Vector3, keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2) -> Dictionary:
+	# Compute horizontal shore-tangent axis perpendicular to downhill beach slope.
+	var slope_xz := Vector2(n0.x, n0.z)
+	var tan_xz := Vector2(-slope_xz.y, slope_xz.x)
+	if tan_xz.length_squared() < 0.0004:
+		tan_xz = Vector2(-pt0.y, pt0.x)
+	if tan_xz.length_squared() < 0.0004:
+		tan_xz = Vector2.RIGHT
+	else:
+		tan_xz = tan_xz.normalized()
+
+	var pref_sign := 1.0 if rng.randf() < 0.5 else -1.0
+	var base_jitter := rng.randf_range(-0.18, 0.18)
+	var try_specs: Array[Array] = [
+		[pref_sign, base_jitter, rng.randf_range(1.5, 2.8)],
+		[-pref_sign, -base_jitter, rng.randf_range(1.4, 2.5)],
+		[pref_sign, base_jitter + 0.28, rng.randf_range(1.2, 1.8)],
+		[-pref_sign, -base_jitter - 0.28, rng.randf_range(1.2, 1.8)],
+	]
+
+	for spec in try_specs:
+		var sgn: float = float(spec[0])
+		var ang_off: float = float(spec[1])
+		var span: float = float(spec[2])
+		var dir_xz := (tan_xz * sgn).rotated(ang_off).normalized()
+		var pt1 := pt0 + dir_xz * span
+		if _is_in_keepout(pt1, keepouts, has_pier, pier_a, pier_b, 0.5):
+			continue
+		var h1 := island.surface_height(pt1.x, pt1.y)
+		if h1 < 0.25 or h1 > 2.50:
+			continue
+		var n1 := island.surface_normal(pt1.x, pt1.y)
+		if n1.y < 0.78:
+			continue
+		var ptm := (pt0 + pt1) * 0.5
+		if _is_in_keepout(ptm, keepouts, has_pier, pier_a, pier_b, 0.5):
+			continue
+		var hm := island.surface_height(ptm.x, ptm.y)
+		if hm < 0.25 or hm > 2.50 or absf(hm - 0.5 * (h0 + h1)) > 0.20:
+			continue
+		var nm := island.surface_normal(ptm.x, ptm.y)
+		if nm.y < 0.78:
+			continue
+
+		# Face local -Z (pincers & eyes) perpendicular to the scuttle track so crabs scuttle sideways!
+		var face_dir := Vector2(-dir_xz.y, dir_xz.x)
+		if slope_xz.length_squared() > 0.0004 and face_dir.dot(slope_xz) < 0.0:
+			face_dir = -face_dir
+		if rng.randf() < 0.25:
+			face_dir = -face_dir
+		var face_yaw := atan2(-face_dir.x, -face_dir.y) + rng.randf_range(-0.14, 0.14)
+
+		return {
+			"p0": Vector3(pt0.x, h0 + 0.005, pt0.y),
+			"p1": Vector3(pt1.x, h1 + 0.005, pt1.y),
+			"n0": n0.normalized(),
+			"n1": n1.normalized(),
+			"face_yaw": face_yaw,
+			"cycle_dur": rng.randf_range(4.2, 7.6),
+			"phase": rng.randf(),
+			"wiggle_freq": rng.randf_range(16.0, 23.0),
+			"scale": rng.randf_range(0.74, 1.16),
+		}
+	return {}
+
+
+static func _compute_crab_transform(orbit: Dictionary, clock: float) -> Transform3D:
+	var p0: Vector3 = orbit["p0"] as Vector3
+	var p1: Vector3 = orbit["p1"] as Vector3
+	var n0: Vector3 = orbit["n0"] as Vector3
+	var n1: Vector3 = orbit["n1"] as Vector3
+	var face_yaw: float = float(orbit["face_yaw"])
+	var cycle_dur: float = float(orbit["cycle_dur"])
+	var phase: float = float(orbit["phase"])
+	var wiggle_freq: float = float(orbit["wiggle_freq"])
+	var sc: float = float(orbit["scale"])
+
+	# Sideways crab-scuttle rhythm:
+	# [0.00..0.28) burst p0 -> p1 | [0.28..0.50) alert pause | [0.50..0.78) burst p1 -> p0 | [0.78..1.00) alert pause
+	var cyc := fposmod(clock / maxf(cycle_dur, 0.5) + phase, 1.0)
+	var u := 0.0
+	var moving := 0.0
+	if cyc < 0.28:
+		var s := cyc / 0.28
+		u = s * s * (3.0 - 2.0 * s)
+		moving = sin(s * PI)
+	elif cyc < 0.50:
+		u = 1.0
+	elif cyc < 0.78:
+		var s := (cyc - 0.50) / 0.28
+		u = 1.0 - (s * s * (3.0 - 2.0 * s))
+		moving = sin(s * PI)
+
+	var pos := p0.lerp(p1, u)
+	var n := n0.lerp(n1, u)
+	n = n.normalized() if n.length_squared() > 1e-6 else Vector3.UP
+
+	var wig := sin(clock * wiggle_freq + phase * TAU)
+	var alert_glance := sin(clock * 1.9 + phase * TAU) * 0.07
+	var yaw := face_yaw + wig * 0.14 * moving + alert_glance * (1.0 - moving)
+	var roll := cos(clock * wiggle_freq + phase * TAU) * 0.09 * moving
+	var hop := absf(wig) * 0.018 * moving * sc
+	var origin := pos + n * hop
+
+	var up_axis := Vector3.UP.lerp(n, 0.92).normalized()
+	var ref_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var right_axis := ref_fwd.cross(up_axis)
+	if right_axis.length_squared() < 0.0001:
+		right_axis = Vector3.RIGHT
+	else:
+		right_axis = right_axis.normalized()
+	var back_axis := right_axis.cross(up_axis).normalized()
+	var xform_basis := (Basis(right_axis, up_axis, back_axis) * Basis(Vector3.BACK, roll)).scaled(Vector3(sc, sc, sc))
+	return Transform3D(xform_basis, origin)
 
 
 # ------------------------------------------------------------------ placement: coastal shoreline layers
@@ -2768,6 +3049,19 @@ static func _get_butterfly_material() -> StandardMaterial3D:
 	return _butterfly_mat
 
 
+static func _get_crab_material() -> StandardMaterial3D:
+	if _crab_mat == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.roughness = 0.65
+		mat.metallic = 0.0
+		mat.metallic_specular = 0.32
+		_crab_mat = mat
+	return _crab_mat
+
+
 static func _get_grass_mesh() -> ArrayMesh:
 	if _grass_mesh == null:
 		_grass_mesh = _build_grass_mesh()
@@ -2826,6 +3120,12 @@ static func _get_butterfly_mesh() -> ArrayMesh:
 	if _butterfly_mesh == null:
 		_butterfly_mesh = _build_butterfly_mesh()
 	return _butterfly_mesh
+
+
+static func _get_crab_mesh() -> ArrayMesh:
+	if _crab_mesh == null:
+		_crab_mesh = _build_crab_mesh()
+	return _crab_mesh
 
 
 # ------------------------------------------------------------------ Mesh 1: Sculpted 10-Blade Tropical Grass Clump
@@ -3665,6 +3965,122 @@ static func _build_butterfly_mesh() -> ArrayMesh:
 		_add_outward_tri(st, hw_rr, hw_mo, hw_mr, wing_ref, col_root, col_panel_hi, col_panel_lo)
 		_add_outward_tri(st, hw_mo, hw_rim, hw_mr, wing_ref, col_panel_hi, col_margin, col_panel_lo)
 		_add_outward_tri(st, hw_mr, hw_rim, hw_tail, wing_ref, col_panel_lo, col_margin, col_tip)
+
+	st.generate_normals()
+	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 11: Sculpted Coastal Tidepool Crab
+
+static func _build_crab_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 36-tri sculpted coastal tidepool crab facing local -Z (scuttles sideways along +-X):
+	#   1. Beveled hexagonal carapace (16 tris: 12 bevel side tris + 4 domed top cap tris)
+	#   2. Twin raised curved pincer claws in front (6 tris: 3 per claw)
+	#   3. 6 splayed articulated walking legs (12 tris: 2 per leg — raised femur + grounded tarsus)
+	#   4. Twin tiny dark upright eye-stalks on front rim (2 tris)
+	var col_rim := Color(0.74, 0.70, 0.66, 1.0)
+	var col_top_front := Color(0.95, 0.93, 0.89, 1.0)
+	var col_top := Color(1.00, 0.98, 0.94, 1.0)
+	var col_top_rear := Color(0.90, 0.87, 0.82, 1.0)
+	var col_arm := Color(0.84, 0.80, 0.75, 1.0)
+	var col_claw := Color(0.96, 0.92, 0.86, 1.0)
+	var col_claw_hi := Color(1.00, 0.97, 0.91, 1.0)
+	var col_claw_tip := Color(1.00, 0.98, 0.93, 1.0)
+	var col_leg_hip := Color(0.84, 0.80, 0.75, 1.0)
+	var col_leg_knee := Color(0.94, 0.90, 0.84, 1.0)
+	var col_leg_foot := Color(0.56, 0.50, 0.46, 1.0)
+	var col_eye_stalk := Color(0.46, 0.40, 0.36, 1.0)
+	var col_eye_tip := Color(0.08, 0.08, 0.10, 1.0)
+
+	# 1. Beveled hexagonal carapace (16 tris).
+	var hex_xz: Array[Vector2] = [
+		Vector2( 0.092, -0.108),  # 0: front-right
+		Vector2( 0.158, -0.008),  # 1: right lateral spine
+		Vector2( 0.098,  0.112),  # 2: back-right
+		Vector2(-0.098,  0.112),  # 3: back-left
+		Vector2(-0.158, -0.008),  # 4: left lateral spine
+		Vector2(-0.092, -0.108),  # 5: front-left
+	]
+	var bot_ring: Array[Vector3] = []
+	var top_ring: Array[Vector3] = []
+	var top_cols: Array[Color] = []
+	for k in 6:
+		var p: Vector2 = hex_xz[k]
+		var is_spine := (k == 1 or k == 4)
+		var is_front := (k == 0 or k == 5)
+		bot_ring.append(Vector3(p.x, 0.042, p.y))
+		top_ring.append(Vector3(p.x * 0.72, 0.128 if is_spine else 0.118, p.y * 0.72))
+		top_cols.append(col_top if is_spine else (col_top_front if is_front else col_top_rear))
+
+	var ref_body := Vector3(0.0, 0.062, 0.0)
+	for k in 6:
+		var nk := (k + 1) % 6
+		_add_outward_quad(st, bot_ring[k], top_ring[k], top_ring[nk], bot_ring[nk], ref_body,
+			col_rim, top_cols[k], top_cols[nk], col_rim)
+
+	# Symmetric 4-tri domed hexagonal top cap split along the transverse lateral ridge (v4 -> v1).
+	_add_outward_tri(st, top_ring[5], top_ring[0], top_ring[1], ref_body,
+		top_cols[5], top_cols[0], top_cols[1])
+	_add_outward_tri(st, top_ring[5], top_ring[1], top_ring[4], ref_body,
+		top_cols[5], top_cols[1], top_cols[4])
+	_add_outward_tri(st, top_ring[4], top_ring[1], top_ring[2], ref_body,
+		top_cols[4], top_cols[1], top_cols[2])
+	_add_outward_tri(st, top_ring[4], top_ring[2], top_ring[3], ref_body,
+		top_cols[4], top_cols[2], top_cols[3])
+
+	# 2. Twin raised curved pincer claws in front (6 tris).
+	var claw_ref := Vector3(0.0, -0.50, 0.12)
+	for side: float in [-1.0, 1.0]:
+		var sh_in := Vector3(side * 0.086, 0.072, -0.086)
+		var sh_out := Vector3(side * 0.128, 0.056, -0.052)
+		var elbow := Vector3(side * 0.208, 0.112, -0.172)
+		var palm_out := Vector3(side * 0.228, 0.158, -0.238)
+		var tip_up := Vector3(side * 0.095, 0.178, -0.268)
+		var wrist_in := Vector3(side * 0.166, 0.104, -0.175)
+		var tip_lo := Vector3(side * 0.082, 0.122, -0.244)
+
+		_add_outward_tri(st, sh_in, sh_out, elbow, claw_ref, col_rim, col_arm, col_claw)
+		_add_outward_tri(st, elbow, palm_out, tip_up, claw_ref, col_claw, col_claw_hi, col_claw_tip)
+		_add_outward_tri(st, elbow, wrist_in, tip_lo, claw_ref, col_claw, col_rim, col_claw_tip)
+
+	# 3. 6 splayed articulated walking legs (12 tris: 3 left, 3 right).
+	# [hip_x, hip_z, knee_x, knee_y, knee_z, foot_x, foot_z]
+	var leg_specs: Array[Array] = [
+		[0.132, -0.042, 0.235, 0.095, -0.085, 0.285, -0.115],
+		[0.146,  0.014, 0.252, 0.098,  0.022, 0.305,  0.032],
+		[0.122,  0.070, 0.228, 0.088,  0.126, 0.275,  0.165],
+	]
+	var leg_up_ref := Vector3(0.0, -0.60, 0.0)
+	for side: float in [-1.0, 1.0]:
+		var leg_side_ref := Vector3(-side * 0.20, -0.10, 0.0)
+		for lspec in leg_specs:
+			var hx: float = float(lspec[0])
+			var hz: float = float(lspec[1])
+			var kx: float = float(lspec[2])
+			var ky: float = float(lspec[3])
+			var kz: float = float(lspec[4])
+			var fx: float = float(lspec[5])
+			var fz: float = float(lspec[6])
+
+			var hip_a := Vector3(side * hx, 0.056, hz - 0.018)
+			var hip_b := Vector3(side * hx, 0.056, hz + 0.018)
+			var knee_top := Vector3(side * kx, ky, kz)
+			var knee_bot := Vector3(side * (kx - 0.024), ky - 0.028, kz)
+			var foot := Vector3(side * fx, 0.002, fz)
+
+			_add_outward_tri(st, hip_a, hip_b, knee_top, leg_up_ref, col_leg_hip, col_leg_hip, col_leg_knee)
+			_add_outward_tri(st, knee_top, knee_bot, foot, leg_side_ref, col_leg_knee, col_leg_hip, col_leg_foot)
+
+	# 4. Tiny dark upright eye-stalks on front carapace edge (2 tris).
+	var eye_ref := Vector3(0.0, 0.08, 0.12)
+	for side: float in [-1.0, 1.0]:
+		var eb_in := Vector3(side * 0.028, 0.108, -0.096)
+		var eb_out := Vector3(side * 0.052, 0.106, -0.092)
+		var eye_tip := Vector3(side * 0.044, 0.156, -0.112)
+		_add_outward_tri(st, eb_in, eb_out, eye_tip, eye_ref, col_eye_stalk, col_eye_stalk, col_eye_tip)
 
 	st.generate_normals()
 	return st.commit()
