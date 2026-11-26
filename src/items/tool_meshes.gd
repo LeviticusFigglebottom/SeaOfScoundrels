@@ -1,0 +1,1193 @@
+class_name ToolMeshes
+extends RefCounted
+## Procedural chunky stylized 3D mesh builders for all 11 pirate tools and weapons.
+##
+## Every mesh is built from scratch with beveled surfaces, turned brass lathes,
+## lofted curved blades/stocks, and rich warm painterly materials (warm brass,
+## dark oak, gleaming steel, stitched leather, glowing lantern glass, parchment).
+## Grip origin sits at (0, 0, 0) in tool-local space so both first-person
+## viewmodels and third-person CharacterVisual.hand_right sockets mount cleanly.
+
+const ALL_TOOLS: Array[StringName] = [
+	&"cutlass",
+	&"pistol",
+	&"compass",
+	&"spyglass",
+	&"lantern",
+	&"map",
+	&"shovel",
+	&"bucket",
+	&"planks",
+	&"tankard",
+	&"instrument",
+]
+
+const DISPLAY_NAMES := {
+	&"cutlass": "Cutlass",
+	&"pistol": "Flintlock Pistol",
+	&"compass": "Brass Compass",
+	&"spyglass": "Spyglass",
+	&"lantern": "Oil Lantern",
+	&"map": "Treasure Map",
+	&"shovel": "Iron Shovel",
+	&"bucket": "Bilge Bucket",
+	&"planks": "Oak Planks",
+	&"tankard": "Grog Tankard",
+	&"instrument": "Concertina",
+}
+
+# Curated warm painterly pirate palette (matching sloop.glb & concept art).
+const COL_BRASS := Color(0.82, 0.62, 0.24)
+const COL_BRONZE := Color(0.49, 0.35, 0.16)
+const COL_STEEL := Color(0.79, 0.84, 0.89)
+const COL_STEEL_EDGE := Color(0.92, 0.95, 0.98)
+const COL_IRON := Color(0.24, 0.26, 0.30)
+const COL_OAK_DARK := Color(0.31, 0.19, 0.11)
+const COL_OAK_WARM := Color(0.47, 0.30, 0.16)
+const COL_OAK_LIGHT := Color(0.60, 0.42, 0.23)
+const COL_WALNUT := Color(0.38, 0.19, 0.10)
+const COL_LEATHER := Color(0.42, 0.22, 0.12)
+const COL_CRIMSON := Color(0.76, 0.13, 0.11)
+const COL_GOLD_BRIGHT := Color(0.95, 0.78, 0.28)
+const COL_IVORY := Color(0.93, 0.87, 0.72)
+const COL_PARCHMENT_BACK := Color(0.76, 0.66, 0.48)
+const COL_ROPE := Color(0.68, 0.57, 0.38)
+const COL_PEWTER := Color(0.56, 0.59, 0.62)
+const COL_FOAM := Color(0.96, 0.92, 0.82)
+const COL_GROG := Color(0.42, 0.22, 0.06)
+const COL_WATER := Color(0.16, 0.58, 0.56, 0.86)
+const COL_LENS := Color(0.14, 0.26, 0.38, 0.84)
+const COL_CRYSTAL := Color(0.84, 0.92, 0.96, 0.30)
+const COL_GLASS_LIT := Color(1.0, 0.78, 0.38, 0.76)
+const COL_GLASS_UNLIT := Color(0.68, 0.72, 0.74, 0.36)
+const COL_FLAME := Color(1.0, 0.90, 0.46)
+const COL_BELLOWS_RED := Color(0.68, 0.20, 0.16)
+const COL_BELLOWS_CREAM := Color(0.88, 0.80, 0.62)
+
+
+## Return ordered list of all 11 supported held tool IDs.
+static func get_tool_ids() -> Array[StringName]:
+	return ALL_TOOLS.duplicate()
+
+
+## Return human-readable display name for a tool ID.
+static func get_display_name(tool_id: StringName) -> String:
+	return String(DISPLAY_NAMES.get(tool_id, String(tool_id).capitalize()))
+
+
+## Build a complete stylized 3D Node3D hierarchy for `tool_id`.
+static func build_tool(tool_id: StringName) -> Node3D:
+	match tool_id:
+		&"cutlass":
+			return _build_cutlass()
+		&"pistol":
+			return _build_pistol()
+		&"compass":
+			return _build_compass()
+		&"spyglass":
+			return _build_spyglass()
+		&"lantern":
+			return _build_lantern()
+		&"map":
+			return _build_map()
+		&"shovel":
+			return _build_shovel()
+		&"bucket":
+			return _build_bucket()
+		&"planks":
+			return _build_planks()
+		&"tankard":
+			return _build_tankard()
+		&"instrument":
+			return _build_instrument()
+		_:
+			push_warning("ToolMeshes: unknown tool '%s', falling back to cutlass." % String(tool_id))
+			return _build_cutlass()
+
+
+## Update the texture displayed on a held Treasure Map node built by `build_tool(&"map")`.
+static func apply_map_texture(map_node: Node3D, tex: Texture2D) -> void:
+	if map_node == null or tex == null:
+		return
+	var surf := map_node.get_node_or_null(^"MapSurface") as MeshInstance3D
+	if surf == null:
+		return
+	var mat := surf.material_override as StandardMaterial3D
+	if mat == null:
+		mat = _make_mat(Color.WHITE, 0.78, 0.0)
+		surf.material_override = mat
+	mat.albedo_texture = tex
+
+
+## Toggle a Lantern node's flame mesh, glowing amber glass emission, and OmniLight3D.
+static func set_lantern_lit(lantern_node: Node3D, lit: bool) -> void:
+	if lantern_node == null:
+		return
+	var light := lantern_node.get_node_or_null(^"LanternLight") as OmniLight3D
+	if light != null:
+		light.visible = lit
+		light.light_energy = 2.4 if lit else 0.0
+	var flame := lantern_node.get_node_or_null(^"Flame") as Node3D
+	if flame != null:
+		flame.visible = lit
+	var glass := lantern_node.get_node_or_null(^"GlassCore") as MeshInstance3D
+	if glass != null and glass.material_override is StandardMaterial3D:
+		var mat := glass.material_override as StandardMaterial3D
+		if lit:
+			mat.albedo_color = COL_GLASS_LIT
+			mat.emission_enabled = true
+			mat.emission = Color(1.0, 0.64, 0.20)
+			mat.emission_energy_multiplier = 2.2
+		else:
+			mat.albedo_color = COL_GLASS_UNLIT
+			mat.emission_enabled = false
+			mat.emission_energy_multiplier = 0.0
+
+
+## Toggle the visible bilge water disc inside a Bucket node.
+static func set_bucket_full(bucket_node: Node3D, full: bool) -> void:
+	if bucket_node == null:
+		return
+	var wf := bucket_node.get_node_or_null(^"WaterFill") as Node3D
+	if wf != null:
+		wf.visible = full
+
+
+## Expand or squeeze a Concertina node's bellows (`stretch_01` in 0..1, 0.5 = rest).
+static func set_concertina_stretch(inst_node: Node3D, stretch_01: float) -> void:
+	if inst_node == null:
+		return
+	var s := clampf(stretch_01, 0.0, 1.0)
+	var scale_x := lerpf(0.68, 1.48, s)
+	var bellows := inst_node.get_node_or_null(^"Bellows") as Node3D
+	var left_end := inst_node.get_node_or_null(^"LeftEnd") as Node3D
+	var right_end := inst_node.get_node_or_null(^"RightEnd") as Node3D
+	if bellows != null:
+		bellows.scale.x = scale_x
+	var half_span := 0.085 * scale_x
+	if left_end != null:
+		left_end.position.x = -half_span
+	if right_end != null:
+		right_end.position.x = half_span
+
+
+## Extend or retract a Spyglass node's telescoping draw tubes (`ext_01` in 0..1).
+static func set_spyglass_extension(spy_node: Node3D, ext_01: float) -> void:
+	if spy_node == null:
+		return
+	var tubes := spy_node.get_node_or_null(^"DrawTubes") as Node3D
+	if tubes != null:
+		tubes.position.z = -clampf(ext_01, 0.0, 1.0) * 0.16
+
+
+# ==============================================================================
+# Individual tool builders
+# ==============================================================================
+
+## 1. Cutlass: curved gleaming pirate sabre with ornate brass basket/D-guard hilt.
+static func _build_cutlass() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Cutlass"
+
+	# Curved broad cutlass blade lofted along +Y with forward sweep (-Z) and clipped point.
+	var blade_rings: Array = []
+	var blade_steps := 12
+	for i in range(blade_steps + 1):
+		var t := float(i) / float(blade_steps)
+		var y := 0.105 + t * 0.64
+		# Classic pirate cutlass curve: convex forward cutting edge (-Z) sweeping gracefully back toward tip (+Z).
+		var sweep_z := 0.072 * pow(t, 1.95) - 0.012 * sin(t * PI)
+		var width := 0.056 * (1.0 + 0.24 * sin(t * PI * 0.82)) * (1.0 - 0.88 * pow(t, 4.2))
+		if i == blade_steps:
+			width = 0.003
+		var spine_half_x := lerpf(0.0085, 0.0025, t)
+		var edge_z := sweep_z - width * 0.62
+		var spine_z := sweep_z + width * 0.38
+		var mid_z := lerpf(edge_z, spine_z, 0.56)
+		blade_rings.append([
+			Vector3(0.0, y, edge_z),                  # sharp front edge
+			Vector3(spine_half_x * 1.05, y, mid_z),   # right fuller bevel
+			Vector3(spine_half_x * 0.72, y, spine_z), # right spine
+			Vector3(-spine_half_x * 0.72, y, spine_z),# left spine
+			Vector3(-spine_half_x * 1.05, y, mid_z),  # left fuller bevel
+		])
+	var blade_mi := _make_mesh_node("Blade", _loft_mesh(blade_rings, true), _make_mat(COL_STEEL, 0.22, 0.90))
+	root.add_child(blade_mi)
+
+	# Ribbed dark stitched-leather grip centered at origin.
+	var grip_prof: Array[Vector2] = [
+		Vector2(0.017, -0.082),
+		Vector2(0.021, -0.055),
+		Vector2(0.018, -0.028),
+		Vector2(0.022, 0.0),
+		Vector2(0.019, 0.028),
+		Vector2(0.022, 0.055),
+		Vector2(0.019, 0.082),
+	]
+	root.add_child(_make_mesh_node("Grip", _lathe_mesh(grip_prof, 10), _make_mat(COL_LEATHER, 0.76, 0.05)))
+
+	# Ornate brass cup-guard, pommel, and sweeping D-guard knuckle bow.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Flared protective hand-guard shell at top of grip.
+	_append_lathe(st_brass, [
+		Vector2(0.022, 0.075),
+		Vector2(0.048, 0.086),
+		Vector2(0.068, 0.104),
+		Vector2(0.060, 0.114),
+		Vector2(0.024, 0.106),
+	], 12)
+	# Turned pommel cap at bottom of grip.
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.125),
+		Vector2(0.024, -0.116),
+		Vector2(0.030, -0.098),
+		Vector2(0.021, -0.080),
+	], 10)
+	# Sweeping D-guard knuckle bow curving forward (-Z) from guard to pommel.
+	var bow_pts: Array[Vector3] = []
+	for i in 11:
+		var u := float(i) / 10.0
+		var ang := lerpf(0.0, PI, u)
+		var bz := -0.022 - sin(ang) * 0.072
+		var by := lerpf(0.098, -0.096, u)
+		bow_pts.append(Vector3(0.0, by, bz))
+	_append_tube(st_brass, bow_pts, 0.0095, 8, true)
+	# Side basket rib for bold silhouette inspired by concept art.
+	var rib_pts: Array[Vector3] = []
+	for i in 9:
+		var u := float(i) / 8.0
+		var ang := lerpf(0.0, PI, u)
+		rib_pts.append(Vector3(sin(ang) * 0.044, lerpf(0.098, -0.088, u), -0.015 - sin(ang) * 0.050))
+	_append_tube(st_brass, rib_pts, 0.0065, 6, true)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassHilt", st_brass.commit(), _make_mat(COL_BRASS, 0.28, 0.86)))
+	return root
+
+
+## 2. Flintlock Pistol: chunky brass-trimmed barrel & carved walnut stock (-Z aim).
+static func _build_pistol() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Pistol"
+
+	# Carved curved walnut pistol stock + forearm bed.
+	var stock_rings: Array = []
+	var stock_path: Array = [
+		[Vector3(0.0, -0.115, 0.078), 0.022, 0.024],
+		[Vector3(0.0, -0.062, 0.046), 0.019, 0.021],
+		[Vector3(0.0, -0.006, 0.016), 0.018, 0.022],
+		[Vector3(0.0, 0.036, -0.022), 0.020, 0.025],
+		[Vector3(0.0, 0.040, -0.135), 0.018, 0.022],
+		[Vector3(0.0, 0.042, -0.245), 0.014, 0.016],
+	]
+	for s in stock_path:
+		var c: Vector3 = s[0]
+		var rx: float = s[1]
+		var ry: float = s[2]
+		stock_rings.append([
+			c + Vector3(0.0, ry, 0.0),
+			c + Vector3(rx, ry * 0.45, 0.0),
+			c + Vector3(rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(0.0, -ry, 0.0),
+			c + Vector3(-rx * 0.9, -ry * 0.55, 0.0),
+			c + Vector3(-rx, ry * 0.45, 0.0),
+		])
+	root.add_child(_make_mesh_node("Stock", _loft_mesh(stock_rings, true), _make_mat(COL_WALNUT, 0.62, 0.04)))
+
+	# Octagonal forged-iron barrel with flared blunder-style pirate muzzle (-Z).
+	var barrel_xf := Transform3D(Basis(Vector3.RIGHT, -PI * 0.5), Vector3(0.0, 0.062, -0.035))
+	var barrel_prof: Array[Vector2] = [
+		Vector2(0.0, 0.0),
+		Vector2(0.022, 0.002),
+		Vector2(0.020, 0.14),
+		Vector2(0.018, 0.25),
+		Vector2(0.026, 0.285),
+		Vector2(0.023, 0.292),
+		Vector2(0.014, 0.282),
+		Vector2(0.0, 0.265),
+	]
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_iron, barrel_prof, 8, barrel_xf)
+	# Curved flintlock hammer/cock on starboard lockplate + steel frizzen.
+	_append_tube(st_iron, [
+		Vector3(0.024, 0.048, -0.038),
+		Vector3(0.028, 0.088, -0.032),
+		Vector3(0.024, 0.098, -0.056),
+	], 0.0065, 6, true)
+	_append_beveled_box(st_iron, Vector3(0.010, 0.032, 0.016), 0.002, Transform3D(Basis.IDENTITY, Vector3(0.024, 0.072, -0.084)))
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("BarrelAndLock", st_iron.commit(), _make_mat(COL_IRON, 0.40, 0.78)))
+
+	# Brass trim: barrel bands, butt pommel cap, lockplate, trigger guard & trigger.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Barrel collar bands.
+	_append_lathe(st_brass, [Vector2(0.0225, 0.09), Vector2(0.0245, 0.095), Vector2(0.0245, 0.115), Vector2(0.0225, 0.12)], 10, barrel_xf)
+	_append_lathe(st_brass, [Vector2(0.021, 0.205), Vector2(0.0235, 0.210), Vector2(0.0235, 0.232), Vector2(0.021, 0.237)], 10, barrel_xf)
+	# Heavy brass pommel butt cap.
+	var pom_xf := Transform3D(Basis(Vector3.RIGHT, 0.55), Vector3(0.0, -0.122, 0.082))
+	_append_lathe(st_brass, [Vector2(0.0, -0.016), Vector2(0.026, -0.006), Vector2(0.026, 0.016), Vector2(0.018, 0.022)], 10, pom_xf)
+	# Starboard brass lockplate.
+	_append_beveled_box(st_brass, Vector3(0.008, 0.030, 0.078), 0.0025, Transform3D(Basis.IDENTITY, Vector3(0.020, 0.044, -0.056)))
+	# Trigger guard bow & trigger.
+	_append_tube(st_brass, [
+		Vector3(0.0, 0.020, -0.012),
+		Vector3(0.0, -0.014, -0.036),
+		Vector3(0.0, -0.012, -0.078),
+		Vector3(0.0, 0.022, -0.094),
+	], 0.0045, 6, true)
+	_append_beveled_box(st_brass, Vector3(0.005, 0.024, 0.007), 0.001, Transform3D(Basis(Vector3.RIGHT, -0.3), Vector3(0.0, 0.006, -0.048)))
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassTrim", st_brass.commit(), _make_mat(COL_BRASS, 0.26, 0.86)))
+	return root
+
+
+## 3. Compass: ornate brass case, ivory rose dial, hinged lid & live-rotating `Needle`.
+static func _build_compass() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Compass"
+
+	# Turned brass pocket-compass body, scalloped rim, open hinged lid & lanyard ring.
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.024),
+		Vector2(0.058, -0.024),
+		Vector2(0.072, -0.012),
+		Vector2(0.075, 0.006),
+		Vector2(0.068, 0.018),
+		Vector2(0.059, 0.018),
+		Vector2(0.057, 0.004),
+		Vector2(0.0, 0.004),
+	], 18)
+	# Hinged brass lid opened back toward -Z (north rim).
+	var lid_xf := Transform3D(Basis(Vector3.RIGHT, -1.78), Vector3(0.0, 0.016, -0.072))
+	_append_lathe(st_brass, [
+		Vector2(0.0, 0.0),
+		Vector2(0.068, 0.0),
+		Vector2(0.072, 0.010),
+		Vector2(0.058, 0.016),
+		Vector2(0.0, 0.018),
+	], 16, lid_xf * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.072)))
+	# Brass lanyard ring at +Z (bottom near thumb).
+	var ring_pts: Array[Vector3] = []
+	for i in 13:
+		var a := float(i) / 12.0 * TAU
+		ring_pts.append(Vector3(cos(a) * 0.018, -0.004, 0.090 + sin(a) * 0.018))
+	_append_tube(st_brass, ring_pts, 0.004, 6, false)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassCase", st_brass.commit(), _make_mat(COL_BRASS, 0.25, 0.88)))
+
+	# Ivory compass face plate with raised cardinal notches.
+	var dial_mesh := _lathe_mesh([
+		Vector2(0.0, 0.004),
+		Vector2(0.058, 0.004),
+		Vector2(0.058, 0.008),
+		Vector2(0.0, 0.008),
+	], 18)
+	root.add_child(_make_mesh_node("DialFace", dial_mesh, _make_mat(COL_IVORY, 0.72, 0.02)))
+
+	# Cardinal ink markers on the dial (N/E/S/W ticks).
+	var st_ticks := SurfaceTool.new()
+	st_ticks.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in 8:
+		var a := float(i) * PI * 0.25
+		var len_t := 0.014 if (i % 2 == 0) else 0.008
+		var wid_t := 0.0045 if (i % 2 == 0) else 0.0028
+		var rad := 0.049
+		var xf := Transform3D(Basis(Vector3.UP, a), Vector3(sin(a) * rad, 0.0095, -cos(a) * rad))
+		_append_beveled_box(st_ticks, Vector3(wid_t, 0.0025, len_t), 0.0005, xf)
+	st_ticks.generate_normals()
+	root.add_child(_make_mesh_node("DialTicks", st_ticks.commit(), _make_mat(COL_BRONZE, 0.45, 0.65)))
+
+	# Live rotating `Needle` node (local -Z is the crimson North arrow!).
+	var needle := Node3D.new()
+	needle.name = "Needle"
+	needle.position = Vector3(0.0, 0.013, 0.0)
+	root.add_child(needle)
+
+	# North crimson diamond half (-Z).
+	var n_st := SurfaceTool.new()
+	n_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_diamond_needle(n_st, -0.048, 0.0, 0.0095, 0.004)
+	n_st.generate_normals()
+	needle.add_child(_make_mesh_node("NorthTip", n_st.commit(), _make_mat(COL_CRIMSON, 0.35, 0.25, COL_CRIMSON * 0.35, 0.4)))
+
+	# South gleaming gold tail (+Z) + brass center cap pin.
+	var s_st := SurfaceTool.new()
+	s_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_diamond_needle(s_st, 0.042, 0.0, 0.0085, 0.0038)
+	_append_lathe(s_st, [Vector2(0.0, -0.002), Vector2(0.0075, -0.002), Vector2(0.0075, 0.004), Vector2(0.0, 0.0055)], 10)
+	s_st.generate_normals()
+	needle.add_child(_make_mesh_node("SouthTail", s_st.commit(), _make_mat(COL_GOLD_BRIGHT, 0.24, 0.85)))
+
+	# Translucent curved glass crystal dome.
+	var glass_mesh := _lathe_mesh([
+		Vector2(0.058, 0.016),
+		Vector2(0.044, 0.022),
+		Vector2(0.022, 0.025),
+		Vector2(0.0, 0.026),
+	], 16)
+	root.add_child(_make_mesh_node("CrystalDome", glass_mesh, _make_mat(COL_CRYSTAL, 0.08, 0.1, Color.BLACK, 0.0, true)))
+	return root
+
+
+## 4. Spyglass: 3-stage telescoping brass & stitched-leather telescope (-Z axis).
+static func _build_spyglass() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Spyglass"
+	var rot_z := Basis(Vector3.RIGHT, -PI * 0.5)  # maps lathe +Y to -Z forward
+
+	# Stage 0: leather-wrapped main barrel grip.
+	var leather_mesh := _lathe_mesh([
+		Vector2(0.026, -0.08),
+		Vector2(0.030, -0.075),
+		Vector2(0.034, 0.115),
+		Vector2(0.030, 0.120),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	root.add_child(_make_mesh_node("LeatherGrip", leather_mesh, _make_mat(COL_LEATHER, 0.72, 0.06)))
+
+	# Stage 0 brass eyepiece & front collar ring.
+	var st_b0 := SurfaceTool.new()
+	st_b0.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_b0, [
+		Vector2(0.0, -0.118),
+		Vector2(0.024, -0.118),
+		Vector2(0.028, -0.106),
+		Vector2(0.024, -0.092),
+		Vector2(0.032, -0.082),
+		Vector2(0.032, -0.068),
+		Vector2(0.028, -0.068),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	_append_lathe(st_b0, [
+		Vector2(0.031, 0.105),
+		Vector2(0.038, 0.110),
+		Vector2(0.038, 0.132),
+		Vector2(0.031, 0.135),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	st_b0.generate_normals()
+	root.add_child(_make_mesh_node("BrassEyepiece", st_b0.commit(), _make_mat(COL_BRASS, 0.24, 0.88)))
+
+	# Telescoping Stages 1 & 2 inside `DrawTubes` child.
+	var draw_tubes := Node3D.new()
+	draw_tubes.name = "DrawTubes"
+	root.add_child(draw_tubes)
+
+	var st_tubes := SurfaceTool.new()
+	st_tubes.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Stage 1 mid draw tube.
+	_append_lathe(st_tubes, [
+		Vector2(0.027, 0.115),
+		Vector2(0.028, 0.255),
+		Vector2(0.033, 0.260),
+		Vector2(0.033, 0.278),
+		Vector2(0.026, 0.280),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	# Stage 2 front draw tube & flared brass objective sun-hood.
+	_append_lathe(st_tubes, [
+		Vector2(0.022, 0.268),
+		Vector2(0.024, 0.375),
+		Vector2(0.040, 0.398),
+		Vector2(0.042, 0.445),
+		Vector2(0.036, 0.445),
+		Vector2(0.034, 0.415),
+		Vector2(0.0, 0.415),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	st_tubes.generate_normals()
+	draw_tubes.add_child(_make_mesh_node("TelescopingBrass", st_tubes.commit(), _make_mat(COL_BRASS, 0.22, 0.90)))
+
+	# Deep sea-blue objective glass lens.
+	var lens_mesh := _lathe_mesh([
+		Vector2(0.0, 0.422),
+		Vector2(0.034, 0.418),
+		Vector2(0.034, 0.412),
+		Vector2(0.0, 0.412),
+	], 14, Transform3D(rot_z, Vector3.ZERO))
+	draw_tubes.add_child(_make_mesh_node("ObjectiveLens", lens_mesh, _make_mat(COL_LENS, 0.08, 0.25, Color(0.12, 0.26, 0.40), 0.25, true)))
+	return root
+
+
+## 5. Lantern: brass-caged maritime oil lantern with glowing glass flame & real OmniLight3D.
+static func _build_lantern() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Lantern"
+
+	# Grip sits at top carry handle; lantern body hangs below (-Y).
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Heavy base oil reservoir.
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.345),
+		Vector2(0.084, -0.345),
+		Vector2(0.092, -0.325),
+		Vector2(0.076, -0.292),
+		Vector2(0.068, -0.280),
+		Vector2(0.0, -0.280),
+	], 12)
+	# Tiered chimney hood above glass cage.
+	_append_lathe(st_brass, [
+		Vector2(0.0, -0.105),
+		Vector2(0.086, -0.105),
+		Vector2(0.090, -0.092),
+		Vector2(0.056, -0.055),
+		Vector2(0.044, -0.030),
+		Vector2(0.052, -0.022),
+		Vector2(0.0, -0.015),
+	], 12)
+	# Four protective cage ribs + mid guard ring.
+	for i in 4:
+		var a := float(i) * PI * 0.5 + PI * 0.25
+		var p_bot := Vector3(cos(a) * 0.078, -0.290, sin(a) * 0.078)
+		var p_mid := Vector3(cos(a) * 0.086, -0.195, sin(a) * 0.086)
+		var p_top := Vector3(cos(a) * 0.080, -0.100, sin(a) * 0.080)
+		_append_tube(st_brass, [p_bot, p_mid, p_top], 0.006, 6, true)
+	var mid_ring: Array[Vector3] = []
+	for i in 13:
+		var a := float(i) / 12.0 * TAU
+		mid_ring.append(Vector3(cos(a) * 0.085, -0.195, sin(a) * 0.085))
+	_append_tube(st_brass, mid_ring, 0.005, 6, false)
+	# Curved top carry bail handle passing through origin grip.
+	var bail_pts: Array[Vector3] = []
+	for i in 11:
+		var u := float(i) / 10.0
+		var a := lerpf(-PI * 0.5, PI * 0.5, u)
+		bail_pts.append(Vector3(sin(a) * 0.055, -0.038 + cos(a) * 0.052, 0.0))
+	_append_tube(st_brass, bail_pts, 0.007, 6, true)
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("BrassCage", st_brass.commit(), _make_mat(COL_BRASS, 0.30, 0.84)))
+
+	# Glowing faceted amber glass cylinder (`GlassCore` with unique material).
+	var glass_mesh := _lathe_mesh([
+		Vector2(0.056, -0.280),
+		Vector2(0.068, -0.235),
+		Vector2(0.070, -0.155),
+		Vector2(0.058, -0.105),
+	], 8)
+	var glass_mat := _make_mat(COL_GLASS_LIT, 0.16, 0.05, Color(1.0, 0.64, 0.20), 2.2, true)
+	root.add_child(_make_mesh_node("GlassCore", glass_mesh, glass_mat))
+
+	# Bright sculpted teardrop flame inside.
+	var flame_mesh := _lathe_mesh([
+		Vector2(0.0, -0.242),
+		Vector2(0.022, -0.228),
+		Vector2(0.018, -0.196),
+		Vector2(0.007, -0.166),
+		Vector2(0.0, -0.152),
+	], 8)
+	var flame_mat := _make_mat(COL_FLAME, 0.2, 0.0, Color(1.0, 0.82, 0.30), 4.5)
+	flame_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	root.add_child(_make_mesh_node("Flame", flame_mesh, flame_mat))
+
+	# Real warm OmniLight3D illuminating dark holds, caves, and nights!
+	var light := OmniLight3D.new()
+	light.name = "LanternLight"
+	light.position = Vector3(0.0, -0.195, 0.0)
+	light.light_color = Color(1.0, 0.72, 0.34)
+	light.light_energy = 2.4
+	light.omni_range = 10.5
+	light.omni_attenuation = 1.35
+	light.shadow_enabled = false
+	root.add_child(light)
+	return root
+
+
+## 6. Held Treasure Map: wooden-roller parchment scroll with live ImageTexture.
+static func _build_map() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Map"
+
+	# Top and bottom turned oak scroll rollers with brass finials.
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var st_brass := SurfaceTool.new()
+	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rot_x := Basis(Vector3.BACK, PI * 0.5)  # maps lathe +Y to +X
+	for ry in [-0.155, 0.155]:
+		_append_lathe(st_wood, [
+			Vector2(0.0, -0.195),
+			Vector2(0.014, -0.192),
+			Vector2(0.015, 0.192),
+			Vector2(0.0, 0.195),
+		], 10, Transform3D(rot_x, Vector3(0.0, ry, -0.006)))
+		for sx: float in [-1.0, 1.0]:
+			var fx: float = sx * 0.202
+			_append_lathe(st_brass, [
+				Vector2(0.0, -0.016),
+				Vector2(0.018, -0.010),
+				Vector2(0.020, 0.006),
+				Vector2(0.011, 0.018),
+				Vector2(0.0, 0.022),
+			], 10, Transform3D(Basis(Vector3.BACK, -sx * PI * 0.5), Vector3(fx, ry, -0.006)))
+	st_wood.generate_normals()
+	st_brass.generate_normals()
+	root.add_child(_make_mesh_node("ScrollRollers", st_wood.commit(), _make_mat(COL_OAK_DARK, 0.74, 0.04)))
+	root.add_child(_make_mesh_node("RollerFinials", st_brass.commit(), _make_mat(COL_BRASS, 0.28, 0.85)))
+
+	# Gently bowed front parchment sheet (`MapSurface`) facing +Z with clean [0..1] UVs.
+	var front_mesh := _build_parchment_sheet_mesh(0.35, 0.30, 0.016, false)
+	var default_tex := MapPainter.render_treasure_map("Cutlass Cay", PackedVector2Array(), Vector2(26.0, -18.0), 120.0)
+	var front_mat := _make_mat(Color.WHITE, 0.78, 0.0)
+	front_mat.albedo_texture = default_tex
+	root.add_child(_make_mesh_node("MapSurface", front_mesh, front_mat))
+
+	# Plain aged parchment backing facing -Z so third-person onlookers see a real scroll!
+	var back_mesh := _build_parchment_sheet_mesh(0.35, 0.30, 0.016, true)
+	root.add_child(_make_mesh_node("MapBack", back_mesh, _make_mat(COL_PARCHMENT_BACK, 0.85, 0.0)))
+	return root
+
+
+## 7. Shovel: heavy timber-handled iron spade with beveled curved blade.
+static func _build_shovel() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Shovel"
+
+	# Timber shaft + chunky D-grip handle at top (+Y), iron blade down (-Y) or up (+Y).
+	# Held upright with spade blade extending upward/forward (+Y) for iconic first-person silhouette!
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_wood, [
+		Vector2(0.0, -0.30),
+		Vector2(0.018, -0.295),
+		Vector2(0.021, 0.0),
+		Vector2(0.019, 0.38),
+		Vector2(0.0, 0.39),
+	], 10)
+	# D-grip pommel crossbar at lower end (-Y).
+	_append_beveled_box(st_wood, Vector3(0.115, 0.024, 0.026), 0.005, Transform3D(Basis.IDENTITY, Vector3(0.0, -0.375, 0.0)))
+	_append_beveled_box(st_wood, Vector3(0.020, 0.090, 0.022), 0.004, Transform3D(Basis.IDENTITY, Vector3(-0.048, -0.335, 0.0)))
+	_append_beveled_box(st_wood, Vector3(0.020, 0.090, 0.022), 0.004, Transform3D(Basis.IDENTITY, Vector3(0.048, -0.335, 0.0)))
+	st_wood.generate_normals()
+	root.add_child(_make_mesh_node("TimberHandle", st_wood.commit(), _make_mat(COL_OAK_WARM, 0.80, 0.03)))
+
+	# Riveted iron socket ferrule + curved beveled iron spade blade.
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_iron, [
+		Vector2(0.020, 0.28),
+		Vector2(0.026, 0.29),
+		Vector2(0.028, 0.42),
+		Vector2(0.022, 0.44),
+	], 10)
+	# Slightly cupped curved iron spade blade lofted from shoulder (y=0.41) to pointed tip (y=0.72).
+	var spade_rings: Array = []
+	var steps := 7
+	for i in range(steps + 1):
+		var t := float(i) / float(steps)
+		var y := lerpf(0.41, 0.73, t)
+		var hw := lerpf(0.115, 0.012, pow(t, 1.75))
+		var thick := lerpf(0.012, 0.004, t)
+		var cup := 0.020 * (1.0 - t * 0.6)
+		var z_off := -0.014 * sin(t * PI * 0.7)
+		spade_rings.append([
+			Vector3(-hw, y, z_off - cup),
+			Vector3(0.0, y, z_off + thick * 0.6),
+			Vector3(hw, y, z_off - cup),
+			Vector3(hw * 0.92, y, z_off - cup + thick),
+			Vector3(0.0, y, z_off + thick * 1.6),
+			Vector3(-hw * 0.92, y, z_off - cup + thick),
+		])
+	_append_loft(st_iron, spade_rings, true)
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("SpadeBlade", st_iron.commit(), _make_mat(COL_IRON, 0.44, 0.76)))
+	return root
+
+
+## 8. Bucket: iron-banded oak-stave bucket with toggleable `WaterFill` disc.
+static func _build_bucket() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Bucket"
+
+	# Grip sits at the curved bail handle (0,0,0); bucket hangs directly below (-Y).
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Outer & inner wooden stave shell (thick visible rim!).
+	_append_lathe(st_wood, [
+		Vector2(0.0, -0.355),
+		Vector2(0.095, -0.355),
+		Vector2(0.102, -0.340),
+		Vector2(0.136, -0.115),
+		Vector2(0.120, -0.115),
+		Vector2(0.088, -0.335),
+		Vector2(0.0, -0.335),
+	], 12)
+	# Wooden handle grip sleeve centered around origin.
+	_append_lathe(st_wood, [
+		Vector2(0.0, -0.044),
+		Vector2(0.014, -0.040),
+		Vector2(0.016, 0.0),
+		Vector2(0.014, 0.040),
+		Vector2(0.0, 0.044),
+	], 8, Transform3D(Basis(Vector3.BACK, PI * 0.5), Vector3.ZERO))
+	st_wood.generate_normals()
+	root.add_child(_make_mesh_node("OakStaves", st_wood.commit(), _make_mat(COL_OAK_WARM, 0.82, 0.03)))
+
+	# Two forged iron barrel hoops + curved iron bail wire.
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_iron, [
+		Vector2(0.103, -0.318),
+		Vector2(0.110, -0.315),
+		Vector2(0.114, -0.285),
+		Vector2(0.108, -0.282),
+	], 12)
+	_append_lathe(st_iron, [
+		Vector2(0.127, -0.175),
+		Vector2(0.136, -0.172),
+		Vector2(0.140, -0.140),
+		Vector2(0.133, -0.137),
+	], 12)
+	# Curved bail arch from rim lugs up through origin grip.
+	var bail_pts: Array[Vector3] = []
+	for i in 13:
+		var u := float(i) / 12.0
+		var a := lerpf(-PI * 0.5, PI * 0.5, u)
+		bail_pts.append(Vector3(sin(a) * 0.138, -0.128 + cos(a) * 0.128, 0.0))
+	_append_tube(st_iron, bail_pts, 0.0055, 6, true)
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("IronBands", st_iron.commit(), _make_mat(COL_IRON, 0.46, 0.74)))
+
+	# Toggleable `WaterFill` disc inside bucket near top rim (hidden when empty).
+	var water_mesh := _lathe_mesh([
+		Vector2(0.0, -0.148),
+		Vector2(0.118, -0.148),
+		Vector2(0.118, -0.142),
+		Vector2(0.0, -0.140),
+	], 12)
+	var water_mi := _make_mesh_node("WaterFill", water_mesh, _make_mat(COL_WATER, 0.12, 0.08, Color(0.06, 0.24, 0.24), 0.35, true))
+	water_mi.visible = false
+	root.add_child(water_mi)
+	return root
+
+
+## 9. Planks: thick weathered oak repair planks with forged iron nails & rope lashing.
+static func _build_planks() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Planks"
+
+	var st_wood := SurfaceTool.new()
+	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Two staggered chunky beveled oak planks.
+	_append_beveled_box(st_wood, Vector3(0.155, 0.54, 0.030), 0.006, Transform3D(Basis(Vector3.UP, 0.04), Vector3(0.0, 0.10, 0.0)))
+	_append_beveled_box(st_wood, Vector3(0.142, 0.48, 0.028), 0.006, Transform3D(Basis(Vector3.UP, -0.06) * Basis(Vector3.BACK, 0.04), Vector3(0.012, 0.08, -0.032)))
+	st_wood.generate_normals()
+	root.add_child(_make_mesh_node("OakPlanks", st_wood.commit(), _make_mat(COL_OAK_LIGHT, 0.84, 0.02)))
+
+	# Iron nail heads & protruding nail shanks along ends of the front plank.
+	var st_iron := SurfaceTool.new()
+	st_iron.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nail_coords := [
+		Vector3(-0.045, 0.31, 0.016),
+		Vector3(0.042, 0.32, 0.016),
+		Vector3(-0.042, -0.11, 0.016),
+		Vector3(0.044, -0.10, 0.016),
+	]
+	for np: Vector3 in nail_coords:
+		_append_lathe(st_iron, [
+			Vector2(0.0, -0.004),
+			Vector2(0.0045, -0.004),
+			Vector2(0.0045, 0.010),
+			Vector2(0.010, 0.012),
+			Vector2(0.010, 0.016),
+			Vector2(0.0, 0.017),
+		], 6, Transform3D(Basis(Vector3.RIGHT, PI * 0.5), np))
+	st_iron.generate_normals()
+	root.add_child(_make_mesh_node("IronNails", st_iron.commit(), _make_mat(COL_IRON, 0.42, 0.78)))
+
+	# Hemp rope lashing band wrapping around the grip center.
+	var st_rope := SurfaceTool.new()
+	st_rope.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ry in [-0.014, 0.0, 0.014]:
+		_append_beveled_box(st_rope, Vector3(0.172, 0.011, 0.072), 0.004, Transform3D(Basis.IDENTITY, Vector3(0.005, ry, -0.015)))
+	st_rope.generate_normals()
+	root.add_child(_make_mesh_node("RopeLashing", st_rope.commit(), _make_mat(COL_ROPE, 0.90, 0.0)))
+	return root
+
+
+## 10. Tankard: banded pewter/oak grog mug with chunky handle and frothy foam top.
+static func _build_tankard() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Tankard"
+
+	# Tapered staved oak barrel mug centered cleanly in front of handle grip.
+	var mug_xform := Transform3D(Basis.IDENTITY, Vector3(0.0, -0.02, -0.095))
+	var mug_mesh := _lathe_mesh([
+		Vector2(0.0, -0.088),
+		Vector2(0.074, -0.088),
+		Vector2(0.080, -0.060),
+		Vector2(0.070, 0.088),
+		Vector2(0.056, 0.088),
+		Vector2(0.058, 0.055),
+		Vector2(0.0, 0.055),
+	], 12, mug_xform)
+	root.add_child(_make_mesh_node("OakMug", mug_mesh, _make_mat(COL_OAK_DARK, 0.74, 0.05)))
+
+	# Banded pewter/brass hoops and curved sturdy grip handle centered at origin.
+	var st_metal := SurfaceTool.new()
+	st_metal.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st_metal, [
+		Vector2(0.076, -0.072),
+		Vector2(0.084, -0.068),
+		Vector2(0.084, -0.044),
+		Vector2(0.077, -0.040),
+	], 12, mug_xform)
+	_append_lathe(st_metal, [
+		Vector2(0.070, 0.052),
+		Vector2(0.077, 0.056),
+		Vector2(0.076, 0.082),
+		Vector2(0.068, 0.086),
+	], 12, mug_xform)
+	_append_tube(st_metal, [
+		Vector3(0.0, 0.048, -0.032),
+		Vector3(0.0, 0.052, 0.008),
+		Vector3(0.0, 0.000, 0.018),
+		Vector3(0.0, -0.052, 0.006),
+		Vector3(0.0, -0.052, -0.028),
+	], 0.011, 8, true)
+	st_metal.generate_normals()
+	root.add_child(_make_mesh_node("PewterBands", st_metal.commit(), _make_mat(COL_PEWTER, 0.34, 0.78)))
+
+	# Dark amber grog pool + overflowing frothy cream foam head (`FoamTop`).
+	var grog_mesh := _lathe_mesh([Vector2(0.0, 0.060), Vector2(0.058, 0.060), Vector2(0.058, 0.064), Vector2(0.0, 0.064)], 10, mug_xform)
+	root.add_child(_make_mesh_node("GrogLiquid", grog_mesh, _make_mat(COL_GROG, 0.16, 0.05)))
+
+	var st_foam := SurfaceTool.new()
+	st_foam.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var puffs := [
+		[Vector3(0.0, 0.078, -0.095), 0.052, 0.030],
+		[Vector3(-0.034, 0.072, -0.105), 0.034, 0.024],
+		[Vector3(0.032, 0.074, -0.085), 0.032, 0.024],
+		[Vector3(0.008, 0.086, -0.112), 0.030, 0.022],
+		[Vector3(-0.044, 0.048, -0.062), 0.018, 0.036],  # frothy drip down the rim!
+	]
+	for pf in puffs:
+		var c: Vector3 = pf[0]
+		var r: float = pf[1]
+		var h: float = pf[2]
+		_append_lathe(st_foam, [
+			Vector2(0.0, -h * 0.5),
+			Vector2(r * 0.85, -h * 0.25),
+			Vector2(r, 0.05 * h),
+			Vector2(r * 0.72, h * 0.55),
+			Vector2(0.0, h * 0.85),
+		], 8, Transform3D(Basis.IDENTITY, c))
+	st_foam.generate_normals()
+	root.add_child(_make_mesh_node("FoamTop", st_foam.commit(), _make_mat(COL_FOAM, 0.86, 0.0)))
+	return root
+
+
+## 11. Instrument: hexagonal mahogany & brass pirate concertina accordion!
+static func _build_instrument() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Tool_Instrument"
+
+	# Pleated zig-zag hexagonal bellows centered at origin, expanding along X.
+	var rot_x := Basis(Vector3.BACK, PI * 0.5)
+	var b_prof: Array[Vector2] = []
+	var pleats := 5
+	for i in range(pleats * 2 + 1):
+		var u := float(i) / float(pleats * 2)
+		var x_pos := lerpf(-0.085, 0.085, u)
+		var r := 0.088 if (i % 2 == 1) else 0.068
+		b_prof.append(Vector2(r, x_pos))
+	var bellows_mesh := _lathe_mesh(b_prof, 6, Transform3D(rot_x, Vector3.ZERO))
+	root.add_child(_make_mesh_node("Bellows", bellows_mesh, _make_mat(COL_BELLOWS_RED, 0.74, 0.04)))
+
+	# Left & Right hexagonal walnut endplates with brass grill bezels & ivory buttons.
+	for side_pair in [["LeftEnd", -1.0], ["RightEnd", 1.0]]:
+		var end_name: String = side_pair[0]
+		var sx: float = side_pair[1]
+		var end_node := Node3D.new()
+		end_node.name = end_name
+		end_node.position = Vector3(sx * 0.085, 0.0, 0.0)
+		root.add_child(end_node)
+
+		var end_rot := Basis(Vector3.BACK, -sx * PI * 0.5)
+		var wood_plate := _lathe_mesh([
+			Vector2(0.0, 0.0),
+			Vector2(0.098, 0.0),
+			Vector2(0.104, 0.014),
+			Vector2(0.096, 0.028),
+			Vector2(0.0, 0.028),
+		], 6, Transform3D(end_rot, Vector3.ZERO))
+		end_node.add_child(_make_mesh_node("WoodPlate", wood_plate, _make_mat(COL_WALNUT, 0.58, 0.05)))
+
+		# Ornate brass sound-plate trim & leather strap bracket.
+		var brass_trim := _lathe_mesh([
+			Vector2(0.040, 0.027),
+			Vector2(0.082, 0.027),
+			Vector2(0.082, 0.032),
+			Vector2(0.040, 0.032),
+		], 6, Transform3D(end_rot, Vector3.ZERO))
+		end_node.add_child(_make_mesh_node("BrassInlay", brass_trim, _make_mat(COL_BRASS, 0.25, 0.86)))
+
+		# Cluster of pearl-ivory concertina buttons.
+		var st_btn := SurfaceTool.new()
+		st_btn.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for bi in 6:
+			var a := float(bi) / 6.0 * TAU
+			var pos := Vector3(sx * 0.031, cos(a) * 0.042, sin(a) * 0.042)
+			_append_lathe(st_btn, [
+				Vector2(0.0, 0.0),
+				Vector2(0.008, 0.0),
+				Vector2(0.008, 0.010),
+				Vector2(0.0, 0.012),
+			], 6, Transform3D(end_rot, pos))
+		st_btn.generate_normals()
+		end_node.add_child(_make_mesh_node("Buttons", st_btn.commit(), _make_mat(COL_IVORY, 0.45, 0.05)))
+	return root
+
+
+# ==============================================================================
+# Reusable SurfaceTool geometry builders
+# ==============================================================================
+
+static func _make_mat(
+	color: Color,
+	roughness: float = 0.6,
+	metallic: float = 0.0,
+	emission: Color = Color.BLACK,
+	emission_energy: float = 0.0,
+	transparent: bool = false
+) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.roughness = roughness
+	m.metallic = metallic
+	if emission_energy > 0.001:
+		m.emission_enabled = true
+		m.emission = emission
+		m.emission_energy_multiplier = emission_energy
+	if transparent or color.a < 0.995:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return m
+
+
+static func _make_mesh_node(node_name: String, mesh: Mesh, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = mesh
+	mi.material_override = mat
+	return mi
+
+
+static func _add_quad(st: SurfaceTool, top_l: Vector3, top_r: Vector3, bot_r: Vector3, bot_l: Vector3,
+		uv_tl: Vector2 = Vector2(0, 0), uv_tr: Vector2 = Vector2(1, 0),
+		uv_br: Vector2 = Vector2(1, 1), uv_bl: Vector2 = Vector2(0, 1)) -> void:
+	# Clockwise winding when viewed from front so Godot generates outward normals.
+	st.set_uv(uv_tl); st.add_vertex(top_l)
+	st.set_uv(uv_tr); st.add_vertex(top_r)
+	st.set_uv(uv_br); st.add_vertex(bot_r)
+	st.set_uv(uv_tl); st.add_vertex(top_l)
+	st.set_uv(uv_br); st.add_vertex(bot_r)
+	st.set_uv(uv_bl); st.add_vertex(bot_l)
+
+
+static func _lathe_mesh(profile: Array[Vector2], segments: int, xform: Transform3D = Transform3D.IDENTITY) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_lathe(st, profile, segments, xform)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_lathe(st: SurfaceTool, profile: Array[Vector2], segments: int, xform: Transform3D = Transform3D.IDENTITY) -> void:
+	var segs := maxi(segments, 4)
+	var rows := profile.size()
+	if rows < 2:
+		return
+	for j in range(rows - 1):
+		var r0 := profile[j].x
+		var y0 := profile[j].y
+		var r1 := profile[j + 1].x
+		var y1 := profile[j + 1].y
+		var v0 := float(j) / float(rows - 1)
+		var v1 := float(j + 1) / float(rows - 1)
+		for i in segs:
+			var a0 := float(i) / float(segs) * TAU
+			var a1 := float(i + 1) / float(segs) * TAU
+			var p00 := xform * Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var p01 := xform * Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var p10 := xform * Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var p11 := xform * Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			var u0 := float(i) / float(segs)
+			var u1 := float(i + 1) / float(segs)
+			if r0 <= 0.0001 and r1 <= 0.0001:
+				continue
+			if r0 <= 0.0001:
+				st.set_uv(Vector2(u1, v1)); st.add_vertex(p11)
+				st.set_uv(Vector2(u0, v1)); st.add_vertex(p10)
+				st.set_uv(Vector2(u0, v0)); st.add_vertex(p00)
+			elif r1 <= 0.0001:
+				st.set_uv(Vector2(u0, v1)); st.add_vertex(p10)
+				st.set_uv(Vector2(u0, v0)); st.add_vertex(p00)
+				st.set_uv(Vector2(u1, v0)); st.add_vertex(p01)
+			else:
+				_add_quad(st, p11, p10, p00, p01,
+					Vector2(u1, v1), Vector2(u0, v1), Vector2(u0, v0), Vector2(u1, v0))
+
+
+static func _loft_mesh(rings: Array, close_caps: bool = true) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_append_loft(st, rings, close_caps)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_loft(st: SurfaceTool, rings: Array, close_caps: bool = true) -> void:
+	if rings.size() < 2:
+		return
+	var ring_len := (rings[0] as Array).size()
+	if ring_len < 3:
+		return
+	for j in range(rings.size() - 1):
+		var r0: Array = rings[j]
+		var r1: Array = rings[j + 1]
+		var v0 := float(j) / float(rings.size() - 1)
+		var v1 := float(j + 1) / float(rings.size() - 1)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			var u0 := float(i) / float(ring_len)
+			var u1 := float(i + 1) / float(ring_len)
+			_add_quad(st, r1[ni], r1[i], r0[i], r0[ni],
+				Vector2(u1, v1), Vector2(u0, v1), Vector2(u0, v0), Vector2(u1, v0))
+	if close_caps:
+		var first: Array = rings[0]
+		var c0 := Vector3.ZERO
+		for p: Vector3 in first:
+			c0 += p
+		c0 /= float(ring_len)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c0)
+			st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(first[i])
+			st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(first[ni])
+		var last: Array = rings[rings.size() - 1]
+		var c1 := Vector3.ZERO
+		for p: Vector3 in last:
+			c1 += p
+		c1 /= float(ring_len)
+		for i in ring_len:
+			var ni := (i + 1) % ring_len
+			st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c1)
+			st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni])
+			st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(last[i])
+
+
+static func _append_tube(st: SurfaceTool, points: Array[Vector3], radius: float, segs: int = 8, close_caps: bool = true) -> void:
+	if points.size() < 2:
+		return
+	var rings: Array = []
+	for i in points.size():
+		var p := points[i]
+		var tang: Vector3
+		if i == 0:
+			tang = (points[1] - p).normalized()
+		elif i == points.size() - 1:
+			tang = (p - points[i - 1]).normalized()
+		else:
+			tang = (points[i + 1] - points[i - 1]).normalized()
+		if tang.length_squared() < 0.0001:
+			tang = Vector3.UP
+		var ref := Vector3.RIGHT if absf(tang.dot(Vector3.RIGHT)) < 0.85 else Vector3.UP
+		var right := tang.cross(ref).normalized()
+		var up := right.cross(tang).normalized()
+		var ring: Array = []
+		for k in segs:
+			var a := float(k) / float(segs) * TAU
+			ring.append(p + (right * cos(a) + up * sin(a)) * radius)
+		rings.append(ring)
+	_append_loft(st, rings, close_caps)
+
+
+static func _append_beveled_box(st: SurfaceTool, size: Vector3, bevel: float, xform: Transform3D = Transform3D.IDENTITY) -> void:
+	var hx := size.x * 0.5
+	var hy := size.y * 0.5
+	var hz := size.z * 0.5
+	var b := minf(bevel, minf(hx, minf(hy, hz)) * 0.42)
+	var ix := maxf(hx - b, 0.0001)
+	var iy := maxf(hy - b, 0.0001)
+	var iz := maxf(hz - b, 0.0001)
+	# 4-ring chamfered loft along Y (bottom cap, lower bevel, upper bevel, top cap).
+	var ys: PackedFloat32Array = PackedFloat32Array([-hy, -iy, iy, hy])
+	var xs: PackedFloat32Array = PackedFloat32Array([ix, hx, hx, ix])
+	var zs: PackedFloat32Array = PackedFloat32Array([iz, hz, hz, iz])
+	var rings: Array = []
+	for k in 4:
+		var y: float = ys[k]
+		var rx: float = xs[k]
+		var rz: float = zs[k]
+		var bx: float = maxf(rx - b * 0.55, rx * 0.72) if (k == 1 or k == 2) else rx
+		var bz: float = maxf(rz - b * 0.55, rz * 0.72) if (k == 1 or k == 2) else rz
+		var ring: Array = [
+			xform * Vector3(bx, y, -rz),
+			xform * Vector3(rx, y, -bz),
+			xform * Vector3(rx, y, bz),
+			xform * Vector3(bx, y, rz),
+			xform * Vector3(-bx, y, rz),
+			xform * Vector3(-rx, y, bz),
+			xform * Vector3(-rx, y, -bz),
+			xform * Vector3(-bx, y, -rz),
+		]
+		rings.append(ring)
+	_append_loft(st, rings, true)
+
+
+static func _append_diamond_needle(st: SurfaceTool, tip_z: float, base_z: float, half_w: float, half_h: float) -> void:
+	var tip := Vector3(0.0, 0.0, tip_z)
+	var top := Vector3(0.0, half_h, base_z)
+	var bot := Vector3(0.0, -half_h, base_z)
+	var right := Vector3(half_w, 0.0, base_z)
+	var left := Vector3(-half_w, 0.0, base_z)
+	var uv := Vector2(0.5, 0.5)
+	if tip_z < base_z:
+		# Pointing along -Z: CW from outside.
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(right); st.set_uv(uv); st.add_vertex(top)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(left)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(left); st.set_uv(uv); st.add_vertex(bot)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(bot); st.set_uv(uv); st.add_vertex(right)
+		st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(right); st.set_uv(uv); st.add_vertex(bot)
+		st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(bot); st.set_uv(uv); st.add_vertex(left)
+	else:
+		# Pointing along +Z.
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(right)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(left); st.set_uv(uv); st.add_vertex(top)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(bot); st.set_uv(uv); st.add_vertex(left)
+		st.set_uv(uv); st.add_vertex(tip); st.set_uv(uv); st.add_vertex(right); st.set_uv(uv); st.add_vertex(bot)
+		st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(bot); st.set_uv(uv); st.add_vertex(right)
+		st.set_uv(uv); st.add_vertex(top); st.set_uv(uv); st.add_vertex(left); st.set_uv(uv); st.add_vertex(bot)
+
+
+static func _build_parchment_sheet_mesh(width: float, height: float, bow: float, back_face: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var cols := 8
+	var rows := 6
+	var z_bias := -0.002 if back_face else 0.002
+	for r in rows:
+		var v0 := float(r) / float(rows)
+		var v1 := float(r + 1) / float(rows)
+		var y0 := lerpf(height * 0.5, -height * 0.5, v0)
+		var y1 := lerpf(height * 0.5, -height * 0.5, v1)
+		var z_y0 := sin(v0 * PI) * bow * 0.55
+		var z_y1 := sin(v1 * PI) * bow * 0.55
+		for c in cols:
+			var u0 := float(c) / float(cols)
+			var u1 := float(c + 1) / float(cols)
+			var x0 := lerpf(-width * 0.5, width * 0.5, u0)
+			var x1 := lerpf(-width * 0.5, width * 0.5, u1)
+			var z_x0 := cos((u0 - 0.5) * PI) * bow * 0.45
+			var z_x1 := cos((u1 - 0.5) * PI) * bow * 0.45
+			var top_l := Vector3(x0, y0, z_y0 + z_x0 + z_bias)
+			var top_r := Vector3(x1, y0, z_y0 + z_x1 + z_bias)
+			var bot_r := Vector3(x1, y1, z_y1 + z_x1 + z_bias)
+			var bot_l := Vector3(x0, y1, z_y1 + z_x0 + z_bias)
+			if back_face:
+				_add_quad(st, top_r, top_l, bot_l, bot_r,
+					Vector2(u1, v0), Vector2(u0, v0), Vector2(u0, v1), Vector2(u1, v1))
+			else:
+				_add_quad(st, top_l, top_r, bot_r, bot_l,
+					Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1))
+	st.generate_normals()
+	return st.commit()

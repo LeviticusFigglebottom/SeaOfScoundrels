@@ -1,0 +1,1013 @@
+class_name Inventory
+extends Node
+## Held tool & weapon inventory, first-person viewmodel rig, third-person hand
+## attachment, and tactile diegetic tool mechanics. Attach as a child of a `Pawn`.
+##
+## Works seamlessly alongside `PlayerController`, `CombatComponent`,
+## `CharacterVisual`, `AnimationDriver`, `Ship`, `DigSite`, and `Audio`.
+
+signal item_equipped(item_id: StringName)
+signal spyglass_zoom_changed(amount: float)
+signal lantern_toggled(on: bool)
+signal tipsy_changed(amount: float)
+signal sighting_updated(label: String, distance_m: float)
+signal bucket_changed(full: bool)
+signal shanty_playing_changed(playing: bool)
+
+const DEFAULT_SLOTS: Array[StringName] = [
+	&"cutlass",
+	&"pistol",
+	&"compass",
+	&"spyglass",
+	&"lantern",
+	&"map",
+	&"shovel",
+	&"bucket",
+	&"planks",
+	&"tankard",
+	&"instrument",
+]
+
+const BASE_FOV := 80.0
+const SPYGLASS_FOV := 18.0
+const PISTOL_ADS_FOV := 62.0
+const HEAVY_HOLD_TIME := 0.30
+const SHOVEL_REACH := 2.6
+const PLANK_REACH := 3.2
+const BAIL_AMOUNT := 0.16
+const GROG_HEAL := 15.0
+
+## First-person rest & secondary-raised poses relative to Camera3D:
+## [rest_pos, rest_rot_deg, raise_pos, raise_rot_deg, scale].
+const FP_POSES := {
+	&"cutlass": [Vector3(0.32, -0.34, -0.52), Vector3(-16.0, 14.0, 12.0), Vector3(0.08, -0.18, -0.44), Vector3(-14.0, 62.0, 68.0), 0.85],
+	&"pistol": [Vector3(0.28, -0.26, -0.46), Vector3(2.0, 4.0, 0.0), Vector3(0.0, -0.145, -0.40), Vector3(0.0, 0.0, 0.0), 0.92],
+	&"compass": [Vector3(0.24, -0.24, -0.40), Vector3(26.0, -14.0, -8.0), Vector3(0.0, -0.10, -0.26), Vector3(58.0, 0.0, 0.0), 1.0],
+	&"spyglass": [Vector3(0.26, -0.24, -0.44), Vector3(8.0, 16.0, -6.0), Vector3(0.0, -0.02, -0.18), Vector3(0.0, 0.0, 0.0), 0.95],
+	&"lantern": [Vector3(0.34, 0.04, -0.48), Vector3(4.0, -10.0, -4.0), Vector3(0.18, 0.22, -0.56), Vector3(-8.0, -6.0, 2.0), 0.92],
+	&"map": [Vector3(0.26, -0.30, -0.46), Vector3(-18.0, -18.0, 6.0), Vector3(0.0, -0.04, -0.36), Vector3(-4.0, 0.0, 0.0), 1.0],
+	&"shovel": [Vector3(0.34, -0.38, -0.56), Vector3(-24.0, 12.0, 10.0), Vector3(0.22, -0.24, -0.50), Vector3(-34.0, 18.0, 16.0), 0.85],
+	&"bucket": [Vector3(0.32, 0.02, -0.48), Vector3(8.0, -18.0, 6.0), Vector3(0.14, 0.06, -0.44), Vector3(20.0, -8.0, 0.0), 0.88],
+	&"planks": [Vector3(0.30, -0.30, -0.50), Vector3(-12.0, -24.0, 10.0), Vector3(0.08, -0.16, -0.44), Vector3(-6.0, -10.0, 4.0), 0.86],
+	&"tankard": [Vector3(0.28, -0.22, -0.40), Vector3(6.0, -14.0, 4.0), Vector3(0.06, -0.08, -0.26), Vector3(26.0, -8.0, -10.0), 0.95],
+	&"instrument": [Vector3(0.0, -0.26, -0.42), Vector3(14.0, 0.0, 0.0), Vector3(0.0, -0.16, -0.36), Vector3(6.0, 0.0, 0.0), 0.95],
+}
+
+## Ordered tool/weapon slots in the player's belt.
+var slots: Array[StringName] = DEFAULT_SLOTS.duplicate()
+var active_index: int = 0
+var active_item: StringName = &"cutlass"
+
+## Read keyboard/mouse input directly. Set false for AI or scripted showcases/tests.
+@export var input_enabled: bool = true
+
+var pawn: Pawn = null
+var player_controller: PlayerController = null
+var combat: CombatComponent = null
+var visual: CharacterVisual = null
+var anim_driver: AnimationDriver = null
+
+var viewmodel_root: Node3D = null
+var fp_tool_node: Node3D = null
+var tp_mount: Node3D = null
+var tp_tool_node: Node3D = null
+
+## Live tool states.
+var lantern_lit: bool = true
+var bucket_full: bool = false
+var spyglass_zoom: float = 0.0
+var spyglass_sighting: String = ""
+var spyglass_sighting_dist: float = 0.0
+var tipsy: float = 0.0
+var playing_shanty: bool = false
+
+## Cached held treasure map data & rendered ImageTexture.
+var map_island_name: String = "Cutlass Cay"
+var map_contour: PackedVector2Array = PackedVector2Array()
+var map_dig_local: Vector2 = Vector2(26.0, -18.0)
+var map_island_radius: float = 120.0
+var treasure_map_texture: ImageTexture = null
+
+# Internal animation & input timers
+var _secondary_held: bool = false
+var _primary_was_down: bool = false
+var _primary_hold_time: float = 0.0
+var _heavy_fired_this_hold: bool = false
+var _raise_blend: float = 0.0
+var _equip_dip: float = 0.0
+var _swing_timer: float = 0.0
+var _swing_dur: float = 0.35
+var _swing_kind: StringName = &""
+var _bob_phase: float = 0.0
+var _clock: float = 0.0
+var _needle_angle: float = 0.0
+var _needle_vel: float = 0.0
+var _use_cooldown: float = 0.0
+var _burp_timer: float = -1.0
+var _sighting_timer: float = 0.0
+var _was_zooming_spyglass: bool = false
+var _started_shanty: bool = false
+var _rng := RandomNumberGenerator.new()
+
+
+func _init() -> void:
+	# Run after PlayerController._process (0) so camera FOV and subtle tipsy sway layer cleanly.
+	process_priority = 10
+
+
+func _ready() -> void:
+	_rng.randomize()
+	_discover_siblings()
+	if treasure_map_texture == null:
+		treasure_map_texture = MapPainter.render_treasure_map(
+			map_island_name, map_contour, map_dig_local, map_island_radius)
+	equip(slots[active_index] if not slots.is_empty() else &"cutlass", true)
+
+
+func _exit_tree() -> void:
+	if playing_shanty:
+		set_playing_shanty(false)
+
+
+## Explicitly bind references if constructing dynamically before tree entry.
+func bind(
+	p_pawn: Pawn,
+	p_controller: PlayerController = null,
+	p_combat: CombatComponent = null,
+	p_visual: CharacterVisual = null
+) -> void:
+	pawn = p_pawn
+	player_controller = p_controller
+	combat = p_combat
+	visual = p_visual
+	_connect_bindings()
+	_ensure_mounts()
+	_rebuild_tool_meshes()
+
+
+func _discover_siblings() -> void:
+	if pawn == null:
+		pawn = get_parent() as Pawn
+	if pawn == null:
+		return
+	if player_controller == null:
+		for c in pawn.get_children():
+			if c is PlayerController:
+				player_controller = c as PlayerController
+				break
+	if combat == null:
+		for c in pawn.get_children():
+			if c is CombatComponent:
+				combat = c as CombatComponent
+				break
+	if visual == null:
+		var v := pawn.get_node_or_null(^"Visual/CharacterVisual") as CharacterVisual
+		if v == null:
+			var found := pawn.find_children("*", "CharacterVisual", true, false)
+			if not found.is_empty():
+				v = found[0] as CharacterVisual
+		visual = v
+	if anim_driver == null:
+		anim_driver = pawn.get_node_or_null(^"Visual/AnimationDriver") as AnimationDriver
+		if anim_driver == null:
+			anim_driver = pawn.get_node_or_null(^"AnimationDriver") as AnimationDriver
+	_connect_bindings()
+	_ensure_mounts()
+
+
+func _connect_bindings() -> void:
+	if combat != null and not combat.attack_started.is_connected(_on_combat_attack_started):
+		combat.attack_started.connect(_on_combat_attack_started)
+	if visual != null and not visual.rig_changed.is_connected(_on_visual_rig_changed):
+		visual.rig_changed.connect(_on_visual_rig_changed)
+
+
+func _on_visual_rig_changed(_skel: Skeleton3D) -> void:
+	tp_mount = null
+	_ensure_mounts()
+	_rebuild_tool_meshes()
+
+
+func _ensure_mounts() -> void:
+	if player_controller != null and player_controller.camera != null:
+		if viewmodel_root == null or not is_instance_valid(viewmodel_root):
+			viewmodel_root = player_controller.camera.get_node_or_null(^"ViewmodelRig") as Node3D
+			if viewmodel_root == null:
+				viewmodel_root = Node3D.new()
+				viewmodel_root.name = "ViewmodelRig"
+				player_controller.camera.add_child(viewmodel_root)
+	if visual != null and visual.hand_right != null:
+		if tp_mount == null or not is_instance_valid(tp_mount):
+			tp_mount = visual.hand_right.get_node_or_null(^"ToolMount") as Node3D
+			if tp_mount == null:
+				tp_mount = Node3D.new()
+				tp_mount.name = "ToolMount"
+				# Match CharacterVisual Hand_R palm orientation (+Y along fingers, -X forward).
+				tp_mount.position = Vector3(0.0, 0.075, -0.015)
+				tp_mount.rotation_degrees = Vector3(0.0, 0.0, -82.0)
+				visual.hand_right.add_child(tp_mount)
+
+
+# ==============================================================================
+# Slot selection & equipment
+# ==============================================================================
+
+## Equip a specific tool by ID (returns true if valid and equipped).
+func equip(item_id: StringName, silent: bool = false) -> bool:
+	var idx := slots.find(item_id)
+	if idx < 0:
+		if ToolMeshes.ALL_TOOLS.has(item_id):
+			slots.append(item_id)
+			idx = slots.size() - 1
+		else:
+			return false
+
+	var changed := (item_id != active_item) or (fp_tool_node == null and tp_tool_node == null)
+	if playing_shanty and item_id != &"instrument":
+		set_playing_shanty(false)
+	if active_item == &"cutlass" and item_id != &"cutlass" and combat != null and combat.is_blocking:
+		combat.set_blocking(false)
+
+	active_index = idx
+	active_item = item_id
+	_equip_dip = 1.0
+	_primary_hold_time = 0.0
+	_heavy_fired_this_hold = false
+	if item_id != &"spyglass" and spyglass_zoom > 0.001:
+		_set_spyglass_zoom(0.0)
+		_was_zooming_spyglass = false
+
+	_discover_siblings()
+	if (item_id == &"cutlass" or item_id == &"pistol") and combat != null:
+		combat.equip_weapon(item_id)
+
+	if changed:
+		_rebuild_tool_meshes()
+		if not silent:
+			Audio.play_sfx(&"ui_tick", Vector3.INF, -5.0, 0.06)
+	item_equipped.emit(active_item)
+	return true
+
+
+## Cycle forward to the next tool in `slots`.
+func next_item() -> StringName:
+	if slots.is_empty():
+		return active_item
+	var next_idx := (active_index + 1) % slots.size()
+	equip(slots[next_idx])
+	return active_item
+
+
+## Cycle backward to the previous tool in `slots`.
+func prev_item() -> StringName:
+	if slots.is_empty():
+		return active_item
+	var prev_idx := (active_index - 1 + slots.size()) % slots.size()
+	equip(slots[prev_idx])
+	return active_item
+
+
+## Return the currently visible tool mesh node (first-person preferred, else third-person).
+func get_active_tool_node() -> Node3D:
+	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		return fp_tool_node
+	if tp_tool_node != null and is_instance_valid(tp_tool_node):
+		return tp_tool_node
+	return null
+
+
+func _rebuild_tool_meshes() -> void:
+	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		fp_tool_node.queue_free()
+		fp_tool_node = null
+	if tp_tool_node != null and is_instance_valid(tp_tool_node):
+		tp_tool_node.queue_free()
+		tp_tool_node = null
+
+	if viewmodel_root != null and is_instance_valid(viewmodel_root):
+		fp_tool_node = ToolMeshes.build_tool(active_item)
+		_configure_fp_node(fp_tool_node)
+		viewmodel_root.add_child(fp_tool_node)
+		_sync_tool_visual_state(fp_tool_node)
+
+	if tp_mount != null and is_instance_valid(tp_mount):
+		tp_tool_node = ToolMeshes.build_tool(active_item)
+		# Avoid double OmniLight3D when both FP and TP lanterns exist on the local player.
+		if fp_tool_node != null and active_item == &"lantern":
+			var tp_light := tp_tool_node.get_node_or_null(^"LanternLight") as OmniLight3D
+			if tp_light != null:
+				tp_light.visible = false
+				tp_light.light_energy = 0.0
+		tp_mount.add_child(tp_tool_node)
+		_sync_tool_visual_state(tp_tool_node)
+
+
+func _configure_fp_node(node: Node3D) -> void:
+	for child in node.find_children("*", "GeometryInstance3D", true, false):
+		var gi := child as GeometryInstance3D
+		if gi != null:
+			gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+func _sync_tool_visual_state(node: Node3D) -> void:
+	if node == null:
+		return
+	match active_item:
+		&"lantern":
+			var is_tp_dup := (node == tp_tool_node and fp_tool_node != null)
+			ToolMeshes.set_lantern_lit(node, lantern_lit)
+			if is_tp_dup:
+				var l := node.get_node_or_null(^"LanternLight") as OmniLight3D
+				if l != null:
+					l.visible = false
+					l.light_energy = 0.0
+		&"bucket":
+			ToolMeshes.set_bucket_full(node, bucket_full)
+		&"map":
+			if treasure_map_texture != null:
+				ToolMeshes.apply_map_texture(node, treasure_map_texture)
+		&"spyglass":
+			ToolMeshes.set_spyglass_extension(node, spyglass_zoom)
+		&"compass":
+			var needle := node.get_node_or_null(^"Needle") as Node3D
+			if needle != null:
+				needle.rotation.y = _needle_angle
+
+
+# ==============================================================================
+# Public tool actions (playable via input, HUD, or direct calls in tests)
+# ==============================================================================
+
+## Programmatically hold or release `secondary` (raise compass/map/lantern,
+## zoom spyglass, block with cutlass, ADS with pistol).
+func set_secondary_held(held: bool) -> void:
+	_secondary_held = held
+	if active_item == &"cutlass" and combat != null:
+		combat.set_blocking(held)
+
+
+## Render & bind a dynamic parchment-and-ink treasure map for the active voyage.
+## `dig_local_pos` accepts either `Vector2(x, z)` or `Vector3(x, y, z)`.
+func set_treasure_map(
+	island_name: String,
+	contour_points: PackedVector2Array,
+	dig_local_pos: Variant,
+	island_radius: float = 120.0
+) -> ImageTexture:
+	map_island_name = island_name
+	map_contour = contour_points.duplicate()
+	if dig_local_pos is Vector3:
+		var v3 := dig_local_pos as Vector3
+		map_dig_local = Vector2(v3.x, v3.z)
+	elif dig_local_pos is Vector2:
+		map_dig_local = dig_local_pos as Vector2
+	map_island_radius = maxf(island_radius, 12.0)
+	treasure_map_texture = MapPainter.render_treasure_map(
+		map_island_name, map_contour, map_dig_local, map_island_radius)
+	if active_item == &"map":
+		ToolMeshes.apply_map_texture(fp_tool_node, treasure_map_texture)
+		ToolMeshes.apply_map_texture(tp_tool_node, treasure_map_texture)
+	return treasure_map_texture
+
+
+## Trigger the primary action of the currently equipped tool or weapon.
+func use_primary() -> Variant:
+	if pawn == null or pawn.dead or pawn.station != null or pawn.carried != null:
+		return false
+	if _use_cooldown > 0.0 and active_item != &"cutlass" and active_item != &"pistol":
+		return false
+	match active_item:
+		&"cutlass", &"pistol":
+			if combat != null:
+				combat.equip_weapon(active_item)
+				return combat.primary_attack()
+			_start_swing(&"slash", 0.34)
+			return true
+		&"lantern":
+			return toggle_lantern()
+		&"shovel":
+			return use_shovel()
+		&"bucket":
+			return use_bucket()
+		&"planks":
+			return use_planks()
+		&"tankard":
+			return use_tankard()
+		&"instrument":
+			return toggle_shanty()
+		&"compass", &"map":
+			# Quick glance lift when clicking primary on navigation tools.
+			_start_swing(&"inspect", 0.32)
+			return true
+		&"spyglass":
+			set_secondary_held(not _secondary_held)
+			return _secondary_held
+	return false
+
+
+## Trigger a heavy melee strike (cutlass).
+func use_heavy() -> bool:
+	if pawn == null or pawn.dead or pawn.station != null or combat == null:
+		return false
+	if active_item == &"cutlass":
+		combat.equip_weapon(&"cutlass")
+		return combat.heavy_attack()
+	return false
+
+
+## Toggle oil lantern flame & OmniLight3D on or off.
+func toggle_lantern() -> bool:
+	lantern_lit = not lantern_lit
+	_use_cooldown = 0.20
+	if active_item == &"lantern":
+		_sync_tool_visual_state(fp_tool_node)
+		_sync_tool_visual_state(tp_tool_node)
+	var pos := pawn.eye_position() if pawn != null else Vector3.INF
+	Audio.play_sfx(&"lantern_click", pos, -2.0)
+	_start_swing(&"click", 0.22)
+	lantern_toggled.emit(lantern_lit)
+	return lantern_lit
+
+
+## Swing the shovel and attempt to dig any nearby `DigSite` within SHOVEL_REACH (2.6 m).
+func use_shovel() -> Dictionary:
+	_use_cooldown = 0.58
+	_start_swing(&"dig", 0.56)
+	_play_anim(&"dig", 0.65)
+	if pawn == null:
+		return {"hit": false, "reason": "no_pawn"}
+
+	var dig_origin := pawn.global_position + pawn.facing() * 1.0
+	var best_site: Node3D = null
+	var best_dist := SHOVEL_REACH
+
+	if is_inside_tree():
+		for node in get_tree().get_nodes_in_group(&"dig_sites"):
+			if not (node is Node3D) or not node.has_method(&"dig"):
+				continue
+			var site := node as Node3D
+			var d_pawn := Vector2(site.global_position.x - pawn.global_position.x,
+				site.global_position.z - pawn.global_position.z).length()
+			var d_tip := Vector2(site.global_position.x - dig_origin.x,
+				site.global_position.z - dig_origin.z).length()
+			var d := minf(d_pawn, d_tip)
+			if d <= best_dist:
+				best_dist = d
+				best_site = site
+
+	if best_site != null:
+		# Pass a dig point cleanly within DigSite's DIG_RADIUS when pawn is within SHOVEL_REACH.
+		var offset := dig_origin - best_site.global_position
+		var flat := Vector2(offset.x, offset.z)
+		var strike_pos := best_site.global_position
+		if flat.length() > 0.01:
+			var clamped := flat.limit_length(2.0)
+			strike_pos = Vector3(best_site.global_position.x + clamped.x, best_site.global_position.y, best_site.global_position.z + clamped.y)
+		var res: Variant = best_site.call(&"dig", strike_pos, pawn)
+		if res is Dictionary:
+			if not bool((res as Dictionary).get("hit", false)):
+				Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
+			return res as Dictionary
+		return {"hit": true}
+
+	Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
+	return {"hit": false, "reason": "no_dig_site"}
+
+
+## Scoop water from a flooded `Ship` (or shallow sea), or splash carried water out!
+func use_bucket() -> Dictionary:
+	_use_cooldown = 0.45
+	_play_anim(&"bail", 0.55)
+	if pawn == null:
+		return {"action": &"none", "full": bucket_full}
+
+	if bucket_full:
+		# Splash carried water out!
+		bucket_full = false
+		_start_swing(&"splash", 0.42)
+		if active_item == &"bucket":
+			ToolMeshes.set_bucket_full(fp_tool_node, false)
+			ToolMeshes.set_bucket_full(tp_tool_node, false)
+		var splash_pos := pawn.eye_position() + pawn.view_dir() * 0.9
+		Audio.play_sfx(&"bucket_splash", splash_pos, -1.0)
+		_spawn_water_splash_puff(splash_pos, pawn.view_dir())
+		bucket_changed.emit(false)
+		return {"action": &"splash", "full": false}
+
+	# Attempt to bail from current or adjacent flooded Ship.
+	var ship := _find_nearby_ship(4.5)
+	if ship != null and ship.water_level > 0.005:
+		var removed := ship.bail(BAIL_AMOUNT)
+		if removed > 0.0005:
+			bucket_full = true
+			_start_swing(&"scoop", 0.42)
+			if active_item == &"bucket":
+				ToolMeshes.set_bucket_full(fp_tool_node, true)
+				ToolMeshes.set_bucket_full(tp_tool_node, true)
+			Audio.play_sfx(&"splash_small", pawn.global_position, -3.0)
+			bucket_changed.emit(true)
+			return {"action": &"bail", "removed": removed, "full": true}
+
+	# Otherwise scoop seawater if wading or swimming!
+	if pawn.is_swimming() or Sea.depth(pawn.global_position) > 0.05:
+		bucket_full = true
+		_start_swing(&"scoop", 0.42)
+		if active_item == &"bucket":
+			ToolMeshes.set_bucket_full(fp_tool_node, true)
+			ToolMeshes.set_bucket_full(tp_tool_node, true)
+		Audio.play_sfx(&"splash_small", pawn.global_position, -2.0)
+		bucket_changed.emit(true)
+		return {"action": &"scoop_sea", "full": true}
+
+	_start_swing(&"scoop", 0.34)
+	return {"action": &"empty_swing", "full": false}
+
+
+## Patch the nearest open hull breach on the current `Ship` within PLANK_REACH (3.2 m).
+func use_planks() -> bool:
+	_use_cooldown = 0.55
+	_start_swing(&"hammer", 0.48)
+	_play_anim(&"hammer", 0.50)
+	if pawn == null:
+		return false
+	var ship := _find_nearby_ship(5.0)
+	if ship == null:
+		return false
+	var open_holes := ship.get_open_holes()
+	if open_holes.is_empty():
+		return false
+
+	var best_idx := -1
+	var best_dist := PLANK_REACH
+	for h in open_holes:
+		var h_world := ship.global_transform * (h["local_pos"] as Vector3)
+		var d := pawn.global_position.distance_to(h_world)
+		var d_eye := pawn.eye_position().distance_to(h_world)
+		var eff := minf(d, d_eye)
+		if eff <= best_dist:
+			best_dist = eff
+			best_idx = int(h["index"])
+
+	if best_idx >= 0:
+		return ship.patch_hole(best_idx)
+	return false
+
+
+## Take a hearty swig of grog: +15 HP, playful tipsy camera sway, and occasional burp!
+func use_tankard() -> bool:
+	_use_cooldown = 1.05
+	_start_swing(&"drink", 0.95)
+	_play_anim(&"drink", 1.05)
+	if pawn == null:
+		return false
+	if Net.is_host():
+		pawn.heal(GROG_HEAL)
+	Audio.play_sfx(&"grog_gulp", pawn.eye_position(), -1.5)
+	tipsy = clampf(tipsy + 0.42, 0.0, 1.0)
+	tipsy_changed.emit(tipsy)
+	if tipsy > 0.55 or _rng.randf() < 0.35:
+		_burp_timer = 0.95
+	return true
+
+
+## Toggle concertina shanty playback (AI crewmates automatically hear it and join in!).
+func toggle_shanty() -> bool:
+	set_playing_shanty(not playing_shanty)
+	return playing_shanty
+
+
+func set_playing_shanty(on: bool) -> void:
+	if playing_shanty == on:
+		return
+	playing_shanty = on
+	if on:
+		if not Audio.is_shanty_playing():
+			Audio.play_shanty([&"concertina"])
+			_started_shanty = true
+		else:
+			Audio.set_shanty_instrument(&"concertina", true, 0.35)
+			_started_shanty = false
+		_play_anim(&"play_instrument", 1.2)
+	else:
+		if _started_shanty:
+			Audio.stop_shanty(0.5)
+			_started_shanty = false
+		else:
+			Audio.set_shanty_instrument(&"concertina", false, 0.35)
+		if active_item == &"instrument":
+			ToolMeshes.set_concertina_stretch(fp_tool_node, 0.5)
+			ToolMeshes.set_concertina_stretch(tp_tool_node, 0.5)
+	shanty_playing_changed.emit(playing_shanty)
+
+
+# ==============================================================================
+# Frame updates & input routing
+# ==============================================================================
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not _can_read_player_input():
+		return
+	if event.is_action_pressed(&"item_next"):
+		next_item()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			next_item()
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			prev_item()
+
+
+func _process(delta: float) -> void:
+	_clock += delta
+	_use_cooldown = maxf(0.0, _use_cooldown - delta)
+	if _burp_timer > 0.0:
+		_burp_timer -= delta
+		if _burp_timer <= 0.0:
+			_burp_timer = -1.0
+			var pos := pawn.eye_position() if pawn != null else Vector3.INF
+			Audio.play_sfx(&"burp", pos, -2.5)
+
+	if pawn == null or player_controller == null or viewmodel_root == null:
+		_discover_siblings()
+
+	_poll_input(delta)
+	_tick_tipsy(delta)
+	_tick_spyglass(delta)
+	_tick_compass(delta)
+	_tick_concertina(delta)
+	_tick_lantern_flicker()
+	_tick_viewmodel_pose(delta)
+	_sync_visibility()
+
+
+func _can_read_player_input() -> bool:
+	if not input_enabled or pawn == null or pawn.dead:
+		return false
+	if pawn.station != null or pawn.carried != null:
+		return false
+	if player_controller == null or not player_controller.input_enabled or player_controller.look_paused:
+		return false
+	return true
+
+
+func _poll_input(delta: float) -> void:
+	if not _can_read_player_input():
+		if _primary_was_down:
+			_primary_was_down = false
+			_primary_hold_time = 0.0
+			_heavy_fired_this_hold = false
+		if input_enabled and _secondary_held:
+			set_secondary_held(false)
+		return
+
+	var sec := Input.is_action_pressed(&"secondary")
+	if sec != _secondary_held:
+		set_secondary_held(sec)
+
+	var pri := Input.is_action_pressed(&"primary")
+	if active_item == &"cutlass":
+		# Tap primary for snappy light combo; hold >= HEAVY_HOLD_TIME for heavy guard-break slash!
+		if pri:
+			if not _primary_was_down:
+				_primary_hold_time = 0.0
+				_heavy_fired_this_hold = false
+			else:
+				_primary_hold_time += delta
+				if not _heavy_fired_this_hold and _primary_hold_time >= HEAVY_HOLD_TIME:
+					_heavy_fired_this_hold = true
+					use_heavy()
+		elif _primary_was_down:
+			if not _heavy_fired_this_hold:
+				use_primary()
+			_primary_hold_time = 0.0
+			_heavy_fired_this_hold = false
+	else:
+		if pri and not _primary_was_down:
+			use_primary()
+	_primary_was_down = pri
+
+
+func _tick_tipsy(delta: float) -> void:
+	if tipsy > 0.0:
+		tipsy = maxf(0.0, tipsy - delta * 0.075)
+		tipsy_changed.emit(tipsy)
+	# Layer playful tipsy sway cleanly onto PlayerController.camera (Inventory runs at priority 10).
+	if tipsy > 0.005 and player_controller != null and player_controller.camera != null:
+		var roll := sin(_clock * 1.9) * 0.085 * tipsy
+		var pitch := cos(_clock * 2.6) * 0.032 * tipsy
+		var sway_x := sin(_clock * 1.35) * 0.045 * tipsy
+		var xf := player_controller.camera.transform
+		xf.basis = xf.basis * Basis(Vector3.BACK, roll) * Basis(Vector3.RIGHT, pitch)
+		xf.origin += xf.basis.x * sway_x
+		player_controller.camera.transform = xf
+
+
+func _tick_spyglass(delta: float) -> void:
+	var want_zoom := (active_item == &"spyglass") and _secondary_held and pawn != null and pawn.station == null and not pawn.dead
+	if want_zoom != _was_zooming_spyglass:
+		_was_zooming_spyglass = want_zoom
+		Audio.play_sfx(&"spyglass_slide", Vector3.INF, -3.0)
+
+	var target_z := 1.0 if want_zoom else 0.0
+	var next_z := lerpf(spyglass_zoom, target_z, 1.0 - exp(-10.5 * delta))
+	if absf(next_z - target_z) < 0.003:
+		next_z = target_z
+	if absf(next_z - spyglass_zoom) > 0.0005:
+		_set_spyglass_zoom(next_z)
+
+	# Drive camera FOV smoothly in exact lockstep with spyglass_zoom (or pistol ADS).
+	if player_controller != null and player_controller.camera != null:
+		var base := player_controller.fov if player_controller.fov > 10.0 else BASE_FOV
+		if spyglass_zoom > 0.002 or active_item == &"spyglass":
+			player_controller.camera.fov = lerpf(base, SPYGLASS_FOV, spyglass_zoom)
+		else:
+			var target_fov := PISTOL_ADS_FOV if (active_item == &"pistol" and _secondary_held) else base
+			player_controller.camera.fov = lerpf(player_controller.camera.fov, target_fov, 1.0 - exp(-12.0 * delta))
+
+	if active_item == &"spyglass":
+		ToolMeshes.set_spyglass_extension(fp_tool_node, spyglass_zoom)
+		ToolMeshes.set_spyglass_extension(tp_tool_node, spyglass_zoom)
+
+	# Horizon sighting scan while peering through the spyglass.
+	if spyglass_zoom > 0.45:
+		_sighting_timer -= delta
+		if _sighting_timer <= 0.0:
+			_sighting_timer = 0.15
+			_scan_spyglass_sighting()
+	elif spyglass_sighting != "":
+		spyglass_sighting = ""
+		spyglass_sighting_dist = 0.0
+		sighting_updated.emit("", 0.0)
+
+
+func _set_spyglass_zoom(v: float) -> void:
+	spyglass_zoom = clampf(v, 0.0, 1.0)
+	spyglass_zoom_changed.emit(spyglass_zoom)
+
+
+func _scan_spyglass_sighting() -> void:
+	if pawn == null or not is_inside_tree():
+		return
+	var eye := pawn.eye_position()
+	var dir := pawn.view_dir()
+	var my_ship := pawn.platform
+	var best_label := ""
+	var best_dist := 0.0
+	var best_score := cos(deg_to_rad(6.5))
+
+	# Check distant ships (other than our own).
+	for node in get_tree().get_nodes_in_group(&"ship"):
+		if not (node is Node3D) or node == my_ship:
+			continue
+		var s := node as Node3D
+		var to := (s.global_position + Vector3.UP * 3.5) - eye
+		var dist := to.length()
+		if dist < 12.0 or dist > 2600.0:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			var fac: Variant = s.get(&"faction")
+			if fac == &"ghost":
+				best_label = "Ghost Ship"
+			elif fac == &"drowned":
+				best_label = "Drowned Sloop"
+			else:
+				best_label = "Sloop"
+
+	# Check archipelago islands (group `islands`).
+	for node in get_tree().get_nodes_in_group(&"islands"):
+		if not (node is Node3D):
+			continue
+		var isl := node as Node3D
+		var to := (isl.global_position + Vector3.UP * 14.0) - eye
+		var dist := to.length()
+		if dist < 25.0 or dist > 3500.0:
+			continue
+		var score := to.dot(dir) / dist
+		if score > best_score:
+			best_score = score
+			best_dist = dist
+			var nm: Variant = isl.get(&"display_name")
+			if nm == null:
+				nm = isl.get(&"island_name")
+			if nm == null and isl.has_meta("display_name"):
+				nm = isl.get_meta("display_name")
+			best_label = String(nm) if nm != null else String(isl.name)
+
+	if best_label != spyglass_sighting or absf(best_dist - spyglass_sighting_dist) > 5.0:
+		spyglass_sighting = best_label
+		spyglass_sighting_dist = best_dist
+		sighting_updated.emit(spyglass_sighting, spyglass_sighting_dist)
+
+
+func _tick_compass(delta: float) -> void:
+	if active_item != &"compass" or pawn == null:
+		return
+	# True North is world -Z. Rotate into the compass node's local XZ frame!
+	var ref_node := get_active_tool_node()
+	var target_angle := -pawn.look_yaw
+	if ref_node != null and ref_node.is_inside_tree():
+		var north_local := ref_node.global_transform.basis.orthonormalized().inverse() * Vector3(0.0, 0.0, -1.0)
+		if Vector2(north_local.x, north_local.z).length_squared() > 0.0004:
+			target_angle = atan2(-north_local.x, -north_local.z)
+	# Damped magnetic spring physics for realistic fluid needle settling!
+	var err := wrapf(target_angle - _needle_angle, -PI, PI)
+	var dt := minf(delta, 0.05)
+	_needle_vel += (err * 42.0 - _needle_vel * 6.5) * dt
+	_needle_angle = wrapf(_needle_angle + _needle_vel * dt, -PI, PI)
+	for n in [fp_tool_node, tp_tool_node]:
+		if n != null and is_instance_valid(n):
+			var needle := (n as Node3D).get_node_or_null(^"Needle") as Node3D
+			if needle != null:
+				needle.rotation.y = _needle_angle
+
+
+func _tick_concertina(_delta: float) -> void:
+	if active_item != &"instrument":
+		return
+	var stretch := 0.5
+	if playing_shanty:
+		var beat := Audio.shanty_beat() if Audio.is_shanty_playing() else (_clock * 2.0)
+		stretch = 0.5 + 0.48 * sin(beat * PI)
+	ToolMeshes.set_concertina_stretch(fp_tool_node, stretch)
+	ToolMeshes.set_concertina_stretch(tp_tool_node, stretch)
+
+
+func _tick_lantern_flicker() -> void:
+	if active_item != &"lantern" or not lantern_lit:
+		return
+	var flick := 0.93 + 0.07 * sin(_clock * 11.4) * cos(_clock * 7.3)
+	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		var light := fp_tool_node.get_node_or_null(^"LanternLight") as OmniLight3D
+		if light != null:
+			light.light_energy = 2.4 * flick
+		var flame := fp_tool_node.get_node_or_null(^"Flame") as Node3D
+		if flame != null:
+			flame.scale = Vector3(1.0, 0.92 + 0.14 * sin(_clock * 15.0), 1.0)
+
+
+func _tick_viewmodel_pose(delta: float) -> void:
+	if fp_tool_node == null or not is_instance_valid(fp_tool_node):
+		return
+	var pose: Array = FP_POSES.get(active_item, FP_POSES[&"cutlass"])
+	var rest_pos: Vector3 = pose[0]
+	var rest_rot: Vector3 = pose[1]
+	var raise_pos: Vector3 = pose[2]
+	var raise_rot: Vector3 = pose[3]
+	var sc: float = float(pose[4])
+
+	var want_raise := _secondary_held
+	if active_item == &"instrument" and playing_shanty:
+		want_raise = true
+	_raise_blend = lerpf(_raise_blend, 1.0 if want_raise else 0.0, 1.0 - exp(-11.0 * delta))
+	_equip_dip = move_toward(_equip_dip, 0.0, delta * 3.8)
+
+	# Walk / breathing bob.
+	var move_spd := 0.0
+	if pawn != null:
+		var rv := pawn.get_relative_velocity()
+		move_spd = Vector2(rv.x, rv.z).length()
+	if move_spd > 0.35 and pawn != null and pawn.is_grounded():
+		_bob_phase = fmod(_bob_phase + move_spd * delta * 3.4, TAU)
+	var bob_amp := lerpf(1.0, 0.18, _raise_blend)
+	var idle_breath := sin(_clock * 2.1) * 0.005 * bob_amp
+	var walk_x := cos(_bob_phase) * 0.014 * clampf(move_spd / 4.0, 0.0, 1.0) * bob_amp
+	var walk_y := absf(sin(_bob_phase)) * 0.014 * clampf(move_spd / 4.0, 0.0, 1.0) * bob_amp
+
+	var pos := rest_pos.lerp(raise_pos, _raise_blend)
+	var rot_deg := rest_rot.lerp(raise_rot, _raise_blend)
+	pos += Vector3(walk_x, idle_breath - walk_y - _equip_dip * 0.24, _equip_dip * 0.08)
+	rot_deg.x -= _equip_dip * 38.0
+
+	# Active swing / dig / recoil / drink offset!
+	if _swing_timer > 0.0:
+		_swing_timer = maxf(0.0, _swing_timer - delta)
+		var u := 1.0 - (_swing_timer / maxf(_swing_dur, 0.001))
+		var pulse := sin(u * PI)
+		match _swing_kind:
+			&"slash", &"slash_1", &"slash_2", &"slash_3":
+				var side_dir := -1.0 if _swing_kind == &"slash_2" else 1.0
+				pos += Vector3(-0.22 * side_dir * pulse, -0.06 * pulse, -0.14 * pulse)
+				rot_deg += Vector3(-48.0 * pulse, 42.0 * side_dir * pulse, 36.0 * side_dir * pulse)
+			&"heavy":
+				pos += Vector3(-0.26 * pulse, 0.04 * pulse, -0.22 * pulse)
+				rot_deg += Vector3(-68.0 * pulse, 58.0 * pulse, 52.0 * pulse)
+			&"pistol":
+				pos += Vector3(0.0, 0.055 * pulse, 0.095 * pulse)
+				rot_deg += Vector3(28.0 * pulse, 0.0, 0.0)
+			&"dig":
+				pos += Vector3(-0.08 * pulse, -0.18 * pulse, -0.18 * pulse)
+				rot_deg += Vector3(-52.0 * pulse, 12.0 * pulse, 8.0 * pulse)
+			&"scoop", &"splash":
+				pos += Vector3(-0.08 * pulse, -0.12 * pulse, -0.16 * pulse)
+				rot_deg += Vector3(-45.0 * pulse if _swing_kind == &"splash" else 34.0 * pulse, 0.0, 0.0)
+			&"hammer":
+				var double_tap := absf(sin(u * PI * 2.0))
+				pos += Vector3(-0.06 * double_tap, -0.05 * double_tap, -0.16 * double_tap)
+				rot_deg += Vector3(-34.0 * double_tap, 8.0 * double_tap, 0.0)
+			&"drink":
+				pos = pos.lerp(Vector3(0.04, -0.02, -0.20), pulse)
+				rot_deg = rot_deg.lerp(Vector3(56.0, -8.0, -14.0), pulse)
+			_:
+				pos += Vector3(0.0, 0.03 * pulse, -0.04 * pulse)
+
+	# Charge windup feedback when holding primary with cutlass.
+	if active_item == &"cutlass" and _primary_was_down and not _heavy_fired_this_hold and _primary_hold_time > 0.08:
+		var ch := clampf((_primary_hold_time - 0.08) / (HEAVY_HOLD_TIME - 0.08), 0.0, 1.0)
+		pos += Vector3(0.10 * ch, 0.06 * ch, 0.08 * ch)
+		rot_deg += Vector3(22.0 * ch, -24.0 * ch, -18.0 * ch)
+
+	fp_tool_node.position = pos
+	fp_tool_node.rotation_degrees = rot_deg
+	fp_tool_node.scale = Vector3.ONE * sc
+
+
+func _sync_visibility() -> void:
+	var hide_tools := pawn != null and (pawn.dead or pawn.station != null or pawn.carried != null)
+	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		var hide_for_lens := (active_item == &"spyglass" and spyglass_zoom > 0.62)
+		fp_tool_node.visible = (not hide_tools) and (not hide_for_lens)
+	if tp_tool_node != null and is_instance_valid(tp_tool_node):
+		var fp_hidden := visual != null and visual.first_person_hidden
+		tp_tool_node.visible = (not hide_tools) and (not fp_hidden)
+
+
+# ==============================================================================
+# Helpers
+# ==============================================================================
+
+func _on_combat_attack_started(kind: StringName) -> void:
+	if kind == &"heavy":
+		_start_swing(&"heavy", 0.58)
+	elif kind == &"pistol" or kind == &"blunderbuss":
+		_start_swing(&"pistol", 0.30)
+	else:
+		_start_swing(kind, 0.36)
+
+
+func _start_swing(kind: StringName, dur: float) -> void:
+	_swing_kind = kind
+	_swing_dur = maxf(dur, 0.05)
+	_swing_timer = _swing_dur
+
+
+func _play_anim(action: StringName, duration: float) -> void:
+	if anim_driver != null and is_instance_valid(anim_driver):
+		anim_driver.play_action(action, duration)
+
+
+func _find_nearby_ship(max_dist: float) -> Ship:
+	if pawn == null:
+		return null
+	if pawn.platform is Ship:
+		return pawn.platform as Ship
+	if not is_inside_tree():
+		return null
+	var best: Ship = null
+	var best_d := max_dist
+	for node in get_tree().get_nodes_in_group(&"ship"):
+		var s := node as Ship
+		if s == null:
+			continue
+		var d := pawn.global_position.distance_to(s.global_position)
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+
+func _spawn_water_splash_puff(pos: Vector3, dir: Vector3) -> void:
+	var host := pawn.get_parent() if pawn != null else null
+	if host == null:
+		return
+	var p := CPUParticles3D.new()
+	p.name = "BucketSplashPuff"
+	p.one_shot = true
+	p.explosiveness = 0.92
+	p.amount = 16
+	p.lifetime = 0.55
+	p.direction = (dir + Vector3(0.0, 0.35, 0.0)).normalized()
+	p.spread = 34.0
+	p.initial_velocity_min = 3.2
+	p.initial_velocity_max = 6.2
+	p.gravity = Vector3(0.0, -11.0, 0.0)
+	p.scale_amount_min = 0.07
+	p.scale_amount_max = 0.16
+	var sp := SphereMesh.new()
+	sp.radius = 0.45
+	sp.height = 0.9
+	sp.radial_segments = 6
+	sp.rings = 3
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.68, 0.92, 0.95, 0.80)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sp.material = mat
+	p.mesh = sp
+	host.add_child(p)
+	p.global_position = pos
+	p.emitting = true
+	p.finished.connect(p.queue_free)
