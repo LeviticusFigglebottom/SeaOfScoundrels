@@ -2,7 +2,7 @@
 # Usage:
 #   blender --background --factory-startup --python tools/blender/gen_island_landmarks.py -- <outdir>
 #   blender --background --python tools/blender/gen_island_landmarks.py -- --only <name> [<name> ...]
-# Writes up to 30 sculpted coastal geology, skyline, harbour, jungle & signature set-piece .glb files into <outdir>/landmarks/.
+# Writes up to 34 sculpted coastal geology, skyline, harbour, jungle, maritime & signature set-piece .glb files into <outdir>/landmarks/.
 import argparse
 import bpy
 import os
@@ -47,6 +47,11 @@ try:
 except ImportError:
     HARBOUR_RUINS_GENERATORS = []
 
+try:
+    from _landmarks_maritime_relics import MARITIME_RELICS_GENERATORS
+except ImportError:
+    MARITIME_RELICS_GENERATORS = []
+
 
 def _normalize_name(name):
     n = name.strip()
@@ -89,6 +94,7 @@ def main():
         + list(SKYLINE_GENERATORS)
         + list(COASTAL_GENERATORS)
         + list(HARBOUR_RUINS_GENERATORS)
+        + list(MARITIME_RELICS_GENERATORS)
     )
 
     if args.only:

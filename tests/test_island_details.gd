@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (30 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (34 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -56,6 +56,13 @@ const HARBOUR_RUINS_LANDMARKS: Array[String] = [
 	"smuggler_contraband_hoard.glb",
 ]
 
+const MARITIME_RELICS_LANDMARKS: Array[String] = [
+	"fort_coastal_watchtower_ruin.glb",
+	"shipwreck_bell_buoy_beacon.glb",
+	"ancient_compass_monolith_ring.glb",
+	"volcanic_chain_bridge_anchor.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -87,6 +94,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"overgrown_jungle_idol_altar.glb": 1,
 	"cliffside_waterfall_shrine.glb": 1,
 	"smuggler_contraband_hoard.glb": 1,
+	"fort_coastal_watchtower_ruin.glb": 1,
+	"shipwreck_bell_buoy_beacon.glb": 1,
+	"ancient_compass_monolith_ring.glb": 1,
+	"volcanic_chain_bridge_anchor.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -107,6 +118,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"overgrown_jungle_idol_altar.glb": ["Lantern_Altar*"],
 	"cliffside_waterfall_shrine.glb": ["Lantern_WaterfallShrine*"],
 	"smuggler_contraband_hoard.glb": ["Lantern_Hoard*"],
+	"fort_coastal_watchtower_ruin.glb": ["Lantern_Watchtower*"],
+	"shipwreck_bell_buoy_beacon.glb": ["Lantern_ReefBeacon*"],
+	"ancient_compass_monolith_ring.glb": ["Lantern_Monolith*"],
+	"volcanic_chain_bridge_anchor.glb": ["Lantern_ChainPylon*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -129,8 +144,11 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"LavaCauldronShrine_",
 	"HarbourCrane_",
 	"JungleAltar_",
-	"WaterfallShrine_",
+	"CascadeShrine_",
 	"SmugglerHoard_",
+	"FortWatchtower_",
+	"CompassMonolith_",
+	"VolcanicChainPylon_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -242,7 +260,8 @@ func _compute_landmark_visual_aabb(landmark: Node3D, isl: Node3D) -> Dictionary:
 
 
 func _is_grounding_audit_landmark(node_name: String) -> bool:
-	if node_name.begins_with("CoastalSeaArch_") or node_name.begins_with("TidalCoralArch_"):
+	if node_name.begins_with("CoastalSeaArch_") or node_name.begins_with("TidalCoralArch_") \
+			or node_name.begins_with("ReefBeacon_"):
 		return false
 	for prefix in GROUNDING_AUDIT_PREFIXES:
 		if node_name.begins_with(prefix):
@@ -258,7 +277,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(SKYLINE_LANDMARKS)
 	all_landmarks.append_array(COASTAL_LANDMARKS)
 	all_landmarks.append_array(HARBOUR_RUINS_LANDMARKS)
-	check_eq(all_landmarks.size(), 30, "expected 30 sculpted landmark GLBs")
+	all_landmarks.append_array(MARITIME_RELICS_LANDMARKS)
+	check_eq(all_landmarks.size(), 34, "expected 34 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -364,14 +384,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 30 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 34 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 30 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected <= 36 unique shared landmark PBR texture paths across all 34 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -862,16 +882,38 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	for isl_i6 in all_islands:
 		crane_total += isl_i6.find_children("HarbourCrane_*", "Node3D", true, false).size()
 		altar_total += isl_i6.find_children("JungleAltar_*", "Node3D", true, false).size()
-		wf_shrine_total += isl_i6.find_children("WaterfallShrine_*", "Node3D", true, false).size()
+		wf_shrine_total += isl_i6.find_children("CascadeShrine_*", "Node3D", true, false).size()
 		hoard_total += isl_i6.find_children("SmugglerHoard_*", "Node3D", true, false).size()
-	print("    wave_i6 harbour/ruins landmarks: cranes=%d altars=%d wf_shrines=%d hoards=%d" % [
+	print("    wave_i6 harbour/ruins landmarks: cranes=%d altars=%d cascade_shrines=%d hoards=%d" % [
 		crane_total, altar_total, wf_shrine_total, hoard_total])
 	check(crane_total >= 3, "Wave I-6 spawns >= 3 HarbourCrane_* landmarks (got %d)" % crane_total)
 	check(altar_total >= 3, "Wave I-6 spawns >= 3 JungleAltar_* landmarks (got %d)" % altar_total)
-	check(wf_shrine_total >= 3, "Wave I-6 spawns >= 3 WaterfallShrine_* landmarks (got %d)" % wf_shrine_total)
+	check(wf_shrine_total >= 3, "Wave I-6 spawns >= 3 CascadeShrine_* landmarks (got %d)" % wf_shrine_total)
 	check(hoard_total >= 4, "Wave I-6 spawns >= 4 SmugglerHoard_* landmarks (got %d)" % hoard_total)
+	if emerald_isl != null:
+		var wf_match := emerald_isl.find_child("*Waterfall*", true, false)
+		check(wf_match is IslandWaterfall,
+			"Emerald Spire find_child('*Waterfall*') resolves to IslandWaterfall (got %s)" % (
+				String(wf_match.name) if wf_match != null else "null"))
 
-	# 2f. Automated 14-island landmark anti-float grounding audit!
+	# 2f. Verify Wave I-7 maritime watchtower, reef beacon, compass monolith & volcanic chain pylon landmarks!
+	var watchtower_total := 0
+	var reef_beacon_total := 0
+	var monolith_total := 0
+	var chain_pylon_total := 0
+	for isl_i7 in all_islands:
+		watchtower_total += isl_i7.find_children("FortWatchtower_*", "Node3D", true, false).size()
+		reef_beacon_total += isl_i7.find_children("ReefBeacon_*", "Node3D", true, false).size()
+		monolith_total += isl_i7.find_children("CompassMonolith_*", "Node3D", true, false).size()
+		chain_pylon_total += isl_i7.find_children("VolcanicChainPylon_*", "Node3D", true, false).size()
+	print("    wave_i7 maritime/relic landmarks: watchtowers=%d reef_beacons=%d monoliths=%d chain_pylons=%d" % [
+		watchtower_total, reef_beacon_total, monolith_total, chain_pylon_total])
+	check(watchtower_total >= 3, "Wave I-7 spawns >= 3 FortWatchtower_* landmarks (got %d)" % watchtower_total)
+	check(reef_beacon_total >= 4, "Wave I-7 spawns >= 4 ReefBeacon_* landmarks (got %d)" % reef_beacon_total)
+	check(monolith_total >= 3, "Wave I-7 spawns >= 3 CompassMonolith_* landmarks (got %d)" % monolith_total)
+	check(chain_pylon_total >= 3, "Wave I-7 spawns >= 3 VolcanicChainPylon_* landmarks (got %d)" % chain_pylon_total)
+
+	# 2g. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
 	var worst_clearance := -INF
@@ -913,7 +955,7 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i6 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i7 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
 	check(grounded_checked >= 50,
 		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)

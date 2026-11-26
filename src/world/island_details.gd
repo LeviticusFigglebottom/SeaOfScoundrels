@@ -160,6 +160,46 @@ const BUTTRESS_FALLBACK_VOLCANIC: Array[Color] = [
 	Color(0.48, 0.36, 0.32, 1.0),  # Rust-scorched caldera crag
 ]
 
+# Biome-specific micro-foliage & coastal accent modulators (pure spatial-hash driven, +0 DC).
+const DUNE_SEA_OATS_COLOR := Color(1.06, 0.98, 0.72, 1.0)     # Warm sun-bleached golden sea-oats
+const DUNE_COASTAL_SAGE_COLOR := Color(0.78, 0.82, 0.54, 1.0) # Dry salt-misted coastal sage
+
+const VOLCANIC_CALDERA_SLATE := Color(0.56, 0.54, 0.44, 1.0)  # Charred olive-slate caldera scrub
+const VOLCANIC_CALDERA_RUSSET := Color(0.82, 0.56, 0.36, 1.0) # Scorched burnt-russet tussock
+const VOLCANIC_CALDERA_SULFUR := Color(0.96, 0.80, 0.42, 1.0) # Sulfur-gold ember-moss accent
+const VOLCANIC_HIBISCUS_EMBER := Color(1.08, 0.58, 0.34, 1.0) # Scarce fiery crimson-orange blossom
+const VOLCANIC_TIDAL_OBSIDIAN := Color(0.42, 0.41, 0.45, 1.0) # Rich dark wet obsidian-basalt shore
+
+const LAGOON_ATOLL_ARCHETYPES: Array[StringName] = [
+	&"crescent_lagoon",
+	&"palm_atoll",
+	&"sea_arch",
+	&"treasure_peak",
+]
+const HIBISCUS_LAGOON_TINTS: Array[Color] = [
+	Color(1.06, 0.84, 0.92, 1.0),  # Vibrant tropical coral-pink
+	Color(1.08, 1.00, 0.74, 1.0),  # Sunlit mango-gold
+	Color(1.04, 0.78, 0.78, 1.0),  # Bright island crimson
+]
+const LAGOON_TIDAL_CORAL := Color(1.08, 1.05, 0.96, 1.0)      # Sun-bleached pale coral-limestone
+
+const HIGHLAND_RUIN_ARCHETYPES: Array[StringName] = [
+	&"twin_spires",
+	&"grand_citadel",
+	&"fort_rock",
+	&"skull_bluff",
+]
+const LUSH_JUNGLE_TEMPLE_ARCHETYPES: Array[StringName] = [
+	&"twin_spires",
+	&"grand_citadel",
+	&"grand_outpost",
+]
+const HIGHLAND_ALPINE_MOSS := Color(0.18, 0.59, 0.31, 1.0)    # Sun-dappled alpine moss-emerald
+const HIGHLAND_SAGE_OLIVE := Color(0.36, 0.57, 0.39, 1.0)     # Cool highland sage-olive
+const HIGHLAND_RUIN_MOSS := Color(0.14, 0.52, 0.29, 1.0)      # Ancient cliff-ruin deep moss-jade
+const HIGHLAND_LICHEN_SAGE := Color(0.42, 0.60, 0.41, 1.0)    # Weathered alpine cliff lichen
+const JUNGLE_VALLEY_FERN_TINT := Color(0.84, 1.04, 0.82, 1.0) # Deep valley emerald-jade depth
+
 # ------------------------------------------------------------------ shared static caches
 
 static var _active_details: int = 0
@@ -311,9 +351,9 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	var hibiscus_xf: Array[Transform3D] = []
 	var hibiscus_col: Array[Color] = []
 	var bush_grid: Dictionary = {}
-	_place_jungle_ferns(island, rng, fern_target, radius, max_fern_h, is_volcanic,
+	_place_jungle_ferns(island, arch, rng, fern_target, radius, max_fern_h, is_volcanic,
 		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, fern_xf, fern_col)
-	_place_hibiscus_shrubs(island, rng, hibiscus_target, radius, max_shrub_h, is_volcanic,
+	_place_hibiscus_shrubs(island, arch, rng, hibiscus_target, radius, max_shrub_h, is_volcanic,
 		meadow_centers, keepouts, has_pier, pier_a, pier_b, trail_ctx, bush_grid, hibiscus_xf, hibiscus_col)
 
 	# 6. Populate Layers 4, 5, 6: CoastalDriftwood, ShorePebblesShells, TidalOutcrops (sRGB vertex colors).
@@ -327,7 +367,7 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 		keepouts, has_pier, pier_a, pier_b, trail_ctx, driftwood_xf, driftwood_col)
 	_place_shore_pebbles(island, rng, pebble_target, radius, is_volcanic,
 		keepouts, has_pier, pier_a, pier_b, pebble_xf, pebble_col)
-	_place_tidal_outcrops(island, rng, tidal_target, radius, is_volcanic,
+	_place_tidal_outcrops(island, arch, rng, tidal_target, radius, is_volcanic,
 		keepouts, has_pier, pier_a, pier_b, trail_ctx, tidal_xf, tidal_col)
 
 	# 7. Populate Layer 7 (+ optional Layer 8 `CliffButtressesWide`): Steep-Slope Cliff Buttresses.
@@ -853,39 +893,48 @@ static func _scan_highland_ledge_candidates(island: Island, rng: RandomNumberGen
 	return candidates
 
 
-static func _append_highland_grass_tuft(rng: RandomNumberGenerator, pt: Vector2, h: float,
-		n: Vector3, grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
+static func _append_highland_grass_tuft(arch: StringName, rng: RandomNumberGenerator, pt: Vector2,
+		h: float, n: Vector3, grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
 		out_col: Array[Color], out_pos: PackedVector3Array) -> void:
 	var sx := rng.randf_range(1.45, 2.25)
 	var sz := sx * rng.randf_range(0.86, 1.15)
 	var sy := rng.randf_range(1.20, 1.85)
+	if h > 30.0:
+		var wind_t := clampf((h - 30.0) / 28.0, 0.0, 1.0)
+		sy *= lerpf(1.0, 0.88, wind_t)
+		sx *= lerpf(1.0, 1.08, wind_t)
+		sz *= lerpf(1.0, 1.08, wind_t)
 	var slope_sink := 0.14 * clampf((0.84 - n.y) / 0.34, 0.0, 1.0)
 	var sink := 0.10 + maxf(0.0, (0.70 - n.y) * 0.30) + slope_sink
 	var origin := Vector3(pt.x, h - sink, pt.y)
 	var xf := _grounded_transform(origin, n, 0.55, rng.randf() * TAU, Vector3(sx, sy, sz))
 	var srgb_col := _pick_jittered_color(rng, GRASS_HIGHLAND_PALETTE, 0.024, 0.10)
+	srgb_col = _apply_highland_alpine_tint(srgb_col, arch, pt, h, true, false)
 	out_xf.append(xf)
 	out_col.append(srgb_col.srgb_to_linear())
 	out_pos.append(origin)
 	_grid_insert(grid, cell_size, pt)
 
 
-static func _append_highland_fern_rosette(rng: RandomNumberGenerator, pt: Vector2, h: float,
-		n: Vector3, bush_grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
+static func _append_highland_fern_rosette(arch: StringName, rng: RandomNumberGenerator, pt: Vector2,
+		h: float, n: Vector3, bush_grid: Dictionary, cell_size: float, out_xf: Array[Transform3D],
 		out_col: Array[Color]) -> void:
 	var sc := rng.randf_range(1.30, 2.05)
 	var sy := sc * rng.randf_range(0.86, 1.15)
+	if arch in HIGHLAND_RUIN_ARCHETYPES:
+		sc *= 1.06
 	var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
 	var sink := 0.10 + maxf(0.0, (0.68 - n.y) * 0.30) + slope_sink
 	var origin := Vector3(pt.x, h - sink, pt.y)
 	var xf := _grounded_transform(origin, n, 0.54, rng.randf() * TAU, Vector3(sc, sy, sc))
 	var srgb_col := _pick_jittered_color(rng, FERN_HIGHLAND_PALETTE, 0.022, 0.10)
+	srgb_col = _apply_highland_alpine_tint(srgb_col, arch, pt, h, true, true)
 	out_xf.append(xf)
 	out_col.append(srgb_col.srgb_to_linear())
 	_grid_insert(bush_grid, cell_size, pt)
 
 
-static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNumberGenerator,
+static func _place_grass_clumps(island: Island, arch: StringName, rng: RandomNumberGenerator,
 		target: int, radius: float, max_grass_h: float, is_volcanic: bool,
 		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
@@ -914,7 +963,7 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 					continue
 				var h: float = float(cand["h"])
 				var n: Vector3 = cand["n"] as Vector3
-				_append_highland_grass_tuft(rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
+				_append_highland_grass_tuft(arch, rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
 
 				# Cluster 1..2 companion tufts tangentially along the stepped cliff-ledge contour.
 				var tan_xz := Vector2(-n.z, n.x)
@@ -943,7 +992,7 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 					var cn := island.surface_normal(cpt.x, cpt.y)
 					if cn.y < 0.48 or cn.y > 0.94:
 						continue
-					_append_highland_grass_tuft(rng, cpt, ch, cn, grid, cell_size, out_xf, out_col, out_pos)
+					_append_highland_grass_tuft(arch, rng, cpt, ch, cn, grid, cell_size, out_xf, out_col, out_pos)
 
 			if out_xf.size() < highland_cap and hl_sep > 1.8:
 				for cand in hl_candidates:
@@ -954,9 +1003,9 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 						continue
 					var h: float = float(cand["h"])
 					var n: Vector3 = cand["n"] as Vector3
-					_append_highland_grass_tuft(rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
+					_append_highland_grass_tuft(arch, rng, pt, h, n, grid, cell_size, out_xf, out_col, out_pos)
 
-	# Pass 1: Lush green meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 2.25..2.8 m).
+	# Pass 1: Lush green meadow carpet (h >= 2.75 m) + golden beach-verge sea-oats (h = 1.95..4.4 m).
 	var passes: Array[Array] = [
 		[2.75, max_grass_h, 0.72, base_spacing, 0.56, target * 14 + 260],
 		[2.30, max_grass_h + 4.0, 0.72, base_spacing * 0.68, 0.35, target * 12 + 220],
@@ -999,6 +1048,26 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 				sx *= 0.82
 				sz *= 0.82
 				sy *= 0.76
+				var v_band := _volcanic_caldera_band(pt, h)
+				if v_band == 2:
+					# Low cushiony sulfur-gold ember-moss scrub hugging ash flats.
+					sy *= 0.88
+					sx *= 1.08
+					sz *= 1.08
+				elif v_band == 1:
+					# Slightly taller scorched burnt-russet cinder tussocks.
+					sy *= 1.08
+			elif h < 4.4:
+				# Coastal dune sea-oats grow slightly taller and slenderer along the sandy verge.
+				var dune_t := clampf((4.4 - h) / 2.8, 0.0, 1.0)
+				sy *= 1.0 + 0.16 * dune_t
+				sx *= 1.0 - 0.08 * dune_t
+				sz *= 1.0 - 0.08 * dune_t
+			elif h > 30.0:
+				var alp_t := clampf((h - 30.0) / 28.0, 0.0, 1.0)
+				sy *= lerpf(1.0, 0.90, alp_t)
+				sx *= lerpf(1.0, 1.06, alp_t)
+				sz *= lerpf(1.0, 1.06, alp_t)
 			var slope_sink := 0.14 * clampf((0.84 - n.y) / 0.34, 0.0, 1.0)
 			var origin := Vector3(pt.x, h - 0.06 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.62, rng.randf() * TAU, Vector3(sx, sy, sz))
@@ -1013,6 +1082,7 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 				srgb_col = g_col.lerp(v_col, clampf(verge_t * 0.85, 0.0, 1.0))
 			else:
 				srgb_col = _pick_jittered_color(rng, GRASS_TROPICAL_PALETTE, 0.025, 0.11)
+			srgb_col = _apply_grass_biome_tint(srgb_col, arch, is_volcanic, pt, h)
 
 			out_xf.append(xf)
 			out_col.append(srgb_col.srgb_to_linear())
@@ -1020,11 +1090,11 @@ static func _place_grass_clumps(island: Island, _arch: StringName, rng: RandomNu
 			_grid_insert(grid, cell_size, pt)
 
 
-static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, target: int,
-		radius: float, max_fern_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
-		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
-		trail_ctx: Dictionary, bush_grid: Dictionary, out_xf: Array[Transform3D],
-		out_col: Array[Color]) -> void:
+static func _place_jungle_ferns(island: Island, arch: StringName, rng: RandomNumberGenerator,
+		target: int, radius: float, max_fern_h: float, is_volcanic: bool,
+		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, bush_grid: Dictionary,
+		out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
 	var min_sep := clampf(radius * 0.026, 1.45, 3.4)
 	var cell_size := 2.6
 
@@ -1048,7 +1118,7 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 					continue
 				var h: float = float(cand["h"])
 				var n: Vector3 = cand["n"] as Vector3
-				_append_highland_fern_rosette(rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
+				_append_highland_fern_rosette(arch, rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
 
 				# Pair with a companion cascading fern along the same ledge terrace when space permits.
 				if out_xf.size() < highland_cap:
@@ -1068,7 +1138,7 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 						if ch >= hl_h_min and ch <= hl_h_max:
 							var cn := island.surface_normal(cpt.x, cpt.y)
 							if cn.y >= 0.48:
-								_append_highland_fern_rosette(rng, cpt, ch, cn, bush_grid, cell_size, out_xf, out_col)
+								_append_highland_fern_rosette(arch, rng, cpt, ch, cn, bush_grid, cell_size, out_xf, out_col)
 
 			if out_xf.size() < highland_cap and hl_sep > 1.8:
 				for cand in hl_candidates:
@@ -1079,7 +1149,7 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 						continue
 					var h: float = float(cand["h"])
 					var n: Vector3 = cand["n"] as Vector3
-					_append_highland_fern_rosette(rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
+					_append_highland_fern_rosette(arch, rng, pt, h, n, bush_grid, cell_size, out_xf, out_col)
 
 	var passes: Array[Array] = [
 		[2.85, max_fern_h, 0.72, min_sep, 0.58, target * 16 + 180],
@@ -1118,21 +1188,26 @@ static func _place_jungle_ferns(island: Island, rng: RandomNumberGenerator, targ
 
 			var sc := rng.randf_range(0.92, 1.54) * (0.76 if is_volcanic else 1.0)
 			var sy := sc * rng.randf_range(0.88, 1.16)
+			if not is_volcanic and arch in LUSH_JUNGLE_TEMPLE_ARCHETYPES and h < 20.0:
+				var lush_t := clampf((20.0 - h) / 14.0, 0.0, 1.0)
+				sc *= 1.0 + 0.08 * lush_t
+				sy *= 1.0 + 0.06 * lush_t
 			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
 			var origin := Vector3(pt.x, h - 0.07 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.52, rng.randf() * TAU, Vector3(sc, sy, sc))
 			var srgb_col := _pick_jittered_color(rng,
 				FERN_VOLCANIC_PALETTE if is_volcanic else FERN_TROPICAL_PALETTE, 0.022, 0.10)
+			srgb_col = _apply_fern_biome_tint(srgb_col, arch, is_volcanic, pt, h)
 			out_xf.append(xf)
 			out_col.append(srgb_col.srgb_to_linear())
 			_grid_insert(bush_grid, cell_size, pt)
 
 
-static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, target: int,
-		radius: float, max_shrub_h: float, is_volcanic: bool, meadow_centers: Array[Vector2],
-		keepouts: Array[Vector3], has_pier: bool, pier_a: Vector2, pier_b: Vector2,
-		trail_ctx: Dictionary, bush_grid: Dictionary, out_xf: Array[Transform3D],
-		out_col: Array[Color]) -> void:
+static func _place_hibiscus_shrubs(island: Island, arch: StringName, rng: RandomNumberGenerator,
+		target: int, radius: float, max_shrub_h: float, is_volcanic: bool,
+		meadow_centers: Array[Vector2], keepouts: Array[Vector3], has_pier: bool,
+		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, bush_grid: Dictionary,
+		out_xf: Array[Transform3D], out_col: Array[Color]) -> void:
 	var min_sep := clampf(radius * 0.032, 1.75, 4.0)
 	var cell_size := 2.6
 	var passes: Array[Array] = [
@@ -1172,11 +1247,15 @@ static func _place_hibiscus_shrubs(island: Island, rng: RandomNumberGenerator, t
 
 			var sc := rng.randf_range(0.86, 1.38) * (0.74 if is_volcanic else 1.0)
 			var sy := sc * rng.randf_range(0.90, 1.15)
+			if not is_volcanic and arch in LAGOON_ATOLL_ARCHETYPES:
+				sc *= 1.05
+				sy *= 1.04
 			var slope_sink := 0.22 * clampf((0.88 - n.y) / 0.34, 0.0, 1.0)
 			var origin := Vector3(pt.x, h - 0.08 - slope_sink, pt.y)
 			var xf := _grounded_transform(origin, n, 0.42, rng.randf() * TAU, Vector3(sc, sy, sc))
 			var tint_srgb := _pick_jittered_color(rng,
 				HIBISCUS_VOLCANIC_TINTS if is_volcanic else HIBISCUS_TROPICAL_TINTS, 0.015, 0.05)
+			tint_srgb = _apply_hibiscus_biome_tint(tint_srgb, arch, is_volcanic, pt)
 			out_xf.append(xf)
 			out_col.append(tint_srgb.srgb_to_linear())
 			_grid_insert(bush_grid, cell_size, pt)
@@ -1304,8 +1383,8 @@ static func _place_shore_pebbles(island: Island, rng: RandomNumberGenerator, tar
 			_grid_insert(grid, cell_size, pt)
 
 
-static func _place_tidal_outcrops(island: Island, rng: RandomNumberGenerator, target: int,
-		radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
+static func _place_tidal_outcrops(island: Island, arch: StringName, rng: RandomNumberGenerator,
+		target: int, radius: float, is_volcanic: bool, keepouts: Array[Vector3], has_pier: bool,
 		pier_a: Vector2, pier_b: Vector2, trail_ctx: Dictionary, out_xf: Array[Transform3D],
 		out_col: Array[Color]) -> void:
 	var r_min := maxf(4.0, radius * 0.20)
@@ -1349,9 +1428,10 @@ static func _place_tidal_outcrops(island: Island, rng: RandomNumberGenerator, ta
 			var sc_y := sc_xz * rng.randf_range(0.78, 1.26)
 			var seat_y := h - 0.24 * sc_y
 			var xf := _grounded_transform(Vector3(pt.x, seat_y, pt.y), n, 0.36, rng.randf() * TAU, Vector3(sc_xz, sc_y, sc_xz * rng.randf_range(0.88, 1.14)))
+			var base_col := _pick_jittered_color(rng,
+				TIDAL_ROCK_VOLCANIC_PALETTE if is_volcanic else TIDAL_ROCK_PALETTE, 0.015, 0.08)
 			out_xf.append(xf)
-			out_col.append(_pick_jittered_color(rng,
-				TIDAL_ROCK_VOLCANIC_PALETTE if is_volcanic else TIDAL_ROCK_PALETTE, 0.015, 0.08))
+			out_col.append(_apply_tidal_rock_biome_tint(base_col, arch, is_volcanic, pt, h))
 			_grid_insert(grid, cell_size, pt)
 
 
@@ -1683,6 +1763,135 @@ static func _pick_jittered_color(rng: RandomNumberGenerator, palette: Array[Colo
 	var s := clampf(base.s * rng.randf_range(1.0 - val_jit, 1.0 + val_jit), 0.0, 1.0)
 	var v := clampf(base.v * rng.randf_range(1.0 - val_jit, 1.0 + val_jit), 0.0, 1.0)
 	return Color.from_hsv(h, s, v, 1.0)
+
+
+# ------------------------------------------------------------------ deterministic biome tint modulators
+
+static func _spatial_hash01(x: float, z: float) -> float:
+	var raw := sin(x * 12.9898 + z * 78.233) * 43758.5453
+	return clampf(raw - floorf(raw), 0.0, 0.999999)
+
+
+static func _volcanic_caldera_band(pt: Vector2, h: float) -> int:
+	# Pure deterministic spatial patch + fine hash -> 0: olive-slate, 1: burnt-russet, 2: sulfur-gold.
+	var h_fine := _spatial_hash01(pt.x, pt.y)
+	var patch := 0.5 + 0.5 * sin(pt.x * 0.17 + pt.y * 0.13) * cos(pt.x * 0.11 - pt.y * 0.19)
+	var roll := clampf(h_fine * 0.72 + patch * 0.28, 0.0, 0.999999)
+	var high_sulfur_boost := clampf((h - 10.0) / 20.0, 0.0, 1.0) * 0.09
+	if roll < 0.50:
+		return 0
+	if roll < 0.84 - high_sulfur_boost:
+		return 1
+	return 2
+
+
+static func _apply_volcanic_flora_tint(base_col: Color, pt: Vector2, h: float) -> Color:
+	var band := _volcanic_caldera_band(pt, h)
+	if band == 0:
+		return base_col.lerp(VOLCANIC_CALDERA_SLATE, 0.74)
+	if band == 1:
+		return base_col.lerp(VOLCANIC_CALDERA_RUSSET, 0.76)
+	return base_col.lerp(VOLCANIC_CALDERA_SULFUR, 0.78)
+
+
+static func _apply_highland_alpine_tint(base_col: Color, arch: StringName, pt: Vector2, h: float,
+		is_highland_pass: bool, is_fern: bool) -> Color:
+	var is_ruin := arch in HIGHLAND_RUIN_ARCHETYPES
+	var alt_t: float
+	if is_highland_pass:
+		alt_t = maxf(clampf((h - 18.0) / 22.0, 0.0, 1.0), 0.56 if is_ruin else 0.46)
+	else:
+		var span := 14.0 if is_ruin else 18.0
+		alt_t = clampf((h - 20.0) / span, 0.0, 1.0)
+	if alt_t <= 0.001:
+		return base_col
+
+	var hv := _spatial_hash01(pt.x * 0.73 + 5.1, pt.y * 0.73 - 3.7)
+	var patch := 0.5 + 0.5 * sin(pt.x * 0.14 - pt.y * 0.16)
+	var mix_t := clampf(hv * 0.65 + patch * 0.35, 0.0, 1.0)
+	var moss_col := HIGHLAND_RUIN_MOSS if (is_ruin or is_fern) else HIGHLAND_ALPINE_MOSS
+	var sage_col := HIGHLAND_LICHEN_SAGE if (is_ruin and not is_fern) else HIGHLAND_SAGE_OLIVE
+	var target := moss_col.lerp(sage_col, mix_t * (0.72 if is_fern else 0.92))
+	var weight := clampf(alt_t * (0.64 if is_ruin else 0.54), 0.0, 0.72)
+	return base_col.lerp(target, weight)
+
+
+static func _apply_grass_biome_tint(base_col: Color, arch: StringName, is_volcanic: bool,
+		pt: Vector2, h: float) -> Color:
+	if is_volcanic:
+		return _apply_volcanic_flora_tint(base_col, pt, h)
+	if h < 4.4:
+		var dune_t := clampf((4.4 - h) / 2.8, 0.0, 1.0)
+		var hv := _spatial_hash01(pt.x + 17.3, pt.y - 11.9)
+		var is_atoll := arch in LAGOON_ATOLL_ARCHETYPES
+		var sea_oat_mix := (0.62 + 0.38 * hv) if is_atoll else (0.48 + 0.52 * hv)
+		var dune_target := DUNE_COASTAL_SAGE_COLOR.lerp(DUNE_SEA_OATS_COLOR, sea_oat_mix)
+		var blended := base_col.lerp(dune_target, dune_t * 0.58)
+		return Color(
+			clampf(blended.r, 0.0, 1.06),
+			clampf(blended.g, 0.0, 1.04),
+			clampf(blended.b, 0.0, 1.0),
+			1.0
+		)
+	if h > 20.0:
+		return _apply_highland_alpine_tint(base_col, arch, pt, h, false, false)
+	if arch in LUSH_JUNGLE_TEMPLE_ARCHETYPES and h > 5.0:
+		var valley_t := clampf((h - 5.0) / 4.0, 0.0, 1.0) * clampf((20.0 - h) / 6.0, 0.0, 1.0)
+		return Color(
+			clampf(base_col.r * lerpf(1.0, 0.92, valley_t), 0.0, 1.0),
+			clampf(base_col.g * lerpf(1.0, 1.02, valley_t), 0.0, 1.0),
+			clampf(base_col.b * lerpf(1.0, 0.94, valley_t), 0.0, 1.0),
+			1.0
+		)
+	return base_col
+
+
+static func _apply_fern_biome_tint(base_col: Color, arch: StringName, is_volcanic: bool,
+		pt: Vector2, h: float) -> Color:
+	if is_volcanic:
+		return _apply_volcanic_flora_tint(base_col, pt, h)
+	if h > 20.0:
+		return _apply_highland_alpine_tint(base_col, arch, pt, h, false, true)
+	if arch in LUSH_JUNGLE_TEMPLE_ARCHETYPES:
+		var valley_t := clampf((20.0 - h) / 12.0, 0.35, 1.0)
+		var mod := Color.WHITE.lerp(JUNGLE_VALLEY_FERN_TINT, valley_t)
+		return Color(
+			clampf(base_col.r * mod.r, 0.0, 1.0),
+			clampf(base_col.g * mod.g, 0.0, 1.0),
+			clampf(base_col.b * mod.b, 0.0, 1.0),
+			1.0
+		)
+	return base_col
+
+
+static func _apply_hibiscus_biome_tint(base_tint: Color, arch: StringName, is_volcanic: bool,
+		pt: Vector2) -> Color:
+	var hv := _spatial_hash01(pt.x, pt.y)
+	if is_volcanic:
+		var ember := Color(
+			VOLCANIC_HIBISCUS_EMBER.r,
+			lerpf(VOLCANIC_HIBISCUS_EMBER.g - 0.05, VOLCANIC_HIBISCUS_EMBER.g + 0.05, hv),
+			lerpf(VOLCANIC_HIBISCUS_EMBER.b - 0.04, VOLCANIC_HIBISCUS_EMBER.b + 0.04, hv),
+			1.0
+		)
+		return base_tint.lerp(ember, 0.84)
+	var idx := mini(HIBISCUS_LAGOON_TINTS.size() - 1, int(floorf(hv * float(HIBISCUS_LAGOON_TINTS.size()))))
+	var target: Color = HIBISCUS_LAGOON_TINTS[idx]
+	var strength := 0.88 if (arch in LAGOON_ATOLL_ARCHETYPES) else 0.42
+	return base_tint.lerp(target, strength)
+
+
+static func _apply_tidal_rock_biome_tint(base_col: Color, arch: StringName, is_volcanic: bool,
+		pt: Vector2, h: float) -> Color:
+	var hv := _spatial_hash01(pt.x, pt.y)
+	if is_volcanic:
+		var wet_t := clampf((0.75 - h) / 1.4, 0.0, 1.0)
+		var obs_target := VOLCANIC_TIDAL_OBSIDIAN.lerp(Color(0.34, 0.34, 0.40, 1.0), wet_t * 0.45)
+		return base_col.lerp(obs_target, 0.72 + 0.14 * hv)
+	if arch in LAGOON_ATOLL_ARCHETYPES:
+		var shallow_t := clampf((1.4 - h) / 2.2, 0.0, 1.0)
+		return base_col.lerp(LAGOON_TIDAL_CORAL, 0.68 + 0.22 * shallow_t * (0.65 + 0.35 * hv))
+	return base_col
 
 
 # ------------------------------------------------------------------ GLB visual mesh extraction (with col_* stripping)
