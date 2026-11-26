@@ -15,7 +15,16 @@ const ACTIONS := {
 	"secondary": ["mouse_right"],
 	"command_wheel": [KEY_Q],
 	"item_next": [KEY_E],
+	"item_prev": [KEY_C],
 	"item_radial": [KEY_TAB],
+	"dodge": [KEY_ALT, KEY_V],
+	"heavy_attack": [KEY_R],
+	"slot_1": [KEY_1],
+	"slot_2": [KEY_2],
+	"slot_3": [KEY_3],
+	"slot_4": [KEY_4],
+	"slot_5": [KEY_5],
+	"slot_6": [KEY_6],
 	"pause": [KEY_ESCAPE],
 }
 
