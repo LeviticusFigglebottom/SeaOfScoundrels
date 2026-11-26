@@ -1157,6 +1157,65 @@ func test_bonus_island_supply_barrels_and_teardown() -> void:
 		"SupplyBarrel releases static shared cache cleanly when all barrels exit tree")
 
 
+func test_night_island_fireflies_daylight_and_distance_gating() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+
+	var arch := Archipelago.new()
+	add_child(arch)
+	await physics_frames(2)
+
+	var cutlass := arch.get_island_by_id("cutlass_cay")
+	var port := arch.get_island_by_id("port_scoundrel")
+	var cinder := arch.get_island_by_id("cinder_crag")
+	check(cutlass != null and port != null and cinder != null, "Archipelago contains cutlass_cay, port_scoundrel & cinder_crag")
+
+	var cutlass_ff := cutlass.get_node_or_null(^"IslandFireflies") as GPUParticles3D if cutlass != null else null
+	var port_ff := port.get_node_or_null(^"IslandFireflies") as GPUParticles3D if port != null else null
+	var cinder_ff := cinder.get_node_or_null(^"IslandFireflies") as GPUParticles3D if cinder != null else null
+
+	check(cutlass_ff != null, "Cutlass Cay mounts IslandFireflies GPUParticles3D")
+	check(port_ff != null, "Port Scoundrel mounts IslandFireflies GPUParticles3D")
+	check(cinder_ff == null, "Volcanic Cinder Crag skips tropical IslandFireflies")
+
+	if cutlass_ff != null:
+		check_eq(cutlass_ff.amount, 36, "IslandFireflies uses 1-draw-call particle budget (amount = 36)")
+		check(cutlass_ff.draw_pass_1 is QuadMesh, "IslandFireflies uses billboarded QuadMesh (zero primitives)")
+		var qm := cutlass_ff.draw_pass_1 as QuadMesh
+		var mat := qm.material as StandardMaterial3D if qm != null else null
+		check(mat != null and mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD and mat.albedo_texture is ImageTexture,
+			"IslandFireflies uses additive unshaded feathered ImageTexture")
+
+		# 1. Noon daylight -> completely hidden & inactive (0.00 ms GPU cost!).
+		Weather.time_of_day = 12.0
+		cutlass.update_night_ambience(cutlass.global_position + Vector3(0.0, 4.0, 20.0), true)
+		check(not cutlass_ff.visible and not cutlass_ff.emitting, "IslandFireflies stays hidden and idle at noon")
+
+		# 2. Nighttime within 95 m -> visible, emitting, full amount_ratio.
+		Weather.time_of_day = 22.5
+		cutlass.update_night_ambience(cutlass.global_position + Vector3(0.0, 4.0, 35.0), true)
+		check(cutlass_ff.visible and cutlass_ff.emitting, "IslandFireflies activates cleanly at night within 95 m")
+		check(cutlass_ff.amount_ratio >= 0.95, "IslandFireflies reaches full amount_ratio at deep night (got %.2f)" % cutlass_ff.amount_ratio)
+
+		# 3. Nighttime beyond 95 m -> cleanly culled!
+		cutlass.update_night_ambience(cutlass.global_position + Vector3(0.0, 4.0, 120.0), true)
+		check(not cutlass_ff.visible and not cutlass_ff.emitting, "IslandFireflies culls cleanly beyond 95 m")
+
+		# 4. Headless mode without a camera still activates cleanly at night.
+		cutlass.update_night_ambience(Vector3.ZERO, false)
+		check(cutlass_ff.visible and cutlass_ff.emitting, "IslandFireflies activates cleanly at night without active camera")
+
+	# 5. Zero-leak teardown releases static firefly glow texture when all islands exit tree.
+	arch.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(cutlass_ff), "IslandFireflies freed cleanly with its Island")
+	check(Island._firefly_glow_tex == null, "Island releases static _firefly_glow_tex cleanly when all islands exit tree")
+	Weather.apply_state(saved_weather)
+
+
+
 
 
 

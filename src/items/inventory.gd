@@ -91,6 +91,12 @@ var spyglass_sighting_dist: float = 0.0
 var tipsy: float = 0.0
 var playing_shanty: bool = false
 
+## Tool Variant sidegrade modifiers synced from Economy via `apply_tool_modifiers()`.
+var spyglass_zoom_scale: float = 1.0
+var sighting_range_scale: float = 1.0
+var dig_power: int = 1
+var bail_power_scale: float = 1.0
+
 ## Cached held parchment mode (&"treasure", &"riddle", &"bounty") & rendered ImageTexture.
 var map_mode: StringName = &"treasure"
 var map_island_name: String = "Cutlass Cay"
@@ -145,6 +151,15 @@ func _load_weapon_loadout_from_profile() -> void:
 	var saved_ranged := StringName(String(Game.profile.data.get("ranged_weapon", "pistol")))
 	if VALID_RANGED_WEAPONS.has(saved_ranged):
 		ranged_weapon = saved_ranged
+	apply_tool_modifiers(Economy.get_ship_modifiers(Game.profile))
+
+
+## Apply Tool Variant sidegrade modifiers from `Economy.get_ship_modifiers(profile)`.
+func apply_tool_modifiers(mods: Dictionary) -> void:
+	spyglass_zoom_scale = clampf(float(mods.get("spyglass_zoom_scale", 1.0)), 0.45, 1.5)
+	sighting_range_scale = clampf(float(mods.get("sighting_range_scale", 1.0)), 0.5, 2.5)
+	dig_power = clampi(roundi(float(mods.get("dig_power", 1.0))), 1, 3)
+	bail_power_scale = clampf(float(mods.get("bail_power_scale", 1.0)), 0.5, 2.5)
 
 
 func _exit_tree() -> void:
@@ -561,12 +576,18 @@ func use_shovel() -> Dictionary:
 		if flat.length() > 0.01:
 			var clamped := flat.limit_length(2.0)
 			strike_pos = Vector3(best_site.global_position.x + clamped.x, best_site.global_position.y, best_site.global_position.z + clamped.y)
-		var res: Variant = best_site.call(&"dig", strike_pos, pawn)
-		if res is Dictionary:
-			if not bool((res as Dictionary).get("hit", false)):
-				Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
-			return res as Dictionary
-		return {"hit": true}
+		var strikes := maxi(1, dig_power)
+		var last_res: Dictionary = {}
+		for _si in strikes:
+			var res: Variant = best_site.call(&"dig", strike_pos, pawn)
+			if not (res is Dictionary):
+				return {"hit": true}
+			last_res = res as Dictionary
+			if not bool(last_res.get("hit", false)) or bool(last_res.get("unearthed", false)):
+				break
+		if not bool(last_res.get("hit", false)):
+			Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
+		return last_res
 
 	Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
 	return {"hit": false, "reason": "no_dig_site"}
@@ -595,7 +616,7 @@ func use_bucket() -> Dictionary:
 	# Attempt to bail from current or adjacent flooded Ship.
 	var ship := _find_nearby_ship(4.5)
 	if ship != null and ship.water_level > 0.005:
-		var removed := ship.bail(BAIL_AMOUNT)
+		var removed := ship.bail(BAIL_AMOUNT * bail_power_scale)
 		if removed > 0.0005:
 			bucket_full = true
 			_start_swing(&"scoop", 0.42)
@@ -818,7 +839,8 @@ func _tick_spyglass(delta: float) -> void:
 	if player_controller != null and player_controller.camera != null:
 		var base := player_controller.fov if player_controller.fov > 10.0 else BASE_FOV
 		if spyglass_zoom > 0.002 or active_item == &"spyglass":
-			player_controller.camera.fov = lerpf(base, SPYGLASS_FOV, spyglass_zoom)
+			var target_spy_fov := clampf(SPYGLASS_FOV * spyglass_zoom_scale, 8.0, base)
+			player_controller.camera.fov = lerpf(base, target_spy_fov, spyglass_zoom)
 		else:
 			var ads_fov := BLUNDERBUSS_ADS_FOV if ranged_weapon == &"blunderbuss" else PISTOL_ADS_FOV
 			var target_fov := ads_fov if (active_item == &"pistol" and _secondary_held) else base
@@ -854,6 +876,8 @@ func _scan_spyglass_sighting() -> void:
 	var best_label := ""
 	var best_dist := 0.0
 	var best_score := cos(deg_to_rad(6.5))
+	var max_ship_dist := 2600.0 * sighting_range_scale
+	var max_island_dist := 3500.0 * sighting_range_scale
 
 	# Check distant ships (other than our own).
 	for node in get_tree().get_nodes_in_group(&"ship"):
@@ -862,7 +886,7 @@ func _scan_spyglass_sighting() -> void:
 		var s := node as Node3D
 		var to := (s.global_position + Vector3.UP * 3.5) - eye
 		var dist := to.length()
-		if dist < 12.0 or dist > 2600.0:
+		if dist < 12.0 or dist > max_ship_dist:
 			continue
 		var score := to.dot(dir) / dist
 		if score > best_score:
@@ -883,7 +907,7 @@ func _scan_spyglass_sighting() -> void:
 		var isl := node as Node3D
 		var to := (isl.global_position + Vector3.UP * 14.0) - eye
 		var dist := to.length()
-		if dist < 25.0 or dist > 3500.0:
+		if dist < 25.0 or dist > max_island_dist:
 			continue
 		var score := to.dot(dir) / dist
 		if score > best_score:

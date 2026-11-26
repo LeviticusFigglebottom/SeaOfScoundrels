@@ -328,4 +328,130 @@ func test_crew_uniform_cosmetics_persistence_and_live_retinting() -> void:
 	await physics_frames(2)
 
 
+func test_tool_variant_sidegrades_persistence_and_inventory_effects() -> void:
+	var pawn_scene: PackedScene = preload("res://src/characters/pawn.tscn")
+	var sloop_scene: PackedScene = preload("res://src/ship/sloop.tscn")
+	var tool_path := "user://test_tool_variant_profile.json"
+	var p := Profile.new()
+
+	check_eq(Economy.get_equipped(p, &"tool_variant"), &"",
+		"default tool_variant is empty for backward compatibility")
+	var base_mods := Economy.get_ship_modifiers(p)
+	check_eq(base_mods.get("tool_variant_id"), &"", "default tool_variant_id is empty")
+	check_near(float(base_mods.get("spyglass_zoom_scale", 0.0)), 1.0, 0.001)
+	check_near(float(base_mods.get("sighting_range_scale", 0.0)), 1.0, 0.001)
+	check_near(float(base_mods.get("dig_power", 0.0)), 1.0, 0.001)
+	check_near(float(base_mods.get("bail_power_scale", 0.0)), 1.0, 0.001)
+
+	var variants := Economy.get_unlocks_by_slot(&"tool_variant")
+	check_eq(variants.size(), 3, "Economy registers 3 tool_variant sidegrades")
+
+	# Rank gating: Rank-2 master shovel & cooper bucket blocked at Rank 1; Rank-1 spyglass allowed.
+	p.add_gold(2000)
+	check(not bool(Economy.purchase_unlock(p, &"tool_master_shovel").get("ok", false)),
+		"Rank-2 tool_master_shovel blocked at Rank 1")
+	check(not bool(Economy.purchase_unlock(p, &"tool_cooper_bucket").get("ok", false)),
+		"Rank-2 tool_cooper_bucket blocked at Rank 1")
+	check(bool(Economy.purchase_unlock(p, &"tool_gilded_spyglass").get("ok", false)),
+		"Rank-1 tool_gilded_spyglass purchases cleanly")
+	check(Economy.equip_loadout(p, &"tool_variant", &"tool_gilded_spyglass"), "equip tool_gilded_spyglass")
+
+	# Save & reload Profile JSON round-trip.
+	check_eq(p.save(tool_path), OK, "profile saves tool_variant cleanly")
+	var loaded := Profile.new()
+	check(loaded.load_from(tool_path), "profile reloads tool_variant cleanly")
+	check_eq(Economy.get_equipped(loaded, &"tool_variant"), &"tool_gilded_spyglass",
+		"reloaded profile restores equipped tool_variant")
+
+	# Unlock Rank 2 across Sunken Archive & Iron Tide for shovel + bucket testing.
+	loaded.add_renown("sunken_archive", Economy.rank_threshold(2))
+	loaded.add_renown("iron_tide", Economy.rank_threshold(2))
+	check(bool(Economy.purchase_unlock(loaded, &"tool_master_shovel").get("ok", false)),
+		"purchase tool_master_shovel after Rank 2")
+	check(bool(Economy.purchase_unlock(loaded, &"tool_cooper_bucket").get("ok", false)),
+		"purchase tool_cooper_bucket after Rank 2")
+
+	# Set up live Pawn + PlayerController + Inventory to verify real gameplay effects!
+	Net.start_single_player()
+	var captain := pawn_scene.instantiate() as Pawn
+	var ctrl := PlayerController.new()
+	ctrl.input_enabled = false
+	captain.add_child(ctrl)
+	var inv := Inventory.new()
+	inv.input_enabled = false
+	captain.add_child(inv)
+	add_child(captain)
+	await physics_frames(1)
+
+	# 1. Navigator's Far-Spyglass: tighter telephoto FOV (~12.96 deg) & +35% sighting range.
+	check(Economy.equip_loadout(loaded, &"tool_variant", &"tool_gilded_spyglass"), "equip far-spyglass")
+	ShipwrightMenu.apply_economy_to_ship(null, loaded, [], null, inv)
+	check_near(inv.spyglass_zoom_scale, 0.72, 0.001, "far-spyglass sets spyglass_zoom_scale=0.72")
+	check_near(inv.sighting_range_scale, 1.35, 0.001, "far-spyglass sets sighting_range_scale=1.35")
+	inv.equip(&"spyglass", true)
+	inv.set_secondary_held(true)
+	for _f in range(30):
+		inv.call(&"_process", 0.05)
+	check(ctrl.camera != null and ctrl.camera.fov < Inventory.SPYGLASS_FOV - 3.5,
+		"far-spyglass tightens zoomed camera FOV below base 18 deg (got %.2f)" % (ctrl.camera.fov if ctrl.camera != null else 99.0))
+	inv.set_secondary_held(false)
+
+	# 2. Iron-Edged Relic Shovel: unearths a 3-hit DigSite in 2 crisp digs!
+	check(Economy.equip_loadout(loaded, &"tool_variant", &"tool_master_shovel"), "equip master shovel")
+	ShipwrightMenu.apply_economy_to_ship(null, loaded, [], null, inv)
+	check_eq(inv.dig_power, 2, "master shovel sets dig_power = 2")
+	check_near(inv.spyglass_zoom_scale, 1.0, 0.001, "switching variant resets spyglass_zoom_scale to 1.0")
+	var site := DigSite.new()
+	site.treasure_id = &"driftwood_chest"
+	site.position = Vector3(4.0, 0.0, 0.0)
+	add_child(site)
+	captain.global_position = Vector3(3.2, 0.0, 0.0)
+	inv.equip(&"shovel", true)
+	var dig1 := inv.use_shovel()
+	check(bool(dig1.get("hit", false)), "master shovel dig 1 hits DigSite")
+	check_eq(site.dig_count, 2, "master shovel advances DigSite by 2 strikes on dig 1")
+	check(not site.is_unearthed, "DigSite still needs 1 more strike after dig 1")
+	var dig2 := inv.use_shovel()
+	check(bool(dig2.get("hit", false)) and bool(dig2.get("unearthed", false)),
+		"master shovel unearths 3-hit DigSite cleanly in 2 digs!")
+	check(site.is_unearthed and site.spawned_chest != null, "unearthed chest spawned cleanly")
+	if site.spawned_chest != null and is_instance_valid(site.spawned_chest):
+		site.spawned_chest.queue_free()
+	site.queue_free()
+
+	# 3. Copper-Banded Heavy Bailer: bails +40% more bilge water per scoop!
+	check(Economy.equip_loadout(loaded, &"tool_variant", &"tool_cooper_bucket"), "equip cooper bucket")
+	ShipwrightMenu.apply_economy_to_ship(null, loaded, [], null, inv)
+	check_near(inv.bail_power_scale, 1.40, 0.001, "cooper bucket sets bail_power_scale = 1.40")
+	check_eq(inv.dig_power, 1, "switching variant resets dig_power to 1")
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	sloop.position = Vector3(20.0, 0.0, 0.0)
+	add_child(sloop)
+	await physics_frames(1)
+	sloop.water_level = 0.60
+	captain.global_position = sloop.global_position + Vector3(0.0, 1.1, 0.0)
+	inv.equip(&"bucket", true)
+	var bail_res := inv.use_bucket()
+	check_eq(bail_res.get("action"), &"bail", "cooper bucket bails flooded sloop")
+	check_near(float(bail_res.get("removed", 0.0)), Inventory.BAIL_AMOUNT * 1.40, 0.005,
+		"cooper bucket removes +40%% bilge water per scoop (%.3f)" % float(bail_res.get("removed", 0.0)))
+
+	# 4. Verify ShipwrightMenu renders all 3 Tool Variant cards in its Shipwright tab!
+	var menu := ShipwrightMenu.new()
+	add_child(menu)
+	menu.refresh()
+	for uid_str: String in ["tool_gilded_spyglass", "tool_master_shovel", "tool_cooper_bucket"]:
+		check(menu.find_child("UnlockBtn_" + uid_str, true, false) != null,
+			"ShipwrightMenu renders Tool Variant button for %s" % uid_str)
+
+	menu.queue_free()
+	sloop.queue_free()
+	captain.queue_free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tool_path))
+	await physics_frames(2)
+
+
+
 

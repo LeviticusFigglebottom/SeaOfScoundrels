@@ -23,6 +23,7 @@ const SLOT_SECTIONS: Array[Array] = [
 	[&"sail", "Sail Rigging (Downwind vs. Close-Hauled)"],
 	[&"cannon", "Broadside Cannons (Breach vs. Reload)"],
 	[&"trait", "Crew Trait"],
+	[&"tool_variant", "Tool Variant"],
 	[&"hull_livery", "Hull Paint"],
 	[&"sail_cosmetic", "Sail Livery"],
 	[&"flag", "Masthead Pennant"],
@@ -247,7 +248,7 @@ func buy_or_equip_unlock(unlock_id: StringName) -> Dictionary:
 	if not Economy.equip_loadout(Game.profile, slot, unlock_id):
 		return {"ok": false, "reason": "Could not equip %s." % String(unlock_id)}
 
-	var applied_mods := apply_economy_to_ship(ship, Game.profile, _crew_brains, world_director)
+	var applied_mods := apply_economy_to_ship(ship, Game.profile, _crew_brains, world_director, inventory)
 	Game.save()
 
 	var nm := String(entry["name"])
@@ -351,7 +352,8 @@ static func apply_economy_to_ship(
 	target_ship: Ship,
 	profile: Profile,
 	crew_brains: Array[CrewBrain] = [],
-	director: WorldDirector = null
+	director: WorldDirector = null,
+	p_inventory: Inventory = null
 ) -> Dictionary:
 	var mods := Economy.get_ship_modifiers(profile)
 	var bridged := mods.duplicate()
@@ -404,6 +406,9 @@ static func apply_economy_to_ship(
 
 	if director != null and is_instance_valid(director):
 		director.lookout_scale = float(mods.get("lookout_scale", 1.0))
+
+	if p_inventory != null and is_instance_valid(p_inventory):
+		p_inventory.apply_tool_modifiers(mods)
 
 	return bridged
 

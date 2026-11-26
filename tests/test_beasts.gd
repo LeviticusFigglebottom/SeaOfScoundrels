@@ -573,3 +573,114 @@ func test_shark_sculpted_meshes_caching_and_charge_animation() -> void:
 		"Shark releases static mesh cache cleanly when last active shark exits tree")
 
 
+func test_dolphin_pod_sculpted_meshes_leaps_and_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	var pod := DolphinPod.spawn_alongside(_root, null, 3, 18.0)
+	check(pod != null, "DolphinPod.spawn_alongside spawns pod cleanly without ship")
+	check(pod.is_in_group(&"dolphins") and pod.is_in_group(&"beasts"),
+		"DolphinPod registers in dolphins and beasts groups")
+
+	var dolphins := pod.get_dolphin_nodes()
+	check_eq(dolphins.size(), 3, "DolphinPod spawns 3 sculpted dolphins")
+
+	# 1. Verify zero raw primitives, finite unit normals, sRGB materials, and static ArrayMesh sharing.
+	var raw_prims := 0
+	var bad_normals := 0
+	var body_tris := 0
+	var tail_tris := 0
+	var first_body_mesh: ArrayMesh = null
+	var first_tail_mesh: ArrayMesh = null
+
+	for d in dolphins:
+		var bmi := d.get_node_or_null(^"BodyMesh") as MeshInstance3D
+		var tp := d.get_node_or_null(^"TailPivot") as Node3D
+		var tmi := tp.get_node_or_null(^"TailFlukeMesh") as MeshInstance3D if tp != null else null
+		check(bmi != null and bmi.mesh is ArrayMesh, "dolphin '%s' has sculpted BodyMesh" % d.name)
+		check(tp != null and tmi != null and tmi.mesh is ArrayMesh, "dolphin '%s' has articulated TailPivot + TailFlukeMesh" % d.name)
+
+		for mi: MeshInstance3D in [bmi, tmi]:
+			if mi == null:
+				continue
+			if mi.mesh is PrimitiveMesh:
+				raw_prims += 1
+			var am := mi.mesh as ArrayMesh
+			var mesh_tris := 0
+			for si in am.get_surface_count():
+				var arr := am.surface_get_arrays(si)
+				var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				mesh_tris += floori(float(verts.size()) / 3.0)
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+			if mi == bmi:
+				body_tris = mesh_tris
+				if first_body_mesh == null:
+					first_body_mesh = am
+				else:
+					check_eq(am, first_body_mesh, "pod shares static BodyMesh ArrayMesh")
+				var smat := bmi.get_surface_override_material(0) as StandardMaterial3D
+				check(smat != null and smat.vertex_color_is_srgb, "BodyMesh uses sRGB vertex-colored material")
+			else:
+				tail_tris = mesh_tris
+				if first_tail_mesh == null:
+					first_tail_mesh = am
+				else:
+					check_eq(am, first_tail_mesh, "pod shares static TailFlukeMesh ArrayMesh")
+
+	print("    dolphin sculpted meshes: BodyMesh=%d, TailFlukeMesh=%d (total=%d tris/dolphin)" % [
+		body_tris, tail_tris, body_tris + tail_tris])
+	check_eq(raw_prims, 0, "DolphinPod contains zero raw primitive meshes")
+	check_eq(bad_normals, 0, "all sculpted dolphin mesh normals are finite unit vectors")
+	check(body_tris >= 550 and body_tris <= 900, "BodyMesh triangle count within target sculpted budget (%d)" % body_tris)
+	check(tail_tris >= 130 and tail_tris <= 240, "TailFlukeMesh triangle count within target sculpted budget (%d)" % tail_tris)
+
+	# 2. Verify vertical mammalian tail-fluke oscillation (rotation.x beats, rotation.y stays 0) & wave leaps!
+	var d0 := dolphins[0]
+	var tp0 := d0.get_node(^"TailPivot") as Node3D
+	var tail_x_min := INF
+	var tail_x_max := -INF
+	var max_leap_y := -INF
+	var min_sub_y := INF
+	for _i in 120:
+		await physics_frames(1)
+		tail_x_min = minf(tail_x_min, tp0.rotation.x)
+		tail_x_max = maxf(tail_x_max, tp0.rotation.x)
+		var sea_y := Sea.height(d0.global_position.x, d0.global_position.z)
+		var rel_y := d0.global_position.y - sea_y
+		max_leap_y = maxf(max_leap_y, rel_y)
+		min_sub_y = minf(min_sub_y, rel_y)
+		check_near(tp0.rotation.y, 0.0, 0.001, "dolphin tail flukes beat vertically (rotation.y == 0)")
+
+	var tail_x_span := tail_x_max - tail_x_min
+	check(tail_x_span > 0.45, "dolphin horizontal tail flukes oscillate vertically (span=%.3f rad)" % tail_x_span)
+	check(max_leap_y > 1.75, "dolphin leaps high above Sea.height() during wave arc (peak=%.2f m)" % max_leap_y)
+	check(min_sub_y < -0.35, "dolphin dives cleanly beneath waves between leaps (min=%.2f m)" % min_sub_y)
+
+	# 3. Verify force_leap_phase() deterministically frames breach pitch-up, mid-air apex, and nose-first dive!
+	pod.force_leap_phase(PI * 0.5)
+	var apex_sea := Sea.height(d0.global_position.x, d0.global_position.z)
+	check(d0.global_position.y - apex_sea >= 1.95,
+		"force_leap_phase(PI * 0.5) places leader dolphin high at leap apex (%.2f m)" % (d0.global_position.y - apex_sea))
+	check(absf(d0.rotation.x) < 0.12, "dolphin levels smoothly at leap apex (pitch=%.3f)" % d0.rotation.x)
+
+	pod.force_leap_phase(PI * 0.16)
+	check(d0.rotation.x > 0.20, "dolphin pitches nose-up on upward breach (pitch=%.3f)" % d0.rotation.x)
+
+	pod.force_leap_phase(PI * 0.84)
+	check(d0.rotation.x < -0.20, "dolphin pitches nose-down on dive re-entry (pitch=%.3f)" % d0.rotation.x)
+
+	# 4. Verify lifetime expiry auto-frees cleanly and releases all static caches with ZERO leaks!
+	pod.age = pod.lifetime - 0.05
+	await physics_frames(8)
+	check(not is_instance_valid(pod), "DolphinPod cleanly queue_free()s after lifetime expires")
+	check(DolphinPod._body_mesh == null and DolphinPod._tail_mesh == null and DolphinPod._skin_mat == null,
+		"DolphinPod releases static mesh & material caches cleanly when last pod exits tree")
+
+	await _end()
+
+
+

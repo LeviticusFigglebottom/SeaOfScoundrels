@@ -18,6 +18,7 @@ const DEFAULT_LOADOUT := {
 	&"sail_cosmetic": &"",
 	&"hull_livery": &"",
 	&"crew_uniform": &"",
+	&"tool_variant": &"",
 }
 
 const COMPANIES := {
@@ -262,6 +263,51 @@ const UNLOCKS := {
 		"modifiers": {
 			"reload_scale": 0.80,
 			"patch_scale": 1.25,
+		},
+	},
+
+	# --- Tool variant sidegrades ----------------------------------------
+	&"tool_gilded_spyglass": {
+		"id": &"tool_gilded_spyglass",
+		"name": "Navigator's Far-Spyglass",
+		"slot": &"tool_variant",
+		"category": &"sidegrade",
+		"cost": 340,
+		"company_id": &"gilded_compass",
+		"req_rank": 1,
+		"is_default": false,
+		"summary": "Long-draw gilded brass optics: +35% telephoto zoom & +35% horizon sighting range.",
+		"modifiers": {
+			"spyglass_zoom_scale": 0.72,
+			"sighting_range_scale": 1.35,
+		},
+	},
+	&"tool_master_shovel": {
+		"id": &"tool_master_shovel",
+		"name": "Iron-Edged Relic Shovel",
+		"slot": &"tool_variant",
+		"category": &"sidegrade",
+		"cost": 420,
+		"company_id": &"sunken_archive",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Heavy forged spade blade: unearths buried chests in 2 strikes instead of 3.",
+		"modifiers": {
+			"dig_power": 2.0,
+		},
+	},
+	&"tool_cooper_bucket": {
+		"id": &"tool_cooper_bucket",
+		"name": "Copper-Banded Heavy Bailer",
+		"slot": &"tool_variant",
+		"category": &"sidegrade",
+		"cost": 420,
+		"company_id": &"iron_tide",
+		"req_rank": 2,
+		"is_default": false,
+		"summary": "Deep reinforced oak bucket: bails +40% more bilge water per scoop.",
+		"modifiers": {
+			"bail_power_scale": 1.40,
 		},
 	},
 
@@ -703,10 +749,15 @@ static func get_ship_modifiers(profile: Profile) -> Dictionary:
 		"bail_scale": 1.0,
 		"swim_scale": 1.0,
 		"lookout_scale": 1.0,
+		"spyglass_zoom_scale": 1.0,
+		"sighting_range_scale": 1.0,
+		"dig_power": 1.0,
+		"bail_power_scale": 1.0,
 		"hull_id": get_equipped(profile, &"hull"),
 		"sail_id": get_equipped(profile, &"sail"),
 		"cannon_id": get_equipped(profile, &"cannon"),
 		"trait_id": get_equipped(profile, &"trait"),
+		"tool_variant_id": get_equipped(profile, &"tool_variant"),
 		"flag_id": get_equipped(profile, &"flag"),
 		"sail_cosmetic_id": get_equipped(profile, &"sail_cosmetic"),
 		"sail_emblem_mode": 0,
@@ -716,7 +767,7 @@ static func get_ship_modifiers(profile: Profile) -> Dictionary:
 	var sail_cos_id: StringName = mods["sail_cosmetic_id"]
 	if sail_cos_id != &"" and UNLOCKS.has(sail_cos_id):
 		mods["sail_emblem_mode"] = int((UNLOCKS[sail_cos_id] as Dictionary).get("emblem_mode", 0))
-	for slot in [&"hull", &"sail", &"cannon", &"trait"]:
+	for slot in [&"hull", &"sail", &"cannon", &"trait", &"tool_variant"]:
 		var equipped_id: StringName = get_equipped(profile, slot)
 		if equipped_id == &"" or not UNLOCKS.has(equipped_id):
 			continue

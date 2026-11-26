@@ -5,6 +5,7 @@ extends Node3D
 ## updates, and warm ambient lantern/campfire flicker.
 
 const GROUP := &"islands"
+const FIREFLY_CULL_DIST := 95.0
 
 @export var island_id: String = ""
 @export var display_name: String = ""
@@ -39,20 +40,46 @@ var _sea_floor_y: float = -20.0
 
 var _foliage_materials: Array[ShaderMaterial] = []
 var _flicker_lights: Array[Dictionary] = []
+var _fireflies: GPUParticles3D = null
 var _flicker_time: float = 0.0
 var _wind_accum: float = 0.25
 var _dig_sites_root: Node3D = null
+
+static var _active_firefly_emitters: int = 0
+static var _firefly_glow_tex: ImageTexture = null
 
 
 func _enter_tree() -> void:
 	add_to_group(GROUP)
 
 
+static func get_firefly_glow_texture() -> ImageTexture:
+	if _firefly_glow_tex != null:
+		return _firefly_glow_tex
+	var sz := 32
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var half := float(sz - 1) * 0.5
+	for y in sz:
+		for x in sz:
+			var dx := (float(x) - half) / half
+			var dy := (float(y) - half) / half
+			var r := sqrt(dx * dx + dy * dy)
+			var halo := exp(-r * r * 5.2) * smoothstep(1.0, 0.25, r)
+			var core := exp(-r * r * 24.0)
+			var alpha := clampf(halo * 0.85 + core * 0.75, 0.0, 1.0)
+			var lum := clampf(0.82 + core * 0.18, 0.0, 1.0)
+			img.set_pixel(x, y, Color(lum, lum, lum * 0.92, alpha))
+	_firefly_glow_tex = ImageTexture.create_from_image(img)
+	return _firefly_glow_tex
+
+
 func _process(delta: float) -> void:
 	_flicker_time += delta
 	_wind_accum += delta
 	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
-	var dist_sq := global_position.distance_squared_to(cam.global_position) if cam != null else 0.0
+	var has_cam := cam != null
+	var cam_pos := cam.global_position if has_cam else Vector3.ZERO
+	var dist_sq := global_position.distance_squared_to(cam_pos) if has_cam else 0.0
 
 	if not _foliage_materials.is_empty() and _wind_accum >= 0.16 and dist_sq <= 380.0 * 380.0:
 		_wind_accum = 0.0
@@ -79,6 +106,9 @@ func _process(delta: float) -> void:
 			var wave := sin(_flicker_time * 5.3 + phase) * 0.6 + sin(_flicker_time * 11.7 + phase * 1.9) * 0.4
 			light.light_energy = maxf(0.1, base_e * (1.0 + wave * amp))
 
+	if _fireflies != null:
+		update_night_ambience(cam_pos, has_cam)
+
 
 ## Bind the exact terrain height grid built by `IslandGenerator`.
 func set_height_grid(grid: PackedFloat32Array, grid_res: int, grid_half: float,
@@ -104,6 +134,57 @@ func register_flicker_light(light: OmniLight3D, base_energy: float,
 		"amp": amp,
 		"phase": phase,
 	})
+
+
+func register_fireflies(node: GPUParticles3D) -> void:
+	_fireflies = node
+	if node != null:
+		if not node.tree_entered.is_connected(_on_fireflies_entered_tree):
+			node.tree_entered.connect(_on_fireflies_entered_tree)
+		if not node.tree_exiting.is_connected(_on_fireflies_exiting_tree):
+			node.tree_exiting.connect(_on_fireflies_exiting_tree.bind(node))
+		if node.is_inside_tree():
+			_on_fireflies_entered_tree()
+	update_night_ambience(Vector3.ZERO, false)
+
+
+static func _on_fireflies_entered_tree() -> void:
+	_active_firefly_emitters += 1
+
+
+static func _on_fireflies_exiting_tree(node: GPUParticles3D) -> void:
+	if node != null and is_instance_valid(node):
+		node.emitting = false
+		node.visible = false
+		if node.draw_pass_1 is QuadMesh:
+			var qm := node.draw_pass_1 as QuadMesh
+			if qm.material is StandardMaterial3D:
+				(qm.material as StandardMaterial3D).albedo_texture = null
+			qm.material = null
+		if node.process_material is ParticleProcessMaterial:
+			var pm := node.process_material as ParticleProcessMaterial
+			pm.color_ramp = null
+			pm.scale_curve = null
+		node.draw_pass_1 = null
+		node.process_material = null
+	_active_firefly_emitters = maxi(0, _active_firefly_emitters - 1)
+	if _active_firefly_emitters == 0:
+		_firefly_glow_tex = null
+
+
+## Gate IslandFireflies smoothly by Weather.daylight() and 95 m camera distance (0.00 ms GPU cost in daylight/open sea).
+func update_night_ambience(cam_pos: Vector3, has_cam: bool) -> void:
+	if _fireflies == null or not is_instance_valid(_fireflies):
+		return
+	var night_strength := clampf((0.45 - Weather.daylight()) / 0.35, 0.0, 1.0)
+	var within_range := (not has_cam) or global_position.distance_squared_to(cam_pos) <= FIREFLY_CULL_DIST * FIREFLY_CULL_DIST
+	if night_strength <= 0.01 or not within_range:
+		_fireflies.emitting = false
+		_fireflies.visible = false
+	else:
+		_fireflies.visible = true
+		_fireflies.emitting = true
+		_fireflies.amount_ratio = clampf(night_strength, 0.2, 1.0)
 
 
 ## Exact local terrain elevation matching the triangulated terrain collider.

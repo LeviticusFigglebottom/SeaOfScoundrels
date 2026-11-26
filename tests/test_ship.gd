@@ -586,5 +586,56 @@ func test_anchor_turn_swinging_stop_rotates_hull() -> void:
 	await _end()
 
 
+func test_livery_net_state_replication_roundtrip() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	var host_ship := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var client_ship := _spawn_sloop(Vector3(24.0, 0.0, 0.0))
+	await physics_frames(8)
+
+	check_eq(client_ship.get_emblem_mode(), 0, "client ship starts at default player emblem_mode 0")
+
+	# Host commissions Sunken Archive livery (emblem_mode = 5) with custom tints & glow accent.
+	var s_col := Color(0.92, 0.96, 0.94)
+	var f_col := Color(0.14, 0.84, 0.72)
+	var g_col := Color(0.16, 0.88, 0.74)
+	var h_col := Color(0.58, 0.94, 0.84)
+	host_ship.apply_livery(s_col, f_col, g_col, h_col, 5)
+
+	var snap := host_ship.get_net_state()
+	check_eq(int(snap.get("emblem_mode", -1)), 5, "get_net_state exports emblem_mode = 5")
+	check((snap.get("sail_tint", Color.BLACK) as Color).is_equal_approx(s_col), "get_net_state exports sail_tint")
+	check((snap.get("flag_tint", Color.BLACK) as Color).is_equal_approx(f_col), "get_net_state exports flag_tint")
+	check((snap.get("hull_tint", Color.BLACK) as Color).is_equal_approx(h_col), "get_net_state exports hull_tint")
+	check((snap.get("glow_accent", Color.WHITE) as Color).is_equal_approx(g_col), "get_net_state exports glow_accent")
+
+	# Apply snapshot to client sloop and verify full visual/shader sync.
+	client_ship.apply_net_state(snap)
+	check_eq(client_ship.get_emblem_mode(), 5, "client ship syncs emblem_mode = 5")
+	check(client_ship._livery_sail_tint.is_equal_approx(s_col), "client ship syncs _livery_sail_tint")
+	check(client_ship._livery_flag_tint.is_equal_approx(f_col), "client ship syncs _livery_flag_tint")
+	check(client_ship._livery_hull_tint.is_equal_approx(h_col), "client ship syncs _livery_hull_tint")
+	check(client_ship._livery_glow_accent.is_equal_approx(g_col), "client ship syncs _livery_glow_accent")
+	for sm in client_ship._sail_mats:
+		check_eq(int(sm.get_shader_parameter(&"emblem_mode")), 5, "client sail ShaderMaterial synced to emblem_mode = 5")
+	for fm in client_ship._flag_mats:
+		check_eq(int(fm.get_shader_parameter(&"emblem_mode")), 5, "client flag ShaderMaterial synced to emblem_mode = 5")
+
+	# Steady-state repeat snapshot is a clean no-op, and subsequent livery swap replicates immediately.
+	client_ship.apply_net_state(snap)
+	check_eq(client_ship.get_emblem_mode(), 5, "repeat snapshot preserves emblem_mode = 5")
+
+	var iron_hull := Color(1.0, 0.56, 0.48)
+	var iron_flag := Color(0.84, 0.16, 0.18)
+	host_ship.apply_livery(Color(0.96, 0.88, 0.86), iron_flag, Color.BLACK, iron_hull, 6)
+	client_ship.apply_net_state(host_ship.get_net_state())
+	check_eq(client_ship.get_emblem_mode(), 6, "subsequent livery change replicates emblem_mode = 6")
+	check(client_ship._livery_hull_tint.is_equal_approx(iron_hull), "subsequent hull_tint replicates cleanly")
+	check(client_ship._livery_flag_tint.is_equal_approx(iron_flag), "subsequent flag_tint replicates cleanly")
+
+	await _end()
+
+
+
 
 

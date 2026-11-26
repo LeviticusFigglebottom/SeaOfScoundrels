@@ -2871,6 +2871,11 @@ func get_net_state() -> Dictionary:
 		"cannons": cannon_state,
 		"cannonballs": cannonballs_remaining,
 		"planks": planks_remaining,
+		"emblem_mode": get_emblem_mode(),
+		"sail_tint": _livery_sail_tint,
+		"flag_tint": _livery_flag_tint,
+		"hull_tint": _livery_hull_tint,
+		"glow_accent": _livery_glow_accent,
 	}
 
 
@@ -2918,3 +2923,19 @@ func apply_net_state(state: Dictionary) -> void:
 				_cannons[side]["yaw"] = float(arr[0])
 				_cannons[side]["pitch"] = float(arr[1])
 				_cannons[side]["recoil"] = float(arr[2])
+
+	# Replicate full company livery only when any tint or emblem_mode differs (zero steady-state cost).
+	if state.has("emblem_mode") or state.has("sail_tint") or state.has("flag_tint") \
+			or state.has("hull_tint") or state.has("glow_accent"):
+		var s_tint: Color = state.get("sail_tint", _livery_sail_tint) as Color
+		var f_tint: Color = state.get("flag_tint", _livery_flag_tint) as Color
+		var h_tint: Color = state.get("hull_tint", _livery_hull_tint) as Color
+		var g_acc: Color = state.get("glow_accent", _livery_glow_accent) as Color
+		var e_mode: int = int(state.get("emblem_mode", get_emblem_mode()))
+		var livery_changed := e_mode != get_emblem_mode() \
+			or not s_tint.is_equal_approx(_livery_sail_tint) \
+			or not f_tint.is_equal_approx(_livery_flag_tint) \
+			or not h_tint.is_equal_approx(_livery_hull_tint) \
+			or not g_acc.is_equal_approx(_livery_glow_accent)
+		if livery_changed:
+			apply_livery(s_tint, f_tint, g_acc, h_tint, e_mode)

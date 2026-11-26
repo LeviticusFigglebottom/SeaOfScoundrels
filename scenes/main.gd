@@ -10,7 +10,7 @@ extends Node3D
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
 ##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
-##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault
+##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|helm|map_table|hold|leviathan|fleet|company_fleet|fort_vault|dolphins
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -21,6 +21,7 @@ const CRATE_PROP_SCENE: PackedScene = preload("res://assets/generated/props/crat
 const FORT_VAULT_SCRIPT: GDScript = preload("res://src/world/fort_vault.gd")
 
 const BRIGANTINE_SCENE_PATH := "res://src/ship/brigantine.tscn"
+const DOLPHIN_POD_PATH := "res://src/world/dolphin_pod.gd"
 
 const CREW_SPECS: Array[Dictionary] = [
 	{"persona": &"helmsman", "local_pos": Vector3(-0.95, 2.00, 4.65)},
@@ -96,6 +97,8 @@ var _discovery_accum: float = 0.0
 var _music_accum: float = 0.0
 var _revive_timer: float = -1.0
 var _ship_restoring: bool = false
+var _active_dolphin_pod: Node3D = null
+var _dolphin_pod_cooldown: float = 52.0
 
 # Parsed CLI options
 var _cli_host: bool = false
@@ -167,6 +170,7 @@ func _exit_tree() -> void:
 			bp.draw_pass_1 = null
 			bp.process_material = null
 	_reef_bubble_emitters.clear()
+	_active_dolphin_pod = null
 	_disconnect_autoload_signals()
 	if Net != null:
 		Net.unregister_replicated_ship(&"player_sloop")
@@ -951,8 +955,9 @@ func _build_voyage_and_director() -> void:
 		map_table.world_director = world_director
 		map_table.refresh_now()
 
-	# Apply Economy sidegrades, liveries & crew traits from Game.profile.
+	# Apply Economy sidegrades, liveries, tool modifiers & crew traits from Game.profile.
 	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
+	_apply_inventory_tool_modifiers()
 
 
 func _build_ui() -> void:
@@ -982,6 +987,9 @@ func _build_ui() -> void:
 	shipwright_menu.menu_opened.connect(_on_shipwright_opened)
 	shipwright_menu.menu_closed.connect(_on_shipwright_closed)
 	shipwright_menu.voyage_accepted.connect(_on_voyage_started)
+	shipwright_menu.loadout_changed.connect(func(_slot: StringName, _unlock_id: StringName) -> void:
+		_apply_inventory_tool_modifiers()
+	)
 	shipwright_menu.ship_class_selected.connect(_on_ship_class_selected)
 	shipwright_menu.settings_changed.connect(_on_settings_changed)
 
@@ -1137,6 +1145,75 @@ func _physics_process(delta: float) -> void:
 		_tick_discovery_and_arrivals()
 
 	_tick_world_director(delta)
+	_tick_dolphin_pod(delta)
+
+
+func _apply_inventory_tool_modifiers() -> void:
+	if inventory == null or not is_instance_valid(inventory) or Game == null or Game.profile == null:
+		return
+	if inventory.has_method(&"apply_tool_modifiers"):
+		var mods := Economy.get_ship_modifiers(Game.profile)
+		inventory.call(&"apply_tool_modifiers", mods)
+
+
+func _spawn_dolphin_pod(count: int = 3, duration: float = 28.0) -> Node3D:
+	if _entities_root == null or player_ship == null or not is_instance_valid(player_ship):
+		return null
+	if not ResourceLoader.exists(DOLPHIN_POD_PATH):
+		return null
+	var pod_script := load(DOLPHIN_POD_PATH) as GDScript
+	if pod_script == null:
+		return null
+	var pod: Node3D = null
+	if pod_script.has_method(&"spawn_alongside"):
+		pod = pod_script.call(&"spawn_alongside", _entities_root, player_ship, count, duration) as Node3D
+	else:
+		pod = pod_script.new() as Node3D
+		if pod != null:
+			_entities_root.add_child(pod)
+	_active_dolphin_pod = pod
+	return pod
+
+
+func _has_active_combat_or_boss() -> bool:
+	if player_combat != null and is_instance_valid(player_combat) and player_combat.state != CombatComponent.State.IDLE:
+		return true
+	for lev in active_leviathans:
+		if lev != null and is_instance_valid(lev) and not lev.is_defeated():
+			return true
+	if player_ship != null and is_instance_valid(player_ship):
+		for foe in enemy_ships:
+			if foe != null and is_instance_valid(foe) and not foe.is_sinking:
+				if foe.global_position.distance_to(player_ship.global_position) < 220.0:
+					return true
+	return false
+
+
+func _tick_dolphin_pod(delta: float) -> void:
+	if active_shot_mode != "":
+		return
+	if _active_dolphin_pod != null:
+		if is_instance_valid(_active_dolphin_pod) and _active_dolphin_pod.is_inside_tree():
+			return
+		_active_dolphin_pod = null
+	if player_ship == null or not is_instance_valid(player_ship) or player_ship.is_sinking:
+		return
+	if player_ship.forward_speed() < 3.2 or Weather.storminess >= 0.42:
+		return
+	if _has_active_combat_or_boss():
+		return
+	_dolphin_pod_cooldown -= delta
+	if _dolphin_pod_cooldown > 0.0:
+		return
+	_dolphin_pod_cooldown = randf_range(45.0, 75.0)
+	var pod := _spawn_dolphin_pod(3, 28.0)
+	if pod != null:
+		var speaker := "Maren"
+		for br in crew_brains:
+			if br != null and is_instance_valid(br) and br.persona_id == &"lookout":
+				speaker = br.crew_name()
+				break
+		Game.post_notice("%s: Dolphins off the bow, Cap'n! Fair winds ahead!" % speaker)
 
 
 func _tick_world_director(delta: float) -> void:
@@ -2325,6 +2402,7 @@ func _on_shipwright_opened(_tab: StringName) -> void:
 
 
 func _on_shipwright_closed() -> void:
+	_apply_inventory_tool_modifiers()
 	if hud != null and active_shot_mode == "":
 		hud.input_enabled = true
 
@@ -2407,6 +2485,7 @@ func _swap_player_ship_class(cls: StringName) -> void:
 		shipwright_menu.ship = player_ship
 		shipwright_menu.map_table = map_table
 	ShipwrightMenu.apply_economy_to_ship(player_ship, Game.profile, crew_brains, world_director)
+	_apply_inventory_tool_modifiers()
 	old_ship.queue_free()
 
 
@@ -2675,8 +2754,8 @@ func _apply_hero_shot(mode: String) -> void:
 		var third_person := mode in [
 			"outpost_dock", "sailing", "island_approach", "combat",
 			"storm", "sunset", "night", "leviathan", "fleet",
-			"company_fleet", "fort_siege", "fort_vault", "harbour_plaza",
-			"smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
+			"company_fleet", "fort_siege", "fort_vault", "dolphins",
+			"harbour_plaza", "smugglers_grotto", "cinder_crag", "coral_reef", "fishing"
 		]
 		p_cv.set_first_person_hidden(not third_person)
 
@@ -2698,6 +2777,17 @@ func _apply_hero_shot(mode: String) -> void:
 			var mid := Vector3(72.0, 0.0, -190.0)
 			_place_sailing_ship(mid, -0.38, 1.0, 6.2)
 			_enable_ship_track_shot(Vector3(16.8 * sc, 5.6 * sc, -17.2 * sc), Vector3(0.0, 4.8 * sc, -0.5), 54.0)
+
+		"dolphins":
+			# Sunlit midday bow-riding DolphinPod leaping across sparkling turquoise swells beside our sailing ship!
+			Weather.time_of_day = 12.6 if is_nan(_cli_time) else _cli_time
+			Weather.set_weather(0.04, 11.2, -0.38, 0.0, 0.32)
+			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.14)
+			_place_sailing_ship(Vector3(68.0, 0.0, -195.0), -0.38, 0.92, 6.2)
+			var pod := _spawn_dolphin_pod(3, 60.0)
+			if pod != null and pod.has_method(&"force_leap_phase"):
+				pod.call(&"force_leap_phase", 1.25)
+			_enable_ship_track_shot(Vector3(15.2 * sc, 4.0 * sc, -18.5 * sc), Vector3(0.8 * sc, 3.6 * sc, -5.2 * sc), 54.0)
 
 		"island_approach":
 			Weather.time_of_day = 11.2 if is_nan(_cli_time) else _cli_time

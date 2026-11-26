@@ -403,6 +403,10 @@ static func build_island(spec: Dictionary) -> Island:
 	var foliage_mat_cache: Dictionary = {}
 	_populate_archetype_props(island, arch, landing_yaw, exclusions, rng, prop_body, props_root, foliage_mat_cache)
 
+	# Atmospheric night-time tropical fireflies over palm groves, coves & outposts (skip stark volcanic crag).
+	if arch != &"volcano_crag":
+		_build_island_fireflies(island, arch, landing_yaw)
+
 	return island
 
 
@@ -3387,4 +3391,93 @@ static func _make_volcano_ember_ramp() -> GradientTexture1D:
 	tex.width = 32
 	tex.gradient = grad
 	return tex
+
+
+static func _build_island_fireflies(island: Island, arch: StringName, landing_yaw: float) -> void:
+	# Position firefly swarm gently over the island's warm inland palm grove / campfire clearing.
+	var glade_xz := Vector3.ZERO
+	var lb := Basis(Vector3.UP, landing_yaw)
+	if island.is_outpost:
+		glade_xz = lb * Vector3(-4.0, 0.0, -10.0)
+	elif arch == &"smuggler_cove":
+		glade_xz = lb * Vector3(0.0, 0.0, 5.5)
+	elif not island.dig_points.is_empty():
+		var dp0 := island.dig_points[0]
+		glade_xz = Vector3(dp0.x * 0.72, 0.0, dp0.z * 0.72)
+	else:
+		glade_xz = lb * Vector3(0.0, 0.0, -island.island_radius * 0.35)
+	var ground_y := maxf(island.surface_height(glade_xz.x, glade_xz.z), 1.0)
+
+	var p := GPUParticles3D.new()
+	p.name = "IslandFireflies"
+	p.position = Vector3(glade_xz.x, ground_y + 2.4, glade_xz.z)
+	p.amount = 36
+	p.lifetime = 4.6
+	p.preprocess = 2.5
+	p.randomness = 0.45
+	p.local_coords = true
+	p.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.visibility_aabb = AABB(Vector3(-22.0, -6.0, -22.0), Vector3(44.0, 14.0, 44.0))
+	p.emitting = false
+	p.visible = false
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	proc.emission_box_extents = Vector3(14.5, 2.2, 14.5)
+	proc.direction = Vector3.UP
+	proc.spread = 180.0
+	proc.initial_velocity_min = 0.14
+	proc.initial_velocity_max = 0.42
+	proc.gravity = Vector3(0.0, 0.04, 0.0)
+	proc.damping_min = 0.35
+	proc.damping_max = 0.65
+	proc.turbulence_enabled = true
+	proc.turbulence_noise_strength = 0.95
+	proc.turbulence_noise_scale = 2.6
+	proc.turbulence_influence_min = 0.35
+	proc.turbulence_influence_max = 0.65
+	proc.scale_min = 0.55
+	proc.scale_max = 1.25
+
+	var sc := Curve.new()
+	sc.add_point(Vector2(0.0, 0.15))
+	sc.add_point(Vector2(0.24, 1.0))
+	sc.add_point(Vector2(0.54, 0.62))
+	sc.add_point(Vector2(0.78, 1.08))
+	sc.add_point(Vector2(1.0, 0.10))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc
+	proc.scale_curve = sc_tex
+
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.48, 0.78, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.95, 0.98, 0.45, 0.0),
+		Color(0.92, 1.00, 0.46, 0.94),
+		Color(1.00, 0.80, 0.28, 0.86),
+		Color(0.96, 0.96, 0.38, 0.74),
+		Color(1.00, 0.72, 0.20, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 32
+	ramp.gradient = grad
+	proc.color_ramp = ramp
+	p.process_material = proc
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.18, 0.18)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_texture = Island.get_firefly_glow_texture()
+	quad.material = mat
+	p.draw_pass_1 = quad
+
+	island.add_child(p)
+	island.register_fireflies(p)
 
