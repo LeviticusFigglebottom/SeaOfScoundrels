@@ -80,7 +80,11 @@ void fragment() {
 	vec3 n_lit = normalize(n_w + side_t * ((n_mid - 0.5) * 0.36) + vec3(0.0, (n_fine - 0.5) * 0.22, 0.0));
 	vec3 L = normalize(sun_dir);
 	vec3 V = normalize(CAMERA_POSITION_WORLD - v_world_pos);
-	float day_gate = smoothstep(0.01, 0.16, L.y);
+	// SkyRig flips sun_dir upward to the moon at night, so detect true night via sky_horizon_color lum too!
+	float hor_lum = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
+	float night_gate = clamp(max(smoothstep(0.02, -0.10, L.y), smoothstep(0.068, 0.024, hor_lum)), 0.0, 1.0);
+	float day_gate = (1.0 - night_gate) * smoothstep(-0.02, 0.14, L.y);
+	float golden_hour = (1.0 - night_gate) * smoothstep(-0.02, 0.05, L.y) * smoothstep(0.24, 0.06, L.y);
 	float ndotl = clamp(dot(n_lit, L) * 0.5 + 0.5, 0.0, 1.0);
 	float ndotv = clamp(abs(dot(n_lit, V)), 0.0, 1.0);
 	float rim = pow(clamp(1.0 - ndotv, 0.0, 1.0), 2.3);
@@ -88,16 +92,18 @@ void fragment() {
 	vec3 H = normalize(L + V);
 	float sparkle = pow(clamp(dot(n_lit, H), 0.0, 1.0), 48.0) * (0.45 + 0.55 * n_fine) * day_gate;
 
-	vec3 light_term = max(ambient_color * 0.88 + sun_color * (0.34 + 0.74 * ndotl), vec3(0.07, 0.11, 0.17));
-	// Shift moonlit night cascades softly toward silvery-slate indigo while keeping daylight turquoise vivid!
-	vec3 night_water = vec3(0.14, 0.24, 0.34);
-	vec3 core_tod = mix(night_water, water_core, 0.36 + 0.64 * day_gate);
-	// Warm golden-hour rim shimmer vs vivid midday turquoise subsurface scatter.
-	float sunset_warm = clamp((sun_color.r - sun_color.b) * 1.8, 0.0, 1.0) * day_gate;
-	vec3 sss_tint = mix(vec3(0.14, 0.86, 0.84), vec3(1.00, 0.72, 0.44), sunset_warm * 0.55);
+	vec3 light_term = max(ambient_color * 0.88 + sun_color * (0.34 + 0.74 * ndotl), vec3(0.05, 0.08, 0.13));
+	// Keep midday jewel-turquoise vivid, give golden sunset warm bronze-apricot highlights with full
+	// ribbon contrast, and shift moonlit night cascades to calm silvery-slate indigo!
+	vec3 night_water = vec3(0.09, 0.14, 0.21);
+	vec3 core_tod = mix(water_core, night_water, night_gate * 0.86);
+	float sunset_warm = golden_hour * clamp(0.45 + (sun_color.r - sun_color.b) * 1.4, 0.0, 1.0);
+	vec3 sunset_mult = mix(vec3(1.0), vec3(1.42, 0.96, 0.72), sunset_warm * 0.78);
+	vec3 sss_tint = mix(vec3(0.14, 0.86, 0.84), vec3(1.00, 0.66, 0.36), sunset_warm * 0.80);
 	vec3 sss_glow = sss_tint * sun_color * (back_scatter * 0.48 + 0.14 * day_gate);
-	vec3 lit_water = core_tod * light_term * (1.0 + rim * 0.36) + sss_glow;
-	vec3 lit_foam = foam_color * (light_term * mix(0.86, 1.12, day_gate) + sun_color * (rim * 0.46 + sunset_warm * 0.18));
+	vec3 lit_water = core_tod * light_term * sunset_mult * (1.0 + rim * 0.38) + sss_glow;
+	vec3 foam_tod_tint = mix(mix(foam_color, vec3(1.00, 0.82, 0.64), sunset_warm * 0.75), vec3(0.58, 0.66, 0.78), night_gate * 0.82);
+	vec3 lit_foam = foam_tod_tint * (light_term * mix(1.10, 0.58, night_gate) + sun_color * (rim * 0.46 + sunset_warm * 0.38));
 	vec3 col = mix(lit_water, lit_foam, foam_mask) + sun_color * (sparkle * 0.78);
 
 	// Gentle aerial horizon blend so distant cliff cascades sit harmoniously in coastal haze.
