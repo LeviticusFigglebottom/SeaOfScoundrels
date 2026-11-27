@@ -1,7 +1,7 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (54 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (58 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
-## coastal details, living shore fauna & steep-slope cliff buttresses across all 14 island archetypes.
+## coastal details, living shore fauna, twilight lantern halos & steep-slope cliff buttresses across all 14 island archetypes.
 
 const IslandDetailsCls := preload("res://src/world/island_details.gd")
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -98,6 +98,13 @@ const ISLAND_LORE_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_bridge_ruin.glb",
 ]
 
+const NAUTICAL_CRAFT_LANDMARKS: Array[String] = [
+	"coastal_rope_ferry_pulley.glb",
+	"ancient_sunken_bell_shrine.glb",
+	"pirate_map_planning_table_tent.glb",
+	"volcanic_basalt_obelisk_brazier.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -153,6 +160,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_jade_serpent_totem.glb": 1,
 	"coastal_driftwood_arch_camp.glb": 1,
 	"volcanic_obsidian_bridge_ruin.glb": 1,
+	"coastal_rope_ferry_pulley.glb": 1,
+	"ancient_sunken_bell_shrine.glb": 1,
+	"pirate_map_planning_table_tent.glb": 1,
+	"volcanic_basalt_obelisk_brazier.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -197,6 +208,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_jade_serpent_totem.glb": ["Lantern_Serpent*"],
 	"coastal_driftwood_arch_camp.glb": ["Lantern_Bivouac*"],
 	"volcanic_obsidian_bridge_ruin.glb": ["Lantern_VolcBridge*"],
+	"coastal_rope_ferry_pulley.glb": ["Lantern_FerryWinch*"],
+	"ancient_sunken_bell_shrine.glb": ["Lantern_BellShrine*"],
+	"pirate_map_planning_table_tent.glb": ["Lantern_MapTent*"],
+	"volcanic_basalt_obelisk_brazier.glb": ["Lantern_BasaltBrazier*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -243,6 +258,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"SerpentTotem_",
 	"DriftwoodCamp_",
 	"VolcanicBridgeRuin_",
+	"FerryWinch_",
+	"BellShrine_",
+	"MapTent_",
+	"BasaltBrazier_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -255,6 +274,7 @@ const GROUND_COVER_LAYERS: Array[String] = [
 	"TrailSteppingStones",
 	"IslandButterflies",
 	"ShoreCrabs",
+	"LandmarkLanternHalos",
 ]
 
 const FOLIAGE_WIND_LAYERS: Array[String] = [
@@ -380,7 +400,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(STORY_CRAFT_LANDMARKS)
 	all_landmarks.append_array(FORT_VAULT_LANDMARKS)
 	all_landmarks.append_array(ISLAND_LORE_LANDMARKS)
-	check_eq(all_landmarks.size(), 54, "expected 54 sculpted landmark GLBs")
+	all_landmarks.append_array(NAUTICAL_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 58, "expected 58 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -486,14 +507,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 54 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 58 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
-	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 54 GLBs (got %d)" % unique_pbr_paths.size())
+	check_eq(unique_pbr_paths.size(), 30,
+		"expected strictly 30 unique shared landmark PBR texture paths across all 58 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -520,6 +541,8 @@ func _collect_leaked_detail_caches() -> Array[String]:
 		leaked_fields.append("_butterfly_mesh")
 	if IslandDetailsCls._crab_mesh != null:
 		leaked_fields.append("_crab_mesh")
+	if IslandDetailsCls._lantern_halo_mesh != null:
+		leaked_fields.append("_lantern_halo_mesh")
 	if IslandDetailsCls._foliage_material != null:
 		leaked_fields.append("_foliage_material")
 	if IslandDetailsCls._wood_stone_material != null:
@@ -536,6 +559,8 @@ func _collect_leaked_detail_caches() -> Array[String]:
 		leaked_fields.append("_butterfly_mat")
 	if IslandDetailsCls._crab_mat != null:
 		leaked_fields.append("_crab_mat")
+	if IslandDetailsCls._lantern_halo_mat != null:
+		leaked_fields.append("_lantern_halo_mat")
 	if not IslandDetailsCls._glb_mesh_cache.is_empty():
 		leaked_fields.append("_glb_mesh_cache(%d)" % IslandDetailsCls._glb_mesh_cache.size())
 	return leaked_fields
@@ -570,8 +595,8 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 			"IslandDetails registers in island_details group on " + String(arch))
 
 		var mm_count := details.get_multimesh_count()
-		check(mm_count >= 5 and mm_count <= 11,
-			"archetype %s MultiMesh draw-call count must be 5..11 (got %d)" % [arch, mm_count])
+		check(mm_count >= 5 and mm_count <= 12,
+			"archetype %s MultiMesh draw-call count must be 5..12 (got %d)" % [arch, mm_count])
 
 		# Ensure ZERO unstripped col_* helper geometry or collider nodes inside IslandDetails.
 		var leaked_cols := details.find_children("col_*", "", true, false)
@@ -638,10 +663,11 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 		var stone_n := details.get_stepping_stone_count()
 		var butterfly_n := details.get_butterfly_count()
 		var crab_n := details.get_shore_crab_count()
+		var halo_n: int = details.get_lantern_halo_count()
 		var total_n := details.get_total_instance_count()
 
-		print("    details %-16s r=%5.1fm  DC=%d  total=%4d  grass=%3d  fern=%3d  hib=%3d  coast=%3d  butt=%2d  stone=%2d  bf=%2d  crab=%2d" % [
-			String(arch), isl.island_radius, mm_count, total_n, grass_n, fern_n, hibiscus_n, coastal_n, buttress_n, stone_n, butterfly_n, crab_n])
+		print("    details %-16s r=%5.1fm  DC=%d  total=%4d  grass=%3d  fern=%3d  hib=%3d  coast=%3d  butt=%2d  stone=%2d  bf=%2d  crab=%2d  halo=%2d" % [
+			String(arch), isl.island_radius, mm_count, total_n, grass_n, fern_n, hibiscus_n, coastal_n, buttress_n, stone_n, butterfly_n, crab_n, halo_n])
 
 		if arch != &"volcano_crag" and arch != &"sea_stack" and isl.island_radius >= 50.0:
 			check(grass_n >= 180 and grass_n <= 720,
@@ -710,6 +736,8 @@ func test_island_details_all_14_archetypes_batched_grounded_and_deterministic() 
 				"archetype %s deterministic butterfly count" % arch)
 			check_eq(details_b.get_shore_crab_count(), crab_n,
 				"archetype %s deterministic shore crab count" % arch)
+			check_eq(details_b.get_lantern_halo_count(), halo_n,
+				"archetype %s deterministic lantern halo count" % arch)
 
 		isl.queue_free()
 		isl_b.queue_free()
@@ -784,7 +812,7 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 	check(cutlass._foliage_materials.has(wind_mat),
 		"Cutlass Cay _foliage_materials contains IslandDetails wind shader material")
 
-	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft & Trail Pebble Hygiene assertions.
+	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft & Trail Pebble Hygiene assertions.
 	if cc_details != null:
 		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
 		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
@@ -827,6 +855,26 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		check(tidal_tris >= 150,
 			"Wave I-12 TidalOutcrops mesh must have >= 150 tris (got %d)" % tidal_tris)
 
+		var cc_bf_mmi := cc_details.get_node_or_null(^"IslandButterflies") as MultiMeshInstance3D
+		var cc_crab_mmi := cc_details.get_node_or_null(^"ShoreCrabs") as MultiMeshInstance3D
+		check(cc_bf_mmi != null and cc_bf_mmi.multimesh != null and cc_bf_mmi.multimesh.mesh != null,
+			"Cutlass Cay mounts IslandButterflies MultiMesh with procedural mesh")
+		check(cc_crab_mmi != null and cc_crab_mmi.multimesh != null and cc_crab_mmi.multimesh.mesh != null,
+			"Cutlass Cay mounts ShoreCrabs MultiMesh with procedural mesh")
+		var bf_tris := _count_mesh_tris(cc_bf_mmi.multimesh.mesh) if (cc_bf_mmi != null and cc_bf_mmi.multimesh != null) else 0
+		var crab_tris := _count_mesh_tris(cc_crab_mmi.multimesh.mesh) if (cc_crab_mmi != null and cc_crab_mmi.multimesh != null) else 0
+		var op_halo_mmi := op_details.get_node_or_null(^"LandmarkLanternHalos") as MultiMeshInstance3D if op_details != null else null
+		var halo_tris := _count_mesh_tris(op_halo_mmi.multimesh.mesh) if (op_halo_mmi != null and op_halo_mmi.multimesh != null) else 0
+		print("    wave_i14 fauna & halo craft tris: butterflies=%d crabs=%d lantern_halos=%d" % [
+			bf_tris, crab_tris, halo_tris])
+		check(bf_tris >= 44,
+			"Wave I-14 IslandButterflies mesh must have >= 44 tris (sculpted swallowtail + thorax/abdomen/antennae, got %d)" % bf_tris)
+		check(crab_tris >= 60,
+			"Wave I-14 ShoreCrabs mesh must have >= 60 tris (beveled carapace + hinged pincers + walking legs + eyestalks, got %d)" % crab_tris)
+		check(op_halo_mmi != null and op_halo_mmi.multimesh != null and op_halo_mmi.multimesh.mesh != null
+			and not (op_halo_mmi.multimesh.mesh is PrimitiveMesh) and halo_tris >= 4,
+			"Wave I-14 Port Scoundrel mounts LandmarkLanternHalos MultiMesh with sculpted non-PrimitiveMesh (tris=%d)" % halo_tris)
+
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
 		check(bool(cc_trail_ctx.get("active", false)),
@@ -842,6 +890,25 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Cutlass Cay places >= 1 coastal shore pebble cluster (got %d)" % cc_pebbles.size())
 		check_eq(trail_pebble_violations, 0,
 			"Cutlass Cay shore pebbles must stay strictly outside walkable trail corridors (%d violations)" % trail_pebble_violations)
+
+	if op_details != null:
+		var op_halo_n: int = op_details.get_lantern_halo_count()
+		check(op_halo_n >= 4,
+			"Wave I-14 Port Scoundrel must batch >= 4 LandmarkLanternHalos (got %d)" % op_halo_n)
+		var op_halo_node := op_details.get_node_or_null(^"LandmarkLanternHalos") as MultiMeshInstance3D
+		check(op_halo_node != null, "Port Scoundrel mounts LandmarkLanternHalos MultiMesh")
+		if op_halo_node != null:
+			var prev_tod := Weather.time_of_day
+			Weather.time_of_day = 11.0
+			op_details._process(0.016)
+			check(not op_halo_node.visible,
+				"LandmarkLanternHalos must stay hidden during bright midday (tod=11.0)")
+			Weather.time_of_day = 20.2
+			op_details._process(0.016)
+			check(op_halo_node.visible,
+				"LandmarkLanternHalos must illuminate cleanly at dusk/night (tod=20.2)")
+			Weather.time_of_day = prev_tod
+			op_details._process(0.016)
 
 	# 3. Zero-leak teardown: free all islands & details, await 2 physics frames, confirm all caches cleared!
 	outpost.queue_free()
@@ -872,22 +939,24 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	var total_stepping_stones := 0
 	var total_butterflies := 0
 	var total_shore_crabs := 0
+	var total_lantern_halos := 0
 	var total_overhang_ledges := 0
 
 	# 1. Verify EVERY island across all 14 carries batched IslandDetails, painted trails, stepping stones,
-	#    tropical butterflies on lush islands, shore crabs on non-volcanic islands, zero visible col_*,
-	#    and zero flat CliffOverhangLedge shelves.
+	#    tropical butterflies on lush islands, shore crabs on non-volcanic islands, twilight lantern halos,
+	#    zero visible col_*, and zero flat CliffOverhangLedge shelves.
 	for isl in all_islands:
 		var details := isl.get_node_or_null(^"IslandDetails") as IslandDetails
 		check(details != null, "island %s missing native IslandDetails child" % isl.island_id)
 		var stone_n := 0
 		var bf_n := 0
 		var crab_n := 0
+		var halo_n := 0
 		if details != null:
 			var dc := details.get_multimesh_count()
 			var inst_n := details.get_total_instance_count()
-			check(dc >= 5 and dc <= 11,
-				"island %s IslandDetails draw calls must be 5..11 (got %d)" % [isl.island_id, dc])
+			check(dc >= 5 and dc <= 12,
+				"island %s IslandDetails draw calls must be 5..12 (got %d)" % [isl.island_id, dc])
 			check(inst_n >= 200,
 				"island %s IslandDetails total instance count must be >= 200 (got %d)" % [isl.island_id, inst_n])
 
@@ -905,9 +974,11 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 			stone_n = details.get_stepping_stone_count()
 			bf_n = details.get_butterfly_count()
 			crab_n = details.get_shore_crab_count()
+			halo_n = details.get_lantern_halo_count()
 			total_stepping_stones += stone_n
 			total_butterflies += bf_n
 			total_shore_crabs += crab_n
+			total_lantern_halos += halo_n
 			var min_stones := 4 if isl.archetype == &"sea_stack" else 10
 			check(stone_n >= min_stones,
 				"island %s TrailSteppingStones count must be >= %d (got %d)" % [isl.island_id, min_stones, stone_n])
@@ -931,6 +1002,12 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 				check(crab_mmi != null and crab_mmi.multimesh != null and crab_mmi.multimesh.mesh != null
 					and not (crab_mmi.multimesh.mesh is PrimitiveMesh),
 					"non-volcanic island %s ShoreCrabs MultiMesh uses sculpted non-PrimitiveMesh" % isl.island_id)
+
+			if halo_n > 0:
+				var halo_mmi := details.get_node_or_null(^"LandmarkLanternHalos") as MultiMeshInstance3D
+				check(halo_mmi != null and halo_mmi.multimesh != null and halo_mmi.multimesh.mesh != null
+					and not (halo_mmi.multimesh.mesh is PrimitiveMesh),
+					"island %s LandmarkLanternHalos MultiMesh uses sculpted non-PrimitiveMesh" % isl.island_id)
 
 		# Verify painted walkable trail vertices in TerrainMesh ARRAY_COLOR (1.0 - COLOR.a).
 		var terrain_mi := isl.get_node_or_null(^"TerrainMesh") as MeshInstance3D
@@ -965,9 +1042,9 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		var cairns := isl.find_children("StoneCairn*", "Node3D", true, false).size()
 		total_trail_markers += lanterns + cairns
 
-		print("    arch14  %-20s r=%5.1fm  trail_v=%4d  markers=%2d (L=%d C=%d)  stone=%2d  bf=%2d  crab=%2d  det=%4d" % [
+		print("    arch14  %-20s r=%5.1fm  trail_v=%4d  markers=%2d (L=%d C=%d)  stone=%2d  bf=%2d  crab=%2d  halo=%2d  det=%4d" % [
 			isl.island_id, isl.island_radius, trail_vert_count, lanterns + cairns, lanterns, cairns,
-			stone_n, bf_n, crab_n, details.get_total_instance_count() if details != null else 0])
+			stone_n, bf_n, crab_n, halo_n, details.get_total_instance_count() if details != null else 0])
 
 	check(total_trail_markers >= 20,
 		"archipelago must place >= 20 trail storytelling markers (TrailLantern*/StoneCairn*, got %d)" % total_trail_markers)
@@ -980,7 +1057,8 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 	check_eq(total_overhang_ledges, 0,
 		"Wave I-8 full overhang sweep: zero CliffOverhangLedge* flat shelves across all 14 live islands (got %d)" % total_overhang_ledges)
 
-	# Verify Wave I-8 living tropical butterflies day/night hiding & Wave I-9 shore crabs storm-hiding.
+	# Verify Wave I-8 living tropical butterflies day/night hiding, Wave I-9 shore crabs storm-hiding
+	# & Wave I-14 LandmarkLanternHalos midday-hiding / twilight-illumination contract.
 	var port_isl := archipelago.get_island_by_id("port_scoundrel")
 	check(port_isl != null, "Port Scoundrel exists in Archipelago")
 	if port_isl != null:
@@ -1018,6 +1096,24 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 				"ShoreCrabs must re-emerge cleanly once storm clears (storm=0.0)")
 			Weather.storminess = prev_storm_c
 			port_details._process(0.25)
+
+		var port_halo_mmi := port_details.get_node_or_null(^"LandmarkLanternHalos") as MultiMeshInstance3D if port_details != null else null
+		check(port_details != null and port_halo_mmi != null,
+			"Port Scoundrel mounts LandmarkLanternHalos MultiMesh for twilight visibility contract")
+		if port_details != null and port_halo_mmi != null:
+			check(port_details.get_lantern_halo_count() >= 4,
+				"Port Scoundrel batches >= 4 LandmarkLanternHalos (got %d)" % port_details.get_lantern_halo_count())
+			var prev_tod_h := Weather.time_of_day
+			Weather.time_of_day = 11.0
+			port_details._process(0.016)
+			check(not port_halo_mmi.visible,
+				"LandmarkLanternHalos must stay hidden during bright midday (tod=11.0)")
+			Weather.time_of_day = 20.2
+			port_details._process(0.016)
+			check(port_halo_mmi.visible,
+				"LandmarkLanternHalos must illuminate cleanly at dusk/night (tod=20.2)")
+			Weather.time_of_day = prev_tod_h
+			port_details._process(0.016)
 
 	print("    wave_i8 pass_iq1: trail_verts=%d stepping_stones=%d butterflies=%d overhang_shelves=%d" % [
 		total_trail_verts, total_stepping_stones, total_butterflies, total_overhang_ledges])
@@ -1300,6 +1396,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(il_glb),
 			"Wave I-13 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 400 m offshore LOD cap)" % il_glb)
 
+	# 2h-5. Verify Wave I-14 (58-Landmark Nautical-Craft & Twilight Lantern Halo Milestone) landmarks
+	#       (coastal rope ferry pulley, ancient sunken bell shrine, pirate map planning table tent &
+	#       volcanic basalt obelisk brazier) + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & batched LandmarkLanternHalos!
+	var ferry_winch_total := 0
+	var bell_shrine_total := 0
+	var map_tent_total := 0
+	var basalt_brazier_total := 0
+	for isl_i14 in all_islands:
+		ferry_winch_total += isl_i14.find_children("FerryWinch_*", "Node3D", true, false).size()
+		bell_shrine_total += isl_i14.find_children("BellShrine_*", "Node3D", true, false).size()
+		map_tent_total += isl_i14.find_children("MapTent_*", "Node3D", true, false).size()
+		basalt_brazier_total += isl_i14.find_children("BasaltBrazier_*", "Node3D", true, false).size()
+	print("    wave_i14 nautical_craft landmarks: ferry_winches=%d bell_shrines=%d map_tents=%d basalt_braziers=%d lantern_halos=%d" % [
+		ferry_winch_total, bell_shrine_total, map_tent_total, basalt_brazier_total, total_lantern_halos])
+	check(ferry_winch_total >= 4, "Wave I-14 spawns >= 4 FerryWinch_* landmarks (got %d)" % ferry_winch_total)
+	check(bell_shrine_total >= 4, "Wave I-14 spawns >= 4 BellShrine_* landmarks (got %d)" % bell_shrine_total)
+	check(map_tent_total >= 4, "Wave I-14 spawns >= 4 MapTent_* landmarks (got %d)" % map_tent_total)
+	check(basalt_brazier_total >= 3, "Wave I-14 spawns >= 3 BasaltBrazier_* landmarks (got %d)" % basalt_brazier_total)
+	check(total_lantern_halos >= 120,
+		"Wave I-14 archipelago must batch >= 120 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for nc_glb in NAUTICAL_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(nc_glb),
+			"Wave I-14 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % nc_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1342,10 +1464,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i13 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i14 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 50,
-		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 210,
+		"grounding audit must inspect >= 210 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

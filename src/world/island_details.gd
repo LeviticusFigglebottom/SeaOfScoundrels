@@ -1,10 +1,11 @@
 class_name IslandDetails
 extends Node3D
 ## Batched MultiMesh 3D ground cover, coastal shoreline dressing, walkable 3D trail
-## flagstones/curbs, living tropical butterflies, scuttling tidepool crabs, and
-## steep-slope sculptural cliff buttresses for every island across the archipelago.
+## flagstones/curbs, living tropical butterflies, scuttling tidepool crabs,
+## steep-slope sculptural cliff buttresses, and twilight landmark lantern halos
+## for every island across the archipelago.
 ##
-## Replaces bare flat 2D terrain slopes and smooth cliff cones with 8–11 strictly
+## Replaces bare flat 2D terrain slopes and smooth cliff cones with 8–12 strictly
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
 ##   1. `GrassClumps`          — 28-blade slender 3-tuft swaying grass + 3 golden plumed seed-stalks (`foliage_wind.gdshader`)
@@ -18,6 +19,7 @@ extends Node3D
 ##   9. `TrailSteppingStones`  — beveled coastal trail flagstones, sloped terrace stair-slabs & border curb stones
 ##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
 ##  11. `ShoreCrabs`           — animated sculpted coastal tidepool crabs scuttling sideways along wet sandy beaches
+##  12. `LandmarkLanternHalos` — 1-DC twilight/night additive 3-plane soft radial glow halos on `Glow_Lantern_*` lights (`0.000 ms` daytime GPU)
 
 const GROUP := &"island_details"
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -35,6 +37,7 @@ const BUTTRESS_MAX_NORMAL_Y := 0.72
 const WIDE_BUTTRESS_MIN_RADIUS := 75.0
 const BUTTERFLY_CULL_DIST := 160.0
 const CRAB_CULL_DIST := 135.0
+const LANTERN_HALO_CULL_DIST := 480.0
 const FOLIAGE_SUN_HEADROOM := 1.08
 const WET_SHORE_MAX_H := 0.95
 const WET_SHORE_SPAN := 0.85
@@ -102,6 +105,8 @@ const HIBISCUS_TROPICAL_TINTS: Array[Color] = [
 	Color(0.95, 1.02, 0.95, 1.0),  # Lush cool-jade foliage lean
 	Color(1.03, 0.98, 0.88, 1.0),  # Golden sunlit tropical lean
 	Color(0.98, 0.94, 1.02, 1.0),  # Hibiscus-magenta pop lean
+	Color(1.06, 1.02, 0.84, 1.0),  # Warm plumeria cream-gold wildflower
+	Color(1.02, 0.88, 1.06, 1.0),  # Vivid bougainvillea magenta-violet
 ]
 
 const HIBISCUS_VOLCANIC_TINTS: Array[Color] = [
@@ -201,6 +206,8 @@ const BUTTERFLY_PALETTE: Array[Color] = [
 	Color(0.22, 0.72, 1.0, 1.0),  # Tropical morpho-blue
 	Color(1.0, 0.92, 0.28, 1.0),  # Sunlit sulphur-yellow
 	Color(1.0, 0.40, 0.58, 1.0),  # Hibiscus-coral
+	Color(0.16, 0.94, 0.68, 1.0), # Emerald-teal birdwing
+	Color(1.0, 0.78, 0.18, 1.0),  # Royal sunset-gold swallowtail
 ]
 
 const CRAB_PALETTE: Array[Color] = [
@@ -230,6 +237,7 @@ const HIBISCUS_LAGOON_TINTS: Array[Color] = [
 	Color(1.06, 0.84, 0.92, 1.0),  # Vibrant tropical coral-pink
 	Color(1.08, 1.00, 0.74, 1.0),  # Sunlit mango-gold
 	Color(1.04, 0.78, 0.78, 1.0),  # Bright island crimson
+	Color(1.08, 0.90, 0.72, 1.0),  # Warm coral-amber
 ]
 const LAGOON_TIDAL_CORAL := Color(1.08, 1.05, 0.96, 1.0)      # Sun-bleached pale coral-limestone
 
@@ -264,6 +272,7 @@ static var _fallback_buttress_wide_mesh: ArrayMesh = null
 static var _stepping_stone_mesh: ArrayMesh = null
 static var _butterfly_mesh: ArrayMesh = null
 static var _crab_mesh: ArrayMesh = null
+static var _lantern_halo_mesh: ArrayMesh = null
 static var _foliage_material: ShaderMaterial = null
 static var _wood_stone_material: StandardMaterial3D = null
 static var _pebble_material: StandardMaterial3D = null
@@ -272,6 +281,7 @@ static var _buttress_fallback_material: StandardMaterial3D = null
 static var _stepping_stone_mat: StandardMaterial3D = null
 static var _butterfly_mat: StandardMaterial3D = null
 static var _crab_mat: StandardMaterial3D = null
+static var _lantern_halo_mat: StandardMaterial3D = null
 static var _glb_mesh_cache: Dictionary = {}  # String path -> Mesh or null
 
 # ------------------------------------------------------------------ instance state
@@ -288,6 +298,7 @@ var _buttress_wide_mmi: MultiMeshInstance3D = null
 var _stepping_stone_mmi: MultiMeshInstance3D = null
 var _butterfly_mmi: MultiMeshInstance3D = null
 var _crab_mmi: MultiMeshInstance3D = null
+var _lantern_halo_mmi: MultiMeshInstance3D = null
 
 var _grass_count: int = 0
 var _fern_count: int = 0
@@ -300,6 +311,7 @@ var _buttress_wide_count: int = 0
 var _stepping_stone_count: int = 0
 var _butterfly_count: int = 0
 var _crab_count: int = 0
+var _lantern_halo_count: int = 0
 
 var _placed_buttress_normals_y: PackedFloat32Array = PackedFloat32Array()
 var _placed_grass_positions: PackedVector3Array = PackedVector3Array()
@@ -308,6 +320,8 @@ var _butterfly_orbits: Array[Dictionary] = []
 var _butterfly_clock: float = 0.0
 var _crab_orbits: Array[Dictionary] = []
 var _crab_clock: float = 0.0
+var _lantern_halo_specs: Array[Dictionary] = []
+var _halo_clock: float = 0.0
 var _island_radius: float = 60.0
 
 
@@ -333,6 +347,7 @@ func _exit_tree() -> void:
 	_stepping_stone_mmi = null
 	_butterfly_mmi = null
 	_crab_mmi = null
+	_lantern_halo_mmi = null
 	_placed_buttress_normals_y = PackedFloat32Array()
 	_placed_grass_positions = PackedVector3Array()
 	_placed_pebble_positions = PackedVector3Array()
@@ -340,6 +355,8 @@ func _exit_tree() -> void:
 	_butterfly_clock = 0.0
 	_crab_orbits.clear()
 	_crab_clock = 0.0
+	_lantern_halo_specs.clear()
+	_halo_clock = 0.0
 	_active_details = maxi(0, _active_details - 1)
 	if _active_details == 0:
 		clear_shared_cache()
@@ -349,9 +366,9 @@ func _process(delta: float) -> void:
 	var dt := clampf(delta, 0.0, 0.15)
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
 	var dist_sq := global_position.distance_squared_to(cam.global_position) if cam != null else 0.0
+	var tod := fposmod(Weather.time_of_day, 24.0)
 
 	if _butterfly_mmi != null and is_instance_valid(_butterfly_mmi) and not _butterfly_orbits.is_empty():
-		var tod := fposmod(Weather.time_of_day, 24.0)
 		var bf_active := tod >= 6.0 and tod <= 18.8 and Weather.storminess < 0.55
 		_butterfly_mmi.visible = bf_active
 		if bf_active:
@@ -377,6 +394,20 @@ func _process(delta: float) -> void:
 					for i in c_count:
 						cmm.set_instance_transform(i, _compute_crab_transform(_crab_orbits[i], _crab_clock))
 
+	if _lantern_halo_mmi != null and is_instance_valid(_lantern_halo_mmi) and not _lantern_halo_specs.is_empty():
+		var halo_w := _lantern_halo_weight(tod)
+		var halo_active := halo_w > 0.01
+		_lantern_halo_mmi.visible = halo_active
+		if halo_active:
+			var halo_cull := maxf(LANTERN_HALO_CULL_DIST, _island_radius + 380.0)
+			if cam == null or dist_sq <= halo_cull * halo_cull:
+				_halo_clock += dt
+				var hmm := _lantern_halo_mmi.multimesh
+				if hmm != null:
+					var h_count := mini(_lantern_halo_specs.size(), hmm.instance_count)
+					for i in h_count:
+						hmm.set_instance_transform(i, _compute_lantern_halo_transform(_lantern_halo_specs[i], halo_w, _halo_clock))
+
 
 ## Release all statically cached procedural meshes, materials, and extracted GLB meshes cleanly.
 static func clear_shared_cache() -> void:
@@ -391,6 +422,7 @@ static func clear_shared_cache() -> void:
 	_stepping_stone_mesh = null
 	_butterfly_mesh = null
 	_crab_mesh = null
+	_lantern_halo_mesh = null
 	_foliage_material = null
 	_wood_stone_material = null
 	_pebble_material = null
@@ -399,13 +431,14 @@ static func clear_shared_cache() -> void:
 	_stepping_stone_mat = null
 	_butterfly_mat = null
 	_crab_mat = null
+	_lantern_halo_mat = null
 	_glb_mesh_cache.clear()
 
 
 ## Deterministically populate batched 3D ground cover, coastal shoreline dressing,
 ## walkable 3D trail stepping stones/curbs, living tropical butterflies, scuttling
-## tidepool crabs, and steep-slope cliff buttresses across `island`, attaching the
-## `IslandDetails` child.
+## tidepool crabs, steep-slope cliff buttresses, and twilight landmark lantern halos
+## across `island`, attaching the `IslandDetails` child.
 static func populate_for_island(island: Island, archetype: StringName = &"",
 		rng_seed: int = 0, exclusions: Array[Vector3] = []) -> IslandDetails:
 	var details := IslandDetails.new()
@@ -596,11 +629,12 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 			stepping_xf, stepping_col, 0.0, stepping_vis, 18.0)
 		details._attach_layer(details._stepping_stone_mmi)
 
+	var init_tod := fposmod(Weather.time_of_day, 24.0)
+
 	if not butterfly_xf.is_empty():
 		details._butterfly_mmi = _create_multimesh_node(
 			"IslandButterflies", _get_butterfly_mesh(), _get_butterfly_material(),
 			butterfly_xf, butterfly_col, 4.0, butterfly_vis, 18.0)
-		var init_tod := fposmod(Weather.time_of_day, 24.0)
 		details._butterfly_mmi.visible = init_tod >= 6.0 and init_tod <= 18.8 and Weather.storminess < 0.55
 		details._attach_layer(details._butterfly_mmi)
 
@@ -610,6 +644,27 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 			crab_xf, crab_col, 3.5, crab_vis, 16.0)
 		details._crab_mmi.visible = Weather.storminess < 0.75
 		details._attach_layer(details._crab_mmi)
+
+	# 11. Layer 12: 1-DC Batched Twilight Landmark Lantern Halos (`0.000 ms` daytime GPU & `0.0 MB` VRAM).
+	var lantern_halo_specs: Array[Dictionary] = []
+	var props_node := island.get_node_or_null(^"Props")
+	if props_node != null:
+		var props_xf := (props_node as Node3D).transform if props_node is Node3D else Transform3D.IDENTITY
+		_collect_lantern_halo_specs(props_node, props_xf, rng, lantern_halo_specs)
+	if not lantern_halo_specs.is_empty():
+		var init_halo_w := _lantern_halo_weight(init_tod)
+		var halo_xf: Array[Transform3D] = []
+		var halo_col: Array[Color] = []
+		for hspec in lantern_halo_specs:
+			halo_xf.append(_compute_lantern_halo_transform(hspec, init_halo_w, 0.0))
+			halo_col.append(hspec["color"] as Color)
+		var halo_vis := maxf(LANTERN_HALO_CULL_DIST, radius + 380.0)
+		details._lantern_halo_mmi = _create_multimesh_node(
+			"LandmarkLanternHalos", _get_lantern_halo_mesh(), _get_lantern_halo_material(),
+			halo_xf, halo_col, 2.5, halo_vis, 32.0)
+		details._lantern_halo_mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+		details._lantern_halo_mmi.visible = init_halo_w > 0.01
+		details._attach_layer(details._lantern_halo_mmi)
 
 	details._grass_count = grass_xf.size()
 	details._fern_count = fern_xf.size()
@@ -622,12 +677,14 @@ static func populate_for_island(island: Island, archetype: StringName = &"",
 	details._stepping_stone_count = stepping_xf.size()
 	details._butterfly_count = butterfly_xf.size()
 	details._crab_count = crab_xf.size()
+	details._lantern_halo_count = lantern_halo_specs.size()
 	details._placed_buttress_normals_y = buttress_normals_y
 	details._placed_grass_positions = grass_pos
 	details._placed_pebble_positions = pebble_pos
 	details._butterfly_orbits = butterfly_orbits
 	details._crab_orbits = crab_orbits
-	details.set_process((not butterfly_orbits.is_empty()) or (not crab_orbits.is_empty()))
+	details._lantern_halo_specs = lantern_halo_specs
+	details.set_process((not butterfly_orbits.is_empty()) or (not crab_orbits.is_empty()) or (not lantern_halo_specs.is_empty()))
 
 	island.add_child(details)
 	return details
@@ -642,7 +699,7 @@ func _attach_layer(mmi: MultiMeshInstance3D) -> void:
 
 # ------------------------------------------------------------------ inspection API
 
-## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (8..11 across archetypes).
+## Number of `MultiMeshInstance3D` draw-call nodes owned by this island detail node (8..12 across archetypes).
 func get_multimesh_count() -> int:
 	var count := 0
 	for child in get_children():
@@ -696,6 +753,11 @@ func get_butterfly_count() -> int:
 ## Placed animated shoreline tidepool crabs in `ShoreCrabs`.
 func get_shore_crab_count() -> int:
 	return _crab_count
+
+
+## Placed batched twilight landmark lantern halos in `LandmarkLanternHalos`.
+func get_lantern_halo_count() -> int:
+	return _lantern_halo_count
 
 
 ## Copy of terrain `normal.y` values recorded at every placed cliff buttress (reliable under `--headless`).
@@ -891,17 +953,19 @@ static func _prop_keepout_radius(cname: String) -> float:
 	if cname.begins_with("PirateWatchpost"):
 		return 5.5
 	if cname.begins_with("SeaGodIdol") or cname.begins_with("LavaCauldronShrine") \
-			or cname.begins_with("JungleAltar") or cname.begins_with("CascadeShrine"):
+			or cname.begins_with("JungleAltar") or cname.begins_with("CascadeShrine") \
+			or cname.begins_with("FerryWinch"):
 		return 5.4
 	if cname.begins_with("VolcanicChainPylon") or cname.begins_with("SkeletonThrone"):
 		return 5.2
-	if cname.begins_with("SundialPlaza"):
+	if cname.begins_with("SundialPlaza") or cname.begins_with("MapTent"):
 		return 5.0
-	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp"):
+	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
+			or cname.begins_with("BellShrine"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
-			or cname.begins_with("RumDistillery"):
+			or cname.begins_with("RumDistillery") or cname.begins_with("BasaltBrazier"):
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
@@ -2252,6 +2316,59 @@ static func _compute_crab_transform(orbit: Dictionary, clock: float) -> Transfor
 	return Transform3D(xform_basis, origin)
 
 
+# ------------------------------------------------------------------ placement & animation: twilight lantern halos
+
+static func _collect_lantern_halo_specs(container: Node, parent_xf: Transform3D,
+		rng: RandomNumberGenerator, out_specs: Array[Dictionary]) -> void:
+	for child in container.get_children():
+		var child_xf := parent_xf
+		if child is Node3D:
+			var n3 := child as Node3D
+			child_xf = parent_xf * n3.transform
+			if n3 is OmniLight3D and String(n3.name).begins_with("Glow_Lantern_"):
+				var light := n3 as OmniLight3D
+				var raw_col := light.light_color
+				var max_c := maxf(raw_col.r, maxf(raw_col.g, raw_col.b))
+				var col := Color(1.0, 0.72, 0.34, 1.0)
+				if max_c >= 0.05:
+					var boost := 1.0 if max_c >= 0.85 else (0.95 / max_c)
+					col = Color(
+						clampf(raw_col.r * boost, 0.0, 1.0),
+						clampf(raw_col.g * boost, 0.0, 1.0),
+						clampf(raw_col.b * boost, 0.0, 1.0),
+						1.0
+					)
+				out_specs.append({
+					"pos": child_xf.origin,
+					"color": col,
+					"radius": clampf(light.omni_range * 0.072, 0.64, 1.50),
+					"phase": rng.randf() * TAU,
+					"speed": rng.randf_range(2.2, 3.8),
+				})
+		if child.get_child_count() > 0:
+			_collect_lantern_halo_specs(child, child_xf, rng, out_specs)
+
+
+static func _lantern_halo_weight(tod: float) -> float:
+	var t := fposmod(tod, 24.0)
+	if t >= 19.2 or t <= 5.4:
+		return 1.0
+	if t > 17.6:
+		return smoothstep(17.6, 19.2, t)
+	if t < 6.8:
+		return 1.0 - smoothstep(5.4, 6.8, t)
+	return 0.0
+
+
+static func _compute_lantern_halo_transform(spec: Dictionary, halo_w: float, clock: float) -> Transform3D:
+	var pos: Vector3 = spec["pos"] as Vector3
+	var rad: float = float(spec["radius"])
+	var phase: float = float(spec["phase"])
+	var speed: float = float(spec["speed"])
+	var sc := rad * (0.72 + 0.28 * halo_w) * (0.92 + 0.10 * sin(clock * speed + phase))
+	return Transform3D(Basis.from_scale(Vector3(sc, sc, sc)), pos)
+
+
 # ------------------------------------------------------------------ placement: coastal shoreline layers
 
 static func _place_coastal_driftwood(island: Island, rng: RandomNumberGenerator, target: int,
@@ -3135,6 +3252,23 @@ static func _get_crab_material() -> StandardMaterial3D:
 	return _crab_mat
 
 
+static func _get_lantern_halo_material() -> StandardMaterial3D:
+	if _lantern_halo_mat == null:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		mat.no_depth_test = false
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		mat.billboard_keep_scale = true
+		_lantern_halo_mat = mat
+	return _lantern_halo_mat
+
+
 static func _get_grass_mesh() -> ArrayMesh:
 	if _grass_mesh == null:
 		_grass_mesh = _build_grass_mesh()
@@ -3199,6 +3333,12 @@ static func _get_crab_mesh() -> ArrayMesh:
 	if _crab_mesh == null:
 		_crab_mesh = _build_crab_mesh()
 	return _crab_mesh
+
+
+static func _get_lantern_halo_mesh() -> ArrayMesh:
+	if _lantern_halo_mesh == null:
+		_lantern_halo_mesh = _build_lantern_halo_mesh()
+	return _lantern_halo_mesh
 
 
 # ------------------------------------------------------------------ Mesh 1: Sculpted 28-Blade Slender Grass + 3 Plumed Seed-Stalks
@@ -4574,60 +4714,97 @@ static func _build_butterfly_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 24-tri sculpted swallowtail butterfly facing local -Z:
-	# tapered 3D thorax/abdomen body (8 tris) + 4 angled faceted wings (16 tris) with
-	# velvety dark wingtips & luminous inner wing panels multiplied by per-instance species tint.
-	var col_body := Color(0.14, 0.12, 0.15, 1.0)
-	var col_body_hi := Color(0.24, 0.21, 0.25, 1.0)
-	var col_root := Color(0.24, 0.22, 0.26, 1.0)
-	var col_panel_hi := Color(1.00, 0.99, 0.96, 1.0)
-	var col_panel_lo := Color(0.94, 0.93, 0.89, 1.0)
-	var col_margin := Color(0.20, 0.18, 0.22, 1.0)
-	var col_tip := Color(0.13, 0.12, 0.16, 1.0)
+	# 52-tri sculpted swallowtail butterfly facing local -Z:
+	#   1. 3-segment tapered head / thorax / abdomen body (12 tris)
+	#   2. Twin curved slender clubbed antennae (4 tris)
+	#   3. Scalloped multi-panel forewings & hindwings with dark velvet margins,
+	#      luminous inner eyespot accents & graceful long twin swallowtail streamers (36 tris)
+	var col_body := Color(0.14, 0.12, 0.16, 1.0)
+	var col_body_hi := Color(0.26, 0.23, 0.28, 1.0)
+	var col_root := Color(0.24, 0.21, 0.26, 1.0)
+	var col_eyespot := Color(1.00, 1.00, 0.97, 1.0)
+	var col_panel_hi := Color(0.98, 0.97, 0.93, 1.0)
+	var col_panel_lo := Color(0.89, 0.87, 0.82, 1.0)
+	var col_margin := Color(0.21, 0.18, 0.24, 1.0)
+	var col_tip := Color(0.12, 0.11, 0.15, 1.0)
 
-	# 1. Tapered 3D thorax/body (8 tris).
-	var head := Vector3(0.0, 0.012, -0.105)
-	var tail := Vector3(0.0, -0.004, 0.115)
-	var body_ring: Array[Vector3] = [
-		Vector3(0.0, 0.024, -0.020),
-		Vector3(0.018, 0.004, -0.020),
-		Vector3(0.0, -0.014, -0.020),
-		Vector3(-0.018, 0.004, -0.020),
+	# 1. 3-segment tapered head / thorax / abdomen body (12 tris).
+	var head_tip := Vector3(0.0, 0.016, -0.118)
+	var thorax_ring: Array[Vector3] = [
+		Vector3(0.0, 0.028, -0.042),
+		Vector3(0.020, 0.002, -0.042),
+		Vector3(-0.020, 0.002, -0.042),
 	]
-	var body_ref := Vector3(0.0, 0.004, 0.0)
-	for k in 4:
-		var nk := (k + 1) % 4
+	var abd_ring: Array[Vector3] = [
+		Vector3(0.0, 0.018, 0.036),
+		Vector3(0.013, -0.004, 0.036),
+		Vector3(-0.013, -0.004, 0.036),
+	]
+	var tail_tip := Vector3(0.0, -0.002, 0.132)
+	var ref_head := Vector3(0.0, 0.011, -0.060)
+	var ref_mid := Vector3(0.0, 0.008, -0.003)
+	var ref_tail := Vector3(0.0, 0.003, 0.060)
+	for k in 3:
+		var nk := (k + 1) % 3
 		var ck := col_body_hi if k == 0 else col_body
 		var cnk := col_body_hi if nk == 0 else col_body
-		_add_outward_tri(st, head, body_ring[k], body_ring[nk], body_ref, col_body, ck, cnk)
-		_add_outward_tri(st, tail, body_ring[nk], body_ring[k], body_ref, col_body, cnk, ck)
+		_add_outward_tri(st, head_tip, thorax_ring[k], thorax_ring[nk], ref_head, col_tip, ck, cnk)
+		_add_outward_quad(st, thorax_ring[k], abd_ring[k], abd_ring[nk], thorax_ring[nk], ref_mid,
+			ck, ck, cnk, cnk)
+		_add_outward_tri(st, tail_tip, abd_ring[nk], abd_ring[k], ref_tail, col_tip, cnk, ck)
 
-	# 2. Left & right swept forewings + swallowtail hindwings (16 tris, upward +Y normals).
+	# 2. Twin curved slender antennae (4 tris) + 3. Scalloped multi-panel wings (36 tris).
 	var wing_ref := Vector3(0.0, -1.0, 0.0)
 	for side: float in [-1.0, 1.0]:
-		# Swept angled forewing (4 tris).
-		var fw_rf := Vector3(side * 0.014, 0.010, -0.055)
-		var fw_rr := Vector3(side * 0.014, 0.006, 0.012)
-		var fw_mf := Vector3(side * 0.115, 0.052, -0.052)
-		var fw_mr := Vector3(side * 0.105, 0.042, 0.018)
-		var fw_tip := Vector3(side * 0.215, 0.092, -0.095)
-		var fw_out := Vector3(side * 0.188, 0.068, 0.010)
-		_add_outward_tri(st, fw_rf, fw_mf, fw_rr, wing_ref, col_root, col_panel_hi, col_root)
-		_add_outward_tri(st, fw_rr, fw_mf, fw_mr, wing_ref, col_root, col_panel_hi, col_panel_lo)
-		_add_outward_tri(st, fw_mf, fw_tip, fw_out, wing_ref, col_panel_hi, col_tip, col_margin)
-		_add_outward_tri(st, fw_mf, fw_out, fw_mr, wing_ref, col_panel_hi, col_margin, col_panel_lo)
+		# Curved slender clubbed antenna (2 tris per side).
+		var ant_root := Vector3(side * 0.006, 0.018, -0.102)
+		var ant_mid_in := Vector3(side * 0.026, 0.044, -0.146)
+		var ant_mid_out := Vector3(side * 0.036, 0.038, -0.142)
+		var ant_tip := Vector3(side * 0.062, 0.058, -0.186)
+		_add_outward_tri(st, ant_root, ant_mid_in, ant_mid_out, wing_ref, col_body, col_body_hi, col_body)
+		_add_outward_tri(st, ant_mid_in, ant_tip, ant_mid_out, wing_ref, col_body_hi, col_tip, col_body)
 
-		# Swallowtail hindwing with pointed streamer tip (4 tris).
-		var hw_rf := Vector3(side * 0.013, 0.006, 0.006)
-		var hw_rr := Vector3(side * 0.010, 0.002, 0.072)
-		var hw_mo := Vector3(side * 0.128, 0.036, 0.038)
-		var hw_mr := Vector3(side * 0.072, 0.020, 0.096)
-		var hw_rim := Vector3(side * 0.146, 0.030, 0.088)
-		var hw_tail := Vector3(side * 0.086, 0.014, 0.168)
-		_add_outward_tri(st, hw_rf, hw_mo, hw_rr, wing_ref, col_root, col_panel_hi, col_root)
-		_add_outward_tri(st, hw_rr, hw_mo, hw_mr, wing_ref, col_root, col_panel_hi, col_panel_lo)
-		_add_outward_tri(st, hw_mo, hw_rim, hw_mr, wing_ref, col_panel_hi, col_margin, col_panel_lo)
-		_add_outward_tri(st, hw_mr, hw_rim, hw_tail, wing_ref, col_panel_lo, col_margin, col_tip)
+		# Scalloped swept forewing with bright inner eyespot & dark velvet margin (9 tris per side).
+		var fw_rf := Vector3(side * 0.014, 0.014, -0.058)
+		var fw_mf := Vector3(side * 0.105, 0.050, -0.068)
+		var fw_costa := Vector3(side * 0.168, 0.078, -0.094)
+		var fw_tip := Vector3(side * 0.236, 0.106, -0.108)
+		var fw_sc1 := Vector3(side * 0.214, 0.088, -0.054)
+		var fw_sc2 := Vector3(side * 0.200, 0.076, -0.008)
+		var fw_out := Vector3(side * 0.172, 0.060, 0.026)
+		var fw_mr := Vector3(side * 0.098, 0.042, 0.022)
+		var fw_rr := Vector3(side * 0.013, 0.008, 0.010)
+		var fw_eye := Vector3(side * 0.132, 0.060, -0.022)
+		_add_outward_tri(st, fw_rf, fw_mf, fw_eye, wing_ref, col_root, col_panel_hi, col_eyespot)
+		_add_outward_tri(st, fw_mf, fw_costa, fw_eye, wing_ref, col_panel_hi, col_margin, col_eyespot)
+		_add_outward_tri(st, fw_costa, fw_sc1, fw_eye, wing_ref, col_margin, col_margin, col_eyespot)
+		_add_outward_tri(st, fw_sc1, fw_sc2, fw_eye, wing_ref, col_margin, col_margin, col_eyespot)
+		_add_outward_tri(st, fw_sc2, fw_out, fw_eye, wing_ref, col_margin, col_tip, col_eyespot)
+		_add_outward_tri(st, fw_out, fw_mr, fw_eye, wing_ref, col_tip, col_panel_lo, col_eyespot)
+		_add_outward_tri(st, fw_mr, fw_rr, fw_eye, wing_ref, col_panel_lo, col_root, col_eyespot)
+		_add_outward_tri(st, fw_rr, fw_rf, fw_eye, wing_ref, col_root, col_root, col_eyespot)
+		_add_outward_tri(st, fw_costa, fw_tip, fw_sc1, wing_ref, col_margin, col_tip, col_margin)
+
+		# Scalloped swallowtail hindwing with bright inner eyespot & long streamer (9 tris per side).
+		var hw_rf := Vector3(side * 0.013, 0.008, 0.004)
+		var hw_mo := Vector3(side * 0.120, 0.040, 0.034)
+		var hw_sc1 := Vector3(side * 0.168, 0.044, 0.064)
+		var hw_sc2 := Vector3(side * 0.156, 0.034, 0.108)
+		var hw_tbo := Vector3(side * 0.124, 0.024, 0.124)
+		var hw_tbi := Vector3(side * 0.090, 0.020, 0.126)
+		var hw_mi := Vector3(side * 0.046, 0.014, 0.106)
+		var hw_rr := Vector3(side * 0.010, 0.002, 0.076)
+		var hw_eye := Vector3(side * 0.096, 0.032, 0.074)
+		var hw_tail := Vector3(side * 0.116, 0.012, 0.218)
+		_add_outward_tri(st, hw_rf, hw_mo, hw_eye, wing_ref, col_root, col_panel_hi, col_eyespot)
+		_add_outward_tri(st, hw_mo, hw_sc1, hw_eye, wing_ref, col_panel_hi, col_margin, col_eyespot)
+		_add_outward_tri(st, hw_sc1, hw_sc2, hw_eye, wing_ref, col_margin, col_margin, col_eyespot)
+		_add_outward_tri(st, hw_sc2, hw_tbo, hw_eye, wing_ref, col_margin, col_margin, col_eyespot)
+		_add_outward_tri(st, hw_tbo, hw_tbi, hw_eye, wing_ref, col_margin, col_margin, col_eyespot)
+		_add_outward_tri(st, hw_tbi, hw_mi, hw_eye, wing_ref, col_margin, col_panel_lo, col_eyespot)
+		_add_outward_tri(st, hw_mi, hw_rr, hw_eye, wing_ref, col_panel_lo, col_root, col_eyespot)
+		_add_outward_tri(st, hw_rr, hw_rf, hw_eye, wing_ref, col_root, col_root, col_eyespot)
+		_add_outward_tri(st, hw_tbo, hw_tail, hw_tbi, wing_ref, col_margin, col_tip, col_margin)
 
 	st.generate_normals()
 	return st.commit()
@@ -4639,32 +4816,35 @@ static func _build_crab_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 36-tri sculpted coastal tidepool crab facing local -Z (scuttles sideways along +-X):
-	#   1. Beveled hexagonal carapace (16 tris: 12 bevel side tris + 4 domed top cap tris)
-	#   2. Twin raised curved pincer claws in front (6 tris: 3 per claw)
-	#   3. 6 splayed articulated walking legs (12 tris: 2 per leg — raised femur + grounded tarsus)
-	#   4. Twin tiny dark upright eye-stalks on front rim (2 tris)
-	var col_rim := Color(0.74, 0.70, 0.66, 1.0)
+	# 68-tri sculpted coastal tidepool crab facing local -Z (scuttles sideways along +-X):
+	#   1. Hexagonal carapace with sculpted raised dorsal crest & notched frontal brow (20 tris)
+	#   2. Twin 3D volumetric double-fingered front pincer claws (16 tris: 8 per claw)
+	#   3. 8 articulated splayed walking legs — 4 pairs (24 tris: 3 per leg — femur + tibia + tarsus)
+	#   4. Twin thicker 3D stalked glossy dark eyes (8 tris: 4 per eye)
+	var col_rim := Color(0.72, 0.68, 0.64, 1.0)
+	var col_brow := Color(0.84, 0.80, 0.75, 1.0)
 	var col_top_front := Color(0.95, 0.93, 0.89, 1.0)
-	var col_top := Color(1.00, 0.98, 0.94, 1.0)
-	var col_top_rear := Color(0.90, 0.87, 0.82, 1.0)
-	var col_arm := Color(0.84, 0.80, 0.75, 1.0)
-	var col_claw := Color(0.96, 0.92, 0.86, 1.0)
+	var col_top := Color(0.98, 0.96, 0.92, 1.0)
+	var col_crest := Color(1.00, 0.99, 0.96, 1.0)
+	var col_top_rear := Color(0.89, 0.86, 0.81, 1.0)
+	var col_arm := Color(0.83, 0.79, 0.74, 1.0)
+	var col_claw := Color(0.95, 0.91, 0.85, 1.0)
 	var col_claw_hi := Color(1.00, 0.97, 0.91, 1.0)
 	var col_claw_tip := Color(1.00, 0.98, 0.93, 1.0)
-	var col_leg_hip := Color(0.84, 0.80, 0.75, 1.0)
-	var col_leg_knee := Color(0.94, 0.90, 0.84, 1.0)
-	var col_leg_foot := Color(0.56, 0.50, 0.46, 1.0)
+	var col_leg_hip := Color(0.83, 0.79, 0.74, 1.0)
+	var col_leg_knee := Color(0.95, 0.91, 0.85, 1.0)
+	var col_leg_ankle := Color(0.78, 0.73, 0.68, 1.0)
+	var col_leg_foot := Color(0.54, 0.48, 0.44, 1.0)
 	var col_eye_stalk := Color(0.46, 0.40, 0.36, 1.0)
-	var col_eye_tip := Color(0.08, 0.08, 0.10, 1.0)
+	var col_eye_tip := Color(0.05, 0.05, 0.08, 1.0)
 
-	# 1. Beveled hexagonal carapace (16 tris).
+	# 1. Hexagonal carapace with sculpted raised dorsal crest & notched frontal brow (20 tris).
 	var hex_xz: Array[Vector2] = [
 		Vector2( 0.092, -0.108),  # 0: front-right
-		Vector2( 0.158, -0.008),  # 1: right lateral spine
+		Vector2( 0.160, -0.008),  # 1: right lateral spine
 		Vector2( 0.098,  0.112),  # 2: back-right
 		Vector2(-0.098,  0.112),  # 3: back-left
-		Vector2(-0.158, -0.008),  # 4: left lateral spine
+		Vector2(-0.160, -0.008),  # 4: left lateral spine
 		Vector2(-0.092, -0.108),  # 5: front-left
 	]
 	var bot_ring: Array[Vector3] = []
@@ -4675,46 +4855,75 @@ static func _build_crab_mesh() -> ArrayMesh:
 		var is_spine := (k == 1 or k == 4)
 		var is_front := (k == 0 or k == 5)
 		bot_ring.append(Vector3(p.x, 0.042, p.y))
-		top_ring.append(Vector3(p.x * 0.72, 0.128 if is_spine else 0.118, p.y * 0.72))
+		var top_y := 0.130 if is_spine else (0.122 if is_front else 0.116)
+		var top_z := p.y * (0.78 if is_front else 0.72)
+		top_ring.append(Vector3(p.x * 0.72, top_y, top_z))
 		top_cols.append(col_top if is_spine else (col_top_front if is_front else col_top_rear))
 
+	var brow_notch := Vector3(0.0, 0.106, -0.068)
+	var dorsal_crest := Vector3(0.0, 0.156, -0.006)
 	var ref_body := Vector3(0.0, 0.062, 0.0)
-	for k in 6:
-		var nk := (k + 1) % 6
+
+	# 5 non-front beveled carapace walls (10 tris) + 3-tri notched frontal brow wall (3 tris).
+	for k in 5:
+		var nk := k + 1
 		_add_outward_quad(st, bot_ring[k], top_ring[k], top_ring[nk], bot_ring[nk], ref_body,
 			col_rim, top_cols[k], top_cols[nk], col_rim)
+	_add_outward_tri(st, bot_ring[5], top_ring[5], brow_notch, ref_body, col_rim, top_cols[5], col_brow)
+	_add_outward_tri(st, bot_ring[5], brow_notch, bot_ring[0], ref_body, col_rim, col_brow, col_rim)
+	_add_outward_tri(st, bot_ring[0], brow_notch, top_ring[0], ref_body, col_rim, col_brow, top_cols[0])
 
-	# Symmetric 4-tri domed hexagonal top cap split along the transverse lateral ridge (v4 -> v1).
-	_add_outward_tri(st, top_ring[5], top_ring[0], top_ring[1], ref_body,
-		top_cols[5], top_cols[0], top_cols[1])
-	_add_outward_tri(st, top_ring[5], top_ring[1], top_ring[4], ref_body,
-		top_cols[5], top_cols[1], top_cols[4])
-	_add_outward_tri(st, top_ring[4], top_ring[1], top_ring[2], ref_body,
-		top_cols[4], top_cols[1], top_cols[2])
-	_add_outward_tri(st, top_ring[4], top_ring[2], top_ring[3], ref_body,
-		top_cols[4], top_cols[2], top_cols[3])
+	# 7-tri sculpted raised dorsal dome fanning from `dorsal_crest` to all 7 top rim edges.
+	for k in 5:
+		var nk := k + 1
+		_add_outward_tri(st, dorsal_crest, top_ring[k], top_ring[nk], ref_body,
+			col_crest, top_cols[k], top_cols[nk])
+	_add_outward_tri(st, dorsal_crest, top_ring[5], brow_notch, ref_body, col_crest, top_cols[5], col_brow)
+	_add_outward_tri(st, dorsal_crest, brow_notch, top_ring[0], ref_body, col_crest, col_brow, top_cols[0])
 
-	# 2. Twin raised curved pincer claws in front (6 tris).
-	var claw_ref := Vector3(0.0, -0.50, 0.12)
+	# 2. Twin 3D volumetric double-fingered pincer claws in front (16 tris: 8 per claw).
 	for side: float in [-1.0, 1.0]:
-		var sh_in := Vector3(side * 0.086, 0.072, -0.086)
-		var sh_out := Vector3(side * 0.128, 0.056, -0.052)
-		var elbow := Vector3(side * 0.208, 0.112, -0.172)
-		var palm_out := Vector3(side * 0.228, 0.158, -0.238)
-		var tip_up := Vector3(side * 0.095, 0.178, -0.268)
-		var wrist_in := Vector3(side * 0.166, 0.104, -0.175)
-		var tip_lo := Vector3(side * 0.082, 0.122, -0.244)
+		var sh_top := Vector3(side * 0.094, 0.086, -0.084)
+		var sh_out := Vector3(side * 0.132, 0.056, -0.050)
+		var sh_in := Vector3(side * 0.082, 0.056, -0.094)
+		var wrist := Vector3(side * 0.194, 0.106, -0.168)
 
-		_add_outward_tri(st, sh_in, sh_out, elbow, claw_ref, col_rim, col_arm, col_claw)
-		_add_outward_tri(st, elbow, palm_out, tip_up, claw_ref, col_claw, col_claw_hi, col_claw_tip)
-		_add_outward_tri(st, elbow, wrist_in, tip_lo, claw_ref, col_claw, col_rim, col_claw_tip)
+		var palm_top := Vector3(side * 0.214, 0.160, -0.212)
+		var palm_out := Vector3(side * 0.236, 0.122, -0.218)
+		var palm_in := Vector3(side * 0.168, 0.120, -0.194)
+		var tip_up := Vector3(side * 0.094, 0.184, -0.278)
 
-	# 3. 6 splayed articulated walking legs (12 tris: 3 left, 3 right).
-	# [hip_x, hip_z, knee_x, knee_y, knee_z, foot_x, foot_z]
+		var dact_out := Vector3(side * 0.212, 0.098, -0.198)
+		var dact_bot := Vector3(side * 0.184, 0.072, -0.202)
+		var dact_in := Vector3(side * 0.166, 0.104, -0.186)
+		var tip_lo := Vector3(side * 0.088, 0.118, -0.258)
+
+		var arm_ref := Vector3(side * 0.090, 0.020, -0.060)
+		var palm_ref := Vector3(side * 0.165, 0.092, -0.206)
+		var inner_up_ref := Vector3(side * 0.200, 0.050, -0.260)
+		var dact_ref := Vector3(side * 0.165, 0.118, -0.192)
+
+		# 3D ridged arm (2 tris).
+		_add_outward_tri(st, sh_top, sh_out, wrist, arm_ref, col_rim, col_arm, col_claw)
+		_add_outward_tri(st, sh_in, sh_top, wrist, arm_ref, col_rim, col_arm, col_claw)
+
+		# Volumetric palm + curved upper fixed finger (3 tris).
+		_add_outward_tri(st, wrist, palm_out, palm_top, palm_ref, col_claw, col_claw, col_claw_hi)
+		_add_outward_tri(st, palm_top, palm_out, tip_up, palm_ref, col_claw_hi, col_claw, col_claw_tip)
+		_add_outward_tri(st, palm_top, tip_up, palm_in, inner_up_ref, col_claw_hi, col_claw_tip, col_arm)
+
+		# Volumetric lower movable pincer dactylus (3 tris).
+		_add_outward_tri(st, wrist, dact_out, dact_bot, dact_ref, col_claw, col_arm, col_rim)
+		_add_outward_tri(st, dact_out, tip_lo, dact_bot, dact_ref, col_claw, col_claw_tip, col_rim)
+		_add_outward_tri(st, dact_out, dact_in, tip_lo, arm_ref, col_claw, col_arm, col_claw_tip)
+
+	# 3. 8 articulated splayed walking legs — 4 pairs (24 tris: 3 per leg).
+	# [hip_x, hip_z, knee_x, knee_y, knee_z, ankle_x, ankle_y, ankle_z, foot_x, foot_z]
 	var leg_specs: Array[Array] = [
-		[0.132, -0.042, 0.235, 0.095, -0.085, 0.285, -0.115],
-		[0.146,  0.014, 0.252, 0.098,  0.022, 0.305,  0.032],
-		[0.122,  0.070, 0.228, 0.088,  0.126, 0.275,  0.165],
+		[0.130, -0.052, 0.228, 0.096, -0.104, 0.264, 0.050, -0.128, 0.286, -0.146],
+		[0.148, -0.008, 0.256, 0.104, -0.018, 0.294, 0.052, -0.024, 0.318, -0.028],
+		[0.142,  0.038, 0.246, 0.098,  0.066, 0.282, 0.048,  0.086, 0.304,  0.102],
+		[0.114,  0.082, 0.212, 0.086,  0.142, 0.244, 0.044,  0.172, 0.262,  0.194],
 	]
 	var leg_up_ref := Vector3(0.0, -0.60, 0.0)
 	for side: float in [-1.0, 1.0]:
@@ -4725,28 +4934,107 @@ static func _build_crab_mesh() -> ArrayMesh:
 			var kx: float = float(lspec[2])
 			var ky: float = float(lspec[3])
 			var kz: float = float(lspec[4])
-			var fx: float = float(lspec[5])
-			var fz: float = float(lspec[6])
+			var ax: float = float(lspec[5])
+			var ay: float = float(lspec[6])
+			var az: float = float(lspec[7])
+			var fx: float = float(lspec[8])
+			var fz: float = float(lspec[9])
 
-			var hip_a := Vector3(side * hx, 0.056, hz - 0.018)
-			var hip_b := Vector3(side * hx, 0.056, hz + 0.018)
+			var hip_a := Vector3(side * hx, 0.056, hz - 0.016)
+			var hip_b := Vector3(side * hx, 0.056, hz + 0.016)
 			var knee_top := Vector3(side * kx, ky, kz)
-			var knee_bot := Vector3(side * (kx - 0.024), ky - 0.028, kz)
+			var knee_bot := Vector3(side * (kx - 0.022), ky - 0.024, kz)
+			var ankle_top := Vector3(side * ax, ay, az)
 			var foot := Vector3(side * fx, 0.002, fz)
 
 			_add_outward_tri(st, hip_a, hip_b, knee_top, leg_up_ref, col_leg_hip, col_leg_hip, col_leg_knee)
-			_add_outward_tri(st, knee_top, knee_bot, foot, leg_side_ref, col_leg_knee, col_leg_hip, col_leg_foot)
+			_add_outward_tri(st, knee_top, knee_bot, ankle_top, leg_side_ref, col_leg_knee, col_leg_hip, col_leg_ankle)
+			_add_outward_tri(st, ankle_top, knee_bot, foot, leg_side_ref, col_leg_ankle, col_leg_hip, col_leg_foot)
 
-	# 4. Tiny dark upright eye-stalks on front carapace edge (2 tris).
-	var eye_ref := Vector3(0.0, 0.08, 0.12)
+	# 4. Twin thicker 3D stalked glossy dark eyes on notched front brow (8 tris: 4 per eye).
 	for side: float in [-1.0, 1.0]:
-		var eb_in := Vector3(side * 0.028, 0.108, -0.096)
-		var eb_out := Vector3(side * 0.052, 0.106, -0.092)
-		var eye_tip := Vector3(side * 0.044, 0.156, -0.112)
-		_add_outward_tri(st, eb_in, eb_out, eye_tip, eye_ref, col_eye_stalk, col_eye_stalk, col_eye_tip)
+		var eye_ring: Array[Vector3] = [
+			Vector3(side * 0.042, 0.110, -0.106),
+			Vector3(side * 0.055, 0.108, -0.092),
+			Vector3(side * 0.040, 0.114, -0.080),
+			Vector3(side * 0.028, 0.110, -0.094),
+		]
+		var eye_tip := Vector3(side * 0.046, 0.164, -0.112)
+		var eye_ref := Vector3(side * 0.041, 0.112, -0.093)
+		for k in 4:
+			var nk := (k + 1) % 4
+			_add_outward_tri(st, eye_ring[k], eye_ring[nk], eye_tip, eye_ref,
+				col_eye_stalk, col_eye_stalk, col_eye_tip)
 
 	st.generate_normals()
 	return st.commit()
+
+
+# ------------------------------------------------------------------ Mesh 12: Camera-Facing Gaussian Twilight Lantern Halo
+
+static func _build_lantern_halo_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# 80-tri single camera-facing 16-gon 3-ring Gaussian radial glow disc (paired with
+	# BILLBOARD_ENABLED + billboard_keep_scale = true; ZERO edge-on cross-plane seams,
+	# ZERO visible outer polygon rim, 0.0 MB texture VRAM):
+	#   r = 0.00 (alpha 0.54) -> r = 0.24 (0.20) -> r = 0.56 (0.032) -> r = 1.00 (0.000).
+	const SIDES := 16
+	const R_INNER := 0.24
+	const R_MID := 0.56
+	const R_OUT := 1.00
+	var col_core := Color(1.00, 0.99, 0.97, 0.54)
+	var col_inner := Color(0.99, 0.98, 0.95, 0.20)
+	var col_mid := Color(0.96, 0.95, 0.93, 0.032)
+	var col_rim := Color(0.94, 0.93, 0.91, 0.000)
+
+	var inner_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var out_ring: Array[Vector3] = []
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU
+		var radial := Vector3(cos(ang), sin(ang), 0.0)
+		inner_ring.append(radial * R_INNER)
+		mid_ring.append(radial * R_MID)
+		out_ring.append(radial * R_OUT)
+
+	var n_axis := Vector3.BACK
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_halo_tri(st, Vector3.ZERO, inner_ring[k], inner_ring[nk], n_axis, col_core, col_inner, col_inner)
+		_add_halo_tri(st, inner_ring[k], mid_ring[k], mid_ring[nk], n_axis, col_inner, col_mid, col_mid)
+		_add_halo_tri(st, inner_ring[k], mid_ring[nk], inner_ring[nk], n_axis, col_inner, col_mid, col_inner)
+		_add_halo_tri(st, mid_ring[k], out_ring[k], out_ring[nk], n_axis, col_mid, col_rim, col_rim)
+		_add_halo_tri(st, mid_ring[k], out_ring[nk], mid_ring[nk], n_axis, col_mid, col_rim, col_mid)
+
+	return st.commit()
+
+
+static func _add_halo_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		normal: Vector3, ca: Color, cb: Color, cc: Color) -> void:
+	if (c - a).cross(b - a).dot(normal) < 0.0:
+		var tmp_v := b
+		b = c
+		c = tmp_v
+		var tmp_c := cb
+		cb = cc
+		cc = tmp_c
+	st.set_normal(normal)
+	st.set_color(ca)
+	st.set_uv(Vector2(0.5, 0.5))
+	st.add_vertex(a)
+
+	st.set_normal(normal)
+	st.set_color(cb)
+	st.set_uv(Vector2(0.5, 0.5))
+	st.add_vertex(b)
+
+	st.set_normal(normal)
+	st.set_color(cc)
+	st.set_uv(Vector2(0.5, 0.5))
+	st.add_vertex(c)
+
 
 
 # ------------------------------------------------------------------ SurfaceTool geometry primitives
