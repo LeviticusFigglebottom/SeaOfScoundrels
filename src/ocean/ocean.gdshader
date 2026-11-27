@@ -559,6 +559,12 @@ void fragment() {
 		// emerald-jade reef dropoff (3.5..14 m) -> fathomless dark sapphire-indigo open sea (> 14 m).
 		// At midnight, cool coastal shallows into velvet moonlit indigo-teal so coves never glow neon-cyan
 		// and harbour lanterns / nocturnal coral bioluminescence / wake stars pop with cinematic contrast!
+		// On LOW (foam_field_on == 0), attenuate shallow-beach turquoise on steep nearby submerged ship hulls
+		// (< 70 m) so hulls sit naturally in deep ocean water without affecting distant sandy coves or MEDIUM/HIGH!
+		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
+		vec3 scene_n = normalize(cross(dFdy(sw0), dFdx(sw0)));
+		float flatness = smoothstep(0.50, 0.92, abs(scene_n.y));
+		float has_ff = step(0.5, foam_field_on);
 		float path = vdepth * 1.45 + min(thick, 10.0) * 0.12;
 		vec3 trans = has_seabed ? exp(-(absorption + turbidity) * path) : vec3(0.0);
 		float fill = has_seabed ? (1.0 - exp(-turbidity * (path + min(thick, 4.0) * 0.85))) : 1.0;
@@ -567,7 +573,9 @@ void fragment() {
 		vec3 shallow_tint = mix(eff_shallow, scatter_color, 0.18 * (1.0 - night_bio * 0.65)) * light * 0.74;
 		vec3 reef_tint = eff_reef * light * mix(0.62, 1.12, smoothstep(0.38, 0.95, face_lit));
 		vec3 coast_body = mix(shallow_tint, reef_tint, smoothstep(1.2, 5.2, path));
-		vec3 water_vol = has_seabed ? mix(coast_body, body, smoothstep(4.2, 16.5, path)) : body;
+		float low_steep_hull = (1.0 - has_ff) * smoothstep(70.0, 25.0, dist) * (1.0 - flatness);
+		vec3 eff_coast = mix(coast_body, body, low_steep_hull * 0.78);
+		vec3 water_vol = has_seabed ? mix(eff_coast, body, smoothstep(4.2, 16.5, path)) : body;
 		col = behind * trans + water_vol * fill;
 
 		// --- compute foam sources early so milky aqua aeration glows ONLY beneath real foam
@@ -610,8 +618,7 @@ void fragment() {
 		}
 		crest_foam = max(crest_foam, standing);
 
-		// Shoreline / ship-hull intersection foam from the depth buffer.
-		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
+		// Shoreline / ship-hull intersection foam from the depth buffer (reuses sw0 & flatness computed above).
 		float vd0 = has_floor0 ? max(v_world.y - sw0.y, 0.0) : 120.0;
 		float in_water = 1.0;
 		if (has_floor0 && quality > 0 && thick0 < 8.0 && vd0 < shore_foam_depth) {
@@ -622,8 +629,6 @@ void fragment() {
 		}
 		// Gentle beaches get crisp scalloped shore-parallel surf wavelets (zero bullseye blot swirl!);
 		// steep rocks & ship hulls get a tight, lacy churning waterline collar (zero thick white pillows!).
-		vec3 scene_n = normalize(cross(dFdy(sw0), dFdx(sw0)));
-		float flatness = smoothstep(0.50, 0.92, abs(scene_n.y));
 		float foam_depth = shore_foam_depth * mix(0.18, 1.0, flatness);
 		float shore = 1.0 - smoothstep(0.0, foam_depth, vd0);
 		float band1 = 0.5 + 0.5 * sin(vd0 * 7.6 / foam_depth + sea_time * 1.55 + blot * 1.50);
@@ -631,10 +636,12 @@ void fragment() {
 		float surf_bands = max(band1 * band1, band2 * band2 * 0.58);
 		float lip_lace = 0.58 + 0.46 * smoothstep(0.22, 0.82, blot * 0.56 + band1 * 0.44);
 		float beach_wash = shore * (0.24 + 0.64 * surf_bands) * 0.82 + smoothstep(0.16, 0.0, vd0) * 0.88 * lip_lace;
-		// Tight lacy whitewater collar around steep rocks and ship hulls (slightly boosted when foam_field is off on LOW).
+		// Tight lacy whitewater collar around steep rocks and ship hulls (expanded cleanly when foam_field is off on LOW
+		// so LOW-preset ships wear a crisp frothy white waterline collar matching MEDIUM/HIGH instead of bare aqua!).
 		float collar_wave = 0.84 + 0.16 * sin(sea_time * 2.2 + dot(v_rest, vec2(0.7, 0.5)));
-		float low_collar_k = mix(1.28, 1.0, step(0.5, foam_field_on));
-		float hull_collar = (smoothstep(0.18 * low_collar_k, 0.0, vd0) * 0.90 + smoothstep(0.52 * low_collar_k, 0.06, vd0) * 0.36 * band1 * (0.48 + 0.52 * blot)) * collar_wave;
+		float hull_collar_hi = (smoothstep(0.18, 0.0, vd0) * 0.90 + smoothstep(0.52, 0.06, vd0) * 0.36 * band1 * (0.48 + 0.52 * blot)) * collar_wave;
+		float hull_collar_lo = (smoothstep(0.42, 0.0, vd0) * 0.96 + smoothstep(0.96, 0.08, vd0) * 0.54 * band1 * (0.52 + 0.48 * blot)) * collar_wave;
+		float hull_collar = mix(hull_collar_lo, hull_collar_hi, has_ff);
 		float shore_foam = mix(hull_collar, beach_wash, flatness);
 		shore_foam *= has_floor * in_water;
 
@@ -662,8 +669,8 @@ void fragment() {
 		float web_foam = fm.z * lod_fade;
 
 		// Tight milky turquoise-green aeration strictly beneath active foam patches & ship wakes
-		// (fades cleanly at distance so aerial views never show glowing cyan halos).
-		float aerate_src = clamp(max(heavy_foam * 1.15, web_foam * 0.78) + field * 0.92 + shore_foam * 0.72, 0.0, 1.0);
+		// (fades cleanly at distance so aerial views never show glowing cyan halos; stays balanced on LOW!).
+		float aerate_src = clamp(max(heavy_foam * 1.15, web_foam * 0.78) + field * 0.92 + shore_foam * mix(0.28, 0.72, has_ff), 0.0, 1.0);
 		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist) * mix(1.0, 0.28, night_bio) * mix(1.0, 0.68, storm);
 		vec3 milky_light = ambient_color * 0.68 + sun_light * (0.34 + 0.66 * clamp(dot(N, L), 0.0, 1.0));
 		vec3 milky_col = foam_under_color * milky_light * mix(0.72, 1.10, smoothstep(0.55, 1.0, macro_light));
