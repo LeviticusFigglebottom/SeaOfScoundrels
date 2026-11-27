@@ -848,4 +848,145 @@ func test_q7b_hud_crew_roster_and_shipwright_specs() -> void:
 		"Q7B HUD & ShipwrightMenu test nodes free cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# 7. Q11B: Landing Harbour Vista Quick-Preview Strip & Live 3D Camera Framing
+# ---------------------------------------------------------------------------
 
+func test_q11b_title_landing_harbour_vista_preview_and_camera_framing() -> void:
+	var saved_weather := Weather.get_state()
+	var saved_amp := Sea.amp_scale
+	Net.start_single_player()
+
+	var main_scene := load("res://scenes/main.tscn") as PackedScene
+	check(main_scene != null, "scenes/main.tscn loads cleanly for Q11B")
+	var main := main_scene.instantiate()
+	add_child(main)
+	await physics_frames(3)
+
+	var tm := main.get(&"title_menu") as TitleMenu
+	check(tm != null, "Main mounts TitleMenu for Q11B")
+	main.call(&"_enter_title_menu", TitleMenu.Page.LANDING)
+	await physics_frames(2)
+
+	# 1. Verify HARBOUR_VISTAS catalog, Landing layout order, and zero-overflow 1280x720 height budget.
+	check_eq(TitleMenu.HARBOUR_VISTAS.size(), 4, "TitleMenu defines 4 Harbour Vista quick-preview presets")
+	var landing_col := tm.find_child("LandingColumn", true, false) as VBoxContainer
+	var action_stack := tm.find_child("MainActionStack", true, false) as Control
+	var vista_bar := tm.find_child("HarbourVistaBar", true, false) as Control
+	var status_lbl := tm.find_child("LandingStatusLabel", true, false) as Control
+	check(landing_col != null and action_stack != null and vista_bar != null and status_lbl != null,
+		"LandingPage mounts MainActionStack, HarbourVistaBar, and LandingStatusLabel")
+	if action_stack != null and vista_bar != null and status_lbl != null:
+		check(action_stack.get_index() < vista_bar.get_index() and vista_bar.get_index() < status_lbl.get_index(),
+			"HarbourVistaBar sits cleanly between MainActionStack and LandingStatusLabel")
+	if landing_col != null:
+		var col_min := landing_col.get_combined_minimum_size()
+		check(col_min.y <= 674.0,
+			"LandingColumn minimum height fits cleanly inside 1280x720 without overflow (min_y=%.1f)" % col_min.y)
+
+	# 2. Verify all 4 Landing Harbour Vista buttons exist, have strict ASCII labels, emit preview_config_changed,
+	#    update config.time_preset & config.weather_preset, and immediately transform Weather in main.tscn!
+	var preview_events: Array[SessionConfig] = []
+	tm.preview_config_changed.connect(func(c: SessionConfig) -> void: preview_events.append(c))
+
+	var expected_vistas: Array[Dictionary] = [
+		{"id": &"morning", "label": "Morning", "time": &"morning", "wx": &"fair", "tod": 10.2, "storm_min": 0.0, "storm_max": 0.15},
+		{"id": &"sunset", "label": "Sunset", "time": &"sunset", "wx": &"fair", "tod": 17.65, "storm_min": 0.0, "storm_max": 0.15},
+		{"id": &"twilight", "label": "Twilight", "time": &"night", "wx": &"fair", "tod": 22.4, "storm_min": 0.0, "storm_max": 0.15},
+		{"id": &"storm", "label": "Storm", "time": &"sunset", "wx": &"storm", "tod": 17.65, "storm_min": 0.70, "storm_max": 0.90},
+	]
+	for idx in expected_vistas.size():
+		var spec := expected_vistas[idx]
+		var vid: StringName = spec["id"]
+		var vbtn := tm.find_child("VistaBtn_" + String(vid), true, false) as Button
+		check(vbtn != null, "Landing Harbour Vista button VistaBtn_%s exists" % String(vid))
+		if vbtn != null:
+			check_eq(vbtn.text, String(spec["label"]), "VistaBtn_%s label matches '%s'" % [String(vid), String(spec["label"])])
+			check(_is_strict_ascii(vbtn.text) and _is_strict_ascii(vbtn.tooltip_text),
+				"VistaBtn_%s text and tooltip are strict ASCII" % String(vid))
+			vbtn.pressed.emit()
+		else:
+			tm.select_harbour_vista(vid)
+		check_eq(tm.config.time_preset, spec["time"], "vista %s sets time_preset=%s" % [String(vid), String(spec["time"])])
+		check_eq(tm.config.weather_preset, spec["wx"], "vista %s sets weather_preset=%s" % [String(vid), String(spec["wx"])])
+		check_eq(tm.get_active_harbour_vista(), vid, "get_active_harbour_vista() reports %s" % String(vid))
+		check_near(Weather.time_of_day, float(spec["tod"]), 0.05,
+			"vista %s updates live Weather.time_of_day to %.2f (got %.2f)" % [String(vid), float(spec["tod"]), Weather.time_of_day])
+		check(Weather.storminess >= float(spec["storm_min"]) and Weather.storminess <= float(spec["storm_max"]),
+			"vista %s updates live Weather.storminess into [%.2f..%.2f] (got %.2f)" % [
+				String(vid), float(spec["storm_min"]), float(spec["storm_max"]), Weather.storminess
+			])
+	check_eq(preview_events.size(), 4, "clicking all 4 Harbour Vista pills emits preview_config_changed 4 times")
+
+	# Manual customization on Setup reports &"custom" from get_active_harbour_vista().
+	tm.select_time_preset(&"dawn")
+	tm.select_weather_preset(&"choppy")
+	check_eq(tm.get_active_harbour_vista(), &"custom",
+		"manual Setup time/weather combo reports &'custom' vista")
+
+	# 3. Verify optional vista= hero shot override and deterministic morning+fair default!
+	main.set(&"_cli_vista", &"twilight")
+	main.set(&"_cli_time", NAN)
+	main.call(&"_apply_hero_shot", "title_menu")
+	check_eq(tm.get_active_harbour_vista(), &"twilight", "title_menu hero shot honours vista=twilight")
+	check_near(Weather.time_of_day, 22.4, 0.05, "title_menu hero shot with vista=twilight sets night time 22.4")
+
+	main.set(&"_cli_vista", &"")
+	main.set(&"_cli_time", NAN)
+	main.call(&"_apply_hero_shot", "title_menu")
+	check_eq(tm.get_active_harbour_vista(), &"morning", "title_menu hero shot defaults cleanly to morning vista")
+	check_near(Weather.time_of_day, 10.2, 0.05, "title_menu hero shot preserves deterministic 10.2 morning default")
+	check_near(Weather.storminess, 0.06, 0.02, "title_menu hero shot preserves deterministic 0.06 fair default")
+
+	# 4. Verify refined unobstructed _update_title_camera() framing for Sloop and Brigantine!
+	var title_cam := main.get(&"_title_camera") as Camera3D
+	check(title_cam != null and title_cam.current, "TitleMenuCamera is mounted and active on TitleMenu")
+
+	tm.select_ship_class(&"sloop")
+	await physics_frames(2)
+	main.set(&"_title_orbit_time", 0.0)
+	main.call(&"_update_title_camera")
+	var sloop_ship := main.get(&"player_ship") as Ship
+	check(sloop_ship != null and sloop_ship.ship_class == &"sloop", "preview swapped cleanly to Sloop")
+	if title_cam != null and sloop_ship != null:
+		var s_off := title_cam.global_position - sloop_ship.global_position
+		var s_horiz := Vector2(s_off.x, s_off.z).length()
+		var s_sea_y := Sea.height(title_cam.global_position.x, title_cam.global_position.z)
+		check(s_horiz >= 24.0, "Sloop title camera horizontal distance >= 24.0 m (got %.2f m)" % s_horiz)
+		check(title_cam.global_position.y >= s_sea_y + 3.35,
+			"Sloop title camera sits well above sea surface (cam_y=%.2f, sea_y=%.2f)" % [title_cam.global_position.y, s_sea_y])
+		var to_sloop := (sloop_ship.global_position - title_cam.global_position).normalized()
+		var cam_fwd := -title_cam.global_basis.z
+		var cam_right := title_cam.global_basis.x
+		check(cam_fwd.dot(to_sloop) > 0.80, "Sloop title camera looks smoothly toward vessel & harbour")
+		check(cam_right.dot(to_sloop) > 0.10, "Sloop vessel frames cleanly to the right of left-anchored TitleMenu")
+
+	tm.select_ship_class(&"brigantine")
+	await physics_frames(2)
+	main.set(&"_title_orbit_time", 0.0)
+	main.call(&"_update_title_camera")
+	var brig_ship := main.get(&"player_ship") as Ship
+	check(brig_ship != null and brig_ship.ship_class == &"brigantine", "preview swapped cleanly to Brigantine")
+	if title_cam != null and brig_ship != null:
+		var b_off := title_cam.global_position - brig_ship.global_position
+		var b_horiz := Vector2(b_off.x, b_off.z).length()
+		var b_sea_y := Sea.height(title_cam.global_position.x, title_cam.global_position.z)
+		check(b_horiz >= 30.0, "Brigantine title camera horizontal distance >= 30.0 m (got %.2f m)" % b_horiz)
+		check(title_cam.global_position.y >= b_sea_y + 3.35,
+			"Brigantine title camera sits well above sea surface (cam_y=%.2f, sea_y=%.2f)" % [title_cam.global_position.y, b_sea_y])
+		var to_brig := (brig_ship.global_position - title_cam.global_position).normalized()
+		var b_fwd := -title_cam.global_basis.z
+		var b_right := title_cam.global_basis.x
+		check(b_fwd.dot(to_brig) > 0.80, "Brigantine title camera looks smoothly toward vessel & harbour")
+		check(b_right.dot(to_brig) > 0.10, "Brigantine vessel frames cleanly to the right of left-anchored TitleMenu")
+
+	# 5. Strict ASCII scan across entire TitleMenu tree including new Harbour Vista strip.
+	var checked_ascii := _check_tree_strict_ascii(tm, "Q11B_TitleMenu")
+	check(checked_ascii >= 50, "verified 100%% strict ASCII across Q11B TitleMenu (checked %d)" % checked_ascii)
+
+	# 6. Clean zero-leak teardown.
+	main.queue_free()
+	await physics_frames(4)
+	check(not is_instance_valid(main), "Q11B main scene frees cleanly with 0 leaks")
+	Weather.apply_state(saved_weather)
+	Sea.amp_scale = saved_amp

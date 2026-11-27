@@ -1852,3 +1852,336 @@ func test_q10b_shipwreck_bubbles_dive_halo_and_castaway_night_beacon() -> void:
 			and SunkenShipwreck._bubble_proc == null and SunkenShipwreck._dive_halo_mesh == null \
 			and SunkenShipwreck._dive_halo_shader == null,
 		"SunkenShipwreck releases all bubble & dive halo static caches cleanly with zero leaks")
+
+
+func test_q11a_reef_atmosphere_sun_shafts_sea_fans_clams_bubbles_and_biolum() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Static source guard: zero raw PrimitiveMesh allocations in reef_atmosphere.gd.
+	var atmo_src := FileAccess.get_file_as_string("res://src/world/reef_atmosphere.gd")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not atmo_src.contains(bad_prim), "reef_atmosphere.gd contains zero %s calls" % bad_prim)
+
+	# 2. Populate Crescent Lagoon reef and confirm CoralReef invariants + sibling ReefAtmosphere!
+	var lagoon := IslandGenerator.build_island({
+		"id": "test_q11a_crescent_lagoon",
+		"name": "Q11A Crescent Lagoon",
+		"archetype": &"crescent_lagoon",
+		"seed": 11103,
+	})
+	_root.add_child(lagoon)
+
+	var reef := CoralReef.populate_for_island(lagoon, 11107, 1.0)
+	check(reef != null and reef.get_parent() == lagoon, "CoralReef attaches cleanly to Island")
+	check_eq(reef.get_multimesh_count(), 3, "CoralReef preserves strictly 3 MultiMesh draw calls")
+	check(reef.find_children("*", "MeshInstance3D", true, false).is_empty(),
+		"CoralReef preserves zero MeshInstance3D children invariant")
+
+	var brain_mmi := reef.get_node_or_null(^"BrainTableCorals") as MultiMeshInstance3D
+	check(brain_mmi != null and brain_mmi.multimesh != null and brain_mmi.multimesh.mesh != null,
+		"CoralReef preserves BrainTableCorals MultiMesh")
+	if brain_mmi != null and brain_mmi.multimesh != null and brain_mmi.multimesh.mesh != null:
+		var brain_tris := int(brain_mmi.multimesh.mesh.get_faces().size() / 3.0)
+		check(brain_tris > 0 and brain_tris <= 420,
+			"BrainTableCorals stays <= 420 tris (got %d)" % brain_tris)
+
+	var atmo := lagoon.get_node_or_null(^"ReefAtmosphere") as ReefAtmosphere
+	check(atmo != null, "CoralReef.populate_for_island auto-attaches sibling ReefAtmosphere on Island")
+	if atmo == null:
+		await _end()
+		return
+	check_eq(atmo.get_parent(), lagoon, "ReefAtmosphere is attached as sibling on Island")
+	check(atmo.is_in_group(ReefAtmosphere.GROUP), "ReefAtmosphere registers in reef_atmosphere group")
+	check_eq(atmo.get_child_count(), 3, "ReefAtmosphere owns strictly 3 GPU-batched procedural children")
+
+	# 3. Inspect all 3 children: UnderwaterSunShafts, SeaFanClamBeds, ReefBubblePlumes.
+	var shafts := atmo.get_node_or_null(^"UnderwaterSunShafts") as MeshInstance3D
+	var seafans := atmo.get_node_or_null(^"SeaFanClamBeds") as MultiMeshInstance3D
+	var bubbles := atmo.get_node_or_null(^"ReefBubblePlumes") as MultiMeshInstance3D
+	check(shafts != null, "ReefAtmosphere owns UnderwaterSunShafts MeshInstance3D")
+	check(seafans != null, "ReefAtmosphere owns SeaFanClamBeds MultiMeshInstance3D")
+	check(bubbles != null, "ReefAtmosphere owns ReefBubblePlumes MultiMeshInstance3D")
+
+	var raw_prims := 0
+	var bad_normals := 0
+	var shaft_tris := 0
+	var seafan_tris := 0
+	var bubble_tris := 0
+
+	if shafts != null:
+		check_eq(shafts.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"UnderwaterSunShafts disables shadow casting")
+		var expected_shaft_vis := maxf(165.0, lagoon.seabed_radius + 115.0)
+		check_near(shafts.visibility_range_end, expected_shaft_vis, 0.05,
+			"UnderwaterSunShafts visibility_range_end matches maxf(165, seabed_radius + 115)")
+		check(shafts.mesh is ArrayMesh and not (shafts.mesh is PrimitiveMesh),
+			"UnderwaterSunShafts uses batched SurfaceTool ArrayMesh (zero PrimitiveMesh)")
+		if shafts.mesh is PrimitiveMesh:
+			raw_prims += 1
+		elif shafts.mesh is ArrayMesh:
+			var arr := (shafts.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			shaft_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+		check(atmo.get_sun_shaft_count() >= 10 and atmo.get_sun_shaft_count() <= 14,
+			"UnderwaterSunShafts batches 10..14 slanted god-rays (got %d)" % atmo.get_sun_shaft_count())
+		var smat := shafts.material_override as ShaderMaterial
+		check(smat != null and smat.shader != null, "UnderwaterSunShafts uses cached custom ShaderMaterial")
+
+	if seafans != null:
+		check_eq(seafans.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"SeaFanClamBeds disables shadow casting")
+		var expected_reef_vis := maxf(CoralReef.VISIBILITY_RANGE_END, lagoon.seabed_radius + 110.0)
+		check_near(seafans.visibility_range_end, expected_reef_vis, 0.05,
+			"SeaFanClamBeds visibility_range_end matches CoralReef")
+		check(seafans.multimesh != null and seafans.multimesh.mesh is ArrayMesh \
+				and not (seafans.multimesh.mesh is PrimitiveMesh),
+			"SeaFanClamBeds uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if seafans.multimesh != null and seafans.multimesh.mesh is PrimitiveMesh:
+			raw_prims += 1
+		elif seafans.multimesh != null and seafans.multimesh.mesh is ArrayMesh:
+			var am := seafans.multimesh.mesh as ArrayMesh
+			var arr := am.surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			seafan_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+			check(seafan_tris >= 180 and seafan_tris <= 320,
+				"SeaFanClam sculpted mesh stays crisp within 180..320 tris (got %d)" % seafan_tris)
+		var sf_mat := seafans.material_override as StandardMaterial3D
+		check(sf_mat != null and sf_mat.vertex_color_use_as_albedo and sf_mat.vertex_color_is_srgb,
+			"SeaFanClamBeds uses sRGB vertex-colored StandardMaterial3D")
+		if sf_mat != null:
+			check(sf_mat.albedo_texture == null and sf_mat.normal_texture == null and sf_mat.roughness_texture == null,
+				"SeaFanClamBeds material allocates 0 extra VRAM textures")
+
+	if bubbles != null:
+		check_eq(bubbles.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ReefBubblePlumes disables shadow casting")
+		check_near(bubbles.visibility_range_end, 115.0, 0.05,
+			"ReefBubblePlumes visibility_range_end is 115.0 m")
+		check(bubbles.multimesh != null and bubbles.multimesh.mesh is ArrayMesh \
+				and not (bubbles.multimesh.mesh is PrimitiveMesh),
+			"ReefBubblePlumes uses sculpted ArrayMesh (zero SphereMesh)")
+		if bubbles.multimesh != null and bubbles.multimesh.mesh is PrimitiveMesh:
+			raw_prims += 1
+		elif bubbles.multimesh != null and bubbles.multimesh.mesh is ArrayMesh:
+			var am := bubbles.multimesh.mesh as ArrayMesh
+			var arr := am.surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			bubble_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bad_normals += 1
+			check_eq(bubble_tris, 12, "sculpted gem micro-bubble mesh has exact 12 triangles")
+		var b_mat := bubbles.material_override as StandardMaterial3D
+		check(b_mat != null and b_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and b_mat.rim_enabled,
+			"ReefBubblePlumes uses translucent rim-shimmering pearl-cyan material")
+		if b_mat != null:
+			check(b_mat.albedo_texture == null and b_mat.normal_texture == null and b_mat.roughness_texture == null,
+				"ReefBubblePlumes material allocates 0 extra VRAM textures")
+
+	check_eq(raw_prims, 0, "ReefAtmosphere contains zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all ReefAtmosphere procedural normals are finite unit vectors")
+
+	# Verify SeaFanClamBeds count, underwater grounding, mooring keepout, and positive determinant.
+	var sf_count := atmo.get_sea_fan_clam_count()
+	check(sf_count >= 12 and sf_count <= 32,
+		"SeaFanClamBeds populates >= 12 sculpted Giant Pearl-Clams & Sea-Fans (got %d)" % sf_count)
+	var sf_xforms := atmo.get_placed_sea_fan_transforms()
+	check_eq(sf_xforms.size(), sf_count, "get_placed_sea_fan_transforms() matches count")
+	var mooring_xz := Vector2(lagoon.mooring_transform.origin.x, lagoon.mooring_transform.origin.z)
+	var max_sf_y := -INF
+	var min_sf_y := INF
+	var min_sf_moor := INF
+	var max_sf_ground_err := 0.0
+	var bad_sf_det := 0
+	for xf in sf_xforms:
+		var p := xf.origin
+		max_sf_y = maxf(max_sf_y, p.y)
+		min_sf_y = minf(min_sf_y, p.y)
+		min_sf_moor = minf(min_sf_moor, Vector2(p.x, p.z).distance_to(mooring_xz))
+		var expected_y := lagoon.surface_height(p.x, p.z) - CoralReef.ROOT_EMBED_Y
+		max_sf_ground_err = maxf(max_sf_ground_err, absf(p.y - expected_y))
+		if xf.basis.determinant() <= 0.0:
+			bad_sf_det += 1
+	check(max_sf_y <= -1.15, "all SeaFanClam roots sit strictly underwater (max_y=%.2f)" % max_sf_y)
+	check(min_sf_y >= -8.50, "all SeaFanClam roots sit in shallow reef shelf (min_y=%.2f)" % min_sf_y)
+	check(min_sf_moor >= CoralReef.MOORING_CLEAR_RADIUS - 0.01,
+		"all SeaFanClams clear mooring keepout >= 9.5 m (min=%.2f m)" % min_sf_moor)
+	check(max_sf_ground_err < 0.02,
+		"all SeaFanClams ground cleanly into seabed heightfield (max_err=%.4f m)" % max_sf_ground_err)
+	check_eq(bad_sf_det, 0, "all SeaFanClam transforms have positive determinant")
+
+	# Verify Outpost pier keepout + static mesh/shader sharing across a second island.
+	var outpost := IslandGenerator.build_island({
+		"id": "test_q11a_outpost",
+		"name": "Q11A Outpost",
+		"archetype": &"outpost",
+		"seed": 11119,
+	}) as Outpost
+	_root.add_child(outpost)
+	CoralReef.populate_for_island(outpost, 11123, 1.0)
+	var op_atmo := outpost.get_node_or_null(^"ReefAtmosphere") as ReefAtmosphere
+	check(op_atmo != null, "Outpost island also auto-attaches sibling ReefAtmosphere")
+	if op_atmo != null:
+		var pier_a := Vector2(outpost.dock_local_transform.origin.x, outpost.dock_local_transform.origin.z)
+		var pier_b := Vector2(outpost.dock_pier_end_local.x, outpost.dock_pier_end_local.z)
+		var min_pier_d := INF
+		for xf in op_atmo.get_placed_sea_fan_transforms():
+			var pt := Vector2(xf.origin.x, xf.origin.z)
+			var ab := pier_b - pier_a
+			var t := clampf((pt - pier_a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+			min_pier_d = minf(min_pier_d, pt.distance_to(pier_a + ab * t))
+		if op_atmo.get_sea_fan_clam_count() > 0:
+			check(min_pier_d >= CoralReef.PIER_CLEAR_RADIUS - 0.01,
+				"Outpost SeaFanClams clear dock pier >= 5.0 m (min=%.2f m)" % min_pier_d)
+		var op_sf := op_atmo.get_node_or_null(^"SeaFanClamBeds") as MultiMeshInstance3D
+		var op_bub := op_atmo.get_node_or_null(^"ReefBubblePlumes") as MultiMeshInstance3D
+		if op_sf != null and seafans != null:
+			check_eq(op_sf.multimesh.mesh, seafans.multimesh.mesh,
+				"islands share static cached SeaFanClam ArrayMesh")
+		if op_bub != null and bubbles != null:
+			check_eq(op_bub.multimesh.mesh, bubbles.multimesh.mesh,
+				"islands share static cached ReefBubble ArrayMesh")
+
+	# 4. Verify sun-shaft intensity ordering: clear noon > heavy storm > midnight, plus golden sunset tint!
+	Weather.time_of_day = 12.5
+	Weather.set_weather(0.0, 7.0, 0.0)
+	atmo.tick_atmosphere(0.05, false)
+	var noon_shaft := atmo.get_sun_shaft_intensity()
+	var noon_col := atmo.get_sun_shaft_color()
+	var noon_biolum := atmo.get_biolum_strength()
+	var noon_coral_e := CoralReef._coral_material.emission_energy_multiplier
+
+	Weather.time_of_day = 18.0
+	Weather.set_weather(0.0, 7.0, 0.0)
+	atmo.tick_atmosphere(0.05, false)
+	var sunset_col := atmo.get_sun_shaft_color()
+
+	Weather.time_of_day = 12.5
+	Weather.set_weather(0.9, 18.0, 0.0)
+	atmo.tick_atmosphere(0.05, false)
+	var storm_shaft := atmo.get_sun_shaft_intensity()
+
+	Weather.time_of_day = 0.5
+	Weather.set_weather(0.0, 6.0, 0.0)
+	atmo.tick_atmosphere(0.05, false)
+	var midnight_shaft := atmo.get_sun_shaft_intensity()
+	var midnight_biolum := atmo.get_biolum_strength()
+	var midnight_coral_e := CoralReef._coral_material.emission_energy_multiplier
+	var midnight_seafan_e := ReefAtmosphere._seafan_clam_material.emission_energy_multiplier
+
+	check(noon_shaft > storm_shaft and storm_shaft > midnight_shaft,
+		"sun-shaft intensity orders noon (%.3f) > storm (%.3f) > midnight (%.3f)" % [
+			noon_shaft, storm_shaft, midnight_shaft
+		])
+	check(midnight_shaft >= 0.03 and midnight_shaft <= 0.07,
+		"midnight sun-shafts settle to soft moonlit cyan (~0.045, got %.3f)" % midnight_shaft)
+	check(sunset_col.r > noon_col.r + 0.15,
+		"sunset sun-shafts warm into golden-amber (noon.r=%.2f -> sunset.r=%.2f)" % [noon_col.r, sunset_col.r])
+
+	# 5. Verify nocturnal coral bioluminescence rises cleanly at midnight on CoralReef & SeaFanClamBeds!
+	check(midnight_biolum > noon_biolum + 0.85,
+		"nocturnal bioluminescence rises at midnight (noon=%.3f -> midnight=%.3f)" % [noon_biolum, midnight_biolum])
+	check(midnight_coral_e > noon_coral_e + 0.45,
+		"CoralReef._coral_material.emission_energy_multiplier rises at night (%.3f -> %.3f)" % [
+			noon_coral_e, midnight_coral_e
+		])
+	check(midnight_seafan_e > 0.50,
+		"SeaFanClamBeds material glows softly at night (energy=%.3f)" % midnight_seafan_e)
+
+	# 6. Verify rising reef micro-bubble plumes, <= 95 m camera distance gate & clean wrap under y = -0.15!
+	var bub_count := atmo.get_bubble_count()
+	check(bub_count >= 30 and bub_count <= 48,
+		"ReefBubblePlumes spawns >= 30 micro-bubbles (got %d)" % bub_count)
+
+	# Without camera (or far camera), non-forced tick_atmosphere keeps bubbles paused (0.00 ms far CPU).
+	var h_before_far := atmo.get_bubble_heights()
+	atmo.tick_atmosphere(0.25, false)
+	var h_after_no_cam := atmo.get_bubble_heights()
+	check_eq(h_after_no_cam, h_before_far, "bubbles skip updates when no camera is within 95 m")
+
+	var cam := Camera3D.new()
+	_root.add_child(cam)
+	cam.current = true
+	cam.global_position = lagoon.global_position + Vector3(360.0, 12.0, 0.0)
+	atmo.tick_atmosphere(0.25, false)
+	check_eq(atmo.get_bubble_heights(), h_before_far, "bubbles pause beyond 95 m camera cull range")
+
+	# Forced tick advances bubble heights smoothly upward & wraps cleanly under y = -0.15!
+	atmo.tick_atmosphere(0.25, true)
+	var h_after_step := atmo.get_bubble_heights()
+	var rose_count := 0
+	var wrapped_count := 0
+	var max_bub_y := -INF
+	for i in bub_count:
+		max_bub_y = maxf(max_bub_y, h_after_step[i])
+		if h_after_step[i] > h_before_far[i] + 0.05:
+			rose_count += 1
+		elif h_after_step[i] < h_before_far[i] - 0.30:
+			wrapped_count += 1
+	check(rose_count >= int(float(bub_count) * 0.6),
+		"forced tick_atmosphere(0.25, true) rises bubbles upward (rose=%d, wrapped=%d / %d)" % [
+			rose_count, wrapped_count, bub_count
+		])
+	check(max_bub_y < -0.15, "all bubbles stay strictly under y = -0.15 after step (max=%.3f)" % max_bub_y)
+
+	# Run 25 more forced ticks (~6.25 s) to verify repeated wraps stay strictly under y = -0.15.
+	var saw_wrap := wrapped_count > 0
+	var prev_h := h_after_step
+	for _s in 25:
+		atmo.tick_atmosphere(0.25, true)
+		var cur_h := atmo.get_bubble_heights()
+		for i in bub_count:
+			max_bub_y = maxf(max_bub_y, cur_h[i])
+			if cur_h[i] < prev_h[i] - 0.35:
+				saw_wrap = true
+		prev_h = cur_h
+	check(saw_wrap, "bubbles wrap smoothly back to seabed vents over multi-second plume cycle")
+	check(max_bub_y < -0.15, "bubbles never breach y = -0.15 across full plume cycles (max=%.3f)" % max_bub_y)
+
+	# Verify close camera within <= 95 m animates bubbles without force_bubbles.
+	if not atmo._vent_positions.is_empty():
+		cam.global_position = lagoon.to_global(atmo._vent_positions[0]) + Vector3(12.0, 2.0, 0.0)
+		var h_before_cam := atmo.get_bubble_heights()
+		atmo.tick_atmosphere(0.25, false)
+		var h_after_cam := atmo.get_bubble_heights()
+		var moved_cam := 0
+		for i in bub_count:
+			if absf(h_after_cam[i] - h_before_cam[i]) > 0.01:
+				moved_cam += 1
+		check(moved_cam == bub_count,
+			"active camera within <= 95 m drives all %d bubbles without force flag (moved=%d)" % [
+				bub_count, moved_cam
+			])
+
+	print("    Q11A reef atmosphere: shafts=%d (%d tris, noon=%.3f/storm=%.3f/night=%.3f), seafan_clams=%d (%d tris), bubbles=%d (%d tris), biolum=%.2f->%.2f" % [
+		atmo.get_sun_shaft_count(), shaft_tris, noon_shaft, storm_shaft, midnight_shaft,
+		sf_count, seafan_tris, bub_count, bubble_tris, noon_coral_e, midnight_coral_e
+	])
+
+	# 7. Clean zero-leak teardown releases ALL static caches cleanly!
+	await _end()
+	CoralReef.clear_shared_cache()
+	check(not is_instance_valid(atmo), "ReefAtmosphere frees cleanly with Island")
+	check_eq(ReefAtmosphere._active_count, 0, "ReefAtmosphere._active_count == 0 after teardown")
+	check(ReefAtmosphere._sun_shaft_shader == null \
+			and ReefAtmosphere._seafan_clam_mesh == null \
+			and ReefAtmosphere._seafan_clam_material == null \
+			and ReefAtmosphere._bubble_mesh == null \
+			and ReefAtmosphere._bubble_material == null,
+		"ReefAtmosphere releases all static shader, mesh & material caches cleanly with zero leaks")
+

@@ -9,7 +9,7 @@ extends Node3D
 ##
 ## CLI user args (passed after `--`):
 ##   host | join=IP | port=N
-##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine
+##   time=H | storm=S | cloud=C | quality=low|med|high | ship=sloop|brigantine | vista=morning|sunset|twilight|storm
 ##   shot=outpost_dock|sailing|island_approach|combat|storm|sunset|night|night_sail|night_lighthouse|rainbow|whale_breach|helm|map_table|hold|cabin|flotsam|deck_duel|leviathan|fleet|company_fleet|fort_vault|dolphins|sovereigns_bastion|galleons_reach|emerald_waterfall|archipelago_panorama
 
 const SKY_RIG_SCENE: PackedScene = preload("res://src/sky/sky_rig.tscn")
@@ -136,6 +136,7 @@ var _cli_quality: String = ""
 var _cli_ship_class: StringName = &"sloop"
 var _cli_ship_explicit: bool = false
 var _cli_skip_menu: bool = false
+var _cli_vista: StringName = &""
 
 
 func _ready() -> void:
@@ -300,6 +301,8 @@ func _parse_cli_args() -> void:
 				_cli_ship_class = &"sloop"
 		elif a.begins_with("shot="):
 			active_shot_mode = a.trim_prefix("shot=").to_lower()
+		elif a.begins_with("vista="):
+			_cli_vista = StringName(a.trim_prefix("vista=").strip_edges().to_lower())
 
 
 func _start_network_session() -> void:
@@ -3836,11 +3839,14 @@ func _apply_hero_shot(mode: String) -> void:
 			var atoll := archipelago.get_island_by_id("crescent_atoll")
 			if atoll != null:
 				var reef := atoll.get_node_or_null(^"CoralReef") as CoralReef
+				var atmo := atoll.get_node_or_null(^"ReefAtmosphere") as ReefAtmosphere
 				var target_w := atoll.global_position + Vector3(0.0, -3.2, -32.0)
 				if reef != null:
 					var pts := reef.get_placed_transforms()
 					if not pts.is_empty():
 						target_w = atoll.global_transform * pts[0].origin
+				if atmo != null:
+					atmo.tick_atmosphere(0.35, true)
 				var dir_out := Vector3(target_w.x - atoll.global_position.x, 0.0, target_w.z - atoll.global_position.z)
 				dir_out = dir_out.normalized() if dir_out.length_squared() > 0.01 else Vector3(0.0, 0.0, -1.0)
 				var cam_p := target_w + dir_out * 6.5 + Vector3(0.0, 1.35, 0.0)
@@ -4381,9 +4387,9 @@ func _apply_hero_shot(mode: String) -> void:
 				_mount_shot_camera(sc_cam, sc_look, 58.0)
 
 		"title_menu":
-			# Wave 32 first-launch live-3D Title Menu hero shot: left-anchored parchment Title Menu
-			# with moored Brigantine, Port Scoundrel lighthouse & shimmering ocean gleaming on the right!
-			Weather.time_of_day = 10.2 if is_nan(_cli_time) else _cli_time
+			# Wave 32 / Q11B first-launch live-3D Title Menu hero shot: left-anchored parchment Title Menu
+			# with unobstructed moored Brigantine, Port Scoundrel lighthouse & shimmering ocean on the right!
+			Weather.time_of_day = 10.2
 			Weather.set_weather(0.06, 9.0, -0.35, 0.0, 0.36)
 			Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.06)
 			_suppress_shot_hud_overlays()
@@ -4394,8 +4400,22 @@ func _apply_hero_shot(mode: String) -> void:
 				title_menu.config.time_preset = &"morning"
 				title_menu.config.weather_preset = &"fair"
 				_enter_title_menu(TitleMenu.Page.LANDING)
+				var shot_vista := _cli_vista
+				if shot_vista == &"night":
+					shot_vista = &"twilight"
+				if shot_vista != &"":
+					title_menu.select_harbour_vista(shot_vista)
+				if not is_nan(_cli_time):
+					Weather.time_of_day = _cli_time
+				if not is_nan(_cli_storm) or not is_nan(_cli_cloud):
+					var st_ov := Weather.storminess if is_nan(_cli_storm) else _cli_storm
+					var cl_ov := Weather.cloudiness if is_nan(_cli_cloud) else _cli_cloud
+					Weather.set_weather(st_ov, lerpf(9.0, 18.5, st_ov), -0.35, 0.0, cl_ov)
+					Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, st_ov)
 				_title_orbit_time = 0.0
 				_update_title_camera()
+			elif not is_nan(_cli_time):
+				Weather.time_of_day = _cli_time
 
 		"play_setup":
 			# Wave 32 Pre-Sail Configurator hero shot: sunset harbour + Brigantine with raised Emissary Flag
@@ -4723,17 +4743,17 @@ func _update_title_camera() -> void:
 	var sc := (1.24 if is_brig else 1.0) * hs
 	var ship_pos := player_ship.global_position
 	var ship_yaw := Basis(Vector3.UP, player_ship.global_rotation.y)
-	# Gentle seaward quarter-bow orbit framing the live ship cleanly on the right 55% of the screen
-	# so the left-anchored parchment TitleMenu never blocks your vessel!
-	var ang := 0.72 + sin(_title_orbit_time * 0.16) * 0.22
-	var eye := ship_pos + ship_yaw * Vector3(sin(ang) * 23.0 * sc, 5.2 * sc, -cos(ang) * 23.0 * sc)
-	eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 2.8)
+	# Gentle seaward quarter-bow orbit framing the full moored vessel (hull, masts, stern Emissary flag,
+	# golden dusk lanterns) and Port Scoundrel harbourfront cleanly on the right 60% of the screen!
+	var ang := 0.76 + sin(_title_orbit_time * 0.14) * 0.18
+	var eye := ship_pos + ship_yaw * Vector3(sin(ang) * 27.5 * sc, 6.4 * sc, -cos(ang) * 27.5 * sc)
+	eye.y = maxf(eye.y, Sea.height(eye.x, eye.z) + 3.4)
 	var to_ship := ship_pos - eye
 	to_ship.y = 0.0
 	var cam_fwd := to_ship.normalized() if to_ship.length_squared() > 0.001 else Vector3.FORWARD
 	var cam_right := cam_fwd.cross(Vector3.UP).normalized()
-	# Shift look point slightly left of the ship so the vessel frames cleanly to the right of the menu!
-	var look := ship_pos + Vector3(0.0, 2.9 * sc, 0.0) - cam_right * (5.6 * sc)
+	# Shift look point left of the ship so vessel & harbour skyline frame cleanly beside the menu!
+	var look := ship_pos + Vector3(0.0, 3.6 * sc, 0.0) - cam_right * (6.8 * sc)
 	_title_camera.look_at_from_position(eye, look, Vector3.UP)
 
 

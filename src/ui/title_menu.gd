@@ -25,6 +25,37 @@ enum Page {
 
 const DEFAULT_SENS := 0.0023
 
+const HARBOUR_VISTAS: Array[Dictionary] = [
+	{
+		"id": &"morning",
+		"label": "Morning",
+		"time_preset": &"morning",
+		"weather_preset": &"fair",
+		"tooltip": "Golden morning trade winds over Port Scoundrel",
+	},
+	{
+		"id": &"sunset",
+		"label": "Sunset",
+		"time_preset": &"sunset",
+		"weather_preset": &"fair",
+		"tooltip": "Crimson sunset light across the harbourfront",
+	},
+	{
+		"id": &"twilight",
+		"label": "Twilight",
+		"time_preset": &"night",
+		"weather_preset": &"fair",
+		"tooltip": "Starlit twilight with glowing ship and outpost lanterns",
+	},
+	{
+		"id": &"storm",
+		"label": "Storm",
+		"time_preset": &"sunset",
+		"weather_preset": &"storm",
+		"tooltip": "Brooding dusk squall with lightning, rain, and heavy swells",
+	},
+]
+
 const CAPTAIN_CONTROLS_LINES: Array[String] = [
 	"[WASD] Move  |  [Space] Jump  |  [Shift] Sprint  |  [X] Step Off",
 	"[Q / Tab] Tools Radial (Hold or Tap)  |  [G] Crew Orders  |  [1-6] Quick Slots",
@@ -52,6 +83,7 @@ var _status_message: String = ""
 # Landing widgets
 var _profile_ship_label: Label = null
 var _profile_stats_label: Label = null
+var _vista_btns: Dictionary = {}        # StringName -> Button
 var _landing_status_label: Label = null
 
 # Setup widgets
@@ -275,6 +307,31 @@ func select_weather_preset(preset: StringName) -> void:
 	_emit_preview_changed()
 
 
+## Apply a Landing Harbour Vista quick-preview preset (Morning / Sunset / Twilight / Storm) live.
+func select_harbour_vista(vista_id: StringName) -> void:
+	for entry in HARBOUR_VISTAS:
+		if entry["id"] == vista_id:
+			var tp: StringName = entry["time_preset"]
+			var wp: StringName = entry["weather_preset"]
+			if current_page == Page.LANDING and config.mode == SessionConfig.MODE_TUTORIAL and wp != &"fair":
+				config.mode = SessionConfig.MODE_ADVENTURE
+			config.time_preset = tp
+			config.weather_preset = wp
+			config.validate()
+			_sync_all_controls()
+			_play_tick()
+			_emit_preview_changed()
+			return
+
+
+## Return the Harbour Vista id matching the active time and weather presets, or &"custom".
+func get_active_harbour_vista() -> StringName:
+	for entry in HARBOUR_VISTAS:
+		if config.time_preset == entry["time_preset"] and config.weather_preset == entry["weather_preset"]:
+			return entry["id"] as StringName
+	return &"custom"
+
+
 func select_difficulty(diff: StringName) -> void:
 	config.difficulty = diff
 	config.validate()
@@ -450,10 +507,10 @@ func _build_landing_page() -> Control:
 	column.name = "LandingColumn"
 	column.anchor_left = 0.028
 	column.anchor_right = 0.368
-	column.anchor_top = 0.055
-	column.anchor_bottom = 0.945
+	column.anchor_top = 0.032
+	column.anchor_bottom = 0.968
 	column.custom_minimum_size = Vector2(456.0, 0.0)
-	column.add_theme_constant_override("separation", 14)
+	column.add_theme_constant_override("separation", 10)
 	column.alignment = BoxContainer.ALIGNMENT_CENTER
 	holder.add_child(column)
 
@@ -481,13 +538,13 @@ func _build_landing_page() -> Control:
 	inner_sb.set_corner_radius_all(6)
 	inner_sb.content_margin_left = 18
 	inner_sb.content_margin_right = 18
-	inner_sb.content_margin_top = 16
-	inner_sb.content_margin_bottom = 16
+	inner_sb.content_margin_top = 12
+	inner_sb.content_margin_bottom = 12
 	mast_inner.add_theme_stylebox_override("panel", inner_sb)
 	mast_outer.add_child(mast_inner)
 
 	var mast_v := VBoxContainer.new()
-	mast_v.add_theme_constant_override("separation", 7)
+	mast_v.add_theme_constant_override("separation", 6)
 	mast_inner.add_child(mast_v)
 
 	var mast_top := HBoxContainer.new()
@@ -529,7 +586,7 @@ func _build_landing_page() -> Control:
 	var prof_panel := PanelContainer.new()
 	prof_panel.name = "ProfileSummaryPanel"
 	prof_panel.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.90), HudIcons.COL_BRASS, 2, 7, 16, 10))
+		HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.90), HudIcons.COL_BRASS, 2, 7, 16, 8))
 	column.add_child(prof_panel)
 
 	var prof_v := VBoxContainer.new()
@@ -554,11 +611,11 @@ func _build_landing_page() -> Control:
 	var stack_panel := PanelContainer.new()
 	stack_panel.name = "MainActionStack"
 	stack_panel.add_theme_stylebox_override("panel",
-		HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.92), HudIcons.COL_INK, 2, 9, 18, 16))
+		HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.92), HudIcons.COL_INK, 2, 9, 18, 12))
 	column.add_child(stack_panel)
 
 	var stack_v := VBoxContainer.new()
-	stack_v.add_theme_constant_override("separation", 10)
+	stack_v.add_theme_constant_override("separation", 8)
 	stack_panel.add_child(stack_v)
 
 	# Primary Adventure row + 1-click Quick Sail CTA
@@ -566,7 +623,7 @@ func _build_landing_page() -> Control:
 	adv_row.add_theme_constant_override("separation", 8)
 	stack_v.add_child(adv_row)
 
-	var btn_adv := _make_menu_button("BtnAdventure", "Set Sail - Adventure", 46.0, 17)
+	var btn_adv := _make_menu_button("BtnAdventure", "Set Sail - Adventure", 44.0, 17)
 	btn_adv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_cta_button(btn_adv)
 	btn_adv.pressed.connect(func() -> void:
@@ -576,8 +633,8 @@ func _build_landing_page() -> Control:
 	)
 	adv_row.add_child(btn_adv)
 
-	var btn_quick := _make_menu_button("BtnQuickSail", "Quick Sail", 46.0, 15)
-	btn_quick.custom_minimum_size = Vector2(124.0, 46.0)
+	var btn_quick := _make_menu_button("BtnQuickSail", "Quick Sail", 44.0, 15)
+	btn_quick.custom_minimum_size = Vector2(124.0, 44.0)
 	btn_quick.tooltip_text = "Launch Open-Seas Adventure immediately with current vessel"
 	_style_gold_button(btn_quick)
 	btn_quick.pressed.connect(func() -> void:
@@ -586,7 +643,7 @@ func _build_landing_page() -> Control:
 	)
 	adv_row.add_child(btn_quick)
 
-	var btn_tut := _make_menu_button("BtnTutorial", "Maiden Voyage (Tutorial)", 42.0, 16)
+	var btn_tut := _make_menu_button("BtnTutorial", "Maiden Voyage (Tutorial)", 40.0, 16)
 	btn_tut.tooltip_text = "Guided 8-step interactive pirate tutorial from Port Scoundrel to Cutlass Cay"
 	btn_tut.pressed.connect(func() -> void:
 		_play_select()
@@ -595,7 +652,7 @@ func _build_landing_page() -> Control:
 	)
 	stack_v.add_child(btn_tut)
 
-	var btn_skirm := _make_menu_button("BtnSkirmish", "High-Seas Naval Skirmish", 42.0, 16)
+	var btn_skirm := _make_menu_button("BtnSkirmish", "High-Seas Naval Skirmish", 40.0, 16)
 	btn_skirm.tooltip_text = "Instant open-sea naval combat waves escalating to the Abyssal Leviathan"
 	btn_skirm.pressed.connect(func() -> void:
 		_play_select()
@@ -604,7 +661,7 @@ func _build_landing_page() -> Control:
 	)
 	stack_v.add_child(btn_skirm)
 
-	var btn_coop := _make_menu_button("BtnCoop", "Co-op Crew (Host / Join)", 42.0, 16)
+	var btn_coop := _make_menu_button("BtnCoop", "Co-op Crew (Host / Join)", 40.0, 16)
 	btn_coop.tooltip_text = "Host a LAN/Direct-IP crew server or join a friend's ship"
 	btn_coop.pressed.connect(func() -> void:
 		_play_select()
@@ -612,18 +669,66 @@ func _build_landing_page() -> Control:
 	)
 	stack_v.add_child(btn_coop)
 
-	var btn_set := _make_menu_button("BtnSettings", "Settings & Controls", 40.0, 15)
+	var btn_set := _make_menu_button("BtnSettings", "Settings & Controls", 38.0, 15)
 	btn_set.pressed.connect(func() -> void:
 		_play_select()
 		show_page(Page.SETTINGS)
 	)
 	stack_v.add_child(btn_set)
 
-	var btn_quit := _make_menu_button("BtnQuit", "Quit to Desktop", 38.0, 15)
+	var btn_quit := _make_menu_button("BtnQuit", "Quit to Desktop", 36.0, 15)
 	btn_quit.pressed.connect(_on_quit_pressed)
 	stack_v.add_child(btn_quit)
 
-	# 4. Subtle Footer Status Strip
+	# 4. Compact Parchment & Brass Harbour Vista Quick-Preview Strip
+	var vista_panel := PanelContainer.new()
+	vista_panel.name = "HarbourVistaBar"
+	vista_panel.add_theme_stylebox_override("panel",
+		HudIcons.make_parchment_box(Color(0.91, 0.84, 0.69, 0.91), HudIcons.COL_BRASS, 2, 7, 14, 8))
+	column.add_child(vista_panel)
+
+	var vista_v := VBoxContainer.new()
+	vista_v.add_theme_constant_override("separation", 5)
+	vista_panel.add_child(vista_v)
+
+	var vista_hdr := HBoxContainer.new()
+	vista_hdr.add_theme_constant_override("separation", 8)
+	vista_v.add_child(vista_hdr)
+
+	var vista_title := Label.new()
+	vista_title.name = "HarbourVistaTitle"
+	vista_title.text = "HARBOUR VISTA"
+	vista_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vista_title.add_theme_font_size_override("font_size", 12)
+	vista_title.add_theme_color_override("font_color", HudIcons.COL_CRIMSON)
+	vista_hdr.add_child(vista_title)
+
+	var vista_hint := Label.new()
+	vista_hint.name = "HarbourVistaHint"
+	vista_hint.text = "Live 3D Preview"
+	vista_hint.add_theme_font_size_override("font_size", 11)
+	vista_hint.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
+	vista_hdr.add_child(vista_hint)
+
+	var vista_row := HBoxContainer.new()
+	vista_row.name = "HarbourVistaButtons"
+	vista_row.add_theme_constant_override("separation", 6)
+	vista_v.add_child(vista_row)
+
+	_vista_btns.clear()
+	for entry in HARBOUR_VISTAS:
+		var vid: StringName = entry["id"]
+		var vbtn := _make_menu_button("VistaBtn_" + String(vid), String(entry["label"]), 30.0, 13)
+		vbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbtn.tooltip_text = _to_ascii(String(entry.get("tooltip", "")))
+		var cap_vid := vid
+		vbtn.pressed.connect(func() -> void:
+			select_harbour_vista(cap_vid)
+		)
+		vista_row.add_child(vbtn)
+		_vista_btns[vid] = vbtn
+
+	# 5. Subtle Footer Status Strip
 	_landing_status_label = Label.new()
 	_landing_status_label.name = "LandingStatusLabel"
 	_landing_status_label.text = "Live 3D Harbour Ready - Choose Your Voyage"
@@ -1480,10 +1585,17 @@ func _build_settings_page() -> Control:
 
 func _sync_all_controls() -> void:
 	_syncing_ui = true
+	_sync_landing_controls()
 	_sync_setup_controls()
 	_sync_coop_controls()
 	_sync_settings_controls()
 	_syncing_ui = false
+
+
+func _sync_landing_controls() -> void:
+	var active_vista := get_active_harbour_vista()
+	for vid: StringName in _vista_btns:
+		_style_toggle_btn(_vista_btns[vid] as Button, active_vista == vid)
 
 
 func _sync_setup_controls() -> void:
@@ -1659,6 +1771,11 @@ func _play_select() -> void:
 func _play_back() -> void:
 	if Audio != null:
 		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
+
+
+func _play_tick() -> void:
+	if Audio != null:
+		Audio.play_sfx(&"ui_tick", Vector3.INF, -4.0)
 
 
 func _make_quality_picker(label_text: String, btn_prefix: String, out_btns: Array[Button], on_pick: Callable) -> HBoxContainer:

@@ -26,6 +26,8 @@ const ROOT_EMBED_Y := 0.12
 const MIN_NORMAL_Y := 0.72
 const MOORING_CLEAR_RADIUS := 9.5
 const PIER_CLEAR_RADIUS := 5.0
+const NOCTURNAL_BIOLUM_COLOR := Color(0.22, 0.82, 0.86)
+const NOCTURNAL_BIOLUM_MAX_ENERGY := 0.55
 
 # Reference local mesh heights (at unit scale) used to keep tips strictly submerged.
 const STAGHORN_MESH_HEIGHT := 1.28
@@ -102,6 +104,16 @@ static func clear_shared_cache() -> void:
 	_kelp_mesh = null
 	_coral_material = null
 	_kelp_material = null
+	ReefAtmosphere.clear_shared_cache()
+
+
+## Smoothly drive nocturnal underwater coral bioluminescence on the shared coral material.
+static func update_bioluminescence(strength: float) -> void:
+	if _coral_material == null:
+		return
+	var target_energy := clampf(strength, 0.0, 1.0) * NOCTURNAL_BIOLUM_MAX_ENERGY
+	if absf(_coral_material.emission_energy_multiplier - target_energy) > 0.0005:
+		_coral_material.emission_energy_multiplier = target_energy
 
 
 ## Deterministically populate underwater coral reefs and swaying kelp gardens
@@ -283,6 +295,13 @@ static func populate_for_island(island: Island, rng_seed: int = 0,
 		reef._has_instances = true
 
 	island.add_child(reef)
+	if island.get_node_or_null(^"ReefAtmosphere") == null:
+		var atmo_anchors: Array[Vector2] = []
+		if not staghorn_xf.is_empty():
+			var h0 := staghorn_xf[0].origin
+			atmo_anchors.append(Vector2(h0.x, h0.z))
+		atmo_anchors.append_array(bed_centers)
+		ReefAtmosphere.populate_for_island(island, atmo_anchors, seed_val ^ 0x5A17)
 	return reef
 
 
@@ -442,6 +461,9 @@ static func _get_coral_material() -> StandardMaterial3D:
 		mat.roughness = 0.76
 		mat.metallic = 0.0
 		mat.metallic_specular = 0.28
+		mat.emission_enabled = true
+		mat.emission = NOCTURNAL_BIOLUM_COLOR
+		mat.emission_energy_multiplier = 0.0
 		_coral_material = mat
 	return _coral_material
 

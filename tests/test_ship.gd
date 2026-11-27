@@ -3027,7 +3027,7 @@ func test_wave36_cursed_cannonballs_anchorball_ballastball_curse_physics_vfx_and
 	ballast_shooter.anchor_progress = 1.0
 	await physics_frames(90)
 
-	var y_normal := ballast_victim.global_position.y
+	var y_normal := ballast_victim.global_position.y - Sea.height(ballast_victim.global_position.x, ballast_victim.global_position.z)
 	var ballast_events: Array[Array] = []
 	ballast_victim.cursed_hit.connect(func(k: StringName, dur: float) -> void: ballast_events.append([k, dur]))
 
@@ -3061,7 +3061,7 @@ func test_wave36_cursed_cannonballs_anchorball_ballastball_curse_physics_vfx_and
 		ballast_victim.patch_hole(hi)
 	ballast_victim.water_level = 0.0
 	await physics_frames(110)
-	var y_cursed := ballast_victim.global_position.y
+	var y_cursed := ballast_victim.global_position.y - Sea.height(ballast_victim.global_position.x, ballast_victim.global_position.z)
 	check(y_cursed < y_normal - 0.25,
 		"Ballastball drags cursed hull visibly deeper (y_cursed=%.2f vs y_normal=%.2f)" % [y_cursed, y_normal])
 	check(ballast_victim.global_basis.y.y > 0.90,
@@ -3108,7 +3108,7 @@ func test_wave36_cursed_cannonballs_anchorball_ballastball_curse_physics_vfx_and
 	ballast_victim.ballast_curse_timer = Ship.BALLAST_CURSE_DURATION
 	await physics_frames(810)
 	ballast_victim._update_visuals(0.05)
-	var y_recovered := ballast_victim.global_position.y
+	var y_recovered := ballast_victim.global_position.y - Sea.height(ballast_victim.global_position.x, ballast_victim.global_position.z)
 	check(not ballast_victim.is_ballast_cursed() and is_zero_approx(ballast_victim.ballast_curse_timer),
 		"Ballastball curse decays to 0.0 after 12 s (remaining=%.2f)" % ballast_victim.ballast_curse_timer)
 	check(bal_ring != null and not bal_ring.visible,
@@ -3371,3 +3371,154 @@ func test_q7b_ship_lantern_halos_and_waterline_bow_ribbons() -> void:
 		"Ship releases static bow-wave ribbon mesh & shader cache cleanly (0 leaks)")
 
 
+func test_q11b_sea_soundscape_harbour_mooring_storm_lash_and_whale_call() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.time_of_day = 10.5
+	Weather.set_weather(0.06, 8.0, 0.0)
+
+	# 1. Verify new SFX keys exist in AudioManager's manifest catalog.
+	check_eq(SeaSoundscape.SFX_HULL_LAP, &"splash_small", "SFX_HULL_LAP maps to verified &'splash_small'")
+	check_eq(SeaSoundscape.SFX_WHALE_CALL, &"whale_call", "SFX_WHALE_CALL maps to verified &'whale_call'")
+	for key: StringName in [SeaSoundscape.SFX_ROPE_CREAK, SeaSoundscape.SFX_SAIL_FLAP,
+			SeaSoundscape.SFX_HULL_LAP, SeaSoundscape.SFX_WHALE_CALL]:
+		check(Audio.has_sound(key), "Audio manifest registers verified sound '%s'" % String(key))
+
+	var sloop := _spawn_sloop(Vector3(120.0, 0.0, 0.0))
+	sloop.start_anchored = true
+	await physics_frames(4)
+	sloop.freeze = true
+	sloop.rotation = Vector3.ZERO
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+	sloop.sail_set = 0.0
+	sloop.sail_target = 0.0
+	sloop.sail_trim = 0.0
+
+	var isl := Island.new()
+	isl.island_id = "q11b_harbour_cay"
+	isl.display_name = "Harbour Cay"
+	isl.island_radius = 65.0
+	_root.add_child(isl)
+	isl.global_position = Vector3(200.0, 0.0, 0.0)
+
+	var soundscape := SeaSoundscape.new()
+	soundscape.set_physics_process(false)
+	_root.add_child(soundscape)
+	soundscape.bind_ship(sloop)
+
+	var triggered_vols: Dictionary = {}
+	soundscape.sfx_triggered.connect(func(k: StringName, vol_db: float) -> void:
+		triggered_vols[k] = vol_db
+	)
+
+	# 2. Harbour mooring creaks & gentle waterline hull-laps near an island while slow/moored.
+	soundscape.step(0.1)
+	check(soundscape.near_island_factor >= 0.95,
+		"moored ship near harbour island has near_island_factor >= 0.95 (got %.2f)" % soundscape.near_island_factor)
+	var moored_counts := soundscape.get_event_counts()
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_HULL_LAP, 0)), 1,
+		"moored harbour ship triggers gentle hull-lap splash_small")
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 1,
+		"moored harbour ship triggers dockside mooring rope_creak")
+	var lap_db := float(triggered_vols.get(SeaSoundscape.SFX_HULL_LAP, 0.0))
+	var moor_db := float(triggered_vols.get(SeaSoundscape.SFX_ROPE_CREAK, 0.0))
+	check(lap_db >= -15.51 and lap_db <= -11.49,
+		"harbour hull-lap volume stays in -15.5..-11.5 dB (got %.2f dB)" % lap_db)
+	check(moor_db >= -14.01 and moor_db <= -10.49,
+		"harbour mooring rope_creak volume stays in -14.0..-10.5 dB (got %.2f dB)" % moor_db)
+
+	# Cooldown gating prevents spam over 5.0 s (< 6.5 s lap min and < 9.0 s mooring rope min).
+	for _i in 5:
+		soundscape.step(1.0)
+	moored_counts = soundscape.get_event_counts()
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_HULL_LAP, 0)), 1,
+		"harbour hull-lap 6.5..12.0 s cooldown prevents rapid spam")
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 1,
+		"harbour mooring rope_creak 9.0..15.5 s cooldown prevents rapid spam")
+
+	# Stepping past max cooldowns re-triggers both cleanly.
+	soundscape.step(11.0)
+	moored_counts = soundscape.get_event_counts()
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_HULL_LAP, 0)), 2,
+		"harbour hull-lap re-triggers after 6.5..12.0 s cooldown")
+	check_eq(int(moored_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 2,
+		"harbour mooring rope_creak re-triggers after 9.0..15.5 s cooldown")
+
+	# 3. Heavy storm shroud rigging lash (storminess = 0.85) triggers rope_creak & sail_flap even on lightly set sail (0.18).
+	sloop.global_position = Vector3(-900.0, 0.0, 0.0)
+	sloop.sail_set = 0.18
+	sloop.sail_target = 0.18
+	Weather.set_weather(0.85, 20.0, 0.0)
+	sloop.sail_trim = sloop.ideal_sail_trim()
+	sloop.linear_velocity = Vector3.ZERO
+	soundscape.bind_ship(sloop)
+
+	soundscape.step(0.1)
+	var storm_counts := soundscape.get_event_counts()
+	check_near(soundscape.near_island_factor, 0.0, 0.001, "open-sea storm ship has near_island_factor == 0.0")
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 1,
+		"heavy storm (0.85) triggers storm shroud rope_creak even at sail_set=0.18")
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_SAIL_FLAP, 0)), 1,
+		"heavy storm (0.85) triggers storm-whipped sail_flap even at sail_set=0.18")
+	# Storm cooldown gates immediate re-triggers, then re-fires after elapsed squall window.
+	soundscape.step(1.5)
+	storm_counts = soundscape.get_event_counts()
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 1, "storm rope_creak cooldown gates spam")
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_SAIL_FLAP, 0)), 1, "storm sail_flap cooldown gates spam")
+	soundscape.step(8.0)
+	storm_counts = soundscape.get_event_counts()
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_ROPE_CREAK, 0)), 2, "storm rope_creak re-triggers cleanly")
+	check_eq(int(storm_counts.get(SeaSoundscape.SFX_SAIL_FLAP, 0)), 2, "storm sail_flap re-triggers cleanly")
+	# Stormy sea suppresses calm open-ocean whale calls even over long duration.
+	soundscape.step(30.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 0,
+		"heavy storm suppresses calm open-ocean whale calls")
+
+	# 4. Open-ocean distant whale call in deep calm/moderate sea (near_island_factor < 0.08, storm < 0.35, 5.0..21.5h).
+	sloop.global_position = Vector3(-900.0, 0.0, 0.0)
+	sloop.sail_set = 0.0
+	sloop.sail_target = 0.0
+	Weather.set_weather(0.10, 8.0, 0.0)
+	Weather.time_of_day = 14.0
+	soundscape.bind_ship(sloop)
+	triggered_vols.clear()
+
+	soundscape.step(0.1)
+	check(soundscape.near_island_factor < 0.08,
+		"deep open sea keeps near_island_factor < 0.08 (got %.3f)" % soundscape.near_island_factor)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 0,
+		"whale call respects initial quiet grace period on fresh bind")
+
+	soundscape.step(19.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 1,
+		"deep calm open sea triggers rare distant whale_call cleanly")
+	var whale_db := float(triggered_vols.get(SeaSoundscape.SFX_WHALE_CALL, 0.0))
+	check(whale_db >= -16.01 and whale_db <= -12.99,
+		"distant whale_call volume stays in -16.0..-13.0 dB (got %.2f dB)" % whale_db)
+
+	# Long 38..65 s cooldown gates re-triggering at 30 s, then re-triggers cleanly after +40 s.
+	soundscape.step(30.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 1,
+		"whale_call 38..65 s cooldown prevents rapid repeat")
+	soundscape.step(40.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 2,
+		"whale_call re-triggers once 38..65 s cooldown elapses")
+
+	# Late night (23:00) and island proximity both suppress open-ocean whale calls cleanly.
+	Weather.time_of_day = 23.0
+	soundscape.step(70.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 2,
+		"late night (> 21.5h) suppresses daytime/twilight whale calls")
+
+	Weather.time_of_day = 14.0
+	sloop.global_position = Vector3(120.0, 0.0, 0.0)
+	soundscape.step(70.0)
+	check_eq(int(soundscape.get_event_counts().get(SeaSoundscape.SFX_WHALE_CALL, 0)), 2,
+		"harbour/island proximity suppresses deep open-ocean whale calls")
+
+	# 5. Clean zero-leak teardown!
+	soundscape.queue_free()
+	await _end()
+	check(not is_instance_valid(soundscape), "Q11B SeaSoundscape frees cleanly with zero leaks")
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 after Q11B teardown")
