@@ -1224,3 +1224,270 @@ func test_q8b_ship_bell_crew_rally_and_live_status_report() -> void:
 	check(CrewBrain._last_bell_rally_msec_by_ship.is_empty(),
 		"bell rally per-ship cooldown map cleans up cleanly on teardown")
 
+
+func test_q21a_crew_dialogue_strict_ascii_and_living_world_callouts() -> void:
+	# 1. Exhaustive strict-ASCII (< 128) scan across EVERY string in CrewDialogue.PERSONAS,
+	#    CrewDialogue.LINES, CrewDialogue.COMPASS_8, and CrewBrain inline callout tables.
+	var personas_checked := 0
+	for pid in CrewDialogue.PERSONAS:
+		var pdict: Dictionary = CrewDialogue.PERSONAS[pid]
+		check(_is_strict_ascii(String(pid)), "PERSONAS key is strict ASCII: %s" % String(pid))
+		for field_k in pdict:
+			var val: Variant = pdict[field_k]
+			if val is String or val is StringName:
+				var sval := String(val)
+				check(sval != "", "PERSONAS[%s][%s] is non-empty" % [String(pid), String(field_k)])
+				check(_is_strict_ascii(sval), "PERSONAS[%s][%s] is strict ASCII: '%s'" % [
+					String(pid), String(field_k), sval
+				])
+		personas_checked += 1
+	check_eq(personas_checked, 3, "CrewDialogue.PERSONAS covers all 3 crew archetypes")
+
+	var new_categories: Array[StringName] = [
+		&"whale_breach",
+		&"dolphin_escort",
+		&"emissary_grade_v",
+		&"fort_vault_opened",
+		&"storm_lightning_near",
+		&"golden_hour",
+	]
+	var total_lines_audited := 0
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		var bank: Dictionary = CrewDialogue.LINES.get(pid, {})
+		check(not bank.is_empty(), "CrewDialogue.LINES has dialogue bank for %s" % String(pid))
+		for cat in bank:
+			var pool: Array = bank[cat]
+			check(not pool.is_empty(), "CrewDialogue.LINES[%s][%s] is non-empty" % [String(pid), String(cat)])
+			for raw_line in pool:
+				var sline := String(raw_line)
+				check(sline.strip_edges() != "", "line in %s/%s is non-empty" % [String(pid), String(cat)])
+				check(_is_strict_ascii(sline), "strict ASCII line in %s/%s: '%s'" % [
+					String(pid), String(cat), sline
+				])
+				total_lines_audited += 1
+		for ncat: StringName in new_categories:
+			var npool: Array = bank.get(ncat, [])
+			check(npool.size() >= 2, "CrewDialogue[%s][%s] has >= 2 lines (got %d)" % [
+				String(pid), String(ncat), npool.size()
+			])
+			if ncat == &"whale_breach":
+				for raw_w in npool:
+					check(String(raw_w).contains("{bearing}"),
+						"whale_breach line for %s supports {bearing} token" % String(pid))
+			elif ncat == &"emissary_grade_v":
+				for raw_e in npool:
+					check(String(raw_e).contains("{company}"),
+						"emissary_grade_v line for %s supports {company} token" % String(pid))
+	check(total_lines_audited >= 200,
+		"exhaustive CrewDialogue audit scanned every line across all 3 personas (audited=%d)" % total_lines_audited)
+
+	for dir_label: String in CrewDialogue.COMPASS_8:
+		check(_is_strict_ascii(dir_label), "COMPASS_8 entry is strict ASCII: '%s'" % dir_label)
+	for pid: StringName in [&"helmsman", &"lookout", &"carpenter"]:
+		for raw_bc in CrewBrain.BATTLE_CRY_LINES[pid]:
+			check(_is_strict_ascii(String(raw_bc)), "BATTLE_CRY_LINES[%s] strict ASCII" % String(pid))
+		for raw_se in CrewBrain.SHANTY_ENCORE_LINES[pid]:
+			check(_is_strict_ascii(String(raw_se)), "SHANTY_ENCORE_LINES[%s] strict ASCII" % String(pid))
+		check(_is_strict_ascii(String(CrewBrain.SIGHTING_ACK_TEMPLATES[pid])),
+			"SIGHTING_ACK_TEMPLATES[%s] strict ASCII" % String(pid))
+
+	# 2. Spawn Sloop + all 3 onboard crewmates and verify Weather.lightning_struck connection count.
+	_begin()
+	var lightning_conns_before := Weather.lightning_struck.get_connections().size()
+	Weather.set_weather(0.10, 10.0, 0.0)
+	Weather.time_of_day = 12.0
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	s.start_anchored = true
+	_root.add_child(s)
+	await physics_frames(10)
+
+	var barnaby_pair := _make_crew(s, null, &"helmsman", Vector3(-1.35, 1.12, 1.35))
+	var maren_pair := _make_crew(s, null, &"lookout", Vector3(0.0, 1.12, -3.05))
+	var pip_pair := _make_crew(s, null, &"carpenter", Vector3(1.35, 1.12, -0.80))
+	var barnaby: CrewBrain = barnaby_pair[1]
+	var maren: CrewBrain = maren_pair[1]
+	var pip: CrewBrain = pip_pair[1]
+	var brains: Array[CrewBrain] = [barnaby, maren, pip]
+	for br: CrewBrain in brains:
+		br.hold_fire = true
+	await physics_frames(4)
+
+	check_eq(Weather.lightning_struck.get_connections().size(), lightning_conns_before + 3,
+		"all 3 CrewBrains connect cleanly to Weather.lightning_struck on _enter_tree()")
+
+	var spoken: Array[Dictionary] = []
+	for br: CrewBrain in brains:
+		br.callout_spoken.connect(func(sp: String, txt: String, cat: StringName) -> void:
+			spoken.append({"speaker": sp, "text": txt, "cat": cat})
+		)
+
+	# 3. Verify all 6 public notify_* hooks emit formatted strict-ASCII callouts and
+	#    enforce single-speaker anti-spam coordination across sibling crewmates!
+	var whale_pos := s.global_position + Vector3(72.0, 4.0, -52.0)
+	var whale_line := barnaby.notify_whale_breach(whale_pos)
+	check(whale_line.begins_with("Barnaby: ") and _is_strict_ascii(whale_line),
+		"notify_whale_breach returns formatted strict-ASCII callout ('%s')" % whale_line)
+	check(whale_line.contains("starboard"),
+		"notify_whale_breach formats ship-relative bearing ('%s')" % whale_line)
+	check_eq(maren.notify_whale_breach(whale_pos), "",
+		"sibling Maren suppressed by shared whale_breach cooldown")
+	check_eq(pip.notify_whale_breach(whale_pos), "",
+		"sibling Pip suppressed by shared whale_breach cooldown")
+	check(float(barnaby._callout_cooldowns.get("whale_breach", 0.0)) >= 45.0,
+		"whale_breach shared cooldown >= 45 s")
+
+	var dolphin_line := maren.notify_dolphin_escort()
+	check(dolphin_line.begins_with("Maren: ") and _is_strict_ascii(dolphin_line),
+		"notify_dolphin_escort returns formatted strict-ASCII callout ('%s')" % dolphin_line)
+	check_eq(barnaby.notify_dolphin_escort(), "",
+		"sibling Barnaby suppressed by shared dolphin_escort cooldown")
+	check_eq(pip.notify_dolphin_escort(), "",
+		"sibling Pip suppressed by shared dolphin_escort cooldown")
+	check(float(maren._callout_cooldowns.get("dolphin_escort", 0.0)) >= 45.0,
+		"dolphin_escort shared cooldown >= 45 s")
+
+	var emissary_line := pip.notify_emissary_grade_v("Gilded Compass")
+	check(emissary_line.begins_with("Pip: ") and _is_strict_ascii(emissary_line),
+		"notify_emissary_grade_v returns formatted strict-ASCII callout ('%s')" % emissary_line)
+	check(emissary_line.contains("Gilded Compass"),
+		"notify_emissary_grade_v formats company name ('%s')" % emissary_line)
+	check_eq(barnaby.notify_emissary_grade_v("Gilded Compass"), "",
+		"sibling Barnaby suppressed by shared emissary_grade_v cooldown")
+	check_eq(maren.notify_emissary_grade_v("Gilded Compass"), "",
+		"sibling Maren suppressed by shared emissary_grade_v cooldown")
+
+	var vault_line := barnaby.notify_fort_vault_opened()
+	check(vault_line.begins_with("Barnaby: ") and _is_strict_ascii(vault_line),
+		"notify_fort_vault_opened returns formatted strict-ASCII callout ('%s')" % vault_line)
+	check_eq(maren.notify_fort_vault_opened(), "",
+		"sibling Maren suppressed by shared fort_vault_opened cooldown")
+	check_eq(pip.notify_fort_vault_opened(), "",
+		"sibling Pip suppressed by shared fort_vault_opened cooldown")
+
+	var strike_pos := s.global_position + Vector3(-38.0, 0.0, -42.0)
+	var bolt_line := maren.notify_storm_lightning_near(strike_pos)
+	check(bolt_line.begins_with("Maren: ") and _is_strict_ascii(bolt_line),
+		"notify_storm_lightning_near returns formatted strict-ASCII callout ('%s')" % bolt_line)
+	check_eq(barnaby.notify_storm_lightning_near(strike_pos), "",
+		"sibling Barnaby suppressed by shared storm_lightning_near cooldown")
+	check_eq(pip.notify_storm_lightning_near(strike_pos), "",
+		"sibling Pip suppressed by shared storm_lightning_near cooldown")
+	check(float(maren._callout_cooldowns.get("storm_lightning_near", 0.0)) >= 28.0,
+		"storm_lightning_near shared cooldown >= 28 s")
+
+	var gold_line := pip.notify_golden_hour()
+	check(gold_line.begins_with("Pip: ") and _is_strict_ascii(gold_line),
+		"notify_golden_hour returns formatted strict-ASCII callout ('%s')" % gold_line)
+	check_eq(barnaby.notify_golden_hour(), "",
+		"sibling Barnaby suppressed by shared golden_hour cooldown")
+	check_eq(maren.notify_golden_hour(), "",
+		"sibling Maren suppressed by shared golden_hour cooldown")
+	check(float(pip._callout_cooldowns.get("golden_hour", 0.0)) >= 60.0,
+		"golden_hour shared cooldown >= 60 s")
+
+	check_eq(spoken.size(), 6,
+		"all 6 living-world hooks emitted exactly 1 callout each with zero crew overlap")
+
+	# 4. Passive Weather.lightning_struck awareness: ignores > 140 m & sheet flashes,
+	#    and picks ONLY the nearest onboard speaker within 140 m with >= 28 s cooldown!
+	for br: CrewBrain in brains:
+		br._callout_cooldowns.clear()
+	spoken.clear()
+	Weather.set_focus(s.global_position)
+
+	# Distant strike (> 140 m) and in-cloud sheet flash must be ignored.
+	Weather.strike_lightning_at(s.global_position + Vector3(0.0, 0.0, -240.0), 1.0, false)
+	Weather.strike_lightning_at(s.global_position + Vector3(0.0, 0.0, -60.0), 1.0, true)
+	check_eq(spoken.size(), 0, "distant (> 140 m) and sheet lightning strikes do not trigger near-bolt shout")
+
+	# Close sea strike dead ahead off the bow (55 m): Maren at bow (z=-3.05) is closest!
+	Weather.strike_lightning_at(s.global_position + Vector3(0.0, 0.0, -55.0), 1.0, false)
+	check_eq(spoken.size(), 1, "near lightning strike within 140 m triggers exactly 1 onboard crew shout")
+	if spoken.size() == 1:
+		check_eq(spoken[0]["cat"], &"storm_lightning_near", "lightning strike emits storm_lightning_near")
+		check_eq(String(spoken[0]["speaker"]), "Maren",
+			"nearest onboard speaker (Maren at bow) reacts to bow-ahead lightning bolt")
+		check(_is_strict_ascii(String(spoken[0]["text"])), "passive lightning shout is strict ASCII")
+
+	# Immediate follow-up close strike suppressed by shared >= 28 s cooldown.
+	Weather.strike_lightning_at(s.global_position + Vector3(0.0, 0.0, -45.0), 1.0, false)
+	check_eq(spoken.size(), 1, "shared >= 28 s lightning cooldown suppresses immediate repeat strike")
+
+	# 5. Passive OceanWhale breaching (within 140 m) & DolphinPod escorting (within 55 m) awareness.
+	for br: CrewBrain in brains:
+		br._callout_cooldowns.clear()
+		br._reported_whales.clear()
+		br._reported_dolphins.clear()
+	spoken.clear()
+
+	var whale := OceanWhale.spawn_breach(null, s.global_position + Vector3(60.0, 0.0, -55.0), 0.25)
+	whale.enable_effects = false
+	_root.add_child(whale)
+	whale.force_breach_apex()
+	for br: CrewBrain in brains:
+		br._scan_timer = 0.0
+	await physics_frames(4)
+	var whale_events := 0
+	for ev in spoken:
+		if ev["cat"] == &"whale_breach":
+			whale_events += 1
+			check(_is_strict_ascii(String(ev["text"])), "passive whale_breach shout is strict ASCII")
+	check_eq(whale_events, 1, "single crewmate spontaneously cheers breaching OceanWhale within 140 m")
+	whale.queue_free()
+	await physics_frames(2)
+
+	var pod := DolphinPod.spawn_alongside(null, s, 3, 22.0)
+	pod.enable_effects = false
+	_root.add_child(pod)
+	for br: CrewBrain in brains:
+		br._scan_timer = 0.0
+	await physics_frames(4)
+	var dolphin_events := 0
+	for ev in spoken:
+		if ev["cat"] == &"dolphin_escort":
+			dolphin_events += 1
+			check(_is_strict_ascii(String(ev["text"])), "passive dolphin_escort cheer is strict ASCII")
+	check_eq(dolphin_events, 1, "single crewmate spontaneously cheers escorting DolphinPod within 55 m")
+	pod.queue_free()
+	await physics_frames(2)
+
+	# 6. Passive calm golden-hour sailing banter window check (dawn 6.0..7.0 / sunset 17.3..18.4, storm < 0.35).
+	Weather.set_weather(0.10, 10.0, 0.0)
+	Weather.time_of_day = 6.5
+	check(CrewBrain._is_calm_golden_hour(s.global_position), "calm dawn 6.5 is inside golden-hour window")
+	Weather.time_of_day = 17.8
+	check(CrewBrain._is_calm_golden_hour(s.global_position), "calm sunset 17.8 is inside golden-hour window")
+	Weather.time_of_day = 12.0
+	check(not CrewBrain._is_calm_golden_hour(s.global_position), "noon 12.0 is outside golden-hour window")
+	Weather.set_weather(0.55, 16.0, 0.0)
+	Weather.time_of_day = 17.8
+	check(not CrewBrain._is_calm_golden_hour(s.global_position), "stormy sunset (>= 0.35) skips golden-hour banter")
+
+	Weather.set_weather(0.10, 10.0, 0.0)
+	Weather.time_of_day = 17.8
+	s.anchor_down = false
+	s.linear_velocity = -s.global_basis.z * 5.0
+	for br: CrewBrain in brains:
+		br._callout_cooldowns.clear()
+		br._banter_timer = 90.0
+	barnaby._banter_timer = 0.0
+	barnaby._scan_timer = 0.0
+	spoken.clear()
+	await physics_frames(3)
+	var gh_events := 0
+	for ev in spoken:
+		if ev["cat"] == &"golden_hour":
+			gh_events += 1
+			check(_is_strict_ascii(String(ev["text"])), "passive golden_hour banter is strict ASCII")
+	check_eq(gh_events, 1, "calm sunset sailing gently mixes golden_hour line into idle banter")
+
+	# 7. Clean teardown: verify _exit_tree() disconnects Weather.lightning_struck & 0 wildlife caches leak.
+	await _end()
+	check_eq(Weather.lightning_struck.get_connections().size(), lightning_conns_before,
+		"all 3 CrewBrains cleanly disconnect Weather.lightning_struck in _exit_tree()")
+	check_eq(OceanWhale._active_whales, 0, "OceanWhale cleans up cleanly with 0 leaks")
+	check_eq(DolphinPod._active_pods, 0, "DolphinPod cleans up cleanly with 0 leaks")
+	print("    Q21A verified: %d CrewDialogue lines strict ASCII, 6 living-world hooks + passive lightning/whale/dolphin/golden-hour clean" % total_lines_audited)
+
+

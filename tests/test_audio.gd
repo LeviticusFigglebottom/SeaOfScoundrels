@@ -224,6 +224,179 @@ func test_ambience_mixer() -> void:
 	await physics_frames(2)
 
 
+func test_q21b_sea_soundscape_heavy_swell_hull_groans_and_underwater_bubbles() -> void:
+	var a := _manager()
+	var saved_weather := Weather.get_state()
+	var saved_amp := Sea.amp_scale
+	var warned_before := Audio._warned.size()
+	Weather.day_length_seconds = 0.0
+	Weather.lightning_enabled = false
+
+	# 1. Verify Q21B SFX constants resolve to registered manifest keys with zero unknown-SFX warnings.
+	check_eq(SeaSoundscape.SFX_HULL_GROAN, &"hull_creak",
+		"SFX_HULL_GROAN maps to manifest-verified &'hull_creak'")
+	check_eq(SeaSoundscape.SFX_UNDERWATER_BUBBLE, &"hold_slosh",
+		"SFX_UNDERWATER_BUBBLE maps to manifest-verified &'hold_slosh'")
+	for key: StringName in [SeaSoundscape.SFX_HULL_GROAN, SeaSoundscape.SFX_UNDERWATER_BUBBLE]:
+		check(Audio.has_sound(key) and a.has_sound(key),
+			"manifest registers verified sound '%s'" % String(key))
+
+	var ship_proxy := Node3D.new()
+	ship_proxy.name = "Q21BShipProxy"
+	add_child(ship_proxy)
+	var listener_node := Node3D.new()
+	listener_node.name = "Q21BListener"
+	add_child(listener_node)
+
+	var soundscape := SeaSoundscape.new()
+	soundscape.set_physics_process(false)
+	add_child(soundscape)
+	soundscape.bind_ship(ship_proxy)
+	soundscape.bind_listener(listener_node)
+
+	var emitted_keys: Array[StringName] = []
+	var emitted_vols: Dictionary = {}
+	soundscape.sfx_triggered.connect(func(k: StringName, vol_db: float) -> void:
+		emitted_keys.append(k)
+		emitted_vols[k] = vol_db
+	)
+
+	# 2. Flat calm sea & above-water listener stay completely silent for both Q21B layers.
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+	Weather.time_of_day = 12.0
+	ship_proxy.global_position = Vector3(-900.0, 0.0, 0.0)
+	ship_proxy.rotation = Vector3.ZERO
+	listener_node.global_position = Vector3(-900.0, 3.0, 0.0)
+
+	soundscape.tick_soundscape(0.1)
+	soundscape.tick_soundscape(6.0)
+	check_eq(soundscape.get_hull_groan_count(), 0, "flat calm sea emits zero heavy-swell hull groans")
+	check_eq(soundscape.get_underwater_bubble_count(), 0, "above-water listener emits zero underwater bubbles")
+
+	# Level deck in calm weather with waves active stays silent too.
+	Sea.amp_scale = 1.0
+	soundscape.tick_soundscape(0.1)
+	check_eq(soundscape.get_hull_groan_count(), 0, "level calm ship emits zero heavy-swell hull groans")
+
+	# 3. Heavy-swell hull timber groans on rolling ship in active waves (5.5..9.5 s cooldown).
+	Sea.amp_scale = 0.90
+	ship_proxy.rotation = Vector3(0.0, 0.0, 0.18)  # abs(roll) >= 0.12
+	soundscape.tick_soundscape(0.1)
+	check_eq(soundscape.get_hull_groan_count(), 1,
+		"rolling ship (0.18 rad) in active swell emits heavy-swell hull timber groan")
+	check_eq(soundscape.hull_groan_count, 1, "hull_groan_count matches getter")
+	var groan_db := float(emitted_vols.get(SeaSoundscape.SFX_HULL_GROAN, 0.0))
+	check(groan_db >= -11.51 and groan_db <= -2.49,
+		"hull groan volume stays within nautical mix bounds (got %.2f dB)" % groan_db)
+
+	# Cooldown gating prevents spam over 4.0 s (< 5.5 s min cooldown).
+	for _i in 4:
+		soundscape.tick_soundscape(1.0)
+	check_eq(soundscape.get_hull_groan_count(), 1,
+		"heavy-swell hull groan 5.5..9.5 s cooldown prevents rapid spam")
+
+	# Advancing past max cooldown (total 10.5 s > 9.5 s) re-triggers cleanly.
+	soundscape.tick_soundscape(6.5)
+	check_eq(soundscape.get_hull_groan_count(), 2,
+		"heavy-swell hull groan re-triggers after 5.5..9.5 s cooldown")
+
+	# Stormy active sea triggers hull groan even on level deck, and pitching bow triggers in calm waves.
+	soundscape.reset_state()
+	ship_proxy.rotation = Vector3.ZERO
+	Weather.set_weather(0.65, 18.0, 0.0)  # storminess >= 0.45
+	Sea.amp_scale = 0.85
+	soundscape.tick_soundscape(0.1)
+	check_eq(soundscape.get_hull_groan_count(), 1,
+		"stormy sea (0.65 >= 0.45) with active waves emits heavy-swell hull groan")
+
+	Weather.set_weather(0.05, 8.0, 0.0)
+	ship_proxy.rotation = Vector3(0.16, 0.0, 0.0)  # abs(pitch) >= 0.12
+	soundscape.tick_soundscape(10.0)
+	check_eq(soundscape.get_hull_groan_count(), 2,
+		"pitching ship (0.16 rad >= 0.12) in active waves emits heavy-swell hull groan")
+
+	# Flat waves (Sea.amp_scale < 0.55) suppress heavy-swell hull groans.
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.75, 20.0, 0.0)
+	ship_proxy.rotation = Vector3(0.0, 0.0, 0.20)
+	soundscape.tick_soundscape(10.0)
+	check_eq(soundscape.get_hull_groan_count(), 2,
+		"inactive waves (Sea.amp_scale=0.0 < 0.55) suppress heavy-swell hull groans")
+
+	# 4. Underwater submersion bubble ambiance (depth >= 0.65 m, not in dry hull, 3.2..5.8 s cooldown).
+	Sea.amp_scale = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+	ship_proxy.rotation = Vector3.ZERO
+	soundscape.reset_state()
+	emitted_vols.clear()
+
+	# Above water and shallow dip (< 0.65 m) emit zero bubbles.
+	listener_node.global_position = Vector3(-900.0, 2.0, 0.0)
+	soundscape.tick_soundscape(0.1)
+	soundscape.tick_soundscape(6.0)
+	check_eq(soundscape.get_underwater_bubble_count(), 0, "above water emits zero underwater bubbles")
+
+	soundscape.tick_soundscape(0.1, 0.40, false)
+	check_eq(soundscape.get_underwater_bubble_count(), 0,
+		"shallow submersion (0.40 m < 0.65 m) emits zero underwater bubbles")
+
+	# Submerged inside a dry hull suppresses underwater bubbles completely.
+	soundscape.tick_soundscape(0.1, 1.50, true)
+	soundscape.tick_soundscape(6.0, 1.50, true)
+	check_eq(soundscape.get_underwater_bubble_count(), 0,
+		"dry hull interior suppresses underwater submersion bubble ambiance")
+
+	# Submerged listener (depth = 1.40 m >= 0.65 m) triggers soft muffled bubbles with cooldown gating.
+	listener_node.global_position = Vector3(-900.0, -1.40, 0.0)
+	soundscape.tick_soundscape(0.1)
+	check_eq(soundscape.get_underwater_bubble_count(), 1,
+		"submerged listener (1.40 m >= 0.65 m) triggers underwater bubble ambiance")
+	check_eq(soundscape.underwater_bubble_count, 1, "underwater_bubble_count matches getter")
+	var bubble_db := float(emitted_vols.get(SeaSoundscape.SFX_UNDERWATER_BUBBLE, 0.0))
+	check(bubble_db >= -16.51 and bubble_db <= -12.49,
+		"underwater bubble volume stays quietly muffled in -16.5..-12.5 dB (got %.2f dB)" % bubble_db)
+
+	# Cooldown gating prevents spam over 2.5 s (< 3.2 s min cooldown).
+	soundscape.tick_soundscape(2.5)
+	check_eq(soundscape.get_underwater_bubble_count(), 1,
+		"underwater bubble 3.2..5.8 s cooldown prevents rapid spam")
+
+	# Advancing past max cooldown (total 6.5 s > 5.8 s) re-triggers cleanly.
+	soundscape.tick_soundscape(4.0)
+	check_eq(soundscape.get_underwater_bubble_count(), 2,
+		"underwater bubble re-triggers cleanly after 3.2..5.8 s cooldown")
+
+	# Surfacing stops underwater bubbles immediately.
+	listener_node.global_position = Vector3(-900.0, 1.20, 0.0)
+	soundscape.tick_soundscape(7.0)
+	check_eq(soundscape.get_underwater_bubble_count(), 2,
+		"surfacing above water silences underwater bubble ambiance")
+
+	# Still works when diving away from any ship (ship == null).
+	soundscape.ship = null
+	soundscape.tick_soundscape(0.1, 2.0, false)
+	check_eq(soundscape.get_underwater_bubble_count(), 3,
+		"underwater bubble ambiance works even when not aboard a ship")
+
+	# 5. Audit all emitted keys against Audio manifest & confirm zero unknown-SFX warnings!
+	check(emitted_keys.size() >= 6, "emitted at least 6 Q21B soundscape events (got %d)" % emitted_keys.size())
+	for k: StringName in emitted_keys:
+		check(Audio.has_sound(k), "emitted SFX key '%s' is registered in manifest.json" % String(k))
+	check_eq(Audio._warned.size(), warned_before, "zero unknown-SFX warnings emitted during Q21B soundscape test")
+
+	# 6. Clean zero-leak teardown.
+	soundscape.queue_free()
+	ship_proxy.queue_free()
+	listener_node.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(soundscape), "Q21B SeaSoundscape frees cleanly with 0 leaks")
+	check(not is_instance_valid(ship_proxy) and not is_instance_valid(listener_node),
+		"Q21B helper nodes free cleanly with 0 leaks")
+	Weather.apply_state(saved_weather)
+	Sea.amp_scale = saved_amp
+
+
 func test_zz_shutdown_is_clean() -> void:
 	# Last on purpose: free the manager and give the audio thread a few mix
 	# cycles to let go of its playbacks, so the run exits without leak reports.

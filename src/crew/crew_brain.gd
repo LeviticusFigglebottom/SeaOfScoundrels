@@ -131,6 +131,15 @@ const TRUMPET_HAIL_ACK_COOLDOWN := 4.0
 const BELL_RALLY_COOLDOWN_SEC := 4.5
 const BELL_RALLY_LOOK_DURATION := 1.6
 const BELL_RALLY_HOSTILE_RANGE := 320.0
+const WHALE_BREACH_COOLDOWN := 45.0
+const WHALE_BREACH_RANGE := 140.0
+const DOLPHIN_ESCORT_COOLDOWN := 45.0
+const DOLPHIN_ESCORT_RANGE := 55.0
+const EMISSARY_GRADE_V_COOLDOWN := 20.0
+const FORT_VAULT_OPENED_COOLDOWN := 20.0
+const STORM_LIGHTNING_COOLDOWN := 30.0
+const STORM_LIGHTNING_NEAR_RANGE := 140.0
+const GOLDEN_HOUR_COOLDOWN := 60.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
@@ -170,6 +179,8 @@ var _reported_islands: Dictionary = {}   # String -> true
 var _reported_ships: Dictionary = {}     # int instance_id -> true
 var _reported_wrecks: Dictionary = {}    # int instance_id -> true
 var _reported_megalodons: Dictionary = {} # int instance_id -> true
+var _reported_whales: Dictionary = {}    # int instance_id -> true
+var _reported_dolphins: Dictionary = {}  # int instance_id -> true
 var _last_wind_heading: float = NAN
 var _was_breached: bool = false
 var _was_on_fire: bool = false
@@ -200,6 +211,7 @@ func _init() -> void:
 
 func _enter_tree() -> void:
 	add_to_group(&"crew_brains")
+	_bind_weather_signals()
 
 
 func _ready() -> void:
@@ -213,6 +225,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_unbind_weather_signals()
 	_unbind_ship_signals()
 	_clear_melee_combat()
 	_stop_shanty_join(false)
@@ -347,6 +360,18 @@ func _cleanup_bell_rally_ship_entry(ship_id: int) -> void:
 			if cb._bound_ship_id == ship_id and cb._bound_ship != null and is_instance_valid(cb._bound_ship):
 				return
 	_last_bell_rally_msec_by_ship.erase(ship_id)
+
+
+func _bind_weather_signals() -> void:
+	if Weather != null and Weather.has_signal(&"lightning_struck"):
+		if not Weather.lightning_struck.is_connected(_on_weather_lightning_struck):
+			Weather.lightning_struck.connect(_on_weather_lightning_struck)
+
+
+func _unbind_weather_signals() -> void:
+	if Weather != null and Weather.has_signal(&"lightning_struck"):
+		if Weather.lightning_struck.is_connected(_on_weather_lightning_struck):
+			Weather.lightning_struck.disconnect(_on_weather_lightning_struck)
 
 
 ## Assign ship, captain, and persona in one call.
@@ -2490,7 +2515,7 @@ func _tick_lookout(delta: float) -> void:
 			_speak(&"shipwreck_sighted", {"target": wnm, "bearing": wbrg}, "wreck:" + str(wid), 45.0)
 			return
 
-	# Island sightings (nodes in group `islands`) ahead or abeam — ignore islands behind the stern.
+	# Island sightings (nodes in group `islands`) ahead or abeam -- ignore islands behind the stern.
 	for node in get_tree().get_nodes_in_group(&"islands"):
 		if not (node is Node3D):
 			continue
@@ -2512,10 +2537,64 @@ func _tick_lookout(delta: float) -> void:
 			_speak(&"land_ho", {"target": nm, "bearing": brg}, "land:" + id_key, 60.0)
 			break
 
-	# Calm sailing banter.
-	if _banter_timer <= 0.0 and current_task == &"idle" and ship != null and ship.forward_speed() > 1.8:
+	# Passive living-world wildlife awareness when aboard ship (single crewmate per encounter).
+	if ship != null and is_instance_valid(ship) and pawn.platform == ship:
+		if not _callout_cooldowns.has("whale_breach"):
+			for node in get_tree().get_nodes_in_group(OceanWhale.GROUP_WHALES):
+				if not (node is Node3D):
+					continue
+				var whale := node as Node3D
+				var wid := whale.get_instance_id()
+				if _reported_whales.has(wid):
+					continue
+				var breaching := false
+				if whale is OceanWhale:
+					var ph: int = (whale as OceanWhale).phase
+					breaching = (ph == OceanWhale.Phase.BREACH_RISE
+						or ph == OceanWhale.Phase.APEX_TWIST
+						or ph == OceanWhale.Phase.SPLASH_REENTRY)
+				else:
+					var ph_v: Variant = whale.get(&"phase")
+					breaching = (ph_v == null) or (int(ph_v) >= 1 and int(ph_v) <= 3)
+				if not breaching:
+					continue
+				if origin.distance_to(whale.global_position) <= WHALE_BREACH_RANGE:
+					_mark_whale_reported(wid)
+					if notify_whale_breach(whale.global_position) != "":
+						return
+
+		if not _callout_cooldowns.has("dolphin_escort"):
+			for node in get_tree().get_nodes_in_group(DolphinPod.GROUP_DOLPHINS):
+				if not (node is Node3D):
+					continue
+				var pod := node as Node3D
+				var pid := pod.get_instance_id()
+				if _reported_dolphins.has(pid):
+					continue
+				var escorting := true
+				var pod_pos := pod.global_position
+				if pod is DolphinPod:
+					var dp := pod as DolphinPod
+					escorting = dp.age < dp.lifetime - 0.5
+					if dp.follow_ship != null and is_instance_valid(dp.follow_ship):
+						pod_pos = dp.follow_ship.global_position
+					elif dp.get_child_count() > 0 and dp.get_child(0) is Node3D:
+						pod_pos = (dp.get_child(0) as Node3D).global_position
+				if not escorting:
+					continue
+				if origin.distance_to(pod_pos) <= DOLPHIN_ESCORT_RANGE:
+					_mark_dolphin_reported(pid)
+					if notify_dolphin_escort() != "":
+						return
+
+	# Calm sailing banter (gently mixing golden-hour lines during calm dawn/sunset windows).
+	if _banter_timer <= 0.0 and current_task == &"idle" and ship != null and is_instance_valid(ship) \
+			and pawn.platform == ship and ship.forward_speed() > 1.8:
 		_banter_timer = _rng.randf_range(42.0, 75.0)
-		_speak(&"banter", {}, "banter", 40.0)
+		if _is_calm_golden_hour(origin) and not _callout_cooldowns.has("golden_hour"):
+			notify_golden_hour()
+		else:
+			_speak(&"banter", {}, "banter", 40.0)
 
 
 ## Acknowledge a target sighted through the Captain's spyglass with a persona response.
@@ -2682,6 +2761,161 @@ func notify_megalodon_sighted(label: String = "Ancient Megalodon", bearing: Stri
 	_speak(&"megalodon_sighted", {"target": clean_target, "bearing": clean_bearing},
 		"megalodon_sighted", MEGALODON_SIGHTED_COOLDOWN)
 	return true
+
+
+## Maritime awe callout when a giant Humpback Whale breaches near the ship (shared cooldown >= 45 s).
+func notify_whale_breach(whale_pos: Vector3) -> String:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return ""
+	var bearing := CrewDialogue.ship_relative_bearing(ship, whale_pos) \
+		if (ship != null and is_instance_valid(ship)) \
+		else CrewDialogue.compass_bearing(pawn.global_position, whale_pos)
+	return _speak_shared_event(&"whale_breach", {"bearing": bearing}, "whale_breach", WHALE_BREACH_COOLDOWN)
+
+
+## Joyful cheer when spinner dolphins race alongside the ship's bow wave (shared cooldown >= 45 s).
+func notify_dolphin_escort() -> String:
+	return _speak_shared_event(&"dolphin_escort", {}, "dolphin_escort", DOLPHIN_ESCORT_COOLDOWN)
+
+
+## Roaring pride callout upon reaching Grade V Trading Company Emissary prestige.
+func notify_emissary_grade_v(company_name: String = "the Company") -> String:
+	var clean_company := _sanitize_ascii_label(company_name, "the Company")
+	return _speak_shared_event(
+		&"emissary_grade_v",
+		{"company": clean_company},
+		"emissary_grade_v",
+		EMISSARY_GRADE_V_COOLDOWN
+	)
+
+
+## Exclamation when Ironwatch Fort's barred vault swings wide to reveal the Sovereign hoard.
+func notify_fort_vault_opened() -> String:
+	return _speak_shared_event(&"fort_vault_opened", {}, "fort_vault_opened", FORT_VAULT_OPENED_COOLDOWN)
+
+
+## Shout over a close storm lightning bolt striking the sea (shared cooldown >= 28 s).
+func notify_storm_lightning_near(strike_pos: Vector3) -> String:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return ""
+	var bearing := CrewDialogue.ship_relative_bearing(ship, strike_pos) \
+		if (ship != null and is_instance_valid(ship)) \
+		else CrewDialogue.compass_bearing(pawn.global_position, strike_pos)
+	return _speak_shared_event(
+		&"storm_lightning_near",
+		{"bearing": bearing},
+		"storm_lightning_near",
+		STORM_LIGHTNING_COOLDOWN
+	)
+
+
+## Atmospheric sunrise/sunset golden-horizon sailing banter (shared cooldown >= 60 s).
+func notify_golden_hour() -> String:
+	return _speak_shared_event(&"golden_hour", {}, "golden_hour", GOLDEN_HOUR_COOLDOWN)
+
+
+func _speak_shared_event(category: StringName, vars: Dictionary, cd_key: String, cooldown: float) -> String:
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return ""
+	if _callout_cooldowns.has(cd_key):
+		return ""
+	var text := _speak(category, vars, cd_key, cooldown)
+	if text != "":
+		for other in _sibling_crew_brains():
+			if other.ship == ship:
+				other._callout_cooldowns[cd_key] = maxf(float(other._callout_cooldowns.get(cd_key, 0.0)), cooldown)
+	return text
+
+
+func _mark_whale_reported(wid: int) -> void:
+	_reported_whales[wid] = true
+	for other in _sibling_crew_brains():
+		if other.ship == ship:
+			other._reported_whales[wid] = true
+
+
+func _mark_dolphin_reported(pid: int) -> void:
+	_reported_dolphins[pid] = true
+	for other in _sibling_crew_brains():
+		if other.ship == ship:
+			other._reported_dolphins[pid] = true
+
+
+func _on_weather_lightning_struck(direction: Vector3, distance: float, _intensity: float) -> void:
+	if not Net.is_host():
+		return
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return
+	if ship == null or not is_instance_valid(ship) or pawn.platform != ship:
+		return
+	if Weather == null or Weather.lightning_is_sheet:
+		return
+	if _callout_cooldowns.has("storm_lightning_near"):
+		return
+	var horiz_dir := Vector3(direction.x, 0.0, direction.z)
+	if horiz_dir.length_squared() > 0.0001:
+		horiz_dir = horiz_dir.normalized()
+	else:
+		horiz_dir = Vector3(0.0, 0.0, -1.0)
+	var focus_xz := Vector3(Weather.focus_position.x, 0.0, Weather.focus_position.z)
+	var strike_pos := focus_xz + horiz_dir * maxf(distance, 0.0)
+	if _horiz_dist_sq(ship.global_position, strike_pos) > STORM_LIGHTNING_NEAR_RANGE * STORM_LIGHTNING_NEAR_RANGE:
+		return
+	# Let only the closest eligible onboard crewmate react so 3 crewmates never shout together.
+	var my_dist_sq := _horiz_dist_sq(pawn.global_position, strike_pos)
+	var my_id := get_instance_id()
+	for other in _sibling_crew_brains():
+		if other.ship != ship or other.pawn == null or not is_instance_valid(other.pawn):
+			continue
+		if other.pawn.dead or other.pawn.platform != ship:
+			continue
+		if other._callout_cooldowns.has("storm_lightning_near"):
+			continue
+		var other_dist_sq := _horiz_dist_sq(other.pawn.global_position, strike_pos)
+		if other_dist_sq + 0.0001 < my_dist_sq \
+				or (absf(other_dist_sq - my_dist_sq) <= 0.0001 and other.get_instance_id() < my_id):
+			return
+	notify_storm_lightning_near(strike_pos)
+
+
+static func _is_calm_golden_hour(world_pos: Vector3 = Vector3.ZERO) -> bool:
+	if Weather == null:
+		return false
+	var storm := maxf(Weather.storminess, Weather.local_storminess(world_pos))
+	if storm >= 0.35:
+		return false
+	var tod := Weather.time_of_day
+	return (tod >= 6.0 and tod <= 7.0) or (tod >= 17.3 and tod <= 18.4)
+
+
+static func _horiz_dist_sq(a: Vector3, b: Vector3) -> float:
+	var dx := a.x - b.x
+	var dz := a.z - b.z
+	return dx * dx + dz * dz
+
+
+static func _sanitize_ascii_label(raw: String, fallback: String) -> String:
+	var trimmed := raw.strip_edges()
+	if trimmed == "":
+		return fallback
+	var ascii_only := true
+	for i in trimmed.length():
+		if trimmed.unicode_at(i) >= 128:
+			ascii_only = false
+			break
+	if ascii_only:
+		return trimmed
+	var out := ""
+	for i in trimmed.length():
+		var code := trimmed.unicode_at(i)
+		if code >= 32 and code < 128:
+			out += char(code)
+		elif code == 0x2014 or code == 0x2013:
+			out += "-"
+		elif code == 0x2019 or code == 0x2018:
+			out += "'"
+	out = out.strip_edges()
+	return out if out != "" else fallback
 
 
 ## Respond to a long-range Captain Speaking Trumpet hail within 115 m, recalling ashore crew back to ship.
@@ -2942,10 +3176,10 @@ func _find_hostile_vessel_for_report(max_dist: float) -> Node3D:
 	return best
 
 
-func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> void:
+func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> String:
 	var key := cd_key if cd_key != "" else String(category)
 	if _callout_cooldowns.has(key):
-		return
+		return ""
 	var text := CrewDialogue.format_line(persona_id, category, vars, _rng)
 	if text == "" and category == &"battle_cry":
 		var cries: Array = BATTLE_CRY_LINES.get(persona_id, BATTLE_CRY_LINES[&"helmsman"])
@@ -2961,17 +3195,21 @@ func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", co
 		tmpl = tmpl.replace("{bearing}", String(vars.get("bearing", "ahead")))
 		text = "%s: %s" % [crew_name(), tmpl]
 	if text == "":
-		return
+		return ""
 	_callout_cooldowns[key] = cooldown
-	Game.post_notice(text)
-	var voice_db := -11.0 if category == &"running_dark" else -6.0
-	Audio.play_sfx(&"crew_shout", pawn.global_position, voice_db, 0.08)
+	if Game != null:
+		Game.post_notice(text)
+	var voice_db := -11.0 if category == &"running_dark" else (-8.0 if category == &"golden_hour" else -6.0)
+	if Audio != null:
+		Audio.play_sfx(&"crew_shout", pawn.global_position, voice_db, 0.08)
 	var skip_shout_anim := (category == &"shanty_encore") \
 		or (category == &"running_dark") \
+		or (category == &"golden_hour") \
 		or (category == &"battle_cry" and _combat != null and _combat.state != CombatComponent.State.IDLE)
 	if not skip_shout_anim:
 		_play_anim(&"shout", 0.7)
 	callout_spoken.emit(crew_name(), text, category)
+	return text
 
 
 func _find_hostile_ship(max_dist: float) -> Ship:

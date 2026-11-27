@@ -39,18 +39,18 @@ const LINES := {
 	&"helmsman": {
 		&"land_ho": [
 			"Land ho! {target} off the {bearing}!",
-			"There she rises — {target}, {bearing}!",
+			"There she rises -- {target}, {bearing}!",
 		],
 		&"sail_sighted": [
 			"Sail on the horizon! {target} bearing {bearing}!",
-			"Bad company, Cap'n — {target} off the {bearing}!",
+			"Bad company, Cap'n -- {target} off the {bearing}!",
 		],
 		&"leak": [
 			"Hull's split below! I'm grabbing planks!",
 			"We're taking on ocean! Heading down to patch!",
 		],
 		&"water_high": [
-			"Bilge is climbing fast — bailing her out!",
+			"Bilge is climbing fast -- bailing her out!",
 			"Ankle-deep down here, Cap'n! Grabbing a bucket!",
 		],
 		&"patched": [
@@ -59,14 +59,14 @@ const LINES := {
 		],
 		&"full_billow": [
 			"Canvas is drawing sweet now, Cap'n!",
-			"Full wind in the mainsail — feel her surge!",
+			"Full wind in the mainsail -- feel her surge!",
 		],
 		&"wind_shift": [
 			"Wind's backing round to the {bearing}! Mind the yard!",
-			"Breeze is shifting {bearing} — trimming to match!",
+			"Breeze is shifting {bearing} -- trimming to match!",
 		],
 		&"order_ack": [
-			"Aye, Cap'n — {order}!",
+			"Aye, Cap'n -- {order}!",
 			"On it, steady as she goes: {order}!",
 		],
 		&"cannon_fire": [
@@ -78,12 +78,12 @@ const LINES := {
 			"Got the haul aboard, Cap'n!",
 		],
 		&"shanty_join": [
-			"Pass the hurdy-gurdy — I know this reel!",
+			"Pass the hurdy-gurdy -- I know this reel!",
 		],
 		&"banter": [
 			"Good timber beneath us and salt in the beard. Can't ask for better.",
 			"If this sloop had a proper kettle, I'd never set foot on dry land again.",
-			"Watch the swell off the bow — she's got a mean little kick today.",
+			"Watch the swell off the bow -- she's got a mean little kick today.",
 		],
 		&"toast_ack": [
 			"Cheers, Cap'n! May our hull stay tight and the wind stay fair!",
@@ -161,6 +161,30 @@ const LINES := {
 			"Heard ye loud and clear through the trumpet, Cap'n! Heading back aboard!",
 			"Aye, Captain! Your brass horn carries over the surf -- returning to the ship!",
 		],
+		&"whale_breach": [
+			"By the deep, Cap'n -- giant whale breaching off the {bearing}! Mind the rolling wake!",
+			"Thar she blows off the {bearing}! Forty winters at sea and a breaching leviathan still steals me breath!",
+		],
+		&"dolphin_escort": [
+			"Spinner dolphins racing our bow wave, Cap'n -- oldest sign of fair winds and lucky tides!",
+			"Look at the pod dancing off the cutwater! Even the sea-folk love the trim of our keel!",
+		],
+		&"emissary_grade_v": [
+			"Grade Five Emissary for {company}! Raise our colors proud, Cap'n -- every port on the sea knows our wake now!",
+			"Five pennants snapping at the stern for {company}! Finest voyage I've steered in all my salty years, Cap'n!",
+		],
+		&"fort_vault_opened": [
+			"Ironwatch's iron bars are swinging wide, Cap'n! Look at that Sovereign hoard gleaming in the torchlight!",
+			"The fort vault is cracked open! Steady hands now, Cap'n -- let's haul every last strongbox to the sloop!",
+		],
+		&"storm_lightning_near": [
+			"Blimey -- bolt struck close enough to singe me beard! Grip the wheel tight, Cap'n!",
+			"Crack of thunder right off the rail! Keep clear of the ironwork till this squall blows through!",
+		],
+		&"golden_hour": [
+			"Amber sky and liquid gold on the swells, Cap'n -- mornings and evenings like this are why we sail.",
+			"Look at the horizon burning copper-bright over the bow -- not a finer sight in all the seven seas.",
+		],
 	},
 	&"lookout": {
 		&"land_ho": [
@@ -169,31 +193,31 @@ const LINES := {
 		],
 		&"sail_sighted": [
 			"Rival canvas! {target} closing from {bearing}!",
-			"Eyes sharp! {target} spotted {bearing} — load the guns!",
+			"Eyes sharp! {target} spotted {bearing} -- load the guns!",
 		],
 		&"leak": [
 			"We've got a hole! Dropping down with timber!",
-			"Splinters flying below — patching her now!",
+			"Splinters flying below -- patching her now!",
 		],
 		&"water_high": [
 			"Hold's flooding! Switching to bucket duty!",
-			"Too much sea inside the boat — bailing!",
+			"Too much sea inside the boat -- bailing!",
 		],
 		&"patched": [
 			"Breach plugged! Back to the guns!",
-			"Hammered shut — she won't sink on my watch!",
+			"Hammered shut -- she won't sink on my watch!",
 		],
 		&"full_billow": [
 			"Sails trimmed razor-sharp! Flying now!",
 			"Catching every knot of this breeze!",
 		],
 		&"wind_shift": [
-			"Wind's swinging {bearing} — trimming the yard!",
+			"Wind's swinging {bearing} -- trimming the yard!",
 			"Fresh gust from the {bearing}!",
 		],
 		&"order_ack": [
 			"You got it, Cap'n: {order}!",
-			"Consider it done — {order}!",
+			"Consider it done -- {order}!",
 		],
 		&"cannon_fire": [
 			"Fire! Right into their ribs!",
@@ -201,7 +225,7 @@ const LINES := {
 		],
 		&"chest_aboard": [
 			"Loot's stowed! Let's make for port before trouble finds us.",
-			"Heavy chest — must be full of the good stuff!",
+			"Heavy chest -- must be full of the good stuff!",
 		],
 		&"shanty_join": [
 			"Ooh, my whistle's warmed up for this one!",
@@ -287,6 +311,30 @@ const LINES := {
 			"Loud and clear across the cove, Cap'n! Sprinting back to the deck!",
 			"Heard the speaking trumpet, Captain! Rallying back aboard right now!",
 		],
+		&"whale_breach": [
+			"Humpback breaching high off the {bearing}, Cap'n! Look at that wall of sunlit spray!",
+			"Eyes to the {bearing}! Colossal whale clearing the swells -- not a fin in the archipelago matches her!",
+		],
+		&"dolphin_escort": [
+			"Dolphins off the bow, Cap'n! Leaping right through the foam and pacing us knot for knot!",
+			"We've picked up a silver escort off the bowsprit -- watch 'em spin clean over the swell!",
+		],
+		&"emissary_grade_v": [
+			"Grade Five for {company}! Every lookout on the archipelago can spot our golden prestige from leagues away!",
+			"Top rank for {company}, Cap'n! Full payout waiting at port -- I'll keep an extra-sharp eye on the horizon!",
+		],
+		&"fort_vault_opened": [
+			"Ironwatch Fort's vault just swung wide! Piles of Sovereign gold waiting inside -- I'll watch the sea while we load!",
+			"Jackpot behind those iron gates, Cap'n! Sovereign treasure stacked to the rafters -- let's move brisk before rival sails spot us!",
+		],
+		&"storm_lightning_near": [
+			"Whoa -- lightning hit the waves right beside us, Cap'n! Almost blinded me right through the spyglass!",
+			"Close strike in the swells! Watch the rigging and keep your head down, Captain!",
+		],
+		&"golden_hour": [
+			"Golden light skimming across the crests, Cap'n -- makes every distant reef glow like a treasure map!",
+			"Sun's kissing the waterline and painting the sails warm amber -- smooth sailing ahead, Captain.",
+		],
 	},
 	&"carpenter": {
 		&"land_ho": [
@@ -294,11 +342,11 @@ const LINES := {
 			"Land ahead! {target} off our {bearing}!",
 		],
 		&"sail_sighted": [
-			"Uh-oh — {target} bearing {bearing}!",
+			"Uh-oh -- {target} bearing {bearing}!",
 			"Got a nasty sail {bearing}! Looks like {target}!",
 		],
 		&"leak": [
-			"Hole in the hull! My favourite job — on my way!",
+			"Hole in the hull! My favourite job -- on my way!",
 			"Wood's cracked below! Grabbing my hammer!",
 		],
 		&"water_high": [
@@ -306,24 +354,24 @@ const LINES := {
 			"Splashing the sea back where it belongs!",
 		],
 		&"patched": [
-			"Good as new — better than new, honestly!",
+			"Good as new -- better than new, honestly!",
 			"Patched up tight as a rum cask!",
 		],
 		&"full_billow": [
 			"Canvas is singing! Listen to that wind!",
-			"Trimmed to perfection — off we go!",
+			"Trimmed to perfection -- off we go!",
 		],
 		&"wind_shift": [
 			"Breeze turned {bearing}! I'll square the yard!",
-			"Wind's playing tricks — shifting {bearing}!",
+			"Wind's playing tricks -- shifting {bearing}!",
 		],
 		&"order_ack": [
-			"Right away, Cap'n — {order}!",
+			"Right away, Cap'n -- {order}!",
 			"Aye aye! Heading to {order}!",
 		],
 		&"cannon_fire": [
 			"Boom! Hope they packed extra planks!",
-			"Cannon away — mind your ears!",
+			"Cannon away -- mind your ears!",
 		],
 		&"chest_aboard": [
 			"Treasure's safely aboard! Shiny!",
@@ -333,7 +381,7 @@ const LINES := {
 			"Hold on, let me squeeze the concertina in on this chorus!",
 		],
 		&"banter": [
-			"I oiled the capstan gears this morning — listen to her purr!",
+			"I oiled the capstan gears this morning -- listen to her purr!",
 			"Do you reckon the Drowned ever get tired of rattling?",
 			"Nothing beats fresh salt air and a hull with zero holes in it.",
 		],
@@ -412,6 +460,30 @@ const LINES := {
 		&"trumpet_hail_ack": [
 			"Whoa, that brass trumpet rings clear to the hilltop! Coming back aboard, Cap'n!",
 			"Heard ye loud and clear, Captain! Returning to the ship on the double!",
+		],
+		&"whale_breach": [
+			"Whoa! Giant whale leaping off the {bearing}, Cap'n -- glad she's showing off and not bumping me hull planks!",
+			"Look off the {bearing}! A breaching humpback big as our whole sloop -- what a sight on open water!",
+		],
+		&"dolphin_escort": [
+			"Haha! Spinner dolphins racing the bow, Cap'n -- bet they're admiring my fresh coat of hull pitch!",
+			"Look at those cheeky swimmers leaping alongside us! Best deck-side company on the whole archipelago!",
+		],
+		&"emissary_grade_v": [
+			"Grade Five for {company}! That gilded banner shines brighter than my polished brass cleats, Cap'n!",
+			"We hit Grade Five Emissary for {company}! Clear space in the hold -- we're bringing back a king's ransom!",
+		],
+		&"fort_vault_opened": [
+			"Ooh, listen to that vault gate groan open! Sovereign chests stacked higher than our mainmast, Cap'n!",
+			"We cracked Ironwatch's vault wide open! Good thing I reinforced the hold floorboards -- we're gonna need 'em!",
+		],
+		&"storm_lightning_near": [
+			"Yikes! That lightning bolt nearly fried my hammer! Stay off the masthead, Cap'n!",
+			"Too close for comfort! Smell that ozone -- praying the next bolt spares my oak spars!",
+		],
+		&"golden_hour": [
+			"Even the deck planks glow like fresh honey in this light, Cap'n -- makes a carpenter proud!",
+			"Warm golden breeze on the canvas and a calm horizon -- almost makes me forget about barnacles!",
 		],
 	},
 }

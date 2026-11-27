@@ -5,28 +5,42 @@ extends Node
 ## Complements AudioManager's continuous ambience beds (hull_wash, sea_calm,
 ## wind_light, etc.) with responsive timber, rigging, and canvas one-shots from
 ## verified keys in assets/generated/audio/manifest.json:
-##   - &"hull_creak"   : hull heel/roll groan (scaled by heel & storminess)
+##   - &"hull_creak"   : hull heel/roll groan & deep oak heavy-swell keel timber groans
 ##   - &"rope_creak"   : taut hemp rigging creak under sail, storm shroud lash, or moored harbour hawser
 ##   - &"sail_flap"    : luffing canvas under headwind or storm-whipped reefed sail lash
 ##   - &"sail_fill"    : crisp billowing snap entering full wind catch
 ##   - &"seagull"      : distant daytime coastal gull / tropical bird calls near islands
 ##   - &"splash_small" : soft harbour waterline hull-lap while moored near shore
 ##   - &"whale_call"   : rare distant open-ocean whale call off the beam in calm/moderate seas
+##   - &"hold_slosh"   : soft muffled underwater submersion water/bubble ripples
 
 signal sfx_triggered(key: StringName, volume_db: float)
 
 const SFX_HULL_CREAK := &"hull_creak"
+const SFX_HULL_GROAN := &"hull_creak"
 const SFX_ROPE_CREAK := &"rope_creak"
 const SFX_SAIL_FLAP := &"sail_flap"
 const SFX_SAIL_FILL := &"sail_fill"
 const SFX_SHORE_BIRD := &"seagull"
 const SFX_HULL_LAP := &"splash_small"
 const SFX_WHALE_CALL := &"whale_call"
+const SFX_UNDERWATER_BUBBLE := &"hold_slosh"
 
 const HULL_ROLL_RAD_MIN := 0.10
 const HULL_ROLL_VEL_MIN := 0.18
 const HULL_CREAK_CD_MIN := 4.5
 const HULL_CREAK_CD_MAX := 8.0
+
+const HULL_GROAN_ROLL_MIN := 0.12
+const HULL_GROAN_PITCH_MIN := 0.12
+const HULL_GROAN_STORM_MIN := 0.45
+const HULL_GROAN_WAVE_AMP_MIN := 0.55
+const HULL_GROAN_CD_MIN := 5.5
+const HULL_GROAN_CD_MAX := 9.5
+
+const UNDERWATER_BUBBLE_DEPTH_MIN := 0.65
+const UNDERWATER_BUBBLE_CD_MIN := 3.2
+const UNDERWATER_BUBBLE_CD_MAX := 5.8
 
 const ROPE_SPEED_MIN := 4.2
 const ROPE_SAIL_MIN := 0.35
@@ -81,18 +95,23 @@ const WHALE_DIST_MAX := 80.0
 @export var enabled: bool = true
 
 var ship: Node3D = null
+var listener: Node3D = null
 var last_sfx_triggered: StringName = &""
 ## Proximity factor to nearest island shore in 0..1 (0 in open ocean, 1 within island_radius + 35 m).
 var near_island_factor: float = 0.0
+var hull_groan_count: int = 0
+var underwater_bubble_count: int = 0
 
 var _rng := RandomNumberGenerator.new()
 var _cd_hull_creak: float = 0.0
+var _cd_hull_groan: float = 0.0
 var _cd_rope_creak: float = 0.0
 var _cd_sail_flap: float = 0.0
 var _cd_sail_fill: float = 0.0
 var _cd_shore_bird: float = 0.0
 var _cd_hull_lap: float = 0.0
 var _cd_whale_call: float = WHALE_CALL_INIT_CD
+var _cd_underwater_bubble: float = 0.0
 var _nearest_shore_pos: Vector3 = Vector3.ZERO
 var _prev_roll_rad: float = 0.0
 var _has_prev_sample: bool = false
@@ -105,6 +124,7 @@ var _event_counts: Dictionary = {
 	SFX_SHORE_BIRD: 0,
 	SFX_HULL_LAP: 0,
 	SFX_WHALE_CALL: 0,
+	SFX_UNDERWATER_BUBBLE: 0,
 }
 
 
@@ -115,6 +135,7 @@ func _init() -> void:
 
 func _exit_tree() -> void:
 	ship = null
+	listener = null
 	_has_prev_sample = false
 	near_island_factor = 0.0
 	_nearest_shore_pos = Vector3.ZERO
@@ -130,21 +151,30 @@ func bind_ship(s: Node3D) -> void:
 		_has_prev_sample = true
 
 
+## Bind an optional listener Node3D (camera or pawn) for underwater depth sampling.
+func bind_listener(node: Node3D) -> void:
+	listener = node
+
+
 ## Clear cooldown timers, transition latches, and triggered event counters.
 func reset_state() -> void:
 	_cd_hull_creak = 0.0
+	_cd_hull_groan = 0.0
 	_cd_rope_creak = 0.0
 	_cd_sail_flap = 0.0
 	_cd_sail_fill = 0.0
 	_cd_shore_bird = 0.0
 	_cd_hull_lap = 0.0
 	_cd_whale_call = WHALE_CALL_INIT_CD
+	_cd_underwater_bubble = 0.0
 	near_island_factor = 0.0
 	_nearest_shore_pos = Vector3.ZERO
 	_prev_roll_rad = 0.0
 	_has_prev_sample = false
 	_billow_armed = false
 	last_sfx_triggered = &""
+	hull_groan_count = 0
+	underwater_bubble_count = 0
 	_event_counts[SFX_HULL_CREAK] = 0
 	_event_counts[SFX_ROPE_CREAK] = 0
 	_event_counts[SFX_SAIL_FLAP] = 0
@@ -152,6 +182,17 @@ func reset_state() -> void:
 	_event_counts[SFX_SHORE_BIRD] = 0
 	_event_counts[SFX_HULL_LAP] = 0
 	_event_counts[SFX_WHALE_CALL] = 0
+	_event_counts[SFX_UNDERWATER_BUBBLE] = 0
+
+
+## Return total heavy-swell hull timber groans emitted since last reset.
+func get_hull_groan_count() -> int:
+	return hull_groan_count
+
+
+## Return total underwater submersion bubble ripples emitted since last reset.
+func get_underwater_bubble_count() -> int:
+	return underwater_bubble_count
 
 
 ## Return a snapshot Dictionary of triggered event counts per SFX key.
@@ -160,15 +201,25 @@ func get_event_counts() -> Dictionary:
 
 
 func _physics_process(delta: float) -> void:
-	if enabled and ship != null:
-		step(delta)
+	if enabled:
+		tick_soundscape(delta)
 
 
-## Advance cooldowns and evaluate sailing telemetry for dynamic ship SFX.
+## Advance cooldowns and evaluate sailing & underwater soundscape telemetry.
 ## Callable directly in deterministic headless unit tests with zero steady-state allocations.
 func step(delta: float) -> void:
+	tick_soundscape(delta)
+
+
+## Deterministic tick for maritime soundscape layers (hull groans, rigging, shore, whale, bubbles).
+## Pass explicit `underwater_depth` (metres) and `in_dry_hull` in tests, or leave `NAN` to auto-sample.
+func tick_soundscape(delta: float, underwater_depth: float = NAN, in_dry_hull: bool = false) -> void:
 	if not enabled or delta <= 0.0:
 		return
+
+	_cd_underwater_bubble = maxf(0.0, _cd_underwater_bubble - delta)
+	_step_underwater_bubbles(underwater_depth, in_dry_hull)
+
 	if ship == null or not is_instance_valid(ship):
 		ship = null
 		near_island_factor = 0.0
@@ -177,6 +228,7 @@ func step(delta: float) -> void:
 		return
 
 	_cd_hull_creak = maxf(0.0, _cd_hull_creak - delta)
+	_cd_hull_groan = maxf(0.0, _cd_hull_groan - delta)
 	_cd_rope_creak = maxf(0.0, _cd_rope_creak - delta)
 	_cd_sail_flap = maxf(0.0, _cd_sail_flap - delta)
 	_cd_sail_fill = maxf(0.0, _cd_sail_fill - delta)
@@ -193,11 +245,13 @@ func step(delta: float) -> void:
 
 	# 1. Timber hull creak on pronounced heel angle or roll velocity.
 	var roll_rad := _sample_roll_rad(ship)
+	var pitch_rad := _sample_pitch_rad(ship)
 	var roll_vel := _sample_roll_vel(ship, roll_rad, delta)
 	_prev_roll_rad = roll_rad
 	_has_prev_sample = true
 
 	var abs_roll := absf(roll_rad)
+	var abs_pitch := absf(pitch_rad)
 	var abs_roll_vel := absf(roll_vel)
 	if _cd_hull_creak <= 0.0 and (abs_roll >= HULL_ROLL_RAD_MIN or abs_roll_vel >= HULL_ROLL_VEL_MIN):
 		var heel_t := clampf((abs_roll - HULL_ROLL_RAD_MIN) / 0.25, 0.0, 1.0)
@@ -293,6 +347,78 @@ func step(delta: float) -> void:
 			_cd_whale_call = _rng.randf_range(WHALE_CALL_CD_MIN, WHALE_CALL_CD_MAX)
 			_trigger(SFX_WHALE_CALL, whale_pos, vol_db, 0.06)
 
+	# 8. Heavy-swell deep oak hull timber groans during rough rolling/pitching or stormy active waves.
+	var waves_active := Sea != null and Sea.amp_scale >= HULL_GROAN_WAVE_AMP_MIN
+	var rough_motion := abs_roll >= HULL_GROAN_ROLL_MIN or abs_pitch >= HULL_GROAN_PITCH_MIN
+	if _cd_hull_groan <= 0.0 and waves_active and (rough_motion or local_storm >= HULL_GROAN_STORM_MIN):
+		var tilt_t := clampf((maxf(abs_roll, abs_pitch) - HULL_GROAN_ROLL_MIN) / 0.24, 0.0, 1.0)
+		var swell_storm_t := clampf((local_storm - HULL_GROAN_STORM_MIN) / (1.0 - HULL_GROAN_STORM_MIN), 0.0, 1.0)
+		var amp_t := clampf((Sea.amp_scale - HULL_GROAN_WAVE_AMP_MIN) / 0.45, 0.0, 1.0)
+		var groan_t := clampf(maxf(tilt_t, swell_storm_t) * 0.78 + amp_t * 0.22, 0.0, 1.0)
+		var groan_db := lerpf(-11.5, -5.0, groan_t)
+		var groan_pitch := _rng.randf_range(0.76, 0.88)
+		var groan_pos := pos - ship_up * 0.85 + ship_basis.z * _rng.randf_range(-2.5, 2.5)
+		_cd_hull_groan = _rng.randf_range(HULL_GROAN_CD_MIN, HULL_GROAN_CD_MAX)
+		hull_groan_count += 1
+		_trigger(SFX_HULL_GROAN, groan_pos, groan_db, 0.04, groan_pitch)
+
+
+func _step_underwater_bubbles(underwater_depth_override: float, dry_hull_override: bool) -> void:
+	if listener != null and not is_instance_valid(listener):
+		listener = null
+
+	var uw_depth := 0.0
+	var in_dry_hull := dry_hull_override
+	var listener_pos := Vector3.INF
+
+	if not is_nan(underwater_depth_override):
+		uw_depth = underwater_depth_override
+		if listener != null:
+			listener_pos = listener.global_position if listener.is_inside_tree() else listener.position
+	elif listener != null:
+		listener_pos = listener.global_position if listener.is_inside_tree() else listener.position
+		in_dry_hull = Ocean.current != null and is_instance_valid(Ocean.current) and Ocean.current.is_point_in_dry_hull(listener_pos)
+		if in_dry_hull:
+			uw_depth = -1000.0
+		else:
+			var sea_y := Sea.height(listener_pos.x, listener_pos.z) if Sea != null else 0.0
+			uw_depth = sea_y - listener_pos.y
+	elif Ocean.current != null and is_instance_valid(Ocean.current):
+		var cam := Ocean.current.active_camera()
+		if cam != null and is_instance_valid(cam):
+			listener_pos = cam.global_position
+			in_dry_hull = Ocean.current.is_point_in_dry_hull(listener_pos)
+			if in_dry_hull:
+				uw_depth = -1000.0
+			else:
+				var sea_y := Sea.height(listener_pos.x, listener_pos.z) if Sea != null else 0.0
+				uw_depth = sea_y - listener_pos.y
+		else:
+			uw_depth = Ocean.current.camera_depth
+			in_dry_hull = uw_depth <= -999.0
+	elif is_inside_tree():
+		var vp := get_viewport()
+		var cam := vp.get_camera_3d() if vp != null else null
+		if cam != null and is_instance_valid(cam):
+			listener_pos = cam.global_position
+			var sea_y := Sea.height(listener_pos.x, listener_pos.z) if Sea != null else 0.0
+			uw_depth = sea_y - listener_pos.y
+
+	if _cd_underwater_bubble <= 0.0 and not in_dry_hull and uw_depth >= UNDERWATER_BUBBLE_DEPTH_MIN:
+		var depth_t := clampf((uw_depth - UNDERWATER_BUBBLE_DEPTH_MIN) / 4.0, 0.0, 1.0)
+		var bubble_db := lerpf(-16.5, -12.5, depth_t)
+		var bubble_pitch := _rng.randf_range(0.72, 0.88)
+		var bubble_pos := Vector3.INF
+		if listener_pos.is_finite():
+			bubble_pos = listener_pos + Vector3(
+				_rng.randf_range(-1.8, 1.8),
+				_rng.randf_range(-0.3, 0.9),
+				_rng.randf_range(-1.8, 1.8)
+			)
+		_cd_underwater_bubble = _rng.randf_range(UNDERWATER_BUBBLE_CD_MIN, UNDERWATER_BUBBLE_CD_MAX)
+		underwater_bubble_count += 1
+		_trigger(SFX_UNDERWATER_BUBBLE, bubble_pos, bubble_db, 0.06, bubble_pitch)
+
 
 func _update_island_proximity(pos: Vector3) -> void:
 	var tree := get_tree() if is_inside_tree() else (ship.get_tree() if (ship != null and ship.is_inside_tree()) else null)
@@ -331,17 +457,27 @@ func _update_island_proximity(pos: Vector3) -> void:
 	_nearest_shore_pos = best_shore
 
 
-func _trigger(key: StringName, pos: Vector3, vol_db: float, pitch_jitter: float = 0.05) -> void:
+func _trigger(key: StringName, pos: Vector3, vol_db: float, pitch_jitter: float = 0.05, pitch_mult: float = 1.0) -> void:
 	last_sfx_triggered = key
 	_event_counts[key] = int(_event_counts.get(key, 0)) + 1
 	if Audio != null and Audio.has_sound(key):
-		Audio.play_sfx(key, pos, vol_db, pitch_jitter)
+		var player: Node = Audio.play_sfx(key, pos, vol_db, pitch_jitter)
+		if player != null and not is_equal_approx(pitch_mult, 1.0):
+			if player is AudioStreamPlayer3D:
+				(player as AudioStreamPlayer3D).pitch_scale *= pitch_mult
+			elif player is AudioStreamPlayer:
+				(player as AudioStreamPlayer).pitch_scale *= pitch_mult
 	sfx_triggered.emit(key, vol_db)
 
 
 func _sample_roll_rad(s: Node3D) -> float:
 	var b := s.global_basis if s.is_inside_tree() else s.basis
 	return atan2(b.x.y, b.y.y)
+
+
+func _sample_pitch_rad(s: Node3D) -> float:
+	var b := s.global_basis if s.is_inside_tree() else s.basis
+	return atan2(-b.z.y, b.y.y)
 
 
 func _sample_roll_vel(s: Node3D, roll_rad: float, delta: float) -> float:

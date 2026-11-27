@@ -1092,3 +1092,128 @@ func test_q19b_hud_animated_gold_rollup_and_delta_toast() -> void:
 	await physics_frames(2)
 	check(not is_instance_valid(hud), "Q19B GameHUD frees cleanly with 0 leaks")
 
+
+# ---------------------------------------------------------------------------
+# 9. Q21B: RadialWheel Smooth Hover-Wedge Pop Animation & Selection Tick SFX
+# ---------------------------------------------------------------------------
+
+func test_q21b_radial_wheel_hover_pop_animation_and_tick_sfx() -> void:
+	check(Audio.has_sound(RadialWheel.SFX_HOVER_TICK),
+		"Audio manifest registers verified RadialWheel hover tick SFX '%s'" % String(RadialWheel.SFX_HOVER_TICK))
+
+	var wheel := RadialWheel.new()
+	wheel.size = Vector2(1280.0, 720.0)
+	add_child(wheel)
+	await get_tree().process_frame
+	wheel.set_process(false)
+
+	var slices: Array[Dictionary] = [
+		{"id": &"cutlass", "label": "Cutlass", "hint": "Swift blade | Parry & lunge", "icon": &"cutlass"},
+		{"id": &"pistol", "label": "Flintlock Pistol", "hint": "Single-shot sidearm", "icon": &"pistol"},
+		{"id": &"spyglass", "label": "Spyglass", "hint": "Scout distant sails", "icon": &"spyglass"},
+		{"id": &"compass", "label": "Brass Compass", "hint": "True North bearing", "icon": &"compass"},
+		{"id": &"lantern", "label": "Oil Lantern", "hint": "Warm deck light", "icon": &"lantern"},
+		{"id": &"shovel", "label": "Iron Shovel", "hint": "Dig buried hoards", "icon": &"shovel"},
+		{"id": &"bucket", "label": "Bilge Bucket", "hint": "Bail hold or douse fire", "icon": &"bucket"},
+		{"id": &"planks", "label": "Oak Planks", "hint": "Patch hull breaches" + char(0x2014) + "fast", "icon": &"planks"},
+	]
+	wheel.configure("Captain Gear" + char(0x2014) + "Deck", slices, "", "Release [Q] to equip " + char(0x00B7) + " [Esc] Cancel")
+
+	# 1. Open wheel -> smooth open pop-in 0.0 -> 1.0 over 0.12 s.
+	wheel.open_wheel()
+	check(wheel.is_open and wheel.visible, "RadialWheel opens cleanly with 8 slices")
+	check_eq(wheel.entries.size(), 8, "RadialWheel holds all 8 configured slices")
+	check_near(wheel.get_open_anim_progress(), 0.0, 0.001, "open animation starts cleanly at 0.0")
+	check_eq(wheel.get_hover_tick_count(), 0, "fresh open_wheel emits zero hover selection ticks")
+	for i in 8:
+		check_near(wheel.get_wedge_hover_weight(i), 0.0, 0.001,
+			"wedge %d starts unexpanded (weight=0.0)" % i)
+	check_near(wheel.get_wedge_hover_weight(-1), 0.0, 0.001, "out-of-range negative index returns 0.0")
+	check_near(wheel.get_wedge_hover_weight(99), 0.0, 0.001, "out-of-range high index returns 0.0")
+
+	wheel.step_radial_animation(0.06)
+	check_near(wheel.get_open_anim_progress(), 0.50, 0.02,
+		"step_radial_animation(0.06) advances open pop-in halfway to 0.50 (got %.3f)" % wheel.get_open_anim_progress())
+	wheel.step_radial_animation(0.06)
+	check_near(wheel.get_open_anim_progress(), 1.0, 0.001,
+		"step_radial_animation(0.12 total) completes open pop-in at 1.0")
+
+	# 2. Hover slice 0 -> tick count increments strictly once, weight rises smoothly toward 1.0.
+	wheel.set_hover_index(0)
+	check_eq(wheel.get_hover_tick_count(), 1, "hovering slice 0 increments hover_tick_count to 1")
+	wheel.set_hover_index(0)
+	wheel.set_hover_index(0)
+	check_eq(wheel.get_hover_tick_count(), 1, "repeated hover on same slice 0 does NOT increment hover_tick_count")
+
+	wheel.step_radial_animation(0.04)
+	var w0_mid := wheel.get_wedge_hover_weight(0)
+	check(w0_mid > 0.30 and w0_mid < 0.90,
+		"hovered slice 0 smoothly eases upward between 0.30 and 0.90 after 0.04 s (got %.3f)" % w0_mid)
+	for i in range(1, 8):
+		check_near(wheel.get_wedge_hover_weight(i), 0.0, 0.001,
+			"non-hovered slice %d remains at 0.0" % i)
+
+	for _step in 16:
+		wheel.step_radial_animation(0.04)
+	check_near(wheel.get_wedge_hover_weight(0), 1.0, 0.01,
+		"hovered slice 0 settles cleanly at 1.0 (got %.3f)" % wheel.get_wedge_hover_weight(0))
+
+	# 3. Move hover to slice 3 -> tick count becomes 2; slice 3 rises while slice 0 decays smoothly.
+	wheel.set_hover_index(3)
+	check_eq(wheel.get_hover_tick_count(), 2, "moving hover to slice 3 increments hover_tick_count to 2")
+	wheel.set_hover_index(3)
+	check_eq(wheel.get_hover_tick_count(), 2, "repeated hover on slice 3 does NOT increment hover_tick_count")
+
+	wheel.step_radial_animation(0.05)
+	var w3_mid := wheel.get_wedge_hover_weight(3)
+	var w0_decay := wheel.get_wedge_hover_weight(0)
+	check(w3_mid > 0.35 and w3_mid < 0.95,
+		"newly hovered slice 3 smoothly rises toward 1.0 (got %.3f)" % w3_mid)
+	check(w0_decay > 0.20 and w0_decay < 0.85,
+		"previously hovered slice 0 smoothly decays toward 0.0 (got %.3f)" % w0_decay)
+
+	# Exercise full RadialWheel._draw() mid-transition with both rising & decaying wedges!
+	wheel.queue_redraw()
+	await get_tree().process_frame
+
+	for _step in 20:
+		wheel.step_radial_animation(0.05)
+	check_near(wheel.get_wedge_hover_weight(3), 1.0, 0.01,
+		"slice 3 settles cleanly at 1.0 (got %.3f)" % wheel.get_wedge_hover_weight(3))
+	check_near(wheel.get_wedge_hover_weight(0), 0.0, 0.01,
+		"previous slice 0 decays cleanly to 0.0 (got %.3f)" % wheel.get_wedge_hover_weight(0))
+
+	# 4. Angle-based selection triggers tick strictly on slice change (slice 6 at 9 o'clock = PI).
+	var picked := wheel.select_by_angle(PI)
+	check_eq(picked, &"bucket", "select_by_angle(PI) targets 9 o'clock slice 6 (bucket)")
+	check_eq(wheel.get_hover_tick_count(), 3, "select_by_angle to new slice 6 increments hover_tick_count to 3")
+	wheel.select_by_angle(PI + 0.05)
+	check_eq(wheel.get_hover_tick_count(), 3, "same-slice angle jitter does NOT re-trigger hover tick")
+
+	# 5. Verify strict ASCII (< 128) across every slice label, footer pill, and sanitized title/hints.
+	for i in 8:
+		var slbl := wheel.get_slice_display_label(i)
+		check(slbl != "" and _is_strict_ascii(slbl),
+			"slice %d display label '%s' is non-empty strict ASCII" % [i, slbl])
+		var shint := RadialWheel._to_ascii(String(wheel.entries[i].get("hint", "")))
+		check(_is_strict_ascii(shint), "slice %d sanitized hint '%s' is strict ASCII" % [i, shint])
+	var title_ascii := RadialWheel._to_ascii(wheel.wheel_title)
+	var footer_ascii := wheel.get_footer_pill_text()
+	check(_is_strict_ascii(title_ascii), "RadialWheel title '%s' sanitizes to strict ASCII" % title_ascii)
+	check(footer_ascii != "" and _is_strict_ascii(footer_ascii),
+		"RadialWheel footer pill '%s' is strict ASCII" % footer_ascii)
+	check(_is_strict_ascii(RadialWheel.DEFAULT_ITEM_FOOTER),
+		"RadialWheel.DEFAULT_ITEM_FOOTER is strict ASCII")
+
+	# 6. Close and free cleanly with zero ObjectDB leaks.
+	wheel.close_wheel(false)
+	check(not wheel.is_open, "close_wheel closes RadialWheel")
+	check_near(wheel.get_open_anim_progress(), 0.0, 0.001, "close_wheel resets open animation progress to 0.0")
+	for i in 8:
+		check_near(wheel.get_wedge_hover_weight(i), 0.0, 0.001,
+			"close_wheel resets wedge %d hover weight to 0.0" % i)
+	wheel.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(wheel), "Q21B RadialWheel frees cleanly with 0 leaks")
+
+
