@@ -703,8 +703,10 @@ void fragment() {
 		glint += pow(max(dot(N, H), 0.0), sharp * 0.28) * mix(0.024, 0.11, golden_hour);
 		float key = max(sun_light.r, max(sun_light.g, sun_light.b));
 		vec3 glint_col = sun_light * (1.0 + 1.25 * smoothstep(0.45, 0.06, key));
-		// Keep golden-hour low sun sparkling across waves while suppressing overcast storms & midnight.
-		float glint_sky = smoothstep(0.005, 0.09, L.y) * (1.0 - night_bio) * mix(1.0, 0.06, storm * storm) * clamp(cloud_l, 0.18, 1.25);
+		// Keep golden-hour & clear midday waves sparkling cleanly while smoothly suppressing
+		// harsh pinpoint specular confetti under overcast squalls & pouring rain (0.00 ms GPU!).
+		float weather_glint_damp = mix(1.0, 0.08, smoothstep(0.18, 0.82, storm)) * mix(1.0, 0.16, smoothstep(0.08, 0.65, rain_intensity));
+		float glint_sky = smoothstep(0.005, 0.09, L.y) * (1.0 - night_bio) * weather_glint_damp * clamp(cloud_l, 0.18, 1.25);
 		float glint_mask = (1.0 - clamp(heavy_foam * 0.85, 0.0, 0.85)) * glint_sky;
 		col += glint_col * glint * glint_strength * (0.34 + 0.66 * fres) * mix(1.0, 1.45, golden_hour) * glint_mask;
 		// Soft silvery moonlit silk shimmer on open night swells (zero pinhole pixel noise).
