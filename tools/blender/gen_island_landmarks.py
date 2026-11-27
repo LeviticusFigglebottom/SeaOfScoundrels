@@ -2,7 +2,7 @@
 # Usage:
 #   blender --background --factory-startup --python tools/blender/gen_island_landmarks.py -- <outdir>
 #   blender --background --python tools/blender/gen_island_landmarks.py -- --only <name> [<name> ...]
-# Writes up to 74 sculpted coastal geology, skyline, harbour, jungle, maritime, world-craft, on-foot craft, story-craft, fort/vault, island-lore, nautical-craft, sea-lore, corsair-relics, expedition-craft, haven-relics & signature set-piece .glb files into <outdir>/landmarks/.
+# Writes up to 78 sculpted coastal geology, skyline, harbour, jungle, maritime, world-craft, on-foot craft, story-craft, fort/vault, island-lore, nautical-craft, sea-lore, corsair-relics, expedition-craft, haven-relics, frontier-craft & signature set-piece .glb files into <outdir>/landmarks/.
 import argparse
 import bpy
 import os
@@ -102,6 +102,11 @@ try:
 except ImportError:
     HAVEN_RELICS_GENERATORS = []
 
+try:
+    from _landmarks_frontier_craft import FRONTIER_CRAFT_GENERATORS
+except ImportError:
+    FRONTIER_CRAFT_GENERATORS = []
+
 
 def _normalize_name(name):
     n = name.strip()
@@ -155,6 +160,7 @@ def main():
         + list(CORSAIR_RELICS_GENERATORS)
         + list(EXPEDITION_CRAFT_GENERATORS)
         + list(HAVEN_RELICS_GENERATORS)
+        + list(FRONTIER_CRAFT_GENERATORS)
     )
 
     if args.only:

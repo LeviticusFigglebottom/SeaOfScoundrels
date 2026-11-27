@@ -12,7 +12,7 @@ extends Node3D
 ##   2. `JungleFerns`          — 12-frond 2-tier pinnate serrated fern rosettes + 3 coiled fiddlehead crosiers (`foliage_wind.gdshader`)
 ##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
-##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted spiral shell & 5-arm coral sea star along wet/dry sand
+##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted scallop shell, 4-whorl spiral conch, 5-petal sand dollar & coral sea star along wet/dry sand
 ##   6. `TidalOutcrops`        — undercut stratified barnacle-ringed coastal rock clusters emerging from tide pools & surf
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
@@ -970,7 +970,7 @@ static func _prop_keepout_radius(cname: String) -> float:
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
 			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
 			or cname.begins_with("BountyPost") or cname.begins_with("FishRack") \
-			or cname.begins_with("MoonDial"):
+			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
@@ -978,11 +978,13 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
+	if cname.begins_with("PowderBunker") or cname.begins_with("CoralAltar"):
+		return 4.4
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
 			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem"):
 		return 4.2
-	if cname.begins_with("SignalBrazier"):
+	if cname.begins_with("SignalBrazier") or cname.begins_with("EmberTotem"):
 		return 4.0
 	if cname.begins_with("BeachedRowboat") or cname.begins_with("PirateGibbet") or cname.begins_with("SupplyCart"):
 		return 3.8
@@ -4492,7 +4494,7 @@ static func _append_barnacle_cone(st: SurfaceTool, base_pos: Vector3, up_dir: Ve
 		_add_outward_tri(st, rim_ring[k], cup_pt, rim_ring[nk], cup_ref, col_rim, col_cup, col_rim)
 
 
-# ------------------------------------------------------------------ Mesh 5: Shore Pebbles, Fluted Spiral Shell & Coral Sea Star
+# ------------------------------------------------------------------ Mesh 5: Shore Pebbles, Fluted Shell, Spiral Conch, Sand Dollar & Coral Sea Star
 
 static func _build_pebbles_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -4519,6 +4521,12 @@ static func _build_pebbles_mesh() -> ArrayMesh:
 
 	# 1 sculpted 5-arm coastal coral sea star resting organically on the open sandy edge.
 	_append_sea_star(st, Vector3(0.22, 0.035, 0.54), 0.22, 0.58)
+
+	# 1 sculpted 4-whorl tapered Spiral Queen Conch / Auger sea-snail shell in the open southwest sand.
+	_append_spiral_conch_shell(st, Vector3(-0.34, 0.028, 0.36), 0.25, 0.92)
+
+	# 1 sun-bleached tropical 5-petal Sand-Dollar medallion nestled in the open eastern sandy pocket.
+	_append_sand_dollar(st, Vector3(0.46, 0.022, -0.06), 0.145, 0.35)
 
 	st.generate_normals()
 	return st.commit()
@@ -4689,6 +4697,191 @@ static func _append_sea_star(st: SurfaceTool, origin: Vector3, arm_len: float, y
 		_add_outward_tri(st, tb_a, tb_b, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
 		_add_outward_tri(st, tb_b, tb_c, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
 		_add_outward_tri(st, tb_c, tb_a, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
+
+
+static func _append_spiral_conch_shell(st: SurfaceTool, origin: Vector3, length: float, yaw: float) -> void:
+	# Sculpted 4-whorl tapered Spiral Queen Conch / Auger sea-snail shell: stepped helical whorls
+	# spiraling from a rounded spire tip to a flared rosy-coral inner aperture lip (60 tris).
+	const SIDES := 5
+	var cy := cos(yaw)
+	var sy := sin(yaw)
+	var to_world := func(p: Vector3) -> Vector3:
+		return origin + Vector3(p.x * cy - p.z * sy, p.y, p.x * sy + p.z * cy)
+
+	var col_spire := Color(0.80, 0.68, 0.54, 1.0)
+	var col_suture := Color(0.82, 0.71, 0.57, 1.0)
+	var col_cream := Color(0.96, 0.92, 0.83, 1.0)
+	var col_rib := Color(1.00, 0.97, 0.90, 1.0)
+	var col_blush := Color(0.95, 0.74, 0.64, 1.0)
+	var col_throat := Color(0.88, 0.42, 0.39, 1.0)
+	var col_lip := Color(0.96, 0.58, 0.51, 1.0)
+	var col_under := Color(0.68, 0.58, 0.49, 1.0)
+
+	# 5 helical profile rings defining 4 stepped whorls + siphonal body taper.
+	var z_fracs := PackedFloat32Array([0.04, 0.24, 0.45, 0.67, 0.82])
+	var r_fracs := PackedFloat32Array([0.098, 0.162, 0.226, 0.278, 0.132])
+	var twists := PackedFloat32Array([0.15, 0.78, 1.41, 2.04, 2.52])
+	var y_bots := PackedFloat32Array([-0.005, -0.010, -0.014, -0.016, -0.010])
+
+	var tip_pt: Vector3 = to_world.call(Vector3(0.0, 0.016, -0.10 * length))
+	var canal_pt: Vector3 = to_world.call(Vector3(0.0, 0.018, 0.90 * length))
+
+	var rings: Array[PackedVector3Array] = []
+	var ring_cols: Array[PackedColorArray] = []
+	var ring_centers: Array[Vector3] = []
+
+	for ri in z_fracs.size():
+		var zf: float = z_fracs[ri]
+		var r: float = length * r_fracs[ri]
+		var tw: float = twists[ri]
+		var yb: float = y_bots[ri]
+		var yc: float = yb + r * 0.82
+		ring_centers.append(Vector3(0.0, yc, zf * length))
+
+		var ring := PackedVector3Array()
+		var cols := PackedColorArray()
+		for k in SIDES:
+			var ang := float(k) / float(SIDES) * TAU + tw
+			var rib := 1.0 + 0.12 * sin(ang * 2.0 + tw)
+			var cx_ang := cos(ang)
+			var sy_ang := sin(ang)
+			var lx := cx_ang * r * rib
+			var ly := maxf(yb, yc + sy_ang * r * (0.96 if sy_ang >= 0.0 else 0.76) * rib)
+			var lz := zf * length + r * 0.22 * cos(ang + tw)
+			ring.append(to_world.call(Vector3(lx, ly, lz)) as Vector3)
+
+			var vcol := col_cream
+			if sy_ang < -0.22:
+				vcol = col_under
+			elif ri == 3 and cx_ang > 0.25:
+				vcol = col_blush
+			elif (ri % 2 == 1) and (k % 2 == 0):
+				vcol = col_rib
+			elif k % 2 == 1:
+				vcol = col_suture
+			cols.append(vcol)
+		rings.append(ring)
+		ring_cols.append(cols)
+
+	# Apical Whorl 1 rounded spire cone (5 tris).
+	var ref_tip: Vector3 = to_world.call(Vector3(0.0, ring_centers[0].y, 0.10 * length))
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_tri(st, tip_pt, rings[0][k], rings[0][nk], ref_tip,
+			col_spire, ring_cols[0][k], ring_cols[0][nk])
+
+	# Stepped helical Whorls 2–4 + lower body taper (40 tris).
+	for ri in range(rings.size() - 1):
+		var rc0 := ring_centers[ri]
+		var rc1 := ring_centers[ri + 1]
+		var ref_band: Vector3 = to_world.call((rc0 + rc1) * 0.5)
+		for k in SIDES:
+			var nk := (k + 1) % SIDES
+			_add_outward_quad(st, rings[ri][k], rings[ri + 1][k], rings[ri + 1][nk], rings[ri][nk],
+				ref_band, ring_cols[ri][k], ring_cols[ri + 1][k], ring_cols[ri + 1][nk], ring_cols[ri][nk])
+
+	# Siphonal canal snout end cap (5 tris).
+	var last_idx := rings.size() - 1
+	var ref_canal: Vector3 = to_world.call(Vector3(0.0, ring_centers[last_idx].y, 0.74 * length))
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_tri(st, rings[last_idx][k], canal_pt, rings[last_idx][nk], ref_canal,
+			ring_cols[last_idx][k], col_suture, ring_cols[last_idx][nk])
+
+	# Flared rosy-coral Queen Conch inner aperture lip + grounded cream outer backing (10 tris).
+	var lip_in: Array[Vector3] = [
+		to_world.call(Vector3(0.026, 0.042, 0.47 * length)) as Vector3,
+		to_world.call(Vector3(0.038, 0.048, 0.67 * length)) as Vector3,
+		to_world.call(Vector3(0.018, 0.032, 0.83 * length)) as Vector3,
+	]
+	var lip_out: Array[Vector3] = [
+		to_world.call(Vector3(0.072, 0.062, 0.49 * length)) as Vector3,
+		to_world.call(Vector3(0.102, 0.070, 0.68 * length)) as Vector3,
+		to_world.call(Vector3(0.064, 0.044, 0.84 * length)) as Vector3,
+	]
+	var lip_bot: Array[Vector3] = [
+		to_world.call(Vector3(0.052, 0.002, 0.49 * length)) as Vector3,
+		to_world.call(Vector3(0.076, -0.006, 0.68 * length)) as Vector3,
+		to_world.call(Vector3(0.044, 0.000, 0.84 * length)) as Vector3,
+	]
+	var ref_lip_in: Vector3 = to_world.call(Vector3(0.060, -0.10, 0.66 * length))
+	var ref_lip_out: Vector3 = to_world.call(Vector3(0.010, 0.055, 0.66 * length))
+	var ref_lip_back: Vector3 = to_world.call(Vector3(0.050, 0.035, 0.67 * length))
+	var ref_lip_front: Vector3 = to_world.call(Vector3(0.040, 0.025, 0.67 * length))
+
+	for i in 2:
+		_add_outward_quad(st, lip_in[i], lip_in[i + 1], lip_out[i + 1], lip_out[i],
+			ref_lip_in, col_throat, col_throat, col_lip, col_lip)
+		_add_outward_quad(st, lip_out[i], lip_out[i + 1], lip_bot[i + 1], lip_bot[i],
+			ref_lip_out, col_cream, col_rib, col_under, col_under)
+	_add_outward_tri(st, lip_in[0], lip_out[0], lip_bot[0], ref_lip_back, col_throat, col_lip, col_under)
+	_add_outward_tri(st, lip_in[2], lip_bot[2], lip_out[2], ref_lip_front, col_throat, col_under, col_lip)
+
+
+static func _append_sand_dollar(st: SurfaceTool, origin: Vector3, radius: float, yaw: float) -> void:
+	# Sun-bleached tropical 5-petal Sand-Dollar medallion: beveled 10-sided ivory dome with a
+	# subtly raised 5-petal star rosette etched in warm sand-ochre/cream and a grounded skirt (45 tris).
+	const PETALS := 5
+	const SIDES := 10
+	var col_ivory := Color(0.98, 0.96, 0.90, 1.0)
+	var col_rim := Color(0.93, 0.89, 0.81, 1.0)
+	var col_rim_hi := col_ivory.lerp(col_rim, 0.55)
+	var col_petal := Color(0.81, 0.68, 0.50, 1.0)
+	var col_hub := Color(0.89, 0.79, 0.63, 1.0)
+	var col_base := Color(0.73, 0.66, 0.57, 1.0)
+
+	var apex := origin + Vector3(0.0, 0.056, 0.0)
+	var ref_top := origin + Vector3(0.0, -0.12, 0.0)
+	var ref_skirt := origin + Vector3(0.0, 0.035, 0.0)
+
+	var rosette := PackedVector3Array()
+	var rosette_cols := PackedColorArray()
+	var rim := PackedVector3Array()
+	var rim_cols := PackedColorArray()
+
+	for k in SIDES:
+		var ang := yaw + float(k) / float(SIDES) * TAU
+		var ca := cos(ang)
+		var sa := sin(ang)
+		var is_petal := (k % 2 == 0)
+		var r_ros := radius * (0.64 if is_petal else 0.42)
+		var y_ros := 0.052 if is_petal else 0.044
+		rosette.append(origin + Vector3(ca * r_ros, y_ros, sa * r_ros))
+		rosette_cols.append(col_petal if is_petal else col_ivory)
+
+		var r_rim := radius * (0.995 if is_petal else 0.965)
+		var y_rim := 0.025 if is_petal else 0.023
+		rim.append(origin + Vector3(ca * r_rim, y_rim, sa * r_rim))
+		rim_cols.append(col_rim if is_petal else col_rim_hi)
+
+	var base := PackedVector3Array()
+	for p in PETALS:
+		var kv := (2 * p + 9) % SIDES
+		var ang_b := yaw + float(kv) / float(SIDES) * TAU
+		var r_base := radius * 0.90
+		base.append(origin + Vector3(cos(ang_b) * r_base, -0.016, sin(ang_b) * r_base))
+
+	for p in PETALS:
+		var kp := 2 * p
+		var kl := (2 * p + 9) % SIDES
+		var kr := (2 * p + 1) % SIDES
+		var bp := p
+		var bn := (p + 1) % PETALS
+
+		# Central raised 5-petal etched rosette star (10 tris).
+		_add_outward_tri(st, apex, rosette[kl], rosette[kp], ref_top, col_hub, rosette_cols[kl], rosette_cols[kp])
+		_add_outward_tri(st, apex, rosette[kp], rosette[kr], ref_top, col_hub, rosette_cols[kp], rosette_cols[kr])
+
+		# Mirror-symmetric beveled ivory dome skirt radiating from each petal tip (20 tris).
+		_add_outward_tri(st, rosette[kp], rim[kp], rim[kl], ref_top, rosette_cols[kp], rim_cols[kp], rim_cols[kl])
+		_add_outward_tri(st, rosette[kp], rim[kl], rosette[kl], ref_top, rosette_cols[kp], rim_cols[kl], rosette_cols[kl])
+		_add_outward_tri(st, rosette[kp], rim[kr], rim[kp], ref_top, rosette_cols[kp], rim_cols[kr], rim_cols[kp])
+		_add_outward_tri(st, rosette[kp], rosette[kr], rim[kr], ref_top, rosette_cols[kp], rosette_cols[kr], rim_cols[kr])
+
+		# Grounded shaded beveled outer edge hugging the sand (15 tris).
+		_add_outward_tri(st, rim[kl], base[bp], rim[kp], ref_skirt, rim_cols[kl], col_base, rim_cols[kp])
+		_add_outward_tri(st, rim[kp], base[bp], base[bn], ref_skirt, rim_cols[kp], col_base, col_base)
+		_add_outward_tri(st, rim[kp], base[bn], rim[kr], ref_skirt, rim_cols[kp], col_base, rim_cols[kr])
 
 
 # ------------------------------------------------------------------ Mesh 6: Undercut Barnacle-Ringed Tidal Outcrop Cluster

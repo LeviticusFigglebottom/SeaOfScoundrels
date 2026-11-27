@@ -665,11 +665,15 @@ static func _midslope_plateau_gate(arch: StringName, u: float, v: float, h: floa
 				* (1.0 - _smoothstep(9.0, 14.0, h))
 			gate *= (1.0 - grot_m)
 		&"twin_spires":
-			# Keep the walkable emerald canyon floor gentle for bridge & stairway landings.
+			# Keep the walkable emerald canyon floor gentle for bridge & stairway landings,
+			# and keep the carved waterfall headwall & recessed plunge pool free of strata bulges.
 			var can_m := _smoothstep(15.0 * scale_r, 8.0 * scale_r, absf(u)) \
 				* _smoothstep(18.0 * scale_r, 9.0 * scale_r, v) \
 				* (1.0 - _smoothstep(11.5, 16.5, h))
-			gate *= (1.0 - can_m)
+			var wf_chute_m := _smoothstep(11.0 * scale_r, 5.5 * scale_r, absf(u)) \
+				* _smoothstep(6.5 * scale_r, 9.5 * scale_r, v) \
+				* _smoothstep(21.0 * scale_r, 18.0 * scale_r, v)
+			gate *= (1.0 - maxf(can_m, wf_chute_m))
 	return gate
 
 
@@ -830,6 +834,18 @@ static func _eval_height(arch: StringName, u: float, v: float, radius: float,
 			var canyon_h := lerpf(1.8, 12.5, canyon_t * canyon_t * (3.0 - 2.0 * canyon_t))
 			h = lerpf(h, minf(h, canyon_h), canyon_u * canyon_v * 0.82)
 			h += ridge_n * 3.4 * _smoothstep(14.0, 36.0, h)
+			# Carve a sheer waterfall headwall amphitheater & recessed emerald plunge pool directly
+			# in front of the v = 20 * scale_r lip (strictly localized inside |u| < 10.5 * scale_r
+			# and v in [7.2, 19.5] * scale_r so canyon trails, bridges, stairway & outer ribs stay untouched).
+			var wf_u := _smoothstep(10.5 * scale_r, 4.4 * scale_r, absf(u))
+			var wf_back := _smoothstep(19.5 * scale_r, 15.8 * scale_r, v)
+			var wf_front := _smoothstep(7.2 * scale_r, 10.2 * scale_r, v)
+			var wf_mask := wf_u * wf_back * wf_front
+			if wf_mask > 0.001:
+				var pool_d := Vector2(u / (6.5 * scale_r), (v - 12.6 * scale_r) / (4.2 * scale_r)).length()
+				var pool_dish := _smoothstep(1.15, 0.0, pool_d) * 0.35
+				var wf_pool_h := minf(17.4, target_peak * 0.24) - pool_dish + detail_n * 0.25
+				h = lerpf(h, minf(h, wf_pool_h), wf_mask)
 
 		&"crescent_lagoon":
 			# Broad coral-sand ring embracing a vast turquoise shallow lagoon + sculpted terraced back headland!
@@ -2201,14 +2217,20 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 			# Cascading highland waterfall plunging off Sovereign's Bastion eastern temple cliff!
 			var wf_top := basis * Vector3(62.0, 0.0, -10.0)
 			var wf_bot := basis * Vector3(54.0, 0.0, -28.0)
-			var top_y := island.surface_height(wf_top.x, wf_top.z)
-			var bot_y := maxf(0.2, island.surface_height(wf_bot.x, wf_bot.z))
-			var drop_h := clampf(top_y - bot_y, 12.0, 34.0)
 			var run_c := Vector2(wf_bot.x - wf_top.x, wf_bot.z - wf_top.z)
-			var yaw_c := atan2(-run_c.x, -run_c.y) if run_c.length_squared() > 0.01 else (landing_yaw - 0.42)
-			var reach_c := clampf(run_c.length() * 0.72, 4.8, 16.5)
-			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_y - 0.35, wf_top.z),
+			var run_len_c := run_c.length()
+			var yaw_c := atan2(-run_c.x, -run_c.y) if run_len_c > 0.01 else (landing_yaw - 0.42)
+			var reach_c := clampf(run_len_c * 0.92, 4.8, 18.5)
+			var wf_dir_c := Vector3(run_c.x / run_len_c, 0.0, run_c.y / run_len_c) if run_len_c > 0.01 else (-basis.z)
+			var wf_pool_c := wf_top + wf_dir_c * reach_c
+			var top_y := island.surface_height(wf_top.x, wf_top.z)
+			var pool_y := maxf(0.2, island.surface_height(wf_pool_c.x, wf_pool_c.z))
+			var top_mount_y := top_y - 0.35
+			var drop_h := clampf(top_mount_y - pool_y, 12.0, 34.0)
+			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_mount_y, wf_top.z),
 				yaw_c, drop_h, 5.4, reach_c)
+			placed.append(Vector3(wf_pool_c.x, wf_pool_c.z, 6.5))
+			keepout_zones.append(Vector3(wf_pool_c.x, wf_pool_c.z, 6.5))
 
 	# C. Lush Canyon (`twin_spires`), Highland Ruins (`skull_bluff`, `smuggler_cove`).
 	if arch == &"twin_spires":
@@ -2230,17 +2252,23 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 			_spawn_optional_at(island, "ruin_pillar.glb", "CanyonRuinPillar_%d" % pi,
 				basis * p_off, landing_yaw + rng.randf() * TAU, Vector3.ONE * rng.randf_range(0.95, 1.25),
 				0.30, 4.0, placed, keepout_zones, prop_body, props_root, foliage_cache, prop_cache, 2.0, 28.0, 0.70)
-		# Thundering Emerald Spire waterfall plunging down the canyon headwall cliff!
+		# Thundering Emerald Spire waterfall plunging cleanly into the recessed emerald plunge pool!
 		var wf_top := basis * Vector3(0.0, 0.0, 20.0 * s_r)
-		var wf_bot := basis * Vector3(0.0, 0.0, 8.0 * s_r)
-		var top_y := island.surface_height(wf_top.x, wf_top.z)
-		var bot_y := maxf(1.5, island.surface_height(wf_bot.x, wf_bot.z))
-		var drop_h := clampf(top_y - bot_y, 14.0, 38.0)
+		var wf_bot := basis * Vector3(0.0, 0.0, 12.2 * s_r)
 		var run_e := Vector2(wf_bot.x - wf_top.x, wf_bot.z - wf_top.z)
-		var yaw_e := atan2(-run_e.x, -run_e.y) if run_e.length_squared() > 0.01 else landing_yaw
-		var reach_e := clampf(run_e.length() * 0.74, 5.2, 18.0)
-		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_y - 0.35, wf_top.z),
+		var run_len_e := run_e.length()
+		var yaw_e := atan2(-run_e.x, -run_e.y) if run_len_e > 0.01 else landing_yaw
+		var reach_e := clampf(run_len_e, 5.2, 20.5)
+		var wf_dir_e := Vector3(run_e.x / run_len_e, 0.0, run_e.y / run_len_e) if run_len_e > 0.01 else (-basis.z)
+		var wf_pool_e := wf_top + wf_dir_e * reach_e
+		var top_y := island.surface_height(wf_top.x, wf_top.z)
+		var pool_y := maxf(1.5, island.surface_height(wf_pool_e.x, wf_pool_e.z))
+		var top_mount_y := top_y - 0.35
+		var drop_h := clampf(top_mount_y - pool_y, 14.0, 38.0)
+		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_mount_y, wf_top.z),
 			yaw_e, drop_h, 5.2, reach_e)
+		placed.append(Vector3(wf_pool_e.x, wf_pool_e.z, 6.5))
+		keepout_zones.append(Vector3(wf_pool_e.x, wf_pool_e.z, 6.5))
 	elif arch == &"skull_bluff" or arch == &"smuggler_cove":
 		var s_r := island.island_radius / 60.0
 		_spawn_optional_at(island, "ruin_arch.glb", "HighlandRuinArch",
@@ -3585,6 +3613,7 @@ static func _build_signal_brazier(bastion: FortBastion, island: Island, iron_st:
 	var e_mat := StandardMaterial3D.new()
 	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	e_mat.disable_fog = true
 	e_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	e_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -4597,6 +4626,7 @@ static func _build_volcano_caldera(island: Island, cal_xform: Transform3D,
 	var emb_mat := StandardMaterial3D.new()
 	emb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	emb_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	emb_mat.disable_fog = true
 	emb_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	emb_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	emb_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -4858,6 +4888,7 @@ static func _build_island_fireflies(island: Island, arch: StringName, landing_ya
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.disable_fog = true
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED

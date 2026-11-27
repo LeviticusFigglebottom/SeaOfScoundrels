@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (74 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (78 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna, twilight lantern halos & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -133,6 +133,13 @@ const HAVEN_RELICS_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_anchor_monolith.glb",
 ]
 
+const FRONTIER_CRAFT_LANDMARKS: Array[String] = [
+	"pirate_powder_magazine_bunker.glb",
+	"ancient_coral_leviathan_altar.glb",
+	"coastal_boatbuilder_slipway_winch.glb",
+	"volcanic_obsidian_ember_totem.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -208,6 +215,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_celestial_moon_dial.glb": 1,
 	"coastal_buccaneer_grog_stall.glb": 1,
 	"volcanic_obsidian_anchor_monolith.glb": 1,
+	"pirate_powder_magazine_bunker.glb": 1,
+	"ancient_coral_leviathan_altar.glb": 1,
+	"coastal_boatbuilder_slipway_winch.glb": 1,
+	"volcanic_obsidian_ember_totem.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -272,6 +283,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_celestial_moon_dial.glb": ["Lantern_MoonDial*"],
 	"coastal_buccaneer_grog_stall.glb": ["Lantern_GrogStall*"],
 	"volcanic_obsidian_anchor_monolith.glb": ["Lantern_VolcAnchor*"],
+	"pirate_powder_magazine_bunker.glb": ["Lantern_PowderBunker*"],
+	"ancient_coral_leviathan_altar.glb": ["Lantern_CoralAltar*"],
+	"coastal_boatbuilder_slipway_winch.glb": ["Lantern_BoatSlipway*"],
+	"volcanic_obsidian_ember_totem.glb": ["Lantern_EmberTotem*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -338,6 +353,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"MoonDial_",
 	"GrogStall_",
 	"VolcAnchor_",
+	"PowderBunker_",
+	"CoralAltar_",
+	"BoatSlipway_",
+	"EmberTotem_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -481,7 +500,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(CORSAIR_RELICS_LANDMARKS)
 	all_landmarks.append_array(EXPEDITION_CRAFT_LANDMARKS)
 	all_landmarks.append_array(HAVEN_RELICS_LANDMARKS)
-	check_eq(all_landmarks.size(), 74, "expected 74 sculpted landmark GLBs")
+	all_landmarks.append_array(FRONTIER_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 78, "expected 78 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -587,14 +607,34 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 74 GLBs.
-	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
-		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
+	# Shared Landmark PBR Texture Deduplication contract across all 78 GLBs (strictly 30 shared PNGs,
+	# 0 non-shared root PNGs, and 0 embedded textures).
+	var embedded_tex_count := 0
+	for tex_key_var in unique_pbr_paths.keys():
+		if String(tex_key_var).begins_with("<embedded:"):
+			embedded_tex_count += 1
+	var root_pngs: Array[String] = []
+	var lm_dir := DirAccess.open(LANDMARK_DIR)
+	check(lm_dir != null, "failed to open landmark asset directory: " + LANDMARK_DIR)
+	if lm_dir != null:
+		lm_dir.list_dir_begin()
+		var entry_name := lm_dir.get_next()
+		while not entry_name.is_empty():
+			if not lm_dir.current_is_dir() and entry_name.to_lower().ends_with(".png"):
+				root_pngs.append(entry_name)
+			entry_name = lm_dir.get_next()
+		lm_dir.list_dir_end()
+	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d, embedded: %d, root_pngs: %d)" % [
+		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size(), embedded_tex_count, root_pngs.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
+	check_eq(embedded_tex_count, 0,
+		"expected 0 embedded PBR textures across all 78 landmark GLBs (got %d)" % embedded_tex_count)
+	check_eq(root_pngs.size(), 0,
+		"expected 0 non-shared root PNGs in %s (found: %s)" % [LANDMARK_DIR, ", ".join(root_pngs.slice(0, 6))])
 	check_eq(unique_pbr_paths.size(), 30,
-		"expected strictly 30 unique shared landmark PBR texture paths across all 74 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected strictly 30 unique shared landmark PBR texture paths across all 78 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -894,7 +934,8 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 
 	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft,
 	#     Wave I-15 Trail Masonry & Gaussian Halo Craft, Wave I-16 Botanical Wildflower Craft,
-	#     Wave I-17 Coastal Grass Plume Craft, Wave I-18 Jungle Fern Crosier Craft & Trail Pebble Hygiene assertions.
+	#     Wave I-17 Coastal Grass Plume Craft, Wave I-18 Jungle Fern Crosier Craft,
+	#     Wave I-19 Coastal Shell Craft & Trail Pebble Hygiene assertions.
 	if cc_details != null:
 		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
 		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
@@ -979,6 +1020,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		print("    wave_i18 jungle fern crosier tris: fern=%d" % fern_tris)
 		check(fern_tris >= 400,
 			"Wave I-18 JungleFerns mesh must have >= 400 tris (upgraded 12-frond + 3 spiral fiddlehead crosiers rosette, got %d)" % fern_tris)
+
+		print("    wave_i19 coastal shell craft tris: pebbles_shells=%d" % peb_tris)
+		check(peb_tris >= 340,
+			"Wave I-19 ShorePebblesShells mesh must have >= 340 tris (upgraded spiral queen conch + 5-petal sand dollar + tide cobbles, got %d)" % peb_tris)
+		check(IslandDetailsCls._prop_keepout_radius("PowderBunker_Harbour") >= 4.0,
+			"Wave I-19 PowderBunker keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("PowderBunker_Harbour"))
+		check(IslandDetailsCls._prop_keepout_radius("CoralAltar_Glade") >= 4.0,
+			"Wave I-19 CoralAltar keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("CoralAltar_Glade"))
+		check(IslandDetailsCls._prop_keepout_radius("BoatSlipway_Slip") >= 4.5,
+			"Wave I-19 BoatSlipway keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("BoatSlipway_Slip"))
+		check(IslandDetailsCls._prop_keepout_radius("EmberTotem_Approach") >= 3.8,
+			"Wave I-19 EmberTotem keepout radius must be >= 3.8 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("EmberTotem_Approach"))
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1631,6 +1684,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(hr_glb),
 			"Wave I-18 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % hr_glb)
 
+	# 2h-10. Verify Wave I-19 (78-Landmark Frontier-Craft Milestone) landmarks (pirate powder magazine bunker,
+	#        ancient coral leviathan altar, coastal boatbuilder slipway winch & volcanic obsidian ember totem)
+	#        + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var powder_bunker_total := 0
+	var coral_altar_total := 0
+	var boat_slipway_total := 0
+	var ember_totem_total := 0
+	for isl_i19 in all_islands:
+		powder_bunker_total += isl_i19.find_children("PowderBunker_*", "Node3D", true, false).size()
+		coral_altar_total += isl_i19.find_children("CoralAltar_*", "Node3D", true, false).size()
+		boat_slipway_total += isl_i19.find_children("BoatSlipway_*", "Node3D", true, false).size()
+		ember_totem_total += isl_i19.find_children("EmberTotem_*", "Node3D", true, false).size()
+	print("    wave_i19 frontier_craft landmarks: powder_bunkers=%d coral_altars=%d boat_slipways=%d ember_totems=%d lantern_halos=%d" % [
+		powder_bunker_total, coral_altar_total, boat_slipway_total, ember_totem_total, total_lantern_halos])
+	check(powder_bunker_total >= 4, "Wave I-19 spawns >= 4 PowderBunker_* landmarks (got %d)" % powder_bunker_total)
+	check(coral_altar_total >= 4, "Wave I-19 spawns >= 4 CoralAltar_* landmarks (got %d)" % coral_altar_total)
+	check(boat_slipway_total >= 4, "Wave I-19 spawns >= 4 BoatSlipway_* landmarks (got %d)" % boat_slipway_total)
+	check(ember_totem_total >= 3, "Wave I-19 spawns >= 3 EmberTotem_* landmarks (got %d)" % ember_totem_total)
+	check(total_lantern_halos >= 220,
+		"Wave I-19 archipelago must batch >= 220 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for fc_glb in FRONTIER_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(fc_glb),
+			"Wave I-19 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % fc_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1673,13 +1752,113 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i18 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i19 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 285,
-		"grounding audit must inspect >= 285 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 304,
+		"grounding audit must inspect >= 304 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])
+
+	# 2j. Waterfall Free-Fall Clearance Regression Guard (Cloud Lead Q35):
+	#     Every mid-fall vertex (15%..85% of drop height) of EmeraldCanyonWaterfall and CitadelWaterfall
+	#     must clear the underlying island terrain by >= +1.2 m so cascading water never clips cliff rock.
+	var wf_specs: Array[Array] = [
+		[emerald_isl, "EmeraldCanyonWaterfall"],
+		[sov_isl, "CitadelWaterfall"],
+	]
+	for wf_spec in wf_specs:
+		var wf_isl: Island = wf_spec[0] as Island
+		var wf_name := String(wf_spec[1])
+		check(wf_isl != null, "waterfall audit island missing for %s" % wf_name)
+		if wf_isl == null:
+			continue
+		var wf := wf_isl.find_child(wf_name, true, false) as IslandWaterfall
+		check(wf != null, "island %s missing %s (IslandWaterfall)" % [wf_isl.island_id, wf_name])
+		if wf == null:
+			continue
+		var sheet_mi := wf.get_node_or_null(^"WaterfallSheet") as MeshInstance3D
+		check(sheet_mi != null and sheet_mi.mesh != null and sheet_mi.mesh.get_surface_count() > 0,
+			"%s/%s missing populated WaterfallSheet mesh" % [wf_isl.island_id, wf_name])
+		if sheet_mi == null or sheet_mi.mesh == null or sheet_mi.mesh.get_surface_count() == 0:
+			continue
+		var sheet_arrays := sheet_mi.mesh.surface_get_arrays(0)
+		var verts_var: Variant = sheet_arrays[Mesh.ARRAY_VERTEX] if not sheet_arrays.is_empty() else null
+		check(verts_var is PackedVector3Array and not (verts_var as PackedVector3Array).is_empty(),
+			"%s/%s WaterfallSheet mesh has vertex array" % [wf_isl.island_id, wf_name])
+		if not (verts_var is PackedVector3Array):
+			continue
+		var sheet_verts: PackedVector3Array = verts_var
+		var sheet_rel_xf := _relative_transform(sheet_mi, wf_isl)
+		var drop_h := maxf(wf.height_m, 1.0)
+		var mid_verts := 0
+		var clipping_verts := 0
+		var min_wf_clearance := INF
+		for v_local in sheet_verts:
+			var drop_frac := -v_local.y / drop_h
+			if drop_frac < 0.15 or drop_frac > 0.85:
+				continue
+			var v_isl := sheet_rel_xf * v_local
+			var terrain_y: float = wf_isl.surface_height(v_isl.x, v_isl.z)
+			var wf_clr := v_isl.y - terrain_y
+			mid_verts += 1
+			if wf_clr < min_wf_clearance:
+				min_wf_clearance = wf_clr
+			if wf_clr < 1.2:
+				clipping_verts += 1
+		if mid_verts == 0:
+			min_wf_clearance = 0.0
+		print("    wave_i19 waterfall free-fall clearance: %s/%s mid_verts=%d min_clearance=%+.2fm clipping=%d" % [
+			wf_isl.island_id, wf_name, mid_verts, min_wf_clearance, clipping_verts])
+		check(mid_verts >= 50,
+			"%s/%s must audit >= 50 mid-fall WaterfallSheet vertices (got %d)" % [wf_isl.island_id, wf_name, mid_verts])
+		check(min_wf_clearance >= 1.2,
+			"%s/%s mid-fall sheet must clear island terrain by >= +1.2 m (min=%+.2fm)" % [
+				wf_isl.island_id, wf_name, min_wf_clearance])
+		check_eq(clipping_verts, 0,
+			"%s/%s has %d mid-fall sheet vertex/vertices below +1.2 m cliff clearance" % [
+				wf_isl.island_id, wf_name, clipping_verts])
+
+	# 2k. Storm-Fog `disable_fog` Hardening Contract (Local-GPU M42):
+	#     Additive twilight lantern halos, inland fireflies & volcanic caldera embers must set
+	#     `disable_fog = true` so stormy distance fog never washes them into milky square quads.
+	var halo_shared_mat := IslandDetailsCls._get_lantern_halo_material()
+	check(halo_shared_mat != null and halo_shared_mat.disable_fog,
+		"Wave I-19 storm-fog hardening: IslandDetails._get_lantern_halo_material() must set disable_fog = true")
+	if port_isl != null:
+		var port_det_fog := port_isl.get_node_or_null(^"IslandDetails") as IslandDetails
+		var port_halo_fog := port_det_fog.get_node_or_null(^"LandmarkLanternHalos") as MultiMeshInstance3D if port_det_fog != null else null
+		var port_halo_std := port_halo_fog.material_override as StandardMaterial3D if port_halo_fog != null else null
+		check(port_halo_std != null and port_halo_std.disable_fog,
+			"Wave I-19 storm-fog hardening: Port Scoundrel LandmarkLanternHalos material_override must set disable_fog = true")
+		var port_ff := port_isl.find_child("IslandFireflies", true, false) as GPUParticles3D
+		check(port_ff != null and port_ff.draw_pass_1 != null,
+			"Wave I-19 storm-fog hardening: Port Scoundrel mounts IslandFireflies GPUParticles3D with draw_pass_1")
+		var ff_mat: Material = null
+		if port_ff != null and port_ff.draw_pass_1 != null:
+			var ff_prim := port_ff.draw_pass_1 as PrimitiveMesh
+			if ff_prim != null:
+				ff_mat = ff_prim.material
+			elif port_ff.draw_pass_1.get_surface_count() > 0:
+				ff_mat = port_ff.draw_pass_1.surface_get_material(0)
+		var ff_std := ff_mat as StandardMaterial3D
+		check(ff_std != null and ff_std.disable_fog,
+			"Wave I-19 storm-fog hardening: Port Scoundrel IslandFireflies draw_pass_1 material must set disable_fog = true")
+	if cinder_isl != null:
+		var cinder_embers := cinder_isl.find_child("VolcanoEmberPlume", true, false) as GPUParticles3D
+		check(cinder_embers != null and cinder_embers.draw_pass_1 != null,
+			"Wave I-19 storm-fog hardening: Cinder Crag mounts VolcanoEmberPlume GPUParticles3D with draw_pass_1")
+		var emb_mat: Material = null
+		if cinder_embers != null and cinder_embers.draw_pass_1 != null:
+			var emb_prim := cinder_embers.draw_pass_1 as PrimitiveMesh
+			if emb_prim != null:
+				emb_mat = emb_prim.material
+			elif cinder_embers.draw_pass_1.get_surface_count() > 0:
+				emb_mat = cinder_embers.draw_pass_1.surface_get_material(0)
+		var emb_std := emb_mat as StandardMaterial3D
+		check(emb_std != null and emb_std.disable_fog,
+			"Wave I-19 storm-fog hardening: Cinder Crag VolcanoEmberPlume draw_pass_1 material must set disable_fog = true")
+	print("    wave_i19 storm-fog disable_fog hardening: lantern_halos=ok island_fireflies=ok volcano_embers=ok")
 
 	# Verify zero-VRAM triplanar cliff PBR wired onto FortBastion & SmugglersGrotto stone meshes.
 	var fort_isl := archipelago.get_island_by_id("ironwatch_fort")
