@@ -559,8 +559,9 @@ void fragment() {
 		// emerald-jade reef dropoff (3.5..14 m) -> fathomless dark sapphire-indigo open sea (> 14 m).
 		// At midnight, cool coastal shallows into velvet moonlit indigo-teal so coves never glow neon-cyan
 		// and harbour lanterns / nocturnal coral bioluminescence / wake stars pop with cinematic contrast!
-		// On LOW (foam_field_on == 0), attenuate shallow-beach turquoise on steep nearby submerged ship hulls
-		// (< 70 m) so hulls sit naturally in deep ocean water without affecting distant sandy coves or MEDIUM/HIGH!
+		// Attenuate shallow sandy-beach turquoise scatter on steep nearby submerged ship hulls (< 55 m)
+		// across ALL presets (LOW/MEDIUM/HIGH) so moored or stormy ships in deep ocean never glow neon cyan
+		// under their keels, while flat sandy beaches, reefs & distant lagoons stay 100% dazzling turquoise!
 		vec3 sw0 = (INV_VIEW_MATRIX * vec4(scene_view, 1.0)).xyz;
 		vec3 scene_n = normalize(cross(dFdy(sw0), dFdx(sw0)));
 		float flatness = smoothstep(0.50, 0.92, abs(scene_n.y));
@@ -573,8 +574,9 @@ void fragment() {
 		vec3 shallow_tint = mix(eff_shallow, scatter_color, 0.18 * (1.0 - night_bio * 0.65)) * light * 0.74;
 		vec3 reef_tint = eff_reef * light * mix(0.62, 1.12, smoothstep(0.38, 0.95, face_lit));
 		vec3 coast_body = mix(shallow_tint, reef_tint, smoothstep(1.2, 5.2, path));
-		float low_steep_hull = (1.0 - has_ff) * smoothstep(70.0, 25.0, dist) * (1.0 - flatness);
-		vec3 eff_coast = mix(coast_body, body, low_steep_hull * 0.78);
+		float steep_hull = smoothstep(0.62, 0.22, abs(scene_n.y)) * smoothstep(58.0, 20.0, dist);
+		float hull_cyan_fix = steep_hull * max(smoothstep(0.12, 0.65, vdepth), 1.0 - has_ff);
+		vec3 eff_coast = mix(coast_body, body, hull_cyan_fix * 0.86);
 		vec3 water_vol = has_seabed ? mix(eff_coast, body, smoothstep(4.2, 16.5, path)) : body;
 		col = behind * trans + water_vol * fill;
 
