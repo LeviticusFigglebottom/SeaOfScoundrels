@@ -25,11 +25,79 @@ var _rng := RandomNumberGenerator.new()
 var _emit_accum: float = 0.0
 var _warmed: bool = false
 
+# Ref-counted static zero-primitive sculpted 2-tri spray billboard card (zero ObjectDB leaks).
+static var _active_sprays: int = 0
+static var _spray_card_mesh: ArrayMesh = null
+
+
+## Release statically cached sculpted spray billboard card mesh cleanly.
+static func clear_shared_cache() -> void:
+	_spray_card_mesh = null
+
+
+func _enter_tree() -> void:
+	_active_sprays += 1
+
+
 func _exit_tree() -> void:
+	_release_local_refs()
+	_active_sprays = maxi(0, _active_sprays - 1)
+	if _active_sprays == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+		if _active_sprays == 0:
+			clear_shared_cache()
+
+
+func _release_local_refs() -> void:
 	_ocean = null
 	if particles != null and is_instance_valid(particles):
 		particles.emitting = false
 		particles.visible = false
+		particles.material_override = null
+		particles.draw_pass_1 = null
+		particles.process_material = null
+	particles = null
+	if _process_mat != null:
+		_process_mat.scale_curve = null
+		_process_mat = null
+	if material != null:
+		material.set_shader_parameter(&"foam_tex", null)
+		material = null
+
+
+## Return the static shared zero-primitive sculpted 2-tri spray billboard card ArrayMesh.
+func get_spray_card_mesh() -> ArrayMesh:
+	return _spray_card_mesh
+
+
+## Sculpted exact 2-tri unit billboard card matching (-0.5..0.5, -0.5..0.5, 0) & full [0..1] UVs.
+static func _build_spray_card_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nrm := Vector3(0.0, 0.0, 1.0)
+	var p_tl := Vector3(-0.5, 0.5, 0.0)
+	var p_tr := Vector3(0.5, 0.5, 0.0)
+	var p_br := Vector3(0.5, -0.5, 0.0)
+	var p_bl := Vector3(-0.5, -0.5, 0.0)
+	var uv_tl := Vector2(0.0, 0.0)
+	var uv_tr := Vector2(1.0, 0.0)
+	var uv_br := Vector2(1.0, 1.0)
+	var uv_bl := Vector2(0.0, 1.0)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_tr); st.add_vertex(p_tr)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+	st.set_normal(nrm); st.set_uv(uv_bl); st.add_vertex(p_bl)
+	return st.commit()
+
 
 func setup(ocean: Node3D) -> void:
 	_ocean = ocean
@@ -52,9 +120,8 @@ func setup(ocean: Node3D) -> void:
 	curve_tex.curve = curve
 	_process_mat.scale_curve = curve_tex
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(1.0, 1.0)
-	quad.material = material
+	if _spray_card_mesh == null:
+		_spray_card_mesh = _build_spray_card_mesh()
 
 	particles = GPUParticles3D.new()
 	particles.name = "SprayParticles"
@@ -63,15 +130,17 @@ func setup(ocean: Node3D) -> void:
 	particles.local_coords = false
 	particles.emitting = false
 	particles.process_material = _process_mat
-	particles.draw_pass_1 = quad
+	particles.draw_pass_1 = _spray_card_mesh
+	particles.material_override = material
 	particles.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH
 	particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	particles.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 	particles.visibility_aabb = AABB(Vector3(-120.0, -24.0, -120.0), Vector3(240.0, 56.0, 240.0))
 	add_child(particles)
 
 func set_quality(q: int) -> void:
 	_quality = clampi(q, 0, 2)
-	if particles == null:
+	if particles == null or not is_instance_valid(particles):
 		return
 	var active := _quality > 0
 	visible = active
@@ -86,7 +155,8 @@ func is_active() -> bool:
 	return _quality > 0 and visible
 
 func update(delta: float, cam: Camera3D, submerged: bool, crest_start: float) -> void:
-	if _quality <= 0 or particles == null or cam == null:
+	if _quality <= 0 or particles == null or not is_instance_valid(particles) \
+			or cam == null or material == null or _process_mat == null:
 		return
 	visible = not submerged
 	particles.visible = not submerged

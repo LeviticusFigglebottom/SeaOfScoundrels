@@ -33,6 +33,11 @@ const COL_RUNE_APEX := Color(1.00, 1.00, 1.00)
 const COL_RUNE_MID := Color(0.86, 0.90, 0.94)
 const COL_RUNE_LO := Color(0.64, 0.70, 0.76)
 
+# Nocturnal ship-lantern gilded catch-light shimmer tuning (0.00 midday/doused -> ~0.36 midnight lit).
+const LANTERN_SHEEN_DAYLIGHT_CUTOFF := 0.55
+const LANTERN_SHEEN_MAX_ENERGY := 0.36
+const COL_LANTERN_WARM_GOLD := Color(1.0, 0.78, 0.32)
+
 # Ref-counted static mesh & shared frame material caches (zero ObjectDB leaks on teardown).
 static var _active_crests: int = 0
 static var _sloop_mesh: ArrayMesh = null
@@ -42,11 +47,14 @@ static var _frame_mat: StandardMaterial3D = null
 @export var ship_class: StringName = &"sloop"
 
 var _mesh_mi: MeshInstance3D = null
+var _frame_inst_mat: StandardMaterial3D = null
 var _core_mat: StandardMaterial3D = null
 var _emblem_mode: int = 0
 var _glow_accent: Color = Color.BLACK
 var _base_emission_energy: float = 0.15
 var _spectral_alpha: float = 1.0
+var _lantern_sheen_energy: float = 0.0
+var _lantern_shimmer_clock: float = 0.0
 
 
 ## Mount (or reuse) a sculpted Port & Starboard bow-cheek HullCrest on `ship`.
@@ -83,6 +91,13 @@ func _ready() -> void:
 	_ensure_shared_assets()
 	var is_brig := ship_class == &"brigantine"
 
+	_frame_inst_mat = _frame_mat.duplicate() as StandardMaterial3D
+	_frame_inst_mat.vertex_color_use_as_albedo = true
+	_frame_inst_mat.vertex_color_is_srgb = true
+	_frame_inst_mat.emission_enabled = true
+	_frame_inst_mat.emission = COL_LANTERN_WARM_GOLD
+	_frame_inst_mat.emission_energy_multiplier = 0.0
+
 	_core_mat = StandardMaterial3D.new()
 	_core_mat.vertex_color_use_as_albedo = true
 	_core_mat.vertex_color_is_srgb = true
@@ -94,12 +109,18 @@ func _ready() -> void:
 	_mesh_mi.name = "HullCrestMesh"
 	_mesh_mi.mesh = _brig_mesh if is_brig else _sloop_mesh
 	_mesh_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_mesh_mi.set_surface_override_material(0, _frame_mat)
+	_mesh_mi.set_surface_override_material(0, _frame_inst_mat)
 	if _mesh_mi.mesh != null and _mesh_mi.mesh.get_surface_count() > 1:
 		_mesh_mi.set_surface_override_material(1, _core_mat)
 	add_child(_mesh_mi)
 
 	apply_emblem(_emblem_mode, _glow_accent)
+	step_lantern_glow()
+
+
+func _process(delta: float) -> void:
+	_lantern_shimmer_clock += maxf(delta, 0.0)
+	step_lantern_glow()
 
 
 func _exit_tree() -> void:
@@ -110,7 +131,10 @@ func _exit_tree() -> void:
 		_mesh_mi.material_override = null
 		_mesh_mi.mesh = null
 	_mesh_mi = null
+	_frame_inst_mat = null
 	_core_mat = null
+	_lantern_sheen_energy = 0.0
+	_lantern_shimmer_clock = 0.0
 	_active_crests = maxi(0, _active_crests - 1)
 	if _active_crests == 0:
 		clear_shared_cache()
@@ -181,11 +205,46 @@ func set_spectral_alpha(alpha: float) -> void:
 	visible = _spectral_alpha > 0.05
 	if _core_mat != null:
 		_core_mat.emission_energy_multiplier = _base_emission_energy * _spectral_alpha
+	step_lantern_glow()
 
 
 ## Return the per-ship luminous runic core material (Surface 1).
 func get_core_material() -> StandardMaterial3D:
 	return _core_mat
+
+
+## Return the per-ship sculpted gilded bronze frame material (Surface 0).
+func get_frame_material() -> StandardMaterial3D:
+	return _frame_inst_mat
+
+
+## Return current nocturnal ship-lantern gilded catch-light sheen energy (0.00 midday/doused -> ~0.36 midnight lit).
+func get_lantern_sheen_energy() -> float:
+	return _lantern_sheen_energy
+
+
+## Modulate warm nocturnal lantern gilded catch-light sheen on the sculpted bronze/gold crest frame.
+func step_lantern_glow() -> void:
+	var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var lanterns_on := _is_ship_lanterns_lit()
+	var is_low_light := dl < LANTERN_SHEEN_DAYLIGHT_CUTOFF
+	var night_t := clampf((LANTERN_SHEEN_DAYLIGHT_CUTOFF - dl) / LANTERN_SHEEN_DAYLIGHT_CUTOFF, 0.0, 1.0)
+	var shimmer := 0.97 + 0.03 * cos(_lantern_shimmer_clock * 4.8 + 0.4 * sin(_lantern_shimmer_clock * 2.9))
+	var sheen := LANTERN_SHEEN_MAX_ENERGY * pow(night_t, 1.15) * shimmer * _spectral_alpha \
+		if (lanterns_on and is_low_light) else 0.0
+	_lantern_sheen_energy = sheen
+	if _frame_inst_mat != null:
+		_frame_inst_mat.emission = COL_LANTERN_WARM_GOLD
+		_frame_inst_mat.emission_energy_multiplier = sheen
+
+
+func _is_ship_lanterns_lit() -> bool:
+	var parent_ship := get_parent()
+	if parent_ship != null and is_instance_valid(parent_ship):
+		var lit_v: Variant = parent_ship.get(&"lanterns_lit")
+		if lit_v != null:
+			return bool(lit_v)
+	return true
 
 
 ## Return total sculpted triangle count across both surfaces of the active crest mesh.

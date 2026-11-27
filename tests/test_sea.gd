@@ -309,3 +309,272 @@ func test_wave25_directional_chop_and_fft_binding() -> void:
 	ocean.free()
 
 
+func test_q20b_underwater_plankton_motes_and_crest_spray_zero_primitive() -> void:
+	Underwater.clear_shared_cache()
+	CrestSpray.clear_shared_cache()
+
+	# 1. Source guards: Vulkan RD MultiMesh teardown safety in underwater.gd & zero QuadMesh in crest_spray.gd.
+	var uw_src := FileAccess.get_file_as_string("res://src/ocean/underwater.gd")
+	check(uw_src.length() > 200, "underwater.gd source loads cleanly for Q20B teardown guard")
+	check(not uw_src.contains("multimesh.mesh = null") and not uw_src.contains("mm.mesh = null") \
+			and not uw_src.contains("particles.mesh = null"),
+		"underwater.gd must NOT mutate MultiMesh .mesh = null on teardown (Godot 4.8 Vulkan RD rule)")
+
+	var cs_src := FileAccess.get_file_as_string("res://src/ocean/crest_spray.gd")
+	check(cs_src.length() > 200, "crest_spray.gd source loads cleanly for Q20B zero-primitive guard")
+	check(not cs_src.contains("QuadMesh"),
+		"crest_spray.gd must contain zero raw QuadMesh primitives")
+
+	var saved_amp := Sea.amp_scale
+	var saved_time := Sea.time
+	var saved_tod := Weather.time_of_day
+	var orphans_before := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+
+	var ocean_scene: PackedScene = load("res://src/ocean/ocean.tscn")
+	var ocean_a: Ocean = ocean_scene.instantiate() as Ocean
+	var ocean_b: Ocean = ocean_scene.instantiate() as Ocean
+	add_child(ocean_a)
+	add_child(ocean_b)
+
+	var uw_a := ocean_a.get_node_or_null(^"Underwater") as Underwater
+	var uw_b := ocean_b.get_node_or_null(^"Underwater") as Underwater
+	var cs_a := ocean_a.crest_spray
+	var cs_b := ocean_b.crest_spray
+	check(uw_a != null and uw_b != null, "Ocean instances mount Underwater nodes")
+	check(cs_a != null and cs_b != null, "Ocean instances mount CrestSpray nodes")
+	check_eq(Underwater._active_underwaters, 2, "Underwater tracks ref-counted active instances")
+	check_eq(CrestSpray._active_sprays, 2, "CrestSpray tracks ref-counted active instances")
+
+	# 2. Verify UnderwaterPlanktonMotes MultiMesh (36x8-tri sculpted octahedron, 0 primitives, 0 VRAM textures).
+	var motes_a := uw_a.get_plankton_motes_node()
+	var motes_b := uw_b.get_plankton_motes_node()
+	check(motes_a != null and motes_a.name == "UnderwaterPlanktonMotes",
+		"Underwater mounts UnderwaterPlanktonMotes MultiMeshInstance3D")
+	var mote_tris := 0
+	var mote_bad_normals := 0
+	if motes_a != null:
+		check_eq(motes_a.get_parent(), uw_a, "UnderwaterPlanktonMotes mounts directly under Underwater")
+		check(not motes_a.visible, "UnderwaterPlanktonMotes starts hidden before submersion")
+		check_eq(motes_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"UnderwaterPlanktonMotes disables shadow casting")
+		check_eq(motes_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"UnderwaterPlanktonMotes disables GI mode")
+		check_near(motes_a.visibility_range_end, 40.0, 0.05,
+			"UnderwaterPlanktonMotes sets visibility_range_end = 40.0 m")
+		check_near(motes_a.extra_cull_margin, 20.0, 0.05,
+			"UnderwaterPlanktonMotes sets extra_cull_margin = 20.0 m")
+
+		var mm := motes_a.multimesh
+		check(mm != null and mm.instance_count == 36 and mm.use_colors,
+			"UnderwaterPlanktonMotes configures 36 per-instance colored motes")
+		check(mm != null and mm.mesh is ArrayMesh and not (mm.mesh is PrimitiveMesh),
+			"UnderwaterPlanktonMotes uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if motes_b != null and motes_b.multimesh != null and mm != null:
+			check_eq(mm.mesh, motes_b.multimesh.mesh,
+				"Underwater instances share statically cached 8-tri _plankton_mesh")
+			check_eq(motes_a.material_override, motes_b.material_override,
+				"Underwater instances share statically cached _plankton_mat")
+		if mm != null and mm.mesh is ArrayMesh:
+			var arr := (mm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			mote_tris = floori(float(verts.size()) / 3.0)
+			check_eq(cols.size(), verts.size(), "UnderwaterPlanktonMotes carries per-vertex luminous colors")
+			for nv in norms:
+				if not nv.is_finite() or absf(nv.length() - 1.0) > 0.002:
+					mote_bad_normals += 1
+		check_eq(mote_tris, 8, "sculpted UnderwaterPlanktonMotes diamond octahedron has exact 8 tris")
+		check_eq(mote_bad_normals, 0, "all UnderwaterPlanktonMotes normals are finite unit vectors")
+
+		var pm_mat := motes_a.material_override as StandardMaterial3D
+		check(pm_mat != null and pm_mat.vertex_color_use_as_albedo and pm_mat.vertex_color_is_srgb \
+				and pm_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and pm_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and pm_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and pm_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"UnderwaterPlanktonMotes uses unshaded additive sRGB double-sided depth-draw-disabled material")
+		if pm_mat != null:
+			check(pm_mat.albedo_texture == null and pm_mat.normal_texture == null \
+					and pm_mat.roughness_texture == null and pm_mat.emission_texture == null,
+				"UnderwaterPlanktonMotes allocates 0 extra VRAM textures")
+
+	# 3. Verify visibility gating (above water, threshold depth <= 0.15, dry hull, and genuinely submerged).
+	Sea.amp_scale = Sea.AMP_STORM
+	Sea.time = 33.5
+	uw_a.step_plankton(0.05, Vector3(0.0, 2.5, 0.0), -2.5, false)
+	check(not motes_a.visible, "UnderwaterPlanktonMotes hidden above water (depth = -2.5)")
+	uw_a.step_plankton(0.05, Vector3(0.0, -0.15, 0.0), 0.15, false)
+	check(not motes_a.visible, "UnderwaterPlanktonMotes hidden at depth == 0.15 threshold")
+	uw_a.step_plankton(0.05, Vector3(0.0, -3.0, 0.0), 3.0, true)
+	check(not motes_a.visible, "UnderwaterPlanktonMotes hidden inside dry hull even when depth > 0.15")
+
+	# Verify dry-hull gating through update(cam, depth) with a registered hull cutout.
+	var hull := Node3D.new()
+	hull.position = Vector3(10.0, 0.0, -6.0)
+	add_child(hull)
+	ocean_a.register_hull_mask(hull, null, 0.0)
+	var cam := Camera3D.new()
+	cam.position = Vector3(10.0, -0.4, -6.0)
+	add_child(cam)
+	uw_a.update(cam, 2.0)
+	check(not motes_a.visible, "Underwater.update() hides UnderwaterPlanktonMotes when camera is inside dry hull")
+	cam.position = Vector3(0.0, -4.0, 0.0)
+	uw_a.update(cam, 4.0)
+	check(motes_a.visible, "Underwater.update() activates UnderwaterPlanktonMotes when submerged outside hull")
+	ocean_a.unregister_hull_mask(hull)
+
+	# 4. Verify seamless 14x8x14 camera wraparound, underwater drift, and strict surface clamping.
+	var cam_pos0 := Vector3(0.0, -4.0, 0.0)
+	uw_a.step_plankton(0.05, cam_pos0, 4.0, false)
+	check(motes_a.visible, "UnderwaterPlanktonMotes active when submerged at (0, -4, 0)")
+	var p0 := uw_a.get_plankton_positions()
+	check_eq(p0.size(), 36, "get_plankton_positions() returns all 36 world-space mote positions")
+	for i in p0.size():
+		var p := p0[i]
+		check(absf(p.x - cam_pos0.x) <= 7.001 and absf(p.z - cam_pos0.z) <= 7.001,
+			"mote %d wraps inside 14x14 XZ volume around cam_pos0 (got %s)" % [i, str(p)])
+		var surf_y := Sea.height(p.x, p.z)
+		check(p.y <= surf_y - 0.25 + 1e-4,
+			"mote %d stays strictly below Sea.height - 0.25 at cam_pos0 (y=%.3f, surf=%.3f)" % [i, p.y, surf_y])
+
+	# Advance current drift at same camera position.
+	uw_a.step_plankton(0.60, cam_pos0, 4.0, false)
+	var p_drift := uw_a.get_plankton_positions()
+	var drifted := 0
+	for i in p0.size():
+		if p_drift[i].distance_squared_to(p0[i]) > 1e-4:
+			drifted += 1
+	check_eq(drifted, 36, "all 36 UnderwaterPlanktonMotes drift smoothly with underwater current")
+
+	# Large swim displacement: (0, -4, 0) -> (45, -5, -30).
+	var cam_pos1 := Vector3(45.0, -5.0, -30.0)
+	uw_a.step_plankton(0.10, cam_pos1, 5.0, false)
+	var p1 := uw_a.get_plankton_positions()
+	for i in p1.size():
+		var p := p1[i]
+		check(absf(p.x - cam_pos1.x) <= 7.001 and absf(p.z - cam_pos1.z) <= 7.001,
+			"mote %d wraps cleanly around displaced cam_pos1 (got %s)" % [i, str(p)])
+		check(p.y <= cam_pos1.y + 4.001,
+			"mote %d respects upper 8 m volume bound around cam_pos1 (got y=%.3f)" % [i, p.y])
+		var surf_y := Sea.height(p.x, p.z)
+		check(p.y <= surf_y - 0.25 + 1e-4,
+			"mote %d stays strictly below Sea.height - 0.25 at cam_pos1 (y=%.3f, surf=%.3f)" % [i, p.y, surf_y])
+
+	# Shallow dive right below stormy waves must STILL keep all 36 motes below Sea.height - 0.25.
+	var shallow_x := 12.0
+	var shallow_z := -8.0
+	var shallow_cam := Vector3(shallow_x, Sea.height(shallow_x, shallow_z) - 0.55, shallow_z)
+	uw_a.step_plankton(0.05, shallow_cam, 0.55, false)
+	var p_shallow := uw_a.get_plankton_positions()
+	for i in p_shallow.size():
+		var p := p_shallow[i]
+		var surf_y := Sea.height(p.x, p.z)
+		check(p.y <= surf_y - 0.25 + 1e-4,
+			"shallow-dive mote %d never floats above Sea.height - 0.25 (y=%.3f, surf=%.3f)" % [i, p.y, surf_y])
+
+	# 5. Verify Weather.daylight() midday -> midnight bioluminescence factor & cyan glow brightening.
+	Weather.time_of_day = 12.0
+	uw_a.step_plankton(0.0, cam_pos1, 5.0, false)
+	var day_bio := uw_a.get_plankton_biolum_factor()
+	var day_cols := uw_a.get_plankton_colors()
+	var day_cyan_sum := 0.0
+	for c in day_cols:
+		day_cyan_sum += c.g + c.b
+
+	Weather.time_of_day = 0.0
+	uw_a.step_plankton(0.0, cam_pos1, 5.0, false)
+	var night_bio := uw_a.get_plankton_biolum_factor()
+	var night_cols := uw_a.get_plankton_colors()
+	var night_cyan_sum := 0.0
+	for c in night_cols:
+		night_cyan_sum += c.g + c.b
+
+	check(day_bio < 0.05 and night_bio > 0.95 and night_bio > day_bio,
+		"nocturnal bioluminescence factor rises cleanly from midday (%.3f) to midnight (%.3f)" % [day_bio, night_bio])
+	check(night_cyan_sum > day_cyan_sum * 1.5,
+		"midnight bioluminescent cyan glow brightens over midday sunlit dust (day=%.2f -> night=%.2f)" % [
+			day_cyan_sum, night_cyan_sum
+		])
+
+	# 6. Verify CrestSpray zero-primitive sculpted 2-tri billboard card (verts, normals, UVs, sharing).
+	var card_a := cs_a.get_spray_card_mesh()
+	var card_b := cs_b.get_spray_card_mesh()
+	var pass_mesh: Mesh = cs_a.particles.draw_pass_1
+	check(pass_mesh != null and pass_mesh is ArrayMesh and not (pass_mesh is PrimitiveMesh),
+		"CrestSpray uses zero-primitive sculpted ArrayMesh card")
+	check_eq(card_a, card_b, "CrestSpray instances share statically cached _spray_card_mesh")
+	check_eq(pass_mesh, card_a, "CrestSpray binds _spray_card_mesh to particles.draw_pass_1")
+	check_eq(cs_a.particles.material_override, cs_a.material,
+		"CrestSpray binds per-instance ShaderMaterial via particles.material_override")
+
+	var card_tris := 0
+	var card_bad_normals := 0
+	if card_a != null:
+		var carr := card_a.surface_get_arrays(0)
+		var cverts: PackedVector3Array = carr[Mesh.ARRAY_VERTEX]
+		var cnorms: PackedVector3Array = carr[Mesh.ARRAY_NORMAL]
+		var cuvs: PackedVector2Array = carr[Mesh.ARRAY_TEX_UV]
+		card_tris = floori(float(cverts.size()) / 3.0)
+		check_eq(card_tris, 2, "CrestSpray sculpted card has exact 2 triangles")
+		check_eq(cnorms.size(), 6, "CrestSpray sculpted card has 6 vertex normals")
+		check_eq(cuvs.size(), 6, "CrestSpray sculpted card has 6 vertex UVs")
+		var min_v := Vector3(INF, INF, INF)
+		var max_v := Vector3(-INF, -INF, -INF)
+		var min_uv := Vector2(INF, INF)
+		var max_uv := Vector2(-INF, -INF)
+		for v in cverts:
+			min_v = min_v.min(v)
+			max_v = max_v.max(v)
+		for uv in cuvs:
+			min_uv = min_uv.min(uv)
+			max_uv = max_uv.max(uv)
+		for nv in cnorms:
+			if not nv.is_finite() or absf(nv.length() - 1.0) > 0.002 \
+					or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+				card_bad_normals += 1
+		check_eq(card_bad_normals, 0, "all CrestSpray card normals are finite unit (0, 0, 1)")
+		check(min_v.distance_to(Vector3(-0.5, -0.5, 0.0)) < 1e-5 \
+				and max_v.distance_to(Vector3(0.5, 0.5, 0.0)) < 1e-5,
+			"CrestSpray card spans exact (-0.5..0.5, -0.5..0.5, 0) (got %s..%s)" % [str(min_v), str(max_v)])
+		check(min_uv.distance_to(Vector2(0.0, 0.0)) < 1e-5 \
+				and max_uv.distance_to(Vector2(1.0, 1.0)) < 1e-5,
+			"CrestSpray card spans full [0..1] UVs (got %s..%s)" % [str(min_uv), str(max_uv)])
+
+	print("    Q20B underwater+spray: PlanktonMotes=36x%d=%d tris (biolum %.2f->%.2f, cyan %.2f->%.2f), CrestSprayCard=%d tris" % [
+		mote_tris, 36 * mote_tris, day_bio, night_bio, day_cyan_sum, night_cyan_sum, card_tris
+	])
+
+	# 7. Restore globals & verify ref-counted zero-leak teardown across partial & final release.
+	Sea.amp_scale = saved_amp
+	Sea.time = saved_time
+	Weather.time_of_day = saved_tod
+
+	remove_child(cam)
+	cam.free()
+	remove_child(hull)
+	hull.free()
+
+	remove_child(ocean_a)
+	ocean_a.free()
+	check_eq(Underwater._active_underwaters, 1, "Underwater refcount decrements to 1 while second Ocean remains")
+	check_eq(CrestSpray._active_sprays, 1, "CrestSpray refcount decrements to 1 while second Ocean remains")
+	check(Underwater._plankton_mesh != null and Underwater._plankton_mat != null,
+		"Underwater shared caches remain valid while an instance is still active")
+	check(CrestSpray._spray_card_mesh != null,
+		"CrestSpray shared card cache remains valid while an instance is still active")
+
+	remove_child(ocean_b)
+	ocean_b.free()
+	await get_tree().process_frame
+	check_eq(Underwater._active_underwaters, 0, "Underwater._active_underwaters returns to 0 on teardown")
+	check(Underwater._plankton_mesh == null and Underwater._plankton_mat == null,
+		"Underwater auto-releases static _plankton_mesh & _plankton_mat cleanly (0 leaks)")
+	check_eq(CrestSpray._active_sprays, 0, "CrestSpray._active_sprays returns to 0 on teardown")
+	check(CrestSpray._spray_card_mesh == null,
+		"CrestSpray auto-releases static _spray_card_mesh cleanly (0 leaks)")
+	Underwater.clear_shared_cache()
+	CrestSpray.clear_shared_cache()
+	var orphans_after := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+	check(orphans_after <= orphans_before,
+		"Q20B teardown leaves 0 orphan nodes (before=%d, after=%d)" % [orphans_before, orphans_after])

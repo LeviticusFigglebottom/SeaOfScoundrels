@@ -19,6 +19,17 @@ signal barrel_used(kind: StringName, pawn: Node)
 const RATIONS_HEAL_AMOUNT := 25.0
 const DEFAULT_MAX_CANNONBALLS := 40
 const DEFAULT_MAX_PLANKS := 24
+const BARREL_KINDS: Array[StringName] = [&"cannonball", &"planks", &"rations"]
+const BARREL_RIM_Y := 0.76
+const RESTOCK_SPARKLE_RIM_OFFSET_Y := 0.55
+const RESTOCK_SPARKLE_DURATION := 0.48
+const RESTOCK_SPARKLE_START_SCALE := 0.24
+const RESTOCK_SPARKLE_END_SCALE := 0.68
+const RESTOCK_SPARKLE_PEAK_ENERGY := 1.35
+const RESTOCK_SPARKLE_SPIN_RAD := PI * 0.85
+const RESTOCK_SPARKLE_VISIBILITY_RANGE := 55.0
+const BARREL_BOUNCE_DURATION := 0.30
+const BARREL_BOUNCE_PEAK_Y := 0.075
 
 # Unscaled hold-bulkhead local coordinates (transformed via ship.ship_point + visual_scale).
 # Seated cleanly inside floor_in so barrel chines rest 100% flush on hold planks with zero hull-wall clipping.
@@ -72,6 +83,14 @@ const COL_BRASS_LO := Color(0.44, 0.31, 0.10)
 const COL_RATION_CLOTH_HI := Color(0.84, 0.74, 0.54)
 const COL_RATION_CLOTH_LO := Color(0.58, 0.48, 0.32)
 
+# Per-barrel tactile restock sparkle tints & 4-point star vertex gradient (0 VRAM textures).
+const COL_SPARKLE_CANNONBALL := Color(1.00, 0.80, 0.32, 1.0)
+const COL_SPARKLE_PLANKS := Color(1.00, 0.54, 0.14, 1.0)
+const COL_SPARKLE_PROVISIONS := Color(0.42, 1.00, 0.66, 1.0)
+const COL_SPARKLE_STAR_CORE := Color(1.00, 0.98, 0.90, 1.0)
+const COL_SPARKLE_STAR_MID := Color(0.96, 0.90, 0.78, 1.0)
+const COL_SPARKLE_STAR_TIP := Color(0.0, 0.0, 0.0, 1.0)
+
 ## Visual scale matched to the owning ship's hull_scale.
 @export var visual_scale: float = 1.0
 ## Maximum cannonball capacity synchronized from Ship.MAX_CANNONBALLS.
@@ -83,10 +102,22 @@ const COL_RATION_CLOTH_LO := Color(0.58, 0.48, 0.32)
 var ship: Node3D = null
 
 var _barrel_nodes: Dictionary = {}  # StringName -> Node3D
+var _barrel_list: Array[Node3D] = []
+var _barrel_visuals: Array[Node3D] = []
+var _barrel_base_pos: Array[Vector3] = []
+var _barrel_base_scale: Array[Vector3] = []
+var _barrel_bounce_elapsed: PackedFloat32Array = PackedFloat32Array([-1.0, -1.0, -1.0])
+var _barrel_bounce_offsets: PackedFloat32Array = PackedFloat32Array([0.0, 0.0, 0.0])
 var _interactables: Dictionary = {}  # StringName -> Interactable
 var _all_mesh_instances: Array[MeshInstance3D] = []
 var _ammo_fill_mi: MeshInstance3D = null
 var _plank_fill_mi: MeshInstance3D = null
+var _restock_sparkle_mi: MeshInstance3D = null
+var _restock_sparkle_mat: StandardMaterial3D = null
+var _sparkle_elapsed: float = -1.0
+var _sparkle_energy: float = 0.0
+var _sparkle_tint: Color = COL_SPARKLE_CANNONBALL
+var _has_active_feedback: bool = false
 
 # Ref-counted static sculpted ArrayMesh & shared PBR material caches (zero ObjectDB leaks).
 static var _active_instances: int = 0
@@ -98,6 +129,7 @@ static var _iron_hoops_mesh: ArrayMesh = null
 static var _rations_brass_mesh: ArrayMesh = null
 static var _ammo_fill_mesh: ArrayMesh = null
 static var _plank_fill_mesh: ArrayMesh = null
+static var _restock_sparkle_mesh: ArrayMesh = null
 static var _oak_mat: StandardMaterial3D = null
 static var _iron_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
@@ -116,6 +148,7 @@ static func clear_shared_cache() -> void:
 	_rations_brass_mesh = null
 	_ammo_fill_mesh = null
 	_plank_fill_mesh = null
+	_restock_sparkle_mesh = null
 	_oak_mat = null
 	_iron_mat = null
 	_brass_mat = null
@@ -129,7 +162,14 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	_ensure_shared_assets()
 	_build_barrels()
+	_build_restock_sparkle_halo()
 	sync_fill_visuals()
+
+
+func _process(delta: float) -> void:
+	if not _has_active_feedback:
+		return
+	step_feedback(delta)
 
 
 func _exit_tree() -> void:
@@ -142,11 +182,27 @@ func _exit_tree() -> void:
 					it.interacted.disconnect(cb)
 	_interactables.clear()
 	_barrel_nodes.clear()
+	_barrel_list.clear()
+	_barrel_visuals.clear()
+	_barrel_base_pos.clear()
+	_barrel_base_scale.clear()
+	for i in _barrel_bounce_elapsed.size():
+		_barrel_bounce_elapsed[i] = -1.0
+		_barrel_bounce_offsets[i] = 0.0
 	for mi: MeshInstance3D in _all_mesh_instances:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
 			mi.mesh = null
 	_all_mesh_instances.clear()
+	if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+		_restock_sparkle_mi.visible = false
+		_restock_sparkle_mi.material_override = null
+		_restock_sparkle_mi.mesh = null
+	_restock_sparkle_mi = null
+	_restock_sparkle_mat = null
+	_sparkle_elapsed = -1.0
+	_sparkle_energy = 0.0
+	_has_active_feedback = false
 	_ammo_fill_mi = null
 	_plank_fill_mi = null
 	ship = null
@@ -249,6 +305,130 @@ func get_fill_ratio(kind: StringName) -> float:
 	return 0.0
 
 
+## Return the mounted 24-tri additive `RestockSparkleHalo` MeshInstance3D.
+func get_restock_sparkle_node() -> MeshInstance3D:
+	if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+		return _restock_sparkle_mi
+	return null
+
+
+## Return current `RestockSparkleHalo` additive bloom energy (0.0 when idle or decayed).
+func get_restock_sparkle_energy() -> float:
+	return _sparkle_energy
+
+
+## Return current vertical recoil bounce offset in meters for barrel index 0..2 (0.000 m at rest).
+func get_barrel_bounce_offset(barrel_index: int) -> float:
+	if barrel_index < 0 or barrel_index >= _barrel_bounce_offsets.size():
+		return 0.0
+	return _barrel_bounce_offsets[barrel_index]
+
+
+## Convenience indexed restock wrapper delegating to `use_barrel()` (0=cannonball, 1=planks, 2=rations).
+func restock_from_barrel(barrel_index: int, pawn: Node = null) -> bool:
+	if barrel_index < 0 or barrel_index >= BARREL_KINDS.size():
+		return false
+	return use_barrel(BARREL_KINDS[barrel_index], pawn)
+
+
+## Snap `RestockSparkleHalo` above barrel `barrel_index` (0..2) and trigger flash + tactile lid pop bounce.
+func trigger_restock_feedback(barrel_index: int) -> void:
+	if barrel_index < 0 or barrel_index >= BARREL_KINDS.size():
+		return
+	if _restock_sparkle_mi == null or not is_instance_valid(_restock_sparkle_mi):
+		_build_restock_sparkle_halo()
+	_sparkle_tint = _get_barrel_sparkle_tint(barrel_index)
+	_sparkle_elapsed = 0.0
+	if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi) \
+			and barrel_index < _barrel_base_pos.size():
+		_restock_sparkle_mi.position = _barrel_base_pos[barrel_index] + Vector3(
+			0.0, (BARREL_RIM_Y + RESTOCK_SPARKLE_RIM_OFFSET_Y) * visual_scale, 0.0
+		)
+	if barrel_index < _barrel_bounce_elapsed.size():
+		_barrel_bounce_elapsed[barrel_index] = 0.0
+	_has_active_feedback = true
+	step_feedback(0.0)
+
+
+## Deterministically advance `RestockSparkleHalo` flash and per-barrel damped recoil bounce.
+func step_feedback(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	var any_active := false
+
+	# 1. RestockSparkleHalo flash (0.48 s: scale 0.24 -> 0.68 m, energy 1.35 -> 0.0, smooth spin).
+	if _sparkle_elapsed >= 0.0:
+		_sparkle_elapsed += dt
+		var u := clampf(_sparkle_elapsed / RESTOCK_SPARKLE_DURATION, 0.0, 1.0)
+		if u >= 1.0:
+			_sparkle_elapsed = -1.0
+			_sparkle_energy = 0.0
+			if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+				_restock_sparkle_mi.visible = false
+				_restock_sparkle_mi.scale = Vector3.ONE * RESTOCK_SPARKLE_START_SCALE
+				_restock_sparkle_mi.rotation.z = 0.0
+			if _restock_sparkle_mat != null:
+				_restock_sparkle_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		else:
+			any_active = true
+			var expand_t := 1.0 - pow(1.0 - u, 2.0)
+			var decay := pow(1.0 - u, 1.55)
+			_sparkle_energy = RESTOCK_SPARKLE_PEAK_ENERGY * decay
+			var cur_scale := lerpf(RESTOCK_SPARKLE_START_SCALE, RESTOCK_SPARKLE_END_SCALE, expand_t)
+			if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+				_restock_sparkle_mi.visible = true
+				_restock_sparkle_mi.scale = Vector3.ONE * cur_scale
+				_restock_sparkle_mi.rotation.z = RESTOCK_SPARKLE_SPIN_RAD * expand_t
+			if _restock_sparkle_mat != null:
+				_restock_sparkle_mat.albedo_color = Color(
+					_sparkle_tint.r * _sparkle_energy,
+					_sparkle_tint.g * _sparkle_energy,
+					_sparkle_tint.b * _sparkle_energy,
+					1.0
+				)
+	else:
+		_sparkle_energy = 0.0
+		if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+			_restock_sparkle_mi.visible = false
+		if _restock_sparkle_mat != null:
+			_restock_sparkle_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	# 2. Per-barrel tactile squash-and-pop vertical recoil bounce (+0.075 m damped over 0.30 s).
+	var count := mini(_barrel_list.size(), _barrel_bounce_elapsed.size())
+	for i in count:
+		var el := _barrel_bounce_elapsed[i]
+		var node := _barrel_list[i]
+		var vis := _barrel_visuals[i] if i < _barrel_visuals.size() else null
+		if el < 0.0:
+			_barrel_bounce_offsets[i] = 0.0
+			continue
+		el += dt
+		var bu := clampf(el / BARREL_BOUNCE_DURATION, 0.0, 1.0)
+		if bu >= 1.0:
+			_barrel_bounce_elapsed[i] = -1.0
+			_barrel_bounce_offsets[i] = 0.0
+			if node != null and is_instance_valid(node) and i < _barrel_base_pos.size():
+				node.position = _barrel_base_pos[i]
+				node.scale = _barrel_base_scale[i]
+			if vis != null and is_instance_valid(vis):
+				vis.scale = Vector3.ONE
+		else:
+			any_active = true
+			_barrel_bounce_elapsed[i] = el
+			var env := pow(1.0 - bu, 1.55)
+			var hop := 0.72 + 0.28 * cos(bu * TAU * 1.25)
+			var offset_y := BARREL_BOUNCE_PEAK_Y * env * hop
+			_barrel_bounce_offsets[i] = offset_y
+			if node != null and is_instance_valid(node) and i < _barrel_base_pos.size():
+				node.position = _barrel_base_pos[i] + Vector3(0.0, offset_y, 0.0)
+				node.scale = _barrel_base_scale[i]
+			if vis != null and is_instance_valid(vis):
+				var stretch := clampf(offset_y / BARREL_BOUNCE_PEAK_Y, 0.0, 1.0) * 0.085
+				var radial := 1.0 - stretch * 0.45
+				vis.scale = Vector3(radial, 1.0 + stretch, radial)
+
+	_has_active_feedback = any_active
+
+
 ## Host-authoritative one-press barrel interaction (`&"cannonball"`, `&"planks"`, or `&"rations"`).
 func use_barrel(kind: StringName, pawn: Node = null) -> bool:
 	if not Net.is_host():
@@ -261,6 +441,7 @@ func use_barrel(kind: StringName, pawn: Node = null) -> bool:
 			if ship != null and is_instance_valid(ship):
 				ship.set(&"cannonballs_remaining", max_cannonballs)
 			sync_fill_visuals()
+			trigger_restock_feedback(0)
 			Audio.play_sfx(&"chest_thump", sfx_pos, -3.5)
 			if Game != null:
 				if before < max_cannonballs:
@@ -277,6 +458,7 @@ func use_barrel(kind: StringName, pawn: Node = null) -> bool:
 			if ship != null and is_instance_valid(ship):
 				ship.set(&"planks_remaining", max_planks)
 			sync_fill_visuals()
+			trigger_restock_feedback(1)
 			Audio.play_sfx(&"hammer_plank", sfx_pos, -3.5)
 			if Game != null:
 				if before < max_planks:
@@ -298,6 +480,7 @@ func use_barrel(kind: StringName, pawn: Node = null) -> bool:
 					var before_hp := p.health
 					p.heal(RATIONS_HEAL_AMOUNT)
 					healed = maxf(0.0, p.health - before_hp)
+			trigger_restock_feedback(2)
 			Audio.play_sfx(&"grog_gulp", sfx_pos, -1.5)
 			if Game != null:
 				if healed > 0.01:
@@ -320,9 +503,20 @@ static func _normalize_kind(kind: StringName) -> StringName:
 			return &"cannonball"
 		&"planks", &"plank", &"wood":
 			return &"planks"
-		&"rations", &"grog", &"food":
+		&"rations", &"provisions", &"grog", &"food":
 			return &"rations"
 	return kind
+
+
+static func _get_barrel_sparkle_tint(barrel_index: int) -> Color:
+	match barrel_index:
+		0:
+			return COL_SPARKLE_CANNONBALL
+		1:
+			return COL_SPARKLE_PLANKS
+		2:
+			return COL_SPARKLE_PROVISIONS
+	return COL_SPARKLE_CANNONBALL
 
 
 func _is_brigantine_ship() -> bool:
@@ -364,36 +558,71 @@ func _build_barrels() -> void:
 	var positions: Dictionary = BRIG_POSITIONS if _is_brigantine_ship() else SLOOP_POSITIONS
 
 	# 1. Cannonball Barrel (dark coopered oak + 4 forged-iron hoops + tiered roundshot stack)
-	var cannon_root := _make_barrel_root(
+	var cannon_vis := _make_barrel_root(
 		"CannonballBarrel",
 		&"cannonball",
 		positions[&"cannonball"] as Vector3,
 		"Take cannonballs (%d/%d)" % [max_cannonballs, max_cannonballs]
 	)
-	_attach_mesh(cannon_root, "CannonballBarrelOak", _cannon_oak_mesh, _oak_mat)
-	_attach_mesh(cannon_root, "CannonballBarrelHoops", _iron_hoops_mesh, _iron_mat)
-	_ammo_fill_mi = _attach_mesh(cannon_root, "AmmoFill", _ammo_fill_mesh, _iron_mat)
+	_attach_mesh(cannon_vis, "CannonballBarrelOak", _cannon_oak_mesh, _oak_mat)
+	_attach_mesh(cannon_vis, "CannonballBarrelHoops", _iron_hoops_mesh, _iron_mat)
+	_ammo_fill_mi = _attach_mesh(cannon_vis, "AmmoFill", _ammo_fill_mesh, _iron_mat)
 
 	# 2. Oak Plank Barrel (seasoned coopered oak + 4 forged-iron hoops + jutting beveled repair planks)
-	var plank_root := _make_barrel_root(
+	var plank_vis := _make_barrel_root(
 		"PlankBarrel",
 		&"planks",
 		positions[&"planks"] as Vector3,
 		"Take oak planks (%d/%d)" % [max_planks, max_planks]
 	)
-	_attach_mesh(plank_root, "PlankBarrelOak", _plank_oak_mesh, _oak_mat)
-	_attach_mesh(plank_root, "PlankBarrelHoops", _iron_hoops_mesh, _iron_mat)
-	_plank_fill_mi = _attach_mesh(plank_root, "PlankFill", _plank_fill_mesh, _oak_mat)
+	_attach_mesh(plank_vis, "PlankBarrelOak", _plank_oak_mesh, _oak_mat)
+	_attach_mesh(plank_vis, "PlankBarrelHoops", _iron_hoops_mesh, _iron_mat)
+	_plank_fill_mi = _attach_mesh(plank_vis, "PlankFill", _plank_fill_mesh, _oak_mat)
 
 	# 3. Grog & Rations Barrel (warm coopered oak + carved ration lid + turned brass hoops, tap spigot & drip mug)
-	var rations_root := _make_barrel_root(
+	var rations_vis := _make_barrel_root(
 		"RationsBarrel",
 		&"rations",
 		positions[&"rations"] as Vector3,
 		"Grab rations & grog (+25 HP)"
 	)
-	_attach_mesh(rations_root, "RationsBarrelOak", _rations_oak_mesh, _oak_mat)
-	_attach_mesh(rations_root, "RationsBarrelBrass", _rations_brass_mesh, _brass_mat)
+	_attach_mesh(rations_vis, "RationsBarrelOak", _rations_oak_mesh, _oak_mat)
+	_attach_mesh(rations_vis, "RationsBarrelBrass", _rations_brass_mesh, _brass_mat)
+
+
+func _build_restock_sparkle_halo() -> void:
+	if _restock_sparkle_mi != null and is_instance_valid(_restock_sparkle_mi):
+		return
+	_ensure_shared_assets()
+
+	_restock_sparkle_mat = StandardMaterial3D.new()
+	_restock_sparkle_mat.vertex_color_use_as_albedo = true
+	_restock_sparkle_mat.vertex_color_is_srgb = true
+	_restock_sparkle_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_restock_sparkle_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_restock_sparkle_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_restock_sparkle_mat.billboard_keep_scale = true
+	_restock_sparkle_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_restock_sparkle_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_restock_sparkle_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_restock_sparkle_mi = MeshInstance3D.new()
+	_restock_sparkle_mi.name = "RestockSparkleHalo"
+	_restock_sparkle_mi.mesh = _restock_sparkle_mesh
+	_restock_sparkle_mi.material_override = _restock_sparkle_mat
+	_restock_sparkle_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_restock_sparkle_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_restock_sparkle_mi.visibility_range_end = RESTOCK_SPARKLE_VISIBILITY_RANGE
+	_restock_sparkle_mi.extra_cull_margin = 0.8
+	_restock_sparkle_mi.scale = Vector3.ONE * RESTOCK_SPARKLE_START_SCALE
+	_restock_sparkle_mi.visible = false
+	if not _barrel_base_pos.is_empty():
+		_restock_sparkle_mi.position = _barrel_base_pos[0] + Vector3(
+			0.0, (BARREL_RIM_Y + RESTOCK_SPARKLE_RIM_OFFSET_Y) * visual_scale, 0.0
+		)
+	add_child(_restock_sparkle_mi)
+	_sparkle_elapsed = -1.0
+	_sparkle_energy = 0.0
 
 
 func _make_barrel_root(node_name: String, kind: StringName, unscaled_pos: Vector3, prompt_text: String) -> Node3D:
@@ -403,6 +632,16 @@ func _make_barrel_root(node_name: String, kind: StringName, unscaled_pos: Vector
 	root.scale = Vector3.ONE * visual_scale
 	add_child(root)
 	_barrel_nodes[kind] = root
+	_barrel_list.append(root)
+	_barrel_base_pos.append(root.position)
+	_barrel_base_scale.append(root.scale)
+
+	# Dedicated visual pivot receives tactile squash-and-pop scale so the sibling Area3D Interactable
+	# keeps strictly uniform scale under Jolt Physics.
+	var visual := Node3D.new()
+	visual.name = "BarrelVisual"
+	root.add_child(visual)
+	_barrel_visuals.append(visual)
 
 	var it := Interactable.create(prompt_text, 0.42)
 	it.name = node_name + "Interactable"
@@ -411,7 +650,7 @@ func _make_barrel_root(node_name: String, kind: StringName, unscaled_pos: Vector
 	it.interacted.connect(_on_barrel_interacted.bind(kind))
 	root.add_child(it)
 	_interactables[kind] = it
-	return root
+	return visual
 
 
 func _attach_mesh(parent: Node3D, node_name: String, am: ArrayMesh, mat: StandardMaterial3D) -> MeshInstance3D:
@@ -495,6 +734,69 @@ static func _ensure_shared_assets() -> void:
 		_ammo_fill_mesh = _build_ammo_fill_mesh()
 	if _plank_fill_mesh == null:
 		_plank_fill_mesh = _build_plank_fill_mesh()
+	if _restock_sparkle_mesh == null:
+		_restock_sparkle_mesh = _build_restock_sparkle_mesh()
+
+
+static func _build_restock_sparkle_mesh() -> ArrayMesh:
+	# Exact 24-tri 4-point brass-gold restock star glint ArrayMesh (diameter 1.0 m):
+	# 4 tapered star rays x 6 tris/ray grading bright warm core -> gilded mid -> pure
+	# Color(0, 0, 0, 1) black tips & outer valleys, finite (0, 0, 1) unit normals, 0 VRAM textures.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const RAYS := 4
+	const INNER_VALLEY_R := 0.095
+	const OUTER_VALLEY_R := 0.185
+	const RAY_MID_R := 0.25
+	const RAY_TIP_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in RAYS:
+		var a_ray := float(i) * (PI * 0.5)
+		var a_prev := a_ray - PI * 0.25
+		var a_next := a_ray + PI * 0.25
+		var dir_ray := Vector3(cos(a_ray), sin(a_ray), 0.0)
+		var dir_prev := Vector3(cos(a_prev), sin(a_prev), 0.0)
+		var dir_next := Vector3(cos(a_next), sin(a_next), 0.0)
+
+		var v_in_l := dir_prev * INNER_VALLEY_R
+		var v_in_r := dir_next * INNER_VALLEY_R
+		var v_out_l := dir_prev * OUTER_VALLEY_R
+		var v_out_r := dir_next * OUTER_VALLEY_R
+		var ray_mid := dir_ray * RAY_MID_R
+		var ray_tip := dir_ray * RAY_TIP_R
+
+		# Inner bright warm core wedges (2 tris/ray).
+		_emit_sparkle_tri(st, ctr, COL_SPARKLE_STAR_CORE, v_in_l, COL_SPARKLE_STAR_MID, ray_mid, COL_SPARKLE_STAR_MID, FRONT_NORMAL)
+		_emit_sparkle_tri(st, ctr, COL_SPARKLE_STAR_CORE, ray_mid, COL_SPARKLE_STAR_MID, v_in_r, COL_SPARKLE_STAR_MID, FRONT_NORMAL)
+		# Soft shoulder skirts feathering cleanly to black outer valleys (2 tris/ray).
+		_emit_sparkle_tri(st, v_in_l, COL_SPARKLE_STAR_MID, v_out_l, COL_SPARKLE_STAR_TIP, ray_mid, COL_SPARKLE_STAR_MID, FRONT_NORMAL)
+		_emit_sparkle_tri(st, ray_mid, COL_SPARKLE_STAR_MID, v_out_r, COL_SPARKLE_STAR_TIP, v_in_r, COL_SPARKLE_STAR_MID, FRONT_NORMAL)
+		# Tapered star ray blades feathering to pure black tips (2 tris/ray).
+		_emit_sparkle_tri(st, ray_mid, COL_SPARKLE_STAR_MID, v_out_l, COL_SPARKLE_STAR_TIP, ray_tip, COL_SPARKLE_STAR_TIP, FRONT_NORMAL)
+		_emit_sparkle_tri(st, ray_mid, COL_SPARKLE_STAR_MID, ray_tip, COL_SPARKLE_STAR_TIP, v_out_r, COL_SPARKLE_STAR_TIP, FRONT_NORMAL)
+	return st.commit()
+
+
+static func _emit_sparkle_tri(
+	st: SurfaceTool,
+	a: Vector3,
+	ca: Color,
+	b: Vector3,
+	cb: Color,
+	c: Vector3,
+	cc: Color,
+	normal: Vector3
+) -> void:
+	st.set_normal(normal)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.set_color(cc)
+	st.add_vertex(c)
 
 
 static func _barrel_radius_at(y: float) -> float:

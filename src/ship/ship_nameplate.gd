@@ -26,6 +26,13 @@ const COL_BRASS_HI := Color(0.98, 0.80, 0.30)
 const COL_BRASS_MID := Color(0.84, 0.62, 0.18)
 const COL_BRASS_LO := Color(0.50, 0.34, 0.09)
 
+# Nocturnal stern-lantern gilded catch-light shimmer tuning (0.00 midday/stealth -> ~0.38 midnight lit).
+const BASE_PLAQUE_EMISSION := 0.16
+const LANTERN_SHEEN_DAYLIGHT_CUTOFF := 0.55
+const LANTERN_SHEEN_MAX_ENERGY := 0.38
+const COL_PLAQUE_DAY_EMIT := Color(1.0, 0.90, 0.65)
+const COL_LANTERN_WARM_GOLD := Color(1.0, 0.79, 0.34)
+
 # Crisp 5x7 uppercase nautical serif glyph bitmaps (each row is a 5-bit mask, bit 4 = left).
 const GLYPHS := {
 	"A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x1B],
@@ -87,9 +94,12 @@ static var _brass_mat: StandardMaterial3D = null
 var current_name: String = Profile.DEFAULT_SHIP_NAME
 
 var _frame_mi: MeshInstance3D = null
+var _frame_brass_mat: StandardMaterial3D = null
 var _plaque_mi: MeshInstance3D = null
 var _plaque_mat: StandardMaterial3D = null
 var _plaque_tex: ImageTexture = null
+var _lantern_sheen_energy: float = 0.0
+var _lantern_shimmer_clock: float = 0.0
 
 
 ## Mount (or update) a carved stern transom ShipNameplate onto `ship`.
@@ -134,12 +144,19 @@ func _ready() -> void:
 	_ensure_shared_assets()
 	var is_brig := ship_class == &"brigantine"
 
+	_frame_brass_mat = _brass_mat.duplicate() as StandardMaterial3D
+	_frame_brass_mat.vertex_color_use_as_albedo = true
+	_frame_brass_mat.vertex_color_is_srgb = true
+	_frame_brass_mat.emission_enabled = true
+	_frame_brass_mat.emission = COL_LANTERN_WARM_GOLD
+	_frame_brass_mat.emission_energy_multiplier = 0.0
+
 	_frame_mi = MeshInstance3D.new()
 	_frame_mi.name = "NameplateFrame"
 	_frame_mi.mesh = _frame_mesh_brig if is_brig else _frame_mesh_sloop
 	_frame_mi.set_surface_override_material(0, _wood_mat)
 	if _frame_mi.mesh.get_surface_count() > 1:
-		_frame_mi.set_surface_override_material(1, _brass_mat)
+		_frame_mi.set_surface_override_material(1, _frame_brass_mat)
 	add_child(_frame_mi)
 
 	_plaque_mat = StandardMaterial3D.new()
@@ -148,8 +165,8 @@ func _ready() -> void:
 	_plaque_mat.metallic = 0.25
 	_plaque_mat.emission_enabled = true
 	_plaque_mat.emission_operator = BaseMaterial3D.EMISSION_OP_MULTIPLY
-	_plaque_mat.emission = Color(1.0, 0.90, 0.65)
-	_plaque_mat.emission_energy_multiplier = 0.16
+	_plaque_mat.emission = COL_PLAQUE_DAY_EMIT
+	_plaque_mat.emission_energy_multiplier = BASE_PLAQUE_EMISSION
 
 	_plaque_mi = MeshInstance3D.new()
 	_plaque_mi.name = "NameplateFace"
@@ -158,6 +175,12 @@ func _ready() -> void:
 	add_child(_plaque_mi)
 
 	set_ship_name(current_name)
+	step_lantern_glow()
+
+
+func _process(delta: float) -> void:
+	_lantern_shimmer_clock += maxf(delta, 0.0)
+	step_lantern_glow()
 
 
 func _exit_tree() -> void:
@@ -166,6 +189,9 @@ func _exit_tree() -> void:
 		_plaque_mat.emission_texture = null
 	_plaque_tex = null
 	_plaque_mat = null
+	_frame_brass_mat = null
+	_lantern_sheen_energy = 0.0
+	_lantern_shimmer_clock = 0.0
 	for mi: MeshInstance3D in [_frame_mi, _plaque_mi]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
@@ -194,6 +220,56 @@ func set_ship_name(new_name: String) -> void:
 ## Return the currently active painted plaque ImageTexture (useful for verification/tests).
 func get_plaque_texture() -> ImageTexture:
 	return _plaque_tex
+
+
+## Return current nocturnal stern-lantern gilded catch-light sheen energy (0.00 midday/doused -> ~0.38 midnight lit).
+func get_lantern_sheen_energy() -> float:
+	return _lantern_sheen_energy
+
+
+## Return the per-ship gilded brass frame material (Surface 1).
+func get_frame_brass_material() -> StandardMaterial3D:
+	return _frame_brass_mat
+
+
+## Return the per-ship varnished mahogany & gold-leaf plaque material.
+func get_plaque_material() -> StandardMaterial3D:
+	return _plaque_mat
+
+
+## Modulate warm nocturnal stern-lantern catch-light sheen on gilded brass trim & serif lettering.
+func step_lantern_glow() -> void:
+	var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var lanterns_on := _is_ship_lanterns_lit()
+	var is_low_light := dl < LANTERN_SHEEN_DAYLIGHT_CUTOFF
+	var night_t := clampf((LANTERN_SHEEN_DAYLIGHT_CUTOFF - dl) / LANTERN_SHEEN_DAYLIGHT_CUTOFF, 0.0, 1.0)
+	var shimmer := 0.97 + 0.03 * cos(_lantern_shimmer_clock * 5.2 + 0.45 * sin(_lantern_shimmer_clock * 3.1))
+	var sheen := LANTERN_SHEEN_MAX_ENERGY * pow(night_t, 1.15) * shimmer if (lanterns_on and is_low_light) else 0.0
+	_lantern_sheen_energy = sheen
+
+	if _frame_brass_mat != null:
+		_frame_brass_mat.emission = COL_LANTERN_WARM_GOLD
+		_frame_brass_mat.emission_energy_multiplier = sheen
+
+	if _plaque_mat != null:
+		if not lanterns_on and is_low_light:
+			_plaque_mat.emission = COL_PLAQUE_DAY_EMIT
+			_plaque_mat.emission_energy_multiplier = 0.0
+		elif is_low_light:
+			_plaque_mat.emission = COL_PLAQUE_DAY_EMIT.lerp(COL_LANTERN_WARM_GOLD, night_t)
+			_plaque_mat.emission_energy_multiplier = BASE_PLAQUE_EMISSION + sheen
+		else:
+			_plaque_mat.emission = COL_PLAQUE_DAY_EMIT
+			_plaque_mat.emission_energy_multiplier = BASE_PLAQUE_EMISSION
+
+
+func _is_ship_lanterns_lit() -> bool:
+	var parent_ship := get_parent()
+	if parent_ship != null and is_instance_valid(parent_ship):
+		var lit_v: Variant = parent_ship.get(&"lanterns_lit")
+		if lit_v != null:
+			return bool(lit_v)
+	return true
 
 
 # ==============================================================================

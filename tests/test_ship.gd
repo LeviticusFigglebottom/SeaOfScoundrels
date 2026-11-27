@@ -2013,11 +2013,24 @@ func test_wave29_ship_supply_barrels_geometry_fill_tiers_and_one_press_restock()
 				for nv in norms:
 					if not nv.is_finite() or nv.length_squared() < 0.5:
 						bad_norms += 1
-		var mat := mi.material_override as StandardMaterial3D
-		if mat == null or not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
-				or not mat.uv1_triplanar or mat.uv1_world_triplanar \
-				or not mat.normal_enabled or mat.normal_texture == null or mat.roughness_texture == null:
-			bad_mats += 1
+		if mi.name == &"RestockSparkleHalo":
+			var hmat := mi.material_override as StandardMaterial3D
+			if hmat == null or not hmat.vertex_color_use_as_albedo or not hmat.vertex_color_is_srgb \
+					or hmat.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED \
+					or hmat.blend_mode != BaseMaterial3D.BLEND_MODE_ADD \
+					or hmat.billboard_mode != BaseMaterial3D.BILLBOARD_ENABLED \
+					or not hmat.billboard_keep_scale \
+					or hmat.depth_draw_mode != BaseMaterial3D.DEPTH_DRAW_DISABLED \
+					or hmat.cull_mode != BaseMaterial3D.CULL_DISABLED \
+					or hmat.albedo_texture != null or hmat.normal_texture != null \
+					or hmat.roughness_texture != null or hmat.emission_texture != null:
+				bad_mats += 1
+		else:
+			var mat := mi.material_override as StandardMaterial3D
+			if mat == null or not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
+					or not mat.uv1_triplanar or mat.uv1_world_triplanar \
+					or not mat.normal_enabled or mat.normal_texture == null or mat.roughness_texture == null:
+				bad_mats += 1
 	var barrel_tris := sb_sloop.get_triangle_count()
 	print("    Wave 29A ShipSupplyBarrels sculpted tris: %d" % barrel_tris)
 	check_eq(raw_prims, 0, "ShipSupplyBarrels contains ZERO PrimitiveMeshes")
@@ -4616,4 +4629,286 @@ func test_q19a_ship_bell_ripple_anchor_splash_and_breach_spray_jets() -> void:
 		"ShipDamageVisuals auto-releases static _spray_drop_mesh & _spray_drop_mat cleanly (0 leaks)")
 	Ship.clear_shared_cache()
 	ShipDamageVisuals.clear_shared_cache()
+
+
+func test_q20a_supply_barrels_restock_feedback_and_stern_nocturnal_gilded_sheen() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+	Weather.time_of_day = 12.0  # High noon daylight baseline
+	ShipSupplyBarrels.clear_shared_cache()
+	ShipNameplate.clear_shared_cache()
+	HullCrest.clear_shared_cache()
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(34.0, 0.0, 0.0)
+	await physics_frames(3)
+
+	sloop.set_process(false)
+	sloop.set_physics_process(false)
+	brig.set_process(false)
+	brig.set_physics_process(false)
+
+	# ------------------------------------------------------------------
+	# 1. ShipSupplyBarrels 24-tri RestockSparkleHalo & Tactile Barrel Lid Pop Bounce
+	# ------------------------------------------------------------------
+	var sb_sloop := sloop.get_supply_barrels()
+	var sb_brig := brig.get_supply_barrels()
+	check(sb_sloop != null and sb_brig != null, "Sloop & Brigantine mount ShipSupplyBarrels for Q20A audit")
+	sb_sloop.set_process(false)
+	sb_brig.set_process(false)
+
+	# Wave 29 exact 3084-tri sculpted barrel contract remains 100% untouched!
+	var sculpted_barrel_tris := sb_sloop.get_triangle_count()
+	check_eq(sculpted_barrel_tris, 3084,
+		"ShipSupplyBarrels preserves exact Wave 29 sculpted triangle count 3084 (got %d)" % sculpted_barrel_tris)
+
+	var sparkle := sb_sloop.get_restock_sparkle_node()
+	var brig_sparkle := sb_brig.get_restock_sparkle_node()
+	check(sparkle != null and sparkle.name == &"RestockSparkleHalo",
+		"ShipSupplyBarrels mounts RestockSparkleHalo and exposes get_restock_sparkle_node()")
+	check(brig_sparkle != null and brig_sparkle.mesh == sparkle.mesh
+		and sparkle.mesh == ShipSupplyBarrels._restock_sparkle_mesh,
+		"Sloop & Brigantine share static zero-primitive _restock_sparkle_mesh")
+	check(sparkle.mesh is ArrayMesh and not (sparkle.mesh is PrimitiveMesh),
+		"RestockSparkleHalo uses zero-primitive ArrayMesh")
+	check_eq(sparkle.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"RestockSparkleHalo disables shadow casting")
+	check_eq(sparkle.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"RestockSparkleHalo disables GI")
+	check_near(sparkle.visibility_range_end, 55.0, 0.01,
+		"RestockSparkleHalo sets visibility_range_end == 55.0 m")
+	check(not sparkle.visible and is_zero_approx(sb_sloop.get_restock_sparkle_energy()),
+		"RestockSparkleHalo starts hidden with 0.0 energy when idle")
+
+	var sp_am := sparkle.mesh as ArrayMesh
+	var sp_arr := sp_am.surface_get_arrays(0)
+	var sp_verts: PackedVector3Array = sp_arr[Mesh.ARRAY_VERTEX]
+	var sp_norms: PackedVector3Array = sp_arr[Mesh.ARRAY_NORMAL]
+	var sp_cols: PackedColorArray = sp_arr[Mesh.ARRAY_COLOR]
+	var sparkle_tris := floori(float(sp_verts.size()) / 3.0)
+	check_eq(sparkle_tris, 24,
+		"RestockSparkleHalo has exact 24 star triangles (4 rays x 6 tris, got %d)" % sparkle_tris)
+	var sp_bad_n := 0
+	for nv: Vector3 in sp_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			sp_bad_n += 1
+	check_eq(sp_bad_n, 0, "RestockSparkleHalo assigns finite unit (0, 0, 1) normal to every vertex")
+	var sp_black_tips := 0
+	var sp_warm_core := 0
+	for cv: Color in sp_cols:
+		if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			sp_black_tips += 1
+		elif cv.r >= 0.95 and cv.g >= 0.90:
+			sp_warm_core += 1
+	check(sp_black_tips >= 24 and sp_warm_core >= 8,
+		"RestockSparkleHalo feathers warm luminous core cleanly to pure Color(0, 0, 0, 1) black tips")
+
+	var sp_mat := sparkle.material_override as StandardMaterial3D
+	check(sp_mat != null and sp_mat.vertex_color_use_as_albedo and sp_mat.vertex_color_is_srgb
+		and sp_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and sp_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and sp_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and sp_mat.billboard_keep_scale
+		and sp_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and sp_mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and sp_mat.albedo_texture == null and sp_mat.emission_texture == null
+		and sp_mat.normal_texture == null and sp_mat.roughness_texture == null,
+		"RestockSparkleHalo uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+
+	# Trigger restock on all 3 barrels (0=cannonballs, 1=planks, 2=provisions) and verify distinct tints,
+	# rim-snapped placement, smooth spin/expansion, positive recoil bounce, and clean decay over 0.55 s!
+	var barrel_node_names: Array[String] = ["CannonballBarrel", "PlankBarrel", "RationsBarrel"]
+	var captured_tints: Array[Color] = []
+	var peak_bounce := 0.0
+	var peak_energy := 0.0
+	var mid_scale := 0.0
+
+	for idx in 3:
+		var b_node := sb_sloop.get_node_or_null(barrel_node_names[idx]) as Node3D
+		check(b_node != null, "barrel node %s present for bounce check" % barrel_node_names[idx])
+		var base_pos := b_node.position
+		var base_scale := b_node.scale
+		check_near(sb_sloop.get_barrel_bounce_offset(idx), 0.0, 0.0001,
+			"barrel %d starts at 0.000 m bounce offset" % idx)
+
+		sb_sloop.trigger_restock_feedback(idx)
+		var e0 := sb_sloop.get_restock_sparkle_energy()
+		var s0 := sparkle.scale.x
+		var b0 := sb_sloop.get_barrel_bounce_offset(idx)
+		var tint_c := sp_mat.albedo_color
+		captured_tints.append(tint_c)
+		peak_bounce = maxf(peak_bounce, b0)
+		peak_energy = maxf(peak_energy, e0)
+
+		check(sparkle.visible, "barrel %d trigger_restock_feedback activates RestockSparkleHalo" % idx)
+		check_near(e0, 1.35, 0.01, "barrel %d RestockSparkleHalo ignites at energy 1.35 (got %.3f)" % [idx, e0])
+		check_near(s0, 0.24, 0.01, "barrel %d RestockSparkleHalo starts at scale 0.24 m (got %.3f)" % [idx, s0])
+		check_near(sparkle.position.x, base_pos.x, 0.005,
+			"barrel %d RestockSparkleHalo snaps X over interacted barrel" % idx)
+		check_near(sparkle.position.z, base_pos.z, 0.005,
+			"barrel %d RestockSparkleHalo snaps Z over interacted barrel" % idx)
+		check_near(sparkle.position.y, base_pos.y + (ShipSupplyBarrels.BARREL_RIM_Y + 0.55) * sb_sloop.visual_scale, 0.01,
+			"barrel %d RestockSparkleHalo snaps +0.55 m above barrel rim" % idx)
+		check(b0 >= 0.070 and b0 <= 0.076,
+			"barrel %d pops upward +0.075 m on restock trigger (got %.4f m)" % [idx, b0])
+		check(b_node.position.y > base_pos.y + 0.05,
+			"barrel %d visual node visibly lifts above base height on pop" % idx)
+
+		# Mid-flight step (0.16 s): halo expands, spins, decays; bounce remains positive & damped.
+		sb_sloop.step_feedback(0.16)
+		var e1 := sb_sloop.get_restock_sparkle_energy()
+		var s1 := sparkle.scale.x
+		var b1 := sb_sloop.get_barrel_bounce_offset(idx)
+		if idx == 0:
+			mid_scale = s1
+		check(sparkle.visible and s1 > 0.42 and s1 < 0.68 and absf(sparkle.rotation.z) > 0.4
+			and e1 > 0.20 and e1 < e0,
+			"barrel %d RestockSparkleHalo expands, spins & decays cleanly at 0.16 s (s=%.2f, rot=%.2f, e=%.2f)" % [
+				idx, s1, sparkle.rotation.z, e1])
+		check(b1 > 0.0 and b1 < b0,
+			"barrel %d recoil bounce damps smoothly at 0.16 s (%.4f -> %.4f m)" % [idx, b0, b1])
+
+		# Decay cleanly over remaining 0.39 s (total 0.55 s) back to 0.0 energy & exact 0.000 m base height!
+		sb_sloop.step_feedback(0.39)
+		check(not sparkle.visible and is_zero_approx(sb_sloop.get_restock_sparkle_energy()),
+			"barrel %d RestockSparkleHalo decays cleanly to hidden & 0.0 energy by 0.55 s" % idx)
+		check(sp_mat.albedo_color.r <= 0.001 and sp_mat.albedo_color.g <= 0.001 and sp_mat.albedo_color.b <= 0.001,
+			"barrel %d RestockSparkleHalo zeroes additive albedo on idle" % idx)
+		check_near(sb_sloop.get_barrel_bounce_offset(idx), 0.0, 0.0001,
+			"barrel %d bounce offset settles cleanly to 0.000 m by 0.55 s" % idx)
+		var b_vis := b_node.get_node_or_null(^"BarrelVisual") as Node3D
+		check(b_node.position.is_equal_approx(base_pos) and b_node.scale.is_equal_approx(base_scale)
+			and b_vis != null and b_vis.scale.is_equal_approx(Vector3.ONE),
+			"barrel %d visual node returns cleanly to exact base position & scale" % idx)
+
+	# Verify distinct tints across all 3 barrels (0=brass-gold, 1=oak-amber, 2=sea-emerald-gold)!
+	check(captured_tints[0].r > captured_tints[0].g and captured_tints[0].g > captured_tints[0].b,
+		"barrel 0 (cannonballs) flashes warm brass-gold (%s)" % str(captured_tints[0]))
+	check(captured_tints[1].r > captured_tints[1].g and captured_tints[1].g < captured_tints[0].g - 0.15,
+		"barrel 1 (planks) flashes distinct warm oak-amber (%s vs %s)" % [str(captured_tints[1]), str(captured_tints[0])])
+	check(captured_tints[2].g > captured_tints[2].b and captured_tints[2].b > captured_tints[2].r,
+		"barrel 2 (provisions) flashes bright sea-emerald-gold (%s)" % str(captured_tints[2]))
+
+	# Also confirm live restock_from_barrel() / use_barrel() triggers sparkle & bounce automatically.
+	check(sb_sloop.restock_from_barrel(0), "restock_from_barrel(0) triggers cannonball restock cleanly")
+	check(sparkle.visible and sb_sloop.get_restock_sparkle_energy() > 1.2 and sb_sloop.get_barrel_bounce_offset(0) > 0.05,
+		"restock_from_barrel() automatically triggers RestockSparkleHalo & barrel bounce")
+	sb_sloop.step_feedback(0.55)
+	check(not sparkle.visible and is_zero_approx(sb_sloop.get_barrel_bounce_offset(0)),
+		"restock_from_barrel() feedback decays cleanly to idle over 0.55 s")
+
+	# ------------------------------------------------------------------
+	# 2. ShipNameplate & HullCrest Nocturnal Gilded Catch-Light Shimmer
+	# ------------------------------------------------------------------
+	var sloop_np := sloop.ship_nameplate as ShipNameplate
+	var brig_np := brig.ship_nameplate as ShipNameplate
+	var sloop_crest := sloop.hull_crest as HullCrest
+	var brig_crest := brig.hull_crest as HullCrest
+	check(sloop_np != null and brig_np != null, "Sloop & Brigantine mount ShipNameplate")
+	check(sloop_crest != null and brig_crest != null, "Sloop & Brigantine mount HullCrest")
+	sloop_np.set_process(false)
+	brig_np.set_process(false)
+	sloop_crest.set_process(false)
+	brig_crest.set_process(false)
+
+	# 2a. Midday (daylight = 1.0): both ShipNameplate and HullCrest report 0.00 lantern sheen.
+	Weather.time_of_day = 12.0
+	sloop.set_lanterns_lit(true)
+	brig.set_lanterns_lit(true)
+	sloop_np.step_lantern_glow()
+	sloop_crest.step_lantern_glow()
+	brig_np.step_lantern_glow()
+	brig_crest.step_lantern_glow()
+
+	var np_day := sloop_np.get_lantern_sheen_energy()
+	var crest_day := sloop_crest.get_lantern_sheen_energy()
+	check_near(np_day, 0.0, 0.001, "ShipNameplate reports 0.00 lantern sheen at midday (got %.3f)" % np_day)
+	check_near(crest_day, 0.0, 0.001, "HullCrest reports 0.00 lantern sheen at midday (got %.3f)" % crest_day)
+	check_near(sloop_np.get_frame_brass_material().emission_energy_multiplier, 0.0, 0.001,
+		"ShipNameplate brass frame emission is 0.00 at midday")
+	check_near(sloop_crest.get_frame_material().emission_energy_multiplier, 0.0, 0.001,
+		"HullCrest bronze frame emission is 0.00 at midday")
+
+	# 2b. Midnight (daylight = 0.0) with lit lanterns: warm gilded sheen boosts >= 0.25 (~0.38 / ~0.36)!
+	Weather.time_of_day = 0.0
+	sloop_np.step_lantern_glow()
+	sloop_crest.step_lantern_glow()
+	brig_np.step_lantern_glow()
+	brig_crest.step_lantern_glow()
+
+	var np_night := sloop_np.get_lantern_sheen_energy()
+	var crest_night := sloop_crest.get_lantern_sheen_energy()
+	check(np_night >= 0.25 and np_night <= 0.42,
+		"ShipNameplate boosts warm nocturnal gilded sheen at midnight when lanterns lit (%.3f)" % np_night)
+	check(crest_night >= 0.25 and crest_night <= 0.40,
+		"HullCrest boosts warm nocturnal gilded sheen at midnight when lanterns lit (%.3f)" % crest_night)
+	check_near(sloop_np.get_frame_brass_material().emission_energy_multiplier, np_night, 0.005,
+		"ShipNameplate brass frame material reflects nocturnal lantern sheen")
+	check(sloop_np.get_plaque_material().emission_energy_multiplier > ShipNameplate.BASE_PLAQUE_EMISSION + 0.25,
+		"ShipNameplate gold-leaf lettering warms softly under lit stern lanterns")
+	check_near(sloop_crest.get_frame_material().emission_energy_multiplier, crest_night, 0.005,
+		"HullCrest gilded bronze frame reflects nocturnal lantern sheen")
+
+	# 2c. Stealth dark-running (set_lanterns_lit(false)) at midnight: immediately drops to 0.00!
+	sloop.set_lanterns_lit(false)
+	sloop_np.step_lantern_glow()
+	sloop_crest.step_lantern_glow()
+	brig_np.step_lantern_glow()
+	brig_crest.step_lantern_glow()
+
+	check_near(sloop_np.get_lantern_sheen_energy(), 0.0, 0.001,
+		"ShipNameplate sheen drops immediately to 0.00 when ship lanterns are doused")
+	check_near(sloop_np.get_frame_brass_material().emission_energy_multiplier, 0.0, 0.001,
+		"ShipNameplate brass frame emission drops to 0.00 on stealth dark-running ship")
+	check_near(sloop_np.get_plaque_material().emission_energy_multiplier, 0.0, 0.001,
+		"ShipNameplate plaque emission drops to 0.00 at night when lanterns are doused")
+	check_near(sloop_crest.get_lantern_sheen_energy(), 0.0, 0.001,
+		"HullCrest sheen drops immediately to 0.00 when ship lanterns are doused")
+	check_near(sloop_crest.get_frame_material().emission_energy_multiplier, 0.0, 0.001,
+		"HullCrest bronze frame emission drops to 0.00 on stealth dark-running ship")
+
+	# Per-ship isolation: Brigantine still has lit lanterns and retains full nocturnal gilded sheen!
+	check(brig_np.get_lantern_sheen_energy() >= 0.25 and brig_crest.get_lantern_sheen_energy() >= 0.25,
+		"Dousing Sloop lanterns leaves Brigantine nocturnal gilded sheen completely unaffected")
+
+	# Re-lighting Sloop lanterns restores nocturnal sheen cleanly!
+	sloop.set_lanterns_lit(true)
+	sloop_np.step_lantern_glow()
+	sloop_crest.step_lantern_glow()
+	check(sloop_np.get_lantern_sheen_energy() >= 0.25 and sloop_crest.get_lantern_sheen_energy() >= 0.25,
+		"Re-lighting Sloop lanterns restores ShipNameplate & HullCrest nocturnal sheen cleanly")
+
+	print("    Q20A metrics: SupplyBarrels=%d tris + RestockSparkleHalo=%d tris (scale 0.24->%.2f->0.68 m, energy %.2f->0.00, bounce +%.3f->0.000 m) | Nameplate sheen %.2f->%.2f->0.00 | HullCrest sheen %.2f->%.2f->0.00" % [
+		sculpted_barrel_tris, sparkle_tris, mid_scale, peak_energy, peak_bounce,
+		np_day, np_night, crest_day, crest_night])
+
+	# ------------------------------------------------------------------
+	# 3. Zero-leak teardown & static cache audit
+	# ------------------------------------------------------------------
+	await _end()
+	check_eq(ShipSupplyBarrels._active_instances, 0,
+		"ShipSupplyBarrels._active_instances returns to 0 on Q20A teardown")
+	check(ShipSupplyBarrels._restock_sparkle_mesh == null and ShipSupplyBarrels._cannon_oak_mesh == null
+		and ShipSupplyBarrels._oak_mat == null and ShipSupplyBarrels._pbr_tex_cache.is_empty(),
+		"ShipSupplyBarrels releases _restock_sparkle_mesh & all static caches cleanly (0 leaks)")
+	check_eq(ShipNameplate._active_nameplates, 0,
+		"ShipNameplate._active_nameplates returns to 0 on Q20A teardown")
+	check(ShipNameplate._frame_mesh_sloop == null and ShipNameplate._frame_mesh_brig == null
+		and ShipNameplate._plaque_mesh_sloop == null and ShipNameplate._wood_mat == null
+		and ShipNameplate._brass_mat == null,
+		"ShipNameplate releases all static caches cleanly (0 leaks)")
+	check_eq(HullCrest._active_crests, 0,
+		"HullCrest._active_crests returns to 0 on Q20A teardown")
+	check(HullCrest._sloop_mesh == null and HullCrest._brig_mesh == null and HullCrest._frame_mat == null,
+		"HullCrest releases all static caches cleanly (0 leaks)")
+	ShipSupplyBarrels.clear_shared_cache()
+	ShipNameplate.clear_shared_cache()
+	HullCrest.clear_shared_cache()
+
 
