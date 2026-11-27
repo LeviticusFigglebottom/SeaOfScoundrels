@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (58 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (62 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna, twilight lantern halos & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -105,6 +105,13 @@ const NAUTICAL_CRAFT_LANDMARKS: Array[String] = [
 	"volcanic_basalt_obelisk_brazier.glb",
 ]
 
+const SEA_LORE_LANDMARKS: Array[String] = [
+	"pirate_shipwright_timber_rack.glb",
+	"ancient_tidal_obelisk_mirror.glb",
+	"smuggler_rope_cargo_hoist.glb",
+	"volcanic_obsidian_forge_anvil.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -164,6 +171,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_sunken_bell_shrine.glb": 1,
 	"pirate_map_planning_table_tent.glb": 1,
 	"volcanic_basalt_obelisk_brazier.glb": 1,
+	"pirate_shipwright_timber_rack.glb": 1,
+	"ancient_tidal_obelisk_mirror.glb": 1,
+	"smuggler_rope_cargo_hoist.glb": 1,
+	"volcanic_obsidian_forge_anvil.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -212,6 +223,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_sunken_bell_shrine.glb": ["Lantern_BellShrine*"],
 	"pirate_map_planning_table_tent.glb": ["Lantern_MapTent*"],
 	"volcanic_basalt_obelisk_brazier.glb": ["Lantern_BasaltBrazier*"],
+	"pirate_shipwright_timber_rack.glb": ["Lantern_Shipyard*"],
+	"ancient_tidal_obelisk_mirror.glb": ["Lantern_MirrorShrine*"],
+	"smuggler_rope_cargo_hoist.glb": ["Lantern_SmugglerHoist*"],
+	"volcanic_obsidian_forge_anvil.glb": ["Lantern_VolcForge*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -262,6 +277,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"BellShrine_",
 	"MapTent_",
 	"BasaltBrazier_",
+	"ShipyardRack_",
+	"MirrorShrine_",
+	"SmugglerHoist_",
+	"VolcForge_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -401,7 +420,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(FORT_VAULT_LANDMARKS)
 	all_landmarks.append_array(ISLAND_LORE_LANDMARKS)
 	all_landmarks.append_array(NAUTICAL_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 58, "expected 58 sculpted landmark GLBs")
+	all_landmarks.append_array(SEA_LORE_LANDMARKS)
+	check_eq(all_landmarks.size(), 62, "expected 62 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -507,14 +527,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 58 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 62 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check_eq(unique_pbr_paths.size(), 30,
-		"expected strictly 30 unique shared landmark PBR texture paths across all 58 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected strictly 30 unique shared landmark PBR texture paths across all 62 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -812,7 +832,8 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 	check(cutlass._foliage_materials.has(wind_mat),
 		"Cutlass Cay _foliage_materials contains IslandDetails wind shader material")
 
-	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft & Trail Pebble Hygiene assertions.
+	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft,
+	#     Wave I-15 Trail Masonry & Gaussian Halo Craft & Trail Pebble Hygiene assertions.
 	if cc_details != null:
 		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
 		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
@@ -874,6 +895,17 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		check(op_halo_mmi != null and op_halo_mmi.multimesh != null and op_halo_mmi.multimesh.mesh != null
 			and not (op_halo_mmi.multimesh.mesh is PrimitiveMesh) and halo_tris >= 4,
 			"Wave I-14 Port Scoundrel mounts LandmarkLanternHalos MultiMesh with sculpted non-PrimitiveMesh (tris=%d)" % halo_tris)
+
+		var cc_stone_mmi := cc_details.get_node_or_null(^"TrailSteppingStones") as MultiMeshInstance3D
+		check(cc_stone_mmi != null and cc_stone_mmi.multimesh != null and cc_stone_mmi.multimesh.mesh != null
+			and not (cc_stone_mmi.multimesh.mesh is PrimitiveMesh),
+			"Cutlass Cay mounts TrailSteppingStones MultiMesh with sculpted non-PrimitiveMesh")
+		var stone_tris := _count_mesh_tris(cc_stone_mmi.multimesh.mesh) if (cc_stone_mmi != null and cc_stone_mmi.multimesh != null) else 0
+		print("    wave_i15 trail masonry tris: stepping_stones=%d" % stone_tris)
+		check(stone_tris >= 80,
+			"Wave I-15 TrailSteppingStones mesh must have >= 80 tris (hand-chiseled flagstone + companion cobbles cluster, got %d)" % stone_tris)
+		check(halo_tris >= 60,
+			"Wave I-15 LandmarkLanternHalos mesh must have >= 60 tris (80-tri 16-gon 3-ring Gaussian billboard, got %d)" % halo_tris)
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1422,6 +1454,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(nc_glb),
 			"Wave I-14 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % nc_glb)
 
+	# 2h-6. Verify Wave I-15 (62-Landmark Sea-Lore Milestone) landmarks (pirate shipwright timber rack,
+	#       ancient tidal obelisk mirror, smuggler rope cargo hoist & volcanic obsidian forge anvil)
+	#       + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var shipyard_rack_total := 0
+	var mirror_shrine_total := 0
+	var smuggler_hoist_total := 0
+	var volc_forge_total := 0
+	for isl_i15 in all_islands:
+		shipyard_rack_total += isl_i15.find_children("ShipyardRack_*", "Node3D", true, false).size()
+		mirror_shrine_total += isl_i15.find_children("MirrorShrine_*", "Node3D", true, false).size()
+		smuggler_hoist_total += isl_i15.find_children("SmugglerHoist_*", "Node3D", true, false).size()
+		volc_forge_total += isl_i15.find_children("VolcForge_*", "Node3D", true, false).size()
+	print("    wave_i15 sea_lore landmarks: shipyard_racks=%d mirror_shrines=%d smuggler_hoists=%d volc_forges=%d lantern_halos=%d" % [
+		shipyard_rack_total, mirror_shrine_total, smuggler_hoist_total, volc_forge_total, total_lantern_halos])
+	check(shipyard_rack_total >= 4, "Wave I-15 spawns >= 4 ShipyardRack_* landmarks (got %d)" % shipyard_rack_total)
+	check(mirror_shrine_total >= 4, "Wave I-15 spawns >= 4 MirrorShrine_* landmarks (got %d)" % mirror_shrine_total)
+	check(smuggler_hoist_total >= 4, "Wave I-15 spawns >= 4 SmugglerHoist_* landmarks (got %d)" % smuggler_hoist_total)
+	check(volc_forge_total >= 3, "Wave I-15 spawns >= 3 VolcForge_* landmarks (got %d)" % volc_forge_total)
+	check(total_lantern_halos >= 140,
+		"Wave I-15 archipelago must batch >= 140 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for sl_glb in SEA_LORE_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(sl_glb),
+			"Wave I-15 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % sl_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1464,10 +1522,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i14 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i15 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 210,
-		"grounding audit must inspect >= 210 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 230,
+		"grounding audit must inspect >= 230 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

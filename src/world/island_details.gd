@@ -16,10 +16,10 @@ extends Node3D
 ##   6. `TidalOutcrops`        — undercut stratified barnacle-ringed coastal rock clusters emerging from tide pools & surf
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
-##   9. `TrailSteppingStones`  — beveled coastal trail flagstones, sloped terrace stair-slabs & border curb stones
+##   9. `TrailSteppingStones`  — chiseled 10-sided coastal trail flagstones + nestled flanking cobble clusters, terrace stair-slabs & curb stones
 ##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
 ##  11. `ShoreCrabs`           — animated sculpted coastal tidepool crabs scuttling sideways along wet sandy beaches
-##  12. `LandmarkLanternHalos` — 1-DC twilight/night additive 3-plane soft radial glow halos on `Glow_Lantern_*` lights (`0.000 ms` daytime GPU)
+##  12. `LandmarkLanternHalos` — 1-DC twilight/night additive camera-facing Gaussian glow halos on `Glow_Lantern_*` lights (`0.000 ms` daytime GPU)
 
 const GROUP := &"island_details"
 const FOLIAGE_SHADER: Shader = preload("res://src/world/foliage_wind.gdshader")
@@ -956,12 +956,14 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("JungleAltar") or cname.begins_with("CascadeShrine") \
 			or cname.begins_with("FerryWinch"):
 		return 5.4
-	if cname.begins_with("VolcanicChainPylon") or cname.begins_with("SkeletonThrone"):
+	if cname.begins_with("VolcanicChainPylon") or cname.begins_with("SkeletonThrone") \
+			or cname.begins_with("ShipyardRack"):
 		return 5.2
-	if cname.begins_with("SundialPlaza") or cname.begins_with("MapTent"):
+	if cname.begins_with("SundialPlaza") or cname.begins_with("MapTent") \
+			or cname.begins_with("SmugglerHoist") or cname.begins_with("VolcForge"):
 		return 5.0
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
-			or cname.begins_with("BellShrine"):
+			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
@@ -2331,13 +2333,26 @@ static func _collect_lantern_halo_specs(container: Node, parent_xf: Transform3D,
 				var max_c := maxf(raw_col.r, maxf(raw_col.g, raw_col.b))
 				var col := Color(1.0, 0.72, 0.34, 1.0)
 				if max_c >= 0.05:
-					var boost := 1.0 if max_c >= 0.85 else (0.95 / max_c)
-					col = Color(
-						clampf(raw_col.r * boost, 0.0, 1.0),
-						clampf(raw_col.g * boost, 0.0, 1.0),
-						clampf(raw_col.b * boost, 0.0, 1.0),
-						1.0
-					)
+					# Normalize peak channel to 1.0 without distorting RGB ratios, then preserve/lift
+					# HSV chroma saturation so warm amber, molten orange & spectral cyan stay jewel-rich
+					# under additive blending instead of washing out to desaturated milky white at twilight.
+					var inv_max := 1.0 / max_c
+					var nr := clampf(raw_col.r * inv_max, 0.0, 1.0)
+					var ng := clampf(raw_col.g * inv_max, 0.0, 1.0)
+					var nb := clampf(raw_col.b * inv_max, 0.0, 1.0)
+					var min_c := minf(nr, minf(ng, nb))
+					var sat := 1.0 - min_c
+					if sat >= 0.06:
+						var target_sat := maxf(sat, clampf(sat + (1.0 - sat) * 0.18, 0.66, 0.96))
+						var sat_scale := target_sat / sat
+						col = Color(
+							clampf(1.0 - (1.0 - nr) * sat_scale, 0.0, 1.0),
+							clampf(1.0 - (1.0 - ng) * sat_scale, 0.0, 1.0),
+							clampf(1.0 - (1.0 - nb) * sat_scale, 0.0, 1.0),
+							1.0
+						)
+					else:
+						col = Color(nr, ng, nb, 1.0).lerp(Color(1.0, 0.72, 0.34, 1.0), 0.75)
 				out_specs.append({
 					"pos": child_xf.origin,
 					"color": col,
@@ -4634,23 +4649,26 @@ static func _append_crag_column(st: SurfaceTool, center: Vector3, rx: float, rz:
 			rcols[top_i][k], col_ledge, rcols[top_i][nk])
 
 
-# ------------------------------------------------------------------ Mesh 9: Sculpted Coastal Trail Flagstone / Curb Slab
+# ------------------------------------------------------------------ Mesh 9: Sculpted Coastal Trail Flagstone + Cobble Cluster
 
 static func _build_stepping_stone_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# Chunky 8-sided beveled weathered coastal flagstone (~40 tris): sunlit flat walkable top,
-	# ~0.80x warm-earth beveled side rim, and recessed -0.16 m buried bottom skirt so it pops
-	# cleanly at on-foot eye height without shadow maps or floating edges on slopes.
-	const SIDES := 8
-	const RX := 0.56
-	const RZ := 0.44
+	# 110-tri hand-laid coastal flagstone cluster (+0 extra DCs, 0.0 MB VRAM):
+	#   1. Primary chiseled 10-sided flagstone slab (50 tris): deep buried -0.18 m dark moss-seam
+	#      contact skirt, chiseled stone edge shoulder, crisp sunlit chamfered upper bevel, and
+	#      subtly relief-undulated walkable flat top (~0.115 m).
+	#   2. Two compact 6-sided beveled companion cobbles (2 x 30 = 60 tris) tucked snugly into
+	#      opposite corners of the primary slab, both plunging to -0.17 m so steep slopes never float.
+	const SIDES := 10
+	const RX := 0.54
+	const RZ := 0.42
 
-	var col_skirt := Color(0.45, 0.40, 0.35, 1.0)
-	var col_side := Color(0.74, 0.69, 0.62, 1.0)
-	var col_bevel := Color(0.84, 0.80, 0.74, 1.0)
-	var col_top_edge := Color(0.98, 0.96, 0.92, 1.0)
+	var col_skirt := Color(0.36, 0.36, 0.28, 1.0)
+	var col_side := Color(0.68, 0.64, 0.57, 1.0)
+	var col_bevel := Color(0.88, 0.85, 0.79, 1.0)
+	var col_top_edge := Color(0.96, 0.94, 0.89, 1.0)
 	var col_top := Color(1.00, 0.99, 0.95, 1.0)
 
 	var bot_ring: Array[Vector3] = []
@@ -4661,18 +4679,86 @@ static func _build_stepping_stone_mesh() -> ArrayMesh:
 	var top_cols: Array[Color] = []
 
 	for k in SIDES:
-		var ang := float(k) / float(SIDES) * TAU + 0.22
-		# Irregular hand-hewn flagstone silhouette (no mechanical cylinder/box symmetry).
-		var facet := 0.88 + 0.13 * sin(ang * 2.0 + 0.65) + 0.08 * cos(ang * 3.0 - 0.45)
+		var ang := float(k) / float(SIDES) * TAU + 0.20 + 0.055 * sin(float(k) * 2.3 + 0.4)
+		# Hand-hewn irregular 10-sided quarry-cleaved silhouette (zero mechanical symmetry).
+		var facet := 0.87 + 0.12 * sin(ang * 2.0 + 0.55) + 0.08 * cos(ang * 3.0 - 0.40) + 0.04 * sin(ang * 5.0 + 1.15)
 		var px := cos(ang) * RX * facet
 		var pz := sin(ang) * RZ * facet
-		var top_jit := 0.008 * sin(ang * 3.0 + 0.9)
+		var shoulder_r := 1.00 + 0.03 * cos(ang * 4.0 + 0.7)
+		var bevel_r := 0.82 + 0.025 * sin(ang * 3.0 - 0.5)
+		var relief := 0.010 * sin(ang * 3.0 + 0.85) + 0.005 * cos(ang * 5.0 - 0.6)
 
-		bot_ring.append(Vector3(px * 0.90, -0.16, pz * 0.90))
-		mid_ring.append(Vector3(px, 0.045 + top_jit * 0.5, pz))
-		top_ring.append(Vector3(px * 0.78, 0.115 + top_jit, pz * 0.78))
+		bot_ring.append(Vector3(px * 0.92, -0.18, pz * 0.92))
+		mid_ring.append(Vector3(px * shoulder_r, 0.046 + relief * 0.55, pz * shoulder_r))
+		top_ring.append(Vector3(px * bevel_r, 0.114 + relief, pz * bevel_r))
 
-		var shade := clampf(0.93 + 0.08 * sin(ang * 2.0 + 1.1), 0.86, 1.04)
+		var shade := clampf(0.91 + 0.10 * sin(ang * 2.0 + 1.15) + 0.04 * cos(ang * 5.0 - 0.3), 0.83, 1.05)
+		side_cols.append(Color(
+			clampf(col_side.r * shade, 0.0, 1.0),
+			clampf(col_side.g * shade, 0.0, 1.0),
+			clampf(col_side.b * shade, 0.0, 1.0),
+			1.0))
+		var bevel_k := 0.93 + 0.07 * shade
+		bevel_cols.append(Color(
+			clampf(col_bevel.r * bevel_k, 0.0, 1.0),
+			clampf(col_bevel.g * bevel_k, 0.0, 1.0),
+			clampf(col_bevel.b * bevel_k, 0.0, 1.0),
+			1.0))
+		var top_k := 0.96 + 0.04 * shade
+		top_cols.append(Color(
+			clampf(col_top_edge.r * top_k, 0.0, 1.0),
+			clampf(col_top_edge.g * top_k, 0.0, 1.0),
+			clampf(col_top_edge.b * top_k, 0.0, 1.0),
+			1.0))
+
+	var top_center := Vector3(0.02, 0.123, -0.015)
+	var ref_center := Vector3(0.0, -0.04, 0.0)
+
+	# 10 * 2 (moss skirt -> shoulder) + 10 * 2 (shoulder -> sunlit bevel) + 10 (walkable top) = 50 tris.
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_quad(st, bot_ring[k], mid_ring[k], mid_ring[nk], bot_ring[nk], ref_center,
+			col_skirt, side_cols[k], side_cols[nk], col_skirt)
+		_add_outward_quad(st, mid_ring[k], top_ring[k], top_ring[nk], mid_ring[nk], ref_center,
+			side_cols[k], bevel_cols[k], bevel_cols[nk], side_cols[nk])
+		_add_outward_tri(st, top_ring[k], top_center, top_ring[nk], ref_center,
+			top_cols[k], col_top, top_cols[nk])
+
+	# Two nestled 6-sided beveled companion cobbles (2 * 30 = 60 tris) tucked against opposite corners.
+	_append_trail_cobble(st, Vector3(0.48, 0.0, 0.26), 0.19, 0.16, 0.082, -0.17, 0.55,
+		Color(0.35, 0.35, 0.27, 1.0), Color(0.65, 0.60, 0.52, 1.0), Color(0.93, 0.89, 0.82, 1.0))
+	_append_trail_cobble(st, Vector3(-0.44, 0.0, -0.24), 0.17, 0.14, 0.074, -0.17, 2.15,
+		Color(0.33, 0.34, 0.27, 1.0), Color(0.60, 0.58, 0.52, 1.0), Color(0.86, 0.84, 0.78, 1.0))
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _append_trail_cobble(st: SurfaceTool, center: Vector3, rx: float, rz: float,
+		top_y: float, bot_y: float, phase: float, col_skirt: Color, col_side: Color,
+		col_top: Color) -> void:
+	const SIDES := 6
+	var bot_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var top_ring: Array[Vector3] = []
+	var side_cols: Array[Color] = []
+	var bevel_cols: Array[Color] = []
+	var top_cols: Array[Color] = []
+	var col_bevel := col_side.lerp(col_top, 0.62)
+	var col_crown := col_top.lerp(Color(1.0, 0.99, 0.95, 1.0), 0.18)
+
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU + phase + 0.07 * sin(float(k) * 2.1 + phase)
+		var facet := 0.88 + 0.14 * sin(ang * 2.0 + phase * 1.7) + 0.06 * cos(ang * 3.0 - phase)
+		var px := cos(ang) * rx * facet
+		var pz := sin(ang) * rz * facet
+		var jit := 0.006 * sin(ang * 3.0 + phase * 1.3)
+
+		bot_ring.append(center + Vector3(px * 0.90, bot_y, pz * 0.90))
+		mid_ring.append(center + Vector3(px, top_y * 0.42 + jit * 0.5, pz))
+		top_ring.append(center + Vector3(px * 0.72, top_y * 0.90 + jit, pz * 0.72))
+
+		var shade := clampf(0.92 + 0.09 * sin(ang * 2.0 + phase + 0.9), 0.84, 1.04)
 		side_cols.append(Color(
 			clampf(col_side.r * shade, 0.0, 1.0),
 			clampf(col_side.g * shade, 0.0, 1.0),
@@ -4684,28 +4770,25 @@ static func _build_stepping_stone_mesh() -> ArrayMesh:
 			clampf(col_bevel.g * bevel_k, 0.0, 1.0),
 			clampf(col_bevel.b * bevel_k, 0.0, 1.0),
 			1.0))
-		var top_k := 0.97 + 0.03 * shade
+		var top_k := 0.96 + 0.04 * shade
 		top_cols.append(Color(
-			clampf(col_top_edge.r * top_k, 0.0, 1.0),
-			clampf(col_top_edge.g * top_k, 0.0, 1.0),
-			clampf(col_top_edge.b * top_k, 0.0, 1.0),
+			clampf(col_top.r * top_k, 0.0, 1.0),
+			clampf(col_top.g * top_k, 0.0, 1.0),
+			clampf(col_top.b * top_k, 0.0, 1.0),
 			1.0))
 
-	var top_center := Vector3(0.0, 0.125, 0.0)
-	var ref_center := Vector3(0.0, -0.04, 0.0)
+	var crown := center + Vector3(rx * 0.06 * cos(phase), top_y, rz * 0.06 * sin(phase))
+	var ref_center := center + Vector3(0.0, (bot_y + top_y) * 0.30, 0.0)
 
-	# 8 * 2 (skirt -> shoulder) + 8 * 2 (shoulder -> top bevel) + 8 (flat top cap) = 40 tris.
+	# 6 * 2 (buried skirt -> shoulder) + 6 * 2 (shoulder -> bevel) + 6 (top crown) = 30 tris.
 	for k in SIDES:
 		var nk := (k + 1) % SIDES
 		_add_outward_quad(st, bot_ring[k], mid_ring[k], mid_ring[nk], bot_ring[nk], ref_center,
 			col_skirt, side_cols[k], side_cols[nk], col_skirt)
 		_add_outward_quad(st, mid_ring[k], top_ring[k], top_ring[nk], mid_ring[nk], ref_center,
 			side_cols[k], bevel_cols[k], bevel_cols[nk], side_cols[nk])
-		_add_outward_tri(st, top_ring[k], top_center, top_ring[nk], ref_center,
-			top_cols[k], col_top, top_cols[nk])
-
-	st.generate_normals()
-	return st.commit()
+		_add_outward_tri(st, top_ring[k], crown, top_ring[nk], ref_center,
+			top_cols[k], col_crown, top_cols[nk])
 
 
 # ------------------------------------------------------------------ Mesh 10: Sculpted Swallowtail Tropical Butterfly
