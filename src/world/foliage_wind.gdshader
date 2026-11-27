@@ -12,6 +12,7 @@ global uniform vec3 sun_dir;
 global uniform vec3 sun_color;
 global uniform vec3 ambient_color;
 global uniform vec3 sky_horizon_color;
+global uniform float sea_amp_scale;
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform float use_albedo_tex = 1.0;
@@ -146,11 +147,16 @@ void fragment() {
 	leaf_col *= mix(1.0, mix(1.0, vein_shade, mix(0.44, 0.56, is_ground_flora) * near_foliage), is_leaf);
 	leaf_col = mix(leaf_col, leaf_col * vec3(1.16, 1.20, 0.78), midrib * mix(0.28, 0.34, is_ground_flora) * is_leaf * near_foliage);
 
+	// Tropical storm rain-slicked foliage sheen (100% 0.0 in calm/sunny weather via sea_amp_scale!).
+	float rain_wet = smoothstep(1.55, 2.25, sea_amp_scale);
+	leaf_col *= mix(1.0, 0.85, rain_wet * is_leaf);
+
 	ALBEDO = leaf_col;
 	float base_rough = use_roughness_tex > 0.5 ? texture(roughness_tex, UV).g : roughness_val;
 	float waxy_tip = mix(base_rough + 0.14, max(base_rough - 0.14, 0.30), v_tip_weight);
 	float vein_rough = mix(0.08, -0.08, vein_ridge * 0.65 + cluster_dapple * 0.35) * is_leaf * near_foliage;
-	ROUGHNESS = clamp(waxy_tip + vein_rough + is_ground_flora * 0.08, 0.24, 0.96);
+	float dry_rough = clamp(waxy_tip + vein_rough + is_ground_flora * 0.08, 0.24, 0.96);
+	ROUGHNESS = mix(dry_rough, max(dry_rough * 0.54, 0.18), rain_wet * is_leaf);
 
 	if (use_normal_tex > 0.5) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;
@@ -170,7 +176,7 @@ void fragment() {
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_w, 0.0)).xyz);
 	}
 	METALLIC = 0.0;
-	SPECULAR = mix(0.28, 0.36, v_tip_weight * is_leaf);
+	SPECULAR = mix(mix(0.28, 0.36, v_tip_weight * is_leaf), 0.52, rain_wet * is_leaf);
 
 	// Translucent sunlit palm-frond, blossom & sea-oat plume subsurface backlight
 	// (golden-hour apricot rim translucency at sunrise/sunset, 100% gated off at moonlit night via true_day!).

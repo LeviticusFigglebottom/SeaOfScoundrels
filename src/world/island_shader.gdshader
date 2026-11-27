@@ -24,6 +24,7 @@ render_mode diffuse_burley, specular_schlick_ggx;
 global uniform vec3 ambient_color;
 global uniform vec3 sky_horizon_color;
 global uniform vec3 sky_zenith_color;
+global uniform float sea_amp_scale;
 
 uniform vec3 deep_seabed_color : source_color = vec3(0.14, 0.25, 0.30);
 uniform vec3 shallow_seabed_color : source_color = vec3(0.76, 0.81, 0.64);
@@ -756,6 +757,24 @@ void fragment() {
 	rough = mix(rough, mix(0.95, 0.58, (1.0 - crevice_shade) * 0.55 + micro_gloss * 0.45), cliff_mask);
 	rough = mix(rough, mix(0.86, 0.64, micro_gloss), ledge_moss);
 
+	// Tropical storm rain-wetness & pooling puddles driven by global sea_amp_scale (100% 0.0 in calm/sunny weather!).
+	// Darkens porous soaked sand/cobbles/stone physically, flattens glassy rainwater puddles between raised cobbles,
+	// and drops roughness so warm harbour lanterns, campfires & storm-sky Fresnel gleam authentically across wet ground!
+	float rain_wet = smoothstep(1.55, 2.25, sea_amp_scale) * smoothstep(-0.15, 0.45, h);
+	float rain_spec_boost = 0.0;
+	if (rain_wet > 0.001) {
+		float flat_ground = smoothstep(0.68, 0.93, smooth_n.y);
+		float rain_puddle = smoothstep(0.45, 0.72, (1.0 - brush_n) * 0.58 + (1.0 - tussock_n) * 0.42) * flat_ground * (1.0 - t_grass_in * 0.58) * (1.0 - cliff_mask);
+		float soak_porous = clamp(path_edge_w * 0.92 + cliff_mask * 0.55 + (1.0 - t_grass_in) * 0.52 + rain_puddle * 0.42, 0.0, 1.0);
+		albedo *= mix(1.0, mix(0.85, 0.74, soak_porous), rain_wet);
+		// Rain-slicked rock & wet beach -> glistening puddles & damp cobblestones.
+		float storm_rough_target = mix(mix(0.44, 0.36, cliff_mask * (1.0 - crevice_shade * 0.5)), 0.22, clamp(path_edge_w * 0.65 + path_cobble_top * 0.35, 0.0, 1.0));
+		storm_rough_target = mix(storm_rough_target, 0.15, rain_puddle);
+		rough = mix(rough, min(rough, storm_rough_target), rain_wet * mix(0.76, 1.0, max(rain_puddle, path_edge_w * 0.85)));
+		final_n_world = normalize(mix(final_n_world, smooth_n, rain_puddle * rain_wet * 0.56));
+		rain_spec_boost = rain_wet * mix(0.10, 0.24, max(rain_puddle, path_edge_w * 0.75));
+	}
+
 	// Graceful atmospheric aerial perspective for massive distant islands (400-2400 m).
 	float aerial_t = smoothstep(380.0, 2400.0, v_cam_dist) * aerial_perspective_strength;
 	vec3 aerial_col = mix(sky_horizon_color, sky_zenith_color, clamp(h * 0.004, 0.0, 0.25));
@@ -764,7 +783,7 @@ void fragment() {
 	ALBEDO = albedo;
 	ROUGHNESS = clamp(rough, 0.12, 0.98);
 	METALLIC = 0.0;
-	SPECULAR = mix(mix(0.32, 0.42, path_cobble_top * 0.6 + (1.0 - rough) * 0.4), 0.58, wet_mask);
+	SPECULAR = clamp(mix(mix(0.32, 0.42, path_cobble_top * 0.6 + (1.0 - rough) * 0.4), 0.58, wet_mask) + rain_spec_boost, 0.0, 0.64);
 	vec3 magma_col = mix(vec3(0.95, 0.18, 0.02), vec3(1.0, 0.56, 0.10), magma_core);
 	EMISSION = magma_col * magma_emit + aerial_col * (aerial_t * 0.075);
 	NORMAL = normalize((VIEW_MATRIX * vec4(final_n_world, 0.0)).xyz);
