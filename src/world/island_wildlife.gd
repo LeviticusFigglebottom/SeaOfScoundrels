@@ -33,6 +33,14 @@ const CRAB_FLEE_DIST := 5.5
 const DAY_START_HOUR := 6.5
 const DAY_END_HOUR := 18.5
 
+const FIREFLY_HALO_MIN_SCALE := 0.55
+const FIREFLY_HALO_MAX_SCALE := 1.35
+const FIREFLY_HALO_VISIBILITY_RANGE := 155.0
+
+const FEATHER_FLURRY_COUNT := 8
+const FEATHER_FLURRY_DURATION := 1.60
+const FEATHER_FLURRY_VISIBILITY_RANGE := 140.0
+
 const PARROT_PERCHED := 0
 const PARROT_FLYING := 1
 const PARROT_RETURNING := 2
@@ -91,6 +99,9 @@ const COL_MONARCH_DOT := Color(0.98, 0.95, 0.84)
 const COL_BUTTERFLY_BODY := Color(0.12, 0.11, 0.13)
 const COL_FIREFLY_CORE := Color(1.00, 0.88, 0.34)
 const COL_FIREFLY_GLOW := Color(1.00, 0.74, 0.18)
+const COL_FIREFLY_HALO_CORE := Color(1.00, 0.90, 0.42, 1.0)
+const COL_FIREFLY_HALO_MID := Color(0.32, 0.23, 0.05, 1.0)
+const COL_FIREFLY_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
 
 # --- Statically Cached Shared Meshes & Materials (Zero Extra VRAM) ------------
 
@@ -100,6 +111,8 @@ static var _feather_mat: StandardMaterial3D = null
 static var _shell_mat: StandardMaterial3D = null
 static var _butterfly_mat: StandardMaterial3D = null
 static var _firefly_mat: StandardMaterial3D = null
+static var _firefly_halo_mat: StandardMaterial3D = null
+static var _feather_flurry_mat: StandardMaterial3D = null
 
 static var _parrot_scarlet_body: ArrayMesh = null
 static var _parrot_scarlet_wing_l: ArrayMesh = null
@@ -123,6 +136,8 @@ static var _butterfly_morpho_wing_r: ArrayMesh = null
 static var _butterfly_monarch_wing_l: ArrayMesh = null
 static var _butterfly_monarch_wing_r: ArrayMesh = null
 static var _firefly_mesh: ArrayMesh = null
+static var _firefly_halo_mesh: ArrayMesh = null
+static var _feather_flurry_mesh: ArrayMesh = null
 
 # --- Per-Island Instance State ------------------------------------------------
 
@@ -140,6 +155,31 @@ var _crabs: Array[Dictionary] = []
 var _insects: Array[Dictionary] = []
 var _owned_meshes: Array[MeshInstance3D] = []
 
+# Preallocated startled-macaw feather flurry state (zero per-frame heap allocations).
+var _feather_flurry_mmi: MultiMeshInstance3D = null
+var _feather_flurry_active: bool = false
+var _feather_flurry_age: float = 0.0
+var _feather_flurry_serial: int = 0
+var _ff_px: PackedFloat32Array = PackedFloat32Array()
+var _ff_py: PackedFloat32Array = PackedFloat32Array()
+var _ff_pz: PackedFloat32Array = PackedFloat32Array()
+var _ff_vx: PackedFloat32Array = PackedFloat32Array()
+var _ff_vy: PackedFloat32Array = PackedFloat32Array()
+var _ff_vz: PackedFloat32Array = PackedFloat32Array()
+var _ff_sway_phase: PackedFloat32Array = PackedFloat32Array()
+var _ff_sway_freq: PackedFloat32Array = PackedFloat32Array()
+var _ff_sway_amp: PackedFloat32Array = PackedFloat32Array()
+var _ff_yaw: PackedFloat32Array = PackedFloat32Array()
+var _ff_pitch: PackedFloat32Array = PackedFloat32Array()
+var _ff_roll: PackedFloat32Array = PackedFloat32Array()
+var _ff_spin_y: PackedFloat32Array = PackedFloat32Array()
+var _ff_spin_x: PackedFloat32Array = PackedFloat32Array()
+var _ff_base_scale: PackedFloat32Array = PackedFloat32Array()
+var _ff_cur_scale: PackedFloat32Array = PackedFloat32Array()
+var _ff_r: PackedFloat32Array = PackedFloat32Array()
+var _ff_g: PackedFloat32Array = PackedFloat32Array()
+var _ff_b: PackedFloat32Array = PackedFloat32Array()
+
 
 # ==============================================================================
 # Public Static API
@@ -151,6 +191,8 @@ static func clear_shared_cache() -> void:
 	_shell_mat = null
 	_butterfly_mat = null
 	_firefly_mat = null
+	_firefly_halo_mat = null
+	_feather_flurry_mat = null
 	_parrot_scarlet_body = null
 	_parrot_scarlet_wing_l = null
 	_parrot_scarlet_wing_r = null
@@ -170,6 +212,8 @@ static func clear_shared_cache() -> void:
 	_butterfly_monarch_wing_l = null
 	_butterfly_monarch_wing_r = null
 	_firefly_mesh = null
+	_firefly_halo_mesh = null
+	_feather_flurry_mesh = null
 
 
 ## Populate every island in `archipelago` with a living `IslandWildlife` ecosystem.
@@ -222,7 +266,24 @@ func _ready() -> void:
 	_ensure_built()
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_flurry_refs()
+
+
+func _release_flurry_refs() -> void:
+	# Godot 4.8 Forward+ Vulkan-safe MultiMesh teardown: never mutate mm.mesh or mm.instance_count.
+	if _feather_flurry_mmi != null and is_instance_valid(_feather_flurry_mmi):
+		_feather_flurry_mmi.visible = false
+		_feather_flurry_mmi.material_override = null
+		_feather_flurry_mmi.multimesh = null
+	_feather_flurry_mmi = null
+	_feather_flurry_active = false
+	_feather_flurry_age = 0.0
+
+
 func _exit_tree() -> void:
+	_release_flurry_refs()
 	for mi in _owned_meshes:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
@@ -270,6 +331,7 @@ func step_wildlife(delta: float) -> void:
 		player_local = isl_xf.affine_inverse() * p_world
 
 	_step_parrots(dt, has_player, player_local)
+	_step_feather_flurry(dt)
 	_step_turtles(dt, has_player, player_local)
 	_step_crabs(dt, has_player, player_local)
 	_step_insects(dt)
@@ -304,6 +366,39 @@ func is_parrot_flying(index: int) -> bool:
 func is_daytime_mode() -> bool:
 	var tod := Weather.time_of_day if Weather != null else 12.0
 	return tod >= DAY_START_HOUR and tod <= DAY_END_HOUR
+
+
+## Return the number of mounted nocturnal FireflyGlowHalo billboard nodes.
+func get_firefly_halo_count() -> int:
+	var count := 0
+	for ins in _insects:
+		var halo := ins.get("ff_halo") as MeshInstance3D
+		if halo != null and is_instance_valid(halo):
+			count += 1
+	return count
+
+
+## Return the current uniform local pulse scale of FireflyGlowHalo `index` (0.55..1.35 at night).
+func get_firefly_halo_scale(index: int) -> float:
+	if index < 0 or index >= _insects.size():
+		return 0.0
+	var halo := _insects[index].get("ff_halo") as MeshInstance3D
+	if halo == null or not is_instance_valid(halo):
+		return 0.0
+	return halo.scale.x
+
+
+## Return the preallocated ParrotFeatherFlurry MultiMeshInstance3D burst node.
+func get_feather_flurry() -> MultiMeshInstance3D:
+	return _feather_flurry_mmi
+
+
+## Return remaining normalized lifetime ratio of the active startled parrot feather flurry (0.0 at rest).
+func get_feather_flurry_active_ratio() -> float:
+	if not _feather_flurry_active or _feather_flurry_mmi == null \
+			or not is_instance_valid(_feather_flurry_mmi) or not _feather_flurry_mmi.visible:
+		return 0.0
+	return clampf(1.0 - (_feather_flurry_age / FEATHER_FLURRY_DURATION), 0.0, 1.0)
 
 
 static func _collect_roots(entries: Array[Dictionary]) -> Array[Node3D]:
@@ -361,6 +456,7 @@ func _ensure_built() -> void:
 	var landing_yaw := _get_landing_yaw(_island)
 	var landing_basis := Basis(Vector3.UP, landing_yaw)
 
+	_init_feather_flurry()
 	_spawn_sea_turtles(target_turtles, landing_basis, is_showcase)
 	_spawn_coral_crabs(target_crabs, landing_basis, is_showcase)
 	_spawn_macaw_parrots(target_parrots, landing_basis, is_showcase, is_volcano)
@@ -863,10 +959,18 @@ func _spawn_butterflies_and_fireflies(count: int, landing_basis: Basis, is_showc
 		root.add_child(ff_group)
 		ff_group.add_child(_make_mesh_inst("FireflyMesh", _firefly_mesh, _firefly_mat, 145.0))
 
+		var ff_halo := _make_mesh_inst("FireflyGlowHalo", _firefly_halo_mesh,
+			_firefly_halo_mat, FIREFLY_HALO_VISIBILITY_RANGE)
+		ff_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		ff_halo.extra_cull_margin = 0.5
+		ff_halo.visible = false
+		ff_group.add_child(ff_halo)
+
 		var entry := {
 			"root": root,
 			"bf_group": bf_group,
 			"ff_group": ff_group,
+			"ff_halo": ff_halo,
 			"wl_pivot": wl_pivot,
 			"wr_pivot": wr_pivot,
 			"anchor_x": spot.x,
@@ -880,8 +984,180 @@ func _spawn_butterflies_and_fireflies(count: int, landing_basis: Basis, is_showc
 			"flap_freq": _rng.randf_range(10.2, 13.8),
 			"flap_phase": _rng.randf() * TAU,
 			"glow_phase": _rng.randf() * TAU,
+			"halo_blink_rate": _rng.randf_range(1.65, 2.85),
+			"halo_blink_phase": fposmod(float(i) * 1.37 + _rng.randf_range(0.0, 0.45), TAU),
 		}
 		_insects.append(entry)
+
+
+func _init_feather_flurry() -> void:
+	_ff_px.resize(FEATHER_FLURRY_COUNT)
+	_ff_py.resize(FEATHER_FLURRY_COUNT)
+	_ff_pz.resize(FEATHER_FLURRY_COUNT)
+	_ff_vx.resize(FEATHER_FLURRY_COUNT)
+	_ff_vy.resize(FEATHER_FLURRY_COUNT)
+	_ff_vz.resize(FEATHER_FLURRY_COUNT)
+	_ff_sway_phase.resize(FEATHER_FLURRY_COUNT)
+	_ff_sway_freq.resize(FEATHER_FLURRY_COUNT)
+	_ff_sway_amp.resize(FEATHER_FLURRY_COUNT)
+	_ff_yaw.resize(FEATHER_FLURRY_COUNT)
+	_ff_pitch.resize(FEATHER_FLURRY_COUNT)
+	_ff_roll.resize(FEATHER_FLURRY_COUNT)
+	_ff_spin_y.resize(FEATHER_FLURRY_COUNT)
+	_ff_spin_x.resize(FEATHER_FLURRY_COUNT)
+	_ff_base_scale.resize(FEATHER_FLURRY_COUNT)
+	_ff_cur_scale.resize(FEATHER_FLURRY_COUNT)
+	_ff_r.resize(FEATHER_FLURRY_COUNT)
+	_ff_g.resize(FEATHER_FLURRY_COUNT)
+	_ff_b.resize(FEATHER_FLURRY_COUNT)
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = _feather_flurry_mesh
+	mm.instance_count = FEATHER_FLURRY_COUNT
+	var zero_xf := Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3.ZERO)
+	for i in FEATHER_FLURRY_COUNT:
+		_ff_cur_scale[i] = 0.0
+		_ff_r[i] = 1.0
+		_ff_g[i] = 1.0
+		_ff_b[i] = 1.0
+		mm.set_instance_transform(i, zero_xf)
+		mm.set_instance_color(i, Color.WHITE)
+
+	_feather_flurry_mmi = MultiMeshInstance3D.new()
+	_feather_flurry_mmi.name = "ParrotFeatherFlurry"
+	_feather_flurry_mmi.multimesh = mm
+	_feather_flurry_mmi.material_override = _feather_flurry_mat
+	_feather_flurry_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_feather_flurry_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_feather_flurry_mmi.visibility_range_end = FEATHER_FLURRY_VISIBILITY_RANGE
+	_feather_flurry_mmi.visibility_range_end_margin = 18.0
+	_feather_flurry_mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	_feather_flurry_mmi.extra_cull_margin = 6.0
+	_feather_flurry_mmi.visible = false
+	add_child(_feather_flurry_mmi)
+
+
+func _trigger_parrot_feather_flurry(takeoff_pos: Vector3, is_scarlet: bool) -> void:
+	if _feather_flurry_mmi == null or not is_instance_valid(_feather_flurry_mmi):
+		return
+	var mm := _feather_flurry_mmi.multimesh
+	if mm == null:
+		return
+
+	_feather_flurry_mmi.position = takeoff_pos
+	_feather_flurry_age = 0.0
+	_feather_flurry_active = true
+	_feather_flurry_serial += 1
+	var phase_seed := float(_feather_flurry_serial) * 2.39996
+
+	for i in FEATHER_FLURRY_COUNT:
+		var fi := float(i)
+		var h1 := fposmod(sin(fi * 12.9898 + phase_seed) * 43758.5453, 1.0)
+		var h2 := fposmod(sin(fi * 78.233 + phase_seed * 1.7) * 24634.6345, 1.0)
+		var ang := TAU * fi / float(FEATHER_FLURRY_COUNT) + (h1 - 0.5) * 0.45
+		var r0 := lerpf(0.08, 0.24, h2)
+		var px := cos(ang) * r0
+		var py := lerpf(-0.06, 0.22, h1)
+		var pz := sin(ang) * r0
+		var h_spd := lerpf(1.15, 2.35, h1)
+
+		_ff_px[i] = px
+		_ff_py[i] = py
+		_ff_pz[i] = pz
+		_ff_vx[i] = cos(ang) * h_spd
+		_ff_vy[i] = lerpf(0.75, 1.65, h2)
+		_ff_vz[i] = sin(ang) * h_spd
+		_ff_sway_phase[i] = fi * 0.91 + phase_seed
+		_ff_sway_freq[i] = lerpf(4.2, 6.8, h1)
+		_ff_sway_amp[i] = lerpf(0.45, 0.90, h2)
+		_ff_yaw[i] = ang + PI * 0.5
+		_ff_pitch[i] = lerpf(-0.45, 0.45, h1)
+		_ff_roll[i] = lerpf(-0.55, 0.55, h2)
+		var spin_sgn := 1.0 if (i % 2 == 0) else -1.0
+		_ff_spin_y[i] = spin_sgn * lerpf(2.2, 4.8, h2)
+		_ff_spin_x[i] = -spin_sgn * lerpf(1.4, 3.2, h1)
+		var b_sc := lerpf(0.88, 1.28, h1)
+		_ff_base_scale[i] = b_sc
+		_ff_cur_scale[i] = b_sc
+
+		var col: Color
+		var band := i % 3
+		if is_scarlet:
+			if band == 0:
+				col = COL_SCARLET_MAIN
+			elif band == 1:
+				col = COL_SCARLET_GOLD
+			else:
+				col = COL_SCARLET_COBALT
+		else:
+			if band == 0:
+				col = COL_EMERALD_MAIN
+			elif band == 1:
+				col = COL_EMERALD_LIME
+			else:
+				col = COL_EMERALD_TEAL
+		_ff_r[i] = col.r
+		_ff_g[i] = col.g
+		_ff_b[i] = col.b
+
+		var b := Basis.from_euler(Vector3(_ff_pitch[i], _ff_yaw[i], _ff_roll[i])).scaled(Vector3.ONE * b_sc)
+		mm.set_instance_transform(i, Transform3D(b, Vector3(px, py, pz)))
+		mm.set_instance_color(i, col)
+
+	_feather_flurry_mmi.visible = true
+
+
+func _step_feather_flurry(dt: float) -> void:
+	if not _feather_flurry_active or _feather_flurry_mmi == null \
+			or not is_instance_valid(_feather_flurry_mmi):
+		return
+	var mm := _feather_flurry_mmi.multimesh
+	if mm == null:
+		_feather_flurry_active = false
+		_feather_flurry_mmi.visible = false
+		return
+
+	_feather_flurry_age += dt
+	if _feather_flurry_age >= FEATHER_FLURRY_DURATION:
+		_feather_flurry_active = false
+		_feather_flurry_age = 0.0
+		for i in FEATHER_FLURRY_COUNT:
+			_ff_cur_scale[i] = 0.0
+		_feather_flurry_mmi.visible = false
+		return
+
+	var u := clampf(_feather_flurry_age / FEATHER_FLURRY_DURATION, 0.0, 1.0)
+	var scale_env := clampf(1.0 - u * u, 0.0, 1.0)
+	var horiz_drag := exp(-dt * 2.4)
+	var vy_blend := clampf(dt * 3.0, 0.0, 1.0)
+
+	for i in FEATHER_FLURRY_COUNT:
+		var vx := _ff_vx[i] * horiz_drag
+		var vy := lerpf(_ff_vy[i], -0.55, vy_blend)
+		var vz := _ff_vz[i] * horiz_drag
+		_ff_vx[i] = vx
+		_ff_vy[i] = vy
+		_ff_vz[i] = vz
+
+		var sway_arg := _feather_flurry_age * _ff_sway_freq[i] + _ff_sway_phase[i]
+		var sway_x := cos(sway_arg) * _ff_sway_amp[i]
+		var sway_z := sin(sway_arg * 0.78) * _ff_sway_amp[i] * 0.72
+		var px := _ff_px[i] + (vx + sway_x) * dt
+		var py := _ff_py[i] + vy * dt
+		var pz := _ff_pz[i] + (vz + sway_z) * dt
+		_ff_px[i] = px
+		_ff_py[i] = py
+		_ff_pz[i] = pz
+
+		var yaw := _ff_yaw[i] + _ff_spin_y[i] * _feather_flurry_age
+		var pitch := _ff_pitch[i] + sin(sway_arg) * 0.65 + _ff_spin_x[i] * _feather_flurry_age * 0.35
+		var roll := _ff_roll[i] + cos(sway_arg) * 0.78
+		var sc := maxf(0.001, _ff_base_scale[i] * scale_env)
+		_ff_cur_scale[i] = sc
+		var b := Basis.from_euler(Vector3(pitch, yaw, roll)).scaled(Vector3.ONE * sc)
+		mm.set_instance_transform(i, Transform3D(b, Vector3(px, py, pz)))
 
 
 func _make_mesh_inst(node_name: String, mesh: ArrayMesh, mat: StandardMaterial3D,
@@ -926,6 +1202,7 @@ func _step_parrots(dt: float, has_player: bool, player_local: Vector3) -> void:
 				p["flight_duration"] = _rng.randf_range(6.2, 8.8)
 				var oc: Vector3 = p["orbit_center"] as Vector3
 				p["orbit_angle"] = atan2(perch_pos.z - oc.z, perch_pos.x - oc.x)
+				_trigger_parrot_feather_flurry(perch_pos + Vector3(0.0, 0.34, 0.0), bool(p["is_scarlet"]))
 				_play_parrot_chirp(root.global_position if root.is_inside_tree() else perch_pos)
 
 		if state == PARROT_PERCHED:
@@ -1232,6 +1509,7 @@ func _step_insects(dt: float) -> void:
 		var root := ins["root"] as Node3D
 		var bf := ins["bf_group"] as Node3D
 		var ff := ins["ff_group"] as Node3D
+		var ff_halo := ins.get("ff_halo") as MeshInstance3D
 		var wl := ins["wl_pivot"] as Node3D
 		var wr := ins["wr_pivot"] as Node3D
 		if root == null or not is_instance_valid(root):
@@ -1239,6 +1517,8 @@ func _step_insects(dt: float) -> void:
 
 		bf.visible = day_mode
 		ff.visible = not day_mode
+		if ff_halo != null and is_instance_valid(ff_halo):
+			ff_halo.visible = not day_mode
 
 		var speed_scale := 1.0 if day_mode else 0.42
 		var ph: float = float(ins["phase"]) + dt * float(ins["path_speed"]) * speed_scale
@@ -1288,6 +1568,12 @@ func _step_insects(dt: float) -> void:
 			ins["glow_phase"] = gp
 			var pulse := 0.80 + 0.32 * (0.5 + 0.5 * sin(gp))
 			ff.scale = Vector3.ONE * pulse
+			if ff_halo != null and is_instance_valid(ff_halo):
+				var blink_rate: float = float(ins["halo_blink_rate"])
+				var blink_phase: float = float(ins["halo_blink_phase"])
+				var blink_wave := 0.5 + 0.5 * sin(_clock * blink_rate + blink_phase)
+				var halo_sc := lerpf(FIREFLY_HALO_MIN_SCALE, FIREFLY_HALO_MAX_SCALE, blink_wave * blink_wave)
+				ff_halo.scale = Vector3.ONE * halo_sc
 
 
 static func _surface_aligned_basis(forward_hint: Vector3, normal: Vector3) -> Basis:
@@ -1373,6 +1659,29 @@ static func _ensure_shared_assets() -> void:
 		_firefly_mat.vertex_color_is_srgb = true
 		_firefly_mat.uv1_world_triplanar = false
 
+	if _firefly_halo_mat == null:
+		_firefly_halo_mat = StandardMaterial3D.new()
+		_firefly_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_firefly_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_firefly_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_firefly_halo_mat.billboard_keep_scale = true
+		_firefly_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_firefly_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_firefly_halo_mat.albedo_color = Color.WHITE
+		_firefly_halo_mat.vertex_color_use_as_albedo = true
+		_firefly_halo_mat.vertex_color_is_srgb = true
+		_firefly_halo_mat.uv1_world_triplanar = false
+
+	if _feather_flurry_mat == null:
+		_feather_flurry_mat = StandardMaterial3D.new()
+		_feather_flurry_mat.albedo_color = Color.WHITE
+		_feather_flurry_mat.vertex_color_use_as_albedo = true
+		_feather_flurry_mat.vertex_color_is_srgb = true
+		_feather_flurry_mat.uv1_world_triplanar = false
+		_feather_flurry_mat.roughness = 0.78
+		_feather_flurry_mat.metallic = 0.0
+		_feather_flurry_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
 	if _parrot_scarlet_body == null:
 		var scarlet_pal := {
 			"main": COL_SCARLET_MAIN,
@@ -1417,6 +1726,12 @@ static func _ensure_shared_assets() -> void:
 		_butterfly_monarch_wing_l = _build_butterfly_wing_mesh(-1.0, COL_MONARCH_INNER, COL_MONARCH_MID, COL_MONARCH_RIM, COL_MONARCH_DOT)
 		_butterfly_monarch_wing_r = _build_butterfly_wing_mesh(1.0, COL_MONARCH_INNER, COL_MONARCH_MID, COL_MONARCH_RIM, COL_MONARCH_DOT)
 		_firefly_mesh = _build_firefly_mesh()
+
+	if _firefly_halo_mesh == null:
+		_firefly_halo_mesh = _build_firefly_halo_mesh()
+
+	if _feather_flurry_mesh == null:
+		_feather_flurry_mesh = _build_parrot_feather_flurry_mesh()
 
 
 # ------------------------------------------------------------------------------
@@ -2043,6 +2358,92 @@ static func _build_firefly_mesh() -> ArrayMesh:
 		[Vector3(0.0, 0.0, 0.095), 0.008, 0.008, 0.008, COL_FIREFLY_GLOW, COL_FIREFLY_GLOW, COL_FIREFLY_GLOW],
 	]
 	_append_curved_tube(st, ff_st, 4, true, true)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_firefly_halo_mesh() -> ArrayMesh:
+	# Exact 24-tri 8-wedge soft-feathered additive billboard halo (INNER_R=0.065, OUTER_R=0.28)
+	# with subdued mid-ring luminance (<= 0.42) fading smoothly to pure Color(0, 0, 0, 1) rim.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 8
+	const INNER_R := 0.065
+	const OUTER_R := 0.28
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner golden core wedge (8 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_MID)
+		st.add_vertex(m0)
+		# Outer soft-feathered amber skirt fading to pure black rim (16 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FIREFLY_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
+
+
+static func _build_parrot_feather_flurry_mesh() -> ArrayMesh:
+	# Exact 8-tri sculpted curved tropical macaw feather vane with arched rachis ridge
+	# and subtle ivory-to-shaded vertex-color gradient multiplied cleanly by instance plumage color.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var c_quill := Color(0.96, 0.94, 0.88)
+	var c_mid := Color(1.00, 1.00, 1.00)
+	var c_upper := Color(0.94, 0.94, 0.96)
+	var c_tip := Color(0.84, 0.84, 0.88)
+
+	var p_quill := Vector3(0.0, -0.010, 0.135)
+	var p_mid_c := Vector3(0.0, 0.018, 0.015)
+	var p_mid_l := Vector3(-0.042, 0.008, 0.025)
+	var p_mid_r := Vector3(0.042, 0.008, 0.025)
+	var p_upper_c := Vector3(0.0, 0.012, -0.068)
+	var p_upper_l := Vector3(-0.028, 0.003, -0.058)
+	var p_upper_r := Vector3(0.028, 0.003, -0.058)
+	var p_tip := Vector3(0.0, -0.014, -0.145)
+	var ref_below := Vector3(0.0, -1.0, 0.0)
+
+	# Base quill flares (2 tris).
+	_emit_outward_tri(st, p_quill, c_quill, p_mid_l, c_mid, p_mid_c, c_mid, ref_below)
+	_emit_outward_tri(st, p_quill, c_quill, p_mid_c, c_mid, p_mid_r, c_mid, ref_below)
+	# Cambered cupped mid-vane quads (4 tris).
+	_emit_outward_tri(st, p_mid_l, c_mid, p_upper_c, c_upper, p_mid_c, c_mid, ref_below)
+	_emit_outward_tri(st, p_mid_l, c_mid, p_upper_l, c_upper, p_upper_c, c_upper, ref_below)
+	_emit_outward_tri(st, p_mid_c, c_mid, p_upper_r, c_upper, p_mid_r, c_mid, ref_below)
+	_emit_outward_tri(st, p_mid_c, c_mid, p_upper_c, c_upper, p_upper_r, c_upper, ref_below)
+	# Tapered drooping plume tip (2 tris).
+	_emit_outward_tri(st, p_upper_l, c_upper, p_tip, c_tip, p_upper_c, c_upper, ref_below)
+	_emit_outward_tri(st, p_upper_c, c_upper, p_tip, c_tip, p_upper_r, c_upper, ref_below)
 
 	st.generate_normals()
 	return st.commit()

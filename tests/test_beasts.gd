@@ -4275,3 +4275,261 @@ func test_q23b_reef_fish_nocturnal_biolum_and_scatter_bubbles() -> void:
 	check(ReefFishSchool._fish_mesh == null and ReefFishSchool._fish_mat == null \
 			and ReefFishSchool._bubble_mesh == null and ReefFishSchool._bubble_mat == null,
 		"ReefFishSchool releases _fish_mesh, _fish_mat, _bubble_mesh & _bubble_mat cleanly (0 leaks)")
+
+
+func test_q25b_seabird_shared_mesh_cache_and_storm_soaring_dynamics() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# 1. Static source hygiene: zero raw PrimitiveMesh constructors and 0 non-ASCII lines.
+	var src := FileAccess.get_file_as_string("res://src/world/seabirds.gd")
+	check(src.length() > 1000, "loaded src/world/seabirds.gd cleanly")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+		"TorusMesh.new", "PlaneMesh.new",
+	]:
+		check(not src.contains(bad_prim), "seabirds.gd contains zero %s calls" % bad_prim)
+	var non_ascii_lines := 0
+	for line: String in src.split("\n"):
+		var raw_bytes := line.to_utf8_buffer()
+		for b in raw_bytes:
+			if b >= 128:
+				non_ascii_lines += 1
+				break
+	check_eq(non_ascii_lines, 0, "src/world/seabirds.gd contains 0 non-ASCII code lines")
+
+	check_eq(SeabirdFlock.get_active_flock_count(), 0,
+		"SeabirdFlock active count starts at 0 before spawning flocks")
+	check(SeabirdFlock._shared_body_mesh == null and SeabirdFlock._shared_wing_l_mesh == null \
+			and SeabirdFlock._shared_wing_r_mesh == null and SeabirdFlock._shared_plumage_mat == null,
+		"SeabirdFlock static shared caches start empty before first flock enters tree")
+
+	# 2. Spawn two independent SeabirdFlock instances and verify exact shared GPU Mesh/Material refs.
+	var anchor_a := Vector3(18.0, 0.0, -14.0)
+	var anchor_b := Vector3(-28.0, 0.0, 22.0)
+	var flock_a := SeabirdFlock.spawn_over(_root, anchor_a, 14.0, 16.0, 6)
+	var flock_b := SeabirdFlock.spawn_over(_root, anchor_b, 12.0, 15.0, 5)
+	flock_a.set_process(false)
+	flock_b.set_process(false)
+
+	check_eq(SeabirdFlock.get_active_flock_count(), 2,
+		"SeabirdFlock tracks 2 active flocks in scene tree")
+
+	var birds_a := flock_a.get_birds()
+	var birds_b := flock_b.get_birds()
+	check_eq(birds_a.size(), 6, "flock_a spawns 6 gulls")
+	check_eq(birds_b.size(), 5, "flock_b spawns 5 gulls")
+
+	var body_mi_a := birds_a[0].get_node_or_null(^"Body") as MeshInstance3D
+	var body_mi_b := birds_b[0].get_node_or_null(^"Body") as MeshInstance3D
+	var wl_mi_a := birds_a[0].get_node_or_null(^"WingL/WingLMesh") as MeshInstance3D
+	var wl_mi_b := birds_b[0].get_node_or_null(^"WingL/WingLMesh") as MeshInstance3D
+	var wr_mi_a := birds_a[0].get_node_or_null(^"WingR/WingRMesh") as MeshInstance3D
+	var wr_mi_b := birds_b[0].get_node_or_null(^"WingR/WingRMesh") as MeshInstance3D
+	check(body_mi_a != null and body_mi_b != null and wl_mi_a != null and wl_mi_b != null \
+			and wr_mi_a != null and wr_mi_b != null,
+		"both independent flocks mount Body, WingLMesh, and WingRMesh MeshInstance3D nodes")
+
+	var body_a := body_mi_a.mesh as ArrayMesh
+	var body_b := body_mi_b.mesh as ArrayMesh
+	var wing_l_a := wl_mi_a.mesh as ArrayMesh
+	var wing_l_b := wl_mi_b.mesh as ArrayMesh
+	var wing_r_a := wr_mi_a.mesh as ArrayMesh
+	var wing_r_b := wr_mi_b.mesh as ArrayMesh
+	var mat_a := body_mi_a.material_override as StandardMaterial3D
+	var mat_b := body_mi_b.material_override as StandardMaterial3D
+
+	check(body_a != null and body_a == body_b and body_a.get_rid() == body_b.get_rid(),
+		"two SeabirdFlock instances share exact same body ArrayMesh and GPU RID")
+	check(wing_l_a != null and wing_l_a == wing_l_b and wing_l_a.get_rid() == wing_l_b.get_rid(),
+		"two SeabirdFlock instances share exact same left-wing ArrayMesh and GPU RID")
+	check(wing_r_a != null and wing_r_a == wing_r_b and wing_r_a.get_rid() == wing_r_b.get_rid(),
+		"two SeabirdFlock instances share exact same right-wing ArrayMesh and GPU RID")
+	check(mat_a != null and mat_a == mat_b and mat_a.get_rid() == mat_b.get_rid(),
+		"two SeabirdFlock instances share exact same plumage StandardMaterial3D and GPU RID")
+	check(flock_a._body_mesh == SeabirdFlock._shared_body_mesh \
+			and flock_a._wing_l_mesh == SeabirdFlock._shared_wing_l_mesh \
+			and flock_a._wing_r_mesh == SeabirdFlock._shared_wing_r_mesh \
+			and flock_a._plumage_mat == SeabirdFlock._shared_plumage_mat,
+		"instance aliases point directly to static shared SeabirdFlock GPU resources")
+	check(mat_a != null and mat_a.vertex_color_use_as_albedo and mat_a.vertex_color_is_srgb \
+			and mat_a.albedo_texture == null,
+		"shared plumage material uses sRGB vertex colors with zero extra VRAM textures")
+
+	var raw_prims := 0
+	var bad_normals := 0
+	var checked_meshes := 0
+	for fl: SeabirdFlock in [flock_a, flock_b]:
+		for n in fl.find_children("*", "MeshInstance3D", true, false):
+			var mi := n as MeshInstance3D
+			if mi == null or mi.mesh == null:
+				continue
+			checked_meshes += 1
+			if mi.mesh is PrimitiveMesh:
+				raw_prims += 1
+			if mi.mesh is ArrayMesh:
+				var am := mi.mesh as ArrayMesh
+				var arr := am.surface_get_arrays(0)
+				var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+				for nv in norms:
+					if not nv.is_finite() or nv.length_squared() < 0.5:
+						bad_normals += 1
+	check(checked_meshes == (6 + 5) * 3, "verified all %d gull MeshInstance3D parts across both flocks" % checked_meshes)
+	check_eq(raw_prims, 0, "SeabirdFlock uses zero raw PrimitiveMeshes")
+	check_eq(bad_normals, 0, "all sculpted gull ArrayMesh normals are finite unit vectors")
+
+	# 3. Calm weather baseline (storm = 0.0, wind = 8.0 m/s).
+	var calm_phase_before: float = float(flock_a._birds[0]["flap_phase"])
+	for _s in 20:
+		flock_a.step_flock(0.05)
+	var calm_phase_delta: float = float(flock_a._birds[0]["flap_phase"]) - calm_phase_before
+	var calm_alt_factor := flock_a.get_effective_altitude_factor()
+	var calm_flap_mult := flock_a.get_effective_flap_rate_mult()
+	check_near(calm_alt_factor, 1.0, 0.005, "calm weather altitude factor stays 1.0")
+	check_near(calm_flap_mult, 1.0, 0.005, "calm weather flap rate multiplier stays 1.0")
+
+	var calm_y_sum := 0.0
+	var calm_horiz_sum := 0.0
+	for b in birds_a:
+		calm_y_sum += b.global_position.y
+		calm_horiz_sum += Vector2(b.global_position.x - anchor_a.x, b.global_position.z - anchor_a.z).length()
+	var calm_mean_y := calm_y_sum / float(birds_a.size())
+	var calm_mean_horiz := calm_horiz_sum / float(birds_a.size())
+
+	# 4. Brisk trade winds (storm = 0.0, wind = 19.0 m/s): direct A/B check of wind-facing bank lean
+	#    & vertical thermal heave modulation while altitude/flap storm factors stay 1.0.
+	Weather.set_weather(0.0, 8.0, 1.1)
+	flock_b.step_flock(0.0)
+	var calm_b_y: Array[float] = []
+	var calm_b_bank: Array[float] = []
+	for idx_b in birds_b.size():
+		calm_b_y.append(birds_b[idx_b].global_position.y)
+		calm_b_bank.append(float(flock_b._birds[idx_b]["bank"]))
+
+	Weather.set_weather(0.0, 19.0, 1.1)
+	flock_b.step_flock(0.0)
+	var max_wind_bank_delta := 0.0
+	var max_thermal_heave_delta := 0.0
+	for idx_b in birds_b.size():
+		max_thermal_heave_delta = maxf(max_thermal_heave_delta, absf(birds_b[idx_b].global_position.y - calm_b_y[idx_b]))
+		max_wind_bank_delta = maxf(max_wind_bank_delta, absf(float(flock_b._birds[idx_b]["bank"]) - calm_b_bank[idx_b]))
+	for _s in 10:
+		flock_b.step_flock(0.05)
+	check_near(flock_b.get_effective_altitude_factor(), 1.0, 0.005,
+		"brisk fair trade winds keep altitude factor at 1.0 when storm == 0.0")
+	check(max_wind_bank_delta >= 0.04,
+		"brisk trade winds add wind-facing roll bank lean (max_delta=%.3f rad)" % max_wind_bank_delta)
+	check(max_thermal_heave_delta >= 0.20,
+		"brisk trade winds add vertical thermal heave modulation (max_delta=%.3f m)" % max_thermal_heave_delta)
+
+	# 5. Heavy storm hunkering (storm = 0.95, wind = 21.0 m/s, storm swells): smooth descent,
+	#    tightened orbit, accelerated wingbeat rate (>= 1.35x), shortened glide windows, and >= Sea.height + 3.0 m floor!
+	Sea.amp_scale = Sea.AMP_STORM
+	Sea.time = 2.4
+	Weather.set_weather(0.95, 21.0, 0.8)
+
+	# Verify smooth transition (intermediate step at 0.25 s is mid-descent, not instant snap).
+	for _s in 5:
+		flock_a.step_flock(0.05)
+	var mid_alt_factor := flock_a.get_effective_altitude_factor()
+	check(mid_alt_factor < 0.95 and mid_alt_factor > 0.65,
+		"storm hunkering transitions smoothly over time (0.25 s alt_factor=%.3f)" % mid_alt_factor)
+
+	# Finish settling into heavy storm over another 2.25 s.
+	for _s in 45:
+		flock_a.step_flock(0.05)
+	var storm_alt_factor := flock_a.get_effective_altitude_factor()
+	var storm_flap_mult := flock_a.get_effective_flap_rate_mult()
+	check(storm_alt_factor <= 0.63 and storm_alt_factor >= 0.58,
+		"heavy storm lowers effective altitude factor toward 0.58 (got %.3f)" % storm_alt_factor)
+	check(storm_flap_mult >= 1.35 and storm_flap_mult <= 1.43,
+		"heavy storm accelerates effective flap rate >= 1.35x (got %.3fx)" % storm_flap_mult)
+
+	# Verify calm glide windows shorten sharply in heavy storms (<= 2.0 s vs calm 2.6..4.6 s).
+	flock_a._birds[0]["flapping"] = true
+	flock_a._birds[0]["mode_timer"] = 0.01
+	flock_a.step_flock(0.05)
+	var storm_glide_dur: float = float(flock_a._birds[0]["mode_timer"])
+	check(not bool(flock_a._birds[0]["flapping"]) and storm_glide_dur > 0.5 and storm_glide_dur <= 2.0,
+		"heavy storm shortens calm glide window (got %.2f s <= 2.0 s)" % storm_glide_dur)
+
+	# Measure actual wingbeat phase advance over 1.0 s in heavy storm vs 1.0 s calm baseline.
+	var storm_phase_before: float = float(flock_a._birds[0]["flap_phase"])
+	for _s in 20:
+		flock_a.step_flock(0.05)
+	var storm_phase_delta: float = float(flock_a._birds[0]["flap_phase"]) - storm_phase_before
+	var observed_flap_ratio := storm_phase_delta / maxf(calm_phase_delta, 0.001)
+	check(observed_flap_ratio >= 1.35,
+		"actual gull wingbeat phase advances >= 1.35x faster in storm (ratio=%.3fx)" % observed_flap_ratio)
+
+	var storm_y_sum := 0.0
+	var storm_horiz_sum := 0.0
+	var min_sea_clearance := INF
+	for b in birds_a:
+		var gp := b.global_position
+		storm_y_sum += gp.y
+		storm_horiz_sum += Vector2(gp.x - anchor_a.x, gp.z - anchor_a.z).length()
+		var sea_y := Sea.height(gp.x, gp.z)
+		min_sea_clearance = minf(min_sea_clearance, gp.y - sea_y)
+	var storm_mean_y := storm_y_sum / float(birds_a.size())
+	var storm_mean_horiz := storm_horiz_sum / float(birds_a.size())
+
+	check(storm_mean_y < calm_mean_y - 2.5,
+		"storm hunkering lowers mean gull altitude by > 2.5 m (calm=%.2f -> storm=%.2f)" % [
+			calm_mean_y, storm_mean_y
+		])
+	check(storm_mean_horiz < calm_mean_horiz - 1.0,
+		"storm hunkering tightens elliptical orbit radius (calm=%.2f -> storm=%.2f)" % [
+			calm_mean_horiz, storm_mean_horiz
+		])
+	check(min_sea_clearance >= 3.0,
+		"storm-hunkered gulls stay safely above Sea.height + 3.0 m (min_clear=%.2f m)" % min_sea_clearance)
+
+	# Low-orbit stress check right over storm swells: floor strictly protects >= Sea.height + 3.5 m!
+	var low_flock := SeabirdFlock.spawn_over(_root, Vector3(4.0, 0.0, 4.0), 10.0, 5.0, 5)
+	low_flock.set_process(false)
+	check_eq(SeabirdFlock.get_active_flock_count(), 3, "low-orbit stress flock increments active count to 3")
+	var low_min_clear := INF
+	for _s in 16:
+		Sea.time += 0.15
+		low_flock.step_flock(0.10)
+		for b in low_flock.get_birds():
+			var gp := b.global_position
+			low_min_clear = minf(low_min_clear, gp.y - Sea.height(gp.x, gp.z))
+	check(low_min_clear >= 3.49,
+		"low-orbit gulls in full storm swell never dip below Sea.height + 3.5 m (min=%.2f m)" % low_min_clear)
+
+	print("    Q25B seabird cache & storm flight: active=%d shared RIDs OK, wind_bank=%.3f rad, thermal=%.2f m, alt=%.2f->%.2f m (factor=%.3f), orbit=%.2f->%.2f m, flap=%.3fx, glide=%.2f s, min_clear=%.2f m (low=%.2f m)" % [
+		SeabirdFlock.get_active_flock_count(),
+		max_wind_bank_delta,
+		max_thermal_heave_delta,
+		calm_mean_y,
+		storm_mean_y,
+		storm_alt_factor,
+		calm_mean_horiz,
+		storm_mean_horiz,
+		storm_flap_mult,
+		storm_glide_dur,
+		min_sea_clearance,
+		low_min_clear,
+	])
+
+	# 6. Ref-counted teardown: partial free keeps shared cache alive; final teardown releases ALL caches!
+	flock_b.queue_free()
+	low_flock.queue_free()
+	await physics_frames(2)
+	check_eq(SeabirdFlock.get_active_flock_count(), 1,
+		"active flock count decrements accurately to 1 while flock_a remains alive")
+	check(SeabirdFlock._shared_body_mesh != null and SeabirdFlock._shared_plumage_mat != null,
+		"static shared caches remain alive while >= 1 SeabirdFlock is active")
+
+	await _end()
+	check_eq(SeabirdFlock.get_active_flock_count(), 0,
+		"SeabirdFlock.get_active_flock_count() drops to 0 after teardown")
+	check(SeabirdFlock._shared_body_mesh == null and SeabirdFlock._shared_wing_l_mesh == null \
+			and SeabirdFlock._shared_wing_r_mesh == null and SeabirdFlock._shared_plumage_mat == null,
+		"SeabirdFlock releases all static shared meshes and plumage material cleanly (0 leaks)")
+

@@ -3223,3 +3223,353 @@ func test_q23b_outpost_pier_bell_ripple_tavern_keg_halo_and_full_src_ascii() -> 
 	check(Outpost._pier_bell_ripple_mesh == null and Outpost._tavern_keg_halo_mesh == null,
 		"Outpost releases _pier_bell_ripple_mesh and _tavern_keg_halo_mesh with 0 leaks")
 	Weather.apply_state(saved_weather)
+
+
+func test_q25a_wildlife_firefly_glow_halos_and_parrot_feather_flurry() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# 1. Source hygiene: strict ASCII code lines, zero PrimitiveMeshes, Vulkan-safe MultiMesh teardown.
+	var wildlife_src := FileAccess.get_file_as_string("res://src/world/island_wildlife.gd")
+	check(wildlife_src.length() > 1000, "loaded src/world/island_wildlife.gd cleanly")
+	var src_lines := wildlife_src.split("\n")
+	var non_ascii_code := 0
+	var scanned_code_lines := 0
+	for li in src_lines.size():
+		var code_part := _q23b_strip_gd_line_comment(src_lines[li])
+		if code_part.strip_edges() == "":
+			continue
+		scanned_code_lines += 1
+		var bad_cp := _q23b_first_non_ascii_cp(code_part)
+		if bad_cp >= 0:
+			non_ascii_code += 1
+			check(false, "non-ASCII U+%04X found in island_wildlife.gd:%d" % [bad_cp, li + 1])
+	check_eq(non_ascii_code, 0,
+		"src/world/island_wildlife.gd (%d code lines) contains 0 non-ASCII characters" % scanned_code_lines)
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new", "PlaneMesh.new",
+	]:
+		check(not wildlife_src.contains(bad_prim),
+			"island_wildlife.gd contains zero %s calls" % bad_prim)
+	for bad_mm_teardown: String in [
+		"mm.mesh = null", "mm.instance_count = 0",
+		"multimesh.mesh = null", "multimesh.instance_count = 0",
+	]:
+		check(not wildlife_src.contains(bad_mm_teardown),
+			"island_wildlife.gd avoids forbidden Vulkan MultiMesh teardown '%s'" % bad_mm_teardown)
+
+	# 2. Build Cutlass Cay and Port Scoundrel so we test both shared static caches and instance isolation.
+	var holder := Node3D.new()
+	add_child(holder)
+	var cutlass_spec: Dictionary = {}
+	var port_spec: Dictionary = {}
+	for spec: Dictionary in Archipelago.ISLAND_SPECS:
+		var sid := String(spec.get("id", ""))
+		if sid == "cutlass_cay":
+			cutlass_spec = spec
+		elif sid == "port_scoundrel":
+			port_spec = spec
+	check(not cutlass_spec.is_empty() and not port_spec.is_empty(),
+		"Archipelago.ISLAND_SPECS provides cutlass_cay and port_scoundrel specs")
+
+	var cutlass := IslandGenerator.build_island(cutlass_spec)
+	var port := IslandGenerator.build_island(port_spec)
+	check(cutlass != null and port != null, "Cutlass Cay and Port Scoundrel build cleanly")
+	if cutlass == null or port == null:
+		if cutlass != null:
+			cutlass.free()
+		if port != null:
+			port.free()
+		holder.queue_free()
+		await physics_frames(2)
+		Weather.apply_state(saved_weather)
+		return
+	holder.add_child(cutlass)
+	holder.add_child(port)
+	if port is Outpost:
+		(port as Outpost).set_process(false)
+
+	var pawn := PAWN_SCENE.instantiate() as Pawn
+	holder.add_child(pawn)
+	pawn.global_position = cutlass.global_position + Vector3(0.0, 2.0, -78.0)
+
+	var cw := IslandWildlife.populate_island(cutlass, pawn)
+	var pw := IslandWildlife.populate_island(port, pawn)
+	check(cw != null and pw != null, "IslandWildlife mounts cleanly on Cutlass Cay and Port Scoundrel")
+	cw.set_process(false)
+	pw.set_process(false)
+	await physics_frames(2)
+	check_eq(IslandWildlife._active_instances, 2, "IslandWildlife tracks 2 active instances")
+
+	# 3. Verify nocturnal FireflyGlowHalo (24-tri zero-primitive billboard halo, day hidden, night twinkling).
+	var halo_count := cw.get_firefly_halo_count()
+	check_eq(halo_count, cw.get_insects().size(),
+		"get_firefly_halo_count() matches mounted glade insects (%d)" % halo_count)
+	check(halo_count >= 5, "Cutlass Cay mounts >= 5 FireflyGlowHalo nodes (got %d)" % halo_count)
+
+	var ins0 := cw.get_insects()[0]
+	var pw_ins0 := pw.get_insects()[0]
+	var halo0 := ins0.get_node_or_null(^"FireflyVisual/FireflyGlowHalo") as MeshInstance3D
+	var pw_halo0 := pw_ins0.get_node_or_null(^"FireflyVisual/FireflyGlowHalo") as MeshInstance3D
+	check(halo0 != null and pw_halo0 != null,
+		"FireflyGlowHalo mounts inside FireflyVisual right alongside FireflyMesh")
+
+	var halo_tris := 0
+	var halo_bad_normals := 0
+	var halo_has_core := false
+	var halo_has_black_rim := false
+	var halo_mid_max_lum := 0.0
+	var halo_max_r := 0.0
+	if halo0 != null and pw_halo0 != null:
+		check(halo0.mesh is ArrayMesh and not (halo0.mesh is PrimitiveMesh),
+			"FireflyGlowHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(halo0.mesh, pw_halo0.mesh,
+			"Islands share statically cached 24-tri _firefly_halo_mesh")
+		check_eq(halo0.material_override, pw_halo0.material_override,
+			"Islands share statically cached _firefly_halo_mat")
+		check_eq(halo0.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"FireflyGlowHalo disables shadow casting")
+		check_eq(halo0.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"FireflyGlowHalo disables GI mode")
+		check_near(halo0.visibility_range_end, 155.0, 0.5,
+			"FireflyGlowHalo culls cleanly at 155.0 m")
+
+		var hmat := halo0.material_override as StandardMaterial3D
+		check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb \
+				and not hmat.uv1_world_triplanar \
+				and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and hmat.billboard_keep_scale \
+				and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED \
+				and hmat.albedo_texture == null,
+			"FireflyGlowHalo uses zero-VRAM additive unshaded scale-preserving billboard sRGB material")
+
+		if halo0.mesh is ArrayMesh:
+			var arr := (halo0.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			halo_tris = floori(float(verts.size()) / 3.0)
+			for vi in verts.size():
+				var v := verts[vi]
+				var nv := norms[vi]
+				var cv := cols[vi]
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					halo_bad_normals += 1
+				var rad := Vector2(v.x, v.y).length()
+				halo_max_r = maxf(halo_max_r, rad)
+				if rad < 0.01 and cv.r >= 0.95 and cv.g >= 0.85:
+					halo_has_core = true
+				elif rad >= 0.055 and rad <= 0.08:
+					var mid_lum := maxf(cv.r, maxf(cv.g, cv.b))
+					halo_mid_max_lum = maxf(halo_mid_max_lum, mid_lum)
+				elif rad >= 0.26 and cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					halo_has_black_rim = true
+		check_eq(halo_tris, 24, "FireflyGlowHalo builds exact 24-tri 8-wedge radial additive billboard")
+		check_eq(halo_bad_normals, 0, "FireflyGlowHalo normals are 100% finite (0, 0, 1) unit vectors")
+		check(halo_has_core and halo_has_black_rim,
+			"FireflyGlowHalo feathers golden core to pure Color(0, 0, 0, 1) outer rim")
+		check_near(halo_max_r, 0.28, 0.005,
+			"FireflyGlowHalo outer radius matches delicate 0.28 m feathering (got %.3f)" % halo_max_r)
+		check(halo_mid_max_lum > 0.05 and halo_mid_max_lum <= 0.42,
+			"FireflyGlowHalo mid-ring stays softly feathered <= 0.42 (got %.3f)" % halo_mid_max_lum)
+
+	# Midday (12.0): FireflyGlowHalo must stay hidden!
+	Weather.time_of_day = 12.0
+	cw.step_wildlife(0.05)
+	check(halo0 != null and not halo0.visible and not halo0.is_visible_in_tree(),
+		"Midday (12.0) keeps FireflyGlowHalo hidden while daytime butterflies fly")
+
+	# Midnight (22.5): FireflyGlowHalo wakes up and twinkles with staggered individual blink scale!
+	Weather.time_of_day = 22.5
+	cw.step_wildlife(0.05)
+	check(halo0 != null and halo0.visible and halo0.is_visible_in_tree(),
+		"Midnight (22.5) shows FireflyGlowHalo alongside glowing fireflies")
+	var night_min_sc := INF
+	var night_max_sc := -INF
+	for hi in halo_count:
+		var hsc := cw.get_firefly_halo_scale(hi)
+		check(hsc >= 0.55 - 0.001 and hsc <= 1.35 + 0.001,
+			"FireflyGlowHalo[%d] scale lies in [0.55..1.35] band (got %.3f)" % [hi, hsc])
+		night_min_sc = minf(night_min_sc, hsc)
+		night_max_sc = maxf(night_max_sc, hsc)
+	var halo_spread := night_max_sc - night_min_sc
+	check(halo_spread > 0.15,
+		"Midnight fireflies show organic staggered blink scale variance > 0.15 (spread=%.3f)" % halo_spread)
+
+	var h0_start_sc := cw.get_firefly_halo_scale(0)
+	var h0_max_delta := 0.0
+	for _step in 24:
+		cw.step_wildlife(0.05)
+		var sc_now := cw.get_firefly_halo_scale(0)
+		check(sc_now >= 0.55 - 0.001 and sc_now <= 1.35 + 0.001,
+			"Pulsing FireflyGlowHalo stays bounded in [0.55..1.35] (got %.3f)" % sc_now)
+		h0_max_delta = maxf(h0_max_delta, absf(sc_now - h0_start_sc))
+	check(h0_max_delta > 0.15,
+		"FireflyGlowHalo pulses smoothly over time at midnight (delta=%.3f)" % h0_max_delta)
+
+	# 4. Verify ParrotFeatherFlurry (8 instances x 8-tri sculpted curved ArrayMesh = 64 tris).
+	var flurry0 := cw.get_feather_flurry()
+	var flurry1 := pw.get_feather_flurry()
+	check(flurry0 != null and flurry0.name == "ParrotFeatherFlurry" and flurry1 != null,
+		"IslandWildlife mounts preallocated ParrotFeatherFlurry MultiMeshInstance3D")
+
+	var feather_tris := 0
+	var feather_count := 0
+	var feather_bad_normals := 0
+	if flurry0 != null and flurry1 != null:
+		check_eq(flurry0.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ParrotFeatherFlurry disables shadow casting")
+		check_eq(flurry0.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"ParrotFeatherFlurry disables GI mode")
+		check_near(flurry0.visibility_range_end, 140.0, 0.5,
+			"ParrotFeatherFlurry culls cleanly at 140.0 m")
+		check_eq(flurry0.material_override, flurry1.material_override,
+			"Islands share statically cached _feather_flurry_mat")
+
+		var fmat := flurry0.material_override as StandardMaterial3D
+		check(fmat != null and fmat.vertex_color_use_as_albedo and fmat.vertex_color_is_srgb \
+				and not fmat.uv1_world_triplanar \
+				and fmat.cull_mode == BaseMaterial3D.CULL_DISABLED \
+				and fmat.albedo_texture == null,
+			"ParrotFeatherFlurry uses zero-VRAM vertex-colored sRGB double-sided StandardMaterial3D")
+
+		var mm0 := flurry0.multimesh
+		var mm1 := flurry1.multimesh
+		check(mm0 != null and mm1 != null, "ParrotFeatherFlurry owns valid MultiMesh resource")
+		if mm0 != null and mm1 != null:
+			feather_count = mm0.instance_count
+			check_eq(feather_count, 8, "ParrotFeatherFlurry allocates exact 8 feather instances")
+			check(mm0.use_colors, "ParrotFeatherFlurry MultiMesh enables per-instance plumage colors")
+			check(mm0.mesh is ArrayMesh and not (mm0.mesh is PrimitiveMesh),
+				"ParrotFeatherFlurry MultiMesh uses sculpted ArrayMesh (zero PrimitiveMesh)")
+			check_eq(mm0.mesh, mm1.mesh,
+				"Islands share statically cached 8-tri _feather_flurry_mesh")
+			if mm0.mesh is ArrayMesh:
+				var farr := (mm0.mesh as ArrayMesh).surface_get_arrays(0)
+				var fverts: PackedVector3Array = farr[Mesh.ARRAY_VERTEX]
+				var fnorms: PackedVector3Array = farr[Mesh.ARRAY_NORMAL]
+				feather_tris = floori(float(fverts.size()) / 3.0)
+				for nv in fnorms:
+					if not nv.is_finite() or absf(nv.length() - 1.0) > 0.02:
+						feather_bad_normals += 1
+			check_eq(feather_tris, 8, "ParrotFeatherFlurry builds exact 8-tri curved feather (64 tris total)")
+			check_eq(feather_bad_normals, 0, "ParrotFeatherFlurry normals are 100% finite unit vectors")
+
+	# Strictly hidden at rest before any parrot startles.
+	check(flurry0 != null and not flurry0.visible \
+			and is_equal_approx(cw.get_feather_flurry_active_ratio(), 0.0),
+		"ParrotFeatherFlurry stays strictly hidden at ratio 0.0 while parrots remain perched")
+
+	# Startle perched Scarlet Macaw 0 with approaching player position.
+	var parrots := cw.get_parrots()
+	check(parrots.size() >= 2, "Cutlass Cay perches >= 2 parrots for startle flurry verification")
+	var parrot0 := parrots[0]
+	var perch_pos0 := parrot0.position
+	check(not cw.is_parrot_flying(0), "Scarlet Macaw 0 starts perched calmly")
+	pawn.global_position = cutlass.global_transform * (perch_pos0 + Vector3(2.0, 0.0, 1.2))
+	cw.step_wildlife(0.05)
+
+	var burst_ratio := cw.get_feather_flurry_active_ratio()
+	check(cw.is_parrot_flying(0), "Approaching player startles Scarlet Macaw 0 into flight")
+	check(flurry0 != null and flurry0.visible and burst_ratio > 0.8,
+		"Startled parrot bursts ParrotFeatherFlurry visibly with ratio > 0.8 (got %.3f)" % burst_ratio)
+	check(flurry1 != null and not flurry1.visible and is_equal_approx(pw.get_feather_flurry_active_ratio(), 0.0),
+		"Startling Cutlass Cay parrot keeps idle Port Scoundrel ParrotFeatherFlurry hidden")
+
+	# Verify takeoff perch alignment, Scarlet Macaw plumage tinting, and initial burst spread.
+	if flurry0 != null:
+		check(flurry0.position.distance_to(perch_pos0 + Vector3(0.0, 0.34, 0.0)) < 0.01,
+			"ParrotFeatherFlurry bursts cleanly from startled parrot takeoff perch")
+	var start_horiz := 0.0
+	var start_scale := 0.0
+	var saw_scarlet := false
+	var saw_gold := false
+	var saw_cobalt := false
+	for fi in feather_count:
+		start_horiz += Vector2(cw._ff_px[fi], cw._ff_pz[fi]).length()
+		start_scale += cw._ff_cur_scale[fi]
+		var fc := Color(cw._ff_r[fi], cw._ff_g[fi], cw._ff_b[fi])
+		if fc.is_equal_approx(IslandWildlife.COL_SCARLET_MAIN):
+			saw_scarlet = true
+		elif fc.is_equal_approx(IslandWildlife.COL_SCARLET_GOLD):
+			saw_gold = true
+		elif fc.is_equal_approx(IslandWildlife.COL_SCARLET_COBALT):
+			saw_cobalt = true
+	start_horiz /= float(maxi(feather_count, 1))
+	start_scale /= float(maxi(feather_count, 1))
+	check(saw_scarlet and saw_gold and saw_cobalt,
+		"Startled Scarlet Macaw tints feathers in scarlet, gold, and cobalt plumage")
+
+	# Move player away so no second parrot triggers while tracking the 1.60 s flutter decay.
+	pawn.global_position = cutlass.global_position + Vector3(0.0, 2.0, -78.0)
+	for _step in 15:
+		cw.step_wildlife(0.05)
+	var mid_ratio := cw.get_feather_flurry_active_ratio()
+	check(flurry0 != null and flurry0.visible and mid_ratio > 0.35 and mid_ratio < 0.65,
+		"ParrotFeatherFlurry stays fluttering mid-descent at ~0.50 ratio (got %.3f)" % mid_ratio)
+	var mid_horiz := 0.0
+	var mid_scale := 0.0
+	for fi in feather_count:
+		mid_horiz += Vector2(cw._ff_px[fi], cw._ff_pz[fi]).length()
+		mid_scale += cw._ff_cur_scale[fi]
+	mid_horiz /= float(maxi(feather_count, 1))
+	mid_scale /= float(maxi(feather_count, 1))
+	check(mid_horiz > start_horiz + 0.30,
+		"Feathers flutter outward from takeoff perch (r=%.2f -> %.2f m)" % [start_horiz, mid_horiz])
+	check(mid_scale < start_scale * 0.90,
+		"Feathers shrink smoothly while drifting downward (scale=%.3f -> %.3f)" % [start_scale, mid_scale])
+	if DisplayServer.get_name() != "headless" and flurry0 != null and flurry0.multimesh != null:
+		var gpu_pos0 := flurry0.multimesh.get_instance_transform(0).origin
+		var cpu_pos0 := Vector3(cw._ff_px[0], cw._ff_py[0], cw._ff_pz[0])
+		check(gpu_pos0.distance_to(cpu_pos0) < 0.001,
+			"GPU MultiMesh transform matches preallocated CPU feather position")
+
+	# Advance past 1.75 s total elapsed (35 x 0.05 s = 1.75 s > 1.60 s): must hide cleanly at ratio 0.0.
+	for _step in 19:
+		cw.step_wildlife(0.05)
+	check(flurry0 != null and not flurry0.visible \
+			and is_equal_approx(cw.get_feather_flurry_active_ratio(), 0.0),
+		"ParrotFeatherFlurry hides cleanly at ratio 0.0 after 1.75 s")
+
+	# Also startle Emerald Amazon parrot (index 1) to verify emerald/lime/teal plumage tinting.
+	if parrots.size() >= 2 and not cw.is_parrot_flying(1):
+		var perch_pos1 := parrots[1].position
+		pawn.global_position = cutlass.global_transform * (perch_pos1 + Vector3(1.8, 0.0, 1.0))
+		cw.step_wildlife(0.05)
+		var saw_emerald := false
+		var saw_lime := false
+		var saw_teal := false
+		for fi in feather_count:
+			var fc := Color(cw._ff_r[fi], cw._ff_g[fi], cw._ff_b[fi])
+			if fc.is_equal_approx(IslandWildlife.COL_EMERALD_MAIN):
+				saw_emerald = true
+			elif fc.is_equal_approx(IslandWildlife.COL_EMERALD_LIME):
+				saw_lime = true
+			elif fc.is_equal_approx(IslandWildlife.COL_EMERALD_TEAL):
+				saw_teal = true
+		check(saw_emerald and saw_lime and saw_teal,
+			"Startled Emerald Amazon parrot tints feathers in emerald, lime, and teal plumage")
+
+	print("    Q25A wildlife polish: FireflyGlowHalo=%d tris x %d (mid_lum=%.2f, night_spread=%.2f, pulse_delta=%.2f), ParrotFeatherFlurry=%dx%d=%d tris (ratio %.2f->%.2f->0.0, r %.2f->%.2f m)" % [
+		halo_tris, halo_count, halo_mid_max_lum, halo_spread, h0_max_delta,
+		feather_count, feather_tris, feather_count * feather_tris,
+		burst_ratio, mid_ratio, start_horiz, mid_horiz,
+	])
+
+	# 5. Clean Vulkan-safe teardown & automatic static ref-counted cache release (0 leaks).
+	holder.queue_free()
+	await physics_frames(3)
+	check_eq(IslandWildlife._active_instances, 0,
+		"IslandWildlife._active_instances returns to 0 after Q25A teardown")
+	check(IslandWildlife._firefly_halo_mesh == null and IslandWildlife._firefly_halo_mat == null \
+			and IslandWildlife._feather_flurry_mesh == null and IslandWildlife._feather_flurry_mat == null,
+		"IslandWildlife releases Q25A static halo and feather flurry caches with 0 leaks")
+	Weather.apply_state(saved_weather)
+

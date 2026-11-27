@@ -19,6 +19,17 @@ const SHIP_ESCORT_MAX_BIRDS := 2
 const SHIP_ESCORT_SCAN_INTERVAL := 0.25
 const SHIP_ESCORT_BLEND_TIME := 1.8
 
+# Wind-aware thermal soaring and storm-hunkering flight dynamics.
+const STORM_ALTITUDE_MIN_MULT := 0.58
+const STORM_ORBIT_MIN_MULT := 0.80
+const STORM_FLAP_MAX_MULT := 1.42
+const STORM_SEA_CLEARANCE := 3.5
+const STORM_SMOOTH_RATE := 2.5
+const WIND_SOAR_THRESHOLD := 10.0
+const WIND_SOAR_FULL_SPEED := 22.0
+const WIND_BANK_MAX_RAD := 0.16
+const WIND_THERMAL_HEAVE_MAX := 1.35
+
 # Painterly sunlit coastal gull palette.
 const COL_BODY_WHITE := Color(0.97, 0.95, 0.90)
 const COL_BELLY_SHADE := Color(0.80, 0.84, 0.88)
@@ -30,6 +41,13 @@ const COL_BEAK_GOLD := Color(0.96, 0.72, 0.14)
 const COL_BEAK_SPOT := Color(0.88, 0.24, 0.14)
 const COL_FEET_AMBER := Color(0.90, 0.54, 0.16)
 const COL_EYE_DARK := Color(0.08, 0.09, 0.11)
+
+# Ref-counted static shared gull meshes and plumage material across all active flocks.
+static var _active_flocks: int = 0
+static var _shared_body_mesh: ArrayMesh = null
+static var _shared_wing_l_mesh: ArrayMesh = null
+static var _shared_wing_r_mesh: ArrayMesh = null
+static var _shared_plumage_mat: StandardMaterial3D = null
 
 @export_range(1, 12, 1) var bird_count: int = 5
 @export var orbit_radius: float = 14.0
@@ -49,6 +67,12 @@ var _plumage_mat: StandardMaterial3D = null
 var _rng := RandomNumberGenerator.new()
 var _cry_timer: float = 4.5
 var _clock: float = 0.0
+var _counted_in_tree: bool = false
+var _storm_blend: float = 0.0
+var _storm_initialized: bool = false
+var _effective_alt_factor: float = 1.0
+var _effective_orbit_factor: float = 1.0
+var _effective_flap_mult: float = 1.0
 var _escort_ship: Node3D = null
 var _escort_scan_timer: float = 0.0
 var _escort_last_ship_pos: Vector3 = Vector3.ZERO
@@ -56,6 +80,19 @@ var _escort_last_ship_aft: Vector3 = Vector3.BACK
 var _escort_last_ship_right: Vector3 = Vector3.RIGHT
 var _escort_last_ship_vel: Vector3 = Vector3.ZERO
 var _has_escort_anchor: bool = false
+
+
+## Return the number of active SeabirdFlock instances currently in the scene tree.
+static func get_active_flock_count() -> int:
+	return _active_flocks
+
+
+## Release all statically cached gull meshes and plumage material cleanly.
+static func clear_shared_cache() -> void:
+	_shared_body_mesh = null
+	_shared_wing_l_mesh = null
+	_shared_wing_r_mesh = null
+	_shared_plumage_mat = null
 
 
 ## Spawn a configured circling gull flock anchored above `world_pos`.
@@ -80,14 +117,33 @@ static func spawn_over(parent: Node, world_pos: Vector3, radius: float = 14.0,
 
 
 func _enter_tree() -> void:
+	if not _counted_in_tree:
+		_counted_in_tree = true
+		_active_flocks += 1
 	add_to_group(GROUP)
 	if is_loot_marker:
 		add_to_group(LOOT_MARKER_GROUP)
 
 
 func _exit_tree() -> void:
+	for entry: Dictionary in _birds:
+		for mi_key: String in ["body_mi", "wing_l_mi", "wing_r_mi"]:
+			var mi := entry.get(mi_key) as MeshInstance3D
+			if mi != null and is_instance_valid(mi):
+				mi.mesh = null
+				mi.material_override = null
+	_birds.clear()
+	_body_mesh = null
+	_wing_l_mesh = null
+	_wing_r_mesh = null
+	_plumage_mat = null
 	_escort_ship = null
 	_has_escort_anchor = false
+	if _counted_in_tree:
+		_counted_in_tree = false
+		_active_flocks = maxi(0, _active_flocks - 1)
+	if _active_flocks == 0:
+		clear_shared_cache()
 
 
 func _ready() -> void:
@@ -139,6 +195,16 @@ func get_bird_escort_blend(idx: int) -> float:
 	return float(_birds[idx].get("escort_blend", 0.0))
 
 
+## Return the current weather-modulated flight altitude multiplier (1.0 calm -> 0.58 full storm).
+func get_effective_altitude_factor() -> float:
+	return _effective_alt_factor
+
+
+## Return the current weather-modulated wingbeat frequency multiplier (1.0 calm -> 1.42 full storm).
+func get_effective_flap_rate_mult() -> float:
+	return _effective_flap_mult
+
+
 func _process(delta: float) -> void:
 	step_flock(delta)
 
@@ -149,6 +215,18 @@ func step_flock(delta: float) -> void:
 		return
 	var dt := clampf(delta, 0.0, 0.15)
 	_clock += dt
+
+	var raw_storm: float = clampf(Weather.storminess, 0.0, 1.0) if Weather != null else 0.0
+	var wind_spd: float = Weather.local_wind_speed() if Weather != null else 8.0
+	if not _storm_initialized:
+		_storm_blend = raw_storm
+		_storm_initialized = true
+	elif dt > 0.0:
+		var blend_alpha := 1.0 - exp(-dt * STORM_SMOOTH_RATE)
+		_storm_blend = lerpf(_storm_blend, raw_storm, blend_alpha)
+	_effective_alt_factor = lerpf(1.0, STORM_ALTITUDE_MIN_MULT, _storm_blend)
+	_effective_orbit_factor = lerpf(1.0, STORM_ORBIT_MIN_MULT, _storm_blend)
+	_effective_flap_mult = lerpf(1.0, STORM_FLAP_MAX_MULT, _storm_blend)
 
 	_escort_scan_timer -= dt
 	var target_invalid := _escort_ship != null and (not is_instance_valid(_escort_ship) or not _escort_ship.is_inside_tree())
@@ -161,14 +239,26 @@ func step_flock(delta: float) -> void:
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
 	var cam_dist_sq := 0.0
 	if cam != null:
-		var flock_center := global_position + Vector3(0.0, orbit_height, 0.0)
+		var flock_center := global_position + Vector3(0.0, orbit_height * _effective_alt_factor, 0.0)
 		cam_dist_sq = flock_center.distance_squared_to(cam.global_position)
 	wing_anim_culled = cam != null and cam_dist_sq > WING_CULL_DISTANCE * WING_CULL_DISTANCE
 
 	var wind_drift := Vector3.ZERO
+	var wind_dir_local := Vector3.ZERO
+	var wind_soar := clampf(
+		(wind_spd - WIND_SOAR_THRESHOLD) / (WIND_SOAR_FULL_SPEED - WIND_SOAR_THRESHOLD),
+		0.0,
+		1.0
+	)
 	if Weather != null:
 		var wv := Weather.mean_wind_vector()
-		wind_drift = Vector3(wv.x, 0.0, wv.z) * 0.08
+		var w_horiz := Vector3(wv.x, 0.0, wv.z)
+		wind_drift = w_horiz * 0.08
+		if w_horiz.length_squared() > 0.001:
+			var w_local := (global_basis.inverse() * w_horiz) if is_inside_tree() else w_horiz
+			w_local.y = 0.0
+			if w_local.length_squared() > 0.001:
+				wind_dir_local = w_local.normalized()
 
 	var escort_slots := mini(SHIP_ESCORT_MAX_BIRDS, maxi(1, _birds.size() - 2))
 	if _birds.size() <= 2:
@@ -199,16 +289,16 @@ func step_flock(delta: float) -> void:
 		if escort_blend > 0.0001:
 			any_blended = true
 
-		var prev_pos := _orbit_local_pos(entry, angle - angular_speed * dir_sign * 0.04, wind_drift)
-		var orbit_pos := _orbit_local_pos(entry, angle, wind_drift)
-		var next_pos := _orbit_local_pos(entry, angle + angular_speed * dir_sign * 0.04, wind_drift)
+		var prev_pos := _orbit_local_pos(entry, angle - angular_speed * dir_sign * 0.04, wind_drift, wind_soar, wind_dir_local)
+		var orbit_pos := _orbit_local_pos(entry, angle, wind_drift, wind_soar, wind_dir_local)
+		var next_pos := _orbit_local_pos(entry, angle + angular_speed * dir_sign * 0.04, wind_drift, wind_soar, wind_dir_local)
 		var cur_pos := orbit_pos
 		var vel := (next_pos - prev_pos) / 0.08
 
 		if escort_blend > 0.0001 and _has_escort_anchor:
 			var smooth_b := smoothstep(0.0, 1.0, escort_blend)
 			var escort_pos := _escort_local_pos(entry, _clock)
-			cur_pos = orbit_pos.lerp(escort_pos, smooth_b)
+			cur_pos = _clamp_above_sea(orbit_pos.lerp(escort_pos, smooth_b))
 			if escort_blend >= 0.98 and _escort_ship != null:
 				var e_prev := _escort_local_pos(entry, _clock - 0.04)
 				var e_next := _escort_local_pos(entry, _clock + 0.04)
@@ -241,8 +331,18 @@ func step_flock(delta: float) -> void:
 			entry["yaw"] = yaw
 			entry["has_yaw"] = true
 
-		var pitch := clampf(atan2(vel.y, maxf(horiz_len, 0.5)), -0.32, 0.32)
-		var target_bank := clampf(yaw_rate * 0.85, -0.58, 0.58)
+		var wind_bank := 0.0
+		var wind_pitch := 0.0
+		if wind_soar > 0.001 and wind_dir_local.length_squared() > 0.001:
+			var bird_right := Vector3(cos(yaw), 0.0, -sin(yaw))
+			var bird_fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+			var crosswind := bird_right.dot(wind_dir_local)
+			var headwind := -bird_fwd.dot(wind_dir_local)
+			wind_bank = crosswind * WIND_BANK_MAX_RAD * wind_soar
+			wind_pitch = headwind * 0.045 * wind_soar
+
+		var pitch := clampf(atan2(vel.y, maxf(horiz_len, 0.5)) + wind_pitch, -0.35, 0.35)
+		var target_bank := clampf(clampf(yaw_rate * 0.85, -0.58, 0.58) + wind_bank, -0.70, 0.70)
 		var bank: float = lerpf(float(entry["bank"]), target_bank, clampf(dt * 4.5, 0.0, 1.0)) if dt > 0.0 else target_bank
 		entry["bank"] = bank
 
@@ -252,29 +352,32 @@ func step_flock(delta: float) -> void:
 		if wing_anim_culled:
 			continue
 
-		var mode_timer: float = float(entry["mode_timer"]) - dt
 		var flapping: bool = bool(entry["flapping"])
+		var timer_step := dt * (lerpf(1.0, 2.2, _storm_blend) if not flapping else 1.0)
+		var mode_timer: float = float(entry["mode_timer"]) - timer_step
 		if mode_timer <= 0.0:
 			flapping = not flapping
 			entry["flapping"] = flapping
+			var glide_scale := lerpf(1.0, 0.35, _storm_blend)
+			var flap_dur_scale := lerpf(1.0, 1.35, _storm_blend)
 			if escort_blend > 0.35:
 				# Escort gulls ride the vessel's masthead updraft in longer soaring glides.
-				mode_timer = _rng.randf_range(0.9, 1.6) if flapping else _rng.randf_range(4.2, 6.8)
+				mode_timer = _rng.randf_range(0.9, 1.6) * flap_dur_scale if flapping else _rng.randf_range(4.2, 6.8) * glide_scale
 			else:
-				mode_timer = _rng.randf_range(1.8, 3.1) if flapping else _rng.randf_range(2.6, 4.6)
+				mode_timer = _rng.randf_range(1.8, 3.1) * flap_dur_scale if flapping else _rng.randf_range(2.6, 4.6) * glide_scale
 		entry["mode_timer"] = mode_timer
 
 		var flap_blend: float = float(entry["flap_blend"])
 		var goal_blend := 1.0 if flapping else 0.0
-		flap_blend = move_toward(flap_blend, goal_blend, dt * 2.4)
+		flap_blend = move_toward(flap_blend, goal_blend, dt * lerpf(2.4, 3.6, _storm_blend))
 		entry["flap_blend"] = flap_blend
 
-		var flap_freq: float = float(entry["flap_freq"])
+		var flap_freq: float = float(entry["flap_freq"]) * _effective_flap_mult
 		var flap_phase: float = float(entry["flap_phase"]) + dt * flap_freq * TAU
 		entry["flap_phase"] = flap_phase
 
 		# Rhythmic downstroke/upstroke mixed smoothly into a gentle banked gull dihedral glide.
-		var raw_flap := sin(flap_phase) * 0.58 - 0.06
+		var raw_flap := sin(flap_phase) * lerpf(0.58, 0.66, _storm_blend) - 0.06
 		var glide_dihedral := 0.14 + absf(bank) * 0.12 + 0.05 * escort_blend
 		var wing_roll := lerpf(glide_dihedral, raw_flap, flap_blend)
 		var wing_pitch := cos(flap_phase) * 0.14 * flap_blend
@@ -379,23 +482,23 @@ func _sync_escort_anchor() -> void:
 func _escort_local_pos(entry: Dictionary, t: float) -> Vector3:
 	var aft_dist: float = float(entry["escort_aft"])
 	var lat_amp: float = float(entry["escort_lat"])
-	var base_h: float = float(entry["escort_height"])
+	var base_h: float = float(entry["escort_height"]) * lerpf(1.0, 0.72, _storm_blend)
 	var phase: float = float(entry["escort_phase"]) + t * float(entry["escort_freq"])
 	var bob: float = sin(t * float(entry["bob_freq"]) + float(entry["bob_phase"])) * float(entry["bob_amp"]) * 0.65
 	var world_pos := _escort_last_ship_pos \
 		+ _escort_last_ship_aft * aft_dist \
 		+ _escort_last_ship_right * (sin(phase) * lat_amp) \
 		+ Vector3.UP * (base_h + bob)
-	if is_inside_tree():
-		return to_local(world_pos)
-	return world_pos - position
+	var local_pos := to_local(world_pos) if is_inside_tree() else (world_pos - position)
+	return _clamp_above_sea(local_pos)
 
 
-func _orbit_local_pos(entry: Dictionary, angle: float, wind_drift: Vector3) -> Vector3:
-	var rx: float = float(entry["rx"])
-	var rz: float = float(entry["rz"])
+func _orbit_local_pos(entry: Dictionary, angle: float, wind_drift: Vector3,
+		wind_soar: float, wind_dir_local: Vector3) -> Vector3:
+	var rx: float = float(entry["rx"]) * _effective_orbit_factor
+	var rz: float = float(entry["rz"]) * _effective_orbit_factor
 	var ellipse_rot: float = float(entry["ellipse_rot"])
-	var base_y: float = float(entry["base_y"])
+	var base_y: float = float(entry["base_y"]) * _effective_alt_factor
 	var bob_amp: float = float(entry["bob_amp"])
 	var bob_freq: float = float(entry["bob_freq"])
 	var bob_phase: float = float(entry["bob_phase"])
@@ -406,9 +509,40 @@ func _orbit_local_pos(entry: Dictionary, angle: float, wind_drift: Vector3) -> V
 	var sr := sin(ellipse_rot)
 	var px := lx * cr - lz * sr
 	var pz := lx * sr + lz * cr
-	var py := base_y + sin(_clock * bob_freq + bob_phase) * bob_amp + sin(angle * 2.0 + bob_phase) * (bob_amp * 0.45)
+
+	var thermal_heave := 0.0
+	if wind_soar > 0.001:
+		var radial_len := Vector2(px, pz).length()
+		var upwind_align := 0.0
+		if radial_len > 0.01 and wind_dir_local.length_squared() > 0.001:
+			upwind_align = -(px * wind_dir_local.x + pz * wind_dir_local.z) / radial_len
+		var thermal_wave := sin(_clock * 0.72 + bob_phase * 1.3) * 0.55 + upwind_align * 0.45
+		var thermal_amp := WIND_THERMAL_HEAVE_MAX * wind_soar * lerpf(1.0, 0.35, _storm_blend)
+		thermal_heave = thermal_wave * thermal_amp
+
+	var py := base_y \
+		+ sin(_clock * bob_freq + bob_phase) * bob_amp \
+		+ sin(angle * 2.0 + bob_phase) * (bob_amp * 0.45) \
+		+ thermal_heave
 	var sway := sin(_clock * 0.28 + bob_phase) * 1.4
-	return Vector3(px + wind_drift.x * sway, py, pz + wind_drift.z * sway)
+	var lee_shift := _storm_blend * 1.25
+	var local_pos := Vector3(
+		px + wind_drift.x * sway + wind_dir_local.x * lee_shift,
+		py,
+		pz + wind_drift.z * sway + wind_dir_local.z * lee_shift
+	)
+	return _clamp_above_sea(local_pos)
+
+
+func _clamp_above_sea(local_pos: Vector3) -> Vector3:
+	if Sea == null:
+		return local_pos
+	var world_pos := to_global(local_pos) if is_inside_tree() else (position + local_pos)
+	var min_world_y := Sea.height(world_pos.x, world_pos.z) + STORM_SEA_CLEARANCE
+	if world_pos.y < min_world_y:
+		world_pos.y = min_world_y
+		return to_local(world_pos) if is_inside_tree() else (world_pos - position)
+	return local_pos
 
 
 func _has_gull_sfx() -> bool:
@@ -481,8 +615,11 @@ func _spawn_flock() -> void:
 
 		_birds.append({
 			"root": gull,
+			"body_mi": body_mi,
 			"wing_l": wing_l,
+			"wing_l_mi": wl_mi,
 			"wing_r": wing_r,
+			"wing_r_mi": wr_mi,
 			"angle": (float(i) / float(count)) * TAU + _rng.randf_range(-0.35, 0.35),
 			"angular_speed": ang_spd,
 			"dir_sign": base_dir,
@@ -515,15 +652,23 @@ func _spawn_flock() -> void:
 # ------------------------------------------------------------------ procedural meshes
 
 func _build_shared_assets() -> void:
-	_plumage_mat = StandardMaterial3D.new()
-	_plumage_mat.vertex_color_use_as_albedo = true
-	_plumage_mat.vertex_color_is_srgb = true
-	_plumage_mat.roughness = 0.72
-	_plumage_mat.metallic = 0.0
+	if _shared_plumage_mat == null:
+		_shared_plumage_mat = StandardMaterial3D.new()
+		_shared_plumage_mat.vertex_color_use_as_albedo = true
+		_shared_plumage_mat.vertex_color_is_srgb = true
+		_shared_plumage_mat.roughness = 0.72
+		_shared_plumage_mat.metallic = 0.0
+	if _shared_body_mesh == null:
+		_shared_body_mesh = _build_gull_body_mesh()
+	if _shared_wing_l_mesh == null:
+		_shared_wing_l_mesh = _build_gull_wing_mesh(-1.0)
+	if _shared_wing_r_mesh == null:
+		_shared_wing_r_mesh = _build_gull_wing_mesh(1.0)
 
-	_body_mesh = _build_gull_body_mesh()
-	_wing_l_mesh = _build_gull_wing_mesh(-1.0)
-	_wing_r_mesh = _build_gull_wing_mesh(1.0)
+	_plumage_mat = _shared_plumage_mat
+	_body_mesh = _shared_body_mesh
+	_wing_l_mesh = _shared_wing_l_mesh
+	_wing_r_mesh = _shared_wing_r_mesh
 
 
 static func _build_gull_body_mesh() -> ArrayMesh:
