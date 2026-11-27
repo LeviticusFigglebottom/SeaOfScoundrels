@@ -93,6 +93,13 @@ var pause_overlay: Control = null
 var pause_open: bool = false
 var crew_hold_fire: bool = false
 
+const LOW_HP_VIGNETTE_THRESHOLD := 0.30
+const LOW_HP_HEARTBEAT_HZ := 1.6
+const SFX_SPYGLASS_LOCK_TICK := &"ui_tick"
+
+var play_spyglass_lock_audio: bool = true
+var spyglass_lock_tick_count: int = 0
+
 var _radial_open_time: float = 0.0
 var _radial_initial_hover: int = -1
 
@@ -100,6 +107,7 @@ var _crew_brains: Array[CrewBrain] = []
 var _root: Control = null
 var _theme: Theme = null
 var _damage_vignette: _DamageVignette = null
+var _vitals_vignette: _VitalsVignette = null
 var _spyglass_view: _SpyglassOverlay = null
 var _directional_damage_view: DirectionalDamageOverlay = null
 var _crosshair_view: _CrosshairView = null
@@ -199,6 +207,9 @@ var _damage_flash: float = 0.0
 var _low_hp_clock: float = 0.0
 var _parry_flash_timer: float = 0.0
 var _stamina_flash_timer: float = 0.0
+var _vitals_vignette_env: float = 0.0
+var _vitals_vignette_phase: float = 0.0
+var _vitals_vignette_strength: float = 0.0
 
 # Pause menu widget references
 var _ocean_qual_btns: Array[Button] = []
@@ -254,6 +265,10 @@ func _exit_tree() -> void:
 	_gold_toast_active = false
 	_gold_toast_amount = 0
 	_gold_toast_text = ""
+	_vitals_vignette_env = 0.0
+	_vitals_vignette_phase = 0.0
+	_vitals_vignette_strength = 0.0
+	_theme = null
 	_crew_brains.clear()
 	_crew_roster_rows.clear()
 	_crew_roster_entries.clear()
@@ -300,6 +315,11 @@ func bind(
 	_low_hp_clock = 0.0
 	_parry_flash_timer = 0.0
 	_stamina_flash_timer = 0.0
+	_vitals_vignette_env = 0.0
+	_vitals_vignette_phase = 0.0
+	_vitals_vignette_strength = 0.0
+	if _vitals_vignette != null:
+		_vitals_vignette.set_state(0.0, _is_colorblind_mode(), pause_open)
 	clear_directional_damage_arcs()
 	_connect_signals()
 	if voyage_manager != null and voyage_manager.emissary != null and voyage_manager.emissary.is_active():
@@ -544,6 +564,8 @@ func set_pause_open(open: bool) -> void:
 	if open:
 		_sync_quality_button_states()
 	_sync_mode_objective_visibility()
+	if _vitals_vignette != null:
+		_vitals_vignette.set_state(_vitals_vignette_strength, _is_colorblind_mode(), pause_open)
 	if _gold_delta_toast_label != null and _gold_toast_active:
 		_gold_delta_toast_label.visible = not pause_open and _gold_delta_toast_label.modulate.a > 0.01
 	_sync_look_pause()
@@ -1065,6 +1087,68 @@ func is_damage_vignette_visible() -> bool:
 	return _damage_vignette != null and _damage_vignette.visible
 
 
+## Set spyglass compass bearing heading in degrees (0 = N, 90 = E, 180 = S, 270 = W).
+func set_spyglass_heading_deg(deg: float) -> void:
+	if _spyglass_view != null:
+		_spyglass_view.set_heading_deg(deg)
+
+
+## Return strict-ASCII spyglass degree/cardinal heading pill text (e.g. "045 NE").
+func get_spyglass_heading_text() -> String:
+	return _spyglass_view.get_heading_text() if _spyglass_view != null else "000 N"
+
+
+## Set spyglass optical zoom factor (0..1) and evaluate target-lock tick transitions.
+func set_spyglass_zoom(amount: float) -> void:
+	if _spyglass_view != null:
+		_spyglass_view.set_zoom(amount)
+		_handle_spyglass_lock_transition()
+
+
+## Set spyglass horizon sighting label/distance/bearing and evaluate target-lock tick transitions.
+func set_spyglass_sighting(label: String, distance_m: float = 0.0, bearing: String = "") -> void:
+	if _spyglass_view != null:
+		_spyglass_view.set_sighting(label, distance_m, bearing)
+		_handle_spyglass_lock_transition()
+
+
+## Count of tactile target-lock audio chimes emitted while zoomed in with the spyglass.
+func get_spyglass_lock_tick_count() -> int:
+	return spyglass_lock_tick_count
+
+
+## Deterministically advance the low-health heartbeat peripheral edge vignette.
+func step_vitals_vignette(delta: float, hp_ratio: float) -> void:
+	var dt := maxf(delta, 0.0)
+	var is_low := is_finite(hp_ratio) and hp_ratio > 0.0 and hp_ratio <= LOW_HP_VIGNETTE_THRESHOLD
+	if is_low:
+		var severity := clampf((LOW_HP_VIGNETTE_THRESHOLD - hp_ratio) / LOW_HP_VIGNETTE_THRESHOLD, 0.0, 1.0)
+		var target_env := lerpf(0.35, 1.0, severity)
+		_vitals_vignette_env = move_toward(_vitals_vignette_env, target_env, dt * 4.5)
+		_vitals_vignette_phase = fposmod(_vitals_vignette_phase + dt * LOW_HP_HEARTBEAT_HZ, 1.0)
+		var p := _vitals_vignette_phase
+		var lub := exp(-pow((p - 0.16) / 0.085, 2.0))
+		var dub := 0.58 * exp(-pow((p - 0.36) / 0.075, 2.0))
+		var wave := clampf(maxf(lub, dub) + 0.18 * (0.5 + 0.5 * sin(p * TAU)), 0.0, 1.0)
+		_vitals_vignette_strength = _vitals_vignette_env * lerpf(0.24, 0.54, wave)
+	else:
+		_vitals_vignette_env = move_toward(_vitals_vignette_env, 0.0, dt * 5.0)
+		if _vitals_vignette_env <= 0.002:
+			_vitals_vignette_env = 0.0
+			_vitals_vignette_phase = 0.0
+			_vitals_vignette_strength = 0.0
+		else:
+			_vitals_vignette_phase = fposmod(_vitals_vignette_phase + dt * LOW_HP_HEARTBEAT_HZ, 1.0)
+			_vitals_vignette_strength = _vitals_vignette_env * 0.24
+	if _vitals_vignette != null:
+		_vitals_vignette.set_state(_vitals_vignette_strength, _is_colorblind_mode(), pause_open)
+
+
+## Current low-health heartbeat peripheral vignette strength (0.0 when hidden/healthy).
+func get_low_health_vignette_strength() -> float:
+	return _vitals_vignette.get_strength() if (_vitals_vignette != null and _vitals_vignette.visible) else 0.0
+
+
 ## Current bottom-right active tool / supplies chip title text.
 func get_tool_title_text() -> String:
 	return _tool_title_label.text if _tool_title_label != null else ""
@@ -1134,10 +1218,15 @@ func _build_ui() -> void:
 	_root.theme = _theme
 	add_child(_root)
 
-	# 0. Peripheral damage ink-wash & low-HP heartbeat vignette (behind all HUD panels).
+	# 0. Peripheral damage ink-wash vignette (behind all HUD panels).
 	_damage_vignette = _DamageVignette.new()
 	_damage_vignette.name = "DamageVignette"
 	_root.add_child(_damage_vignette)
+
+	# 0b. Low-health heartbeat peripheral edge vignette (outer 10% border, beneath HUD panels).
+	_vitals_vignette = _VitalsVignette.new()
+	_vitals_vignette.name = "VitalsVignette"
+	_root.add_child(_vitals_vignette)
 
 	# 1. Spyglass circular brass aperture vignette (behind center HUD elements).
 	_spyglass_view = _SpyglassOverlay.new()
@@ -2073,6 +2162,8 @@ func _process(delta: float) -> void:
 	_tick_voyage_title(delta)
 	_tick_vitals(delta)
 	_sync_damage_vignette(delta)
+	_tick_vitals_vignette(delta)
+	_tick_spyglass(delta)
 	_tick_directional_damage(delta)
 	_tick_context_prompt(delta)
 	_tick_sailing_telemetry()
@@ -2081,6 +2172,48 @@ func _process(delta: float) -> void:
 	_tick_crosshair(delta)
 	_sync_top_left_visibility()
 	_tick_crew_roster(delta)
+
+
+func _tick_vitals_vignette(delta: float) -> void:
+	if pawn != null and is_instance_valid(pawn):
+		var hp_r := 0.0 if (pawn.dead or pawn.max_health <= 0.0) else clampf(pawn.health / pawn.max_health, 0.0, 1.0)
+		step_vitals_vignette(delta, hp_r)
+
+
+func _tick_spyglass(delta: float) -> void:
+	if _spyglass_view == null:
+		return
+	var live_deg := _resolve_live_spyglass_heading_deg()
+	if not is_nan(live_deg):
+		_spyglass_view.set_heading_deg(live_deg)
+	_spyglass_view.tick_lock_pulse(delta)
+	_handle_spyglass_lock_transition()
+
+
+func _resolve_live_spyglass_heading_deg() -> float:
+	var cam: Camera3D = null
+	if is_inside_tree() and get_viewport() != null:
+		cam = get_viewport().get_camera_3d()
+	if cam == null and player_controller != null and is_instance_valid(player_controller):
+		var pc_cam := player_controller.camera
+		if pc_cam != null and is_instance_valid(pc_cam) and pc_cam.is_inside_tree():
+			cam = pc_cam
+	if cam != null and is_instance_valid(cam):
+		var fwd := -cam.global_basis.z
+		if fwd.x * fwd.x + fwd.z * fwd.z > 0.0001:
+			return fposmod(rad_to_deg(atan2(fwd.x, -fwd.z)), 360.0)
+	if pawn != null and is_instance_valid(pawn):
+		return fposmod(rad_to_deg(-pawn.look_yaw), 360.0)
+	return NAN
+
+
+func _handle_spyglass_lock_transition() -> void:
+	if _spyglass_view == null:
+		return
+	if _spyglass_view.consume_lock_acquired():
+		if play_spyglass_lock_audio and Audio != null and Audio.has_sound(SFX_SPYGLASS_LOCK_TICK):
+			Audio.play_sfx(SFX_SPYGLASS_LOCK_TICK, Vector3.INF, -7.5)
+			spyglass_lock_tick_count += 1
 
 
 func _tick_crew_roster(delta: float) -> void:
@@ -2790,14 +2923,12 @@ func _on_grog_toast_raised() -> void:
 
 
 func _on_spyglass_zoom(amount: float) -> void:
-	if _spyglass_view != null:
-		_spyglass_view.set_zoom(amount)
+	set_spyglass_zoom(amount)
 
 
 func _on_sighting_updated(label: String, distance_m: float) -> void:
-	if _spyglass_view != null:
-		var bearing := inventory.spyglass_sighting_bearing if (inventory != null and is_instance_valid(inventory)) else ""
-		_spyglass_view.set_sighting(label, distance_m, bearing)
+	var bearing := inventory.spyglass_sighting_bearing if (inventory != null and is_instance_valid(inventory)) else ""
+	set_spyglass_sighting(label, distance_m, bearing)
 
 
 func _on_pawn_damaged(amount: float, from: Node) -> void:
@@ -3384,10 +3515,22 @@ class _VitalsView extends Control:
 
 
 class _SpyglassOverlay extends Control:
+	const COMPASS_8: PackedStringArray = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+	const COMPASS_HALF_FOV_DEG := 60.0
+	const COMPASS_STEP_DEG := 15.0
+	const STADIA_OFFSETS_Y: Array[float] = [24.0, 52.0, 84.0]
+	const STADIA_HALF_WIDTHS: Array[float] = [18.0, 12.0, 7.5]
+
 	var _zoom: float = 0.0
 	var _sighting_label: String = ""
 	var _sighting_dist: float = 0.0
 	var _sighting_bearing: String = ""
+	var _heading_deg: float = 0.0
+	var _heading_deg_int: int = 0
+	var _heading_text: String = "000 N"
+	var _locked_target_label: String = ""
+	var _lock_pulse_t: float = 0.0
+	var _lock_acquired_pending: bool = false
 	var _font: Font = null
 
 	func _ready() -> void:
@@ -3396,16 +3539,65 @@ class _SpyglassOverlay extends Control:
 		visible = false
 		_font = HudIcons.get_ui_font()
 
+	func _exit_tree() -> void:
+		_font = null
+
+	static func format_heading_text(deg: float) -> String:
+		var norm := fposmod(deg if is_finite(deg) else 0.0, 360.0)
+		var deg_int := int(roundf(norm)) % 360
+		var card_idx := int(floor((float(deg_int) + 22.5) / 45.0)) % 8
+		return "%03d %s" % [deg_int, COMPASS_8[card_idx]]
+
+	func set_heading_deg(deg: float) -> void:
+		var norm := fposmod(deg if is_finite(deg) else 0.0, 360.0)
+		var diff := absf(norm - _heading_deg)
+		if diff > 180.0:
+			diff = 360.0 - diff
+		_heading_deg = norm
+		var deg_int := int(roundf(norm)) % 360
+		if deg_int != _heading_deg_int:
+			_heading_deg_int = deg_int
+			_heading_text = format_heading_text(float(deg_int))
+		if visible and diff > 0.05:
+			queue_redraw()
+
+	func get_heading_text() -> String:
+		return _heading_text
+
 	func set_zoom(v: float) -> void:
 		_zoom = clampf(v, 0.0, 1.0)
 		visible = _zoom > 0.03
+		_update_lock_state()
 		queue_redraw()
 
 	func set_sighting(label: String, dist_m: float, bearing: String = "") -> void:
-		_sighting_label = GameHUD._to_ascii(label)
+		_sighting_label = GameHUD._to_ascii(label).strip_edges()
 		_sighting_dist = dist_m
 		_sighting_bearing = GameHUD._to_ascii(bearing).strip_edges()
+		_update_lock_state()
 		queue_redraw()
+
+	func tick_lock_pulse(delta: float) -> void:
+		if _sighting_label != "" and _zoom > 0.45:
+			_lock_pulse_t = fmod(_lock_pulse_t + maxf(delta, 0.0), TAU * 10.0)
+			if visible:
+				queue_redraw()
+
+	func consume_lock_acquired() -> bool:
+		if not _lock_acquired_pending:
+			return false
+		_lock_acquired_pending = false
+		return true
+
+	func _update_lock_state() -> void:
+		if _zoom <= 0.45 or _sighting_label == "":
+			_locked_target_label = ""
+			_lock_pulse_t = 0.0
+			return
+		if _sighting_label != _locked_target_label:
+			_locked_target_label = _sighting_label
+			_lock_pulse_t = 0.0
+			_lock_acquired_pending = true
 
 	func get_sighting_text() -> String:
 		if _sighting_label == "":
@@ -3418,10 +3610,14 @@ class _SpyglassOverlay extends Control:
 	func _draw() -> void:
 		if _zoom <= 0.03:
 			return
-		var view_sz := size if size.length_squared() >= 1.0 else get_viewport_rect().size
+		var view_sz := size if (size.is_finite() and size.length_squared() >= 1.0) else get_viewport_rect().size
+		if not view_sz.is_finite() or view_sz.x < 4.0 or view_sz.y < 4.0:
+			return
 		var c := view_sz * 0.5
 		var min_dim := minf(view_sz.x, view_sz.y)
 		var aperture_r := lerpf(min_dim * 0.68, min_dim * 0.42, _zoom)
+		if aperture_r < 24.0:
+			return
 		var outer_r := maxf(view_sz.x, view_sz.y) * 0.82
 		var a := smoothstep(0.05, 0.55, _zoom)
 
@@ -3445,6 +3641,16 @@ class _SpyglassOverlay extends Control:
 			draw_line(c + d * (aperture_r - 36.0), c + d * (aperture_r - 8.0), tick_col, 1.8, true)
 		draw_circle(c, 2.0, Color(0.95, 0.88, 0.68, 0.55 * a))
 
+		# Optical stadia rangefinder hairlines along the lower vertical centerline.
+		_draw_stadia_hairlines(c, aperture_r, a)
+
+		# Etched brass compass bearing arc/ribbon tucked inside the upper aperture rim.
+		_draw_compass_strip(c, aperture_r, a)
+
+		# Pulsing burnished-gold target-lock corner brackets around center reticle.
+		if _sighting_label != "" and _zoom > 0.45:
+			_draw_target_lock_brackets(c, a)
+
 		# Subtle horizon sighting readout tucked cleanly at the bottom of the lens.
 		if _sighting_label != "" and _zoom > 0.45 and _font != null:
 			var txt := get_sighting_text()
@@ -3454,6 +3660,141 @@ class _SpyglassOverlay extends Control:
 			draw_rect(box_r, Color(0.22, 0.14, 0.09, 0.92 * a), false, 2.0)
 			draw_string(_font, Vector2(c.x - sz.x * 0.5, box_r.position.y + 22.0),
 				txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, HudIcons.COL_INK)
+
+	func _draw_stadia_hairlines(c: Vector2, aperture_r: float, a: float) -> void:
+		var stadia_a := smoothstep(0.15, 0.55, _zoom) * a
+		if stadia_a <= 0.01:
+			return
+		var ink_col := Color(0.14, 0.09, 0.05, 0.48 * stadia_a)
+		var brass_col := Color(0.92, 0.80, 0.48, 0.64 * stadia_a)
+		var max_y := minf(92.0, aperture_r - 24.0)
+		if max_y > 16.0:
+			draw_line(Vector2(c.x, c.y + 12.0), Vector2(c.x, c.y + max_y), ink_col, 2.2, true)
+			draw_line(Vector2(c.x, c.y + 12.0), Vector2(c.x, c.y + max_y), brass_col, 1.0, true)
+		for i in STADIA_OFFSETS_Y.size():
+			var off_y: float = STADIA_OFFSETS_Y[i]
+			if off_y > aperture_r - 20.0:
+				continue
+			var hw: float = STADIA_HALF_WIDTHS[i]
+			var y := c.y + off_y
+			draw_line(Vector2(c.x - hw, y), Vector2(c.x + hw, y), ink_col, 2.4, true)
+			draw_line(Vector2(c.x - hw, y), Vector2(c.x + hw, y), brass_col, 1.1, true)
+			draw_line(Vector2(c.x - hw, y - 2.4), Vector2(c.x - hw, y + 2.4), brass_col, 1.0, true)
+			draw_line(Vector2(c.x + hw, y - 2.4), Vector2(c.x + hw, y + 2.4), brass_col, 1.0, true)
+
+	func _draw_compass_strip(c: Vector2, aperture_r: float, a: float) -> void:
+		var strip_a := smoothstep(0.18, 0.55, _zoom) * a
+		if strip_a <= 0.01:
+			return
+		var half_w := aperture_r * 0.48
+		if half_w < 32.0:
+			return
+		var base_y := c.y - aperture_r + 30.0
+		var arc_sag := aperture_r * 0.095
+		var band_top := -8.0
+		var band_bot := 15.0
+
+		# Curved smoked-brass backing ribbon clipped cleanly inside +/- aperture_r * 0.48.
+		var segs := 14
+		var bg_col := Color(0.10, 0.07, 0.04, 0.62 * strip_a)
+		var rim_col := Color(0.84, 0.66, 0.28, 0.72 * strip_a)
+		var prev_top := Vector2.ZERO
+		var prev_bot := Vector2.ZERO
+		for s in segs + 1:
+			var u := lerpf(-1.0, 1.0, float(s) / float(segs))
+			var px := c.x + u * half_w
+			var py := base_y + u * u * arc_sag
+			var cur_top := Vector2(px, py + band_top)
+			var cur_bot := Vector2(px, py + band_bot)
+			if s > 0:
+				var quad := PackedVector2Array([prev_top, cur_top, cur_bot, prev_bot])
+				draw_colored_polygon(quad, bg_col)
+				draw_line(prev_top, cur_top, rim_col, 1.2, true)
+				draw_line(prev_bot, cur_bot, Color(0.84, 0.66, 0.28, 0.48 * strip_a), 1.0, true)
+			prev_top = cur_top
+			prev_bot = cur_bot
+
+		# Scrolled 15-degree brass ticks and strict-ASCII cardinal/intercardinal glyphs.
+		for step_idx in 24:
+			var tick_deg := float(step_idx) * COMPASS_STEP_DEG
+			var diff := fposmod(tick_deg - _heading_deg + 180.0, 360.0) - 180.0
+			if absf(diff) > COMPASS_HALF_FOV_DEG:
+				continue
+			var u := diff / COMPASS_HALF_FOV_DEG
+			var edge_fade := 1.0 - smoothstep(0.76, 1.0, absf(u))
+			var ta := strip_a * edge_fade
+			if ta <= 0.02:
+				continue
+			var tx := c.x + u * half_w
+			var ty := base_y + u * u * arc_sag
+			var is_cardinal := (step_idx % 6 == 0)
+			var is_inter := (not is_cardinal) and (step_idx % 3 == 0)
+			var tick_h := 9.0 if is_cardinal else (6.5 if is_inter else 4.2)
+			var tick_w := 2.0 if is_cardinal else (1.5 if is_inter else 1.0)
+			var tick_c := Color(0.96, 0.80, 0.34, 0.94 * ta) if is_cardinal else (
+				Color(0.88, 0.74, 0.40, 0.84 * ta) if is_inter else Color(0.78, 0.66, 0.40, 0.62 * ta)
+			)
+			draw_line(Vector2(tx, ty + band_top + 1.0), Vector2(tx, ty + band_top + 1.0 + tick_h), tick_c, tick_w, true)
+
+			if (is_cardinal or is_inter) and _font != null:
+				var glyph := COMPASS_8[int(roundf(tick_deg / 45.0)) % 8]
+				var fsize := 13 if is_cardinal else 11
+				var gsz := _font.get_string_size(glyph, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize)
+				var gx := tx - gsz.x * 0.5
+				var gy := ty + band_bot - 2.0
+				var gcol := Color(0.98, 0.72, 0.24, 0.98 * ta) if glyph == "N" else (
+					Color(0.96, 0.90, 0.72, 0.95 * ta) if is_cardinal else Color(0.88, 0.80, 0.60, 0.86 * ta)
+				)
+				draw_string(_font, Vector2(gx + 1.0, gy + 1.0), glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize,
+					Color(0.08, 0.05, 0.03, 0.82 * ta))
+				draw_string(_font, Vector2(gx, gy), glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, gcol)
+
+		# Tiny gilded center lubber triangle pointing down at live heading.
+		var lubber_outer := PackedVector2Array([
+			Vector2(c.x, base_y + band_top + 4.5),
+			Vector2(c.x - 5.5, base_y + band_top - 4.5),
+			Vector2(c.x + 5.5, base_y + band_top - 4.5),
+		])
+		draw_colored_polygon(lubber_outer, Color(0.12, 0.08, 0.04, 0.92 * strip_a))
+		var lubber_inner := PackedVector2Array([
+			Vector2(c.x, base_y + band_top + 2.8),
+			Vector2(c.x - 4.0, base_y + band_top - 3.3),
+			Vector2(c.x + 4.0, base_y + band_top - 3.3),
+		])
+		draw_colored_polygon(lubber_inner, Color(0.96, 0.78, 0.26, 0.98 * strip_a))
+
+		# Subtle degree pill below ribbon (e.g. "045 NE").
+		if _font != null:
+			var psize := 12
+			var psz := _font.get_string_size(_heading_text, HORIZONTAL_ALIGNMENT_CENTER, -1, psize)
+			var pw := maxf(psz.x + 16.0, 60.0)
+			var ph := 19.0
+			var pill_r := Rect2(c.x - pw * 0.5, base_y + band_bot + 4.0, pw, ph)
+			draw_rect(pill_r, Color(0.12, 0.08, 0.05, 0.80 * strip_a), true)
+			draw_rect(pill_r, Color(0.84, 0.65, 0.26, 0.88 * strip_a), false, 1.4)
+			draw_string(_font, Vector2(c.x - psz.x * 0.5, pill_r.position.y + 13.5),
+				_heading_text, HORIZONTAL_ALIGNMENT_LEFT, -1, psize, Color(0.96, 0.89, 0.70, 0.96 * strip_a))
+
+	func _draw_target_lock_brackets(c: Vector2, a: float) -> void:
+		var lock_a := smoothstep(0.45, 0.68, _zoom) * a
+		if lock_a <= 0.01:
+			return
+		var pulse := 0.5 + 0.5 * sin(_lock_pulse_t * 5.2)
+		var br := lerpf(24.0, 28.0, pulse)
+		var arm := 9.0
+		var shadow_col := Color(0.14, 0.08, 0.04, 0.78 * lock_a)
+		var gold_col := Color(0.96, 0.78, 0.26, lerpf(0.82, 0.98, pulse) * lock_a)
+		var glint_col := Color(1.0, 0.95, 0.74, 0.86 * lock_a)
+		for sx: float in [-1.0, 1.0]:
+			for sy: float in [-1.0, 1.0]:
+				var corner := c + Vector2(sx * br, sy * br)
+				var h_end := corner + Vector2(-sx * arm, 0.0)
+				var v_end := corner + Vector2(0.0, -sy * arm)
+				draw_line(h_end, corner, shadow_col, 4.0, true)
+				draw_line(corner, v_end, shadow_col, 4.0, true)
+				draw_line(h_end, corner, gold_col, 2.0, true)
+				draw_line(corner, v_end, gold_col, 2.0, true)
+				draw_circle(corner, 1.3, glint_col)
 
 	static func _annulus_strip(center: Vector2, r_in: float, r_out: float, segs: int) -> Array:
 		var quads: Array = []
@@ -3469,3 +3810,77 @@ class _SpyglassOverlay extends Control:
 				center + d1 * r_in,
 			]))
 		return quads
+
+
+class _VitalsVignette extends Control:
+	var _strength: float = 0.0
+	var _colorblind: bool = false
+
+	func _ready() -> void:
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		clip_contents = true
+		visible = false
+
+	func get_strength() -> float:
+		return _strength
+
+	func set_state(strength: float, colorblind: bool, suppressed: bool = false) -> void:
+		var clamped := clampf(strength, 0.0, 0.65)
+		var next_vis := (not suppressed) and clamped > 0.002
+		var changed := absf(clamped - _strength) > 0.002 or colorblind != _colorblind or next_vis != visible
+		_strength = clamped
+		_colorblind = colorblind
+		visible = next_vis
+		if changed and visible:
+			queue_redraw()
+
+	func _draw() -> void:
+		if _strength <= 0.002:
+			return
+		var view_sz := size if (size.is_finite() and size.length_squared() >= 1.0) else get_viewport_rect().size
+		if not view_sz.is_finite() or view_sz.x < 4.0 or view_sz.y < 4.0:
+			return
+		var w := view_sz.x
+		var h := view_sz.y
+		var t := clampf(_strength / 0.50, 0.0, 1.0)
+		# Strictly outer 10% viewport border along all 4 edges with zero center obstruction.
+		var bw := w * lerpf(0.055, 0.10, t)
+		var bh := h * lerpf(0.055, 0.10, t)
+		var mbw := bw * 0.45
+		var mbh := bh * 0.45
+
+		var outer_rgb := Color(0.78, 0.38, 0.06) if _colorblind else Color(0.56, 0.07, 0.06)
+		var mid_rgb := Color(0.86, 0.48, 0.10) if _colorblind else Color(0.68, 0.13, 0.10)
+		var col_outer := Color(outer_rgb.r, outer_rgb.g, outer_rgb.b, _strength)
+		var col_mid := Color(mid_rgb.r, mid_rgb.g, mid_rgb.b, _strength * 0.42)
+		var col_inner := Color(mid_rgb.r, mid_rgb.g, mid_rgb.b, 0.0)
+
+		var o_pts := PackedVector2Array([
+			Vector2(0.0, 0.0),
+			Vector2(w, 0.0),
+			Vector2(w, h),
+			Vector2(0.0, h),
+		])
+		var m_pts := PackedVector2Array([
+			Vector2(mbw, mbh),
+			Vector2(w - mbw, mbh),
+			Vector2(w - mbw, h - mbh),
+			Vector2(mbw, h - mbh),
+		])
+		var i_pts := PackedVector2Array([
+			Vector2(bw, bh),
+			Vector2(w - bw, bh),
+			Vector2(w - bw, h - bh),
+			Vector2(bw, h - bh),
+		])
+
+		var cols_outer := PackedColorArray([col_outer, col_outer, col_mid, col_mid])
+		var cols_inner := PackedColorArray([col_mid, col_mid, col_inner, col_inner])
+		for idx in 4:
+			var nxt := (idx + 1) % 4
+			var q_out := PackedVector2Array([o_pts[idx], o_pts[nxt], m_pts[nxt], m_pts[idx]])
+			draw_polygon(q_out, cols_outer)
+			var q_in := PackedVector2Array([m_pts[idx], m_pts[nxt], i_pts[nxt], i_pts[idx]])
+			draw_polygon(q_in, cols_inner)
+

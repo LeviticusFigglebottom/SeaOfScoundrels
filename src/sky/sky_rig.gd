@@ -47,6 +47,12 @@ const SHADOW_RES := 512
 const MAX_SHELTERS := 4
 ## Lifetime of the ocean impact shockwave & ionized spray crown in seconds.
 const IMPACT_DURATION := 0.95
+## Shared zero-primitive SurfaceTool ArrayMesh geometry dimensions.
+const CURTAIN_SEGMENTS := 64
+const RAIN_CARD_SIZE := Vector2(0.034, 1.15)
+const RAIN_FAR_CARD_SIZE := Vector2(0.11, 4.2)
+const SPLASH_CARD_SIZE := Vector2(1.0, 1.0)
+const MIST_CARD_SIZE := Vector2(16.0, 7.0)
 
 ## Cloud rendering cost: LOW marches at quarter resolution, MEDIUM at half,
 ## HIGH at full resolution with finer noise (the no-compromise look).
@@ -84,6 +90,7 @@ var current_rainbow_strength: float = 0.0
 ## The clouds as a CPU-side function, for `cloud_light_at()`.
 var cloud_field: RefCounted = CloudField.new()
 
+var _world_env: WorldEnvironment
 var _flash_light: DirectionalLight3D
 var _rain: GPUParticles3D
 var _rain_far: GPUParticles3D
@@ -107,13 +114,61 @@ var _impact_age: float = -1.0
 var _impact_foot: Vector3 = Vector3.ZERO
 var _impact_intensity: float = 0.0
 var _shadow_viewport: SubViewport
+var _shadow_rect: ColorRect
 var _shadow_material: ShaderMaterial
 var _rng := RandomNumberGenerator.new()
 var _peak_recent_storm: float = 0.0
 var _post_storm_rainbow_timer: float = 0.0
+var _counted_in_tree: bool = false
+
+# Ref-counted static shared zero-primitive SurfaceTool ArrayMeshes (zero ObjectDB leaks).
+static var _active_sky_rigs: int = 0
+static var _shared_curtain_mesh: ArrayMesh = null
+static var _shared_splash_card: ArrayMesh = null
+static var _shared_mist_card: ArrayMesh = null
+static var _shared_rain_card: ArrayMesh = null
+static var _shared_rain_far_card: ArrayMesh = null
+static var _shared_impact_mesh: ArrayMesh = null
+
+
+## Return the number of active SkyRig instances currently in the scene tree.
+static func get_active_rig_count() -> int:
+	return _active_sky_rigs
+
+
+## Release all statically cached zero-primitive weather and impact ArrayMeshes cleanly.
+static func clear_shared_cache() -> void:
+	_shared_curtain_mesh = null
+	_shared_splash_card = null
+	_shared_mist_card = null
+	_shared_rain_card = null
+	_shared_rain_far_card = null
+	_shared_impact_mesh = null
+
+
+static func _ensure_shared_meshes() -> void:
+	if _shared_curtain_mesh == null:
+		_shared_curtain_mesh = _build_curtain_mesh()
+	if _shared_splash_card == null:
+		_shared_splash_card = _build_card_mesh(SPLASH_CARD_SIZE)
+	if _shared_mist_card == null:
+		_shared_mist_card = _build_card_mesh(MIST_CARD_SIZE)
+	if _shared_rain_card == null:
+		_shared_rain_card = _build_card_mesh(RAIN_CARD_SIZE)
+	if _shared_rain_far_card == null:
+		_shared_rain_far_card = _build_card_mesh(RAIN_FAR_CARD_SIZE)
+	if _shared_impact_mesh == null:
+		_shared_impact_mesh = _make_impact_mesh()
+
+
+func _enter_tree() -> void:
+	if not _counted_in_tree:
+		_counted_in_tree = true
+		_active_sky_rigs += 1
 
 
 func _ready() -> void:
+	_ensure_shared_meshes()
 	_build_environment()
 	_build_shadow_bake()
 	_build_lights()
@@ -124,17 +179,103 @@ func _ready() -> void:
 	Weather.lightning_struck.connect(_on_lightning_struck)
 	_update(true, 0.0)
 
+
 func _exit_tree() -> void:
 	if Weather != null and Weather.lightning_struck.is_connected(_on_lightning_struck):
 		Weather.lightning_struck.disconnect(_on_lightning_struck)
 	RenderingServer.global_shader_parameter_set(&"cloud_shadow_tex", RID())
-	if sky_material != null:
-		sky_material.set_shader_parameter(&"shadow_map", null)
-	if _shadow_viewport != null and is_instance_valid(_shadow_viewport):
-		_shadow_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_release_local_refs()
+	if _counted_in_tree:
+		_counted_in_tree = false
+		_active_sky_rigs = maxi(0, _active_sky_rigs - 1)
+	if _active_sky_rigs == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+		if _counted_in_tree:
+			_counted_in_tree = false
+			_active_sky_rigs = maxi(0, _active_sky_rigs - 1)
+		if _active_sky_rigs == 0:
+			clear_shared_cache()
+
+
+func _release_local_refs() -> void:
 	_impact_age = -1.0
+	if _curtain != null and is_instance_valid(_curtain):
+		_curtain.visible = false
+		_curtain.mesh = null
+		_curtain.material_override = null
+	_curtain = null
+	if _curtain_material != null:
+		_curtain_material.set_shader_parameter(&"streak_tex", null)
+	_curtain_material = null
+
+	if _bolt != null and is_instance_valid(_bolt):
+		_bolt.visible = false
+		_bolt.mesh = null
+		_bolt.material_override = null
+	_bolt = null
+	_bolt_material = null
+
 	if _impact != null and is_instance_valid(_impact):
 		_impact.visible = false
+		_impact.mesh = null
+		_impact.material_override = null
+	_impact = null
+	if _impact_material != null:
+		_impact_material.set_shader_parameter(&"noise_tex", null)
+	_impact_material = null
+
+	for e: GPUParticles3D in [_rain, _rain_far, _splash, _mist]:
+		if e != null and is_instance_valid(e):
+			e.emitting = false
+			e.visible = false
+			e.draw_pass_1 = null
+			e.process_material = null
+			e.material_override = null
+	_rain = null
+	_rain_far = null
+	_splash = null
+	_mist = null
+	_rain_process = null
+	_rain_far_process = null
+	_mist_process = null
+	_rain_material = null
+	_rain_far_material = null
+	_splash_material = null
+	_mist_material = null
+	_weather_materials.clear()
+
+	if sky_material != null:
+		sky_material.set_shader_parameter(&"shadow_map", null)
+		sky_material.set_shader_parameter(&"noise_tex", null)
+		sky_material.set_shader_parameter(&"cloud_map", null)
+		sky_material.set_shader_parameter(&"cloud_volume", null)
+	if _shadow_rect != null and is_instance_valid(_shadow_rect):
+		_shadow_rect.material = null
+	_shadow_rect = null
+	if _shadow_viewport != null and is_instance_valid(_shadow_viewport):
+		_shadow_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_shadow_viewport = null
+	if _shadow_material != null:
+		_shadow_material.set_shader_parameter(&"cloud_map", null)
+		_shadow_material.set_shader_parameter(&"cloud_volume", null)
+	_shadow_material = null
+	if _world_env != null and is_instance_valid(_world_env):
+		_world_env.environment = null
+	_world_env = null
+	if environment != null:
+		if environment.sky != null:
+			environment.sky.sky_material = null
+		environment.sky = null
+	environment = null
+	sky_material = null
+	sun = null
+	moon = null
+	_flash_light = null
 
 func _process(delta: float) -> void:
 	_update(false, delta)
@@ -182,10 +323,10 @@ func _build_environment() -> void:
 	environment.adjustment_enabled = true
 	environment.adjustment_saturation = 1.1
 
-	var we := WorldEnvironment.new()
-	we.name = "WorldEnvironment"
-	we.environment = environment
-	add_child(we)
+	_world_env = WorldEnvironment.new()
+	_world_env.name = "WorldEnvironment"
+	_world_env.environment = environment
+	add_child(_world_env)
 
 func _build_shadow_bake() -> void:
 	_shadow_viewport = SubViewport.new()
@@ -199,10 +340,10 @@ func _build_shadow_bake() -> void:
 	_shadow_material.set_shader_parameter(&"cloud_map", CLOUD_MAP)
 	_shadow_material.set_shader_parameter(&"cloud_volume", CLOUD_VOLUME)
 	_shadow_material.set_shader_parameter(&"floor_light", CloudField.FLOOR_LIGHT)
-	var rect := ColorRect.new()
-	rect.size = Vector2(SHADOW_RES, SHADOW_RES)
-	rect.material = _shadow_material
-	_shadow_viewport.add_child(rect)
+	_shadow_rect = ColorRect.new()
+	_shadow_rect.size = Vector2(SHADOW_RES, SHADOW_RES)
+	_shadow_rect.material = _shadow_material
+	_shadow_viewport.add_child(_shadow_rect)
 	add_child(_shadow_viewport)
 	var tex := _shadow_viewport.get_texture()
 	sky_material.set_shader_parameter(&"shadow_map", tex)
@@ -231,16 +372,17 @@ func _make_light(light_name: String) -> DirectionalLight3D:
 	return l
 
 func _build_rain() -> void:
+	_ensure_shared_meshes()
 	# Near streaks: a box around the camera.
 	_rain_process = _streak_process(Vector3(22.0, 1.0, 22.0), 24.0, 31.0)
 	_rain_material = _weather_material(RAIN_SHADER)
-	_rain = _streak_emitter("Rain", rain_particles, 1.0, _rain_process, _rain_material,
-			Vector2(0.034, 1.15), AABB(Vector3(-60, -50, -60), Vector3(120, 80, 120)))
+	_rain = _streak_emitter("Rain", rain_particles, 1.0, _rain_process, _shared_rain_card,
+			_rain_material, AABB(Vector3(-60, -50, -60), Vector3(120, 80, 120)))
 	# Far streaks: bigger, fainter, further out, so the rain has depth.
 	_rain_far_process = _streak_process(Vector3(75.0, 2.0, 75.0), 26.0, 34.0)
 	_rain_far_material = _weather_material(RAIN_SHADER)
 	_rain_far = _streak_emitter("RainFar", int(rain_particles * 0.4), 1.6, _rain_far_process,
-			_rain_far_material, Vector2(0.11, 4.2), AABB(Vector3(-160, -90, -160), Vector3(320, 140, 320)))
+			_shared_rain_far_card, _rain_far_material, AABB(Vector3(-160, -90, -160), Vector3(320, 140, 320)))
 
 	# Splashes where drops hit the sea.
 	var sp := ParticleProcessMaterial.new()
@@ -254,10 +396,8 @@ func _build_rain() -> void:
 	_splash_material = _weather_material(SPLASH_SHADER)
 	_splash_material.set_shader_parameter(&"follow_sea", 1.0 if splashes_follow_sea else 0.0)
 	Sea.bind_material(_splash_material)
-	var ring := QuadMesh.new()
-	ring.size = Vector2(1.0, 1.0)
-	ring.material = _splash_material
-	_splash = _emitter("RainSplash", 2600, 0.3, sp, ring, AABB(Vector3(-60, -12, -60), Vector3(120, 24, 120)))
+	_splash = _emitter("RainSplash", 2600, 0.3, sp, _shared_splash_card, _splash_material,
+			AABB(Vector3(-60, -12, -60), Vector3(120, 24, 120)))
 
 	# Mist and spindrift torn off the surface by the wind.
 	_mist_process = ParticleProcessMaterial.new()
@@ -268,10 +408,8 @@ func _build_rain() -> void:
 	_mist_process.scale_min = 0.7
 	_mist_process.scale_max = 1.5
 	_mist_material = _weather_material(MIST_SHADER)
-	var puff := QuadMesh.new()
-	puff.size = Vector2(16.0, 7.0)
-	puff.material = _mist_material
-	_mist = _emitter("RainMist", 110, 5.0, _mist_process, puff, AABB(Vector3(-180, -20, -180), Vector3(360, 60, 360)))
+	_mist = _emitter("RainMist", 110, 5.0, _mist_process, _shared_mist_card, _mist_material,
+			AABB(Vector3(-180, -20, -180), Vector3(360, 60, 360)))
 
 func _streak_process(extents: Vector3, v_min: float, v_max: float) -> ParticleProcessMaterial:
 	var pm := ParticleProcessMaterial.new()
@@ -286,16 +424,13 @@ func _streak_process(extents: Vector3, v_min: float, v_max: float) -> ParticlePr
 	return pm
 
 func _streak_emitter(node_name: String, amount: int, lifetime: float, pm: ParticleProcessMaterial,
-		mat: ShaderMaterial, size: Vector2, aabb: AABB) -> GPUParticles3D:
-	var streak := QuadMesh.new()
-	streak.size = size
-	streak.material = mat
-	var e := _emitter(node_name, amount, lifetime, pm, streak, aabb)
+		mesh: ArrayMesh, mat: ShaderMaterial, aabb: AABB) -> GPUParticles3D:
+	var e := _emitter(node_name, amount, lifetime, pm, mesh, mat, aabb)
 	e.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	return e
 
 func _emitter(node_name: String, amount: int, lifetime: float, pm: ParticleProcessMaterial,
-		mesh: Mesh, aabb: AABB) -> GPUParticles3D:
+		mesh: Mesh, mat: ShaderMaterial, aabb: AABB) -> GPUParticles3D:
 	var e := GPUParticles3D.new()
 	e.name = node_name
 	e.amount = maxi(amount, 1)
@@ -304,6 +439,7 @@ func _emitter(node_name: String, amount: int, lifetime: float, pm: ParticleProce
 	e.local_coords = false
 	e.process_material = pm
 	e.draw_pass_1 = mesh
+	e.material_override = mat
 	e.visibility_aabb = aabb
 	e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	e.emitting = false
@@ -318,21 +454,14 @@ func _weather_material(shader: Shader) -> ShaderMaterial:
 	return m
 
 func _build_curtain() -> void:
-	## The storm cell's wall of rain: a unit open cylinder scaled to the cell.
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = 1.0
-	mesh.bottom_radius = 1.0
-	mesh.height = 1.0
-	mesh.radial_segments = 64
-	mesh.rings = 1
-	mesh.cap_top = false
-	mesh.cap_bottom = false
+	## The storm cell's wall of rain: a shared unit open cylinder scaled to the cell.
+	_ensure_shared_meshes()
 	_curtain_material = ShaderMaterial.new()
 	_curtain_material.shader = CURTAIN_SHADER
 	_curtain_material.set_shader_parameter(&"streak_tex", CLOUD_MAP)
 	_curtain = MeshInstance3D.new()
 	_curtain.name = "RainCurtain"
-	_curtain.mesh = mesh
+	_curtain.mesh = _shared_curtain_mesh
 	_curtain.material_override = _curtain_material
 	_curtain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_curtain.top_level = true
@@ -370,6 +499,7 @@ func _build_bolt() -> void:
 	add_child(_bolt)
 
 func _build_impact() -> void:
+	_ensure_shared_meshes()
 	_impact_material = ShaderMaterial.new()
 	_impact_material.shader = IMPACT_SHADER
 	_impact_material.set_shader_parameter(&"noise_tex", NOISE_TEX)
@@ -378,7 +508,7 @@ func _build_impact() -> void:
 	Sea.bind_material(_impact_material)
 	_impact = MeshInstance3D.new()
 	_impact.name = "LightningImpact"
-	_impact.mesh = _make_impact_mesh()
+	_impact.mesh = _shared_impact_mesh
 	_impact.material_override = _impact_material
 	_impact.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_impact.visible = false
@@ -390,6 +520,8 @@ func _build_impact() -> void:
 # --- Per-frame update ---------------------------------------------------
 
 func _update(first: bool, delta: float = 0.0) -> void:
+	if not is_inside_tree() or sky_material == null or environment == null:
+		return
 	var cam := get_viewport().get_camera_3d()
 	var cam_pos := cam.global_position if cam != null else global_position
 	if track_camera_focus and cam != null:
@@ -977,3 +1109,89 @@ static func _impact_tri(st: SurfaceTool, a: Vector3, uva: Vector2,
 	st.set_color(col)
 	st.set_uv(uvc)
 	st.add_vertex(c)
+
+
+static func _build_curtain_mesh() -> ArrayMesh:
+	## Unit open cylinder skirt for `rain_curtain.gdshader`: radius = 1.0,
+	## height = 1.0 (y = -0.5..+0.5), 64 radial segments = 128 tris, no caps,
+	## outward horizontal unit normals (cos(a), 0, sin(a)), and exact UVs
+	## (u in 0..1 around circumference, v = 0 top / v = 1 bottom).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in CURTAIN_SEGMENTS:
+		var u0 := float(i) / float(CURTAIN_SEGMENTS)
+		var u1 := float(i + 1) / float(CURTAIN_SEGMENTS)
+		var a0 := u0 * TAU
+		var a1 := 0.0 if (i + 1 == CURTAIN_SEGMENTS) else u1 * TAU
+		var n0 := Vector3(cos(a0), 0.0, sin(a0))
+		var n1 := Vector3(cos(a1), 0.0, sin(a1))
+		var t0 := Vector3(n0.x, 0.5, n0.z)
+		var t1 := Vector3(n1.x, 0.5, n1.z)
+		var b0 := Vector3(n0.x, -0.5, n0.z)
+		var b1 := Vector3(n1.x, -0.5, n1.z)
+		var uv_t0 := Vector2(u0, 0.0)
+		var uv_t1 := Vector2(u1, 0.0)
+		var uv_b0 := Vector2(u0, 1.0)
+		var uv_b1 := Vector2(u1, 1.0)
+
+		# Outward CW winding: Tri 1 (t1 -> t0 -> b0), Tri 2 (t1 -> b0 -> b1).
+		st.set_normal(n1)
+		st.set_uv(uv_t1)
+		st.add_vertex(t1)
+		st.set_normal(n0)
+		st.set_uv(uv_t0)
+		st.add_vertex(t0)
+		st.set_normal(n0)
+		st.set_uv(uv_b0)
+		st.add_vertex(b0)
+
+		st.set_normal(n1)
+		st.set_uv(uv_t1)
+		st.add_vertex(t1)
+		st.set_normal(n0)
+		st.set_uv(uv_b0)
+		st.add_vertex(b0)
+		st.set_normal(n1)
+		st.set_uv(uv_b1)
+		st.add_vertex(b1)
+	return st.commit()
+
+
+static func _build_card_mesh(size: Vector2) -> ArrayMesh:
+	## Exact 2-tri XY billboard card centered at the origin with +Z unit normals
+	## and full [0..1] UVs (UV.y = 0 top, UV.y = 1 bottom).
+	var hx := size.x * 0.5
+	var hy := size.y * 0.5
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nrm := Vector3(0.0, 0.0, 1.0)
+	var p_tl := Vector3(-hx, hy, 0.0)
+	var p_tr := Vector3(hx, hy, 0.0)
+	var p_br := Vector3(hx, -hy, 0.0)
+	var p_bl := Vector3(-hx, -hy, 0.0)
+	var uv_tl := Vector2(0.0, 0.0)
+	var uv_tr := Vector2(1.0, 0.0)
+	var uv_br := Vector2(1.0, 1.0)
+	var uv_bl := Vector2(0.0, 1.0)
+
+	st.set_normal(nrm)
+	st.set_uv(uv_tl)
+	st.add_vertex(p_tl)
+	st.set_normal(nrm)
+	st.set_uv(uv_tr)
+	st.add_vertex(p_tr)
+	st.set_normal(nrm)
+	st.set_uv(uv_br)
+	st.add_vertex(p_br)
+
+	st.set_normal(nrm)
+	st.set_uv(uv_tl)
+	st.add_vertex(p_tl)
+	st.set_normal(nrm)
+	st.set_uv(uv_br)
+	st.add_vertex(p_br)
+	st.set_normal(nrm)
+	st.set_uv(uv_bl)
+	st.add_vertex(p_bl)
+	return st.commit()
+

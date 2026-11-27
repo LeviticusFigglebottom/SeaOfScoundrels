@@ -269,6 +269,10 @@ func _setup_hud_shot(sky: Node) -> void:
 	_hud.bind(captain, pc, _inventory, cc, _ship, null, sky)
 	_hud.set_voyage_whisper("The Salt-King's Ledger", "Sail NE to Cutlass Cay and unearth the hoard", 12.0)
 	Game.post_notice("Maren: Land ho! Cutlass Cay off the starboard bow!")
+	if _fp_item == &"spyglass":
+		_hud.set_spyglass_zoom(0.88)
+		_hud.set_spyglass_heading_deg(45.0)
+		_hud.set_spyglass_sighting("Sovereign's Bastion", 420.0, "NE")
 
 	if _wheel_mode == "item":
 		_hud.open_item_radial()

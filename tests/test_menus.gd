@@ -1667,4 +1667,223 @@ func test_q24b_title_menu_page_fade_hover_ticks_and_director_chimes() -> void:
 		"Q24B TitleMenu, SkirmishDirector & TutorialDirector free cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# 12. Q27A: Spyglass Compass Bearing Strip, Target-Lock & Low-Health Vignette
+# ---------------------------------------------------------------------------
+
+func test_q27a_hud_spyglass_compass_lock_and_low_health_vignette() -> void:
+	check(Audio != null and Audio.has_sound(GameHUD.SFX_SPYGLASS_LOCK_TICK),
+		"Audio manifest registers spyglass target-lock tick SFX '%s'" % String(GameHUD.SFX_SPYGLASS_LOCK_TICK))
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	add_child(hud)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var spy_overlay := hud.find_child("SpyglassOverlay", true, false) as Control
+	var vitals_vig := hud.find_child("VitalsVignette", true, false) as Control
+	var crosshair := hud.find_child("Crosshair", true, false) as Control
+	check(spy_overlay != null, "GameHUD mounts SpyglassOverlay")
+	check(vitals_vig != null, "GameHUD mounts VitalsVignette")
+	if spy_overlay != null:
+		check_eq(spy_overlay.mouse_filter, Control.MOUSE_FILTER_IGNORE,
+			"SpyglassOverlay uses MOUSE_FILTER_IGNORE")
+		check(not spy_overlay.visible, "SpyglassOverlay starts hidden")
+	if vitals_vig != null:
+		check_eq(vitals_vig.mouse_filter, Control.MOUSE_FILTER_IGNORE,
+			"VitalsVignette uses MOUSE_FILTER_IGNORE")
+		check(not vitals_vig.visible, "VitalsVignette starts hidden")
+		if crosshair != null:
+			check(vitals_vig.get_index() < crosshair.get_index(),
+				"VitalsVignette sits beneath HUD overlays/panels so text and menus stay crisp on top")
+
+	# 1. Spyglass compass bearing formatting (strict ASCII across cardinals & wraparound).
+	var heading_cases: Array[Array] = [
+		[0.0, "000 N"],
+		[45.0, "045 NE"],
+		[90.0, "090 E"],
+		[135.0, "135 SE"],
+		[180.0, "180 S"],
+		[225.0, "225 SW"],
+		[270.0, "270 W"],
+		[315.0, "315 NW"],
+		[360.0, "000 N"],
+		[359.8, "000 N"],
+		[-90.0, "270 W"],
+	]
+	for hc in heading_cases:
+		hud.set_spyglass_heading_deg(float(hc[0]))
+		var txt := hud.get_spyglass_heading_text()
+		check_eq(txt, String(hc[1]),
+			"set_spyglass_heading_deg(%.1f) formats '%s' (got '%s')" % [float(hc[0]), String(hc[1]), txt])
+		check(_is_strict_ascii(txt), "spyglass heading '%s' is strict ASCII" % txt)
+
+	# 2. Live heading derivation from bound Pawn look_yaw fallback & active Camera3D forward XZ.
+	var pawn_scene := load("res://src/characters/pawn.tscn") as PackedScene
+	check(pawn_scene != null, "pawn.tscn loads for Q27A spyglass live heading check")
+	var test_pawn := pawn_scene.instantiate() as Pawn
+	test_pawn.set_physics_process(false)
+	add_child(test_pawn)
+	hud.bind(test_pawn, null, null, null, null, null, null)
+
+	test_pawn.look_yaw = -PI * 0.5  # Facing +X (East)
+	hud._process(0.05)
+	check_eq(hud.get_spyglass_heading_text(), "090 E",
+		"GameHUD._process derives 090 E from pawn.look_yaw fallback when no Camera3D is active")
+
+	test_pawn.look_yaw = PI * 0.5  # Facing -X (West)
+	hud._process(0.05)
+	check_eq(hud.get_spyglass_heading_text(), "270 W",
+		"GameHUD._process derives 270 W from pawn.look_yaw fallback")
+
+	var test_cam := Camera3D.new()
+	add_child(test_cam)
+	test_cam.current = true
+	test_cam.rotation_degrees = Vector3(0.0, -45.0, 0.0)  # Facing NE (+X, -Z)
+	hud._process(0.05)
+	check_eq(hud.get_spyglass_heading_text(), "045 NE",
+		"GameHUD._process derives 045 NE from active Camera3D forward XZ")
+
+	test_cam.current = false
+	test_cam.queue_free()
+	hud.bind(null, null, null, null, null, null, null)
+	test_pawn.queue_free()
+	await physics_frames(2)
+
+	# 3. Spyglass target-lock transitions, non-duplicate guarantee, and play_spyglass_lock_audio guard.
+	check(hud.play_spyglass_lock_audio, "play_spyglass_lock_audio defaults to true")
+	check_eq(hud.get_spyglass_lock_tick_count(), 0, "spyglass_lock_tick_count starts at 0")
+
+	# Below 0.45 zoom -> no lock tick fired yet.
+	hud.set_spyglass_zoom(0.20)
+	hud.set_spyglass_sighting("Port Scoundrel", 420.0, "NE")
+	check_eq(hud.get_spyglass_lock_tick_count(), 0,
+		"sighting below 0.45 zoom does not trigger target-lock tick")
+
+	# Crossing zoom > 0.45 acquires lock -> increments cleanly to 1!
+	hud.set_spyglass_zoom(0.85)
+	check_eq(hud.get_spyglass_lock_tick_count(), 1,
+		"zooming past 0.45 onto a target increments get_spyglass_lock_tick_count() to 1")
+	if spy_overlay != null:
+		check(spy_overlay.visible, "SpyglassOverlay visible when zoomed")
+
+	# Identical repeated sighting (even with updated distance) must NEVER double-fire!
+	hud.set_spyglass_sighting("Port Scoundrel", 412.0, "NE")
+	hud.set_spyglass_sighting("Port Scoundrel", 398.0, "NE")
+	check_eq(hud.get_spyglass_lock_tick_count(), 1,
+		"identical repeated sightings do NOT double-fire target-lock tick")
+
+	# Switching to a distinct target increments cleanly to 2!
+	hud.set_spyglass_sighting("Skeleton Sloop", 310.0, "E")
+	check_eq(hud.get_spyglass_lock_tick_count(), 2,
+		"locking onto a new target increments get_spyglass_lock_tick_count() to 2")
+
+	# Exercise full _SpyglassOverlay._draw() (compass strip, stadia hairlines & pulsing brackets).
+	hud.set_spyglass_heading_deg(45.0)
+	hud._process(0.08)
+	if spy_overlay != null:
+		spy_overlay.queue_redraw()
+	await get_tree().process_frame
+
+	# Clearing sighting does not tick; re-acquiring ticks once to 3.
+	hud.set_spyglass_sighting("", 0.0, "")
+	check_eq(hud.get_spyglass_lock_tick_count(), 2, "clearing sighting does not fire target-lock tick")
+	hud.set_spyglass_sighting("Skeleton Sloop", 295.0, "E")
+	check_eq(hud.get_spyglass_lock_tick_count(), 3,
+		"re-acquiring target after empty sighting increments tick count to 3")
+
+	# Respect play_spyglass_lock_audio = false!
+	hud.play_spyglass_lock_audio = false
+	hud.set_spyglass_sighting("Cutlass Cay", 540.0, "NW")
+	check_eq(hud.get_spyglass_lock_tick_count(), 3,
+		"play_spyglass_lock_audio = false suppresses target-lock tick increment")
+	hud.play_spyglass_lock_audio = true
+	hud.set_spyglass_sighting("Cutlass Cay", 530.0, "NW")
+	check_eq(hud.get_spyglass_lock_tick_count(), 3,
+		"re-enabling play_spyglass_lock_audio does not spuriously tick on already-locked target")
+	hud.set_spyglass_sighting("Galleon's Reach", 610.0, "S")
+	check_eq(hud.get_spyglass_lock_tick_count(), 4,
+		"subsequent new target lock with audio enabled increments tick count to 4")
+
+	hud.set_spyglass_zoom(0.0)
+	if spy_overlay != null:
+		check(not spy_overlay.visible, "SpyglassOverlay hides cleanly when zoom returns to 0.0")
+
+	# 4. Low-health heartbeat peripheral vignette (VitalsVignette).
+	check_near(hud.get_low_health_vignette_strength(), 0.0, 0.0005,
+		"low-health vignette starts strictly at 0.0")
+
+	hud.step_vitals_vignette(0.10, 0.75)
+	check_near(hud.get_low_health_vignette_strength(), 0.0, 0.0005,
+		"low-health vignette remains strictly 0.0 at hp_ratio = 0.75")
+	if vitals_vig != null:
+		check(not vitals_vig.visible, "VitalsVignette stays hidden at hp_ratio = 0.75")
+
+	hud.step_vitals_vignette(0.10, 0.35)
+	check_near(hud.get_low_health_vignette_strength(), 0.0, 0.0005,
+		"low-health vignette remains strictly 0.0 at hp_ratio = 0.35")
+	if vitals_vig != null:
+		check(not vitals_vig.visible, "VitalsVignette stays hidden at hp_ratio = 0.35")
+
+	hud.step_vitals_vignette(0.10, 0.0)
+	check_near(hud.get_low_health_vignette_strength(), 0.0, 0.0005,
+		"low-health vignette stays strictly 0.0 when hp_ratio <= 0.0 (dead)")
+	if vitals_vig != null:
+		check(not vitals_vig.visible, "VitalsVignette stays hidden when hp_ratio = 0.0")
+
+	# Ramp into low health (hp_ratio = 0.18) and sample rhythmic ~1.6 Hz pulse over ~1.0 s!
+	for _ramp in 4:
+		hud.step_vitals_vignette(0.05, 0.18)
+	var min_strength := 999.0
+	var max_strength := 0.0
+	for _sample in 20:
+		hud.step_vitals_vignette(0.05, 0.18)
+		var s := hud.get_low_health_vignette_strength()
+		min_strength = minf(min_strength, s)
+		max_strength = maxf(max_strength, s)
+	check(max_strength > 0.10,
+		"low-health vignette activates strongly (> 0.10) at hp_ratio = 0.18 (max=%.3f)" % max_strength)
+	check(min_strength > 0.10,
+		"low-health vignette stays clearly active across trough at hp_ratio = 0.18 (min=%.3f)" % min_strength)
+	check(min_strength < max_strength - 0.08,
+		"low-health vignette pulses rhythmically at ~1.6 Hz (min=%.3f < max=%.3f)" % [min_strength, max_strength])
+	if vitals_vig != null:
+		check(vitals_vig.visible, "VitalsVignette is visible at hp_ratio = 0.18")
+		vitals_vig.queue_redraw()
+	await get_tree().process_frame
+
+	# Pause overlay suppresses VitalsVignette cleanly and restores on resume.
+	hud.set_pause_open(true)
+	if vitals_vig != null:
+		check(not vitals_vig.visible, "VitalsVignette hides while pause menu is open")
+	hud.set_pause_open(false)
+	if vitals_vig != null:
+		check(vitals_vig.visible, "VitalsVignette restores when pause menu closes")
+
+	# Healing back to hp_ratio = 0.80 smoothly clears vignette strictly back to 0.0 / hidden.
+	for _heal in 8:
+		hud.step_vitals_vignette(0.05, 0.80)
+	check_near(hud.get_low_health_vignette_strength(), 0.0, 0.0005,
+		"low-health vignette returns cleanly to 0.0 on heal (hp_ratio = 0.80)")
+	if vitals_vig != null:
+		check(not vitals_vig.visible, "VitalsVignette hides cleanly after healing to 0.80")
+
+	# 5. Strict ASCII scan across src/ui/hud.gd source & all HUD controls!
+	var hud_src := FileAccess.get_file_as_string("res://src/ui/hud.gd")
+	check(hud_src.length() > 1000, "loaded source text of res://src/ui/hud.gd")
+	var non_ascii := 0
+	for i in hud_src.length():
+		if hud_src.unicode_at(i) >= 128:
+			non_ascii += 1
+	check_eq(non_ascii, 0, "src/ui/hud.gd has 0 non-ASCII characters")
+	var hud_widgets := _check_tree_strict_ascii(hud, "Q27A_GameHUD")
+	check(hud_widgets >= 20, "verified strict ASCII across Q27A GameHUD widgets (checked %d)" % hud_widgets)
+
+	# 6. Clean zero-leak teardown (SpyglassOverlay nulls _font cleanly on _exit_tree()).
+	hud.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(hud), "Q27A GameHUD frees cleanly with 0 leaks")
+
+
 
