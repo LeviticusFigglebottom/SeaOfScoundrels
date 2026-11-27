@@ -147,6 +147,13 @@ const ARMADA_RELICS_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_kraken_altar.glb",
 ]
 
+const PRIVATEER_CRAFT_LANDMARKS: Array[String] = [
+	"pirate_sailmaker_rigging_loft.glb",
+	"ancient_serpent_tide_portal.glb",
+	"coastal_castaway_raft_shelter.glb",
+	"volcanic_obsidian_phoenix_brazier.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -230,6 +237,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_tidal_compass_sanctum.glb": 1,
 	"coastal_buccaneer_careening_cradle.glb": 1,
 	"volcanic_obsidian_kraken_altar.glb": 1,
+	"pirate_sailmaker_rigging_loft.glb": 1,
+	"ancient_serpent_tide_portal.glb": 1,
+	"coastal_castaway_raft_shelter.glb": 1,
+	"volcanic_obsidian_phoenix_brazier.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -302,6 +313,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_tidal_compass_sanctum.glb": ["Lantern_TidalCompass*"],
 	"coastal_buccaneer_careening_cradle.glb": ["Lantern_Careening*"],
 	"volcanic_obsidian_kraken_altar.glb": ["Lantern_VolcKraken*"],
+	"pirate_sailmaker_rigging_loft.glb": ["Lantern_Sailmaker*"],
+	"ancient_serpent_tide_portal.glb": ["Lantern_SerpentPortal*"],
+	"coastal_castaway_raft_shelter.glb": ["Lantern_CastawayCamp*"],
+	"volcanic_obsidian_phoenix_brazier.glb": ["Lantern_PhoenixBrazier*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -376,6 +391,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"TidalCompass_",
 	"Careening_",
 	"VolcKraken_",
+	"Sailmaker_",
+	"SerpentPortal_",
+	"CastawayCamp_",
+	"PhoenixBrazier_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -521,7 +540,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(HAVEN_RELICS_LANDMARKS)
 	all_landmarks.append_array(FRONTIER_CRAFT_LANDMARKS)
 	all_landmarks.append_array(ARMADA_RELICS_LANDMARKS)
-	check_eq(all_landmarks.size(), 82, "expected 82 sculpted landmark GLBs")
+	all_landmarks.append_array(PRIVATEER_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 86, "expected 86 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -1064,6 +1084,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Wave I-20 Careening keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("Careening_Shore"))
 		check(IslandDetailsCls._prop_keepout_radius("VolcKraken_Approach") >= 4.0,
 			"Wave I-20 VolcKraken keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("VolcKraken_Approach"))
+
+		print("    wave_i21 driftwood micro-craft tris: driftwood=%d" % drift_tris)
+		check(drift_tris >= 420,
+			"Wave I-21 CoastalDriftwood mesh must have >= 420 tris (rope lash + bracket fungus + coral sea star + barnacles + 3rd kelp ribbon, got %d)" % drift_tris)
+		check(IslandDetailsCls._prop_keepout_radius("Sailmaker_Loft") >= 4.5,
+			"Wave I-21 Sailmaker keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("Sailmaker_Loft"))
+		check(IslandDetailsCls._prop_keepout_radius("SerpentPortal_Glade") >= 4.3,
+			"Wave I-21 SerpentPortal keepout radius must be >= 4.3 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("SerpentPortal_Glade"))
+		check(IslandDetailsCls._prop_keepout_radius("CastawayCamp_Shoal") >= 4.5,
+			"Wave I-21 CastawayCamp keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("CastawayCamp_Shoal"))
+		check(IslandDetailsCls._prop_keepout_radius("PhoenixBrazier_Approach") >= 4.0,
+			"Wave I-21 PhoenixBrazier keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("PhoenixBrazier_Approach"))
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1768,6 +1800,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(ar_glb),
 			"Wave I-20 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % ar_glb)
 
+	# 2h-12. Verify Wave I-21 (86-Landmark Privateer-Craft) landmarks (pirate sailmaker rigging loft,
+	#        ancient serpent tide portal, coastal castaway raft shelter & volcanic obsidian phoenix brazier)
+	#        + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var sailmaker_total := 0
+	var serpent_portal_total := 0
+	var castaway_camp_total := 0
+	var phoenix_brazier_total := 0
+	for isl_i21 in all_islands:
+		sailmaker_total += isl_i21.find_children("Sailmaker_*", "Node3D", true, false).size()
+		serpent_portal_total += isl_i21.find_children("SerpentPortal_*", "Node3D", true, false).size()
+		castaway_camp_total += isl_i21.find_children("CastawayCamp_*", "Node3D", true, false).size()
+		phoenix_brazier_total += isl_i21.find_children("PhoenixBrazier_*", "Node3D", true, false).size()
+	print("    wave_i21 privateer_craft landmarks: sailmakers=%d serpent_portals=%d castaway_camps=%d phoenix_braziers=%d lantern_halos=%d" % [
+		sailmaker_total, serpent_portal_total, castaway_camp_total, phoenix_brazier_total, total_lantern_halos])
+	check(sailmaker_total >= 4, "Wave I-21 spawns >= 4 Sailmaker_* landmarks (got %d)" % sailmaker_total)
+	check(serpent_portal_total >= 4, "Wave I-21 spawns >= 4 SerpentPortal_* landmarks (got %d)" % serpent_portal_total)
+	check(castaway_camp_total >= 4, "Wave I-21 spawns >= 4 CastawayCamp_* landmarks (got %d)" % castaway_camp_total)
+	check(phoenix_brazier_total >= 3, "Wave I-21 spawns >= 3 PhoenixBrazier_* landmarks (got %d)" % phoenix_brazier_total)
+	check(total_lantern_halos >= 260,
+		"Wave I-21 archipelago must batch >= 260 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for pc_glb in PRIVATEER_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(pc_glb),
+			"Wave I-21 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % pc_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1810,10 +1868,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i20 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i21 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 323,
-		"grounding audit must inspect >= 323 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 342,
+		"grounding audit must inspect >= 342 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

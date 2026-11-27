@@ -11,7 +11,7 @@ extends Node3D
 ##   1. `GrassClumps`          — 32-blade slender 3-tuft swaying grass + 7 golden plumed sea-oat seed-stalks (`foliage_wind.gdshader`)
 ##   2. `JungleFerns`          — 12-frond 2-tier pinnate serrated fern rosettes + 3 coiled fiddlehead crosiers (`foliage_wind.gdshader`)
 ##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
-##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
+##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with hawser rope lash, bracket fungi, coral sea star, sea-kelp & barnacles aligned to coastline contours
 ##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted scallop shell, 4-whorl spiral conch, 5-petal sand dollar & coral sea star along wet/dry sand
 ##   6. `TidalOutcrops`        — undercut stratified coastal rock clusters crusted with barnacles, limpets, sea mussels & tide-pool anemones
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
@@ -971,12 +971,13 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
 			or cname.begins_with("BountyPost") or cname.begins_with("FishRack") \
 			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway") \
-			or cname.begins_with("Ropewalk") or cname.begins_with("Careening"):
+			or cname.begins_with("Ropewalk") or cname.begins_with("Careening") \
+			or cname.begins_with("Sailmaker") or cname.begins_with("CastawayCamp"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
 			or cname.begins_with("RumDistillery") or cname.begins_with("BasaltBrazier") \
-			or cname.begins_with("TidalCompass"):
+			or cname.begins_with("TidalCompass") or cname.begins_with("SerpentPortal"):
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
@@ -985,7 +986,7 @@ static func _prop_keepout_radius(cname: String) -> float:
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
 			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem") \
-			or cname.begins_with("VolcKraken"):
+			or cname.begins_with("VolcKraken") or cname.begins_with("PhoenixBrazier"):
 		return 4.2
 	if cname.begins_with("SignalBrazier") or cname.begins_with("EmberTotem"):
 		return 4.0
@@ -4234,7 +4235,7 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 	return st.commit()
 
 
-# ------------------------------------------------------------------ Mesh 4: Sculpted Gnarled Coastal Driftwood Log
+# ------------------------------------------------------------------ Mesh 4: Sculpted Gnarled Coastal Driftwood Log (Hawser Rope, Bracket Fungi, Sea Star, Kelp & Barnacles)
 
 static func _build_driftwood_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -4373,7 +4374,22 @@ static func _build_driftwood_mesh() -> ArrayMesh:
 	_append_kelp_ribbon(st, kelp_b_pts, kelp_b_norms, kelp_b_widths,
 		Vector3(0.76, -0.015, -0.31), col_kelp_dark, col_kelp_bright)
 
-	# 3 subtle pale coastal barnacle nodule bumps clinging to the water-washed lower flank.
+	# 3rd draped wet sea-kelp ribbon snagged over the forked coastal branch elbow & hanging free (15 tris).
+	var kelp_c_pts: Array[Vector3] = [
+		Vector3(0.616, 0.412, 0.405),
+		Vector3(0.587, 0.339, 0.449),
+		Vector3(0.596, 0.212, 0.474),
+	]
+	var kelp_c_norms: Array[Vector3] = [
+		Vector3(0.00, 0.96, 0.28).normalized(),
+		Vector3(-0.32, 0.08, 0.94).normalized(),
+		Vector3(-0.28, 0.04, 0.96).normalized(),
+	]
+	var kelp_c_widths: Array[float] = [0.028, 0.044, 0.036]
+	_append_hanging_kelp_ribbon(st, kelp_c_pts, kelp_c_norms, kelp_c_widths,
+		Vector3(0.646, 0.343, 0.365), Vector3(0.616, 0.095, 0.490), col_kelp_dark, col_kelp_bright)
+
+	# 5 subtle pale coastal barnacle volcanoes clinging to the water-washed lower flanks (3 original + 2 extra).
 	var col_barn_base := Color(0.68, 0.65, 0.58, 1.0)
 	var col_barn_rim := Color(0.92, 0.90, 0.84, 1.0)
 	var col_barn_cup := Color(0.38, 0.36, 0.32, 1.0)
@@ -4386,6 +4402,23 @@ static func _build_driftwood_mesh() -> ArrayMesh:
 		var bsamp := _sample_driftwood_surface(spine, float(bspec[0]), float(bspec[1]), 0.90)
 		_append_barnacle_cone(st, bsamp[0], bsamp[1], float(bspec[2]), float(bspec[3]), 5,
 			col_barn_base, col_barn_rim, col_barn_cup)
+	var dw_extra_barnacles: Array[Array] = [
+		[3.42, -0.26, 0.042, 0.040],
+		[3.60, -0.44, 0.032, 0.034],
+	]
+	for bspec in dw_extra_barnacles:
+		var bsamp := _sample_driftwood_bark(spine, float(bspec[0]), float(bspec[1]))
+		_append_barnacle_cone(st, bsamp[0] - bsamp[1] * 0.004, bsamp[1], float(bspec[2]), float(bspec[3]), 5,
+			col_barn_base, col_barn_rim, col_barn_cup)
+
+	# Tangled 3-turn helical Ship's Hemp Hawser Rope Lash wrapped around mid-trunk with frayed sand tail (80 tris).
+	_append_driftwood_rope_wrap(st, spine)
+
+	# Trio of overlapping scalloped Coastal Bracket-Fungus / Sea-Lichen shelves on shaded north flank (42 tris).
+	_append_driftwood_bracket_shelf(st, spine)
+
+	# Washed-up miniature 5-arm Coral Sea-Star clinging organically to the damp root-crown knot shoulder (45 tris).
+	_append_driftwood_sea_star(st, spine, 0.78, 0.65, 0.096, 0.32)
 
 	st.generate_normals()
 	return st.commit()
@@ -4407,6 +4440,366 @@ static func _sample_driftwood_surface(spine: Array[Array], si_f: float, ang: flo
 	var pos := ctr + Vector3(0.0, sin(ang) * rad * rib * 0.86, cos(ang) * rad * rib)
 	var n := Vector3(0.0, sin(ang), cos(ang)).normalized()
 	return [pos, n]
+
+
+static func _driftwood_ring_vertex(spine: Array[Array], si: int, k: int) -> Vector3:
+	const SIDES := 8
+	var row: Array = spine[si]
+	var ctr := Vector3(float(row[0]), float(row[1]), float(row[2]))
+	var rad: float = float(row[3])
+	var ang := float(k) / float(SIDES) * TAU + float(si) * 0.14
+	var ridge_sign := 1.0 if (k % 2 == 0) else -1.0
+	var rib := 0.94 + 0.09 * ridge_sign + 0.07 * sin(ang * 3.0 + float(si) * 1.1)
+	return ctr + Vector3(0.0, sin(ang) * rad * rib * 0.86, cos(ang) * rad * rib)
+
+
+static func _sample_driftwood_bark(spine: Array[Array], si_f: float, ang: float) -> Array[Vector3]:
+	const SIDES := 8
+	var max_idx := spine.size() - 2
+	var i0 := clampi(int(floorf(si_f)), 0, max_idx)
+	var t := clampf(si_f - float(i0), 0.0, 1.0)
+	var ang_rel := fposmod(ang - si_f * 0.14, TAU)
+	var kf := ang_rel / TAU * float(SIDES)
+	var k0 := int(floorf(kf)) % SIDES
+	var k1 := (k0 + 1) % SIDES
+	var frac := kf - floorf(kf)
+	var p00 := _driftwood_ring_vertex(spine, i0, k0)
+	var p01 := _driftwood_ring_vertex(spine, i0, k1)
+	var p10 := _driftwood_ring_vertex(spine, i0 + 1, k0)
+	var p11 := _driftwood_ring_vertex(spine, i0 + 1, k1)
+	var pos := p00.lerp(p01, frac).lerp(p10.lerp(p11, frac), t)
+	var n := Vector3(0.0, sin(ang) / 0.86, cos(ang)).normalized()
+	return [pos, n]
+
+
+static func _append_driftwood_rope_wrap(st: SurfaceTool, spine: Array[Array]) -> void:
+	# Weathered tangled 3-turn helical Ship's Hemp Hawser Rope Lash wrapped snugly around
+	# mid-trunk (t in 1.15..2.35) + frayed V-fork trailing end draped cleanly onto sand (80 tris).
+	const WRAP_SEGS := 17
+	const TURNS := 3.0
+	const ANG_START := -0.18
+	const ROPE_HALF_W := 0.026
+	const ROPE_CREST_H := 0.034
+	const ROPE_TUCK_D := 0.030
+
+	var col_hemp_sun := Color(0.86, 0.74, 0.49, 1.0)
+	var col_hemp_mid := Color(0.73, 0.60, 0.38, 1.0)
+	var col_hemp_crevice := Color(0.45, 0.35, 0.21, 1.0)
+	var col_hemp_under := Color(0.32, 0.25, 0.16, 1.0)
+	var col_hemp_fray := Color(0.89, 0.79, 0.56, 1.0)
+
+	var pts: Array[Vector3] = []
+	var norms: Array[Vector3] = []
+	var ctrs: Array[Vector3] = []
+	var max_idx := spine.size() - 2
+	for i in range(WRAP_SEGS + 1):
+		var u := float(i) / float(WRAP_SEGS)
+		var si_f := clampf(lerpf(1.15, 2.35, u) + 0.030 * sin(u * TAU * 2.5 + 0.4), 1.15, 2.35)
+		var ang := ANG_START + u * TURNS * TAU
+		var samp := _sample_driftwood_surface(spine, si_f, ang, 1.07)
+		pts.append(samp[0])
+		norms.append(samp[1])
+		var i0 := clampi(int(floor(si_f)), 0, max_idx)
+		var tf := clampf(si_f - float(i0), 0.0, 1.0)
+		var row0: Array = spine[i0]
+		var row1: Array = spine[i0 + 1]
+		ctrs.append(Vector3(
+			lerpf(float(row0[0]), float(row1[0]), tf),
+			lerpf(float(row0[1]), float(row1[1]), tf),
+			lerpf(float(row0[2]), float(row1[2]), tf)))
+
+	var left_ring: Array[Vector3] = []
+	var crest_ring: Array[Vector3] = []
+	var right_ring: Array[Vector3] = []
+	var crest_cols: Array[Color] = []
+	var edge_cols: Array[Color] = []
+	var count := pts.size()
+	for i in count:
+		var p := pts[i]
+		var n_out := norms[i].normalized() if norms[i].length_squared() > 1e-8 else Vector3.UP
+		var tangent := Vector3.ZERO
+		if i == 0:
+			tangent = pts[1] - pts[0]
+		elif i == count - 1:
+			tangent = pts[i] - pts[i - 1]
+		else:
+			tangent = pts[i + 1] - pts[i - 1]
+		tangent = tangent.normalized() if tangent.length_squared() > 1e-8 else Vector3.UP
+		var side := tangent.cross(n_out)
+		side = side.normalized() if side.length_squared() > 1e-8 else Vector3.RIGHT
+		left_ring.append(p - side * ROPE_HALF_W - n_out * ROPE_TUCK_D)
+		crest_ring.append(p + n_out * ROPE_CREST_H)
+		right_ring.append(p + side * ROPE_HALF_W - n_out * ROPE_TUCK_D)
+
+		var up_t := clampf(n_out.y * 0.5 + 0.5, 0.0, 1.0)
+		var lay_k := 1.00 if (i % 2 == 0) else 0.90
+		var c_cr := col_hemp_under.lerp(col_hemp_mid, smoothstep(0.0, 0.45, up_t)).lerp(
+			col_hemp_sun, smoothstep(0.45, 1.0, up_t))
+		crest_cols.append(Color(
+			clampf(c_cr.r * lay_k, 0.0, 1.0),
+			clampf(c_cr.g * lay_k, 0.0, 1.0),
+			clampf(c_cr.b * lay_k, 0.0, 1.0),
+			1.0))
+		edge_cols.append(col_hemp_under.lerp(col_hemp_crevice, smoothstep(0.0, 0.65, up_t)))
+
+	# 3 helical wrap turns (17 x 4 = 68 tris).
+	for i in range(WRAP_SEGS):
+		var ref_seg := (ctrs[i] + ctrs[i + 1]) * 0.5
+		_add_outward_quad(st, left_ring[i], crest_ring[i], crest_ring[i + 1], left_ring[i + 1],
+			ref_seg, edge_cols[i], crest_cols[i], crest_cols[i + 1], edge_cols[i + 1])
+		_add_outward_quad(st, crest_ring[i], right_ring[i], right_ring[i + 1], crest_ring[i + 1],
+			ref_seg, crest_cols[i], edge_cols[i], edge_cols[i + 1], crest_cols[i + 1])
+
+	# Tucked bitter-end splice snug against the bark at the upper wrap end (2 tris).
+	var last := count - 1
+	var end_dir := (pts[last] - pts[last - 1]).normalized()
+	var tuck_tip := pts[last] + end_dir * 0.036 - norms[last] * ROPE_TUCK_D
+	_add_outward_tri(st, left_ring[last], crest_ring[last], tuck_tip, ctrs[last],
+		edge_cols[last], crest_cols[last], edge_cols[last])
+	_add_outward_tri(st, crest_ring[last], right_ring[last], tuck_tip, ctrs[last],
+		crest_cols[last], edge_cols[last], edge_cols[last])
+
+	# Frayed trailing hawser end draping smoothly off the lower front flank onto the sand (y >= -0.004 >= -0.02, 10 tris).
+	var p1_l := Vector3(-0.718, 0.002, 0.308)
+	var p1_c := Vector3(-0.692, 0.034, 0.312)
+	var p1_r := Vector3(-0.666, 0.002, 0.302)
+	var drape_ref := (left_ring[0] + crest_ring[0] + right_ring[0] + p1_l + p1_c + p1_r) / 6.0
+	_add_outward_quad(st, left_ring[0], crest_ring[0], p1_c, p1_l,
+		drape_ref, edge_cols[0], crest_cols[0], col_hemp_sun, col_hemp_crevice)
+	_add_outward_quad(st, crest_ring[0], right_ring[0], p1_r, p1_c,
+		drape_ref, crest_cols[0], edge_cols[0], col_hemp_crevice, col_hemp_sun)
+	_add_outward_quad(st, right_ring[0], left_ring[0], p1_l, p1_r,
+		drape_ref, edge_cols[0], edge_cols[0], col_hemp_under, col_hemp_under)
+
+	var fray_l := Vector3(-0.690, -0.004, 0.415)
+	var fray_m := Vector3(-0.665, -0.004, 0.362)
+	var fray_r := Vector3(-0.616, -0.004, 0.402)
+	var sand_ref := Vector3(-0.675, -0.140, 0.360)
+	_add_outward_tri(st, p1_l, p1_c, fray_l, sand_ref, col_hemp_crevice, col_hemp_sun, col_hemp_fray)
+	_add_outward_tri(st, p1_c, fray_m, fray_l, sand_ref, col_hemp_sun, col_hemp_crevice, col_hemp_fray)
+	_add_outward_tri(st, p1_c, p1_r, fray_r, sand_ref, col_hemp_sun, col_hemp_crevice, col_hemp_fray)
+	_add_outward_tri(st, fray_m, p1_c, fray_r, sand_ref, col_hemp_crevice, col_hemp_sun, col_hemp_fray)
+
+
+static func _append_driftwood_bracket_shelf(st: SurfaceTool, spine: Array[Array]) -> void:
+	# Trio of overlapping scalloped Coastal Bracket-Fungus / Sea-Lichen shelves sprouting
+	# solidly from the damp shaded north flank of the log (t in 2.46..2.94, 3 x 14 = 42 tris).
+	const RIM_PTS := 7
+	var col_cap_root := Color(0.56, 0.25, 0.12, 1.0)
+	var col_cap_mid := Color(0.76, 0.44, 0.19, 1.0)
+	var col_cap_hub := col_cap_root.lerp(col_cap_mid, 0.38)
+	var col_rim_cream := Color(0.95, 0.90, 0.77, 1.0)
+	var col_rim_ochre := Color(0.86, 0.71, 0.47, 1.0)
+	var col_under_pore := Color(0.42, 0.34, 0.24, 1.0)
+
+	# [si_f, ang, reach, half_span, thick_top, thick_bot, roll_rad]
+	var shelves: Array[Array] = [
+		[2.68, 2.74, 0.138, 0.118, 0.018, 0.030,  0.06],
+		[2.46, 3.04, 0.114, 0.098, 0.015, 0.025, -0.08],
+		[2.94, 2.90, 0.098, 0.086, 0.014, 0.022,  0.10],
+	]
+
+	for sspec in shelves:
+		var si_f: float = float(sspec[0])
+		var ang: float = float(sspec[1])
+		var reach: float = float(sspec[2])
+		var half_span: float = float(sspec[3])
+		var thick_top: float = float(sspec[4])
+		var thick_bot: float = float(sspec[5])
+		var roll_rad: float = float(sspec[6])
+
+		var bsamp := _sample_driftwood_bark(spine, si_f, ang)
+		var bark_pos: Vector3 = bsamp[0]
+		var bark_n: Vector3 = bsamp[1]
+		# Anchor shelf root 2.5 cm inside the damp bark so zero gap appears on any furrow.
+		var root_pos := bark_pos - bark_n * 0.025
+		var out_dir := Vector3(bark_n.x, bark_n.y * 0.18, bark_n.z).normalized()
+		var side0 := Vector3.UP.cross(out_dir)
+		side0 = side0.normalized() if side0.length_squared() > 1e-8 else Vector3.RIGHT
+		var up0 := out_dir.cross(side0).normalized()
+		var cr := cos(roll_rad)
+		var sr := sin(roll_rad)
+		var side_dir := side0 * cr + up0 * sr
+		var up_dir := up0 * cr - side0 * sr
+
+		var top_hub := root_pos + out_dir * 0.012 + up_dir * thick_top
+		var bot_hub := root_pos - out_dir * 0.008 - up_dir * thick_bot
+		var rim: Array[Vector3] = []
+		var rcol: Array[Color] = []
+		for k in RIM_PTS:
+			var f := float(k) / float(RIM_PTS - 1)
+			var theta := lerpf(-1.32, 1.32, f)
+			var sc_r := 1.0 - 0.065 * cos(float(k) * PI)
+			var sc_y := 0.004 * sin(float(k) * PI * 0.5) - 0.004 * absf(sin(theta))
+			rim.append(root_pos
+				+ out_dir * (cos(theta) * reach * sc_r)
+				+ side_dir * (sin(theta) * half_span * sc_r)
+				+ up_dir * sc_y)
+			rcol.append(col_rim_cream if (k % 2 == 1) else col_rim_ochre)
+
+		var ref_ctr := root_pos + out_dir * (reach * 0.28) + up_dir * ((thick_top - thick_bot) * 0.25)
+		for k in range(RIM_PTS - 1):
+			_add_outward_tri(st, top_hub, rim[k], rim[k + 1], ref_ctr, col_cap_hub, rcol[k], rcol[k + 1])
+			_add_outward_tri(st, bot_hub, rim[k + 1], rim[k], ref_ctr, col_under_pore, rcol[k + 1], rcol[k])
+		_add_outward_tri(st, top_hub, bot_hub, rim[0], ref_ctr, col_cap_root, col_under_pore, rcol[0])
+		_add_outward_tri(st, top_hub, rim[RIM_PTS - 1], bot_hub, ref_ctr,
+			col_cap_root, rcol[RIM_PTS - 1], col_under_pore)
+
+
+static func _append_driftwood_sea_star(st: SurfaceTool, spine: Array[Array], si_center: float,
+		ang_center: float, arm_len: float, yaw: float) -> void:
+	# Washed-up miniature 5-arm Coral Sea-Star molded onto the exact curved bark facets of the
+	# damp root-crown knot shoulder (5 x (6 dorsal + 3 coral-gold spine tubercle) = 45 tris).
+	const ARMS := 5
+	const DX_PER_SI := 0.48
+	const ARC_RAD := 0.163
+	var max_si := float(spine.size() - 1) - 0.05
+
+	var col_dorsal := Color(0.96, 0.43, 0.21, 1.0)
+	var col_spine := Color(1.00, 0.78, 0.48, 1.0)
+	var col_flank := Color(0.80, 0.33, 0.17, 1.0)
+	var col_mid_spine := col_dorsal.lerp(col_spine, 0.68)
+	var col_tip := Color(0.98, 0.56, 0.30, 1.0)
+
+	var samp_ctr := _sample_driftwood_bark(spine, si_center, ang_center)
+	var crown: Vector3 = samp_ctr[0] + samp_ctr[1] * 0.026
+	var center_ref: Vector3 = samp_ctr[0] - samp_ctr[1] * 0.050
+
+	var valleys: Array[Vector3] = []
+	for a in ARMS:
+		var ang_v := yaw + (float(a) + 0.5) / float(ARMS) * TAU
+		var r_v := arm_len * 0.30
+		var sv := _sample_driftwood_bark(spine,
+			clampf(si_center + cos(ang_v) * r_v / DX_PER_SI, 0.05, max_si),
+			ang_center + sin(ang_v) * r_v / ARC_RAD)
+		valleys.append(sv[0] - sv[1] * 0.004)
+
+	for a in ARMS:
+		var ang_a := yaw + float(a) / float(ARMS) * TAU
+		var ca := cos(ang_a)
+		var sa := sin(ang_a)
+		var rx := -sa
+		var ry := ca
+		var v_prev := valleys[(a + ARMS - 1) % ARMS]
+		var v_next := valleys[a]
+
+		var len_a := arm_len * (0.94 + 0.09 * sin(float(a) * 1.7 + 0.4))
+		var sway := sin(float(a) * 2.1 + 0.5) * 0.010
+		var r_mid := len_a * 0.50
+		var w_mid := len_a * 0.175
+
+		var mx := ca * r_mid + rx * (sway * 0.50)
+		var my := sa * r_mid + ry * (sway * 0.50)
+		var sm := _sample_driftwood_bark(spine, clampf(si_center + mx / DX_PER_SI, 0.05, max_si),
+			ang_center + my / ARC_RAD)
+		var ridge_mid: Vector3 = sm[0] + sm[1] * 0.021
+		var arm_ref: Vector3 = sm[0] - sm[1] * 0.060
+
+		var sl := _sample_driftwood_bark(spine,
+			clampf(si_center + (mx - rx * w_mid) / DX_PER_SI, 0.05, max_si),
+			ang_center + (my - ry * w_mid) / ARC_RAD)
+		var left_mid: Vector3 = sl[0] - sl[1] * 0.004
+
+		var sr_s := _sample_driftwood_bark(spine,
+			clampf(si_center + (mx + rx * w_mid) / DX_PER_SI, 0.05, max_si),
+			ang_center + (my + ry * w_mid) / ARC_RAD)
+		var right_mid: Vector3 = sr_s[0] - sr_s[1] * 0.004
+
+		var st_s := _sample_driftwood_bark(spine,
+			clampf(si_center + (ca * len_a + rx * sway) / DX_PER_SI, 0.05, max_si),
+			ang_center + (sa * len_a + ry * sway) / ARC_RAD)
+		var tip: Vector3 = st_s[0] + st_s[1] * 0.001
+
+		# 6 watertight surface-clinging dorsal facets per arm.
+		_add_outward_tri(st, crown, v_prev, ridge_mid, center_ref, col_spine, col_flank, col_mid_spine)
+		_add_outward_tri(st, crown, ridge_mid, v_next, center_ref, col_spine, col_mid_spine, col_flank)
+		_add_outward_tri(st, v_prev, left_mid, ridge_mid, arm_ref, col_flank, col_dorsal, col_mid_spine)
+		_add_outward_tri(st, v_next, ridge_mid, right_mid, arm_ref, col_flank, col_mid_spine, col_dorsal)
+		_add_outward_tri(st, left_mid, tip, ridge_mid, arm_ref, col_dorsal, col_tip, col_mid_spine)
+		_add_outward_tri(st, ridge_mid, tip, right_mid, arm_ref, col_mid_spine, col_tip, col_dorsal)
+
+		# Sculpted coral-gold dorsal spine tubercle crest along each ray (3 tris).
+		var r_tb := len_a * 0.42
+		var tbx := ca * r_tb + rx * (sway * 0.35)
+		var tby := sa * r_tb + ry * (sway * 0.35)
+		var stb := _sample_driftwood_bark(spine, clampf(si_center + tbx / DX_PER_SI, 0.05, max_si),
+			ang_center + tby / ARC_RAD)
+		var sta := _sample_driftwood_bark(spine,
+			clampf(si_center + (tbx + ca * 0.011) / DX_PER_SI, 0.05, max_si),
+			ang_center + (tby + sa * 0.011) / ARC_RAD)
+		var stb_l := _sample_driftwood_bark(spine,
+			clampf(si_center + (tbx - ca * 0.009 - rx * 0.009) / DX_PER_SI, 0.05, max_si),
+			ang_center + (tby - sa * 0.009 - ry * 0.009) / ARC_RAD)
+		var stb_r := _sample_driftwood_bark(spine,
+			clampf(si_center + (tbx - ca * 0.009 + rx * 0.009) / DX_PER_SI, 0.05, max_si),
+			ang_center + (tby - sa * 0.009 + ry * 0.009) / ARC_RAD)
+		var tb_a: Vector3 = sta[0] + sta[1] * 0.017
+		var tb_b: Vector3 = stb_l[0] + stb_l[1] * 0.017
+		var tb_c: Vector3 = stb_r[0] + stb_r[1] * 0.017
+		var tb_apex: Vector3 = stb[0] + stb[1] * 0.031
+		var tb_ref: Vector3 = stb[0] + stb[1] * 0.002
+		_add_outward_tri(st, tb_a, tb_b, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
+		_add_outward_tri(st, tb_b, tb_c, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
+		_add_outward_tri(st, tb_c, tb_a, tb_apex, tb_ref, col_dorsal, col_dorsal, col_spine)
+
+
+static func _append_hanging_kelp_ribbon(st: SurfaceTool, pts: Array[Vector3], norms: Array[Vector3],
+		widths: Array[float], start_tip: Vector3, end_tip: Vector3, col_dark: Color,
+		col_bright: Color) -> void:
+	# 3-station wet sea-kelp ribbon snagged across the forked branch elbow and hanging free
+	# with a solid dark-green shaded back closure so it reads cleanly from all 360 deg (15 tris).
+	var count := mini(pts.size(), mini(norms.size(), widths.size()))
+	if count < 2:
+		return
+	var left_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var right_ring: Array[Vector3] = []
+	for i in count:
+		var p := pts[i]
+		var n_out := norms[i].normalized() if norms[i].length_squared() > 1e-8 else Vector3.UP
+		var tangent := Vector3.ZERO
+		if i == 0:
+			tangent = pts[1] - start_tip
+		elif i == count - 1:
+			tangent = end_tip - pts[i - 1]
+		else:
+			tangent = pts[i + 1] - pts[i - 1]
+		tangent = tangent.normalized() if tangent.length_squared() > 1e-8 else Vector3.DOWN
+		var side := tangent.cross(n_out)
+		side = side.normalized() if side.length_squared() > 1e-8 else Vector3.RIGHT
+		var hw := widths[i]
+		left_ring.append(p - side * hw - n_out * 0.006)
+		mid_ring.append(p + n_out * 0.013)
+		right_ring.append(p + side * hw - n_out * 0.006)
+
+	var start_ref := pts[0] - norms[0] * 0.14
+	_add_outward_tri(st, start_tip, mid_ring[0], left_ring[0], start_ref, col_dark, col_bright, col_dark)
+	_add_outward_tri(st, start_tip, right_ring[0], mid_ring[0], start_ref, col_dark, col_dark, col_bright)
+
+	var col_back := Color(col_dark.r * 0.72, col_dark.g * 0.74, col_dark.b * 0.72, 1.0)
+	for i in range(count - 1):
+		var n_mid := (norms[i] + norms[i + 1]).normalized()
+		var ref_seg := (mid_ring[i] + mid_ring[i + 1]) * 0.5 - n_mid * 0.16
+		var c_edge_0 := col_dark.lerp(col_bright, 0.18)
+		var c_edge_1 := col_dark.lerp(col_bright, 0.12)
+		var c_mid_0 := col_bright.lerp(col_dark, float(i) / float(count) * 0.25)
+		var c_mid_1 := col_bright.lerp(col_dark, float(i + 1) / float(count) * 0.25)
+		_add_outward_quad(st, left_ring[i], mid_ring[i], mid_ring[i + 1], left_ring[i + 1],
+			ref_seg, c_edge_0, c_mid_0, c_mid_1, c_edge_1)
+		_add_outward_quad(st, mid_ring[i], right_ring[i], right_ring[i + 1], mid_ring[i + 1],
+			ref_seg, c_mid_0, c_edge_0, c_edge_1, c_mid_1)
+		if i >= 1:
+			var back_ref := (mid_ring[i] + mid_ring[i + 1]) * 0.5
+			_add_outward_quad(st, right_ring[i], left_ring[i], left_ring[i + 1], right_ring[i + 1],
+				back_ref, col_back, col_back, col_back, col_back)
+
+	var last := count - 1
+	var end_ref := (mid_ring[last] + end_tip) * 0.5 - norms[last] * 0.14
+	_add_outward_tri(st, left_ring[last], mid_ring[last], end_tip, end_ref, col_dark, col_bright, col_dark)
+	_add_outward_tri(st, mid_ring[last], right_ring[last], end_tip, end_ref, col_bright, col_dark, col_dark)
+	var tip_back_ref := mid_ring[last]
+	_add_outward_tri(st, right_ring[last], left_ring[last], end_tip, tip_back_ref,
+		col_back, col_back, col_back)
 
 
 static func _append_kelp_ribbon(st: SurfaceTool, pts: Array[Vector3], norms: Array[Vector3],
@@ -5102,11 +5495,13 @@ static func _append_limpet_cone(st: SurfaceTool, base_pos: Vector3, up_dir: Vect
 
 static func _append_tidal_boulder(st: SurfaceTool, center: Vector3, rx: float, height: float,
 		rz: float, bot_y: float, sides: int, phase: float) -> void:
-	var col_moss := Color(0.20, 0.27, 0.19, 1.0)
-	var col_barnacle_a := Color(0.76, 0.74, 0.66, 1.0)
-	var col_barnacle_b := Color(0.42, 0.40, 0.35, 1.0)
-	var col_mid_rock := Color(0.76, 0.63, 0.46, 1.0)
-	var col_crest := Color(0.91, 0.82, 0.67, 1.0)
+	# Wave I-21 (Local-GPU M52 tip): rich damp-rock base COLOR_0 AO along 0..0.45 m grounds
+	# pale coastal limestone against wet sand and makes barnacles, mussels & anemones pop!
+	var col_moss := Color(0.14, 0.21, 0.14, 1.0)
+	var col_barnacle_a := Color(0.36, 0.35, 0.29, 1.0)
+	var col_barnacle_b := Color(0.24, 0.26, 0.21, 1.0)
+	var col_mid_rock := Color(0.64, 0.54, 0.40, 1.0)
+	var col_crest := Color(0.86, 0.77, 0.62, 1.0)
 
 	# 5 stratified rings with wave-carved tidal undercut notch & overhanging rock ledge:
 	# [y_val, rad_scale, tier_id]
