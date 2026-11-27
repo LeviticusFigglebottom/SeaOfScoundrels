@@ -13,7 +13,7 @@ extends Node3D
 ##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
 ##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted scallop shell, 4-whorl spiral conch, 5-petal sand dollar & coral sea star along wet/dry sand
-##   6. `TidalOutcrops`        — undercut stratified barnacle-ringed coastal rock clusters emerging from tide pools & surf
+##   6. `TidalOutcrops`        — undercut stratified coastal rock clusters crusted with barnacles, limpets, sea mussels & tide-pool anemones
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
 ##   9. `TrailSteppingStones`  — chiseled 10-sided coastal trail flagstones + nestled flanking cobble clusters, terrace stair-slabs & curb stones
@@ -970,11 +970,13 @@ static func _prop_keepout_radius(cname: String) -> float:
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
 			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
 			or cname.begins_with("BountyPost") or cname.begins_with("FishRack") \
-			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway"):
+			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway") \
+			or cname.begins_with("Ropewalk") or cname.begins_with("Careening"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
-			or cname.begins_with("RumDistillery") or cname.begins_with("BasaltBrazier"):
+			or cname.begins_with("RumDistillery") or cname.begins_with("BasaltBrazier") \
+			or cname.begins_with("TidalCompass"):
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
@@ -982,7 +984,8 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 4.4
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
-			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem"):
+			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem") \
+			or cname.begins_with("VolcKraken"):
 		return 4.2
 	if cname.begins_with("SignalBrazier") or cname.begins_with("EmberTotem"):
 		return 4.0
@@ -4884,7 +4887,7 @@ static func _append_sand_dollar(st: SurfaceTool, origin: Vector3, radius: float,
 		_add_outward_tri(st, rim[kp], base[bn], rim[kr], ref_skirt, rim_cols[kp], col_base, rim_cols[kr])
 
 
-# ------------------------------------------------------------------ Mesh 6: Undercut Barnacle-Ringed Tidal Outcrop Cluster
+# ------------------------------------------------------------------ Mesh 6: Undercut Tidal Outcrop Cluster (Barnacles, Limpets, Sea Mussels & Anemones)
 
 static func _build_tidal_rock_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -4926,8 +4929,149 @@ static func _build_tidal_rock_mesh() -> ArrayMesh:
 			_append_barnacle_cone(st, Vector3(px, py, pz), n_out, float(wspec[1]), float(wspec[2]), 5,
 				col_shell_base, col_shell_rim, col_shell_cup)
 
+	# 2 extra sculpted Barnacle Volcanoes clustered along the sunlit damp tier-1 flank of Boulder 1.
+	var b1_n := Vector3(0.76, 0.37, -0.54).normalized()
+	_append_barnacle_cone(st, Vector3(1.356, 0.248, 0.365), b1_n, 0.096, 0.066, 5,
+		col_shell_base, col_shell_rim, col_shell_cup)
+	_append_barnacle_cone(st, Vector3(1.280, 0.205, 0.232), b1_n, 0.076, 0.054, 5,
+		col_shell_base, col_shell_rim, col_shell_cup)
+
+	# 5 fanned glossy blue-black / slate-indigo Sea-Mussel bivalves wedged into the damp B0/B1 junction crevice.
+	_append_mussel_cluster(st, Vector3(0.494, 0.285, 0.408), Vector3(-0.44, 0.22, 0.87))
+
+	# 2 vivid tide-pool Sea Anemone Crown Rosettes perched solidly on damp low ledges of Boulder 2 & Boulder 3.
+	_append_sea_anemone(st, Vector3(-1.165, 0.265, -0.415), Vector3(-0.54, 0.84, -0.07), 0.078, 0.064, 0.35)
+	_append_sea_anemone(st, Vector3(-0.500, 0.285,  0.720), Vector3(-0.50, 0.82,  0.27), 0.068, 0.056, 1.15)
+
 	st.generate_normals()
 	return st.commit()
+
+
+static func _append_mussel_cluster(st: SurfaceTool, origin: Vector3, out_dir: Vector3) -> void:
+	# Tight cluster of 5 fanned glossy blue-black / slate-indigo Sea-Mussel bivalves wedged
+	# into the damp Boulder 0 / Boulder 1 tier-1 rock shelf (5 x 12 = 60 tris).
+	var n := out_dir.normalized() if out_dir.length_squared() > 1e-8 else Vector3.FORWARD
+	var ref_axis := Vector3.UP if absf(n.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var u := n.cross(ref_axis).normalized()
+	var v := u.cross(n).normalized()
+
+	var col_umbo := Color(0.14, 0.17, 0.25, 1.0)
+	var col_belly := Color(0.20, 0.25, 0.36, 1.0)
+	var col_flank := Color(0.24, 0.30, 0.43, 1.0)
+	var col_rim := Color(0.30, 0.37, 0.52, 1.0)
+	var col_sheen := Color(0.35, 0.43, 0.59, 1.0)
+
+	# [off_u, off_v, off_n, yaw_rad, pitch_rad, roll_rad, length, breadth, thickness]
+	var specs: Array[Array] = [
+		[ 0.000,  0.000, -0.022,  0.00,  0.04,  0.06, 0.210, 0.098, 0.064],
+		[-0.008,  0.046,  0.002,  0.06,  0.30, -0.22, 0.185, 0.086, 0.056],
+		[ 0.032,  0.036,  0.000,  0.14,  0.16,  0.32, 0.190, 0.088, 0.058],
+		[-0.024, -0.054, -0.024, -0.10, -0.16, -0.48, 0.165, 0.078, 0.050],
+		[ 0.034, -0.048, -0.012,  0.24, -0.14,  0.46, 0.170, 0.080, 0.052],
+	]
+	var rim_cols: Array[Color] = [col_umbo, col_flank, col_rim, col_sheen, col_rim, col_flank]
+
+	for mspec in specs:
+		var ou: float = float(mspec[0])
+		var ov: float = float(mspec[1])
+		var on: float = float(mspec[2])
+		var yaw: float = float(mspec[3])
+		var pitch: float = float(mspec[4])
+		var roll: float = float(mspec[5])
+		var m_len: float = float(mspec[6])
+		var m_brd: float = float(mspec[7])
+		var m_thk: float = float(mspec[8])
+
+		var umbo := origin + u * ou + v * ov + n * on
+		var fwd := (n + u * sin(yaw) + v * sin(pitch)).normalized()
+		var f_ref := Vector3.UP if absf(fwd.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+		var side0 := fwd.cross(f_ref).normalized()
+		var up0 := side0.cross(fwd).normalized()
+		var cr := cos(roll)
+		var sr := sin(roll)
+		var m_up := up0 * cr + side0 * sr
+		var m_side := side0 * cr - up0 * sr
+
+		var belly_l := umbo + fwd * (0.46 * m_len) + m_up * (0.04 * m_brd) - m_side * (0.50 * m_thk)
+		var belly_r := umbo + fwd * (0.46 * m_len) + m_up * (0.04 * m_brd) + m_side * (0.50 * m_thk)
+		var rim: Array[Vector3] = [
+			umbo,
+			umbo + fwd * (0.52 * m_len) + m_up * ( 0.50 * m_brd),
+			umbo + fwd * (0.90 * m_len) + m_up * ( 0.28 * m_brd),
+			umbo + fwd * (1.00 * m_len) + m_up * (-0.02 * m_brd),
+			umbo + fwd * (0.84 * m_len) + m_up * (-0.30 * m_brd),
+			umbo + fwd * (0.42 * m_len) + m_up * (-0.34 * m_brd),
+		]
+		var ref_ctr := (belly_l + belly_r) * 0.5
+		for i in 6:
+			var ni := (i + 1) % 6
+			_add_outward_tri(st, belly_l, rim[i], rim[ni], ref_ctr, col_belly, rim_cols[i], rim_cols[ni])
+			_add_outward_tri(st, belly_r, rim[ni], rim[i], ref_ctr, col_belly, rim_cols[ni], rim_cols[i])
+
+
+static func _append_sea_anemone(st: SurfaceTool, base_pos: Vector3, up_dir: Vector3,
+		base_r: float, stalk_h: float, yaw_phase: float) -> void:
+	# Sculpted tide-pool Sea Anemone Crown Rosette: short fleshy crimson-plum 6-sided column
+	# stalk + recessed oral disc + 6 outward-curling coral-rose/golden-tipped tentacle petals (42 tris).
+	const SIDES := 6
+	var n := up_dir.normalized() if up_dir.length_squared() > 1e-8 else Vector3.UP
+	var ref_axis := Vector3.UP if absf(n.dot(Vector3.UP)) < 0.92 else Vector3.RIGHT
+	var u := n.cross(ref_axis).normalized()
+	var v := n.cross(u).normalized()
+
+	var col_foot := Color(0.30, 0.08, 0.16, 1.0)
+	var col_stalk := Color(0.58, 0.15, 0.25, 1.0)
+	var col_mouth := Color(0.38, 0.10, 0.18, 1.0)
+	var col_petal_base := Color(0.78, 0.24, 0.32, 1.0)
+	var col_petal_arch := Color(0.96, 0.44, 0.48, 1.0)
+	var col_petal_tip := Color(1.00, 0.80, 0.36, 1.0)
+
+	var base_ring: Array[Vector3] = []
+	var rim_ring: Array[Vector3] = []
+	var rim_r := base_r * 0.94
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU + yaw_phase
+		var radial := u * cos(ang) + v * sin(ang)
+		var b_jit := 0.95 + 0.08 * sin(ang * 2.0 + 0.4)
+		base_ring.append(base_pos - n * 0.022 + radial * (base_r * b_jit))
+		rim_ring.append(base_pos + n * stalk_h + radial * rim_r)
+
+	var oral_ctr := base_pos + n * (stalk_h * 0.72)
+	var outer_ref := base_pos + n * (stalk_h * 0.45)
+	var oral_ref := base_pos - n * 0.05
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_quad(st, base_ring[k], rim_ring[k], rim_ring[nk], base_ring[nk],
+			outer_ref, col_foot, col_stalk, col_stalk, col_foot)
+		_add_outward_tri(st, rim_ring[k], oral_ctr, rim_ring[nk], oral_ref,
+			col_stalk, col_mouth, col_stalk)
+
+		# Outward-curling solid 3D coral-rose / golden-tipped tentacle petal (4 tris).
+		var ang_p := (float(k) + 0.5) / float(SIDES) * TAU + yaw_phase
+		var rad_p := u * cos(ang_p) + v * sin(ang_p)
+		var tan_p := -u * sin(ang_p) + v * cos(ang_p)
+		var is_tall := (k % 2 == 0)
+		var alt := 1.07 if is_tall else 0.92
+		var reach := base_r * 2.15 * alt
+		var arc_h := stalk_h * (1.72 if is_tall else 1.54)
+		var tip_h := stalk_h * (1.28 if is_tall else 1.08)
+		var half_w := rim_r * 0.44
+
+		var root_ctr := base_pos + n * (stalk_h * 0.86) + rad_p * (rim_r * 0.78)
+		var base_l := root_ctr - tan_p * half_w
+		var base_r_pt := root_ctr + tan_p * half_w
+		var mid_top := base_pos + n * arc_h + rad_p * (rim_r * 1.36 * alt)
+		var tip := base_pos + n * tip_h + rad_p * reach
+		var petal_ref := (base_l + base_r_pt + mid_top + tip) * 0.25
+
+		_add_outward_tri(st, base_l, base_r_pt, mid_top, petal_ref,
+			col_petal_base, col_petal_base, col_petal_arch)
+		_add_outward_tri(st, base_l, mid_top, tip, petal_ref,
+			col_petal_base, col_petal_arch, col_petal_tip)
+		_add_outward_tri(st, mid_top, base_r_pt, tip, petal_ref,
+			col_petal_arch, col_petal_base, col_petal_tip)
+		_add_outward_tri(st, base_r_pt, base_l, tip, petal_ref,
+			col_stalk, col_stalk, col_petal_tip)
 
 
 static func _append_limpet_cone(st: SurfaceTool, base_pos: Vector3, up_dir: Vector3,

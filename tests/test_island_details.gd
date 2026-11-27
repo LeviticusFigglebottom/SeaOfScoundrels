@@ -140,6 +140,13 @@ const FRONTIER_CRAFT_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_ember_totem.glb",
 ]
 
+const ARMADA_RELICS_LANDMARKS: Array[String] = [
+	"pirate_ropewalk_cordage_loom.glb",
+	"ancient_tidal_compass_sanctum.glb",
+	"coastal_buccaneer_careening_cradle.glb",
+	"volcanic_obsidian_kraken_altar.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -219,6 +226,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_coral_leviathan_altar.glb": 1,
 	"coastal_boatbuilder_slipway_winch.glb": 1,
 	"volcanic_obsidian_ember_totem.glb": 1,
+	"pirate_ropewalk_cordage_loom.glb": 1,
+	"ancient_tidal_compass_sanctum.glb": 1,
+	"coastal_buccaneer_careening_cradle.glb": 1,
+	"volcanic_obsidian_kraken_altar.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -287,6 +298,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_coral_leviathan_altar.glb": ["Lantern_CoralAltar*"],
 	"coastal_boatbuilder_slipway_winch.glb": ["Lantern_BoatSlipway*"],
 	"volcanic_obsidian_ember_totem.glb": ["Lantern_EmberTotem*"],
+	"pirate_ropewalk_cordage_loom.glb": ["Lantern_Ropewalk*"],
+	"ancient_tidal_compass_sanctum.glb": ["Lantern_TidalCompass*"],
+	"coastal_buccaneer_careening_cradle.glb": ["Lantern_Careening*"],
+	"volcanic_obsidian_kraken_altar.glb": ["Lantern_VolcKraken*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -357,6 +372,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"CoralAltar_",
 	"BoatSlipway_",
 	"EmberTotem_",
+	"Ropewalk_",
+	"TidalCompass_",
+	"Careening_",
+	"VolcKraken_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -501,7 +520,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(EXPEDITION_CRAFT_LANDMARKS)
 	all_landmarks.append_array(HAVEN_RELICS_LANDMARKS)
 	all_landmarks.append_array(FRONTIER_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 78, "expected 78 sculpted landmark GLBs")
+	all_landmarks.append_array(ARMADA_RELICS_LANDMARKS)
+	check_eq(all_landmarks.size(), 82, "expected 82 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -1032,6 +1052,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Wave I-19 BoatSlipway keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("BoatSlipway_Slip"))
 		check(IslandDetailsCls._prop_keepout_radius("EmberTotem_Approach") >= 3.8,
 			"Wave I-19 EmberTotem keepout radius must be >= 3.8 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("EmberTotem_Approach"))
+
+		print("    wave_i20 tidal micro-craft tris: tidal_outcrops=%d" % tidal_tris)
+		check(tidal_tris >= 440,
+			"Wave I-20 TidalOutcrops mesh must have >= 440 tris (4 boulders + barnacles/limpets + 5-bivalve sea-mussel cluster + 2 sea anemone rosettes, got %d)" % tidal_tris)
+		check(IslandDetailsCls._prop_keepout_radius("Ropewalk_Yard") >= 4.5,
+			"Wave I-20 Ropewalk keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("Ropewalk_Yard"))
+		check(IslandDetailsCls._prop_keepout_radius("TidalCompass_Glade") >= 4.3,
+			"Wave I-20 TidalCompass keepout radius must be >= 4.3 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("TidalCompass_Glade"))
+		check(IslandDetailsCls._prop_keepout_radius("Careening_Shore") >= 4.5,
+			"Wave I-20 Careening keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("Careening_Shore"))
+		check(IslandDetailsCls._prop_keepout_radius("VolcKraken_Approach") >= 4.0,
+			"Wave I-20 VolcKraken keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("VolcKraken_Approach"))
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1710,6 +1742,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(fc_glb),
 			"Wave I-19 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % fc_glb)
 
+	# 2h-11. Verify Wave I-20 (82-Landmark Armada-Relics Milestone) landmarks (pirate ropewalk cordage loom,
+	#        ancient tidal compass sanctum, coastal buccaneer careening cradle & volcanic obsidian kraken altar)
+	#        + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var ropewalk_total := 0
+	var tidal_compass_total := 0
+	var careening_total := 0
+	var volc_kraken_total := 0
+	for isl_i20 in all_islands:
+		ropewalk_total += isl_i20.find_children("Ropewalk_*", "Node3D", true, false).size()
+		tidal_compass_total += isl_i20.find_children("TidalCompass_*", "Node3D", true, false).size()
+		careening_total += isl_i20.find_children("Careening_*", "Node3D", true, false).size()
+		volc_kraken_total += isl_i20.find_children("VolcKraken_*", "Node3D", true, false).size()
+	print("    wave_i20 armada_relics landmarks: ropewalks=%d tidal_compasses=%d careenings=%d volc_krakens=%d lantern_halos=%d" % [
+		ropewalk_total, tidal_compass_total, careening_total, volc_kraken_total, total_lantern_halos])
+	check(ropewalk_total >= 4, "Wave I-20 spawns >= 4 Ropewalk_* landmarks (got %d)" % ropewalk_total)
+	check(tidal_compass_total >= 4, "Wave I-20 spawns >= 4 TidalCompass_* landmarks (got %d)" % tidal_compass_total)
+	check(careening_total >= 4, "Wave I-20 spawns >= 4 Careening_* landmarks (got %d)" % careening_total)
+	check(volc_kraken_total >= 3, "Wave I-20 spawns >= 3 VolcKraken_* landmarks (got %d)" % volc_kraken_total)
+	check(total_lantern_halos >= 240,
+		"Wave I-20 archipelago must batch >= 240 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for ar_glb in ARMADA_RELICS_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(ar_glb),
+			"Wave I-20 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % ar_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1752,10 +1810,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i19 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i20 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 304,
-		"grounding audit must inspect >= 304 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 323,
+		"grounding audit must inspect >= 323 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

@@ -2229,8 +2229,10 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 			var drop_h := clampf(top_mount_y - pool_y, 12.0, 34.0)
 			_try_spawn_waterfall(island, "CitadelWaterfall", Vector3(wf_top.x, top_mount_y, wf_top.z),
 				yaw_c, drop_h, 5.4, reach_c)
-			placed.append(Vector3(wf_pool_c.x, wf_pool_c.z, 6.5))
-			keepout_zones.append(Vector3(wf_pool_c.x, wf_pool_c.z, 6.5))
+			var wf_mid_c := wf_top.lerp(wf_pool_c, 0.45)
+			placed.append(Vector3(wf_pool_c.x, wf_pool_c.z, 7.8))
+			keepout_zones.append(Vector3(wf_pool_c.x, wf_pool_c.z, 7.8))
+			keepout_zones.append(Vector3(wf_mid_c.x, wf_mid_c.z, 8.5))
 
 	# C. Lush Canyon (`twin_spires`), Highland Ruins (`skull_bluff`, `smuggler_cove`).
 	if arch == &"twin_spires":
@@ -2267,8 +2269,10 @@ static func _populate_wave24_landmarks_and_architecture(island: Island, arch: St
 		var drop_h := clampf(top_mount_y - pool_y, 14.0, 38.0)
 		_try_spawn_waterfall(island, "EmeraldCanyonWaterfall", Vector3(wf_top.x, top_mount_y, wf_top.z),
 			yaw_e, drop_h, 5.2, reach_e)
-		placed.append(Vector3(wf_pool_e.x, wf_pool_e.z, 6.5))
-		keepout_zones.append(Vector3(wf_pool_e.x, wf_pool_e.z, 6.5))
+		var wf_mid_e := wf_top.lerp(wf_pool_e, 0.45)
+		placed.append(Vector3(wf_pool_e.x, wf_pool_e.z, 7.8))
+		keepout_zones.append(Vector3(wf_pool_e.x, wf_pool_e.z, 7.8))
+		keepout_zones.append(Vector3(wf_mid_e.x, wf_mid_e.z, 8.5))
 	elif arch == &"skull_bluff" or arch == &"smuggler_cove":
 		var s_r := island.island_radius / 60.0
 		_spawn_optional_at(island, "ruin_arch.glb", "HighlandRuinArch",
