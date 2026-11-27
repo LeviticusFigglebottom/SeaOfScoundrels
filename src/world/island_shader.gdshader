@@ -657,11 +657,15 @@ void fragment() {
 
 		if (w_sand > 0.06) {
 			vec3 sa; vec3 sn_o;
-			// Calibrated for Pass Q3A 1024x1024 shell-flecked sand PBR: crisp natural grain, golden wet swash
-			// AND rippled coral-sand seabed relief beneath Pass Q11A ReefAtmosphere!
+			// Calibrated for Pass Q3A 1024x1024 shell-flecked sand PBR: crisp natural grain, golden wet swash,
+			// rippled coral-sand seabed relief beneath Pass Q11A ReefAtmosphere, AND authentic dark volcanic
+			// basalt-ash beaches on Cinder Crag (volc > 0, zero impact on tropical islands where volc == 0!).
 			float sand_nrm_k = mix(mix(0.84, 0.24, t_wet_in), 0.88, t_dry_in);
 			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.68, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail * 0.58, sa, sn_o);
 			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.06)) * vec3(1.03, 1.01, 0.98);
+			if (volc > 0.01) {
+				sa_pop = mix(sa_pop, sa_pop * vec3(0.36, 0.34, 0.35), volc * 0.82);
+			}
 			vec3 reef_pbr = mix(ground_col, sa_pop * mix(vec3(0.56, 0.68, 0.64), vec3(0.82, 0.88, 0.78), t_shallow), 0.74);
 			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.68, 0.64, 0.45), 0.56);
 			vec3 dry_pbr = mix(col_dry, sa_pop, 0.80);
@@ -672,11 +676,16 @@ void fragment() {
 		}
 		if (w_grass > 0.06) {
 			vec3 ga; vec3 gn_o;
-			// Calibrated for Pass Q3A lush multi-tone meadow turf PBR without crushing shadowed slopes!
+			// Calibrated for Pass Q3A lush multi-tone meadow turf PBR without crushing shadowed slopes,
+			// shifting naturally into hardy charred olive-ash volcanic scrub on Cinder Crag (volc > 0)!
 			sample_stochastic_ground(tex_grass_albedo, tex_grass_normal, xz, terrain_tex_scale * 1.65, macro_n, brush_n, tex_nrm_str * 1.06, 0.645, near_detail * 0.62, ga, gn_o);
 			vec3 ga_rich = pow(max(ga, vec3(0.001)), vec3(1.08)) * vec3(1.04, 1.06, 0.97);
 			ga_rich *= mix(0.84, 1.15, meadow_tuft * 0.60 + tussock_n * 0.40);
 			ga_rich = mix(ga_rich, vec3(0.20, 0.16, 0.10), soil_pocket * 0.44);
+			if (volc > 0.01) {
+				vec3 volc_scrub = mix(vec3(0.15, 0.14, 0.13), vec3(0.30, 0.28, 0.16), meadow_tuft * 0.55 + tussock_n * 0.45);
+				ga_rich = mix(ga_rich, volc_scrub, volc * 0.76);
+			}
 			tex_alb_acc += (ga_rich * grass_tint) * w_grass;
 			tex_nrm_acc += gn_o * w_grass;
 			tex_w_acc += w_grass;
@@ -798,7 +807,11 @@ void light() {
 		if (wet_m > 0.01) {
 			float wet_fres = pow(clamp(1.0 - max(dot(NORMAL, VIEW), 0.0), 0.0, 1.0), 4.0);
 			float sky_gate = clamp(dot(LIGHT_COLOR, vec3(0.333)) * 1.35, 0.08, 1.0);
-			vec3 wet_sky = mix(sky_horizon_color, sky_zenith_color, 0.12) * vec3(0.92, 1.00, 1.00) * clamp(sun, 0.42, 1.15);
+			// Softly neutralize rose-violet low-dawn horizon cast in grazing wet-sand sheen so beaches read warm golden-ochre!
+			vec3 raw_sky = mix(sky_horizon_color, sky_zenith_color, 0.12);
+			float rose_cast = clamp((raw_sky.r + raw_sky.b) * 0.5 - raw_sky.g, 0.0, 0.5);
+			vec3 bal_sky = mix(raw_sky, vec3(raw_sky.r * 0.94, max(raw_sky.g, raw_sky.r * 0.90), raw_sky.b * 0.86), clamp(rose_cast * 3.0, 0.0, 0.72));
+			vec3 wet_sky = bal_sky * vec3(0.92, 1.00, 1.00) * clamp(sun, 0.42, 1.15);
 			SPECULAR_LIGHT += wet_sky * (wet_fres * 0.34 * wet_m * sky_gate);
 		}
 	} else {
