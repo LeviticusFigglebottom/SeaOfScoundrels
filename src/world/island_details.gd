@@ -16,7 +16,7 @@ extends Node3D
 ##   6. `TidalOutcrops`        — undercut stratified coastal rock clusters crusted with barnacles, limpets, sea mussels & tide-pool anemones
 ##   7. `CliffButtresses`      — steep-slope (`0.12 < normal.y < 0.72`) sculptural cliff crags (GLB w/ `col_*` stripped or procedural fallback)
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
-##   9. `TrailSteppingStones`  — chiseled 10-sided coastal trail flagstones + nestled flanking cobble clusters, terrace stair-slabs & curb stones
+##   9. `TrailSteppingStones`  - chiseled 10-sided coastal trail flagstones + 4 flanking cobbles/mortar wedges, 3 crevice moss cushions, terrace stair-slabs & curb stones
 ##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
 ##  11. `ShoreCrabs`           — animated sculpted coastal tidepool crabs scuttling sideways along wet sandy beaches
 ##  12. `LandmarkLanternHalos` — 1-DC twilight/night additive camera-facing Gaussian glow halos on `Glow_Lantern_*` lights (`0.000 ms` daytime GPU)
@@ -972,7 +972,8 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("BountyPost") or cname.begins_with("FishRack") \
 			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway") \
 			or cname.begins_with("Ropewalk") or cname.begins_with("Careening") \
-			or cname.begins_with("Sailmaker") or cname.begins_with("CastawayCamp"):
+			or cname.begins_with("Sailmaker") or cname.begins_with("CastawayCamp") \
+			or cname.begins_with("Cooperage") or cname.begins_with("NetPier"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
@@ -981,12 +982,14 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
-	if cname.begins_with("PowderBunker") or cname.begins_with("CoralAltar"):
+	if cname.begins_with("PowderBunker") or cname.begins_with("CoralAltar") \
+			or cname.begins_with("AstralObelisk"):
 		return 4.4
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
 			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem") \
-			or cname.begins_with("VolcKraken") or cname.begins_with("PhoenixBrazier"):
+			or cname.begins_with("VolcKraken") or cname.begins_with("PhoenixBrazier") \
+			or cname.begins_with("VolcSpire"):
 		return 4.2
 	if cname.begins_with("SignalBrazier") or cname.begins_with("EmberTotem"):
 		return 4.0
@@ -4374,20 +4377,20 @@ static func _build_driftwood_mesh() -> ArrayMesh:
 	_append_kelp_ribbon(st, kelp_b_pts, kelp_b_norms, kelp_b_widths,
 		Vector3(0.76, -0.015, -0.31), col_kelp_dark, col_kelp_bright)
 
-	# 3rd draped wet sea-kelp ribbon snagged over the forked coastal branch elbow & hanging free (15 tris).
+	# 3rd draped wet sea-kelp ribbon snagged over the forked coastal branch elbow & curling softly onto the sand (15 tris, M58 tip).
 	var kelp_c_pts: Array[Vector3] = [
 		Vector3(0.616, 0.412, 0.405),
-		Vector3(0.587, 0.339, 0.449),
-		Vector3(0.596, 0.212, 0.474),
+		Vector3(0.596, 0.312, 0.460),
+		Vector3(0.642, 0.168, 0.525),
 	]
 	var kelp_c_norms: Array[Vector3] = [
 		Vector3(0.00, 0.96, 0.28).normalized(),
-		Vector3(-0.32, 0.08, 0.94).normalized(),
-		Vector3(-0.28, 0.04, 0.96).normalized(),
+		Vector3(-0.24, 0.26, 0.93).normalized(),
+		Vector3(-0.10, 0.52, 0.85).normalized(),
 	]
 	var kelp_c_widths: Array[float] = [0.028, 0.044, 0.036]
 	_append_hanging_kelp_ribbon(st, kelp_c_pts, kelp_c_norms, kelp_c_widths,
-		Vector3(0.646, 0.343, 0.365), Vector3(0.616, 0.095, 0.490), col_kelp_dark, col_kelp_bright)
+		Vector3(0.646, 0.343, 0.365), Vector3(0.735, 0.032, 0.605), col_kelp_dark, col_kelp_bright)
 
 	# 5 subtle pale coastal barnacle volcanoes clinging to the water-washed lower flanks (3 original + 2 extra).
 	var col_barn_base := Color(0.68, 0.65, 0.58, 1.0)
@@ -5660,18 +5663,22 @@ static func _append_crag_column(st: SurfaceTool, center: Vector3, rx: float, rz:
 			rcols[top_i][k], col_ledge, rcols[top_i][nk])
 
 
-# ------------------------------------------------------------------ Mesh 9: Sculpted Coastal Trail Flagstone + Cobble Cluster
+# ------------------------------------------------------------------ Mesh 9: Sculpted Coastal Trail Flagstone + Cobble & Moss Cluster
 
 static func _build_stepping_stone_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 110-tri hand-laid coastal flagstone cluster (+0 extra DCs, 0.0 MB VRAM):
+	# 224-tri hand-laid coastal flagstone cluster (+0 extra DCs, 0.0 MB VRAM):
 	#   1. Primary chiseled 10-sided flagstone slab (50 tris): deep buried -0.18 m dark moss-seam
 	#      contact skirt, chiseled stone edge shoulder, crisp sunlit chamfered upper bevel, and
 	#      subtly relief-undulated walkable flat top (~0.115 m).
 	#   2. Two compact 6-sided beveled companion cobbles (2 x 30 = 60 tris) tucked snugly into
 	#      opposite corners of the primary slab, both plunging to -0.17 m so steep slopes never float.
+	#   3. Two smaller 6-sided weathered mortar pebble wedges (2 x 30 = 60 tris) tucked into the
+	#      remaining two opposite corners, deep-skirted to -0.16 m so steep trails never float.
+	#   4. Three sculpted scalloped emerald-jade crevice moss / clover cushions (3 x 18 = 54 tris)
+	#      wedged organically into the stone joints, plunging to -0.09 m and cresting at 0.076..0.092 m.
 	const SIDES := 10
 	const RX := 0.54
 	const RZ := 0.42
@@ -5741,6 +5748,24 @@ static func _build_stepping_stone_mesh() -> ArrayMesh:
 	_append_trail_cobble(st, Vector3(-0.44, 0.0, -0.24), 0.17, 0.14, 0.074, -0.17, 2.15,
 		Color(0.33, 0.34, 0.27, 1.0), Color(0.60, 0.58, 0.52, 1.0), Color(0.86, 0.84, 0.78, 1.0))
 
+	# Two smaller 6-sided weathered mortar pebble wedges (2 * 30 = 60 tris) tucked into the
+	# remaining two opposite corners, deep-skirted to -0.16 m so steep trails never float.
+	_append_trail_cobble(st, Vector3(-0.46, 0.0, 0.25), 0.14, 0.115, 0.064, -0.16, 1.35,
+		Color(0.32, 0.33, 0.26, 1.0), Color(0.58, 0.55, 0.48, 1.0), Color(0.84, 0.81, 0.74, 1.0))
+	_append_trail_cobble(st, Vector3(0.42, 0.0, -0.26), 0.13, 0.105, 0.058, -0.16, 3.70,
+		Color(0.34, 0.34, 0.26, 1.0), Color(0.62, 0.58, 0.50, 1.0), Color(0.88, 0.84, 0.77, 1.0))
+
+	# Three sculpted scalloped emerald-jade crevice moss / clover cushions (3 * 18 = 54 tris)
+	# tucked into the stone joints, plunging to -0.09 m and cresting at 0.076..0.092 m.
+	var col_moss_root := Color(0.18, 0.30, 0.14, 1.0)
+	var col_moss_crown := Color(0.44, 0.68, 0.30, 1.0)
+	_append_trail_moss_cushion(st, Vector3(0.34, 0.0, 0.25), 0.118, 0.096, 0.092, -0.09, 0.45,
+		col_moss_root, col_moss_crown)
+	_append_trail_moss_cushion(st, Vector3(-0.39, 0.0, -0.15), 0.112, 0.092, 0.084, -0.09, 1.95,
+		col_moss_root, col_moss_crown)
+	_append_trail_moss_cushion(st, Vector3(-0.32, 0.0, 0.24), 0.108, 0.088, 0.076, -0.09, 3.25,
+		col_moss_root, col_moss_crown)
+
 	st.generate_normals()
 	return st.commit()
 
@@ -5800,6 +5825,46 @@ static func _append_trail_cobble(st: SurfaceTool, center: Vector3, rx: float, rz
 			side_cols[k], bevel_cols[k], bevel_cols[nk], side_cols[nk])
 		_add_outward_tri(st, top_ring[k], crown, top_ring[nk], ref_center,
 			top_cols[k], col_crown, top_cols[nk])
+
+
+static func _append_trail_moss_cushion(st: SurfaceTool, center: Vector3, rx: float, rz: float,
+		top_y: float, bot_y: float, phase: float, col_root: Color, col_crown: Color) -> void:
+	const SIDES := 6
+	var bot_ring: Array[Vector3] = []
+	var mid_ring: Array[Vector3] = []
+	var mid_cols: Array[Color] = []
+
+	for k in SIDES:
+		var ang := float(k) / float(SIDES) * TAU + phase
+		var is_lobe := (k % 2) == 0
+		# Alternating 3-lobe scalloped clover/moss cushion silhouette.
+		var lobe := (1.06 if is_lobe else 0.78) + 0.05 * sin(ang * 2.0 + phase * 1.3)
+		var px := cos(ang) * rx * lobe
+		var pz := sin(ang) * rz * lobe
+		var mid_y := top_y * (0.64 if is_lobe else 0.50) + 0.004 * cos(ang * 3.0 - phase)
+
+		bot_ring.append(center + Vector3(px * 0.86, bot_y, pz * 0.86))
+		mid_ring.append(center + Vector3(px, mid_y, pz))
+
+		var tint_t := 0.74 if is_lobe else 0.54
+		var base_c := col_root.lerp(col_crown, tint_t)
+		var shade := clampf(0.92 + 0.09 * sin(ang * 2.0 + phase + 0.8), 0.84, 1.05)
+		mid_cols.append(Color(
+			clampf(base_c.r * shade, 0.0, 1.0),
+			clampf(base_c.g * shade, 0.0, 1.0),
+			clampf(base_c.b * shade, 0.0, 1.0),
+			1.0))
+
+	var crown := center + Vector3(rx * 0.05 * cos(phase), top_y, rz * 0.05 * sin(phase))
+	var ref_center := center + Vector3(0.0, (bot_y + top_y) * 0.30, 0.0)
+
+	# 6 * 2 (deep crevice skirt -> scalloped moss shoulder) + 6 (sunlit dome crown) = 18 tris.
+	for k in SIDES:
+		var nk := (k + 1) % SIDES
+		_add_outward_quad(st, bot_ring[k], mid_ring[k], mid_ring[nk], bot_ring[nk], ref_center,
+			col_root, mid_cols[k], mid_cols[nk], col_root)
+		_add_outward_tri(st, mid_ring[k], crown, mid_ring[nk], ref_center,
+			mid_cols[k], col_crown, mid_cols[nk])
 
 
 # ------------------------------------------------------------------ Mesh 10: Sculpted Swallowtail Tropical Butterfly

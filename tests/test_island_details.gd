@@ -154,6 +154,13 @@ const PRIVATEER_CRAFT_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_phoenix_brazier.glb",
 ]
 
+const SOVEREIGN_CRAFT_LANDMARKS: Array[String] = [
+	"pirate_cooperage_barrel_workshop.glb",
+	"ancient_astral_tide_obelisk.glb",
+	"coastal_buccaneer_net_mending_pier.glb",
+	"volcanic_obsidian_leviathan_spire.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -241,6 +248,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_serpent_tide_portal.glb": 1,
 	"coastal_castaway_raft_shelter.glb": 1,
 	"volcanic_obsidian_phoenix_brazier.glb": 1,
+	"pirate_cooperage_barrel_workshop.glb": 1,
+	"ancient_astral_tide_obelisk.glb": 1,
+	"coastal_buccaneer_net_mending_pier.glb": 1,
+	"volcanic_obsidian_leviathan_spire.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -317,6 +328,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_serpent_tide_portal.glb": ["Lantern_SerpentPortal*"],
 	"coastal_castaway_raft_shelter.glb": ["Lantern_CastawayCamp*"],
 	"volcanic_obsidian_phoenix_brazier.glb": ["Lantern_PhoenixBrazier*"],
+	"pirate_cooperage_barrel_workshop.glb": ["Lantern_Cooperage*"],
+	"ancient_astral_tide_obelisk.glb": ["Lantern_AstralObelisk*"],
+	"coastal_buccaneer_net_mending_pier.glb": ["Lantern_NetPier*"],
+	"volcanic_obsidian_leviathan_spire.glb": ["Lantern_VolcSpire*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -395,6 +410,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"SerpentPortal_",
 	"CastawayCamp_",
 	"PhoenixBrazier_",
+	"Cooperage_",
+	"AstralObelisk_",
+	"NetPier_",
+	"VolcSpire_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -541,7 +560,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(FRONTIER_CRAFT_LANDMARKS)
 	all_landmarks.append_array(ARMADA_RELICS_LANDMARKS)
 	all_landmarks.append_array(PRIVATEER_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 86, "expected 86 sculpted landmark GLBs")
+	all_landmarks.append_array(SOVEREIGN_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 90, "expected 90 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -1096,6 +1116,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Wave I-21 CastawayCamp keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("CastawayCamp_Shoal"))
 		check(IslandDetailsCls._prop_keepout_radius("PhoenixBrazier_Approach") >= 4.0,
 			"Wave I-21 PhoenixBrazier keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("PhoenixBrazier_Approach"))
+
+		print("    wave_i22 trail masonry craft tris: stepping_stones=%d" % stone_tris)
+		check(stone_tris >= 200,
+			"Wave I-22 TrailSteppingStones mesh must have >= 200 tris (flagstone + 4 companion cobbles/wedges + 3 moss crevice cushions, got %d)" % stone_tris)
+		check(IslandDetailsCls._prop_keepout_radius("Cooperage_Yard") >= 4.5,
+			"Wave I-22 Cooperage keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("Cooperage_Yard"))
+		check(IslandDetailsCls._prop_keepout_radius("AstralObelisk_Glade") >= 4.2,
+			"Wave I-22 AstralObelisk keepout radius must be >= 4.2 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("AstralObelisk_Glade"))
+		check(IslandDetailsCls._prop_keepout_radius("NetPier_Shore") >= 4.5,
+			"Wave I-22 NetPier keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("NetPier_Shore"))
+		check(IslandDetailsCls._prop_keepout_radius("VolcSpire_Approach") >= 4.0,
+			"Wave I-22 VolcSpire keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("VolcSpire_Approach"))
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1826,6 +1858,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(pc_glb),
 			"Wave I-21 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % pc_glb)
 
+	# 2h-13. Verify Wave I-22 (90-Landmark Sovereign-Craft Milestone) landmarks (pirate cooperage barrel workshop,
+	#        ancient astral tide obelisk, coastal buccaneer net mending pier & volcanic obsidian leviathan spire)
+	#        + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var cooperage_total := 0
+	var astral_obelisk_total := 0
+	var net_pier_total := 0
+	var volc_spire_total := 0
+	for isl_i22 in all_islands:
+		cooperage_total += isl_i22.find_children("Cooperage_*", "Node3D", true, false).size()
+		astral_obelisk_total += isl_i22.find_children("AstralObelisk_*", "Node3D", true, false).size()
+		net_pier_total += isl_i22.find_children("NetPier_*", "Node3D", true, false).size()
+		volc_spire_total += isl_i22.find_children("VolcSpire_*", "Node3D", true, false).size()
+	print("    wave_i22 sovereign_craft landmarks: cooperages=%d astral_obelisks=%d net_piers=%d volc_spires=%d lantern_halos=%d" % [
+		cooperage_total, astral_obelisk_total, net_pier_total, volc_spire_total, total_lantern_halos])
+	check(cooperage_total >= 4, "Wave I-22 spawns >= 4 Cooperage_* landmarks (got %d)" % cooperage_total)
+	check(astral_obelisk_total >= 4, "Wave I-22 spawns >= 4 AstralObelisk_* landmarks (got %d)" % astral_obelisk_total)
+	check(net_pier_total >= 4, "Wave I-22 spawns >= 4 NetPier_* landmarks (got %d)" % net_pier_total)
+	check(volc_spire_total >= 3, "Wave I-22 spawns >= 3 VolcSpire_* landmarks (got %d)" % volc_spire_total)
+	check(total_lantern_halos >= 280,
+		"Wave I-22 archipelago must batch >= 280 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for sc_glb22 in SOVEREIGN_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(sc_glb22),
+			"Wave I-22 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % sc_glb22)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1868,10 +1926,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i21 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i22 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 342,
-		"grounding audit must inspect >= 342 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 360,
+		"grounding audit must inspect >= 360 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])
