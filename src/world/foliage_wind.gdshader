@@ -127,13 +127,19 @@ void fragment() {
 	float meadow_patch = foliage_noise3(vec3(v_world.xz * 0.24, 1.7));
 	float canopy_ao = mix(1.0, clamp(up_ao * crown_ao * mix(0.78, 1.18, cluster_dapple) * mix(1.0, mix(0.86, 1.12, meadow_patch), is_ground_flora), 0.36, 1.22), is_leaf);
 
+	// True horizon-luminance daylight gate: SkyRig flips `sun_dir` upward to the moon at night,
+	// so checking horizon luminance keeps moonlit canopies rich cool indigo-jade instead of glowing daytime green!
+	float hor_lum = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
+	float true_day = smoothstep(0.022, 0.088, hor_lum);
+
 	// Painterly tropical frond gradient: rich deep jade shadow core -> sunlit golden-lime outer leaflets.
 	vec3 jade_base = mix(vec3(0.56, 0.82, 0.72), vec3(0.48, 0.74, 0.56), is_ground_flora);
-	vec3 gold_tip = vec3(1.24, 1.18, 0.70);
+	vec3 gold_tip = mix(vec3(0.60, 0.78, 0.86), vec3(1.24, 1.18, 0.70), true_day);
 	vec3 grad_tint = mix(vec3(1.0), mix(jade_base, gold_tip, smoothstep(0.06, 0.90, v_tip_weight)), is_leaf);
 	// Per-frond hue shift + sunlit leaf-cluster & subtle pinnate-vein contrast breakup (zero corduroy striping!).
 	vec3 frond_shift = mix(vec3(0.88, 0.98, 0.96), vec3(1.12, 1.05, 0.84), v_frond_var);
-	vec3 leaf_col = base_col * grad_tint * mix(vec3(1.0), frond_shift, is_leaf) * canopy_ao;
+	vec3 night_leaf_cool = mix(vec3(0.66, 0.76, 0.88), vec3(1.0), true_day);
+	vec3 leaf_col = base_col * grad_tint * mix(vec3(1.0), frond_shift * night_leaf_cool, is_leaf) * canopy_ao;
 
 	// Highlight central frond spine & natural pinnate ribs (gentle on close blades, bolder on palm/banyan canopies).
 	float vein_shade = mix(0.91, 1.09, vein_ridge * 0.72 + fine_fiber * 0.28);
@@ -174,7 +180,7 @@ void fragment() {
 	float back_lit = clamp(-dot(n_w, s_dir) * 0.55 + 0.45, 0.0, 1.0);
 	float sun_sh = cloud_light(v_world.xz);
 	float thinness = (0.30 + 0.70 * smoothstep(0.08, 0.92, v_tip_weight)) * mix(0.82, 1.24, vein_ridge * 0.55 + cluster_dapple * 0.45);
-	float day_gate = smoothstep(0.02, 0.18, s_dir.y);
+	float day_gate = smoothstep(0.02, 0.18, s_dir.y) * true_day;
 	float sss_factor = (back_lit * 0.46 + forward_scatter * 1.15 + rim_back * 0.55) * sss_strength * thinness * sun_sh * day_gate;
 	vec3 sss_tint = mix(vec3(1.22, 0.92, 0.72), vec3(1.24, 1.32, 0.46), is_leaf);
 	EMISSION = leaf_col * sss_tint * sun_color * (sss_factor * 0.44);
@@ -186,10 +192,13 @@ void light() {
 	float wrapped = clamp((ndl + 0.32) / 1.32, 0.0, 1.0);
 	DIFFUSE_LIGHT += wrapped * ATTENUATION * LIGHT_COLOR * sun / PI;
 	if (LIGHT_IS_DIRECTIONAL) {
-		// Rich cool turquoise-sky bounce fill on shaded underside of tropical palm & banyan canopies.
+		// Rich cool turquoise-sky bounce fill on shaded underside of tropical palm & banyan canopies
+		// (gently attenuated at night so moonlit foliage holds deep atmospheric silhouette contrast).
+		float hor_l = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
+		float day_fill = mix(0.36, 1.0, smoothstep(0.022, 0.088, hor_l));
 		float under = smoothstep(0.16, -0.48, ndl);
 		vec3 sky_fill = mix(ambient_color, sky_horizon_color * vec3(0.54, 0.86, 1.08), 0.58);
-		DIFFUSE_LIGHT += under * sky_fill * (0.20 * clamp(sun, 0.35, 1.1)) / PI;
+		DIFFUSE_LIGHT += under * sky_fill * (0.20 * day_fill * clamp(sun, 0.35, 1.1)) / PI;
 	}
 	vec3 h_vec = normalize(VIEW + LIGHT);
 	float ndh = clamp(dot(NORMAL, h_vec), 0.0, 1.0);

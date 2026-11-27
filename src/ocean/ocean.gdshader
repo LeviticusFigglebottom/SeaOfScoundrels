@@ -456,6 +456,15 @@ void fragment() {
 		float vdepth = has_seabed ? max(v_world.y - scene_world.y, 0.0) : 120.0;
 		vec3 behind = has_seabed ? texture(screen_tex, uv_r).rgb : vec3(0.0);
 
+		// Compute night detection early so moonlight never triggers daytime neon-cyan shallow caustics,
+		// electric turquoise shore halos, or daytime emerald SSS at the horizon.
+		float sun_dip = smoothstep(0.02, -0.14, sun_dir.y);
+		float hor_lum = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
+		float zen_lum = dot(sky_zenith_color, vec3(0.2126, 0.7152, 0.0722));
+		float dark_sky = smoothstep(0.055, 0.028, hor_lum) * smoothstep(0.018, 0.008, zen_lum);
+		float blue_night = smoothstep(1.15, 1.55, sky_horizon_color.b / max(sky_horizon_color.g, 0.001));
+		float night_bio = clamp(max(sun_dip, dark_sky * blue_night), 0.0, 1.0);
+
 		// Luminous Caribbean caustic light webs dancing across shallow harbours, reefs & beaches
 		// (uses abs(floor_n.y) so refracted depth-derivative sign flips never drop caustics; 0 cost on open sea!).
 		if (has_seabed && quality > 0 && vdepth < 14.0 && dist < 120.0) {
@@ -467,7 +476,7 @@ void fragment() {
 			caus *= smoothstep(120.0, 26.0, dist);
 			vec3 floor_n = normalize(cross(dFdy(scene_world), dFdx(scene_world)));
 			caus = min(caus, 2.4) * smoothstep(0.16, 0.56, abs(floor_n.y));
-			float caus_sun = smoothstep(0.04, 0.26, L.y) * (1.0 - storm * 0.72) * (sun_light.g + 0.05);
+			float caus_sun = smoothstep(0.04, 0.26, L.y) * (1.0 - storm * 0.72) * (sun_light.g + 0.05) * mix(1.0, 0.04, night_bio);
 			behind *= 1.0 + caus * 1.85 * caus_sun;
 			behind += vec3(0.46, 0.96, 0.92) * (caus_sharp * exp(-vdepth * 0.24) * smoothstep(0.0, 0.35, vdepth) * smoothstep(95.0, 18.0, dist) * smoothstep(0.18, 0.58, abs(floor_n.y)) * caus_sun * 0.26);
 		}
@@ -494,14 +503,6 @@ void fragment() {
 		float body_floor = mix(0.008, 0.055, near_emerald);
 		float dist_sapphire = smoothstep(45.0, 320.0, dist);
 		float macro_depth = mix(0.78, 1.22, macro_patch);
-
-		// Compute night detection early so moonlight never triggers daytime emerald SSS at the horizon.
-		float sun_dip = smoothstep(0.02, -0.14, sun_dir.y);
-		float hor_lum = dot(sky_horizon_color, vec3(0.2126, 0.7152, 0.0722));
-		float zen_lum = dot(sky_zenith_color, vec3(0.2126, 0.7152, 0.0722));
-		float dark_sky = smoothstep(0.055, 0.028, hor_lum) * smoothstep(0.018, 0.008, zen_lum);
-		float blue_night = smoothstep(1.15, 1.55, sky_horizon_color.b / max(sky_horizon_color.g, 0.001));
-		float night_bio = clamp(max(sun_dip, dark_sky * blue_night), 0.0, 1.0);
 
 		// View-angle & steepness gate ensures overhead aerial views and distant horizons stay
 		// deep fathomless sapphire rather than painting bright cyan bands across broad swell tops.
@@ -549,11 +550,15 @@ void fragment() {
 
 		// 3-zone coastal depth absorption: crystal turquoise shallows (0..3.5 m) -> vivid
 		// emerald-jade reef dropoff (3.5..14 m) -> fathomless dark sapphire-indigo open sea (> 14 m).
+		// At midnight, cool coastal shallows into velvet moonlit indigo-teal so coves never glow neon-cyan
+		// and harbour lanterns / nocturnal coral bioluminescence / wake stars pop with cinematic contrast!
 		float path = vdepth * 1.45 + min(thick, 10.0) * 0.12;
 		vec3 trans = has_seabed ? exp(-(absorption + turbidity) * path) : vec3(0.0);
 		float fill = has_seabed ? (1.0 - exp(-turbidity * (path + min(thick, 4.0) * 0.85))) : 1.0;
-		vec3 shallow_tint = mix(shallow_color, scatter_color, 0.18) * light * 0.74;
-		vec3 reef_tint = reef_color * light * mix(0.62, 1.12, smoothstep(0.38, 0.95, face_lit));
+		vec3 eff_shallow = mix(shallow_color, deep_color * 2.1 + vec3(0.008, 0.12, 0.21), night_bio * 0.80);
+		vec3 eff_reef = mix(reef_color, deep_color * 1.7 + vec3(0.006, 0.08, 0.16), night_bio * 0.74);
+		vec3 shallow_tint = mix(eff_shallow, scatter_color, 0.18 * (1.0 - night_bio * 0.65)) * light * 0.74;
+		vec3 reef_tint = eff_reef * light * mix(0.62, 1.12, smoothstep(0.38, 0.95, face_lit));
 		vec3 coast_body = mix(shallow_tint, reef_tint, smoothstep(1.2, 5.2, path));
 		vec3 water_vol = has_seabed ? mix(coast_body, body, smoothstep(4.2, 16.5, path)) : body;
 		col = behind * trans + water_vol * fill;
