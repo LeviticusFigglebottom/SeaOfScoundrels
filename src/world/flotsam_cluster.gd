@@ -9,6 +9,10 @@ signal flotsam_salvaged(cluster: FlotsamCluster, pawn: Node, loot: Dictionary)
 
 const GROUP := &"flotsam"
 const BARREL_PROP_PATH := "res://assets/generated/props/barrel_prop.glb"
+const FOAM_RIPPLE_INTERVAL := 1.25
+const GLINT_MIN_DIST := 5.5
+const GLINT_MAX_DIST := 155.0
+const GLINT_HEIGHT_OFFSET := 1.06
 
 # Painterly sea-soaked shipwreck timber, tarred spar, hemp rope & painted float palette (sRGB).
 const COL_OAK_BLEACHED := Color(0.56, 0.43, 0.28)
@@ -23,12 +27,17 @@ const COL_IRON_BAND := Color(0.22, 0.23, 0.26)
 const COL_FLOAT_CRIMSON := Color(0.84, 0.18, 0.15)
 const COL_FLOAT_CREAM := Color(0.95, 0.90, 0.77)
 const COL_FLOAT_CORK := Color(0.62, 0.46, 0.28)
+const COL_GLINT_CORE := Color(1.00, 0.96, 0.80, 1.0)
+const COL_GLINT_MID := Color(0.98, 0.72, 0.22, 1.0)
+const COL_GLINT_WAIST := Color(0.72, 0.44, 0.10, 1.0)
 
 static var _active_clusters: int = 0
 static var _debris_mesh: ArrayMesh = null
 static var _fallback_barrel_mesh: ArrayMesh = null
+static var _glint_mesh: ArrayMesh = null
 static var _wood_mat: StandardMaterial3D = null
 static var _accent_mat: StandardMaterial3D = null
+static var _glint_mat: StandardMaterial3D = null
 
 @export var seed_val: int = 1
 
@@ -39,8 +48,12 @@ var base_z: float = 0.0
 
 var _debris_mi: MeshInstance3D = null
 var _barrel_root: Node3D = null
+var _glint_mi: MeshInstance3D = null
 var _bob_clock: float = 0.0
 var _base_yaw: float = 0.0
+var _foam_accum: float = 0.0
+var _glint_clock: float = 0.0
+var _glint_phase: float = 0.0
 
 
 ## Spawn a buoyant shipwreck flotsam debris cluster at `world_pos`.
@@ -62,8 +75,10 @@ static func spawn_at(parent: Node, world_pos: Vector3, p_seed: int = 1) -> Flots
 static func clear_shared_cache() -> void:
 	_debris_mesh = null
 	_fallback_barrel_mesh = null
+	_glint_mesh = null
 	_wood_mat = null
 	_accent_mat = null
+	_glint_mat = null
 
 
 func _enter_tree() -> void:
@@ -72,17 +87,30 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	_release_refs()
+	_active_clusters = maxi(0, _active_clusters - 1)
+	if _active_clusters == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_refs()
+
+
+func _release_refs() -> void:
 	if _debris_mi != null and is_instance_valid(_debris_mi):
 		if _debris_mi.mesh != null:
 			for si in _debris_mi.mesh.get_surface_count():
 				_debris_mi.set_surface_override_material(si, null)
 		_debris_mi.mesh = null
 		_debris_mi.material_override = null
+	if _glint_mi != null and is_instance_valid(_glint_mi):
+		_glint_mi.mesh = null
+		_glint_mi.material_override = null
 	_debris_mi = null
 	_barrel_root = null
-	_active_clusters = maxi(0, _active_clusters - 1)
-	if _active_clusters == 0:
-		clear_shared_cache()
+	_glint_mi = null
 
 
 func _ready() -> void:
@@ -93,12 +121,25 @@ func _ready() -> void:
 	rng.seed = seed_val ^ 0xF1075A
 	_base_yaw = rng.randf_range(0.0, TAU)
 	_bob_clock = rng.randf_range(0.0, TAU)
+	_foam_accum = rng.randf_range(0.0, FOAM_RIPPLE_INTERVAL)
+	_glint_phase = rng.randf_range(0.0, TAU)
 	rotation.y = _base_yaw
 
 	_ensure_shared_assets()
 	_build_visuals()
+	_build_salvage_glint()
 	_build_interactable()
 	step_buoyancy(0.0)
+	if salvaged:
+		if _glint_mi != null and is_instance_valid(_glint_mi):
+			_glint_mi.visible = false
+		set_process(false)
+	else:
+		tick_glint(0.0)
+
+
+func _process(delta: float) -> void:
+	tick_glint(delta)
 
 
 func _physics_process(delta: float) -> void:
@@ -109,6 +150,45 @@ func _physics_process(delta: float) -> void:
 # Public API & Wave Buoyancy
 # ==============================================================================
 
+## Return the sculpted additive SalvageGlint MeshInstance3D floating above the cargo barrel.
+func get_salvage_glint_node() -> MeshInstance3D:
+	return _glint_mi
+
+
+## Update distance-gated open-sea salvage glint twinkle (5.5..155.0 m).
+func tick_glint(delta: float, cam_dist_override: float = -1.0) -> void:
+	if _glint_mi == null or not is_instance_valid(_glint_mi):
+		return
+	if salvaged:
+		_glint_mi.visible = false
+		return
+
+	var dist := cam_dist_override
+	if dist < 0.0:
+		var vp := get_viewport() if is_inside_tree() else null
+		var cam := vp.get_camera_3d() if vp != null else null
+		if cam != null:
+			dist = global_position.distance_to(cam.global_position)
+		else:
+			dist = 40.0
+
+	if dist < GLINT_MIN_DIST or dist > GLINT_MAX_DIST:
+		_glint_mi.visible = false
+		return
+
+	_glint_mi.visible = true
+	_glint_clock += maxf(delta, 0.0)
+
+	var tw := 0.5 + 0.5 * sin(_glint_clock * 2.9 + _glint_phase)
+	var shimmer := 0.5 + 0.5 * sin(_glint_clock * 6.4 + _glint_phase * 1.7)
+	var pulse := 0.52 + 0.58 * pow(tw, 2.5) + 0.14 * shimmer
+	var near_fade := clampf((dist - GLINT_MIN_DIST) / 4.5, 0.28, 1.0)
+	var far_fade := clampf((GLINT_MAX_DIST - dist) / 22.0, 0.28, 1.0)
+	var range_boost := lerpf(0.85, 1.80, clampf((dist - GLINT_MIN_DIST) / (GLINT_MAX_DIST - GLINT_MIN_DIST), 0.0, 1.0))
+	var glint_scale := pulse * near_fade * far_fade * range_boost
+	_glint_mi.scale = Vector3.ONE * glint_scale
+
+
 ## Host-authoritative idempotent salvage action; returns loot dict once, else empty dict.
 func salvage(pawn: Node = null) -> Dictionary:
 	if not Net.is_host() or salvaged:
@@ -118,6 +198,9 @@ func salvage(pawn: Node = null) -> Dictionary:
 		interactable.enabled = false
 	if _barrel_root != null and is_instance_valid(_barrel_root):
 		_barrel_root.visible = false
+	if _glint_mi != null and is_instance_valid(_glint_mi):
+		_glint_mi.visible = false
+	set_process(false)
 	var loot := {
 		"cannonballs": 6,
 		"planks": 4,
@@ -128,7 +211,7 @@ func salvage(pawn: Node = null) -> Dictionary:
 	return loot
 
 
-## Update buoyant wave height, pitch/roll slope matching, and gentle barrel rock.
+## Update buoyant wave height, pitch/roll slope matching, gentle barrel rock, and bobbing ocean foam ripple.
 func step_buoyancy(delta: float) -> void:
 	_bob_clock += delta
 	var sea_y := Sea.height(base_x, base_z) if Sea != null else 0.0
@@ -159,6 +242,15 @@ func step_buoyancy(delta: float) -> void:
 			0.38,
 			-0.14 + cos(_bob_clock * 1.5) * 0.09
 		)
+		if _glint_mi != null and is_instance_valid(_glint_mi):
+			_glint_mi.position.y = _barrel_root.position.y + GLINT_HEIGHT_OFFSET
+
+	if delta > 0.0:
+		_foam_accum += delta
+		if _foam_accum >= FOAM_RIPPLE_INTERVAL:
+			_foam_accum = fmod(_foam_accum, FOAM_RIPPLE_INTERVAL)
+			if Ocean.current != null and is_inside_tree():
+				Ocean.current.add_foam(global_position, 1.45, 0.34)
 
 
 func _on_interacted(pawn: Node) -> void:
@@ -206,6 +298,17 @@ func _build_visuals() -> void:
 	_barrel_root.add_child(fb)
 
 
+func _build_salvage_glint() -> void:
+	_glint_mi = MeshInstance3D.new()
+	_glint_mi.name = "SalvageGlint"
+	_glint_mi.mesh = _glint_mesh
+	_glint_mi.material_override = _glint_mat
+	_glint_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_glint_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_glint_mi.position = Vector3(0.0, -0.26 + GLINT_HEIGHT_OFFSET, 0.0)
+	add_child(_glint_mi)
+
+
 func _build_interactable() -> void:
 	interactable = Interactable.create("Salvage flotsam supplies", 1.25)
 	interactable.name = "FlotsamInteractable"
@@ -228,10 +331,81 @@ static func _ensure_shared_assets() -> void:
 		_accent_mat.vertex_color_is_srgb = true
 		_accent_mat.roughness = 0.42
 		_accent_mat.metallic = 0.24
+	if _glint_mat == null:
+		_glint_mat = StandardMaterial3D.new()
+		_glint_mat.vertex_color_use_as_albedo = true
+		_glint_mat.vertex_color_is_srgb = true
+		_glint_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_glint_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_glint_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_glint_mat.billboard_keep_scale = true
+		_glint_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_glint_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if _debris_mesh == null:
 		_debris_mesh = _build_debris_ring_mesh()
 	if _fallback_barrel_mesh == null:
 		_fallback_barrel_mesh = _build_fallback_barrel_mesh()
+	if _glint_mesh == null:
+		_glint_mesh = _build_salvage_glint_mesh()
+
+
+static func _build_salvage_glint_mesh() -> ArrayMesh:
+	# Sculpted exact 24-triangle 4-point star flare ArrayMesh (zero QuadMesh / zero VRAM textures).
+	# Warm golden-amber core -> amber inner star waist -> Color(0, 0, 0, 1) additive-feathered tips.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SPOKES := 8
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	const COL_TIP := Color(0.0, 0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var inner_pts: Array[Vector3] = []
+	var outer_pts: Array[Vector3] = []
+	var inner_cols: Array[Color] = []
+
+	for i in SPOKES:
+		var ang := float(i) / float(SPOKES) * TAU
+		var ca := cos(ang)
+		var sa := sin(ang)
+		var is_major := (i % 2 == 0)
+		var r_in := 0.165 if is_major else 0.072
+		var r_out := (0.64 if (i == 2 or i == 6) else 0.54) if is_major else 0.18
+		inner_pts.append(Vector3(ca * r_in, sa * r_in, 0.0))
+		outer_pts.append(Vector3(ca * r_out, sa * r_out, 0.0))
+		inner_cols.append(COL_GLINT_MID if is_major else COL_GLINT_WAIST)
+
+	for i in SPOKES:
+		var ni := (i + 1) % SPOKES
+		var in_a := inner_pts[i]
+		var in_b := inner_pts[ni]
+		var out_a := outer_pts[i]
+		var out_b := outer_pts[ni]
+		var col_a := inner_cols[i]
+		var col_b := inner_cols[ni]
+
+		# Inner bright star heart (8 tris).
+		st.set_normal(NORM); st.set_color(COL_GLINT_CORE); st.add_vertex(center)
+		st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+		st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+
+		# Outer symmetric ray flare feathering cleanly to black tips (16 tris).
+		if i % 2 == 0:
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+		else:
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+	return st.commit()
 
 
 static func _build_debris_ring_mesh() -> ArrayMesh:

@@ -13,6 +13,8 @@ signal supplies_taken(barrel: SupplyBarrel, pawn: Node, loot: Dictionary)
 const GROUP := &"supply_barrels"
 const BARREL_GLB_PATH := "res://assets/generated/props/barrel_prop.glb"
 const LID_HEIGHT_Y := 0.86
+const GLINT_MIN_DIST := 4.0
+const GLINT_MAX_DIST := 75.0
 
 # Painterly pirate brass, crimson wax seal, and coopered oak fallback palette.
 const COL_BRASS_HI := Color(0.96, 0.80, 0.30)
@@ -24,6 +26,9 @@ const COL_ROPE := Color(0.74, 0.60, 0.38)
 const COL_OAK_LIGHT := Color(0.50, 0.34, 0.19)
 const COL_OAK_DARK := Color(0.30, 0.19, 0.10)
 const COL_IRON := Color(0.18, 0.19, 0.21)
+const COL_GLINT_CORE := Color(1.00, 0.95, 0.72, 1.0)
+const COL_GLINT_MID := Color(0.95, 0.76, 0.26, 1.0)
+const COL_GLINT_WAIST := Color(0.62, 0.45, 0.12, 1.0)
 
 @export var cannonballs: int = 6
 @export var planks: int = 3
@@ -34,16 +39,21 @@ var interactable: Interactable = null
 
 var _barrel_root: Node3D = null
 var _emblem_mi: MeshInstance3D = null
+var _glint_mi: MeshInstance3D = null
 var _fallback_mi: MeshInstance3D = null
 var _col_body: StaticBody3D = null
+var _glint_clock: float = 0.0
+var _glint_phase: float = 0.0
 
 # Statically shared meshes & materials released cleanly when the last barrel exits tree.
 static var _active_barrels: int = 0
 static var _barrel_scene: PackedScene = null
 static var _fallback_barrel_mesh: ArrayMesh = null
 static var _emblem_mesh: ArrayMesh = null
+static var _glint_mesh: ArrayMesh = null
 static var _brass_mat: StandardMaterial3D = null
 static var _wood_mat: StandardMaterial3D = null
+static var _glint_mat: StandardMaterial3D = null
 
 
 func _enter_tree() -> void:
@@ -52,6 +62,7 @@ func _enter_tree() -> void:
 
 
 func _ready() -> void:
+	_glint_phase = fposmod(position.x * 0.37 + position.z * 0.53, TAU)
 	_ensure_shared_assets()
 	_build_visual_and_collision()
 	interactable = Interactable.create(_build_prompt(), 1.1)
@@ -62,25 +73,44 @@ func _ready() -> void:
 	add_child(interactable)
 	if looted:
 		_apply_looted_visuals()
+	else:
+		tick_glint(0.0)
+
+
+func _process(delta: float) -> void:
+	tick_glint(delta)
 
 
 func _exit_tree() -> void:
+	_release_refs()
+	_active_barrels = maxi(0, _active_barrels - 1)
+	if _active_barrels == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_refs()
+
+
+func _release_refs() -> void:
 	if interactable != null and is_instance_valid(interactable):
 		if interactable.interacted.is_connected(_on_interacted):
 			interactable.interacted.disconnect(_on_interacted)
 	if _emblem_mi != null and is_instance_valid(_emblem_mi):
 		_emblem_mi.material_override = null
 		_emblem_mi.mesh = null
+	if _glint_mi != null and is_instance_valid(_glint_mi):
+		_glint_mi.material_override = null
+		_glint_mi.mesh = null
 	if _fallback_mi != null and is_instance_valid(_fallback_mi):
 		_fallback_mi.material_override = null
 		_fallback_mi.mesh = null
 	_emblem_mi = null
+	_glint_mi = null
 	_fallback_mi = null
 	_barrel_root = null
 	_col_body = null
-	_active_barrels = maxi(0, _active_barrels - 1)
-	if _active_barrels == 0:
-		clear_shared_cache()
 
 
 ## Release statically cached meshes & materials cleanly (also called automatically when count hits 0).
@@ -88,8 +118,47 @@ static func clear_shared_cache() -> void:
 	_barrel_scene = null
 	_fallback_barrel_mesh = null
 	_emblem_mesh = null
+	_glint_mesh = null
 	_brass_mat = null
 	_wood_mat = null
+	_glint_mat = null
+
+
+## Return the sculpted additive LidGlint MeshInstance3D crowning the unlooted lid seal.
+func get_lid_glint_node() -> MeshInstance3D:
+	return _glint_mi
+
+
+## Update distance-gated unlooted golden lid seal shimmer (4.0..75.0 m).
+func tick_glint(delta: float, cam_dist_override: float = -1.0) -> void:
+	if _glint_mi == null or not is_instance_valid(_glint_mi):
+		return
+	if looted:
+		_glint_mi.visible = false
+		return
+
+	var dist := cam_dist_override
+	if dist < 0.0:
+		var vp := get_viewport() if is_inside_tree() else null
+		var cam := vp.get_camera_3d() if vp != null else null
+		if cam != null:
+			dist = global_position.distance_to(cam.global_position)
+		else:
+			dist = 22.0
+
+	if dist < GLINT_MIN_DIST or dist > GLINT_MAX_DIST:
+		_glint_mi.visible = false
+		return
+
+	_glint_mi.visible = true
+	_glint_clock += maxf(delta, 0.0)
+
+	var wave := 0.5 + 0.5 * sin(_glint_clock * 2.5 + _glint_phase)
+	var pulse := 0.56 + 0.52 * pow(wave, 2.2)
+	var near_fade := clampf((dist - GLINT_MIN_DIST) / 3.5, 0.30, 1.0)
+	var far_fade := clampf((GLINT_MAX_DIST - dist) / 14.0, 0.30, 1.0)
+	var range_boost := lerpf(0.88, 1.48, clampf((dist - GLINT_MIN_DIST) / (GLINT_MAX_DIST - GLINT_MIN_DIST), 0.0, 1.0))
+	_glint_mi.scale = Vector3.ONE * (pulse * near_fade * far_fade * range_boost)
 
 
 ## Host-authoritative idempotent one-press take-all. Returns loot payload or `{}` if already looted.
@@ -128,9 +197,12 @@ func _build_prompt() -> String:
 func _apply_looted_visuals() -> void:
 	if _emblem_mi != null and is_instance_valid(_emblem_mi):
 		_emblem_mi.visible = false
+	if _glint_mi != null and is_instance_valid(_glint_mi):
+		_glint_mi.visible = false
 	if interactable != null and is_instance_valid(interactable):
 		interactable.enabled = false
 		interactable.prompt = "Empty supply barrel"
+	set_process(false)
 
 
 func _build_visual_and_collision() -> void:
@@ -192,6 +264,16 @@ func _build_visual_and_collision() -> void:
 	_emblem_mi.position = Vector3(0.0, LID_HEIGHT_Y, 0.0)
 	_barrel_root.add_child(_emblem_mi)
 
+	# Sunlit additive 4-point star shimmer hovering cleanly above the intact golden lid seal.
+	_glint_mi = MeshInstance3D.new()
+	_glint_mi.name = "LidGlint"
+	_glint_mi.mesh = _glint_mesh
+	_glint_mi.material_override = _glint_mat
+	_glint_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_glint_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_glint_mi.position = Vector3(0.0, LID_HEIGHT_Y + 0.14, 0.0)
+	_barrel_root.add_child(_glint_mi)
+
 
 # ==============================================================================
 # Statically Cached Sculpted Flat-Faceted ArrayMeshes (Zero Raw Primitives)
@@ -205,8 +287,20 @@ static func _ensure_shared_assets() -> void:
 		_brass_mat.vertex_color_use_as_albedo = true
 		_brass_mat.roughness = 0.32
 		_brass_mat.metallic = 0.72
+	if _glint_mat == null:
+		_glint_mat = StandardMaterial3D.new()
+		_glint_mat.vertex_color_use_as_albedo = true
+		_glint_mat.vertex_color_is_srgb = true
+		_glint_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_glint_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_glint_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_glint_mat.billboard_keep_scale = true
+		_glint_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_glint_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if _emblem_mesh == null:
 		_emblem_mesh = _build_supply_emblem_mesh()
+	if _glint_mesh == null:
+		_glint_mesh = _build_lid_glint_mesh()
 	if _barrel_scene == null:
 		if _wood_mat == null:
 			_wood_mat = StandardMaterial3D.new()
@@ -215,6 +309,65 @@ static func _ensure_shared_assets() -> void:
 			_wood_mat.metallic = 0.06
 		if _fallback_barrel_mesh == null:
 			_fallback_barrel_mesh = _build_fallback_barrel_mesh()
+
+
+static func _build_lid_glint_mesh() -> ArrayMesh:
+	# Sculpted exact 24-triangle 4-point star flare ArrayMesh (zero QuadMesh / zero VRAM textures).
+	# Sunlit brass-gold core -> warm burnished gold waist -> Color(0, 0, 0, 1) feathered black edge.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SPOKES := 8
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	const COL_TIP := Color(0.0, 0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var inner_pts: Array[Vector3] = []
+	var outer_pts: Array[Vector3] = []
+	var inner_cols: Array[Color] = []
+
+	for i in SPOKES:
+		var ang := float(i) / float(SPOKES) * TAU
+		var ca := cos(ang)
+		var sa := sin(ang)
+		var is_major := (i % 2 == 0)
+		var r_in := 0.088 if is_major else 0.042
+		var r_out := (0.33 if (i == 2 or i == 6) else 0.28) if is_major else 0.10
+		inner_pts.append(Vector3(ca * r_in, sa * r_in, 0.0))
+		outer_pts.append(Vector3(ca * r_out, sa * r_out, 0.0))
+		inner_cols.append(COL_GLINT_MID if is_major else COL_GLINT_WAIST)
+
+	for i in SPOKES:
+		var ni := (i + 1) % SPOKES
+		var in_a := inner_pts[i]
+		var in_b := inner_pts[ni]
+		var out_a := outer_pts[i]
+		var out_b := outer_pts[ni]
+		var col_a := inner_cols[i]
+		var col_b := inner_cols[ni]
+
+		# Inner bright sunlit brass star core (8 tris).
+		st.set_normal(NORM); st.set_color(COL_GLINT_CORE); st.add_vertex(center)
+		st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+		st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+
+		# Outer symmetric ray flare feathering cleanly to black edge (16 tris).
+		if i % 2 == 0:
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+		else:
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+	return st.commit()
 
 
 static func _build_supply_emblem_mesh() -> ArrayMesh:

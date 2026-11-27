@@ -28,6 +28,16 @@ class MockBailShip:
 		_water = clampf(_water - amount, 0.0, 1.0)
 
 
+class MockGlintContainer:
+	extends Node
+	var accepted_count: int = 0
+
+	func accept_carryable(_item: Node) -> bool:
+		accepted_count += 1
+		return true
+
+
+
 var _saved_weather: Dictionary = {}
 
 
@@ -2593,3 +2603,226 @@ func test_wave33_blazing_rage_chest_fire_cooling_and_merchant_trade_routes() -> 
 	Sea.amp_scale = saved_amp
 	Game.profile.data = saved_profile
 	_restore_weather()
+
+
+# ---------------------------------------------------------------------------
+# 10. Q13A: Distant Color-Coded TreasureGlintStar & Floating Ocean Ripples
+# ---------------------------------------------------------------------------
+
+func test_q13a_treasure_glint_star_distance_gating_color_coding_and_zero_leaks() -> void:
+	Net.start_single_player()
+	TreasureCatalog.clear_mesh_cache()
+	Carryable.clear_shared_glint_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Q13AGlintTestHolder"
+	add_child(holder)
+
+	# 1. Spawn color-coded treasure archetypes and verify sculpted TreasureGlintStar geometry,
+	#    zero raw primitives, finite unit (0,0,1) normals, sRGB additive billboard material,
+	#    distinct color-coded hues, shape-matched heights, and WeakRef-shared ArrayMesh!
+	var expected_specs: Array[Dictionary] = [
+		{"id": &"sovereign_chest", "color": Color(1.0, 0.86, 0.32), "height": 0.46, "pos": Vector3(0.0, 2.0, 0.0)},
+		{"id": &"weeping_bilge_chest", "color": Color(0.28, 1.0, 0.88), "height": 0.46, "pos": Vector3(3.0, 2.0, 1.5)},
+		{"id": &"blazing_rage_chest", "color": Color(1.0, 0.50, 0.18), "height": 0.46, "pos": Vector3(6.0, 2.0, -2.0)},
+		{"id": &"drowned_skull", "color": Color(0.38, 1.0, 0.62), "height": 0.34, "pos": Vector3(9.0, 2.0, 0.5)},
+		{"id": &"commodity_spiced_silk", "color": Color(0.98, 0.92, 0.70), "height": 0.46, "pos": Vector3(12.0, 2.0, -1.0)},
+		{"id": &"archive_chalice", "color": Color(0.42, 0.98, 0.88), "height": 0.34, "pos": Vector3(15.0, 2.0, 2.5)},
+		{"id": &"captains_skull", "color": Color(1.0, 0.50, 0.18), "height": 0.34, "pos": Vector3(18.0, 2.0, -0.5)},
+	]
+
+	var items: Array[Carryable] = []
+	var shared_mesh: ArrayMesh = null
+	var primary_hues: Dictionary = {}
+	var seen_phases: Dictionary = {}
+
+	for idx in expected_specs.size():
+		var spec: Dictionary = expected_specs[idx]
+		var tid: StringName = spec["id"] as StringName
+		var exp_col: Color = spec["color"] as Color
+		var exp_h: float = float(spec["height"])
+		var spawn_pos: Vector3 = spec["pos"] as Vector3
+
+		var item := TreasureCatalog.create_treasure_carryable(tid, spawn_pos)
+		item.freeze = true
+		holder.add_child(item)
+		items.append(item)
+
+		check(item.glint_enabled, "%s enables distant TreasureGlintStar" % tid)
+		check_near(item.glint_color.r, exp_col.r, 0.002, "%s glint_color.r matches palette" % tid)
+		check_near(item.glint_color.g, exp_col.g, 0.002, "%s glint_color.g matches palette" % tid)
+		check_near(item.glint_color.b, exp_col.b, 0.002, "%s glint_color.b matches palette" % tid)
+		check_near(item.glint_height, exp_h, 0.001, "%s glint_height matches shape" % tid)
+
+		if idx < 5:
+			primary_hues[item.glint_color.to_html(false)] = true
+		seen_phases[snappedi(roundi(item._glint_phase * 1000.0), 1)] = true
+
+		var glint_mi := item.get_glint_node()
+		check(glint_mi != null, "%s exposes get_glint_node()" % tid)
+		check(glint_mi == item.get_node_or_null(^"TreasureGlintStar"), "%s mounts child named TreasureGlintStar" % tid)
+		if glint_mi != null:
+			check_near(glint_mi.position.y, exp_h, 0.001, "%s TreasureGlintStar mounted at expected y=%.2f" % [tid, exp_h])
+			check_eq(glint_mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s TreasureGlintStar disables shadow casting" % tid)
+			check_near(glint_mi.visibility_range_end, 175.0, 0.01,
+				"%s TreasureGlintStar visibility_range_end == 175.0" % tid)
+
+			var m := glint_mi.mesh
+			check(m is ArrayMesh, "%s TreasureGlintStar uses sculpted ArrayMesh" % tid)
+			check(not (m is PrimitiveMesh), "%s TreasureGlintStar uses zero raw PrimitiveMesh" % tid)
+			if shared_mesh == null:
+				shared_mesh = m as ArrayMesh
+			else:
+				check(m == shared_mesh, "%s shares WeakRef-cached TreasureGlintStar ArrayMesh" % tid)
+
+			var mat := glint_mi.material_override as StandardMaterial3D
+			check(mat != null, "%s TreasureGlintStar has StandardMaterial3D override" % tid)
+			if mat != null:
+				check(mat.vertex_color_use_as_albedo, "%s glint material uses vertex color as albedo" % tid)
+				check(mat.vertex_color_is_srgb, "%s glint material sets vertex_color_is_srgb = true" % tid)
+				check_eq(mat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "%s glint material unshaded" % tid)
+				check_eq(mat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD, "%s glint material additive blend" % tid)
+				check_eq(mat.billboard_mode, BaseMaterial3D.BILLBOARD_ENABLED, "%s glint material billboard enabled" % tid)
+				check(mat.billboard_keep_scale, "%s glint material preserves billboard scale" % tid)
+				check_eq(mat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED, "%s glint material disables depth draw" % tid)
+
+	check_eq(primary_hues.size(), 5,
+		"all 5 primary treasure types have distinct color-coded glint hues (got %d)" % primary_hues.size())
+	check(seen_phases.size() >= 6,
+		"staggered deterministic _glint_phase varies across treasures (got %d distinct)" % seen_phases.size())
+	check(Carryable._glint_mesh_ref != null and Carryable._glint_mesh_ref.get_ref() == shared_mesh,
+		"Carryable._glint_mesh_ref WeakRef tracks shared TreasureGlintStar ArrayMesh")
+
+	# Inspect sculpted ArrayMesh triangles, finite unit (0,0,1) normals, and zero-edge additive vertex colors.
+	check(shared_mesh != null, "shared TreasureGlintStar ArrayMesh built")
+	if shared_mesh != null:
+		var star_tris := _count_mesh_triangles(shared_mesh)
+		check(star_tris >= 24 and star_tris <= 32,
+			"TreasureGlintStar triangle count in 24..32 (got %d)" % star_tris)
+		var arr := shared_mesh.surface_get_arrays(0)
+		var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+		var cols := arr[Mesh.ARRAY_COLOR] as PackedColorArray
+		check_eq(norms.size(), verts.size(), "TreasureGlintStar normals match vertex count")
+		check_eq(cols.size(), verts.size(), "TreasureGlintStar colors match vertex count")
+		var bad_normals := 0
+		for n: Vector3 in norms:
+			if not n.is_finite() or absf(n.length() - 1.0) > 0.001 or n.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				bad_normals += 1
+		check_eq(bad_normals, 0, "TreasureGlintStar has 100%% finite unit (0, 0, 1) normals")
+		var bright_center_verts := 0
+		var zero_edge_verts := 0
+		for c: Color in cols:
+			if c.r > 0.90 and c.g > 0.90 and c.b > 0.85:
+				bright_center_verts += 1
+			elif c.r <= 0.001 and c.g <= 0.001 and c.b <= 0.001:
+				zero_edge_verts += 1
+		check(bright_center_verts > 0, "TreasureGlintStar has bright white-gold center vertices")
+		check(zero_edge_verts > 0, "TreasureGlintStar fades tips & halo rim to Color(0, 0, 0, 1) for zero hard edges")
+		print("    Q13A TreasureGlintStar sculpted mesh: %d tris, %d verts, %d color-coded hues" % [
+			star_tris, verts.size(), primary_hues.size()])
+
+	# 2. Distance gating (2.5 m hidden, 45.0 m sparkling & pulsing, 180.0 m culled) + headless safety.
+	var sov := items[0]
+	var sov_mi := sov.get_glint_node()
+	var sov_mat := sov_mi.material_override as StandardMaterial3D
+
+	# Headless no-Camera3D path stays cleanly hidden.
+	sov.tick_glint(0.1)
+	check(not sov_mi.visible and sov.get_glint_strength() == 0.0,
+		"tick_glint() without active Camera3D stays cleanly hidden")
+
+	# Close deck distance (2.5 m < 5.0 m): glare-free!
+	sov.tick_glint(0.1, 2.5)
+	check(not sov_mi.visible, "glint hidden at close range (2.5 m) to keep ship decks glare-free")
+	check_near(sov.get_glint_strength(), 0.0, 0.0001, "glint strength == 0.0 at 2.5 m")
+
+	# Mid-far distance (45.0 m): clearly visible and pulses organically across time!
+	sov.tick_glint(0.1, 45.0)
+	check(sov_mi.visible, "glint visible at 45.0 m")
+	check(sov.get_glint_strength() > 0.0, "glint strength > 0.0 at 45.0 m (got %.3f)" % sov.get_glint_strength())
+	check(sov_mat.albedo_color.r > sov_mat.albedo_color.b,
+		"sovereign_chest glint preserves golden warm tint at 45.0 m")
+
+	var min_str := 99.0
+	var max_str := -1.0
+	var min_sc := 99.0
+	var max_sc := -1.0
+	for _step in 16:
+		sov.tick_glint(0.22, 45.0)
+		var st_v := sov.get_glint_strength()
+		min_str = minf(min_str, st_v)
+		max_str = maxf(max_str, st_v)
+		min_sc = minf(min_sc, sov_mi.scale.x)
+		max_sc = maxf(max_sc, sov_mi.scale.x)
+	check(max_str - min_str > 0.25,
+		"glint strength pulses organically across time (range %.3f..%.3f)" % [min_str, max_str])
+	check(max_sc - min_sc > 0.15,
+		"glint billboard scale twinkles organically across time (range %.3f..%.3f)" % [min_sc, max_sc])
+
+	# Far cull distance (180.0 m > 165.0 m): culled cleanly!
+	sov.tick_glint(0.1, 180.0)
+	check(not sov_mi.visible, "glint culled cleanly beyond 165.0 m (at 180.0 m)")
+	check_near(sov.get_glint_strength(), 0.0, 0.0001, "glint strength == 0.0 at 180.0 m")
+
+	# 3. Holding (attach_to) and storing (hand_to) immediately hide glint; detach/take_out restore!
+	sov.tick_glint(0.1, 45.0)
+	check(sov_mi.visible and sov.get_glint_strength() > 0.0, "glint visible at 45.0 m before pickup")
+
+	var mock_holder := Node3D.new()
+	holder.add_child(mock_holder)
+	sov.attach_to(mock_holder)
+	check(not sov_mi.visible and sov.get_glint_strength() == 0.0,
+		"attach_to() immediately hides TreasureGlintStar")
+	sov.tick_glint(0.1, 45.0)
+	check(not sov_mi.visible and sov.get_glint_strength() == 0.0,
+		"tick_glint() keeps TreasureGlintStar hidden while held")
+
+	sov.detach()
+	sov.freeze = true
+	sov.tick_glint(0.1, 45.0)
+	check(sov_mi.visible and sov.get_glint_strength() > 0.0,
+		"detach() restores distance-gated TreasureGlintStar visibility cleanly")
+
+	var mock_container := MockGlintContainer.new()
+	holder.add_child(mock_container)
+	check(sov.hand_to(mock_container), "hand_to() succeeds into container")
+	check_eq(mock_container.accepted_count, 1, "container accepted treasure Carryable")
+	check(not sov_mi.visible and sov.get_glint_strength() == 0.0,
+		"hand_to() immediately hides TreasureGlintStar")
+	sov.tick_glint(0.1, 45.0)
+	check(not sov_mi.visible and sov.get_glint_strength() == 0.0,
+		"tick_glint() keeps TreasureGlintStar hidden while stored")
+
+	sov.take_out(Vector3(0.0, 2.0, 0.0))
+	sov.freeze = true
+	sov.tick_glint(0.1, 45.0)
+	check(sov_mi.visible and sov.get_glint_strength() > 0.0,
+		"take_out() restores distance-gated TreasureGlintStar visibility cleanly")
+
+	# 4. Floating ocean ripple timer cadence (1.45 s) in _physics_process when buoyant in water.
+	var floater := items[1]
+	floater.global_position = Vector3(0.0, Sea.height(0.0, 0.0) - 0.15, 0.0)
+	floater._foam_timer = 0.0
+	floater.freeze = false
+	await physics_frames(2)
+	check(floater._foam_timer > 1.20 and floater._foam_timer <= 1.45,
+		"floating Carryable resets ocean foam ripple cadence to 1.45 s (timer=%.3f)" % floater._foam_timer)
+	var timer_after_first := floater._foam_timer
+	await physics_frames(4)
+	check(floater._foam_timer < timer_after_first,
+		"floating Carryable decrements ocean foam ripple timer over physics ticks")
+	floater.freeze = true
+
+	# 5. Zero-leak teardown: freeing all Carryables releases shared WeakRef ArrayMesh cleanly!
+	shared_mesh = null
+	items.clear()
+	holder.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(holder), "Q13A test holder freed cleanly")
+	check(Carryable._glint_mesh_ref == null or Carryable._glint_mesh_ref.get_ref() == null,
+		"WeakRef-cached TreasureGlintStar ArrayMesh freed automatically on teardown (0 leaks)")
+	Carryable.clear_shared_glint_cache()
+	TreasureCatalog.clear_mesh_cache()
+

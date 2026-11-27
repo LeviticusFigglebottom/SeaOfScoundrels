@@ -52,6 +52,10 @@ const BODY_STATIONS: Array[Array] = [
 
 const BODY_RADIAL_SEGS := 16
 const TAIL_MID_RADIAL_SEGS := 12
+const SPLASH_DROPLET_COUNT := 16
+const SPLASH_DURATION := 0.65
+const SPLASH_GRAVITY := 10.5
+const CHARGE_WAKE_INTERVAL := 0.56
 
 # Statically cached procedural ArrayMeshes & materials shared across shark packs.
 static var _active_sharks: int = 0
@@ -59,6 +63,8 @@ static var _spawn_serial: int = 0
 static var _mesh_cache: Dictionary = {}
 static var _skin_mat: StandardMaterial3D = null
 static var _eye_mat: StandardMaterial3D = null
+static var _splash_mesh: ArrayMesh = null
+static var _splash_mat: StandardMaterial3D = null
 
 @export var max_health: float = 80.0
 @export var circle_radius: float = 8.5
@@ -79,10 +85,29 @@ var _visual_root: Node3D = null
 var _tail_mid_node: Node3D = null
 var _tail_node: Node3D = null
 var _jaw_node: Node3D = null
+var _splash_mmi: MultiMeshInstance3D = null
 var _center: Vector3 = Vector3.ZERO
 var _turn_bank: float = 0.0
 var _pitch_tilt: float = 0.0
 var _jaw_snap_timer: float = 0.0
+var _prev_state: State = State.CIRCLE
+var _splash_active: bool = false
+var _splash_age: float = 0.0
+var _splash_burst_serial: int = 0
+var _charge_wake_timer: float = 0.0
+
+# Preallocated ballistic fin-slice spray droplet buffers (zero per-frame heap allocations).
+var _drop_px: PackedFloat32Array = PackedFloat32Array()
+var _drop_py: PackedFloat32Array = PackedFloat32Array()
+var _drop_pz: PackedFloat32Array = PackedFloat32Array()
+var _drop_vx: PackedFloat32Array = PackedFloat32Array()
+var _drop_vy: PackedFloat32Array = PackedFloat32Array()
+var _drop_vz: PackedFloat32Array = PackedFloat32Array()
+var _drop_scale: PackedFloat32Array = PackedFloat32Array()
+var _drop_spin: PackedFloat32Array = PackedFloat32Array()
+var _drop_r: PackedFloat32Array = PackedFloat32Array()
+var _drop_g: PackedFloat32Array = PackedFloat32Array()
+var _drop_b: PackedFloat32Array = PackedFloat32Array()
 
 
 func _enter_tree() -> void:
@@ -90,9 +115,24 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	_release_refs()
 	_active_sharks = maxi(0, _active_sharks - 1)
 	if _active_sharks == 0:
 		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_refs()
+
+
+func _release_refs() -> void:
+	if _splash_mmi != null and is_instance_valid(_splash_mmi):
+		_splash_mmi.visible = false
+		_splash_mmi.material_override = null
+		_splash_mmi.multimesh = null
+	_splash_mmi = null
+	_splash_active = false
 
 
 ## Release statically cached shared procedural shark meshes & materials cleanly.
@@ -100,18 +140,92 @@ static func clear_shared_cache() -> void:
 	_mesh_cache.clear()
 	_skin_mat = null
 	_eye_mat = null
+	_splash_mesh = null
+	_splash_mat = null
+
+
+## Return the sculpted MultiMeshInstance3D used for ballistic lunge & fin-slice spray bursts.
+func get_splash_spray_node() -> MultiMeshInstance3D:
+	return _splash_mmi
+
+
+## Return true while a ballistic lunge/fin-slice spray burst is actively animating.
+func is_splash_active() -> bool:
+	return _splash_active
+
+
+## Return current local positions of all 16 ballistic spray droplets (useful for headless tests).
+func get_splash_droplet_positions() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	out.resize(_drop_px.size())
+	for i in _drop_px.size():
+		out[i] = Vector3(_drop_px[i], _drop_py[i], _drop_pz[i])
+	return out
+
+
+## Fire an energetic 16-droplet ballistic spray burst arcing upward & outward over 0.65 s.
+func trigger_splash_burst(intensity: float = 1.0) -> void:
+	if _splash_mmi == null or not is_instance_valid(_splash_mmi) or _splash_mmi.multimesh == null:
+		return
+	var clamped_i := clampf(intensity, 0.35, 1.8)
+	_splash_age = 0.0
+	_splash_active = true
+	_splash_burst_serial += 1
+	var phase_seed := float(_splash_burst_serial) * 2.39996
+	var mm := _splash_mmi.multimesh
+	for i in SPLASH_DROPLET_COUNT:
+		var fi := float(i)
+		var side := -1.0 if (i % 2 == 0) else 1.0
+		var h1 := fposmod(sin(fi * 12.9898 + phase_seed) * 43758.5453, 1.0)
+		var h2 := fposmod(sin(fi * 78.233 + phase_seed * 1.7) * 24634.6345, 1.0)
+		var ox := side * lerpf(0.08, 0.28, h1)
+		var oy := lerpf(0.28, 0.48, h2)
+		var oz := lerpf(-0.95, 0.42, fi / float(SPLASH_DROPLET_COUNT - 1))
+		_drop_px[i] = ox
+		_drop_py[i] = oy
+		_drop_pz[i] = oz
+		_drop_vx[i] = side * lerpf(1.15, 2.85, h2) * clamped_i
+		_drop_vy[i] = lerpf(2.85, 4.95, h1) * clamped_i
+		_drop_vz[i] = lerpf(-0.45, 1.65, h2) * clamped_i
+		_drop_scale[i] = lerpf(0.75, 1.50, h1) * lerpf(0.85, 1.15, clampf(clamped_i - 0.5, 0.0, 1.0))
+		_drop_spin[i] = side * lerpf(3.5, 9.0, h2)
+		var aqua_t := h2 * 0.65
+		_drop_r[i] = lerpf(0.98, 0.72, aqua_t)
+		_drop_g[i] = lerpf(1.00, 0.94, aqua_t)
+		_drop_b[i] = 1.00
+		var s := _drop_scale[i] * 0.85
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(s, s * 1.25, s)), Vector3(ox, oy, oz)))
+		mm.set_instance_color(i, Color(_drop_r[i], _drop_g[i], _drop_b[i], 0.92))
+	_splash_mmi.visible = true
 
 
 func _ready() -> void:
 	health = max_health
 	_center = global_position
+	_prev_state = state
 	_tail_phase = float(_spawn_serial % 16) * 1.65
 	_spawn_serial += 1
 	add_to_group(GROUP_SHARKS)
 	add_to_group(GROUP_BEASTS)
+	_init_splash_buffers()
 	_build_mesh()
 	_build_hitbox()
 	_update_articulation(0.0, 0.0, 0.0)
+	_update_eye_night_sheen()
+
+
+func _init_splash_buffers() -> void:
+	_drop_px.resize(SPLASH_DROPLET_COUNT)
+	_drop_py.resize(SPLASH_DROPLET_COUNT)
+	_drop_pz.resize(SPLASH_DROPLET_COUNT)
+	_drop_vx.resize(SPLASH_DROPLET_COUNT)
+	_drop_vy.resize(SPLASH_DROPLET_COUNT)
+	_drop_vz.resize(SPLASH_DROPLET_COUNT)
+	_drop_scale.resize(SPLASH_DROPLET_COUNT)
+	_drop_spin.resize(SPLASH_DROPLET_COUNT)
+	_drop_r.resize(SPLASH_DROPLET_COUNT)
+	_drop_g.resize(SPLASH_DROPLET_COUNT)
+	_drop_b.resize(SPLASH_DROPLET_COUNT)
 
 
 func _build_hitbox() -> void:
@@ -186,6 +300,25 @@ func _build_mesh() -> void:
 	tail_fin_mi.material_override = _skin_mat
 	_tail_node.add_child(tail_fin_mi)
 
+	# 6. Sculpted 16-droplet zero-primitive MultiMesh ballistic fin-slice & lunge spray bursts.
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = _splash_mesh
+	mm.instance_count = SPLASH_DROPLET_COUNT
+	for i in SPLASH_DROPLET_COUNT:
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3.ZERO))
+		mm.set_instance_color(i, Color(1.0, 1.0, 1.0, 0.0))
+
+	_splash_mmi = MultiMeshInstance3D.new()
+	_splash_mmi.name = "SharkSplashSpray"
+	_splash_mmi.multimesh = mm
+	_splash_mmi.material_override = _splash_mat
+	_splash_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_splash_mmi.visibility_range_end = 110.0
+	_splash_mmi.visible = false
+	add_child(_splash_mmi)
+
 
 func apply_damage(amount: float, _from: Node = null) -> void:
 	if not Net.is_host() or dead:
@@ -233,6 +366,7 @@ func _physics_process(delta: float) -> void:
 						target.apply_damage(bite_damage, self)
 						Audio.play_sfx(&"splash_large", global_position, -2.0)
 						bit_target.emit(target, bite_damage)
+						trigger_splash_burst(1.35)
 						_jaw_snap_timer = 0.18
 						state = State.RETREAT
 						_state_timer = 3.6
@@ -271,7 +405,68 @@ func _physics_process(delta: float) -> void:
 			else:
 				Ocean.current.add_foam(global_position, 0.65, 0.14)
 
+	if state == State.CHARGE and _prev_state == State.CIRCLE:
+		trigger_splash_burst(1.1)
+		_charge_wake_timer = CHARGE_WAKE_INTERVAL
+	elif state == State.CHARGE:
+		_charge_wake_timer -= delta
+		if _charge_wake_timer <= 0.0:
+			_charge_wake_timer = CHARGE_WAKE_INTERVAL
+			trigger_splash_burst(0.78)
+	_prev_state = state
+
+	_step_splash_spray(delta)
+	_update_eye_night_sheen()
 	_update_articulation(delta, yaw_delta, vertical_vel)
+
+
+func _step_splash_spray(delta: float) -> void:
+	if not _splash_active or _splash_mmi == null or not is_instance_valid(_splash_mmi):
+		return
+	var mm := _splash_mmi.multimesh
+	if mm == null:
+		_splash_active = false
+		_splash_mmi.visible = false
+		return
+	var dt := maxf(delta, 0.0)
+	_splash_age += dt
+	var t := _splash_age / SPLASH_DURATION
+	if t >= 1.0:
+		_splash_active = false
+		_splash_age = 0.0
+		_splash_mmi.visible = false
+		return
+	var alpha := clampf((1.0 - t) * (1.0 - t * 0.35), 0.0, 1.0) * 0.92
+	var size_env := lerpf(0.85, 1.22, minf(t * 2.5, 1.0)) * lerpf(1.0, 0.42, t * t)
+	var drag := maxf(0.0, 1.0 - dt * 1.45)
+	for i in SPLASH_DROPLET_COUNT:
+		var vx := _drop_vx[i] * drag
+		var vy := _drop_vy[i] - SPLASH_GRAVITY * dt
+		var vz := _drop_vz[i] * drag
+		_drop_vx[i] = vx
+		_drop_vy[i] = vy
+		_drop_vz[i] = vz
+		var px := _drop_px[i] + vx * dt
+		var py := _drop_py[i] + vy * dt
+		var pz := _drop_pz[i] + vz * dt
+		_drop_px[i] = px
+		_drop_py[i] = py
+		_drop_pz[i] = pz
+		var s := _drop_scale[i] * size_env
+		var spin_ang := _drop_spin[i] * _splash_age
+		var drop_basis := Basis(Vector3.UP, spin_ang).scaled(Vector3(s, s * 1.25, s))
+		mm.set_instance_transform(i, Transform3D(drop_basis, Vector3(px, py, pz)))
+		mm.set_instance_color(i, Color(_drop_r[i], _drop_g[i], _drop_b[i], alpha))
+
+
+func _update_eye_night_sheen() -> void:
+	if _eye_mat == null:
+		return
+	var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := 1.0 - dl
+	_eye_mat.emission_energy_multiplier = lerpf(0.0, 0.52, night)
+	_eye_mat.clearcoat = lerpf(0.85, 1.0, night)
+	_eye_mat.rim = lerpf(0.18, 0.65, night)
 
 
 func _update_articulation(delta: float, yaw_delta: float, vertical_vel: float) -> void:
@@ -364,6 +559,27 @@ static func _ensure_shared_assets() -> void:
 		_eye_mat.clearcoat_enabled = true
 		_eye_mat.clearcoat = 0.85
 		_eye_mat.clearcoat_roughness = 0.08
+		_eye_mat.rim_enabled = true
+		_eye_mat.rim = 0.18
+		_eye_mat.rim_tint = 0.45
+		_eye_mat.emission_enabled = true
+		_eye_mat.emission = Color(0.56, 0.86, 0.96)
+		_eye_mat.emission_energy_multiplier = 0.0
+
+	if _splash_mat == null:
+		_splash_mat = StandardMaterial3D.new()
+		_splash_mat.vertex_color_use_as_albedo = true
+		_splash_mat.vertex_color_is_srgb = true
+		_splash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_splash_mat.roughness = 0.15
+		_splash_mat.metallic = 0.0
+		_splash_mat.rim_enabled = true
+		_splash_mat.rim = 0.55
+		_splash_mat.rim_tint = 0.35
+		_splash_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+
+	if _splash_mesh == null:
+		_splash_mesh = _build_spray_droplet_mesh()
 
 	if _mesh_cache.is_empty():
 		_mesh_cache["body"] = _build_body_mesh()
@@ -371,6 +587,32 @@ static func _ensure_shared_assets() -> void:
 		_mesh_cache["jaw"] = _build_jaw_mesh()
 		_mesh_cache["tail_mid"] = _build_tail_mid_mesh()
 		_mesh_cache["tail_fin"] = _build_tail_fin_mesh()
+
+
+static func _build_spray_droplet_mesh() -> ArrayMesh:
+	# Sculpted exact 12-triangle faceted translucent white-aqua spray droplet (zero SphereMesh).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SIDES := 6
+	const R_EQ := 0.056
+	const Y_TOP := 0.088
+	const Y_EQ := -0.010
+	const Y_BOT := -0.064
+	var top := Vector3(0.0, Y_TOP, 0.0)
+	var bot := Vector3(0.0, Y_BOT, 0.0)
+	var ring: Array[Vector3] = []
+	for s in SIDES:
+		var ang := float(s) / float(SIDES) * TAU
+		ring.append(Vector3(cos(ang) * R_EQ, Y_EQ, sin(ang) * R_EQ))
+	var col_top := Color(0.98, 1.00, 1.00, 0.94)
+	var col_eq := Color(0.82, 0.96, 1.00, 0.88)
+	var col_bot := Color(0.56, 0.88, 0.96, 0.80)
+	for s in SIDES:
+		var ns := (s + 1) % SIDES
+		_add_outward_tri(st, ring[s], top, ring[ns], Vector3.ZERO, col_eq, col_top, col_eq)
+		_add_outward_tri(st, ring[ns], bot, ring[s], Vector3.ZERO, col_eq, col_bot, col_eq)
+	st.generate_normals()
+	return st.commit()
 
 
 # ------------------------------------------------------------------ Mesh 1: Fusiform Torso & Fins

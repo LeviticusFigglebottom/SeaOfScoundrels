@@ -473,7 +473,30 @@ static func create_treasure_carryable(treasure_id: StringName,
 	item.add_child(handle)
 	item.interactable = handle
 
+	# Mount Sea-of-Thieves distant color-coded TreasureGlintStar (glare-free up close).
+	var glint_col := get_glint_color(resolved_id, entry)
+	var glint_y := 0.34 if (shape_kind == &"skull" or shape_kind == &"chalice") else 0.46
+	item.enable_treasure_glint(glint_col, glint_y)
+
 	return item
+
+
+## Resolve the Sea-of-Thieves color-coded distant glint hue for a treasure entry.
+static func get_glint_color(treasure_id: StringName, entry: Dictionary = {}) -> Color:
+	var resolved_entry := entry if not entry.is_empty() else get_entry(treasure_id)
+	if treasure_id == &"weeping_bilge_chest":
+		return Color(0.28, 1.0, 0.88)
+	if treasure_id == &"blazing_rage_chest" or treasure_id == &"captains_skull":
+		return Color(1.0, 0.50, 0.18)
+	var company_id: StringName = StringName(resolved_entry.get("company_id", &""))
+	if company_id == &"sunken_archive":
+		return Color(0.42, 0.98, 0.88)
+	if company_id == &"iron_tide":
+		return Color(0.38, 1.0, 0.62)
+	if String(treasure_id).begins_with("commodity_"):
+		return Color(0.98, 0.92, 0.70)
+	return Color(1.0, 0.86, 0.32)
+
 
 
 ## Read a normalized treasure info dictionary from a Carryable or Node.
@@ -747,6 +770,8 @@ static func clear_mesh_cache() -> void:
 	_mesh_cache.clear()
 	_mat_cache.clear()
 	_tex_cache.clear()
+	Carryable.clear_shared_glint_cache()
+
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:

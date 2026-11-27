@@ -2185,3 +2185,324 @@ func test_q11a_reef_atmosphere_sun_shafts_sea_fans_clams_bubbles_and_biolum() ->
 			and ReefAtmosphere._bubble_material == null,
 		"ReefAtmosphere releases all static shader, mesh & material caches cleanly with zero leaks")
 
+
+func test_q13b_flotsam_salvage_glint_supply_barrel_glint_and_shark_spray() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+
+	# 1. Static source guard: zero raw PrimitiveMesh allocations & safe Vulkan MultiMesh teardown.
+	var flotsam_src := FileAccess.get_file_as_string("res://src/world/flotsam_cluster.gd")
+	var barrel_src := FileAccess.get_file_as_string("res://src/world/supply_barrel.gd")
+	var shark_src := FileAccess.get_file_as_string("res://src/combat/shark.gd")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not flotsam_src.contains(bad_prim), "flotsam_cluster.gd contains zero %s calls" % bad_prim)
+		check(not barrel_src.contains(bad_prim), "supply_barrel.gd contains zero %s calls" % bad_prim)
+		check(not shark_src.contains(bad_prim), "shark.gd contains zero %s calls" % bad_prim)
+	check(not shark_src.contains("multimesh.mesh = null") and not shark_src.contains("mm.mesh = null"),
+		"shark.gd follows Godot 4.8 Vulkan rule (never nulls .mesh on a live MultiMesh)")
+
+	# 2. FlotsamCluster: sculpted zero-primitive additive SalvageGlint (24..32 tris), distance gate & salvage hide!
+	var fc_a := FlotsamCluster.spawn_at(_root, Vector3(24.0, 0.0, -32.0), 1301)
+	var fc_b := FlotsamCluster.spawn_at(_root, Vector3(-24.0, 0.0, -36.0), 1302)
+	var f_glint := fc_a.get_salvage_glint_node()
+	var f_glint_b := fc_b.get_salvage_glint_node()
+	check(f_glint != null and f_glint.name == "SalvageGlint",
+		"FlotsamCluster mounts SalvageGlint MeshInstance3D via get_salvage_glint_node()")
+	check(f_glint_b != null and f_glint.mesh == f_glint_b.mesh,
+		"FlotsamClusters share statically cached _glint_mesh ArrayMesh")
+
+	var flotsam_glint_tris := 0
+	var flotsam_bad_normals := 0
+	var flotsam_has_black_tip := false
+	var flotsam_has_gold_core := false
+	if f_glint != null:
+		check_eq(f_glint.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"SalvageGlint disables shadow casting")
+		check(f_glint.mesh is ArrayMesh and not (f_glint.mesh is PrimitiveMesh),
+			"SalvageGlint uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if f_glint.mesh is ArrayMesh:
+			var arr := (f_glint.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			flotsam_glint_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					flotsam_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					flotsam_has_black_tip = true
+				if cv.r >= 0.95 and cv.g >= 0.85 and cv.b >= 0.65:
+					flotsam_has_gold_core = true
+		check(flotsam_glint_tris >= 24 and flotsam_glint_tris <= 32,
+			"SalvageGlint 4-point star flare has 24..32 tris (got %d)" % flotsam_glint_tris)
+		check_eq(flotsam_bad_normals, 0, "SalvageGlint normals are all finite (0, 0, 1) unit vectors")
+		check(flotsam_has_gold_core and flotsam_has_black_tip,
+			"SalvageGlint fades from warm golden-amber core to Color(0, 0, 0, 1) tips")
+
+		var f_mat := f_glint.material_override as StandardMaterial3D
+		check(f_mat != null and f_mat.vertex_color_use_as_albedo and f_mat.vertex_color_is_srgb \
+				and f_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and f_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and f_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and f_mat.billboard_keep_scale \
+				and f_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"SalvageGlint uses unshaded additive scale-preserving billboard StandardMaterial3D")
+		if f_mat != null:
+			check(f_mat.albedo_texture == null and f_mat.normal_texture == null and f_mat.roughness_texture == null,
+				"SalvageGlint allocates 0 extra VRAM textures")
+
+		# Distance gating: shows at 40 m, hides at 2 m and 180 m, twinkles smoothly over time.
+		fc_a.tick_glint(0.05, 40.0)
+		check(f_glint.visible and f_glint.scale.x > 0.25, "SalvageGlint shows brightly at 40 m")
+		var s40_a := f_glint.scale.x
+		fc_a.tick_glint(0.55, 40.0)
+		var s40_b := f_glint.scale.x
+		check(absf(s40_b - s40_a) > 0.01, "SalvageGlint twinkles smoothly across time (%.3f -> %.3f)" % [s40_a, s40_b])
+		fc_a.tick_glint(0.05, 2.0)
+		check(not f_glint.visible, "SalvageGlint hides inside 5.5 m near threshold (2 m)")
+		fc_a.tick_glint(0.05, 180.0)
+		check(not f_glint.visible, "SalvageGlint hides beyond 155 m far threshold (180 m)")
+		fc_a.tick_glint(0.05, 40.0)
+		check(f_glint.visible, "SalvageGlint re-appears cleanly at 40 m before salvage")
+
+		# Step buoyancy > 1.25 s to exercise rate-limited ocean foam ripple path cleanly.
+		for _b in 8:
+			fc_a.step_buoyancy(0.20)
+
+		# Salvaging immediately hides SalvageGlint and keeps it hidden!
+		var f_loot := fc_a.salvage(null)
+		check(not f_loot.is_empty(), "FlotsamCluster.salvage() returns loot payload")
+		check(not f_glint.visible, "SalvageGlint hides immediately on salvage()")
+		fc_a.tick_glint(0.10, 40.0)
+		check(not f_glint.visible, "SalvageGlint stays hidden on tick_glint() after salvage")
+
+	# 3. SupplyBarrel: sculpted zero-primitive additive LidGlint (24..32 tris), distance gate & take_all hide!
+	var sb_a := SupplyBarrel.new()
+	sb_a.name = "SupplyBarrelA"
+	sb_a.position = Vector3(10.0, 2.0, -14.0)
+	_root.add_child(sb_a)
+
+	var sb_b := SupplyBarrel.new()
+	sb_b.name = "SupplyBarrelB"
+	sb_b.position = Vector3(-10.0, 2.0, -14.0)
+	_root.add_child(sb_b)
+
+	var l_glint := sb_a.get_lid_glint_node()
+	var l_glint_b := sb_b.get_lid_glint_node()
+	check(l_glint != null and l_glint.name == "LidGlint",
+		"SupplyBarrel mounts LidGlint MeshInstance3D via get_lid_glint_node()")
+	check(l_glint_b != null and l_glint.mesh == l_glint_b.mesh,
+		"SupplyBarrels share statically cached _glint_mesh ArrayMesh")
+
+	var lid_glint_tris := 0
+	var lid_bad_normals := 0
+	var lid_has_black_tip := false
+	var lid_has_brass_core := false
+	if l_glint != null:
+		check(l_glint.position.distance_to(Vector3(0.0, SupplyBarrel.LID_HEIGHT_Y + 0.14, 0.0)) < 0.001,
+			"LidGlint mounts right above the golden lid seal at y = LID_HEIGHT_Y + 0.14")
+		check_eq(l_glint.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"LidGlint disables shadow casting")
+		check(l_glint.mesh is ArrayMesh and not (l_glint.mesh is PrimitiveMesh),
+			"LidGlint uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if l_glint.mesh is ArrayMesh:
+			var arr := (l_glint.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			lid_glint_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					lid_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					lid_has_black_tip = true
+				if cv.r >= 0.95 and cv.g >= 0.85 and cv.b >= 0.60:
+					lid_has_brass_core = true
+		check(lid_glint_tris >= 24 and lid_glint_tris <= 32,
+			"LidGlint 4-point star flare has 24..32 tris (got %d)" % lid_glint_tris)
+		check_eq(lid_bad_normals, 0, "LidGlint normals are all finite (0, 0, 1) unit vectors")
+		check(lid_has_brass_core and lid_has_black_tip,
+			"LidGlint fades from sunlit brass-gold core to Color(0, 0, 0, 1) edge")
+
+		var l_mat := l_glint.material_override as StandardMaterial3D
+		check(l_mat != null and l_mat.vertex_color_use_as_albedo and l_mat.vertex_color_is_srgb \
+				and l_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and l_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and l_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and l_mat.billboard_keep_scale \
+				and l_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"LidGlint uses unshaded additive scale-preserving billboard StandardMaterial3D")
+		if l_mat != null:
+			check(l_mat.albedo_texture == null and l_mat.normal_texture == null and l_mat.roughness_texture == null,
+				"LidGlint allocates 0 extra VRAM textures")
+
+		# Distance gating: shows at 22 m, hides at 1.5 m and 90 m, pulses softly over time.
+		sb_a.tick_glint(0.05, 22.0)
+		check(l_glint.visible and l_glint.scale.x > 0.25, "LidGlint shows clearly at 22 m")
+		var s22_a := l_glint.scale.x
+		sb_a.tick_glint(0.65, 22.0)
+		var s22_b := l_glint.scale.x
+		check(absf(s22_b - s22_a) > 0.01, "LidGlint pulses softly over time (%.3f -> %.3f)" % [s22_a, s22_b])
+		sb_a.tick_glint(0.05, 1.5)
+		check(not l_glint.visible, "LidGlint hides inside 4.0 m near threshold (1.5 m)")
+		sb_a.tick_glint(0.05, 90.0)
+		check(not l_glint.visible, "LidGlint hides beyond 75.0 m far threshold (90 m)")
+		sb_a.tick_glint(0.05, 22.0)
+		check(l_glint.visible, "LidGlint re-appears cleanly at 22 m before looting")
+
+		# take_all() hides LidGlint immediately via _apply_looted_visuals().
+		var sb_loot := sb_a.take_all(null)
+		check(not sb_loot.is_empty(), "SupplyBarrel.take_all() returns loot payload")
+		check(not l_glint.visible, "LidGlint hides immediately on take_all()")
+		sb_a.tick_glint(0.10, 22.0)
+		check(not l_glint.visible, "LidGlint stays hidden on tick_glint() after take_all()")
+
+	# 4. Shark: sculpted zero-primitive SharkSplashSpray (16 instances, 12-tri droplets) + nocturnal eye sheen!
+	var sh_a := Shark.new()
+	sh_a.name = "SharkQ13B_A"
+	_root.add_child(sh_a)
+	sh_a.global_position = Vector3(14.0, -0.35, 14.0)
+
+	var sh_b := Shark.new()
+	sh_b.name = "SharkQ13B_B"
+	_root.add_child(sh_b)
+	sh_b.global_position = Vector3(-14.0, -0.35, 14.0)
+
+	var spray_a := sh_a.get_splash_spray_node()
+	var spray_b := sh_b.get_splash_spray_node()
+	check(spray_a != null and spray_a.name == "SharkSplashSpray",
+		"Shark mounts SharkSplashSpray MultiMeshInstance3D via get_splash_spray_node()")
+	check(not sh_a.is_splash_active() and (spray_a == null or not spray_a.visible),
+		"SharkSplashSpray starts hidden when circling calmly")
+
+	var droplet_tris := 0
+	var droplet_bad_normals := 0
+	if spray_a != null:
+		check_eq(spray_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"SharkSplashSpray disables shadow casting")
+		check_near(spray_a.visibility_range_end, 110.0, 0.05,
+			"SharkSplashSpray sets visibility_range_end = 110.0 m")
+		var mm := spray_a.multimesh
+		check(mm != null and mm.instance_count == 16 and mm.use_colors,
+			"SharkSplashSpray configures 16 per-instance colored droplets")
+		check(mm != null and mm.mesh is ArrayMesh and not (mm.mesh is PrimitiveMesh),
+			"SharkSplashSpray uses sculpted ArrayMesh (zero SphereMesh)")
+		if spray_b != null and spray_b.multimesh != null and mm != null:
+			check_eq(mm.mesh, spray_b.multimesh.mesh,
+				"Sharks share statically cached 12-tri spray droplet ArrayMesh")
+		if mm != null and mm.mesh is ArrayMesh:
+			var arr := (mm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			droplet_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					droplet_bad_normals += 1
+		check_eq(droplet_tris, 12, "sculpted spray droplet mesh has exact 12 triangles")
+		check_eq(droplet_bad_normals, 0, "all spray droplet normals are finite unit vectors")
+
+		var sp_mat := spray_a.material_override as StandardMaterial3D
+		check(sp_mat != null and sp_mat.vertex_color_use_as_albedo and sp_mat.vertex_color_is_srgb \
+				and sp_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and is_equal_approx(sp_mat.roughness, 0.15) and sp_mat.rim_enabled,
+			"SharkSplashSpray uses translucent white-aqua sRGB StandardMaterial3D with rim & 0.15 roughness")
+		if sp_mat != null:
+			check(sp_mat.albedo_texture == null and sp_mat.normal_texture == null and sp_mat.roughness_texture == null,
+				"SharkSplashSpray allocates 0 extra VRAM textures")
+
+		# Verify trigger_splash_burst() activates, arcs droplets upward, and decays smoothly to hidden over 0.65 s!
+		sh_a.state = Shark.State.CIRCLE
+		sh_a._state_timer = 10.0
+		sh_a.trigger_splash_burst(1.0)
+		check(sh_a.is_splash_active() and spray_a.visible,
+			"trigger_splash_burst() immediately activates SharkSplashSpray")
+		var pts0 := sh_a.get_splash_droplet_positions()
+		var sum_y0 := 0.0
+		var max_y0 := -INF
+		for p in pts0:
+			sum_y0 += p.y
+			max_y0 = maxf(max_y0, p.y)
+		var mean_y0 := sum_y0 / float(maxi(1, pts0.size()))
+
+		await physics_frames(9)  # ~0.15 s into ballistic upward arc
+		check(sh_a.is_splash_active() and spray_a.visible,
+			"SharkSplashSpray remains active mid-arc (~0.15 s)")
+		var pts_mid := sh_a.get_splash_droplet_positions()
+		var sum_ym := 0.0
+		var max_ym := -INF
+		for p in pts_mid:
+			sum_ym += p.y
+			max_ym = maxf(max_ym, p.y)
+		var mean_ym := sum_ym / float(maxi(1, pts_mid.size()))
+		check(mean_ym > mean_y0 + 0.25 and max_ym > max_y0 + 0.30,
+			"spray droplets arc energetically upward (mean %.2f->%.2f, max %.2f->%.2f)" % [
+				mean_y0, mean_ym, max_y0, max_ym
+			])
+		if DisplayServer.get_name() != "headless" and mm != null:
+			check(mm.get_instance_transform(0).origin.distance_to(pts_mid[0]) < 0.001,
+				"GPU MultiMesh transform matches cached droplet position")
+
+		await physics_frames(36)  # total ~0.75 s > 0.65 s SPLASH_DURATION
+		check(not sh_a.is_splash_active() and not spray_a.visible,
+			"SharkSplashSpray decays cleanly back to hidden after 0.65 s")
+
+	# Verify CIRCLE -> CHARGE transition triggers SharkSplashSpray automatically & decays on RETREAT!
+	sh_b.state = Shark.State.CIRCLE
+	sh_b._state_timer = 10.0
+	await physics_frames(2)
+	check(not sh_b.is_splash_active() and (spray_b == null or not spray_b.visible),
+		"SharkB spray stays hidden during calm CIRCLE")
+	sh_b.state = Shark.State.CHARGE
+	sh_b._state_timer = 5.0
+	await physics_frames(2)
+	check(sh_b.is_splash_active() and spray_b != null and spray_b.visible,
+		"CIRCLE -> CHARGE transition activates SharkSplashSpray automatically")
+	sh_b.state = Shark.State.RETREAT
+	sh_b._state_timer = 5.0
+	await physics_frames(44)
+	check(not sh_b.is_splash_active() and (spray_b == null or not spray_b.visible),
+		"CHARGE burst finishes ballistic arc and hides cleanly after entering RETREAT")
+
+	# Verify nocturnal _eye_mat moonlight glint/sheen rises cleanly at night!
+	Weather.time_of_day = 12.0
+	await physics_frames(1)
+	var noon_eye_e := Shark._eye_mat.emission_energy_multiplier
+	var noon_eye_rim := Shark._eye_mat.rim
+	Weather.time_of_day = 0.5
+	await physics_frames(1)
+	var night_eye_e := Shark._eye_mat.emission_energy_multiplier
+	var night_eye_rim := Shark._eye_mat.rim
+	check(night_eye_e > noon_eye_e + 0.35 and night_eye_rim > noon_eye_rim + 0.30,
+		"Shark _eye_mat boosts subtle nocturnal moonlight sheen at night (e %.2f->%.2f, rim %.2f->%.2f)" % [
+			noon_eye_e, night_eye_e, noon_eye_rim, night_eye_rim
+		])
+
+	print("    Q13B maritime life: SalvageGlint=%d tris, LidGlint=%d tris, SharkSplashSpray=16x%d tris, eye_night=%.2f->%.2f" % [
+		flotsam_glint_tris, lid_glint_tris, droplet_tris, noon_eye_e, night_eye_e
+	])
+
+	# 5. Full teardown releases ALL static caches cleanly with 0 ObjectDB leaks!
+	await _end()
+	check_eq(FlotsamCluster._active_clusters, 0, "FlotsamCluster._active_clusters == 0 after teardown")
+	check(FlotsamCluster._glint_mesh == null and FlotsamCluster._glint_mat == null \
+			and FlotsamCluster._debris_mesh == null and FlotsamCluster._wood_mat == null \
+			and FlotsamCluster._accent_mat == null and FlotsamCluster._fallback_barrel_mesh == null,
+		"FlotsamCluster releases all static meshes & materials cleanly (0 leaks)")
+	check_eq(SupplyBarrel._active_barrels, 0, "SupplyBarrel._active_barrels == 0 after teardown")
+	check(SupplyBarrel._glint_mesh == null and SupplyBarrel._glint_mat == null \
+			and SupplyBarrel._emblem_mesh == null and SupplyBarrel._brass_mat == null \
+			and SupplyBarrel._wood_mat == null and SupplyBarrel._fallback_barrel_mesh == null \
+			and SupplyBarrel._barrel_scene == null,
+		"SupplyBarrel releases all static meshes & materials cleanly (0 leaks)")
+	check_eq(Shark._active_sharks, 0, "Shark._active_sharks == 0 after teardown")
+	check(Shark._mesh_cache.is_empty() and Shark._skin_mat == null and Shark._eye_mat == null \
+			and Shark._splash_mesh == null and Shark._splash_mat == null,
+		"Shark releases all static meshes, spray MultiMesh asset & materials cleanly (0 leaks)")
+
+
