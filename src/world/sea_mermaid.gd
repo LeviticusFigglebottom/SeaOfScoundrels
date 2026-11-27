@@ -28,6 +28,10 @@ const SUBMERGE_END_Y := -2.8
 const RISE_SPEED := 2.2
 const SUBMERGE_SPEED := 2.4
 const CONCH_ORB_LOCAL := Vector3(0.55, 1.98, -0.14)
+const RIPPLE_Y_OFFSET := 0.06
+const RIPPLE_FOAM_INTERVAL := 1.6
+const RIPPLE_VISIBILITY_END := 260.0
+const CONCH_HALO_VISIBILITY_END := 420.0
 
 # Painterly sea-merfolk, kelp mantle, coral braid & glowing conch palette (sRGB).
 const COL_SCALE_TEAL := Color(0.11, 0.56, 0.54)
@@ -68,11 +72,21 @@ const COL_SMOKE_MID := Color(0.14, 0.90, 0.72, 0.76)
 const COL_SMOKE_HIGH := Color(0.09, 0.72, 0.58, 0.42)
 const COL_SMOKE_TIP := Color(0.24, 0.88, 0.78, 0.02)
 
+const COL_RIPPLE_INNER_MID := Color(0.42, 1.00, 0.90, 0.90)
+const COL_RIPPLE_OUTER_MID := Color(0.16, 0.88, 0.78, 0.68)
+const COL_RIPPLE_EDGE := Color(0.0, 0.0, 0.0, 0.0)
+
+const COL_CONCH_HALO_CORE := Color(0.84, 1.00, 0.97, 1.0)
+const COL_CONCH_HALO_MID := Color(0.06, 0.42, 0.36, 1.0)
+const COL_CONCH_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
+
 # Ref-counted static cache shared across all live SeaMermaids (0 extra VRAM).
 static var _active_mermaids: int = 0
 static var _figure_mesh: ArrayMesh = null
 static var _smoke_mesh: ArrayMesh = null
 static var _mote_mesh: ArrayMesh = null
+static var _ripple_mesh: ArrayMesh = null
+static var _conch_halo_mesh: ArrayMesh = null
 static var _body_mat: StandardMaterial3D = null
 static var _glow_mat: StandardMaterial3D = null
 static var _smoke_mat: StandardMaterial3D = null
@@ -94,6 +108,13 @@ var _smoke_plume: Node3D = null
 var _smoke_mi: MeshInstance3D = null
 var _conch_light: OmniLight3D = null
 var _mist_particles: CPUParticles3D = null
+var _ripple_halo_mi: MeshInstance3D = null
+var _ripple_halo_mat: StandardMaterial3D = null
+var _conch_halo_mi: MeshInstance3D = null
+var _conch_halo_mat: StandardMaterial3D = null
+var _ripple_halo_energy: float = 0.0
+var _conch_halo_energy: float = 0.0
+var _foam_accum: float = 0.0
 var _clock: float = 0.0
 var _base_yaw: float = 0.0
 
@@ -171,6 +192,8 @@ static func clear_shared_cache() -> void:
 	_figure_mesh = null
 	_smoke_mesh = null
 	_mote_mesh = null
+	_ripple_mesh = null
+	_conch_halo_mesh = null
 	_body_mat = null
 	_glow_mat = null
 	_smoke_mat = null
@@ -228,6 +251,14 @@ func _release_local_refs() -> void:
 	if _smoke_mi != null and is_instance_valid(_smoke_mi):
 		_smoke_mi.mesh = null
 		_smoke_mi.material_override = null
+	if _ripple_halo_mi != null and is_instance_valid(_ripple_halo_mi):
+		_ripple_halo_mi.visible = false
+		_ripple_halo_mi.material_override = null
+		_ripple_halo_mi.mesh = null
+	if _conch_halo_mi != null and is_instance_valid(_conch_halo_mi):
+		_conch_halo_mi.visible = false
+		_conch_halo_mi.material_override = null
+		_conch_halo_mi.mesh = null
 	if _mist_particles != null and is_instance_valid(_mist_particles):
 		_mist_particles.emitting = false
 		_mist_particles.visible = false
@@ -238,6 +269,12 @@ func _release_local_refs() -> void:
 	_smoke_mi = null
 	_conch_light = null
 	_mist_particles = null
+	_ripple_halo_mi = null
+	_ripple_halo_mat = null
+	_conch_halo_mi = null
+	_conch_halo_mat = null
+	_ripple_halo_energy = 0.0
+	_conch_halo_energy = 0.0
 
 
 # ==============================================================================
@@ -343,11 +380,74 @@ func step_mermaid(delta: float) -> void:
 		_smoke_plume.scale = Vector3(plume_s, plume_s, plume_s)
 		_smoke_plume.visible = (not dismissed) or emerge > 0.04
 
+	var conch_pulse := 2.45 + sin(_clock * 3.1) * 0.35 + cos(_clock * 5.7) * 0.14
+	var conch_pulse_norm := conch_pulse / 2.45
+	var show_beacon := (not dismissed) or emerge > 0.04
+
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var storm := 0.0
+	if Weather != null:
+		storm = clampf(
+			Weather.local_storminess(target_pos) if is_inside_tree() else Weather.storminess,
+			0.0,
+			1.0
+		)
+	var night_storm := clampf(maxf(night, storm * 0.80), 0.0, 1.0)
+
 	if _conch_light != null and is_instance_valid(_conch_light):
-		var pulse := 2.45 + sin(_clock * 3.1) * 0.35 + cos(_clock * 5.7) * 0.14
 		var light_scale := lerpf(0.35, 1.0, emerge) if not dismissed else emerge
-		_conch_light.light_energy = maxf(0.0, pulse * light_scale)
-		_conch_light.visible = (not dismissed) or emerge > 0.04
+		_conch_light.light_energy = maxf(0.0, conch_pulse * light_scale)
+		_conch_light.visible = show_beacon
+
+	if _ripple_halo_mi != null and is_instance_valid(_ripple_halo_mi):
+		_ripple_halo_mi.visible = show_beacon
+		if show_beacon:
+			var ripple_wave := 0.5 + 0.5 * sin(_clock * 1.65)
+			var ripple_s := lerpf(0.88, 1.34, ripple_wave) * lerpf(0.75, 1.0, emerge)
+			_ripple_halo_mi.scale = Vector3(ripple_s, 1.0, ripple_s)
+			_ripple_halo_mi.rotation = Vector3(0.0, _clock * 0.24, 0.0)
+			var ripple_emerge := lerpf(0.30, 1.0, emerge) if not dismissed else emerge
+			var ripple_breath := 0.94 + 0.06 * sin(_clock * 1.65 + 0.6)
+			var ripple_base := lerpf(0.38, 0.92, night_storm) + storm * 0.06
+			_ripple_halo_energy = maxf(0.0, ripple_base * ripple_breath * ripple_emerge)
+			if _ripple_halo_mat != null:
+				var r_tint := Color(0.86, 0.98, 1.00).lerp(Color(0.36, 1.00, 0.92), night_storm)
+				_ripple_halo_mat.albedo_color = Color(
+					r_tint.r * _ripple_halo_energy,
+					r_tint.g * _ripple_halo_energy,
+					r_tint.b * _ripple_halo_energy,
+					1.0
+				)
+		else:
+			_ripple_halo_energy = 0.0
+
+	if _conch_halo_mi != null and is_instance_valid(_conch_halo_mi):
+		_conch_halo_mi.visible = show_beacon
+		if show_beacon:
+			var conch_emerge := lerpf(0.35, 1.0, emerge) if not dismissed else emerge
+			var conch_base := lerpf(0.52, 1.22, night_storm) + storm * 0.08
+			_conch_halo_energy = maxf(0.0, conch_base * conch_pulse_norm * conch_emerge)
+			var halo_pulse_s := lerpf(0.92, 1.08, clampf((conch_pulse_norm - 0.8) / 0.4, 0.0, 1.0))
+			var halo_s := lerpf(0.45, 1.0, emerge) * lerpf(0.92, 1.22, night_storm) * halo_pulse_s
+			_conch_halo_mi.scale = Vector3(halo_s, halo_s, halo_s)
+			if _conch_halo_mat != null:
+				var c_tint := Color(0.94, 1.00, 0.98).lerp(Color(0.76, 1.00, 0.94), night_storm)
+				_conch_halo_mat.albedo_color = Color(
+					c_tint.r * _conch_halo_energy,
+					c_tint.g * _conch_halo_energy,
+					c_tint.b * _conch_halo_energy,
+					1.0
+				)
+		else:
+			_conch_halo_energy = 0.0
+
+	if not dismissed and emerge > 0.25 and dt > 0.0:
+		_foam_accum += dt
+		if _foam_accum >= RIPPLE_FOAM_INTERVAL:
+			_foam_accum = fmod(_foam_accum, RIPPLE_FOAM_INTERVAL)
+			if Ocean.current != null and is_inside_tree():
+				Ocean.current.add_foam(target_pos, 2.2, 0.42)
 
 	if auto_recall and not dismissed and Net.is_host() and tracked_pawn != null:
 		if not is_instance_valid(tracked_pawn) or tracked_pawn.dead or tracked_pawn.platform != null:
@@ -420,6 +520,26 @@ func get_conch_light() -> OmniLight3D:
 
 func get_mist_particles() -> CPUParticles3D:
 	return _mist_particles
+
+
+## Return the concentric bioluminescent surface ripple halo MeshInstance3D at the waterline.
+func get_ripple_halo_node() -> MeshInstance3D:
+	return _ripple_halo_mi
+
+
+## Return the additive radial-gradient billboard halo MeshInstance3D mounted on the conch orb.
+func get_conch_halo_node() -> MeshInstance3D:
+	return _conch_halo_mi
+
+
+## Return current brightness energy of MermaidRippleHalo (0.0 when dismissed & submerged).
+func get_ripple_halo_energy() -> float:
+	return _ripple_halo_energy
+
+
+## Return current brightness energy of ConchOrbHalo (0.0 when dismissed & submerged).
+func get_conch_halo_energy() -> float:
+	return _conch_halo_energy
 
 
 # ==============================================================================
@@ -502,6 +622,28 @@ func _build_visuals() -> void:
 	_conch_light.shadow_enabled = false
 	_figure_pivot.add_child(_conch_light)
 
+	_conch_halo_mat = StandardMaterial3D.new()
+	_conch_halo_mat.vertex_color_use_as_albedo = true
+	_conch_halo_mat.vertex_color_is_srgb = true
+	_conch_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_conch_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_conch_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_conch_halo_mat.billboard_keep_scale = true
+	_conch_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_conch_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_conch_halo_mat.render_priority = 2
+	_conch_halo_mat.albedo_color = Color(0.52, 0.52, 0.52, 1.0)
+
+	_conch_halo_mi = MeshInstance3D.new()
+	_conch_halo_mi.name = "ConchOrbHalo"
+	_conch_halo_mi.position = CONCH_ORB_LOCAL
+	_conch_halo_mi.mesh = _conch_halo_mesh
+	_conch_halo_mi.material_override = _conch_halo_mat
+	_conch_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_conch_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_conch_halo_mi.visibility_range_end = CONCH_HALO_VISIBILITY_END
+	_figure_pivot.add_child(_conch_halo_mi)
+
 	_mist_particles = CPUParticles3D.new()
 	_mist_particles.name = "SeaMistSparkles"
 	_mist_particles.position = CONCH_ORB_LOCAL + Vector3(0.0, -0.10, 0.0)
@@ -521,6 +663,27 @@ func _build_visuals() -> void:
 	_mist_particles.mesh = _mote_mesh
 	_mist_particles.material_override = _glow_mat
 	_figure_pivot.add_child(_mist_particles)
+
+	_ripple_halo_mat = StandardMaterial3D.new()
+	_ripple_halo_mat.vertex_color_use_as_albedo = true
+	_ripple_halo_mat.vertex_color_is_srgb = true
+	_ripple_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ripple_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_ripple_halo_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ripple_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_ripple_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_ripple_halo_mat.render_priority = 1
+	_ripple_halo_mat.albedo_color = Color(0.38, 0.38, 0.38, 1.0)
+
+	_ripple_halo_mi = MeshInstance3D.new()
+	_ripple_halo_mi.name = "MermaidRippleHalo"
+	_ripple_halo_mi.position = Vector3(0.0, RIPPLE_Y_OFFSET, 0.0)
+	_ripple_halo_mi.mesh = _ripple_mesh
+	_ripple_halo_mi.material_override = _ripple_halo_mat
+	_ripple_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ripple_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_ripple_halo_mi.visibility_range_end = RIPPLE_VISIBILITY_END
+	add_child(_ripple_halo_mi)
 
 	_smoke_plume = Node3D.new()
 	_smoke_plume.name = "SmokePlume"
@@ -596,6 +759,10 @@ static func _ensure_shared_assets() -> void:
 		_smoke_mesh = _build_emerald_smoke_beacon_mesh()
 	if _mote_mesh == null:
 		_mote_mesh = _build_diamond_mote_mesh()
+	if _ripple_mesh == null:
+		_ripple_mesh = _build_ripple_halo_mesh()
+	if _conch_halo_mesh == null:
+		_conch_halo_mesh = _build_conch_halo_mesh()
 
 
 static func _build_merfolk_figure_mesh() -> ArrayMesh:
@@ -1173,6 +1340,129 @@ static func _build_diamond_mote_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	_append_faceted_bipyramid(st, Vector3.ZERO, 0.036, 0.064, 8, COL_ORB_CORE, COL_ORB_EDGE)
+	return st.commit()
+
+
+## Sculpted 176-tri concentric 2-ring flat horizontal surface ripple ArrayMesh (0 primitives).
+## 22 radial segments x 2 concentric tapered annular ribbons with finite (0, 1, 0) unit normals.
+static func _build_ripple_halo_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 22
+
+	# Row: [r_in, r_mid, r_out, mid_col, wave_amp, wave_phase]
+	var ring_specs: Array[Array] = [
+		[0.44, 0.68, 0.96, COL_RIPPLE_INNER_MID, 0.024, 0.4],
+		[1.02, 1.36, 1.78, COL_RIPPLE_OUTER_MID, 0.036, 1.8],
+	]
+
+	for spec in ring_specs:
+		var r_in := float(spec[0])
+		var r_mid := float(spec[1])
+		var r_out := float(spec[2])
+		var c_mid: Color = spec[3] as Color
+		var w_amp := float(spec[4])
+		var w_ph := float(spec[5])
+
+		for k in SEGS:
+			var a0 := TAU * float(k) / float(SEGS)
+			var a1 := TAU * float(k + 1) / float(SEGS)
+			var j0 := sin(a0 * 6.0 + w_ph) * w_amp + cos(a0 * 4.0 - w_ph) * (w_amp * 0.45)
+			var j1 := sin(a1 * 6.0 + w_ph) * w_amp + cos(a1 * 4.0 - w_ph) * (w_amp * 0.45)
+
+			var d0 := Vector3(cos(a0), 0.0, sin(a0))
+			var d1 := Vector3(cos(a1), 0.0, sin(a1))
+
+			var v_in0 := d0 * (r_in + j0 * 0.5)
+			var v_in1 := d1 * (r_in + j1 * 0.5)
+			var v_mid0 := d0 * (r_mid + j0)
+			var v_mid1 := d1 * (r_mid + j1)
+			var v_out0 := d0 * (r_out + j0 * 0.7)
+			var v_out1 := d1 * (r_out + j1 * 0.7)
+
+			_emit_upward_ripple_quad(st, v_in0, v_mid0, v_mid1, v_in1, COL_RIPPLE_EDGE, c_mid)
+			_emit_upward_ripple_quad(st, v_mid0, v_out0, v_out1, v_mid1, c_mid, COL_RIPPLE_EDGE)
+
+	return st.commit()
+
+
+static func _emit_upward_ripple_quad(st: SurfaceTool, v_in0: Vector3, v_out0: Vector3,
+		v_out1: Vector3, v_in1: Vector3, c_in: Color, c_out: Color) -> void:
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(v_in0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(v_out0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(v_out1)
+
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(v_in0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(v_out1)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(v_in1)
+
+
+## Sculpted 48-tri 16-wedge radial-gradient billboard halo ArrayMesh for ConchOrbHalo (0 primitives).
+## Incandescent aquamarine-white core -> luminous emerald mid -> pure Color(0, 0, 0, 1) black rim.
+static func _build_conch_halo_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.14
+	const OUTER_R := 0.62
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_MID)
+		st.add_vertex(m0)
+
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_RIM)
+		st.add_vertex(o1)
+
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_CONCH_HALO_RIM)
+		st.add_vertex(o0)
+
 	return st.commit()
 
 

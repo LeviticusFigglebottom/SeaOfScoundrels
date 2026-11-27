@@ -1658,3 +1658,152 @@ func test_q6a_directional_damage_signal_and_hud_arcs() -> void:
 	await _end()
 	check_eq(CombatComponent._active_combatants, 0, "all CombatComponents exited cleanly with 0 leaks")
 
+
+func test_q16a_powder_keg_urgent_countdown_fuse_halo() -> void:
+	_begin()
+	_ground()
+	PowderKeg.clear_shared_cache()
+
+	var keg := PowderKeg.spawn_at(_root, Vector3(0.0, 5.05, -2.5))
+	keg.freeze = true
+	await physics_frames(2)
+
+	# 1. Audit sculpted 48-tri FuseGlowHalo mounted inside FuseEmberPivot (0 primitives, finite (0,0,1) normals,
+	#    additive scale-preserving billboard, zero VRAM textures, hidden when unlit with energy == 0.0).
+	var halo := keg.get_fuse_halo_node()
+	check(halo != null and halo.name == "FuseGlowHalo", "PowderKeg mounts FuseGlowHalo and exposes get_fuse_halo_node()")
+	check(halo != null and halo.get_parent() != null and halo.get_parent().name == "FuseEmberPivot",
+		"FuseGlowHalo mounted directly inside FuseEmberPivot on the fuse tip")
+	if halo == null:
+		await _end()
+		return
+
+	check(not halo.visible, "FuseGlowHalo starts hidden when PowderKeg fuse is unlit")
+	check_near(keg.get_fuse_halo_energy(), 0.0, 0.0001, "get_fuse_halo_energy() == 0.0 when unlit")
+	check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "FuseGlowHalo disables shadows")
+	check_eq(halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED, "FuseGlowHalo disables GI")
+	check_near(halo.visibility_range_end, 110.0, 0.01, "FuseGlowHalo visibility_range_end == 110.0")
+	check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+		"FuseGlowHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(halo.mesh == PowderKeg._fuse_halo_mesh, "FuseGlowHalo uses statically shared _fuse_halo_mesh")
+
+	var halo_am := halo.mesh as ArrayMesh
+	var halo_tris := PowderKeg._count_mesh_tris(halo_am)
+	check_eq(halo_tris, 48, "FuseGlowHalo has exact 48 triangles (16 radial wedges)")
+	var halo_arr := halo_am.surface_get_arrays(0)
+	var halo_verts: PackedVector3Array = halo_arr[Mesh.ARRAY_VERTEX]
+	var halo_norms: PackedVector3Array = halo_arr[Mesh.ARRAY_NORMAL]
+	var halo_cols: PackedColorArray = halo_arr[Mesh.ARRAY_COLOR]
+	check_eq(halo_norms.size(), halo_verts.size(), "FuseGlowHalo has normal per vertex")
+	check_eq(halo_cols.size(), halo_verts.size(), "FuseGlowHalo has color per vertex")
+	var bad_norms := 0
+	for nv: Vector3 in halo_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			bad_norms += 1
+	check_eq(bad_norms, 0, "FuseGlowHalo assigns exact finite unit (0, 0, 1) normal to every vertex")
+
+	var saw_core := false
+	var saw_ember_mid := false
+	var saw_black_rim := false
+	for cv: Color in halo_cols:
+		if cv.r >= 0.95 and cv.g >= 0.90 and cv.b >= 0.70:
+			saw_core = true
+		elif cv.r >= 0.95 and cv.g >= 0.35 and cv.g <= 0.65 and cv.b <= 0.20:
+			saw_ember_mid = true
+		elif cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			saw_black_rim = true
+	check(saw_core and saw_ember_mid and saw_black_rim,
+		"FuseGlowHalo grades incandescent white-gold core -> ember-orange mid -> pure black rim")
+
+	var hmat := halo.material_override as StandardMaterial3D
+	check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb
+		and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and hmat.billboard_keep_scale
+		and hmat.albedo_texture == null and hmat.normal_texture == null and hmat.roughness_texture == null,
+		"FuseGlowHalo uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+
+	# 2. ignite_fuse() activates FuseGlowHalo; advancing toward 0.5 s dramatically escalates
+	#    pulse frequency, halo scale, and peak warning energy compared to 4.2 s remaining!
+	check(keg.ignite_fuse(), "ignite_fuse() succeeds on unlit PowderKeg")
+	check(halo.visible and keg.get_fuse_halo_energy() > 0.70,
+		"ignite_fuse() immediately illuminates FuseGlowHalo (energy=%.3f)" % keg.get_fuse_halo_energy())
+
+	# Sample early fuse (4.2 s remaining) over a 0.25 s window.
+	keg.fuse_remaining = 4.2
+	keg._fuse_halo_phase = 0.0
+	var early_peak_scale := 0.0
+	var early_peak_energy := 0.0
+	var early_phase_start := keg._fuse_halo_phase
+	for _s in 25:
+		keg._update_fuse_visuals(0.01)
+		early_peak_scale = maxf(early_peak_scale, halo.scale.x)
+		early_peak_energy = maxf(early_peak_energy, keg.get_fuse_halo_energy())
+	var early_phase_delta := keg._fuse_halo_phase - early_phase_start
+
+	# Sample urgent final second (0.5 s remaining) over an identical 0.25 s window.
+	keg.fuse_remaining = 0.5
+	keg._fuse_halo_phase = 0.0
+	var urgent_peak_scale := 0.0
+	var urgent_peak_energy := 0.0
+	var urgent_phase_start := keg._fuse_halo_phase
+	for _s in 25:
+		keg._update_fuse_visuals(0.01)
+		urgent_peak_scale = maxf(urgent_peak_scale, halo.scale.x)
+		urgent_peak_energy = maxf(urgent_peak_energy, keg.get_fuse_halo_energy())
+	var urgent_phase_delta := keg._fuse_halo_phase - urgent_phase_start
+
+	print("    Q16A PowderKeg FuseGlowHalo: %d tris | 4.2s scale=%.3f energy=%.3f | 0.5s scale=%.3f energy=%.3f | freq_ratio=%.2fx" % [
+		halo_tris, early_peak_scale, early_peak_energy, urgent_peak_scale, urgent_peak_energy,
+		urgent_phase_delta / maxf(early_phase_delta, 0.001)])
+
+	check(early_peak_scale >= 0.40 and early_peak_scale <= 0.56,
+		"early fuse (4.2 s) halo scale near ~0.42..0.52 m (got %.3f)" % early_peak_scale)
+	check(urgent_peak_scale >= 0.80 and urgent_peak_scale <= 1.02,
+		"urgent fuse (0.5 s) halo scale swells toward ~0.92 m (got %.3f)" % urgent_peak_scale)
+	check(urgent_peak_scale > early_peak_scale + 0.30,
+		"urgent halo scale measurably exceeds early fuse scale (%.3f vs %.3f)" % [urgent_peak_scale, early_peak_scale])
+	check(early_peak_energy >= 0.78 and early_peak_energy <= 1.02,
+		"early fuse (4.2 s) peak energy near warm amber ~0.85 (got %.3f)" % early_peak_energy)
+	check(urgent_peak_energy >= 1.50 and urgent_peak_energy > early_peak_energy + 0.55,
+		"urgent fuse (0.5 s) peak energy surges dramatically over early fuse (%.3f vs %.3f)" % [
+			urgent_peak_energy, early_peak_energy])
+	check(urgent_phase_delta > early_phase_delta * 2.2,
+		"pulse frequency accelerates dramatically toward ~22 Hz in final second (ratio=%.2fx)" % (
+			urgent_phase_delta / maxf(early_phase_delta, 0.001)))
+
+	# Imminent detonation (0.1 s remaining) pushes peak bloom near ~1.85!
+	keg.fuse_remaining = 0.1
+	keg._fuse_halo_phase = PI * 0.5
+	keg._update_fuse_visuals(0.0)
+	check(keg.get_fuse_halo_energy() >= 1.75,
+		"final 0.1 s countdown pushes FuseGlowHalo into scorching ~1.85 warning bloom (got %.3f)" % keg.get_fuse_halo_energy())
+
+	# 3. extinguish_fuse() & detonate() cleanly hide FuseGlowHalo and zero energy!
+	check(keg.extinguish_fuse(), "extinguish_fuse() snuffs active fuse cleanly")
+	check(not halo.visible, "extinguish_fuse() hides FuseGlowHalo immediately")
+	check_near(keg.get_fuse_halo_energy(), 0.0, 0.0001, "extinguish_fuse() resets FuseGlowHalo energy to 0.0")
+
+	var det_keg := PowderKeg.spawn_at(_root, Vector3(6.0, 5.05, -2.5))
+	det_keg.freeze = true
+	await physics_frames(2)
+	var det_halo := det_keg.get_fuse_halo_node()
+	check(det_keg.ignite_fuse(), "second PowderKeg ignites cleanly before detonation")
+	check(det_halo != null and det_halo.visible and det_keg.get_fuse_halo_energy() > 0.70,
+		"second PowderKeg FuseGlowHalo illuminates while lit")
+	det_keg.detonate()
+	check(det_halo == null or not det_halo.visible, "detonate() hides FuseGlowHalo cleanly")
+	check_near(det_keg.get_fuse_halo_energy(), 0.0, 0.0001, "detonate() resets FuseGlowHalo energy to 0.0")
+
+	# 4. Clean teardown & 0 ObjectDB leaks!
+	await _end()
+	PowderKeg.clear_shared_cache()
+	check_eq(PowderKeg._active_kegs, 0, "PowderKeg._active_kegs == 0 after Q16A teardown")
+	check(PowderKeg._fuse_halo_mesh == null and PowderKeg._keg_mesh == null
+		and PowderKeg._ember_mesh == null and PowderKeg._spark_mesh == null,
+		"PowderKeg releases all static caches including _fuse_halo_mesh cleanly (0 leaks)")
+
+

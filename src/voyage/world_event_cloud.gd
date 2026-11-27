@@ -41,11 +41,24 @@ const COL_LEV_DEEP := Color(0.10, 0.07, 0.20)
 const COL_LEV_EYE_HI := Color(0.86, 0.58, 1.00)
 const COL_LEV_EYE_LO := Color(0.54, 0.20, 0.96)
 
+# Q16A dramatic sky-lightning & storm-belly flash event palettes.
+const COL_FLASH_FORT := Color(0.42, 1.00, 0.58)
+const COL_FLASH_GHOST := Color(0.45, 1.00, 0.96)
+const COL_FLASH_LEVIATHAN := Color(0.84, 0.48, 1.00)
+
+const LIGHTNING_FLASH_DURATION := 0.36
+const LIGHTNING_INTERVAL_MIN := 3.2
+const LIGHTNING_INTERVAL_MAX := 5.8
+const FLASH_HALO_SCALE := 34.0
+const LIGHTNING_VISIBILITY_RANGE := 3600.0
+
 # Ref-counted static shared caches (zero extra VRAM; cleared when _active_instances hits 0).
 static var _active_instances: int = 0
 static var _mesh_cache: Dictionary = {}
 static var _body_mat_cache: Dictionary = {}
 static var _accent_mat_cache: Dictionary = {}
+static var _lightning_mesh: ArrayMesh = null
+static var _flash_halo_mesh: ArrayMesh = null
 
 var event_kind: StringName = &"fort_siege"
 var display_label: String = "Fort Skull Cloud"
@@ -53,8 +66,12 @@ var event_world_pos: Vector3 = Vector3.ZERO
 
 var _visual_root: Node3D = null
 var _cloud_mi: MeshInstance3D = null
+var _lightning_mi: MeshInstance3D = null
+var _flash_halo_mi: MeshInstance3D = null
 var _body_override: StandardMaterial3D = null
 var _accent_override: StandardMaterial3D = null
+var _lightning_mat: StandardMaterial3D = null
+var _flash_halo_mat: StandardMaterial3D = null
 var _configured: bool = false
 var _fade_state: FadeState = FadeState.ACTIVE
 var _fade_duration: float = DEFAULT_FADE_DURATION
@@ -62,6 +79,11 @@ var _scale_t: float = 1.0
 var _anim_time: float = 0.0
 var _phase_offset: float = 0.0
 var _tri_count: int = 0
+var _lightning_cooldown: float = 4.0
+var _lightning_elapsed: float = -1.0
+var _lightning_peak: float = 1.0
+var _lightning_intensity: float = 0.0
+var _lightning_strike_seq: int = 0
 
 
 ## Return the strict-ASCII display label for a world event cloud kind.
@@ -80,6 +102,8 @@ static func clear_shared_cache() -> void:
 	_mesh_cache.clear()
 	_body_mat_cache.clear()
 	_accent_mat_cache.clear()
+	_lightning_mesh = null
+	_flash_halo_mesh = null
 
 
 func _enter_tree() -> void:
@@ -97,19 +121,40 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_release_local_visuals()
+	_active_instances = maxi(0, _active_instances - 1)
+	if _active_instances == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_visuals()
+
+
+func _release_local_visuals() -> void:
 	if _cloud_mi != null and is_instance_valid(_cloud_mi):
 		if _cloud_mi.mesh != null:
 			for si in _cloud_mi.mesh.get_surface_count():
 				_cloud_mi.set_surface_override_material(si, null)
 		_cloud_mi.mesh = null
 		_cloud_mi.material_override = null
+	if _lightning_mi != null and is_instance_valid(_lightning_mi):
+		_lightning_mi.material_override = null
+		_lightning_mi.mesh = null
+	if _flash_halo_mi != null and is_instance_valid(_flash_halo_mi):
+		_flash_halo_mi.material_override = null
+		_flash_halo_mi.mesh = null
 	_body_override = null
 	_accent_override = null
+	_lightning_mat = null
+	_flash_halo_mat = null
 	_cloud_mi = null
+	_lightning_mi = null
+	_flash_halo_mi = null
 	_visual_root = null
-	_active_instances = maxi(0, _active_instances - 1)
-	if _active_instances == 0:
-		clear_shared_cache()
+	_lightning_elapsed = -1.0
+	_lightning_intensity = 0.0
 
 
 func _process(delta: float) -> void:
@@ -124,6 +169,11 @@ func configure(kind: StringName, sea_world_pos: Vector3, instant: bool = false) 
 	event_world_pos = Vector3(sea_world_pos.x, 0.0, sea_world_pos.z)
 	_configured = true
 	_phase_offset = fposmod(absf(sea_world_pos.x * 0.017 + sea_world_pos.z * 0.023), TAU)
+	_lightning_elapsed = -1.0
+	_lightning_intensity = 0.0
+	_lightning_peak = 1.0
+	_lightning_strike_seq = 0
+	_lightning_cooldown = _compute_next_lightning_interval()
 
 	var sky_pos := Vector3(event_world_pos.x, CLOUD_ALTITUDE, event_world_pos.z)
 	if is_inside_tree():
@@ -147,6 +197,8 @@ func configure(kind: StringName, sea_world_pos: Vector3, instant: bool = false) 
 func fade_out_and_free(duration: float = 1.5) -> void:
 	if is_in_group(GROUP):
 		remove_from_group(GROUP)
+	_lightning_elapsed = -1.0
+	_lightning_intensity = 0.0
 	if duration <= 0.001:
 		_fade_state = FadeState.FADING_OUT
 		_scale_t = 0.0
@@ -165,11 +217,50 @@ func is_fading_out() -> bool:
 func get_triangle_count() -> int:
 	if _tri_count <= 0:
 		var mesh := _get_or_build_mesh(event_kind)
-		_tri_count = _count_mesh_tris(mesh)
+		_tri_count = _count_mesh_tris(mesh) \
+			+ _count_mesh_tris(_get_or_build_lightning_mesh()) \
+			+ _count_mesh_tris(_get_or_build_flash_halo_mesh())
 	return _tri_count
 
 
-## Advance gentle living sky billow bob, atmospheric rotation, eye pulse, and fades.
+## Return the mounted CloudLightningBolt MeshInstance3D node.
+func get_lightning_bolt_node() -> MeshInstance3D:
+	return _lightning_mi
+
+
+## Return the mounted CloudStormFlashHalo MeshInstance3D node.
+func get_storm_flash_halo_node() -> MeshInstance3D:
+	return _flash_halo_mi
+
+
+## Return the current normalized sky-lightning flash intensity (0.0 when idle).
+func get_lightning_flash_intensity() -> float:
+	return _lightning_intensity
+
+
+## Deterministically trigger an internal forked sky-lightning discharge & storm-belly flash.
+func trigger_lightning_flash(intensity: float = 1.0) -> void:
+	var clamped_i := clampf(intensity, 0.0, 2.5)
+	if clamped_i <= 0.001:
+		_lightning_elapsed = -1.0
+		_lightning_intensity = 0.0
+		_apply_animation_state()
+		return
+	_lightning_strike_seq += 1
+	_lightning_peak = clamped_i
+	_lightning_elapsed = 0.0
+	_lightning_intensity = clamped_i
+	_lightning_cooldown = _compute_next_lightning_interval()
+	if _lightning_mi != null and is_instance_valid(_lightning_mi):
+		var az := fposmod(_phase_offset + float(_lightning_strike_seq) * 2.3999632, TAU)
+		var tilt_x := sin(_phase_offset * 1.9 + float(_lightning_strike_seq) * 1.73) * 0.20
+		var tilt_z := cos(_phase_offset * 2.3 + float(_lightning_strike_seq) * 2.17) * 0.24
+		_lightning_mi.rotation = Vector3(tilt_x, az, tilt_z)
+		_lightning_mi.scale = Vector3(1.25, 1.35, 1.25)
+	_apply_animation_state()
+
+
+## Advance gentle living sky billow bob, atmospheric rotation, eye pulse, lightning, and fades.
 func step_cloud(delta: float) -> void:
 	var dt := maxf(0.0, delta)
 	_anim_time += dt
@@ -182,17 +273,73 @@ func step_cloud(delta: float) -> void:
 				_fade_state = FadeState.ACTIVE
 		FadeState.FADING_OUT:
 			_scale_t = maxf(0.0, _scale_t - dt / maxf(0.05, _fade_duration))
+			_lightning_elapsed = -1.0
+			_lightning_intensity = 0.0
 			if _scale_t <= 0.0:
 				_apply_animation_state()
 				queue_free()
 				return
 
+	if _fade_state != FadeState.FADING_OUT and dt > 0.0:
+		if _lightning_elapsed >= 0.0:
+			_lightning_elapsed += dt
+			if _lightning_elapsed >= LIGHTNING_FLASH_DURATION:
+				_lightning_elapsed = -1.0
+				_lightning_intensity = 0.0
+			else:
+				var u := _lightning_elapsed / LIGHTNING_FLASH_DURATION
+				_lightning_intensity = _lightning_peak * _eval_lightning_envelope(u)
+		else:
+			_lightning_cooldown -= dt
+			if _lightning_cooldown <= 0.0:
+				trigger_lightning_flash(1.0)
+				return
+
 	_apply_animation_state()
+
+
+func _compute_next_lightning_interval() -> float:
+	var kind_salt := 0.0
+	var min_s := LIGHTNING_INTERVAL_MIN
+	var max_s := LIGHTNING_INTERVAL_MAX
+	if event_kind == &"ghost_ship":
+		kind_salt = 0.31
+	elif event_kind == &"leviathan":
+		kind_salt = 0.67
+		min_s = LIGHTNING_INTERVAL_MIN
+		max_s = 4.6
+	var h := fposmod(_phase_offset * 0.3183099 + float(_lightning_strike_seq) * 0.6180339 + kind_salt, 1.0)
+	return lerpf(min_s, max_s, h)
+
+
+static func _eval_lightning_envelope(u: float) -> float:
+	if u < 0.0 or u >= 1.0:
+		return 0.0
+	if u <= 0.14:
+		return lerpf(1.0, 0.92, u / 0.14)
+	if u <= 0.34:
+		return lerpf(0.92, 0.24, (u - 0.14) / 0.20)
+	if u <= 0.52:
+		return lerpf(0.24, 0.82, (u - 0.34) / 0.18)
+	var decay := 1.0 - (u - 0.52) / 0.48
+	return 0.82 * decay * decay
+
+
+static func _flash_color_for_kind(kind: StringName) -> Color:
+	match kind:
+		&"ghost_ship":
+			return COL_FLASH_GHOST
+		&"leviathan":
+			return COL_FLASH_LEVIATHAN
+		_:
+			return COL_FLASH_FORT
 
 
 func _apply_animation_state() -> void:
 	var eased := _scale_t * _scale_t * (3.0 - 2.0 * _scale_t)
 	var eff_scale := maxf(MIN_SCALE, eased)
+	var flash_col := _flash_color_for_kind(event_kind)
+	var eff_flash := _lightning_intensity * eased
 
 	if _visual_root != null and is_instance_valid(_visual_root):
 		var bob_y := sin(_anim_time * 0.58 + _phase_offset) * BOB_AMPLITUDE
@@ -207,18 +354,22 @@ func _apply_animation_state() -> void:
 		# Softly warm outer skull-cloud puffs toward golden-hour dawn/sunset horizon tones
 		# so beacons sit harmoniously in pastel sunset skies while eyes keep blazing.
 		var warmth := _golden_hour_factor()
+		var base_body_em: Color
+		var base_body_energy: float
 		if event_kind == &"fort_siege":
 			_body_override.albedo_color = Color.WHITE.lerp(Color(1.00, 0.88, 0.78), warmth * 0.65)
-			_body_override.emission = Color(0.20, 0.27, 0.30).lerp(Color(0.56, 0.34, 0.24), warmth * 0.72)
-			_body_override.emission_energy_multiplier = lerpf(0.30, 0.44, warmth)
+			base_body_em = Color(0.20, 0.27, 0.30).lerp(Color(0.56, 0.34, 0.24), warmth * 0.72)
+			base_body_energy = lerpf(0.30, 0.44, warmth)
 		elif event_kind == &"leviathan":
 			_body_override.albedo_color = Color.WHITE.lerp(Color(0.98, 0.88, 0.92), warmth * 0.42)
-			_body_override.emission = Color(0.24, 0.14, 0.42).lerp(Color(0.46, 0.24, 0.38), warmth * 0.50)
-			_body_override.emission_energy_multiplier = lerpf(0.32, 0.40, warmth)
+			base_body_em = Color(0.24, 0.14, 0.42).lerp(Color(0.46, 0.24, 0.38), warmth * 0.50)
+			base_body_energy = lerpf(0.32, 0.40, warmth)
 		else:
 			_body_override.albedo_color = Color.WHITE.lerp(Color(0.95, 0.96, 0.92), warmth * 0.30)
-			_body_override.emission = Color(0.14, 0.42, 0.46).lerp(Color(0.30, 0.46, 0.44), warmth * 0.35)
-			_body_override.emission_energy_multiplier = lerpf(0.34, 0.40, warmth)
+			base_body_em = Color(0.14, 0.42, 0.46).lerp(Color(0.30, 0.46, 0.44), warmth * 0.35)
+			base_body_energy = lerpf(0.34, 0.40, warmth)
+		_body_override.emission = base_body_em.lerp(flash_col, clampf(eff_flash * 0.48, 0.0, 0.68))
+		_body_override.emission_energy_multiplier = base_body_energy + 0.55 * eff_flash
 
 	if _accent_override != null:
 		var base_e := 2.65
@@ -233,7 +384,31 @@ func _apply_animation_state() -> void:
 			pulse_amp = 0.95
 			pulse_rate = 2.65
 		var pulse := sin(_anim_time * pulse_rate + _phase_offset)
-		_accent_override.emission_energy_multiplier = maxf(0.2, (base_e + pulse * pulse_amp) * eased)
+		_accent_override.emission_energy_multiplier = maxf(0.2, (base_e + pulse * pulse_amp + 1.15 * _lightning_intensity) * eased)
+
+	var flash_active := eff_flash > 0.005
+	if _lightning_mi != null and is_instance_valid(_lightning_mi):
+		_lightning_mi.visible = flash_active
+	if _lightning_mat != null:
+		var bolt_e := (2.60 * eff_flash) if flash_active else 1.0
+		_lightning_mat.albedo_color = Color(
+			flash_col.r * bolt_e,
+			flash_col.g * bolt_e,
+			flash_col.b * bolt_e,
+			1.0
+		)
+	if _flash_halo_mi != null and is_instance_valid(_flash_halo_mi):
+		_flash_halo_mi.visible = flash_active
+		var halo_s := FLASH_HALO_SCALE * lerpf(0.86, 1.00, clampf(eff_flash, 0.0, 1.0)) if flash_active else FLASH_HALO_SCALE
+		_flash_halo_mi.scale = Vector3(halo_s, halo_s, halo_s)
+	if _flash_halo_mat != null:
+		var halo_e := (1.15 * eff_flash) if flash_active else 1.0
+		_flash_halo_mat.albedo_color = Color(
+			flash_col.r * halo_e,
+			flash_col.g * halo_e,
+			flash_col.b * halo_e,
+			1.0
+		)
 
 
 static func _golden_hour_factor() -> float:
@@ -248,7 +423,9 @@ static func _golden_hour_factor() -> float:
 
 func _rebuild_visual() -> void:
 	var mesh := _get_or_build_mesh(event_kind)
-	_tri_count = _count_mesh_tris(mesh)
+	var bolt_mesh := _get_or_build_lightning_mesh()
+	var halo_mesh := _get_or_build_flash_halo_mesh()
+	_tri_count = _count_mesh_tris(mesh) + _count_mesh_tris(bolt_mesh) + _count_mesh_tris(halo_mesh)
 
 	if _visual_root == null or not is_instance_valid(_visual_root):
 		_visual_root = get_node_or_null(^"CloudVisualRoot") as Node3D
@@ -281,6 +458,65 @@ func _rebuild_visual() -> void:
 		_accent_override = shared_accent.duplicate() as StandardMaterial3D
 		if mesh.get_surface_count() > 1:
 			_cloud_mi.set_surface_override_material(1, _accent_override)
+
+	var flash_col := _flash_color_for_kind(event_kind)
+	if _lightning_mat == null:
+		_lightning_mat = StandardMaterial3D.new()
+		_lightning_mat.vertex_color_use_as_albedo = true
+		_lightning_mat.vertex_color_is_srgb = true
+		_lightning_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_lightning_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_lightning_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_lightning_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_lightning_mat.disable_fog = true
+	_lightning_mat.albedo_color = flash_col
+
+	if _lightning_mi == null or not is_instance_valid(_lightning_mi):
+		_lightning_mi = _visual_root.get_node_or_null(^"CloudLightningBolt") as MeshInstance3D
+		if _lightning_mi == null:
+			_lightning_mi = MeshInstance3D.new()
+			_lightning_mi.name = "CloudLightningBolt"
+			_lightning_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_lightning_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+			_lightning_mi.visibility_range_end = LIGHTNING_VISIBILITY_RANGE
+			_lightning_mi.extra_cull_margin = 24.0
+			_lightning_mi.visible = false
+			_visual_root.add_child(_lightning_mi)
+	_lightning_mi.position = Vector3(0.0, -24.0, 0.0)
+	_lightning_mi.mesh = bolt_mesh
+	_lightning_mi.material_override = _lightning_mat
+	_lightning_mi.visible = false
+
+	if _flash_halo_mat == null:
+		_flash_halo_mat = StandardMaterial3D.new()
+		_flash_halo_mat.vertex_color_use_as_albedo = true
+		_flash_halo_mat.vertex_color_is_srgb = true
+		_flash_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_flash_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_flash_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_flash_halo_mat.billboard_keep_scale = true
+		_flash_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_flash_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_flash_halo_mat.disable_fog = true
+	_flash_halo_mat.albedo_color = flash_col
+
+	if _flash_halo_mi == null or not is_instance_valid(_flash_halo_mi):
+		_flash_halo_mi = _visual_root.get_node_or_null(^"CloudStormFlashHalo") as MeshInstance3D
+		if _flash_halo_mi == null:
+			_flash_halo_mi = MeshInstance3D.new()
+			_flash_halo_mi.name = "CloudStormFlashHalo"
+			_flash_halo_mi.position = Vector3(0.0, -3.5, 0.0)
+			_flash_halo_mi.scale = Vector3.ONE * FLASH_HALO_SCALE
+			_flash_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_flash_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+			_flash_halo_mi.visibility_range_end = LIGHTNING_VISIBILITY_RANGE
+			_flash_halo_mi.extra_cull_margin = 24.0
+			_flash_halo_mi.visible = false
+			_visual_root.add_child(_flash_halo_mi)
+	_flash_halo_mi.mesh = halo_mesh
+	_flash_halo_mi.material_override = _flash_halo_mat
+	_flash_halo_mi.scale = Vector3.ONE * FLASH_HALO_SCALE
+	_flash_halo_mi.visible = false
 
 
 static func _normalize_kind(kind: StringName) -> StringName:
@@ -888,6 +1124,191 @@ static func _emit_dir_tri(
 	st.set_normal(unit_n)
 	st.set_color(cc)
 	st.add_vertex(c)
+
+
+# ==============================================================================
+# Q16A Sculpted Forked Sky-Lightning Bolt (53 tris) & Storm-Belly Flash Halo (48 tris)
+# ==============================================================================
+
+static func _get_or_build_lightning_mesh() -> ArrayMesh:
+	if _lightning_mesh == null:
+		_lightning_mesh = _build_lightning_bolt_mesh()
+	return _lightning_mesh
+
+
+static func _get_or_build_flash_halo_mesh() -> ArrayMesh:
+	if _flash_halo_mesh == null:
+		_flash_halo_mesh = _build_flash_halo_mesh()
+	return _flash_halo_mesh
+
+
+static func _build_lightning_bolt_mesh() -> ArrayMesh:
+	# Jagged 42 m primary lightning trunk (33 tris, 3-wing cross section for 360-deg readability)
+	# + 2 secondary forked side branches (10 + 10 tris) = 53 tris total, zero primitives.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var trunk_pts: Array[Vector3] = [
+		Vector3(-3.5, 18.5, 11.0),
+		Vector3(3.8, 11.2, 15.2),
+		Vector3(-4.6, 3.4, 18.0),
+		Vector3(4.2, -4.0, 17.4),
+		Vector3(-3.2, -11.4, 15.6),
+		Vector3(2.6, -18.0, 13.8),
+		Vector3(-1.4, -23.5, 12.5),
+	]
+	var trunk_hw: Array[float] = [1.85, 1.65, 1.45, 1.25, 0.95, 0.62, 0.0]
+	_add_lightning_branch(st, trunk_pts, trunk_hw, true)
+
+	# Secondary upper-right fork splitting off trunk elbow 1.
+	var fork_r_pts: Array[Vector3] = [
+		Vector3(3.8, 11.2, 15.2),
+		Vector3(11.5, 5.8, 16.8),
+		Vector3(16.2, -0.8, 15.0),
+		Vector3(20.4, -7.2, 13.0),
+	]
+	var fork_r_hw: Array[float] = [1.05, 0.78, 0.46, 0.0]
+	_add_lightning_branch(st, fork_r_pts, fork_r_hw, false)
+
+	# Secondary mid-left fork splitting off trunk elbow 2.
+	var fork_l_pts: Array[Vector3] = [
+		Vector3(-4.6, 3.4, 18.0),
+		Vector3(-12.8, -2.6, 17.6),
+		Vector3(-17.4, -9.5, 15.4),
+		Vector3(-21.2, -15.8, 13.2),
+	]
+	var fork_l_hw: Array[float] = [1.00, 0.74, 0.44, 0.0]
+	_add_lightning_branch(st, fork_l_pts, fork_l_hw, false)
+
+	return st.commit()
+
+
+static func _add_lightning_branch(
+	st: SurfaceTool,
+	points: Array[Vector3],
+	half_widths: Array[float],
+	include_back_fin: bool
+) -> void:
+	var n_pts := points.size()
+	if n_pts < 2 or half_widths.size() < n_pts:
+		return
+
+	const COL_CORE := Color(1.00, 1.00, 1.00, 1.0)
+	const COL_RIM := Color(0.30, 0.34, 0.38, 1.0)
+	const COL_TIP := Color(0.48, 0.52, 0.56, 1.0)
+
+	var lefts: Array[Vector3] = []
+	var spines: Array[Vector3] = []
+	var rights: Array[Vector3] = []
+	var backs: Array[Vector3] = []
+	var fronts: Array[Vector3] = []
+
+	for i in range(n_pts - 1):
+		var tang: Vector3
+		if i == 0:
+			tang = (points[1] - points[0]).normalized()
+		else:
+			tang = (points[i + 1] - points[i - 1]).normalized()
+		if tang.length_squared() < 1e-8:
+			tang = Vector3.DOWN
+
+		var side := tang.cross(Vector3(0.0, 0.0, 1.0))
+		if side.length_squared() < 1e-6:
+			side = Vector3.RIGHT
+		else:
+			side = side.normalized()
+		var depth_dir := side.cross(tang)
+		if depth_dir.length_squared() < 1e-6:
+			depth_dir = Vector3(0.0, 0.0, 1.0)
+		else:
+			depth_dir = depth_dir.normalized()
+		if depth_dir.z < 0.0:
+			depth_dir = -depth_dir
+
+		var hw := maxf(0.18, half_widths[i])
+		spines.append(points[i] + depth_dir * (hw * 0.45))
+		lefts.append(points[i] - side * hw)
+		rights.append(points[i] + side * hw)
+		backs.append(points[i] - depth_dir * (hw * 0.85))
+		fronts.append(depth_dir)
+
+	for i in range(n_pts - 2):
+		var fn := fronts[i]
+		# Left rim -> white-hot spine ribbon quad.
+		_emit_dir_tri(st, lefts[i], spines[i], spines[i + 1], fn, COL_RIM, COL_CORE, COL_CORE)
+		_emit_dir_tri(st, lefts[i], spines[i + 1], lefts[i + 1], fn, COL_RIM, COL_CORE, COL_RIM)
+		# White-hot spine -> right rim ribbon quad.
+		_emit_dir_tri(st, spines[i], rights[i], rights[i + 1], fn, COL_CORE, COL_RIM, COL_RIM)
+		_emit_dir_tri(st, spines[i], rights[i + 1], spines[i + 1], fn, COL_CORE, COL_RIM, COL_CORE)
+		if include_back_fin:
+			var side_n := (rights[i] - lefts[i]).normalized()
+			_emit_dir_tri(st, backs[i], spines[i], spines[i + 1], side_n, COL_RIM, COL_CORE, COL_CORE)
+			_emit_dir_tri(st, backs[i], spines[i + 1], backs[i + 1], side_n, COL_RIM, COL_CORE, COL_RIM)
+
+	var last := n_pts - 2
+	var tip := points[n_pts - 1]
+	var last_fn := fronts[last]
+	_emit_dir_tri(st, lefts[last], spines[last], tip, last_fn, COL_RIM, COL_CORE, COL_TIP)
+	_emit_dir_tri(st, spines[last], rights[last], tip, last_fn, COL_CORE, COL_RIM, COL_TIP)
+	if include_back_fin:
+		var last_side_n := (rights[last] - lefts[last]).normalized()
+		_emit_dir_tri(st, backs[last], spines[last], tip, last_side_n, COL_RIM, COL_CORE, COL_TIP)
+
+
+static func _build_flash_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial additive storm-belly flash disc (glowing white core -> black rim)
+	# with exact finite unit (0, 0, 1) normals for zero box edge under additive billboard blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.44
+	const OUTER_R := 1.00
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	const COL_CORE := Color(1.00, 1.00, 1.00, 1.0)
+	const COL_MID := Color(0.42, 0.42, 0.42, 1.0)
+	const COL_RIM := Color(0.00, 0.00, 0.00, 1.0)
+
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		# Inner glowing core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+
+		# Outer feathered skirt quad fading to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o0)
+
+	return st.commit()
 
 
 static func _count_mesh_tris(mesh: ArrayMesh) -> int:

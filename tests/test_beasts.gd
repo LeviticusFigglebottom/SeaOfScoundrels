@@ -2787,3 +2787,330 @@ func test_q14b_whale_blowhole_spout_and_dolphin_biolum_breach_rings() -> void:
 	check(DolphinPod._breach_ring_mesh == null and DolphinPod._breach_ring_mat == null \
 			and DolphinPod._body_mesh == null and DolphinPod._skin_mat == null,
 		"DolphinPod releases breach-ring & dolphin static caches cleanly (0 leaks)")
+
+
+func test_q16b_sea_mermaid_ripples_conch_halo_and_manta_wingtip_bubbles() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# 1. Static source guards: zero raw PrimitiveMesh allocations & Vulkan-safe MultiMesh teardown.
+	var mermaid_src := FileAccess.get_file_as_string("res://src/world/sea_mermaid.gd")
+	var manta_src := FileAccess.get_file_as_string("res://src/world/manta_ray.gd")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not mermaid_src.contains(bad_prim), "sea_mermaid.gd contains zero %s calls" % bad_prim)
+		check(not manta_src.contains(bad_prim), "manta_ray.gd contains zero %s calls" % bad_prim)
+	check(not manta_src.contains("multimesh.mesh = null") and not manta_src.contains("mm.mesh = null"),
+		"manta_ray.gd follows Godot 4.8 Vulkan rule (never nulls .mesh on a live MultiMesh)")
+
+	# 2. SeaMermaid: MermaidRippleHalo (176 tris) + ConchOrbHalo (48 tris), weather boost & dismiss fade!
+	var m_a := SeaMermaid.spawn_at(_root, Vector3(44.0, 0.0, -32.0))
+	var m_b := SeaMermaid.spawn_at(_root, Vector3(-44.0, 0.0, -32.0))
+	m_a.force_emerged()
+	m_b.force_emerged()
+
+	var ripple_a := m_a.get_ripple_halo_node()
+	var ripple_b := m_b.get_ripple_halo_node()
+	var conch_a := m_a.get_conch_halo_node()
+	var conch_b := m_b.get_conch_halo_node()
+
+	check(ripple_a != null and ripple_a.name == "MermaidRippleHalo",
+		"SeaMermaid mounts MermaidRippleHalo via get_ripple_halo_node()")
+	check(conch_a != null and conch_a.name == "ConchOrbHalo",
+		"SeaMermaid mounts ConchOrbHalo via get_conch_halo_node()")
+
+	var ripple_tris := 0
+	var ripple_bad_normals := 0
+	var ripple_non_flat := 0
+	if ripple_a != null:
+		check_eq(ripple_a.get_parent(), m_a, "MermaidRippleHalo mounts directly under SeaMermaid")
+		check(ripple_a.position.distance_to(Vector3(0.0, 0.06, 0.0)) < 0.001,
+			"MermaidRippleHalo mounts at waterline (0.0, 0.06, 0.0)")
+		check_eq(ripple_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"MermaidRippleHalo disables shadow casting")
+		check_eq(ripple_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"MermaidRippleHalo disables GI mode")
+		check_near(ripple_a.visibility_range_end, 260.0, 0.05,
+			"MermaidRippleHalo sets visibility_range_end = 260.0 m")
+		check(ripple_a.mesh is ArrayMesh and not (ripple_a.mesh is PrimitiveMesh),
+			"MermaidRippleHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if ripple_b != null:
+			check_eq(ripple_a.mesh, ripple_b.mesh, "SeaMermaids share statically cached _ripple_mesh")
+			check(ripple_a.material_override != ripple_b.material_override,
+				"MermaidRippleHalo uses per-instance StandardMaterial3D")
+		if ripple_a.mesh is ArrayMesh:
+			var arr := (ripple_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			ripple_tris = floori(float(verts.size()) / 3.0)
+			for v in verts:
+				if absf(v.y) > 0.0001:
+					ripple_non_flat += 1
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+					ripple_bad_normals += 1
+		check_eq(ripple_tris, 176, "MermaidRippleHalo has exact 176 triangles (22 segs x 2 rings)")
+		check_eq(ripple_non_flat, 0, "MermaidRippleHalo vertices lie flat on y = 0.0")
+		check_eq(ripple_bad_normals, 0, "MermaidRippleHalo normals are all finite (0, 1, 0) unit vectors")
+
+		var r_mat := ripple_a.material_override as StandardMaterial3D
+		check(r_mat != null and r_mat.vertex_color_use_as_albedo and r_mat.vertex_color_is_srgb \
+				and r_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and r_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and r_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and r_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"MermaidRippleHalo uses unshaded additive sRGB double-sided depth-draw-disabled material")
+		if r_mat != null:
+			check(r_mat.albedo_texture == null and r_mat.normal_texture == null and r_mat.roughness_texture == null,
+				"MermaidRippleHalo allocates 0 extra VRAM textures")
+
+	var conch_tris := 0
+	var conch_bad_normals := 0
+	var conch_has_core := false
+	var conch_has_black_rim := false
+	if conch_a != null:
+		check_eq(conch_a.get_parent(), m_a.get_figure_mesh_instance().get_parent(),
+			"ConchOrbHalo mounts inside FigurePivot alongside MerfolkFigure")
+		check(conch_a.position.distance_to(SeaMermaid.CONCH_ORB_LOCAL) < 0.001,
+			"ConchOrbHalo mounts directly at CONCH_ORB_LOCAL")
+		check_eq(conch_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ConchOrbHalo disables shadow casting")
+		check_eq(conch_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"ConchOrbHalo disables GI mode")
+		check_near(conch_a.visibility_range_end, 420.0, 0.05,
+			"ConchOrbHalo sets visibility_range_end = 420.0 m")
+		check(conch_a.mesh is ArrayMesh and not (conch_a.mesh is PrimitiveMesh),
+			"ConchOrbHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if conch_b != null:
+			check_eq(conch_a.mesh, conch_b.mesh, "SeaMermaids share statically cached _conch_halo_mesh")
+			check(conch_a.material_override != conch_b.material_override,
+				"ConchOrbHalo uses per-instance StandardMaterial3D")
+		if conch_a.mesh is ArrayMesh:
+			var arr := (conch_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			conch_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					conch_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					conch_has_black_rim = true
+				if cv.r >= 0.75 and cv.g >= 0.95 and cv.b >= 0.90:
+					conch_has_core = true
+		check_eq(conch_tris, 48, "ConchOrbHalo has exact 48 triangles (16 radial wedges)")
+		check_eq(conch_bad_normals, 0, "ConchOrbHalo normals are all finite (0, 0, 1) unit vectors")
+		check(conch_has_core and conch_has_black_rim,
+			"ConchOrbHalo fades from aquamarine-white core to pure Color(0, 0, 0, 1) rim")
+
+		var c_mat := conch_a.material_override as StandardMaterial3D
+		check(c_mat != null and c_mat.vertex_color_use_as_albedo and c_mat.vertex_color_is_srgb \
+				and c_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and c_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and c_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and c_mat.billboard_keep_scale \
+				and c_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and c_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"ConchOrbHalo uses unshaded additive scale-preserving billboard StandardMaterial3D")
+		if c_mat != null:
+			check(c_mat.albedo_texture == null and c_mat.normal_texture == null and c_mat.roughness_texture == null,
+				"ConchOrbHalo allocates 0 extra VRAM textures")
+
+	# Verify daylight -> night -> storm energy boost on both halos!
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	m_a.step_mermaid(0.0)
+	var noon_ripple_e := m_a.get_ripple_halo_energy()
+	var noon_conch_e := m_a.get_conch_halo_energy()
+
+	Weather.time_of_day = 0.5
+	Weather.set_weather(0.0, 8.0, 0.0)
+	m_a.step_mermaid(0.0)
+	var night_ripple_e := m_a.get_ripple_halo_energy()
+	var night_conch_e := m_a.get_conch_halo_energy()
+
+	Weather.time_of_day = 0.5
+	Weather.set_weather(1.0, 16.0, 0.0)
+	m_a.step_mermaid(0.0)
+	var storm_ripple_e := m_a.get_ripple_halo_energy()
+	var storm_conch_e := m_a.get_conch_halo_energy()
+
+	check(noon_ripple_e >= 0.30 and noon_ripple_e <= 0.45,
+		"MermaidRippleHalo stays subtle in bright midday (~0.38, got %.3f)" % noon_ripple_e)
+	check(night_ripple_e > noon_ripple_e * 2.0 and night_ripple_e >= 0.80,
+		"MermaidRippleHalo rises dramatically at night (noon=%.3f -> night=%.3f)" % [noon_ripple_e, night_ripple_e])
+	check(storm_ripple_e > night_ripple_e,
+		"MermaidRippleHalo intensifies further in storm (night=%.3f -> storm=%.3f)" % [night_ripple_e, storm_ripple_e])
+
+	check(noon_conch_e >= 0.42 and noon_conch_e <= 0.65,
+		"ConchOrbHalo glows crisply at midday (~0.52, got %.3f)" % noon_conch_e)
+	check(night_conch_e > noon_conch_e * 2.0 and night_conch_e >= 1.05,
+		"ConchOrbHalo blooms radiantly at night (noon=%.3f -> night=%.3f)" % [noon_conch_e, night_conch_e])
+	check(storm_conch_e > night_conch_e,
+		"ConchOrbHalo intensifies further in storm (night=%.3f -> storm=%.3f)" % [night_conch_e, storm_conch_e])
+
+	# Verify concentric ripple pulsing expansion (0.88..1.34) & slow rotation across 5 s (also triggers foam interval).
+	var min_rip_s := INF
+	var max_rip_s := -INF
+	var rot0 := ripple_a.rotation.y if ripple_a != null else 0.0
+	for _s in 20:
+		m_a.step_mermaid(0.25)
+		if ripple_a != null:
+			min_rip_s = minf(min_rip_s, ripple_a.scale.x)
+			max_rip_s = maxf(max_rip_s, ripple_a.scale.x)
+	var rot1 := ripple_a.rotation.y if ripple_a != null else 0.0
+	check(min_rip_s >= 0.87 and max_rip_s <= 1.35 and (max_rip_s - min_rip_s) > 0.35,
+		"MermaidRippleHalo pulses smoothly across 0.88..1.34 scale (min=%.3f, max=%.3f)" % [min_rip_s, max_rip_s])
+	check(rot1 > rot0 + 0.5, "MermaidRippleHalo rotates gently around Y (%.2f -> %.2f rad)" % [rot0, rot1])
+
+	# Verify clean fade & hide on dismiss() when submerged (emerge <= 0.04).
+	var pre_dismiss_ripple_e := m_a.get_ripple_halo_energy()
+	var pre_dismiss_conch_e := m_a.get_conch_halo_energy()
+	m_a.dismiss()
+	m_a.step_mermaid(0.45)  # partway submerged
+	check(m_a.get_ripple_halo_energy() < pre_dismiss_ripple_e * 0.75,
+		"MermaidRippleHalo fades smoothly while submerging after dismiss()")
+	check(m_a.get_conch_halo_energy() < pre_dismiss_conch_e * 0.75,
+		"ConchOrbHalo fades smoothly while submerging after dismiss()")
+	# Step just past emerge <= 0.04 (rise_offset ~ -2.35, before queue_free at -2.78).
+	m_a.step_mermaid(0.55)
+	check(is_instance_valid(m_a), "dismissed mermaid still valid at emerge <= 0.04 check")
+	check_near(m_a.get_ripple_halo_energy(), 0.0, 0.0001,
+		"MermaidRippleHalo energy fades to 0.0 when dismissed & submerged")
+	check_near(m_a.get_conch_halo_energy(), 0.0, 0.0001,
+		"ConchOrbHalo energy fades to 0.0 when dismissed & submerged")
+	check(ripple_a != null and not ripple_a.visible, "MermaidRippleHalo hides when dismissed & submerged")
+	check(conch_a != null and not conch_a.visible, "ConchOrbHalo hides when dismissed & submerged")
+
+	# 3. MantaRay: sculpted 12x12-tri WingtipBubbles, prime-frame trails, upward drift, surface clamp!
+	var manta_a := MantaRay.new()
+	manta_a.name = "MantaQ16B_A"
+	manta_a.position = Vector3(0.0, -3.2, 0.0)
+	_root.add_child(manta_a)
+
+	var manta_b := MantaRay.new()
+	manta_b.name = "MantaQ16B_B"
+	manta_b.position = Vector3(28.0, -1.6, 0.0)  # shallow lagoon placement to stress surface clamp
+	_root.add_child(manta_b)
+
+	check_eq(manta_a.get_mesh_instances().size(), 3,
+		"MantaRay.get_mesh_instances() stays strictly 3 (WingtipBubbles excluded)")
+
+	var bub_a := manta_a.get_wingtip_bubbles_node()
+	var bub_b := manta_b.get_wingtip_bubbles_node()
+	check(bub_a != null and bub_a.name == "WingtipBubbles",
+		"MantaRay mounts WingtipBubbles MultiMeshInstance3D via get_wingtip_bubbles_node()")
+	if bub_a != null:
+		check_eq(bub_a.get_parent(), manta_a,
+			"WingtipBubbles mounts directly under MantaRay (not inside GlideRoot)")
+		check_eq(bub_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"WingtipBubbles disables shadow casting")
+		check_eq(bub_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"WingtipBubbles disables GI mode")
+		check_near(bub_a.visibility_range_end, MantaRay.VISIBILITY_END, 0.05,
+			"WingtipBubbles uses VISIBILITY_END")
+		check_near(bub_a.visibility_range_end_margin, MantaRay.VISIBILITY_MARGIN, 0.05,
+			"WingtipBubbles uses VISIBILITY_MARGIN")
+
+		var mm_a := bub_a.multimesh
+		check(mm_a != null and mm_a.instance_count == 12 and mm_a.use_colors,
+			"WingtipBubbles configures 12 per-instance colored micro-bubbles (6 port + 6 starboard)")
+		check(mm_a != null and mm_a.mesh is ArrayMesh and not (mm_a.mesh is PrimitiveMesh),
+			"WingtipBubbles uses sculpted ArrayMesh (zero SphereMesh)")
+		if bub_b != null and bub_b.multimesh != null and mm_a != null:
+			check_eq(mm_a.mesh, bub_b.multimesh.mesh,
+				"MantaRays share statically cached 12-tri micro-bubble ArrayMesh")
+
+		var bubble_tris := 0
+		var bubble_bad_normals := 0
+		if mm_a != null and mm_a.mesh is ArrayMesh:
+			var arr := (mm_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			bubble_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bubble_bad_normals += 1
+		check_eq(bubble_tris, 12, "sculpted 6-sided bipyramid bubble mesh has exact 12 triangles")
+		check_eq(bubble_bad_normals, 0, "all wingtip bubble mesh normals are finite unit vectors")
+
+		var b_mat := bub_a.material_override as StandardMaterial3D
+		check(b_mat != null and b_mat.vertex_color_use_as_albedo and b_mat.vertex_color_is_srgb \
+				and b_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and b_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and b_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"WingtipBubbles uses unshaded translucent sRGB depth-draw-disabled StandardMaterial3D")
+		if b_mat != null:
+			check(b_mat.albedo_texture == null and b_mat.normal_texture == null and b_mat.roughness_texture == null,
+				"WingtipBubbles allocates 0 extra VRAM textures")
+
+	# Verify prime-frame initialization places 12 distinct bubbles along both wingtip trails & strictly submerged.
+	var bp0 := manta_a.get_wingtip_bubble_positions()
+	check_eq(bp0.size(), 12, "get_wingtip_bubble_positions() returns all 12 wingtip bubbles")
+	var port_stbd_sep := bp0[0].distance_to(bp0[6])
+	check(port_stbd_sep > 3.2 and port_stbd_sep < 5.0,
+		"port and starboard wingtip bubble trails span ~4.1 m across wingtips (sep=%.2f m)" % port_stbd_sep)
+
+	# Step 0.20 s and verify bubbles drift cleanly upward!
+	manta_a.step_glide(0.20)
+	var bp1 := manta_a.get_wingtip_bubble_positions()
+	var rose_n := 0
+	for i in 12:
+		if bp1[i].y > bp0[i].y + 0.05:
+			rose_n += 1
+	check(rose_n >= 9, "step_glide(0.20) drifts wingtip bubbles upward (rose=%d / 12)" % rose_n)
+
+	# Step 24 frames (3.6 s > max 2.4 s cycle) on both mantas and verify strict submersion & cycle wrap!
+	var max_world_y_a := -INF
+	var max_world_y_b := -INF
+	var saw_wrap := false
+	var prev_y_a := PackedFloat32Array()
+	prev_y_a.resize(12)
+	for i in 12:
+		prev_y_a[i] = bp1[i].y
+	for _step in 24:
+		manta_a.step_glide(0.15)
+		manta_b.step_glide(0.15)
+		var pa := manta_a.get_wingtip_bubble_positions()
+		var pb := manta_b.get_wingtip_bubble_positions()
+		for i in 12:
+			var wy_a := manta_a.global_position.y + pa[i].y
+			var wy_b := manta_b.global_position.y + pb[i].y
+			max_world_y_a = maxf(max_world_y_a, wy_a)
+			max_world_y_b = maxf(max_world_y_b, wy_b)
+			if pa[i].y < prev_y_a[i] - 0.35:
+				saw_wrap = true
+			prev_y_a[i] = pa[i].y
+
+	check(saw_wrap, "wingtip bubbles continuously wrap and re-seed at moving wingtips")
+	check(max_world_y_a <= -0.15 and max_world_y_a <= MantaRay.MAX_MANTA_Y + 0.901,
+		"MantaA wingtip bubbles stay strictly submerged below ocean surface (max_y=%.3f)" % max_world_y_a)
+	check(max_world_y_b <= -0.15 and max_world_y_b <= MantaRay.MAX_MANTA_Y + 0.901,
+		"shallow MantaB wingtip bubbles stay strictly clamped below ocean surface (max_y=%.3f)" % max_world_y_b)
+
+	print("    Q16B marine sanctuary: MermaidRippleHalo=%d tris (%.2f->%.2f->%.2f), ConchOrbHalo=%d tris (%.2f->%.2f->%.2f), WingtipBubbles=12x12 tris (max_y=%.2f/%.2f)" % [
+		ripple_tris, noon_ripple_e, night_ripple_e, storm_ripple_e,
+		conch_tris, noon_conch_e, night_conch_e, storm_conch_e,
+		max_world_y_a, max_world_y_b,
+	])
+
+	# 4. Full zero-leak teardown releases ALL static caches cleanly to null!
+	await _end()
+	check_eq(SeaMermaid._active_mermaids, 0, "SeaMermaid._active_mermaids == 0 after Q16B teardown")
+	check(SeaMermaid._figure_mesh == null and SeaMermaid._smoke_mesh == null \
+			and SeaMermaid._mote_mesh == null and SeaMermaid._ripple_mesh == null \
+			and SeaMermaid._conch_halo_mesh == null and SeaMermaid._body_mat == null \
+			and SeaMermaid._glow_mat == null and SeaMermaid._smoke_mat == null,
+		"SeaMermaid releases all static meshes including _ripple_mesh & _conch_halo_mesh (0 leaks)")
+	check_eq(MantaRay._active_mantas, 0, "MantaRay._active_mantas == 0 after Q16B teardown")
+	check(MantaRay._body_mesh == null and MantaRay._wing_left_mesh == null \
+			and MantaRay._wing_right_mesh == null and MantaRay._manta_mat == null \
+			and MantaRay._bubble_mesh == null and MantaRay._bubble_mat == null,
+		"MantaRay releases all static meshes & materials including _bubble_mesh & _bubble_mat (0 leaks)")
+

@@ -67,6 +67,10 @@ const COL_ROPE_HI := Color(0.74, 0.60, 0.38)
 const COL_ROPE_LO := Color(0.48, 0.37, 0.22)
 const COL_BRASS_HI := Color(0.88, 0.68, 0.26)
 const COL_BRASS_LO := Color(0.54, 0.38, 0.12)
+const COL_FUSE_HALO_WARM := Color(1.00, 0.76, 0.34)
+const COL_FUSE_HALO_DANGER := Color(1.00, 0.34, 0.22)
+const COL_FUSE_HALO_HOT := Color(1.00, 0.88, 0.78)
+const FUSE_HALO_VISIBILITY_RANGE := 110.0
 
 ## Remaining seconds until detonation once the fuse is lit.
 var fuse_remaining: float = FUSE_DURATION
@@ -87,6 +91,10 @@ var _keg_mi: MeshInstance3D = null
 var _fuse_cord_mi: MeshInstance3D = null
 var _ember_pivot: Node3D = null
 var _ember_mi: MeshInstance3D = null
+var _fuse_halo_mi: MeshInstance3D = null
+var _fuse_halo_mat: StandardMaterial3D = null
+var _fuse_halo_energy: float = 0.0
+var _fuse_halo_phase: float = 0.0
 var _fuse_light: OmniLight3D = null
 var _spark_particles: CPUParticles3D = null
 
@@ -105,6 +113,7 @@ static var _pbr_tex_cache: Dictionary = {}  # String path -> WeakRef(Texture2D)
 static var _keg_mesh: ArrayMesh = null
 static var _fuse_cord_mesh: ArrayMesh = null
 static var _ember_mesh: ArrayMesh = null
+static var _fuse_halo_mesh: ArrayMesh = null
 static var _spark_mesh: ArrayMesh = null
 static var _fireball_mesh: ArrayMesh = null
 static var _shockwave_mesh: ArrayMesh = null
@@ -138,6 +147,7 @@ static func clear_shared_cache() -> void:
 	_keg_mesh = null
 	_fuse_cord_mesh = null
 	_ember_mesh = null
+	_fuse_halo_mesh = null
 	_spark_mesh = null
 	_fireball_mesh = null
 	_shockwave_mesh = null
@@ -208,9 +218,12 @@ func _release_local_visuals() -> void:
 	if _ember_mi != null and is_instance_valid(_ember_mi):
 		_ember_mi.material_override = null
 		_ember_mi.mesh = null
+	if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+		_fuse_halo_mi.material_override = null
+		_fuse_halo_mi.mesh = null
 	if _spark_particles != null and is_instance_valid(_spark_particles):
 		_spark_particles.emitting = false
-		_spark_particles.mesh = null
+		_spark_particles.visible = false
 		_spark_particles.material_override = null
 	if _fuse_light != null and is_instance_valid(_fuse_light):
 		_fuse_light.light_energy = 0.0
@@ -219,6 +232,9 @@ func _release_local_visuals() -> void:
 	_keg_mi = null
 	_fuse_cord_mi = null
 	_ember_mi = null
+	_fuse_halo_mi = null
+	_fuse_halo_mat = null
+	_fuse_halo_energy = 0.0
 	_ember_pivot = null
 	_fuse_light = null
 	_spark_particles = null
@@ -235,11 +251,11 @@ func _release_blast_vfx() -> void:
 		_blast_shockwave_mi.mesh = null
 	if _blast_splinters != null and is_instance_valid(_blast_splinters):
 		_blast_splinters.emitting = false
-		_blast_splinters.mesh = null
+		_blast_splinters.visible = false
 		_blast_splinters.material_override = null
 	if _blast_smoke != null and is_instance_valid(_blast_smoke):
 		_blast_smoke.emitting = false
-		_blast_smoke.mesh = null
+		_blast_smoke.visible = false
 		_blast_smoke.material_override = null
 	if _blast_light != null and is_instance_valid(_blast_light):
 		_blast_light.light_energy = 0.0
@@ -280,6 +296,8 @@ func get_triangle_count() -> int:
 		total += _count_mesh_tris(_fuse_cord_mesh)
 	if _ember_mesh != null:
 		total += _count_mesh_tris(_ember_mesh)
+	if _fuse_halo_mesh != null:
+		total += _count_mesh_tris(_fuse_halo_mesh)
 	return total
 
 
@@ -287,6 +305,16 @@ func get_triangle_count() -> int:
 func get_keg_material() -> StandardMaterial3D:
 	_ensure_shared_assets()
 	return _keg_mat
+
+
+## Return the mounted additive FuseGlowHalo MeshInstance3D on the fuse tip.
+func get_fuse_halo_node() -> MeshInstance3D:
+	return _fuse_halo_mi
+
+
+## Return the current urgent countdown FuseGlowHalo energy (0.0 when unlit/snuffed/detonated).
+func get_fuse_halo_energy() -> float:
+	return _fuse_halo_energy
 
 
 func attach_to(pawn: Node3D) -> void:
@@ -316,6 +344,7 @@ func ignite_fuse(lighter: Node = null) -> bool:
 	fuse_remaining = FUSE_DURATION
 	_lighter = lighter
 	_sizzle_tick_accum = 0.0
+	_fuse_halo_phase = PI * 0.5
 	_set_fuse_fx_active(true)
 	_update_fuse_visuals(0.0)
 	if Audio != null:
@@ -398,6 +427,12 @@ func _process(delta: float) -> void:
 func _set_fuse_fx_active(active: bool) -> void:
 	if _ember_mi != null and is_instance_valid(_ember_mi):
 		_ember_mi.visible = active
+	if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+		_fuse_halo_mi.visible = active
+	if not active:
+		_fuse_halo_energy = 0.0
+		if _fuse_halo_mat != null:
+			_fuse_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 	if _fuse_light != null and is_instance_valid(_fuse_light):
 		_fuse_light.visible = active
 		if not active:
@@ -407,7 +442,8 @@ func _set_fuse_fx_active(active: bool) -> void:
 
 
 func _update_fuse_visuals(delta: float) -> void:
-	_anim_clock += maxf(0.0, delta)
+	var dt := maxf(0.0, delta)
+	_anim_clock += dt
 	var frac := clampf(fuse_remaining / FUSE_DURATION, 0.06, 1.0) if _fuse_lit else 1.0
 	var tip_rel := _fuse_curve_pos(1.0) - Vector3(0.0, FUSE_BASE_Y, 0.0)
 	if _fuse_cord_mi != null and is_instance_valid(_fuse_cord_mi):
@@ -415,13 +451,43 @@ func _update_fuse_visuals(delta: float) -> void:
 	if _ember_pivot != null and is_instance_valid(_ember_pivot):
 		_ember_pivot.position = Vector3(0.0, FUSE_BASE_Y, 0.0) + tip_rel * frac
 		if _fuse_lit:
+			var burn_t := clampf(1.0 - fuse_remaining / FUSE_DURATION, 0.0, 1.0)
+			var urgent_t := clampf(1.0 - fuse_remaining / 1.2, 0.0, 1.0)
 			var urgency := lerpf(16.0, 34.0, 1.0 - frac)
 			var flick := 0.80 + 0.20 * sin(_anim_clock * urgency) * cos(_anim_clock * (urgency * 0.63))
 			if _ember_mi != null and is_instance_valid(_ember_mi):
 				_ember_mi.scale = Vector3.ONE * (0.85 + 0.30 * flick)
-				_ember_mi.rotation.y += delta * 11.0
+				_ember_mi.rotation.y += dt * 11.0
 			if _fuse_light != null and is_instance_valid(_fuse_light):
 				_fuse_light.light_energy = lerpf(1.75, 2.85, 1.0 - frac) * flick
+
+			# Q16A urgent frantic FuseGlowHalo: 7 Hz -> 22 Hz, 0.42 m -> 0.92 m,
+			# intensifying warm amber-orange (~0.85) -> scorching crimson-white (~1.85) in final 1.2 s!
+			var pulse_hz := lerpf(7.0, 22.0, pow(burn_t, 1.35))
+			_fuse_halo_phase = fposmod(_fuse_halo_phase + dt * TAU * pulse_hz, TAU * 64.0)
+			var flick_w := clampf(0.50 + 0.42 * sin(_fuse_halo_phase) + 0.12 * sin(_fuse_halo_phase * 2.13 + 0.6), 0.0, 1.0)
+			var halo_scale := lerpf(0.42, 0.82, burn_t) + lerpf(0.04, 0.14, maxf(burn_t, urgent_t)) * flick_w
+			var halo_energy := lerpf(0.80, 1.24, burn_t) + 0.50 * urgent_t \
+				+ lerpf(0.09, 0.22, maxf(burn_t, urgent_t)) * (flick_w - 0.35)
+			_fuse_halo_energy = maxf(0.15, halo_energy)
+			if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+				_fuse_halo_mi.visible = true
+				_fuse_halo_mi.scale = Vector3(halo_scale, halo_scale, halo_scale)
+			if _fuse_halo_mat != null:
+				var danger_tint := COL_FUSE_HALO_DANGER.lerp(COL_FUSE_HALO_HOT, flick_w * 0.85)
+				var halo_tint := COL_FUSE_HALO_WARM.lerp(danger_tint, urgent_t)
+				_fuse_halo_mat.albedo_color = Color(
+					halo_tint.r * _fuse_halo_energy,
+					halo_tint.g * _fuse_halo_energy,
+					halo_tint.b * _fuse_halo_energy,
+					1.0
+				)
+		else:
+			_fuse_halo_energy = 0.0
+			if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+				_fuse_halo_mi.visible = false
+			if _fuse_halo_mat != null:
+				_fuse_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 
 
 # ==============================================================================
@@ -900,6 +966,30 @@ func _ensure_visuals() -> void:
 	_ember_mi.visible = false
 	_ember_pivot.add_child(_ember_mi)
 
+	_fuse_halo_mat = StandardMaterial3D.new()
+	_fuse_halo_mat.vertex_color_use_as_albedo = true
+	_fuse_halo_mat.vertex_color_is_srgb = true
+	_fuse_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_fuse_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_fuse_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_fuse_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_fuse_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_fuse_halo_mat.billboard_keep_scale = true
+	_fuse_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_fuse_halo_mi = MeshInstance3D.new()
+	_fuse_halo_mi.name = "FuseGlowHalo"
+	_fuse_halo_mi.position = Vector3(0.0, 0.014, 0.0)
+	_fuse_halo_mi.scale = Vector3.ONE * 0.42
+	_fuse_halo_mi.mesh = _fuse_halo_mesh
+	_fuse_halo_mi.material_override = _fuse_halo_mat
+	_fuse_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fuse_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_fuse_halo_mi.visibility_range_end = FUSE_HALO_VISIBILITY_RANGE
+	_fuse_halo_mi.extra_cull_margin = 1.0
+	_fuse_halo_mi.visible = false
+	_ember_pivot.add_child(_fuse_halo_mi)
+
 	_fuse_light = OmniLight3D.new()
 	_fuse_light.name = "FuseLight"
 	_fuse_light.light_color = Color(1.0, 0.56, 0.16)
@@ -1028,6 +1118,8 @@ static func _ensure_shared_assets() -> void:
 		_fuse_cord_mesh = _build_fuse_cord_mesh()
 	if _ember_mesh == null:
 		_ember_mesh = _build_ember_mesh()
+	if _fuse_halo_mesh == null:
+		_fuse_halo_mesh = _build_fuse_halo_mesh()
 	if _spark_mesh == null:
 		_spark_mesh = _build_spark_mesh()
 	if _fireball_mesh == null:
@@ -1498,6 +1590,63 @@ static func _build_ember_mesh() -> ArrayMesh:
 		_emit_outward_tri(st, top, ring_hi[k], ring_hi[k1], Vector3.ZERO, col_core, col_core, col_hot)
 
 	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fuse_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial additive FuseGlowHalo disc (diameter 1.0 m -> scale = world meters)
+	# with incandescent white-gold center -> blazing ember-orange mid -> pure Color(0, 0, 0, 1) rim
+	# and exact finite unit (0, 0, 1) normals for zero box edge under additive billboard blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	const COL_CORE := Color(1.00, 0.96, 0.78, 1.0)
+	const COL_MID := Color(1.00, 0.48, 0.10, 1.0)
+	const COL_RIM := Color(0.00, 0.00, 0.00, 1.0)
+
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		# Inner incandescent white-gold core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+
+		# Outer feathered skirt quad fading smoothly to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_RIM)
+		st.add_vertex(o0)
+
 	return st.commit()
 
 

@@ -20,6 +20,14 @@ const MAX_MANTA_Y := -1.2
 const MOORING_CLEAR_RADIUS := 10.5
 const PIER_CLEAR_RADIUS := 6.0
 
+# Trailing underwater wingtip micro-bubble constants (zero runtime allocations).
+const BUBBLE_COUNT := 12
+const BUBBLES_PER_WING := 6
+const WINGTIP_PIVOT_X := 1.83
+const WINGTIP_PIVOT_Y := 0.10
+const WINGTIP_PIVOT_Z := 0.28
+const BUBBLE_CEILING_WORLD_Y := MAX_MANTA_Y + 0.9
+
 # Painterly tropical giant reef manta palette (authored in sRGB).
 const COL_BACK_DEEP := Color(0.10, 0.16, 0.26)
 const COL_BACK_SLATE := Color(0.15, 0.25, 0.36)
@@ -29,12 +37,17 @@ const COL_BELLY_CREAM := Color(0.93, 0.92, 0.86)
 const COL_BELLY_GILL := Color(0.74, 0.78, 0.82)
 const COL_TAIL_DARK := Color(0.09, 0.13, 0.21)
 const COL_EYE := Color(0.06, 0.07, 0.10)
+const COL_BUBBLE_TOP := Color(0.96, 1.00, 1.00, 1.0)
+const COL_BUBBLE_MID := Color(0.74, 0.97, 0.99, 1.0)
+const COL_BUBBLE_BOT := Color(0.48, 0.88, 0.95, 1.0)
 
 static var _active_mantas: int = 0
 static var _body_mesh: ArrayMesh = null
 static var _wing_left_mesh: ArrayMesh = null
 static var _wing_right_mesh: ArrayMesh = null
 static var _manta_mat: StandardMaterial3D = null
+static var _bubble_mesh: ArrayMesh = null
+static var _bubble_mat: StandardMaterial3D = null
 
 @export var orbit_radius: float = 13.5
 @export var orbit_speed: float = 0.24
@@ -49,12 +62,25 @@ var _left_wing_pivot: Node3D = null
 var _right_wing_pivot: Node3D = null
 var _left_wing_mi: MeshInstance3D = null
 var _right_wing_mi: MeshInstance3D = null
+var _bubbles_mmi: MultiMeshInstance3D = null
 var _clock: float = 0.0
 var _phase_offset: float = 0.0
 var _prev_local_pos: Vector3 = Vector3.ZERO
 var _prev_yaw: float = 0.0
 var _has_prev: bool = false
 var _built: bool = false
+var _bubbles_initialized: bool = false
+
+# Preallocated per-bubble buffers (zero steady-state heap allocations in step_glide).
+var _bubble_origin: PackedVector3Array = PackedVector3Array()
+var _bubble_pos: PackedVector3Array = PackedVector3Array()
+var _bubble_age: PackedFloat32Array = PackedFloat32Array()
+var _bubble_lifetime: PackedFloat32Array = PackedFloat32Array()
+var _bubble_rise_speed: PackedFloat32Array = PackedFloat32Array()
+var _bubble_phase: PackedFloat32Array = PackedFloat32Array()
+var _bubble_helix_r: PackedFloat32Array = PackedFloat32Array()
+var _bubble_helix_freq: PackedFloat32Array = PackedFloat32Array()
+var _bubble_scale: PackedFloat32Array = PackedFloat32Array()
 
 
 ## Release all statically cached MantaRay meshes and materials cleanly.
@@ -63,6 +89,8 @@ static func clear_shared_cache() -> void:
 	_wing_left_mesh = null
 	_wing_right_mesh = null
 	_manta_mat = null
+	_bubble_mesh = null
+	_bubble_mat = null
 
 
 ## Deterministically spawn a gliding `MantaRay` over a shallow turquoise reef lagoon
@@ -165,20 +193,35 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	_release_local_refs()
+	_active_mantas = maxi(0, _active_mantas - 1)
+	if _active_mantas == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+
+
+func _release_local_refs() -> void:
 	for mi: MeshInstance3D in [_body_mi, _left_wing_mi, _right_wing_mi]:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
 			mi.mesh = null
+	if _bubbles_mmi != null and is_instance_valid(_bubbles_mmi):
+		_bubbles_mmi.visible = false
+		_bubbles_mmi.material_override = null
+		_bubbles_mmi.multimesh = null
 	_body_mi = null
 	_left_wing_mi = null
 	_right_wing_mi = null
 	_left_wing_pivot = null
 	_right_wing_pivot = null
 	_glide_root = null
+	_bubbles_mmi = null
+	_bubbles_initialized = false
 	_built = false
-	_active_mantas = maxi(0, _active_mantas - 1)
-	if _active_mantas == 0:
-		clear_shared_cache()
 
 
 func _ready() -> void:
@@ -196,7 +239,8 @@ func _physics_process(delta: float) -> void:
 
 
 ## Advance the Manta Ray along its wide curving lagoon glide path and articulate
-## its undulating pectoral wings, vertical heave surge, and gentle turn banking.
+## its undulating pectoral wings, vertical heave surge, gentle turn banking, and
+## trailing underwater wingtip micro-bubbles.
 func step_glide(delta: float) -> void:
 	if not _built or _glide_root == null:
 		return
@@ -259,6 +303,75 @@ func step_glide(delta: float) -> void:
 	if _right_wing_pivot != null:
 		_right_wing_pivot.rotation = Vector3(wing_twist, 0.0, wing_angle)
 
+	_step_wingtip_bubbles(dt, origin_y)
+
+
+func _step_wingtip_bubbles(dt: float, origin_y: float) -> void:
+	if _bubbles_mmi == null or not is_instance_valid(_bubbles_mmi):
+		return
+	var mm := _bubbles_mmi.multimesh
+	if mm == null or _bubble_origin.size() != BUBBLE_COUNT:
+		return
+	if _left_wing_pivot == null or _right_wing_pivot == null:
+		return
+
+	var glide_xf := _glide_root.transform
+	var port_tip := glide_xf * (_left_wing_pivot.transform * Vector3(-WINGTIP_PIVOT_X, WINGTIP_PIVOT_Y, WINGTIP_PIVOT_Z))
+	var stbd_tip := glide_xf * (_right_wing_pivot.transform * Vector3(WINGTIP_PIVOT_X, WINGTIP_PIVOT_Y, WINGTIP_PIVOT_Z))
+	var max_local_y := minf(BUBBLE_CEILING_WORLD_Y, -0.15) - origin_y
+
+	# On the initial prime frame (step_glide(0.0) in _ready), seed all 12 bubbles across
+	# staggered trail phases right behind both moving wingtips so showcases frame full trails!
+	if not _bubbles_initialized:
+		var trail_dir := glide_xf.basis.z
+		var td_len2 := trail_dir.length_squared()
+		if td_len2 > 1e-6:
+			trail_dir /= sqrt(td_len2)
+		else:
+			trail_dir = Vector3.BACK
+		var approx_speed := clampf(maxf(orbit_radius, 4.0) * orbit_speed * 0.72, 1.4, 3.4)
+		for i in BUBBLE_COUNT:
+			var is_stbd := i >= BUBBLES_PER_WING
+			var slot := i % BUBBLES_PER_WING
+			var tip := stbd_tip if is_stbd else port_tip
+			var frac := (float(slot) + 0.18) / float(BUBBLES_PER_WING)
+			var life := _bubble_lifetime[i]
+			var init_age := frac * life
+			_bubble_age[i] = init_age
+			_bubble_origin[i] = tip + trail_dir * (approx_speed * init_age)
+		_bubbles_initialized = true
+	elif dt > 0.0:
+		for i in BUBBLE_COUNT:
+			var life := _bubble_lifetime[i]
+			var next_age := _bubble_age[i] + dt
+			if next_age >= life:
+				next_age = fposmod(next_age, life)
+				_bubble_origin[i] = stbd_tip if (i >= BUBBLES_PER_WING) else port_tip
+			_bubble_age[i] = next_age
+
+	for i in BUBBLE_COUNT:
+		var age := _bubble_age[i]
+		var life := _bubble_lifetime[i]
+		var u := clampf(age / life, 0.0, 1.0)
+		var base_p := _bubble_origin[i]
+		var ang := _bubble_phase[i] + _clock * _bubble_helix_freq[i] + u * TAU * 1.15
+		var h_rad := _bubble_helix_r[i] * (0.25 + 0.75 * u)
+		var bx := base_p.x + cos(ang) * h_rad
+		var bz := base_p.z + sin(ang) * h_rad
+		var by := minf(base_p.y + _bubble_rise_speed[i] * age, max_local_y)
+		var pos := Vector3(bx, by, bz)
+		_bubble_pos[i] = pos
+
+		var fade_in := smoothstep(0.0, 0.14, u)
+		var fade_out := 1.0 - smoothstep(0.74, 1.0, u)
+		var env := clampf(fade_in * fade_out, 0.0, 1.0)
+		var s := _bubble_scale[i] * lerpf(0.28, 1.0, env)
+		var b_basis := Basis(Vector3.UP, ang * 0.5) * Basis.from_scale(Vector3(s, s, s))
+		mm.set_instance_transform(i, Transform3D(b_basis, pos))
+
+		var glint := 0.90 + 0.10 * sin(_clock * 5.2 + _bubble_phase[i])
+		mm.set_instance_color(i, Color(0.86 * glint, 0.98 * glint, 1.00 * glint, clampf(0.82 * env, 0.0, 1.0)))
+
 
 func get_glide_world_position() -> Vector3:
 	if _glide_root == null:
@@ -282,6 +395,16 @@ func get_mesh_instances() -> Array[MeshInstance3D]:
 		if mi != null:
 			out.append(mi)
 	return out
+
+
+## Return the sculpted MultiMeshInstance3D rendering trailing underwater wingtip micro-bubbles.
+func get_wingtip_bubbles_node() -> MultiMeshInstance3D:
+	return _bubbles_mmi
+
+
+## Return the current local-space positions of all 12 trailing wingtip micro-bubbles.
+func get_wingtip_bubble_positions() -> PackedVector3Array:
+	return _bubble_pos.duplicate()
 
 
 func _ensure_built() -> void:
@@ -315,7 +438,55 @@ func _ensure_built() -> void:
 	_right_wing_mi = _make_part("RightWingMesh", _wing_right_mesh)
 	_right_wing_pivot.add_child(_right_wing_mi)
 
+	_build_wingtip_bubbles(rng)
 	step_glide(0.0)
+
+
+func _build_wingtip_bubbles(rng: RandomNumberGenerator) -> void:
+	_bubble_origin.resize(BUBBLE_COUNT)
+	_bubble_pos.resize(BUBBLE_COUNT)
+	_bubble_age.resize(BUBBLE_COUNT)
+	_bubble_lifetime.resize(BUBBLE_COUNT)
+	_bubble_rise_speed.resize(BUBBLE_COUNT)
+	_bubble_phase.resize(BUBBLE_COUNT)
+	_bubble_helix_r.resize(BUBBLE_COUNT)
+	_bubble_helix_freq.resize(BUBBLE_COUNT)
+	_bubble_scale.resize(BUBBLE_COUNT)
+	_bubbles_initialized = false
+
+	for i in BUBBLE_COUNT:
+		_bubble_origin[i] = Vector3.ZERO
+		_bubble_pos[i] = Vector3.ZERO
+		_bubble_age[i] = 0.0
+		_bubble_lifetime[i] = rng.randf_range(1.6, 2.4)
+		_bubble_rise_speed[i] = rng.randf_range(0.55, 0.85)
+		_bubble_phase[i] = rng.randf() * TAU
+		_bubble_helix_r[i] = rng.randf_range(0.045, 0.115)
+		_bubble_helix_freq[i] = rng.randf_range(2.8, 4.6)
+		_bubble_scale[i] = rng.randf_range(0.68, 1.32)
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _bubble_mesh
+	mm.instance_count = BUBBLE_COUNT
+	for i in BUBBLE_COUNT:
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+		mm.set_instance_color(i, Color(0.86, 0.98, 1.00, 0.0))
+
+	_bubbles_mmi = MultiMeshInstance3D.new()
+	_bubbles_mmi.name = "WingtipBubbles"
+	_bubbles_mmi.multimesh = mm
+	_bubbles_mmi.material_override = _bubble_mat
+	_bubbles_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bubbles_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_bubbles_mmi.visibility_range_end = VISIBILITY_END
+	_bubbles_mmi.visibility_range_end_margin = VISIBILITY_MARGIN
+	_bubbles_mmi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	var r_box := maxf(orbit_radius, 4.0) * 1.25 + 5.0
+	_bubbles_mmi.custom_aabb = AABB(Vector3(-r_box, -6.0, -r_box), Vector3(r_box * 2.0, 12.0, r_box * 2.0))
+	add_child(_bubbles_mmi)
 
 
 static func _make_part(node_name: String, mesh: ArrayMesh) -> MeshInstance3D:
@@ -346,12 +517,45 @@ static func _ensure_shared_assets() -> void:
 		_manta_mat.clearcoat = 0.45
 		_manta_mat.clearcoat_roughness = 0.22
 
+	if _bubble_mat == null:
+		_bubble_mat = StandardMaterial3D.new()
+		_bubble_mat.albedo_color = Color(0.92, 1.00, 1.00, 0.78)
+		_bubble_mat.vertex_color_use_as_albedo = true
+		_bubble_mat.vertex_color_is_srgb = true
+		_bubble_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_bubble_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_bubble_mat.cull_mode = BaseMaterial3D.CULL_BACK
+
 	if _body_mesh == null:
 		_body_mesh = _build_body_mesh()
 	if _wing_left_mesh == null:
 		_wing_left_mesh = _build_pectoral_wing_mesh(-1.0)
 	if _wing_right_mesh == null:
 		_wing_right_mesh = _build_pectoral_wing_mesh(1.0)
+	if _bubble_mesh == null:
+		_bubble_mesh = _build_bubble_mesh()
+
+
+static func _build_bubble_mesh() -> ArrayMesh:
+	# Sculpted exact 12-triangle 6-sided bipyramid underwater micro-bubble (zero SphereMesh).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SIDES := 6
+	const R_EQ := 0.052
+	const R_POLE := 0.044
+	var top := Vector3(0.0, R_POLE, 0.0)
+	var bot := Vector3(0.0, -R_POLE, 0.0)
+	var ring: Array[Vector3] = []
+	for s in SIDES:
+		var ang := float(s) / float(SIDES) * TAU
+		ring.append(Vector3(cos(ang) * R_EQ, 0.0, sin(ang) * R_EQ))
+	for s in SIDES:
+		var ns := (s + 1) % SIDES
+		_emit_outward_tri(st, ring[s], COL_BUBBLE_MID, top, COL_BUBBLE_TOP, ring[ns], COL_BUBBLE_MID, Vector3.ZERO)
+		_emit_outward_tri(st, ring[ns], COL_BUBBLE_MID, bot, COL_BUBBLE_BOT, ring[s], COL_BUBBLE_MID, Vector3.ZERO)
+	st.generate_normals()
+	return st.commit()
 
 
 static func _build_body_mesh() -> ArrayMesh:

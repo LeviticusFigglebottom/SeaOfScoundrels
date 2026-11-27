@@ -187,6 +187,7 @@ func _ready() -> void:
 		keg_right.position = _ship.ship_point(Vector3(0.40, deck_y, -2.36 + z_shift))
 		keg_right.rotation.y = -0.32
 		keg_right.ignite_fuse()
+		keg_right.fuse_remaining = 0.85
 
 	if _shot == "shipwreck":
 		_ship.linear_velocity = Vector3.ZERO

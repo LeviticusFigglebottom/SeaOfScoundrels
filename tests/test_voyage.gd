@@ -1741,6 +1741,7 @@ func test_wave30_world_event_clouds_spyglass_id_director_lifecycle_and_crew_call
 		check(not mis.is_empty(), "%s builds MeshInstance3D" % kind)
 		var prim_hits := 0
 		var has_emissive_accent := false
+		var checked_cloud_body := false
 		for mi in mis:
 			check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
 				"%s disables shadow casting" % kind)
@@ -1750,19 +1751,29 @@ func test_wave30_world_event_clouds_spyglass_id_director_lifecycle_and_crew_call
 				prim_hits += 1
 			if m is ArrayMesh:
 				var am := m as ArrayMesh
-				var aabb := am.get_aabb()
-				var span := maxf(aabb.size.x, aabb.size.z)
-				check(span >= 54.0 and span <= 88.0,
-					"%s colossal horizon silhouette span in 54..88 m (got %.1f m)" % [kind, span])
-				check(am.get_surface_count() >= 2, "%s builds body + emissive accent surfaces" % kind)
+				var is_cloud_body := mi.name == "CloudMesh"
+				if is_cloud_body:
+					checked_cloud_body = true
+					var aabb := am.get_aabb()
+					var span := maxf(aabb.size.x, aabb.size.z)
+					check(span >= 54.0 and span <= 88.0,
+						"%s colossal horizon silhouette span in 54..88 m (got %.1f m)" % [kind, span])
+					check(am.get_surface_count() >= 2, "%s builds body + emissive accent surfaces" % kind)
+				else:
+					var ov_mat := mi.material_override as StandardMaterial3D
+					check(ov_mat != null, "%s VFX mesh '%s' has StandardMaterial3D override" % [kind, mi.name])
+					if ov_mat != null:
+						check(ov_mat.vertex_color_use_as_albedo, "%s VFX '%s' vertex_color_use_as_albedo" % [kind, mi.name])
+						check(ov_mat.vertex_color_is_srgb, "%s VFX '%s' vertex_color_is_srgb" % [kind, mi.name])
 				for si in am.get_surface_count():
-					var mat := am.surface_get_material(si) as StandardMaterial3D
-					check(mat != null, "%s surface %d has StandardMaterial3D" % [kind, si])
-					if mat != null:
-						check(mat.vertex_color_use_as_albedo, "%s surface %d vertex_color_use_as_albedo" % [kind, si])
-						check(mat.vertex_color_is_srgb, "%s surface %d vertex_color_is_srgb" % [kind, si])
-						if si >= 1 and mat.emission_enabled:
-							has_emissive_accent = true
+					if is_cloud_body:
+						var mat := am.surface_get_material(si) as StandardMaterial3D
+						check(mat != null, "%s surface %d has StandardMaterial3D" % [kind, si])
+						if mat != null:
+							check(mat.vertex_color_use_as_albedo, "%s surface %d vertex_color_use_as_albedo" % [kind, si])
+							check(mat.vertex_color_is_srgb, "%s surface %d vertex_color_is_srgb" % [kind, si])
+							if si >= 1 and mat.emission_enabled:
+								has_emissive_accent = true
 					var arr := am.surface_get_arrays(si)
 					var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
 					var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
@@ -1774,6 +1785,7 @@ func test_wave30_world_event_clouds_spyglass_id_director_lifecycle_and_crew_call
 						if not n.is_finite() or absf(n.length() - 1.0) > 0.01:
 							bad_normals += 1
 					check_eq(bad_normals, 0, "%s surface %d has 100%% finite unit normals" % [kind, si])
+		check(checked_cloud_body, "%s builds primary CloudMesh body" % kind)
 		check_eq(prim_hits, 0, "%s contains zero PrimitiveMesh instances" % kind)
 		check(has_emissive_accent, "%s includes glowing emissive accent surface" % kind)
 
@@ -2996,3 +3008,213 @@ func test_q15a_fort_vault_treasury_halo_and_gold_motes() -> void:
 	FortVault.clear_shared_cache()
 
 
+# ---------------------------------------------------------------------------
+# 12. Q16A: WorldEventCloud Forked Sky-Lightning & Storm-Belly Flash
+# ---------------------------------------------------------------------------
+
+func test_q16a_world_event_cloud_sky_lightning_and_storm_belly_flash() -> void:
+	_save_weather()
+	Net.start_single_player()
+	WorldEventCloud.clear_shared_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Q16AWorldEventCloudHolder"
+	add_child(holder)
+
+	var kind_specs: Array[Dictionary] = [
+		{
+			"kind": &"fort_siege",
+			"pos": Vector3(240.0, 0.0, -480.0),
+			"color": Color(0.42, 1.00, 0.58),
+		},
+		{
+			"kind": &"ghost_ship",
+			"pos": Vector3(-520.0, 0.0, -310.0),
+			"color": Color(0.45, 1.00, 0.96),
+		},
+		{
+			"kind": &"leviathan",
+			"pos": Vector3(410.0, 0.0, 390.0),
+			"color": Color(0.84, 0.48, 1.00),
+		},
+	]
+
+	var shared_bolt_mesh: ArrayMesh = null
+	var shared_halo_mesh: ArrayMesh = null
+	var bolt_tris := 0
+	var halo_tris := 0
+
+	for spec: Dictionary in kind_specs:
+		var kind: StringName = spec["kind"] as StringName
+		var sea_pos: Vector3 = spec["pos"] as Vector3
+		var exp_col: Color = spec["color"] as Color
+
+		var cloud := WorldEventCloud.new()
+		cloud.configure(kind, sea_pos, true)
+		holder.add_child(cloud)
+		cloud.set_process(false)
+
+		# 1. Verify CloudLightningBolt & CloudStormFlashHalo mounting, zero primitives,
+		#    finite unit normals, zero VRAM textures, and color-coded additive materials.
+		var bolt := cloud.get_lightning_bolt_node()
+		var halo := cloud.get_storm_flash_halo_node()
+		check(bolt != null and bolt == cloud.get_node_or_null(^"CloudVisualRoot/CloudLightningBolt"),
+			"%s mounts CloudLightningBolt under CloudVisualRoot" % kind)
+		check(halo != null and halo == cloud.get_node_or_null(^"CloudVisualRoot/CloudStormFlashHalo"),
+			"%s mounts CloudStormFlashHalo under CloudVisualRoot" % kind)
+		if bolt == null or halo == null:
+			continue
+
+		check(not bolt.visible and not halo.visible, "%s lightning bolt & flash halo start hidden when idle" % kind)
+		check_near(cloud.get_lightning_flash_intensity(), 0.0, 0.0001, "%s idle flash intensity == 0.0" % kind)
+		check_eq(bolt.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s bolt disables shadows" % kind)
+		check_eq(bolt.gi_mode, GeometryInstance3D.GI_MODE_DISABLED, "%s bolt disables GI" % kind)
+		check_near(bolt.visibility_range_end, 3600.0, 0.01, "%s bolt visibility_range_end == 3600.0" % kind)
+		check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s halo disables shadows" % kind)
+		check_eq(halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED, "%s halo disables GI" % kind)
+		check_near(halo.visibility_range_end, 3600.0, 0.01, "%s halo visibility_range_end == 3600.0" % kind)
+		check(halo.scale.is_equal_approx(Vector3.ONE * 34.0), "%s halo scale == Vector3.ONE * 34.0" % kind)
+
+		check(bolt.mesh is ArrayMesh and not (bolt.mesh is PrimitiveMesh),
+			"%s CloudLightningBolt uses sculpted ArrayMesh (zero primitives)" % kind)
+		check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+			"%s CloudStormFlashHalo uses sculpted ArrayMesh (zero primitives)" % kind)
+
+		var bolt_am := bolt.mesh as ArrayMesh
+		var halo_am := halo.mesh as ArrayMesh
+		if shared_bolt_mesh == null:
+			shared_bolt_mesh = bolt_am
+			shared_halo_mesh = halo_am
+		else:
+			check(bolt_am == shared_bolt_mesh, "%s shares static _lightning_mesh" % kind)
+			check(halo_am == shared_halo_mesh, "%s shares static _flash_halo_mesh" % kind)
+
+		bolt_tris = _count_mesh_triangles(bolt_am)
+		halo_tris = _count_mesh_triangles(halo_am)
+		check(bolt_tris >= 36 and bolt_tris <= 60, "%s bolt triangle count in 36..60 (got %d)" % [kind, bolt_tris])
+		check_eq(halo_tris, 48, "%s flash halo has exact 48 triangles (16 radial wedges)" % kind)
+
+		var bolt_aabb := bolt_am.get_aabb()
+		check(bolt_aabb.size.y >= 38.0 and bolt_aabb.size.y <= 48.0,
+			"%s bolt vertical span ~42 m inside cloud (got %.1f m)" % [kind, bolt_aabb.size.y])
+
+		var bolt_arr := bolt_am.surface_get_arrays(0)
+		var bolt_norms: PackedVector3Array = bolt_arr[Mesh.ARRAY_NORMAL]
+		var bolt_cols: PackedColorArray = bolt_arr[Mesh.ARRAY_COLOR]
+		var bolt_bad_n := 0
+		var bolt_white_core := 0
+		var bolt_tinted_rim := 0
+		for nv: Vector3 in bolt_norms:
+			if not nv.is_finite() or absf(nv.length() - 1.0) > 0.01:
+				bolt_bad_n += 1
+		for cv: Color in bolt_cols:
+			if cv.r >= 0.95 and cv.g >= 0.95 and cv.b >= 0.95:
+				bolt_white_core += 1
+			elif cv.r < 0.55 and cv.g < 0.55:
+				bolt_tinted_rim += 1
+		check_eq(bolt_bad_n, 0, "%s bolt has 100%% finite unit normals" % kind)
+		check(bolt_white_core > 0 and bolt_tinted_rim > 0,
+			"%s bolt vertex colors grade bright white-core -> event-tinted rim" % kind)
+
+		var halo_arr := halo_am.surface_get_arrays(0)
+		var halo_norms: PackedVector3Array = halo_arr[Mesh.ARRAY_NORMAL]
+		var halo_cols: PackedColorArray = halo_arr[Mesh.ARRAY_COLOR]
+		var halo_bad_n := 0
+		var halo_core_v := 0
+		var halo_black_rim_v := 0
+		for nv: Vector3 in halo_norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				halo_bad_n += 1
+		for cv: Color in halo_cols:
+			if cv.r >= 0.95 and cv.g >= 0.95 and cv.b >= 0.95:
+				halo_core_v += 1
+			elif cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+				halo_black_rim_v += 1
+		check_eq(halo_bad_n, 0, "%s flash halo assigns exact finite unit (0, 0, 1) normals" % kind)
+		check(halo_core_v > 0 and halo_black_rim_v > 0,
+			"%s flash halo grades glowing core -> pure Color(0, 0, 0, 1) black rim" % kind)
+
+		var bmat := bolt.material_override as StandardMaterial3D
+		var hmat := halo.material_override as StandardMaterial3D
+		check(bmat != null and bmat.vertex_color_use_as_albedo and bmat.vertex_color_is_srgb
+			and bmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and bmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and bmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and bmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and bmat.albedo_texture == null and bmat.normal_texture == null and bmat.roughness_texture == null,
+			"%s CloudLightningBolt uses zero-VRAM unshaded additive sRGB StandardMaterial3D" % kind)
+		check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb
+			and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and hmat.billboard_keep_scale
+			and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and hmat.albedo_texture == null and hmat.normal_texture == null and hmat.roughness_texture == null,
+			"%s CloudStormFlashHalo uses zero-VRAM unshaded additive billboard sRGB StandardMaterial3D" % kind)
+
+		if bmat != null and hmat != null:
+			check_near(bmat.albedo_color.r, exp_col.r, 0.01, "%s bolt color-coded R matches event kind" % kind)
+			check_near(bmat.albedo_color.g, exp_col.g, 0.01, "%s bolt color-coded G matches event kind" % kind)
+			check_near(bmat.albedo_color.b, exp_col.b, 0.01, "%s bolt color-coded B matches event kind" % kind)
+			check_near(hmat.albedo_color.r, exp_col.r, 0.01, "%s halo color-coded R matches event kind" % kind)
+			check_near(hmat.albedo_color.g, exp_col.g, 0.01, "%s halo color-coded G matches event kind" % kind)
+			check_near(hmat.albedo_color.b, exp_col.b, 0.01, "%s halo color-coded B matches event kind" % kind)
+
+		# 2. Manual trigger_lightning_flash(1.0) -> storm-belly emission boost -> double-flicker -> clean decay.
+		var idle_body_e := cloud._body_override.emission_energy_multiplier
+		var idle_accent_e := cloud._accent_override.emission_energy_multiplier
+		cloud.trigger_lightning_flash(1.0)
+		check_near(cloud.get_lightning_flash_intensity(), 1.0, 0.001, "%s trigger_lightning_flash(1.0) peaks at 1.0" % kind)
+		check(bolt.visible and halo.visible, "%s trigger_lightning_flash activates bolt & storm-belly halo" % kind)
+		check_near(cloud._body_override.emission_energy_multiplier, idle_body_e + 0.55, 0.02,
+			"%s storm-belly body emission boosts by +0.55 during flash" % kind)
+		check(cloud._accent_override.emission_energy_multiplier > idle_accent_e + 0.85,
+			"%s accent emission flares brightly during lightning discharge" % kind)
+		var strike1_rot := bolt.rotation
+
+		# Step into dip (t=0.12 s), secondary restrike (t=0.19 s), and past 0.36 s decay!
+		cloud.step_cloud(0.12)
+		var dip_i := cloud.get_lightning_flash_intensity()
+		check(dip_i > 0.15 and dip_i < 0.45, "%s lightning dips cleanly mid-flicker (got %.3f)" % [kind, dip_i])
+		cloud.step_cloud(0.07)
+		var restrike_i := cloud.get_lightning_flash_intensity()
+		check(restrike_i > dip_i + 0.30,
+			"%s lightning double-flicker restrikes brightly (dip=%.3f -> restrike=%.3f)" % [kind, dip_i, restrike_i])
+		cloud.step_cloud(0.22)
+		check_near(cloud.get_lightning_flash_intensity(), 0.0, 0.0001,
+			"%s lightning decays cleanly back to 0.0 after 0.36 s" % kind)
+		check(not bolt.visible and not halo.visible, "%s bolt & halo hide cleanly once discharge completes" % kind)
+
+		# 3. Advancing 6.5 s deterministically triggers an autonomous sky-lightning strike with rotated azimuth!
+		var auto_struck := false
+		var auto_peak := 0.0
+		var auto_rot := strike1_rot
+		for _step in 130:
+			cloud.step_cloud(0.05)
+			var cur_i := cloud.get_lightning_flash_intensity()
+			if cur_i > 0.05:
+				auto_struck = true
+				auto_peak = maxf(auto_peak, cur_i)
+				auto_rot = bolt.rotation
+		check(auto_struck and auto_peak >= 0.75,
+			"%s triggers autonomous sky-lightning strike within 6.5 s (peak=%.2f)" % [kind, auto_peak])
+		check(not auto_rot.is_equal_approx(strike1_rot),
+			"%s rotates CloudLightningBolt deterministically to fresh azimuth on next strike" % kind)
+
+	print("    Q16A WorldEventCloud metrics: bolt=%d tris, flash_halo=%d tris, 3 color-coded kinds verified" % [
+		bolt_tris, halo_tris])
+
+	# 4. Zero-leak teardown!
+	shared_bolt_mesh = null
+	shared_halo_mesh = null
+	holder.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check_eq(WorldEventCloud._active_instances, 0, "WorldEventCloud._active_instances == 0 after Q16A teardown")
+	check(WorldEventCloud._lightning_mesh == null and WorldEventCloud._flash_halo_mesh == null
+		and WorldEventCloud._mesh_cache.is_empty() and WorldEventCloud._body_mat_cache.is_empty()
+		and WorldEventCloud._accent_mat_cache.is_empty(),
+		"WorldEventCloud releases all static caches including _lightning_mesh and _flash_halo_mesh (0 leaks)")
+	WorldEventCloud.clear_shared_cache()
+	_restore_weather()

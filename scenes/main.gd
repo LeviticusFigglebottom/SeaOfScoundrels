@@ -4371,7 +4371,9 @@ func _apply_hero_shot(mode: String) -> void:
 				sc_fort = archipelago.get_island_by_id("ironwatch_fort")
 			if sc_fort != null and world_director != null:
 				var sc_fpos := sc_fort.global_position
-				world_director.spawn_event_cloud(&"fort_siege", sc_fpos, true)
+				var sc_cloud: Node = world_director.spawn_event_cloud(&"fort_siege", sc_fpos, true)
+				if sc_cloud != null and sc_cloud.has_method(&"trigger_lightning_flash"):
+					sc_cloud.call(&"trigger_lightning_flash", 1.0)
 				var sc_dir := Vector3(-0.62, 0.0, 0.78).normalized()
 				var sc_side := (-sc_dir).cross(Vector3.UP).normalized()
 				var sc_ship_pos := sc_fpos + sc_dir * 420.0 + sc_side * 34.0
