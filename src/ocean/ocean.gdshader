@@ -522,11 +522,18 @@ void fragment() {
 
 		float face_lit = mix(macro_light, slope_light, 0.56);
 		float face_contrast = mix(0.28, 1.50, smoothstep(0.36, 0.96, face_lit)) * trough_ao;
-		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * light * face_contrast * swell_shade;
+		// Preserve deep jewel indigo-teal swell troughs during rose-peach dawn/sunset so waves contrast
+		// richly against molten golden-apricot sky reflections instead of turning flat plum-maroon!
+		float golden_hour = (1.0 - night_bio) * (1.0 - storm * 0.82) * smoothstep(-0.01, 0.04, L.y) * smoothstep(0.32, 0.08, L.y);
+		float dawn_lum = max(dot(light, vec3(0.299, 0.587, 0.114)), 0.08);
+		vec3 cool_twilight_light = vec3(light.r * 0.48, max(light.g, dawn_lum * 0.96), max(light.b, dawn_lum * 1.28));
+		vec3 body_light = mix(light, cool_twilight_light, golden_hour * 0.72);
+		vec3 body = mix(deep_color, scatter_color, clamp(body_k, 0.0, 1.0)) * body_light * face_contrast * swell_shade;
+		// Subtle cool marine zenith depth inside shaded dawn/sunset troughs (leaves molten sun-path 100% blazing!).
+		body += vec3(0.005, 0.036, 0.072) * (golden_hour * dawn_lum * mix(0.55, 1.10, smoothstep(0.28, 0.88, face_lit)) * (0.45 + 0.55 * trough_ao));
 
 		// Luminous emerald-aquamarine translucent glow strictly in near-to-mid steep thin crests
 		// viewed through the wave wall during daylight & golden hour (zero aerial pancakes, zero midnight horizon glow).
-		float golden_hour = (1.0 - night_bio) * (1.0 - storm * 0.82) * smoothstep(-0.01, 0.04, L.y) * smoothstep(0.32, 0.08, L.y);
 		float sss_elev = smoothstep(0.005, 0.16, L.y);
 		float sss_key = smoothstep(0.10, 0.56, sun_light.r + sun_light.g * 0.8);
 		float sss_mod = sss_elev * sss_key * (1.0 - night_bio) * mix(1.0, 0.44, storm);
@@ -670,11 +677,14 @@ void fragment() {
 		R.y = abs(R.y) + sqrt(rough_var) * 0.72;
 		R = normalize(R);
 		vec3 refl = ocean_sky(R);
-		// Keep daytime troughs rich jewel marine blue rather than muddy warm-grey reflection.
+		// Keep daytime troughs rich jewel marine blue rather than muddy warm-grey reflection,
+		// and cool off-axis dawn/sunset reflection shadows slightly toward steel-indigo while keeping molten sun-path gold!
 		float day_cool = (1.0 - night_bio) * (1.0 - storm) * smoothstep(0.12, 0.42, L.y);
 		refl *= mix(vec3(1.0), vec3(0.84, 0.96, 1.12), day_cool * 0.42);
 		// Tight sunlit mirror accent + molten golden-hour sunset sun-path ribbon (zero broad midday wash).
 		float rs = max(dot(R, L), 0.0);
+		float off_sun_dawn = golden_hour * (1.0 - smoothstep(0.22, 0.72, rs));
+		refl *= mix(vec3(1.0), vec3(0.76, 0.88, 1.08), off_sun_dawn * 0.46);
 		float sunset_ribbon = golden_hour * clamp(cloud_l, 0.22, 1.35) * (pow(rs, 20.0) * 0.72 + pow(rs, 110.0) * 1.95);
 		refl += sun_light * (pow(rs, 90.0) * 0.60 * mix(1.0, 0.14, storm) + sunset_ribbon);
 		float film = mix(0.28, 1.0, smoothstep(0.0, 2.5, thick));
@@ -777,7 +787,9 @@ void fragment() {
 			vec3 T_sky = normalize(vec3(T.x, max(T.y, 0.08), T.z));
 			vec3 sky = ocean_sky(T_sky);
 			float sd = max(dot(T_sky, L), 0.0);
-			sky += sun_light * (pow(sd, 240.0) * 10.0 + pow(sd, 20.0) * 0.85 + pow(sd, 4.0) * 0.24);
+			// Damp underwater Snell's window sun-disc blaze under dense overcast storms.
+			float snell_sun_vis = mix(1.0, 0.10, smoothstep(0.22, 0.85, storm));
+			sky += sun_light * (pow(sd, 240.0) * 10.0 * snell_sun_vis + pow(sd, 20.0) * 0.85 * mix(1.0, 0.22, storm) + pow(sd, 4.0) * 0.24 * mix(1.0, 0.42, storm));
 			// Soft aqueous hint of above-water silhouettes without hard posterized screen-space rings.
 			vec4 clip = PROJECTION_MATRIX * (VIEW_MATRIX * vec4(T, 0.0));
 			vec2 suv = clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5;

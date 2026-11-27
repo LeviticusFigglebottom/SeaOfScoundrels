@@ -104,9 +104,9 @@ void fragment() {
 	// deepen overcast stormy cascades to brooding slate-teal, and keep moonlit night silvery-indigo.
 	float storm_dim = (1.0 - night_gate) * (1.0 - sun_vis);
 	vec3 storm_water = vec3(0.04, 0.18, 0.24);
-	vec3 night_water = vec3(0.09, 0.14, 0.21);
+	vec3 night_water = vec3(0.035, 0.068, 0.115);
 	vec3 core_tod = mix(water_core, storm_water, storm_dim * 0.72);
-	core_tod = mix(core_tod, night_water, night_gate * 0.86);
+	core_tod = mix(core_tod, night_water, night_gate * 0.88);
 	float sunset_warm = golden_hour * clamp(0.45 + (sun_color.r - sun_color.b) * 1.4, 0.0, 1.0) * mix(0.45, 1.0, sun_vis);
 	// At golden sunset, neutralize magenta-brown mud in the shadowed water core with cool zenith-teal depth
 	// so bright golden-apricot foam chutes pop with painterly warm-vs-cool contrast!
@@ -114,14 +114,19 @@ void fragment() {
 	vec3 sss_tint = mix(vec3(0.14, 0.86, 0.84), vec3(0.28, 0.76, 0.68), sunset_warm * 0.65);
 	vec3 sss_glow = sss_tint * sun_color * (back_scatter * 0.52 + 0.14 * day_gate * sun_vis);
 	vec3 lit_water = core_tod * water_light * mix(0.78, 1.08, ndotl) * (1.0 + rim * 0.36) + sss_glow;
-	vec3 foam_tod_tint = mix(mix(foam_color, vec3(1.00, 0.88, 0.68), sunset_warm * 0.86), vec3(0.58, 0.66, 0.78), night_gate * 0.82);
+	// Preserve crisp silvery-white tumbling foam contrast against dark indigo water under blue moonlight!
+	float lt_lum = dot(light_term, vec3(0.299, 0.587, 0.114));
+	vec3 night_foam_light = mix(light_term, vec3(lt_lum) * vec3(0.86, 0.95, 1.12), 0.68);
+	vec3 foam_light_eff = mix(light_term * 1.14, night_foam_light * 1.18, night_gate);
+	vec3 foam_tod_tint = mix(mix(foam_color, vec3(1.00, 0.88, 0.68), sunset_warm * 0.86), vec3(0.78, 0.87, 0.96), night_gate * 0.82);
 	foam_tod_tint = mix(foam_tod_tint, vec3(0.56, 0.64, 0.70), storm_dim * 0.52);
-	vec3 lit_foam = foam_tod_tint * (light_term * mix(1.14, 0.58, night_gate) + sun_color * ((rim * 0.48 + sunset_warm * 0.65) * sun_vis));
+	float moon_glint = pow(clamp(dot(n_lit, H), 0.0, 1.0), 36.0) * (0.45 + 0.55 * n_fine) * night_gate * sun_vis;
+	vec3 lit_foam = foam_tod_tint * (foam_light_eff + sun_color * ((rim * 0.48 + sunset_warm * 0.65) * sun_vis) + vec3(0.45, 0.58, 0.76) * (rim * 0.16 * night_gate));
 	// Delicate sunlit mist-prism iridescence near aerated plunge curtain (UV.y 0.56..0.94, pairs w/ Pass Q15 rainbow!).
 	float plunge_zone = smoothstep(0.54, 0.76, UV.y) * smoothstep(0.98, 0.78, UV.y) * day_gate * sun_vis * (1.0 - storm_dim);
 	float prism_t = clamp((UV.x + (n_broad - 0.5) * 0.16) * 1.45 - 0.22, 0.0, 1.0);
 	vec3 prism_col = 0.5 + 0.5 * cos(6.28318 * (prism_t * 0.78 + vec3(0.02, 0.34, 0.66)));
-	vec3 col = mix(lit_water, lit_foam, foam_mask) + sun_color * (sparkle * 0.78) + prism_col * (plunge_zone * foam_mask * 0.11);
+	vec3 col = mix(lit_water, lit_foam, foam_mask) + sun_color * (sparkle * 0.78) + vec3(0.68, 0.80, 0.96) * (moon_glint * 0.32) + prism_col * (plunge_zone * foam_mask * 0.11);
 
 	// Gentle aerial horizon blend so distant cliff cascades sit harmoniously in coastal haze.
 	float dist = length(CAMERA_POSITION_WORLD - v_world_pos);
