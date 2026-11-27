@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (62 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (66 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna, twilight lantern halos & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -112,6 +112,13 @@ const SEA_LORE_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_forge_anvil.glb",
 ]
 
+const CORSAIR_RELICS_LANDMARKS: Array[String] = [
+	"pirate_bounty_gallows_post.glb",
+	"ancient_kraken_stone_fountain.glb",
+	"coastal_salted_fish_drying_rack.glb",
+	"volcanic_obsidian_dragon_maw.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -175,6 +182,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_tidal_obelisk_mirror.glb": 1,
 	"smuggler_rope_cargo_hoist.glb": 1,
 	"volcanic_obsidian_forge_anvil.glb": 1,
+	"pirate_bounty_gallows_post.glb": 1,
+	"ancient_kraken_stone_fountain.glb": 1,
+	"coastal_salted_fish_drying_rack.glb": 1,
+	"volcanic_obsidian_dragon_maw.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -227,6 +238,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_tidal_obelisk_mirror.glb": ["Lantern_MirrorShrine*"],
 	"smuggler_rope_cargo_hoist.glb": ["Lantern_SmugglerHoist*"],
 	"volcanic_obsidian_forge_anvil.glb": ["Lantern_VolcForge*"],
+	"pirate_bounty_gallows_post.glb": ["Lantern_BountyPost*"],
+	"ancient_kraken_stone_fountain.glb": ["Lantern_KrakenShrine*"],
+	"coastal_salted_fish_drying_rack.glb": ["Lantern_FishRack*"],
+	"volcanic_obsidian_dragon_maw.glb": ["Lantern_DragonMaw*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -281,6 +296,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"MirrorShrine_",
 	"SmugglerHoist_",
 	"VolcForge_",
+	"BountyPost_",
+	"KrakenShrine_",
+	"FishRack_",
+	"DragonMaw_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -421,7 +440,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(ISLAND_LORE_LANDMARKS)
 	all_landmarks.append_array(NAUTICAL_CRAFT_LANDMARKS)
 	all_landmarks.append_array(SEA_LORE_LANDMARKS)
-	check_eq(all_landmarks.size(), 62, "expected 62 sculpted landmark GLBs")
+	all_landmarks.append_array(CORSAIR_RELICS_LANDMARKS)
+	check_eq(all_landmarks.size(), 66, "expected 66 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -527,14 +547,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 62 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 66 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check_eq(unique_pbr_paths.size(), 30,
-		"expected strictly 30 unique shared landmark PBR texture paths across all 62 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected strictly 30 unique shared landmark PBR texture paths across all 66 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -833,7 +853,7 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		"Cutlass Cay _foliage_materials contains IslandDetails wind shader material")
 
 	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft,
-	#     Wave I-15 Trail Masonry & Gaussian Halo Craft & Trail Pebble Hygiene assertions.
+	#     Wave I-15 Trail Masonry & Gaussian Halo Craft, Wave I-16 Botanical Wildflower Craft & Trail Pebble Hygiene assertions.
 	if cc_details != null:
 		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
 		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
@@ -906,6 +926,10 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Wave I-15 TrailSteppingStones mesh must have >= 80 tris (hand-chiseled flagstone + companion cobbles cluster, got %d)" % stone_tris)
 		check(halo_tris >= 60,
 			"Wave I-15 LandmarkLanternHalos mesh must have >= 60 tris (80-tri 16-gon 3-ring Gaussian billboard, got %d)" % halo_tris)
+
+		print("    wave_i16 botanical wildflower tris: hibiscus=%d" % hib_tris)
+		check(hib_tris >= 300,
+			"Wave I-16 HibiscusShrubs mesh must have >= 300 tris (upgraded 18-leaf / 8-blossom / 3-bud crown, got %d)" % hib_tris)
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1480,6 +1504,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(sl_glb),
 			"Wave I-15 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % sl_glb)
 
+	# 2h-7. Verify Wave I-16 (66-Landmark Corsair-Relics Milestone) landmarks (pirate bounty gallows post,
+	#       ancient kraken stone fountain, coastal salted fish drying rack & volcanic obsidian dragon maw)
+	#       + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var bounty_post_total := 0
+	var kraken_shrine_total := 0
+	var fish_rack_total := 0
+	var dragon_maw_total := 0
+	for isl_i16 in all_islands:
+		bounty_post_total += isl_i16.find_children("BountyPost_*", "Node3D", true, false).size()
+		kraken_shrine_total += isl_i16.find_children("KrakenShrine_*", "Node3D", true, false).size()
+		fish_rack_total += isl_i16.find_children("FishRack_*", "Node3D", true, false).size()
+		dragon_maw_total += isl_i16.find_children("DragonMaw_*", "Node3D", true, false).size()
+	print("    wave_i16 corsair_relics landmarks: bounty_posts=%d kraken_shrines=%d fish_racks=%d dragon_maws=%d lantern_halos=%d" % [
+		bounty_post_total, kraken_shrine_total, fish_rack_total, dragon_maw_total, total_lantern_halos])
+	check(bounty_post_total >= 4, "Wave I-16 spawns >= 4 BountyPost_* landmarks (got %d)" % bounty_post_total)
+	check(kraken_shrine_total >= 4, "Wave I-16 spawns >= 4 KrakenShrine_* landmarks (got %d)" % kraken_shrine_total)
+	check(fish_rack_total >= 4, "Wave I-16 spawns >= 4 FishRack_* landmarks (got %d)" % fish_rack_total)
+	check(dragon_maw_total >= 3, "Wave I-16 spawns >= 3 DragonMaw_* landmarks (got %d)" % dragon_maw_total)
+	check(total_lantern_halos >= 160,
+		"Wave I-16 archipelago must batch >= 160 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for cr_glb in CORSAIR_RELICS_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(cr_glb),
+			"Wave I-16 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % cr_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1522,10 +1572,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i15 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i16 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 230,
-		"grounding audit must inspect >= 230 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 248,
+		"grounding audit must inspect >= 248 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

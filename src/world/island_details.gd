@@ -10,7 +10,7 @@ extends Node3D
 ## radius-scaled distance culling):
 ##   1. `GrassClumps`          — 28-blade slender 3-tuft swaying grass + 3 golden plumed seed-stalks (`foliage_wind.gdshader`)
 ##   2. `JungleFerns`          — 10-frond 2-tier pinnate serrated fern rosettes (`foliage_wind.gdshader`)
-##   3. `HibiscusShrubs`       — 16-leaf 3-tier tropical bushes crowned with 6 vivid 5-petal blossoms (`foliage_wind.gdshader`)
+##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
 ##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted spiral shell & 5-arm coral sea star along wet/dry sand
 ##   6. `TidalOutcrops`        — undercut stratified barnacle-ringed coastal rock clusters emerging from tide pools & surf
@@ -960,10 +960,12 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("ShipyardRack"):
 		return 5.2
 	if cname.begins_with("SundialPlaza") or cname.begins_with("MapTent") \
-			or cname.begins_with("SmugglerHoist") or cname.begins_with("VolcForge"):
+			or cname.begins_with("SmugglerHoist") or cname.begins_with("VolcForge") \
+			or cname.begins_with("KrakenShrine") or cname.begins_with("DragonMaw"):
 		return 5.0
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
-			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine"):
+			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
+			or cname.begins_with("BountyPost") or cname.begins_with("FishRack"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
@@ -3768,7 +3770,7 @@ static func _build_fern_mesh() -> ArrayMesh:
 	return st.commit()
 
 
-# ------------------------------------------------------------------ Mesh 3: Tropical Hibiscus Shrub (16 Sleek Leaves + 6 Blossoms)
+# ------------------------------------------------------------------ Mesh 3: Tropical Hibiscus Shrub (18 Sleek Leaves + 8 Blossoms + 3 Wildflower Buds)
 
 static func _build_hibiscus_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -3795,7 +3797,7 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		_append_tapered_limb_uv2(st, root_off, tip, 0.062 if si == 0 else 0.045, 0.025, 4,
 			bark_lo_ao, bark_hi_ao, Vector2(0.0, float(si) * 0.16), Vector2(0.18, float(si) * 0.16))
 
-	# 2. 16 sleek multi-tiered serrated/pointed glossy tropical leaves (lower + mid + upper sunlit tiers, 128 tris).
+	# 2. 18 sleek multi-tiered serrated/pointed glossy tropical leaves (2 basal + 6 lower + 6 mid + 4 upper sunlit, 144 tris).
 	var leaf_base := Color(0.11, 0.38, 0.15, 1.0).srgb_to_linear()
 	var leaf_mid := Color(0.22, 0.62, 0.20, 1.0).srgb_to_linear()
 	var leaf_upper := Color(0.32, 0.72, 0.22, 1.0).srgb_to_linear()
@@ -3803,6 +3805,9 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 
 	# [anchor_pos, azimuth, pitch_rad, length, half_w, phase_01]
 	var leaves: Array[Array] = [
+		# Basal under-canopy grounding leaves (2 deeper shadowed leaves anchored near stem base for lush root contact-AO)
+		[Vector3(0.08, 0.14,  0.10), 0.84, 0.14, 0.49, 0.178, 0.08],
+		[Vector3(-0.09, 0.13, -0.08), 3.96, 0.12, 0.47, 0.172, 0.56],
 		# Lower skirt tier (6 sleek tapered leaves: length 0.51..0.56 m, hw 0.16..0.18 m)
 		[Vector3(0.22, 0.28,  0.10), 0.28, 0.22, 0.55, 0.175, 0.04],
 		[Vector3(0.10, 0.26,  0.22), 1.32, 0.18, 0.52, 0.165, 0.15],
@@ -3848,28 +3853,31 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		var c1_m := Color(leaf_mid.r * 0.84, leaf_mid.g * 0.88, leaf_mid.b * 0.84, 1.0)
 		var c2_m := Color(leaf_upper.r * 0.88, leaf_upper.g * 0.92, leaf_upper.b * 0.88, 1.0)
 
-		var leaf_tip_lift := 1.07 if anchor.y >= 0.52 else (1.06 if anchor.y >= 0.38 else 1.05)
+		var is_basal := anchor.y < 0.20
+		var leaf_root_ao := 0.66 if is_basal else 0.75
+		var leaf_mid_ao := 0.68 if is_basal else 0.76
+		var leaf_tip_lift := 0.94 if is_basal else (1.07 if anchor.y >= 0.52 else (1.06 if anchor.y >= 0.38 else 1.05))
 		var c_p0 := _scale_flora_linear(leaf_base,
-			_flora_contact_ao_gain(p0.y, 0.0, 0.75, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p0.y, 0.0, leaf_root_ao, leaf_tip_lift, 0.56))
 		var c_p1 := _scale_flora_linear(c1_m,
-			_flora_contact_ao_gain(p1.y, 0.36, 0.75, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p1.y, 0.36, leaf_root_ao, leaf_tip_lift, 0.56))
 		var c_l1 := _scale_flora_linear(leaf_mid,
-			_flora_contact_ao_gain(l1.y, 0.40, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(l1.y, 0.40, leaf_mid_ao, leaf_tip_lift, 0.56))
 		var c_r1 := _scale_flora_linear(leaf_mid,
-			_flora_contact_ao_gain(r1.y, 0.40, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(r1.y, 0.40, leaf_mid_ao, leaf_tip_lift, 0.56))
 		var c_p2 := _scale_flora_linear(c2_m,
-			_flora_contact_ao_gain(p2.y, 0.70, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p2.y, 0.70, leaf_mid_ao, leaf_tip_lift, 0.56))
 		var c_l2 := _scale_flora_linear(leaf_upper,
-			_flora_contact_ao_gain(l2.y, 0.74, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(l2.y, 0.74, leaf_mid_ao, leaf_tip_lift, 0.56))
 		var c_r2 := _scale_flora_linear(leaf_upper,
-			_flora_contact_ao_gain(r2.y, 0.74, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(r2.y, 0.74, leaf_mid_ao, leaf_tip_lift, 0.56))
 		var c_p3 := _scale_flora_linear(leaf_tip,
-			_flora_contact_ao_gain(p3.y, 1.0, 0.76, leaf_tip_lift, 0.56))
+			_flora_contact_ao_gain(p3.y, 1.0, leaf_mid_ao, leaf_tip_lift, 0.56))
 
-		var uv2_a := Vector2(0.16, phase_01)
-		var uv2_b := Vector2(0.32, phase_01)
-		var uv2_c := Vector2(0.46, phase_01)
-		var uv2_d := Vector2(0.58, phase_01)
+		var uv2_a := Vector2(0.08 if is_basal else 0.16, phase_01)
+		var uv2_b := Vector2(0.18 if is_basal else 0.32, phase_01)
+		var uv2_c := Vector2(0.28 if is_basal else 0.46, phase_01)
+		var uv2_d := Vector2(0.36 if is_basal else 0.58, phase_01)
 
 		# 8-triangle V-creased serrated/pointed oval glossy tropical leaf.
 		_add_foliage_tri(st, p0, l1, p1, c_p0, c_l1, c_p1,
@@ -3889,7 +3897,7 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		_add_foliage_tri(st, p2, p3, r2, c_p2, c_p3, c_r2,
 			Vector2(0.5, 0.70), Vector2(0.5, 1.0), Vector2(0.86, 0.70), uv2_c, uv2_d, uv2_c)
 
-	# 3. 6 vibrant sculpted 5-petal tropical Hibiscus blossoms + golden stamen stalks (78 tris)!
+	# 3. 8 vibrant sculpted 5-petal tropical Hibiscus blossoms + golden stamen stalks (104 tris)!
 	# Slight blue lift on pink/crimson/magenta petals offsets foliage_wind.gdshader's warm golden tip tint,
 	# while 1.05x sunlit petal luminance keeps every bloom crisp & vivid against the shaded canopy.
 	# [pos, axis, radius, throat_srgb, petal_srgb, phase_01, cup_scale]
@@ -3900,6 +3908,8 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 		[Vector3(-0.22, 0.64, -0.40), Vector3(-0.36, 0.70, -0.62), 0.21, Color(0.88, 0.42, 0.06), Color(1.00, 0.84, 0.24), 0.64, 1.00], # Tropical gold
 		[Vector3(0.36, 0.60, -0.32), Vector3(0.56, 0.66, -0.50), 0.21, Color(0.76, 0.12, 0.14), Color(1.00, 0.34, 0.28), 0.80, 1.00], # Bright coral-red
 		[Vector3(-0.18, 0.86, -0.14), Vector3(-0.34, 0.92, -0.24), 0.19, Color(0.68, 0.06, 0.38), Color(1.00, 0.26, 0.72), 0.93, 1.38], # Magenta-rose crown bud
+		[Vector3(-0.18, 0.86,  0.26), Vector3(-0.46, 0.78,  0.42), 0.215, Color(0.86, 0.24, 0.08), Color(1.00, 0.62, 0.26), 0.36, 1.04], # Sunlit warm golden-coral upper crown
+		[Vector3(0.24, 0.85, -0.20), Vector3(0.48, 0.76, -0.44), 0.21, Color(0.52, 0.06, 0.34), Color(0.94, 0.20, 0.76), 0.72, 1.06],  # Rich magenta-plum upper crown
 	]
 	var stamen_col := _scale_flora_linear(Color(1.00, 0.90, 0.32, 1.0).srgb_to_linear(), 1.05)
 
@@ -3933,18 +3943,99 @@ static func _build_hibiscus_mesh() -> ArrayMesh:
 			_add_foliage_tri(st, b_pos, p_tip, p_r, col_throat, col_petal, col_petal,
 				Vector2(0.5, 0.0), Vector2(0.5, 1.0), Vector2(1.0, 0.6), uv2_ctr, uv2_rim, uv2_rim)
 
-		# Protruding golden Hibiscus stamen stalk pyramid (3 tris).
+		# Protruding golden Hibiscus stamen stalk pyramid (3 outward-normal tris).
 		var st_tip := b_pos + b_axis * (b_rad * 0.68)
 		var sr := b_rad * 0.15
 		var sb0 := b_pos + u * sr
 		var sb1 := b_pos + (-u * 0.5 + v * 0.866) * sr
 		var sb2 := b_pos + (-u * 0.5 - v * 0.866) * sr
-		_add_foliage_tri(st, sb0, sb1, st_tip, col_throat, col_throat, stamen_col,
-			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
-		_add_foliage_tri(st, sb1, sb2, st_tip, col_throat, col_throat, stamen_col,
-			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
-		_add_foliage_tri(st, sb2, sb0, st_tip, col_throat, col_throat, stamen_col,
-			Vector2(0.5, 0.5), Vector2(0.5, 0.5), Vector2(0.5, 1.0), uv2_ctr, uv2_ctr, uv2_rim)
+		_add_outward_tri_uv2(st, sb0, sb1, st_tip, b_pos, col_throat, col_throat, stamen_col,
+			uv2_ctr, uv2_ctr, uv2_rim)
+		_add_outward_tri_uv2(st, sb1, sb2, st_tip, b_pos, col_throat, col_throat, stamen_col,
+			uv2_ctr, uv2_ctr, uv2_rim)
+		_add_outward_tri_uv2(st, sb2, sb0, st_tip, b_pos, col_throat, col_throat, stamen_col,
+			uv2_ctr, uv2_ctr, uv2_rim)
+
+	# 4. 3 delicate perched unopened wildflower bud stalks rising gently between foliage tiers (96 tris).
+	# Each stalk builds a curved 2-segment green pedicel (12 tris), a flared 4-sided emerald calyx cup (8 tris),
+	# and a spiraled tapered closed petal bud in crimson, coral, or mango-gold (12 tris) with smooth UV2.x sway.
+	var stalk_lo := _scale_flora_linear(Color(0.15, 0.40, 0.14, 1.0).srgb_to_linear(), 0.90)
+	var stalk_mid := _scale_flora_linear(Color(0.22, 0.56, 0.18, 1.0).srgb_to_linear(), 0.98)
+	var calyx_lo := _scale_flora_linear(Color(0.18, 0.52, 0.16, 1.0).srgb_to_linear(), 0.96)
+	var calyx_hi := _scale_flora_linear(Color(0.32, 0.70, 0.22, 1.0).srgb_to_linear(), 1.04)
+
+	# [p_root, p_knee, p_calyx, bud_len, bud_r, throat_srgb, body_srgb, tip_srgb, phase_01]
+	var bud_stalks: Array[Array] = [
+		[Vector3(0.06, 0.44,  0.16), Vector3(0.09, 0.68,  0.29), Vector3(0.11, 0.86,  0.37),
+			0.155, 0.050, Color(0.66, 0.06, 0.16), Color(0.98, 0.18, 0.34), Color(1.00, 0.34, 0.46), 0.19], # Crimson bud
+		[Vector3(0.02, 0.44, -0.16), Vector3(0.03, 0.68, -0.29), Vector3(0.04, 0.87, -0.38),
+			0.150, 0.048, Color(0.76, 0.14, 0.14), Color(1.00, 0.40, 0.30), Color(1.00, 0.62, 0.42), 0.54], # Coral bud
+		[Vector3(-0.20, 0.45, 0.04), Vector3(-0.35, 0.68, 0.05), Vector3(-0.43, 0.85, 0.06),
+			0.148, 0.048, Color(0.84, 0.34, 0.05), Color(1.00, 0.68, 0.14), Color(1.00, 0.88, 0.32), 0.84], # Mango-gold bud
+	]
+
+	for bsspec in bud_stalks:
+		var p_root: Vector3 = bsspec[0] as Vector3
+		var p_knee: Vector3 = bsspec[1] as Vector3
+		var p_calyx: Vector3 = bsspec[2] as Vector3
+		var bud_len: float = float(bsspec[3])
+		var bud_r: float = float(bsspec[4])
+		var col_b_throat := _scale_flora_linear((bsspec[5] as Color).srgb_to_linear(), 0.96)
+		var col_b_body := _scale_flora_linear((bsspec[6] as Color).srgb_to_linear(), 1.04)
+		var col_b_tip := _scale_flora_linear((bsspec[7] as Color).srgb_to_linear(), 1.06)
+		var b_phase: float = float(bsspec[8])
+
+		var uv2_s0 := Vector2(0.22, b_phase)
+		var uv2_s1 := Vector2(0.44, b_phase)
+		var uv2_cb := Vector2(0.64, b_phase)
+		var uv2_cr := Vector2(0.72, b_phase)
+		var uv2_bm := Vector2(0.82, b_phase)
+		var uv2_bt := Vector2(0.94, b_phase)
+
+		# Slender curved 2-segment herbaceous green pedicel (12 outward tris).
+		_append_tapered_limb_uv2(st, p_root, p_knee, 0.014, 0.011, 3,
+			stalk_lo, stalk_mid, uv2_s0, uv2_s1)
+		_append_tapered_limb_uv2(st, p_knee, p_calyx, 0.011, 0.010, 3,
+			stalk_mid, calyx_lo, uv2_s1, uv2_cb)
+
+		var bud_dir := ((p_calyx - p_knee).normalized() + Vector3(0.0, 0.65, 0.0)).normalized()
+		var bud_ref := Vector3.RIGHT if absf(bud_dir.dot(Vector3.RIGHT)) < 0.88 else Vector3.FORWARD
+		var bud_u := bud_dir.cross(bud_ref).normalized()
+		var bud_v := bud_dir.cross(bud_u).normalized()
+
+		# Slender 4-sided flared emerald green calyx cup clasping the bud throat (8 outward tris).
+		var p_calyx_rim := p_calyx + bud_dir * (bud_len * 0.34)
+		var calyx_ring0: Array[Vector3] = []
+		var calyx_ring1: Array[Vector3] = []
+		var p_bud_base := p_calyx + bud_dir * (bud_len * 0.24)
+		var p_bud_belly := p_calyx + bud_dir * (bud_len * 0.56)
+		var p_bud_tip := p_calyx + bud_dir * bud_len
+		var bud_ring0: Array[Vector3] = []
+		var bud_ring1: Array[Vector3] = []
+
+		for k in 4:
+			var ang0 := float(k) / 4.0 * TAU + b_phase * 1.5
+			var rad0 := bud_u * cos(ang0) + bud_v * sin(ang0)
+			var ang1 := ang0 + 0.36
+			var rad1 := bud_u * cos(ang1) + bud_v * sin(ang1)
+			calyx_ring0.append(p_calyx + rad0 * 0.010)
+			calyx_ring1.append(p_calyx_rim + rad0 * (bud_r * 0.92))
+			bud_ring0.append(p_bud_base + rad0 * (bud_r * 0.72))
+			bud_ring1.append(p_bud_belly + rad1 * bud_r)
+
+		var calyx_ctr := (p_calyx + p_calyx_rim) * 0.5
+		var bud_mid_ctr := (p_bud_base + p_bud_belly) * 0.5
+		for k in 4:
+			var nk := (k + 1) % 4
+			_add_outward_quad_uv2(st, calyx_ring0[k], calyx_ring1[k], calyx_ring1[nk], calyx_ring0[nk],
+				calyx_ctr, calyx_lo, calyx_hi, calyx_hi, calyx_lo, uv2_cb, uv2_cr, uv2_cr, uv2_cb)
+			# Spiraled unopened petal shoulder emerging cleanly from inside the green calyx (8 outward tris).
+			_add_outward_quad_uv2(st, bud_ring0[k], bud_ring1[k], bud_ring1[nk], bud_ring0[nk],
+				bud_mid_ctr, col_b_throat, col_b_body, col_b_body, col_b_throat,
+				uv2_cr, uv2_bm, uv2_bm, uv2_cr)
+			# Sculptural tapered unopened bud apex (4 outward tris).
+			_add_outward_tri_uv2(st, bud_ring1[k], p_bud_tip, bud_ring1[nk],
+				p_bud_belly, col_b_body, col_b_tip, col_b_body, uv2_bm, uv2_bt, uv2_bm)
 
 	st.generate_normals()
 	return st.commit()
