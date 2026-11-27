@@ -172,18 +172,22 @@ void fragment() {
 	METALLIC = 0.0;
 	SPECULAR = mix(0.28, 0.36, v_tip_weight * is_leaf);
 
-	// Translucent sunlit palm-frond subsurface backlight (veined forward scatter + thin golden-lime rim!).
+	// Translucent sunlit palm-frond, blossom & sea-oat plume subsurface backlight
+	// (golden-hour apricot rim translucency at sunrise/sunset, 100% gated off at moonlit night via true_day!).
 	vec3 s_dir = normalize(sun_dir);
 	vec3 view_w = normalize(CAMERA_POSITION_WORLD - v_world);
-	float forward_scatter = pow(clamp(dot(-view_w, s_dir), 0.0, 1.0), 2.6);
+	float forward_scatter = pow(clamp(dot(-view_w, s_dir), 0.0, 1.0), 2.5);
 	float rim_back = pow(1.0 - abs(dot(n_w, view_w)), 2.2) * clamp(dot(view_w, -s_dir) * 0.5 + 0.5, 0.0, 1.0);
 	float back_lit = clamp(-dot(n_w, s_dir) * 0.55 + 0.45, 0.0, 1.0);
 	float sun_sh = cloud_light(v_world.xz);
 	float thinness = (0.30 + 0.70 * smoothstep(0.08, 0.92, v_tip_weight)) * mix(0.82, 1.24, vein_ridge * 0.55 + cluster_dapple * 0.45);
-	float day_gate = smoothstep(0.02, 0.18, s_dir.y) * true_day;
-	float sss_factor = (back_lit * 0.46 + forward_scatter * 1.15 + rim_back * 0.55) * sss_strength * thinness * sun_sh * day_gate;
-	vec3 sss_tint = mix(vec3(1.22, 0.92, 0.72), vec3(1.24, 1.32, 0.46), is_leaf);
-	EMISSION = leaf_col * sss_tint * sun_color * (sss_factor * 0.44);
+	float golden_hr = true_day * smoothstep(-0.01, 0.05, s_dir.y) * smoothstep(0.26, 0.07, s_dir.y);
+	float day_gate = smoothstep(0.005, 0.14, s_dir.y) * true_day;
+	float sss_factor = (back_lit * 0.46 + forward_scatter * 1.18 + rim_back * mix(0.55, 0.88, golden_hr)) * sss_strength * thinness * sun_sh * day_gate;
+	vec3 leaf_sss = mix(vec3(1.24, 1.32, 0.46), vec3(1.40, 1.06, 0.44), golden_hr * 0.72);
+	vec3 petal_sss = mix(vec3(1.26, 0.96, 0.76), vec3(1.42, 1.04, 0.64), golden_hr * 0.68);
+	vec3 sss_tint = mix(petal_sss, leaf_sss, is_leaf);
+	EMISSION = leaf_col * sss_tint * sun_color * (sss_factor * mix(0.44, 0.58, golden_hr));
 }
 
 void light() {
