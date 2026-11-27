@@ -637,7 +637,7 @@ void fragment() {
 		web_src = max(web_src, crest_foam * 0.85 + storm * 0.36 * smoothstep(0.06, 0.24, slope_len) * deep_water);
 		float web_amt = near_web_fade * clamp(web_src, 0.0, 1.0) * mix(0.26, 1.20, web_patch);
 
-		float soft = clamp(0.045 + fp * 0.55, 0.045, 0.45);
+		float soft = clamp(0.036 + fp * 0.42, 0.036, 0.42);
 		float amount = clamp(max(min(crest_foam, 0.78), shore_foam * 0.92), 0.0, 0.96);
 		float streak = storm * clamp(max(linger, standing) * 1.85 - shore_foam, 0.0, 1.0) * 0.72;
 		// Keep shallow beach surf lace isotropic (un-smeared) while open-sea crests stretch along wave flow.
@@ -652,7 +652,7 @@ void fragment() {
 		// Tight milky turquoise-green aeration strictly beneath active foam patches & ship wakes
 		// (fades cleanly at distance so aerial views never show glowing cyan halos).
 		float aerate_src = clamp(max(heavy_foam * 1.15, web_foam * 0.78) + field * 0.92 + shore_foam * 0.72, 0.0, 1.0);
-		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist) * mix(1.0, 0.28, night_bio);
+		float aerate = smoothstep(0.24, 0.82, aerate_src) * lod_fade * smoothstep(340.0, 45.0, dist) * mix(1.0, 0.28, night_bio) * mix(1.0, 0.68, storm);
 		vec3 milky_light = ambient_color * 0.68 + sun_light * (0.34 + 0.66 * clamp(dot(N, L), 0.0, 1.0));
 		vec3 milky_col = foam_under_color * milky_light * mix(0.72, 1.10, smoothstep(0.55, 1.0, macro_light));
 		col = mix(col, milky_col, clamp(aerate * 0.46 + heavy_foam * 0.24, 0.0, 0.56));
@@ -748,39 +748,50 @@ void fragment() {
 		float hf = smoothstep(horizon_fade_start, horizon_fade_end, dist);
 		col = mix(col, sky_horizon_color, hf);
 	} else {
-		// ---------------- seen from below ----------------
-		vec3 Nd = -N;
+		// ---------------- seen from below (silky liquid-glass Snell's window) ----------------
+		// Soften choppy high-frequency normal variance on the underside so Snell's critical-angle
+		// boundary shimmers as smooth liquid glass rather than jagged posterized contour islands.
+		vec3 Nu = normalize(mix(n_geo, N, 0.48));
+		vec3 Nd = -Nu;
 		vec3 I = -V;
-		vec3 T = refract(I, Nd, 1.333);
 		float cos_i = max(dot(V, Nd), 0.0);
 		vec3 Rd = reflect(I, Nd);
-		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * (0.75 + 2.2 * pow(1.0 - abs(Rd.y), 2.0));
-		if (dot(T, T) < 1e-5) {
+		float swell_glow = smoothstep(-0.35, 0.55, h_rel) * 0.30;
+		vec3 mirror = uw_ambient(normalize(vec3(Rd.x, -abs(Rd.y), Rd.z))) * (0.78 + 1.85 * pow(1.0 - abs(Rd.y), 2.0) + swell_glow);
+		float eta = 1.333;
+		float k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
+		float tn = sqrt(max(k, 0.0));
+		// Continuous critical-angle Fresnel blend (zero hard TIR cutoff step!).
+		float window_w = smoothstep(0.0, 0.42, tn);
+		if (window_w <= 0.001) {
 			col = mirror;
 		} else {
-			T = normalize(T);
-			vec3 T_sky = normalize(vec3(T.x, max(T.y, 0.06), T.z));
+			vec3 T = normalize(eta * I + (eta * cos_i - tn) * Nd);
+			vec3 T_sky = normalize(vec3(T.x, max(T.y, 0.08), T.z));
 			vec3 sky = ocean_sky(T_sky);
 			float sd = max(dot(T_sky, L), 0.0);
-			sky += sun_light * (pow(sd, 350.0) * 14.0 + pow(sd, 24.0) * 0.9 + pow(sd, 4.0) * 0.25);
+			sky += sun_light * (pow(sd, 240.0) * 10.0 + pow(sd, 20.0) * 0.85 + pow(sd, 4.0) * 0.24);
+			// Soft aqueous hint of above-water silhouettes without hard posterized screen-space rings.
 			vec4 clip = PROJECTION_MATRIX * (VIEW_MATRIX * vec4(T, 0.0));
 			vec2 suv = clip.xy / max(clip.w, 1e-4) * 0.5 + 0.5;
 			vec2 edge = min(suv, 1.0 - suv);
-			float tn = max(dot(T, N), 0.0);
-			float snell_soft = smoothstep(0.14, 0.46, tn);
-			float on_screen = step(1e-4, clip.w) * smoothstep(0.0, 0.12, min(edge.x, edge.y)) * snell_soft;
-			vec3 sv;
-			float raw_u;
-			float sz = linear_depth(clamp(suv, vec2(0.001), vec2(0.999)), INV_PROJECTION_MATRIX, sv, raw_u);
-			vec3 sw = (INV_VIEW_MATRIX * vec4(sv, 1.0)).xyz;
-			on_screen *= step(1e-5, raw_u) * step(-0.2, sw.y);
-			sky = mix(sky, texture(screen_tex, clamp(suv, vec2(0.001), vec2(0.999))).rgb, on_screen * 0.80);
+			float on_screen = step(1e-4, clip.w) * smoothstep(0.0, 0.16, min(edge.x, edge.y)) * smoothstep(0.18, 0.58, tn);
+			if (on_screen > 0.01) {
+				vec3 sv;
+				float raw_u;
+				linear_depth(clamp(suv, vec2(0.001), vec2(0.999)), INV_PROJECTION_MATRIX, sv, raw_u);
+				vec3 sw = (INV_VIEW_MATRIX * vec4(sv, 1.0)).xyz;
+				float above_w = smoothstep(1e-5, 0.0005, raw_u) * smoothstep(0.10, 1.15, sw.y);
+				vec3 sil = mix(sky * 0.55, texture(screen_tex, clamp(suv, vec2(0.001), vec2(0.999))).rgb, 0.55);
+				sky = mix(sky, sil, on_screen * above_w * 0.34);
+			}
 			float fr = clamp(0.04 + 0.96 * pow(1.0 - tn, 2.35), 0.0, 1.0);
-			col = mix(sky, mirror, fr);
-			col *= 1.0 + 0.22 * smoothstep(0.55, 1.0, cos_i);
+			float trans_w = window_w * (1.0 - fr);
+			col = mix(mirror, sky, trans_w);
+			col *= 1.0 + 0.18 * smoothstep(0.55, 1.0, cos_i) * window_w;
 		}
 		float f_under = max(smoothstep(foam_crest_start, foam_crest_full, jac), field_foam(v_rest, dist));
-		col *= 1.0 - 0.45 * f_under;
+		col *= 1.0 - 0.38 * f_under;
 		col = uw_apply(col, dist, I) + uw_shafts(cam, I, dist, FRAGCOORD.xy);
 	}
 	ALBEDO = col;
