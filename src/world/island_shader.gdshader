@@ -410,9 +410,9 @@ void fragment() {
 	col_shallow = mix(col_shallow, vec3(0.24, 0.44, 0.34), seagrass_bed * 0.42);
 	col_shallow = mix(col_shallow, col_shallow * vec3(0.52, 0.50, 0.52), volc * 0.55);
 
-	// Wet shoreline sand: rich warm golden-amber damp swash sand with subtle sea-foam edge & washed shingle.
+	// Wet shoreline sand: rich damp golden-ochre swash sand (balanced R/G avoids pink cast under blue sky Fresnel!).
 	float shore_foam_band = smoothstep(-0.20, 0.12, h) * smoothstep(0.56, 0.18, h + (brush_n - 0.5) * 0.16);
-	vec3 col_wet = wet_sand_color * vec3(0.92, 0.84, 0.72) * mix(0.84, 1.14, ripple_n * 0.38 + pebble_n * 0.62);
+	vec3 col_wet = wet_sand_color * vec3(0.88, 0.88, 0.74) * mix(0.84, 1.14, ripple_n * 0.38 + pebble_n * 0.62);
 	col_wet = mix(col_wet, col_wet * vec3(0.76, 0.70, 0.60), shingle_patch * 0.36);
 	col_wet = mix(col_wet, vec3(0.94, 0.97, 0.95), shore_foam_band * smoothstep(0.52, 0.88, brush_n * 0.62 + pebble_n * 0.38) * 0.24);
 	col_wet = mix(col_wet, col_wet * vec3(0.50, 0.46, 0.46), volc * 0.58);
@@ -663,7 +663,7 @@ void fragment() {
 			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.68, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail * 0.58, sa, sn_o);
 			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.06)) * vec3(1.03, 1.01, 0.98);
 			vec3 reef_pbr = mix(ground_col, sa_pop * mix(vec3(0.56, 0.68, 0.64), vec3(0.82, 0.88, 0.78), t_shallow), 0.74);
-			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.68, 0.56, 0.38), 0.54);
+			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.68, 0.64, 0.45), 0.56);
 			vec3 dry_pbr = mix(col_dry, sa_pop, 0.80);
 			vec3 shore_pbr = mix(reef_pbr, wet_pbr, t_wet_in);
 			tex_alb_acc += mix(shore_pbr, dry_pbr, t_dry_in) * w_sand;
@@ -796,10 +796,10 @@ void light() {
 		float spec_amp = mix(mix(0.05, 0.20, micro_sheen), 0.72, wet_m);
 		SPECULAR_LIGHT += pow(ndh, spec_pow) * spec_amp * ndl * ATTENUATION * LIGHT_COLOR * sun;
 		if (wet_m > 0.01) {
-			float wet_fres = pow(clamp(1.0 - max(dot(NORMAL, VIEW), 0.0), 0.0, 1.0), 3.4);
+			float wet_fres = pow(clamp(1.0 - max(dot(NORMAL, VIEW), 0.0), 0.0, 1.0), 4.0);
 			float sky_gate = clamp(dot(LIGHT_COLOR, vec3(0.333)) * 1.35, 0.08, 1.0);
-			vec3 wet_sky = mix(sky_horizon_color, sky_zenith_color, 0.25) * clamp(sun, 0.42, 1.15);
-			SPECULAR_LIGHT += wet_sky * (wet_fres * 0.36 * wet_m * sky_gate);
+			vec3 wet_sky = mix(sky_horizon_color, sky_zenith_color, 0.12) * vec3(0.92, 1.00, 1.00) * clamp(sun, 0.42, 1.15);
+			SPECULAR_LIGHT += wet_sky * (wet_fres * 0.34 * wet_m * sky_gate);
 		}
 	} else {
 		// Point/spot lights (campfires, lava caldera, tavern/dock/beacon lanterns).
