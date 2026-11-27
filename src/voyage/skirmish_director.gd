@@ -24,6 +24,8 @@ const RESTOCK_BILGE_CLEAR: float = 0.35
 const SHIP_KILL_SCORE: int = 100
 const LEVIATHAN_KILL_SCORE: int = 500
 const SKIRMISH_COMPANY: StringName = &"iron_tide"
+const SFX_RESTOCK_BELL: StringName = &"ship_bell"
+const RESTOCK_BELL_DB: float = -5.0
 
 const STATE_NAMES: Array[String] = ["IDLE", "PREPARING", "COMBAT", "INTERMISSION", "VICTORY"]
 
@@ -85,8 +87,10 @@ var elapsed_seconds: float = 0.0
 var profile: Profile = null
 ## When false, `Game.post_notice` banners are suppressed (useful in quiet tests).
 var post_notices: bool = true
-## When false, `Audio.play_stinger` is suppressed.
+## When false, `Audio.play_stinger` and intermission restock bell SFX are suppressed.
 var play_audio: bool = true
+## Number of intermission resupply ship-bell SFX cues played during the current skirmish.
+var restock_bell_count: int = 0
 
 
 func _exit_tree() -> void:
@@ -119,6 +123,7 @@ func start_skirmish(
 	intermission_remaining = 0.0
 	prepare_remaining = maxf(0.0, p_prepare_delay)
 	elapsed_seconds = 0.0
+	restock_bell_count = 0
 
 	state = State.PREPARING
 	if prepare_remaining > 0.0:
@@ -253,6 +258,7 @@ func get_state() -> Dictionary:
 		"intermission_remaining": intermission_remaining,
 		"prepare_remaining": prepare_remaining,
 		"elapsed_seconds": elapsed_seconds,
+		"restock_bell_count": restock_bell_count,
 		"objective": get_objective_summary(),
 	}
 
@@ -337,6 +343,9 @@ func _complete_current_wave() -> void:
 		restock_requested.emit(RESTOCK_CANNONBALLS, RESTOCK_PLANKS)
 		if play_audio and Audio != null:
 			Audio.play_stinger(&"discovery")
+			if Audio.has_sound(SFX_RESTOCK_BELL):
+				Audio.play_sfx(SFX_RESTOCK_BELL, Vector3.INF, RESTOCK_BELL_DB)
+				restock_bell_count += 1
 		_post_notice(
 			"Wave %d Cleared! +%dg Bounty | Supplies Restocked (+%d Shot, +%d Planks) | Next wave in %.0fs!" % [
 				wave_number, bounty_gold, RESTOCK_CANNONBALLS, RESTOCK_PLANKS, INTERMISSION_SECONDS,

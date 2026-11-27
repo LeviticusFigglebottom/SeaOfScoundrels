@@ -21,6 +21,8 @@ const SAIL_CLEAR_DISTANCE_M: float = 45.0
 const SAIL_HELM_DISTANCE_M: float = 35.0
 const ISLAND_APPROACH_RADIUS_M: float = 95.0
 const UNEARTHED_SUB_TIP: String = "Chest unearthed! Carry it aboard and sell at Port Scoundrel!"
+const SFX_STAGE_COMPLETE: StringName = &"coin_jingle"
+const STAGE_CHIME_DB: float = -4.5
 
 const STAGES: Array[Dictionary] = [
 	{
@@ -74,8 +76,10 @@ var target_island_name: String = "Cutlass Cay"
 var profile: Profile = null
 ## When false, `Game.post_notice` banners are suppressed (useful in quiet tests).
 var post_notices: bool = true
-## When false, `Audio.play_stinger` is suppressed.
+## When false, `Audio.play_stinger` and stage-completion chime SFX are suppressed.
 var play_audio: bool = true
+## Number of intermediate stage-completion chime SFX cues played in this tutorial run.
+var stage_chime_count: int = 0
 ## Most recent sub-tip message posted during the tutorial.
 var last_sub_tip: String = ""
 
@@ -144,6 +148,7 @@ func start_tutorial(
 	active = true
 	completed = false
 	current_step = 0
+	stage_chime_count = 0
 	_manned_helm = false
 	_cannon_or_harpoon_fired = false
 	_rowboat_launched_flag = false
@@ -249,6 +254,7 @@ func get_state() -> Dictionary:
 		"target_island_name": target_island_name,
 		"target_island_pos": target_island_pos,
 		"treasure_unearthed": _treasure_unearthed,
+		"stage_chime_count": stage_chime_count,
 		"step": get_current_step_dict(),
 	}
 
@@ -418,6 +424,9 @@ func _complete_current_step() -> void:
 	if current_step >= STAGES.size():
 		_graduate()
 	else:
+		if play_audio and Audio != null and Audio.has_sound(SFX_STAGE_COMPLETE):
+			Audio.play_sfx(SFX_STAGE_COMPLETE, Vector3.INF, STAGE_CHIME_DB)
+			stage_chime_count += 1
 		_on_enter_step(current_step)
 		_emit_current_step()
 	_advancing = false

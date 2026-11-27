@@ -1428,4 +1428,243 @@ func test_q22b_location_banner_arrival_chimes_shimmer_and_shipwright_confirm_fla
 		"Q22B ShipwrightMenu and LocationBanner free cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# 11. Q24B: TitleMenu Page Fade, Rate-Limited Hover Ticks, Focus & Director Chimes
+# ---------------------------------------------------------------------------
+
+func test_q24b_title_menu_page_fade_hover_ticks_and_director_chimes() -> void:
+	Net.start_single_player()
+
+	# 1. Verify every Q24B SFX id is registered in Audio's manifest (zero unknown-SFX warnings).
+	check(Audio != null and Audio.has_sound(TitleMenu.SFX_HOVER_TICK),
+		"Audio manifest registers TitleMenu hover tick SFX '%s'" % String(TitleMenu.SFX_HOVER_TICK))
+	check(Audio != null and Audio.has_sound(SkirmishDirector.SFX_RESTOCK_BELL),
+		"Audio manifest registers SkirmishDirector restock bell SFX '%s'" % String(SkirmishDirector.SFX_RESTOCK_BELL))
+	check(Audio != null and Audio.has_sound(TutorialDirector.SFX_STAGE_COMPLETE),
+		"Audio manifest registers TutorialDirector stage chime SFX '%s'" % String(TutorialDirector.SFX_STAGE_COMPLETE))
+
+	# 2. TitleMenu smooth ease-out page fade (0.22 s), focus handoff & rate-limited hover ticks.
+	var menu := TitleMenu.new()
+	add_child(menu)
+	await get_tree().process_frame
+	menu.set_process(false)
+
+	check(menu.play_hover_audio, "TitleMenu defaults play_hover_audio = true")
+	check_eq(menu.hover_tick_count, 0, "TitleMenu starts with hover_tick_count = 0")
+
+	menu.open_menu(TitleMenu.Page.LANDING)
+	check_near(menu.get_page_fade_alpha(), 0.0, 0.001,
+		"open_menu resets get_page_fade_alpha() to 0.0 for smooth fade-in")
+	check_eq(menu.hover_tick_count, 0,
+		"opening menu and focusing primary Landing button does NOT emit spurious hover ticks")
+	var btn_adv := menu.find_child("BtnAdventure", true, false) as Button
+	check(btn_adv != null and btn_adv.has_focus(),
+		"open_menu(LANDING) grabs keyboard focus on BtnAdventure")
+
+	# Switch to SETUP -> fade resets to 0.0, SetSailBtn grabs focus, advances 0.0 -> mid -> 1.0 across 0.22 s!
+	menu.show_page(TitleMenu.Page.SETUP)
+	var setup_page := menu.find_child("SetupPage", true, false) as Control
+	var sail_btn := menu.find_child("SetSailBtn", true, false) as Button
+	check(setup_page != null and setup_page.visible, "SetupPage is visible on Page.SETUP")
+	check(sail_btn != null and sail_btn.has_focus(),
+		"show_page(SETUP) grabs keyboard focus on SetSailBtn")
+	check_eq(menu.hover_tick_count, 0,
+		"show_page(SETUP) focus handoff does NOT emit spurious hover ticks")
+	check_near(menu.get_page_fade_alpha(), 0.0, 0.001,
+		"show_page(SETUP) resets get_page_fade_alpha() to 0.0")
+	if setup_page != null:
+		check_near(setup_page.modulate.a, 0.0, 0.001, "SetupPage modulate.a starts at 0.0")
+
+	menu.step_ui_transition(0.055)
+	var fade_q1 := menu.get_page_fade_alpha()
+	check(fade_q1 > 0.35 and fade_q1 < 0.75,
+		"step_ui_transition(0.055) smoothly advances ease-out fade into mid-range (got %.3f)" % fade_q1)
+	if setup_page != null:
+		check_near(setup_page.modulate.a, fade_q1, 0.002,
+			"SetupPage modulate.a matches get_page_fade_alpha() mid-fade")
+
+	menu.step_ui_transition(0.055)
+	var fade_half := menu.get_page_fade_alpha()
+	check(fade_half > fade_q1 and fade_half < 0.96,
+		"step_ui_transition(0.11 total) advances monotonically along ease-out cubic (got %.3f)" % fade_half)
+
+	menu.step_ui_transition(0.11)
+	check_near(menu.get_page_fade_alpha(), 1.0, 0.0005,
+		"step_ui_transition(0.22 total) snaps cleanly to 1.0")
+	if setup_page != null:
+		check_near(setup_page.modulate.a, 1.0, 0.0005, "SetupPage modulate.a settles cleanly at 1.0")
+
+	# Switch to COOP & SETTINGS -> focus grabs cleanly and uneven exact sums (0.10 + 0.12 = 0.22) snap to 1.0.
+	menu.show_page(TitleMenu.Page.COOP)
+	var host_btn := menu.find_child("BtnCoopHost", true, false) as Button
+	check(host_btn != null and host_btn.has_focus(), "show_page(COOP) grabs focus on BtnCoopHost")
+	check_near(menu.get_page_fade_alpha(), 0.0, 0.001, "show_page(COOP) resets fade to 0.0")
+	menu.step_ui_transition(0.10)
+	check(menu.get_page_fade_alpha() > 0.50 and menu.get_page_fade_alpha() < 0.99,
+		"COOP page fade mid-transition at 0.10 s (got %.3f)" % menu.get_page_fade_alpha())
+	menu.step_ui_transition(0.12)
+	check_near(menu.get_page_fade_alpha(), 1.0, 0.0005,
+		"COOP page fade snaps cleanly to 1.0 on exact sum 0.10 + 0.12 = 0.22 s")
+
+	menu.show_page(TitleMenu.Page.SETTINGS)
+	var apply_btn := menu.find_child("SettingsApplyBtn", true, false) as Button
+	check(apply_btn != null and apply_btn.has_focus(), "show_page(SETTINGS) grabs focus on SettingsApplyBtn")
+	menu.step_ui_transition(0.22)
+	check_near(menu.get_page_fade_alpha(), 1.0, 0.0005, "SETTINGS page fade completes cleanly at 0.22 s")
+
+	# Rate-limited tactile hover tick SFX on mouse_entered & focus_entered.
+	menu.show_page(TitleMenu.Page.LANDING)
+	menu.step_ui_transition(0.22)
+	var btn_tut := menu.find_child("BtnTutorial", true, false) as Button
+	var btn_skirm := menu.find_child("BtnSkirmish", true, false) as Button
+	var btn_coop := menu.find_child("BtnCoop", true, false) as Button
+	check(btn_tut != null and btn_skirm != null and btn_coop != null,
+		"Landing page primary interactive buttons exist for hover tick verification")
+
+	if btn_tut != null and btn_skirm != null and btn_coop != null:
+		btn_tut.mouse_entered.emit()
+		check_eq(menu.hover_tick_count, 1, "first button hover increments hover_tick_count to 1")
+		# Immediate mouse sweep & focus events within 0.07 s cooldown must be rate-limited!
+		btn_skirm.mouse_entered.emit()
+		btn_coop.focus_entered.emit()
+		check_eq(menu.hover_tick_count, 1, "fast sweep within 0.07 s cooldown does NOT spam hover ticks")
+
+		menu.step_ui_transition(0.03)
+		btn_skirm.mouse_entered.emit()
+		check_eq(menu.hover_tick_count, 1, "hover at 0.03 s (< 0.07 s cooldown) remains rate-limited")
+
+		menu.step_ui_transition(0.04)
+		btn_skirm.focus_entered.emit()
+		check_eq(menu.hover_tick_count, 2, "focus_entered after 0.07 s cooldown increments hover_tick_count to 2")
+
+		# Respect play_hover_audio = false!
+		menu.play_hover_audio = false
+		menu.step_ui_transition(0.10)
+		btn_tut.mouse_entered.emit()
+		btn_coop.focus_entered.emit()
+		check_eq(menu.hover_tick_count, 2, "play_hover_audio = false suppresses hover ticks cleanly")
+
+		# Closed menu ignores hover ticks even when play_hover_audio = true.
+		menu.play_hover_audio = true
+		menu.close_menu()
+		menu.step_ui_transition(0.10)
+		btn_tut.mouse_entered.emit()
+		check_eq(menu.hover_tick_count, 2, "closed TitleMenu suppresses hover ticks cleanly")
+
+	var checked_widgets := _check_tree_strict_ascii(menu, "Q24B_TitleMenu")
+	check(checked_widgets >= 50,
+		"verified 100%% strict ASCII across Q24B TitleMenu widgets (checked %d)" % checked_widgets)
+
+	# 3. SkirmishDirector restock ship_bell SFX count & play_audio = false guard.
+	var sd := SkirmishDirector.new()
+	sd.play_audio = true
+	sd.post_notices = false
+	sd.profile = Profile.new()
+	add_child(sd)
+
+	var restock_hits: Array[int] = [0]
+	sd.restock_requested.connect(func(_cb: int, _pl: int) -> void: restock_hits[0] += 1)
+
+	sd.start_skirmish(1.0, 1.0)
+	check_eq(sd.restock_bell_count, 0, "SkirmishDirector starts with restock_bell_count = 0")
+
+	# Wave 1 clear -> INTERMISSION restock plays &'ship_bell' and increments restock_bell_count to 1!
+	sd.notify_enemy_defeated(&"ship")
+	check_eq(sd.state, SkirmishDirector.State.INTERMISSION, "Wave 1 clear enters INTERMISSION")
+	check_eq(restock_hits[0], 1, "Wave 1 clear emits restock_requested")
+	check_eq(sd.restock_bell_count, 1, "Wave 1 intermission restock increments restock_bell_count to 1")
+
+	# Wave 2 clear with play_audio = false -> restock emits, but bell is suppressed!
+	sd.play_audio = false
+	sd.step_skirmish(SkirmishDirector.INTERMISSION_SECONDS + 0.1)
+	check_eq(sd.wave_number, 2, "Wave 2 begins after intermission")
+	sd.notify_enemy_defeated(&"ship")
+	sd.notify_enemy_defeated(&"ship")
+	check_eq(sd.state, SkirmishDirector.State.INTERMISSION, "Wave 2 clear enters INTERMISSION")
+	check_eq(restock_hits[0], 2, "Wave 2 clear emits restock_requested")
+	check_eq(sd.restock_bell_count, 1, "SkirmishDirector play_audio = false suppresses restock bell")
+
+	# Wave 3 clear with play_audio = true -> increments restock_bell_count to 2!
+	sd.play_audio = true
+	sd.step_skirmish(SkirmishDirector.INTERMISSION_SECONDS + 0.1)
+	sd.notify_enemy_defeated(&"ship")
+	sd.notify_enemy_defeated(&"ship")
+	check_eq(sd.restock_bell_count, 2, "Wave 3 intermission restock increments restock_bell_count to 2")
+
+	# Final Wave 4 clear -> VICTORY (no intermission restock bell).
+	sd.step_skirmish(SkirmishDirector.INTERMISSION_SECONDS + 0.1)
+	sd.notify_enemy_defeated(&"leviathan")
+	sd.notify_enemy_defeated(&"ship")
+	check_eq(sd.state, SkirmishDirector.State.VICTORY, "Wave 4 clear reaches VICTORY")
+	check_eq(sd.restock_bell_count, 2, "Final victory wave does NOT trigger extra intermission restock bell")
+	check_eq(int(sd.get_state().get("restock_bell_count", -1)), 2,
+		"SkirmishDirector.get_state() reports restock_bell_count")
+
+	sd.start_skirmish(1.0, 1.0)
+	check_eq(sd.restock_bell_count, 0, "start_skirmish resets restock_bell_count to 0")
+
+	# 4. TutorialDirector intermediate stage completion chime & play_audio = false guard.
+	var td := TutorialDirector.new()
+	td.play_audio = true
+	td.post_notices = false
+	td.profile = Profile.new()
+	add_child(td)
+
+	td.start_tutorial(Vector3(0.0, 0.0, -300.0), "Cutlass Cay")
+	check_eq(td.stage_chime_count, 0, "TutorialDirector starts with stage_chime_count = 0")
+
+	td.notify_action(&"equip_compass")
+	check_eq(td.current_step, 1, "Stage 0 completes into Stage 1")
+	check_eq(td.stage_chime_count, 1, "Completing intermediate Stage 0 increments stage_chime_count to 1")
+
+	td.notify_action(&"check_map_table")
+	check_eq(td.current_step, 2, "Stage 1 completes into Stage 2")
+	check_eq(td.stage_chime_count, 2, "Completing intermediate Stage 1 increments stage_chime_count to 2")
+
+	# Suppress audio -> completing Stage 2..6 must NOT increment stage_chime_count!
+	td.play_audio = false
+	td.notify_action(&"raise_anchor")
+	check_eq(td.current_step, 3, "Stage 2 completes while play_audio = false")
+	check_eq(td.stage_chime_count, 2, "TutorialDirector play_audio = false suppresses stage chime")
+	for _i in 4:
+		td.skip_current_step()
+	check_eq(td.current_step, 7, "Reached final graduation Stage 7")
+	check_eq(td.stage_chime_count, 2, "Muted intermediate stages keep stage_chime_count at 2")
+
+	# Final stage graduation plays victory stinger (not intermediate stage chime).
+	td.play_audio = true
+	td.notify_treasure_sold()
+	check(td.completed and not td.active, "Final stage graduates tutorial cleanly")
+	check_eq(td.stage_chime_count, 2,
+		"Final graduation uses victory stinger and does NOT increment intermediate stage_chime_count")
+	check_eq(int(td.get_state().get("stage_chime_count", -1)), 2,
+		"TutorialDirector.get_state() reports stage_chime_count")
+
+	td.start_tutorial(Vector3(0.0, 0.0, -300.0), "Cutlass Cay")
+	check_eq(td.stage_chime_count, 0, "start_tutorial resets stage_chime_count to 0")
+
+	# 5. Verify 0 non-ASCII (< 128) characters across all 3 Q24B production scripts!
+	var q24b_scripts: Array[String] = [
+		"res://src/ui/title_menu.gd",
+		"res://src/voyage/skirmish_director.gd",
+		"res://src/voyage/tutorial_director.gd",
+	]
+	for script_path: String in q24b_scripts:
+		var src_text := FileAccess.get_file_as_string(script_path)
+		check(src_text.length() > 100, "loaded source text of %s" % script_path)
+		var non_ascii := 0
+		for i in src_text.length():
+			if src_text.unicode_at(i) >= 128:
+				non_ascii += 1
+		check_eq(non_ascii, 0, "%s has 0 non-ASCII characters" % script_path)
+
+	# 6. Clean zero-leak teardown!
+	menu.queue_free()
+	sd.queue_free()
+	td.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(menu) and not is_instance_valid(sd) and not is_instance_valid(td),
+		"Q24B TitleMenu, SkirmishDirector & TutorialDirector free cleanly with 0 leaks")
+
+
 

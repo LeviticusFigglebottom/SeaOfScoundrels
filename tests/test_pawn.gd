@@ -966,7 +966,9 @@ func test_q9a_surface_aware_footsteps_wading_landing_ladder_and_swim_audio() -> 
 		"walking on static wooden pier triggers footstep_wood (got %s)" % str(pier_counts))
 
 	# 4c. Coastal shallow water wading ashore resolves &"water" & triggers &"footstep_water".
-	var shallow_y := Sea.height(260.0, 220.0) - 0.35
+	# Use calm still lagoon water (amp_scale = 0.0) so arbitrary Sea.time wave phase never dries out the shallows slab.
+	Sea.amp_scale = 0.0
+	var shallow_y := Sea.height(260.0, 220.0) - 0.40
 	var seabed := _ground(Vector3(260.0, shallow_y, 220.0), Vector3(24.0, 1.0, 24.0))
 	seabed.name = "CoastalSeabed"
 	p.teleport(Vector3(254.0, shallow_y + 0.06, 220.0))

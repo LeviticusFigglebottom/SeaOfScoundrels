@@ -24,6 +24,10 @@ enum Page {
 }
 
 const DEFAULT_SENS := 0.0023
+const PAGE_FADE_DURATION := 0.22
+const HOVER_TICK_COOLDOWN := 0.07
+const SFX_HOVER_TICK := &"ui_tick"
+const HOVER_TICK_DB := -8.0
 
 const HARBOUR_VISTAS: Array[Dictionary] = [
 	{
@@ -68,6 +72,8 @@ const CAPTAIN_CONTROLS_LINES: Array[String] = [
 var is_open: bool = false
 var config: SessionConfig = SessionConfig.new()
 var current_page: Page = Page.LANDING
+var hover_tick_count: int = 0
+var play_hover_audio: bool = true
 
 var user_settings: UserSettings = null
 var profile: Profile = null
@@ -76,7 +82,11 @@ var scene_root: Node = null
 var _theme: Theme = null
 var _root: Control = null
 var _backdrop: _LeftVignetteBackdrop = null
-var _pages: Dictionary = {}  # Page (int) -> Control
+var _pages: Dictionary = {}              # Page (int) -> Control
+var _page_primary_btns: Dictionary = {}  # Page (int) -> Button
+var _page_fade_t: float = 1.0
+var _hover_cooldown_remaining: float = 0.0
+var _last_hover_tick_ms: int = -1
 var _syncing_ui: bool = false
 var _status_message: String = ""
 
@@ -148,6 +158,13 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	_disconnect_profile()
+	_page_primary_btns.clear()
+	_hover_cooldown_remaining = 0.0
+	_last_hover_tick_ms = -1
+
+
+func _process(delta: float) -> void:
+	step_ui_transition(delta)
 
 
 ## Bind live UserSettings, Captain Profile, and optional scene root for live Apply.
@@ -177,12 +194,15 @@ func open_menu(page: Page = Page.LANDING) -> void:
 	visible = true
 	if _root != null:
 		_root.visible = true
+	if not was_open:
+		_hover_cooldown_remaining = 0.0
+		_last_hover_tick_ms = -1
 	show_page(page)
 	refresh_profile_summary()
 	_sync_all_controls()
 	if DisplayServer.get_name() != "headless":
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	if not was_open and Audio != null:
+	if not was_open and Audio != null and Audio.has_sound(&"ui_open"):
 		Audio.play_sfx(&"ui_open", Vector3.INF, -2.5)
 
 
@@ -193,7 +213,11 @@ func close_menu() -> void:
 	visible = false
 	if _root != null:
 		_root.visible = false
-	if was_open and Audio != null:
+	_page_fade_t = 1.0
+	_hover_cooldown_remaining = 0.0
+	_last_hover_tick_ms = -1
+	_apply_page_fade()
+	if was_open and Audio != null and Audio.has_sound(&"ui_back"):
 		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 
 
@@ -206,13 +230,42 @@ func show_page(page: Page) -> void:
 	elif page == Page.SETUP and config.mode == SessionConfig.MODE_COOP:
 		config.mode = SessionConfig.MODE_ADVENTURE
 		config.validate()
+	_page_fade_t = 0.0
 	for key: int in _pages:
 		var ctrl := _pages[key] as Control
 		if ctrl != null:
-			ctrl.visible = (key == int(page))
+			var is_target := (key == int(page))
+			ctrl.visible = is_target
+			ctrl.modulate.a = 0.0 if is_target else 1.0
+	_apply_page_fade()
 	_sync_all_controls()
 	if page == Page.LANDING:
 		refresh_profile_summary()
+	_focus_page_primary_button(page)
+
+
+## Advance active page fade-in and hover-tick cooldown timers cleanly.
+func step_ui_transition(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if _hover_cooldown_remaining > 0.0:
+		_hover_cooldown_remaining = maxf(0.0, _hover_cooldown_remaining - dt)
+		if _hover_cooldown_remaining <= 0.0001:
+			_hover_cooldown_remaining = 0.0
+	if _page_fade_t < 1.0 and dt > 0.0:
+		_page_fade_t = clampf(_page_fade_t + dt / PAGE_FADE_DURATION, 0.0, 1.0)
+		if _page_fade_t >= 0.999:
+			_page_fade_t = 1.0
+		_apply_page_fade()
+
+
+## Return the active page's ease-out cubic transition alpha in [0.0..1.0].
+func get_page_fade_alpha() -> float:
+	return _ease_out_cubic(_page_fade_t)
+
+
+## Return the primary keyboard-focus action button registered for `page`, if any.
+func get_page_primary_button(page: Page) -> Button:
+	return _page_primary_btns.get(int(page)) as Button
 
 
 ## Update status/error readout across Landing, Setup, Co-op, and Settings views.
@@ -380,7 +433,7 @@ func set_coop_port(port: int) -> void:
 func trigger_set_sail() -> void:
 	_pull_text_edits_into_config()
 	config.validate()
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_select"):
 		Audio.play_sfx(&"ui_select", Vector3.INF, -1.5)
 	start_game_requested.emit(config.duplicate_config())
 
@@ -393,7 +446,7 @@ func trigger_coop_host() -> void:
 	config.validate()
 	_sync_all_controls()
 	set_status_message("Launching Co-op Host on port %d..." % config.coop_port)
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_select"):
 		Audio.play_sfx(&"ui_select", Vector3.INF, -1.5)
 	start_game_requested.emit(config.duplicate_config())
 
@@ -406,7 +459,7 @@ func trigger_coop_join() -> void:
 	config.validate()
 	_sync_all_controls()
 	set_status_message("Joining crew at %s:%d..." % [config.coop_address, config.coop_port])
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_select"):
 		Audio.play_sfx(&"ui_select", Vector3.INF, -1.5)
 	start_game_requested.emit(config.duplicate_config())
 
@@ -444,7 +497,7 @@ func apply_and_save_settings(persist: bool = true) -> void:
 			user_settings.save()
 	if _settings_status_label != null:
 		_settings_status_label.text = "Settings saved and applied."
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_select"):
 		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	settings_changed.emit()
 
@@ -463,7 +516,7 @@ func _input(event: InputEvent) -> void:
 			is_esc = true
 	if is_esc:
 		if current_page != Page.LANDING:
-			if Audio != null:
+			if Audio != null and Audio.has_sound(&"ui_back"):
 				Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 			show_page(Page.LANDING)
 		get_viewport().set_input_as_handled()
@@ -632,6 +685,7 @@ func _build_landing_page() -> Control:
 		show_page(Page.SETUP)
 	)
 	adv_row.add_child(btn_adv)
+	_page_primary_btns[int(Page.LANDING)] = btn_adv
 
 	var btn_quick := _make_menu_button("BtnQuickSail", "Quick Sail", 44.0, 15)
 	btn_quick.custom_minimum_size = Vector2(124.0, 44.0)
@@ -1101,6 +1155,7 @@ func _build_setup_page() -> Control:
 	_style_cta_button(sail_btn)
 	sail_btn.pressed.connect(trigger_set_sail)
 	foot.add_child(sail_btn)
+	_page_primary_btns[int(Page.SETUP)] = sail_btn
 
 	return holder
 
@@ -1261,6 +1316,7 @@ func _build_coop_page() -> Control:
 	_style_cta_button(host_btn)
 	host_btn.pressed.connect(trigger_coop_host)
 	hv.add_child(host_btn)
+	_page_primary_btns[int(Page.COOP)] = host_btn
 	cards.add_child(host_card)
 
 	# --- Right Card: Join Friend's Crew ---
@@ -1575,6 +1631,7 @@ func _build_settings_page() -> Control:
 	_style_cta_button(apply_btn)
 	apply_btn.pressed.connect(func() -> void: apply_and_save_settings(true))
 	foot.add_child(apply_btn)
+	_page_primary_btns[int(Page.SETTINGS)] = apply_btn
 
 	return holder
 
@@ -1763,18 +1820,54 @@ func _on_quit_pressed() -> void:
 		get_tree().quit()
 
 
+func _apply_page_fade() -> void:
+	var ctrl := _pages.get(int(current_page)) as Control
+	if ctrl != null and is_instance_valid(ctrl):
+		ctrl.modulate.a = get_page_fade_alpha()
+
+
+func _focus_page_primary_button(page: Page) -> void:
+	if not is_open or not is_inside_tree():
+		return
+	var btn := _page_primary_btns.get(int(page)) as Button
+	if btn != null and is_instance_valid(btn) and btn.is_visible_in_tree() and not btn.disabled:
+		var prev_sync := _syncing_ui
+		_syncing_ui = true
+		btn.grab_focus()
+		_syncing_ui = prev_sync
+
+
+func _on_button_hover_tick(btn: Button) -> void:
+	if not is_open or _syncing_ui or not play_hover_audio:
+		return
+	if btn != null and is_instance_valid(btn) and btn.disabled:
+		return
+	if Audio == null or not Audio.has_sound(SFX_HOVER_TICK):
+		return
+	var now_ms := Time.get_ticks_msec()
+	var cooldown_ms := int(roundf(HOVER_TICK_COOLDOWN * 1000.0))
+	var real_ready := (_last_hover_tick_ms < 0) or ((now_ms - _last_hover_tick_ms) >= cooldown_ms)
+	var sim_ready := (_hover_cooldown_remaining <= 0.0)
+	if not (real_ready or sim_ready):
+		return
+	Audio.play_sfx(SFX_HOVER_TICK, Vector3.INF, HOVER_TICK_DB, 0.03)
+	_last_hover_tick_ms = Time.get_ticks_msec()
+	_hover_cooldown_remaining = HOVER_TICK_COOLDOWN
+	hover_tick_count += 1
+
+
 func _play_select() -> void:
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_select"):
 		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 
 
 func _play_back() -> void:
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_back"):
 		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 
 
 func _play_tick() -> void:
-	if Audio != null:
+	if Audio != null and Audio.has_sound(&"ui_tick"):
 		Audio.play_sfx(&"ui_tick", Vector3.INF, -4.0)
 
 
@@ -1795,6 +1888,12 @@ func _make_quality_picker(label_text: String, btn_prefix: String, out_btns: Arra
 		row.add_child(btn)
 		out_btns.append(btn)
 	return row
+
+
+static func _ease_out_cubic(t: float) -> float:
+	var c := clampf(t, 0.0, 1.0)
+	var inv := 1.0 - c
+	return 1.0 - inv * inv * inv
 
 
 static func _lookup_mode_short(mode_id: StringName) -> String:
@@ -1819,12 +1918,14 @@ static func _make_section_label(text: String) -> Label:
 	return l
 
 
-static func _make_menu_button(node_name: String, label_text: String, min_h: float, font_sz: int) -> Button:
+func _make_menu_button(node_name: String, label_text: String, min_h: float, font_sz: int) -> Button:
 	var btn := Button.new()
 	btn.name = node_name
 	btn.text = label_text
 	btn.custom_minimum_size = Vector2(0.0, min_h)
 	btn.add_theme_font_size_override("font_size", font_sz)
+	btn.mouse_entered.connect(_on_button_hover_tick.bind(btn))
+	btn.focus_entered.connect(_on_button_hover_tick.bind(btn))
 	return btn
 
 

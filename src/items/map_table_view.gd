@@ -35,8 +35,15 @@ const COURSE_RAY_LENGTH_M := 550.0
 const MAX_TRAIL_POINTS := 48
 const PIN_TOGGLE_RADIUS_M := 90.0
 const FORT_CLUSTER_RADIUS_M := 160.0
+const CLOUD_DEDUP_RADIUS_M := 160.0
 const MPS_TO_KNOTS := 1.94384
 const DEFAULT_CARTOUCHE_NAME := "SV SCOUNDREL"
+const CHART_EMISSION_DAY := 0.06
+const CHART_EMISSION_NIGHT_LIT := 0.38
+const CHART_EMISSION_NIGHT_DARK := 0.03
+const COL_CHART_EMIT_DAY := Color(0.96, 0.88, 0.72)
+const COL_CHART_EMIT_NIGHT_LIT := Color(1.00, 0.84, 0.56)
+const COL_CHART_EMIT_NIGHT_DARK := Color(0.68, 0.70, 0.74)
 
 const COMPASS_16: Array[String] = [
 	"N", "NNE", "NE", "ENE",
@@ -72,8 +79,11 @@ var salvage_wrecks: Array[Vector3] = []
 var _viewport: SubViewport = null
 var _canvas: _ChartCanvas = null
 var _surface_mesh: MeshInstance3D = null
+var _backing_mesh: MeshInstance3D = null
+var _pins_mesh: MeshInstance3D = null
 var _frame_root: Node3D = null
 var _surface_mat: StandardMaterial3D = null
+var _chart_emission_energy: float = CHART_EMISSION_DAY
 var _islands_cache: Array[Dictionary] = []
 var _trail: Array[Vector2] = []
 var _update_accum: float = 0.0
@@ -88,10 +98,8 @@ var _jump_was_down: bool = false
 
 func _enter_tree() -> void:
 	add_to_group(&"map_tables")
-	if _surface_mat != null and _viewport != null and is_instance_valid(_viewport):
-		var vp_tex := _viewport.get_texture()
-		_surface_mat.albedo_texture = vp_tex
-		_surface_mat.emission_texture = vp_tex
+	if _viewport != null and is_instance_valid(_viewport) and _surface_mesh != null and is_instance_valid(_surface_mesh):
+		_restore_surface_visuals()
 		_dirty = true
 
 
@@ -107,8 +115,19 @@ func _exit_tree() -> void:
 	if _surface_mat != null:
 		_surface_mat.albedo_texture = null
 		_surface_mat.emission_texture = null
+	_surface_mat = null
+	if _surface_mesh != null and is_instance_valid(_surface_mesh):
+		_surface_mesh.mesh = null
+		_surface_mesh.material_override = null
+	if _backing_mesh != null and is_instance_valid(_backing_mesh):
+		_backing_mesh.mesh = null
+		_backing_mesh.material_override = null
+	if _pins_mesh != null and is_instance_valid(_pins_mesh):
+		_pins_mesh.mesh = null
+		_pins_mesh.material_override = null
 	if _canvas != null and is_instance_valid(_canvas):
 		_canvas._chart_font = null
+		_canvas.snapshot.clear()
 	if _viewport != null and is_instance_valid(_viewport):
 		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
@@ -370,11 +389,24 @@ func get_ship_chart_pos() -> Vector2:
 	return world_to_chart(tracked_ship.global_position)
 
 
+## Return the live chart surface emission energy multiplier (0.06 midday, up to 0.38 night lit, 0.03 dark).
+func get_chart_emission_energy() -> float:
+	if _surface_mat != null:
+		return _surface_mat.emission_energy_multiplier
+	return _chart_emission_energy
+
+
+## Deterministically update nocturnal cabin-lantern chart surface lighting right now.
+func step_chart_lighting() -> void:
+	_update_chart_lighting()
+
+
 ## Force an immediate chart redraw right now (bypasses the 0.15 s throttle).
 func refresh_now() -> void:
 	_update_accum = 0.0
 	_cache_accum = 0.0
 	_dirty = false
+	_update_chart_lighting()
 	_refresh_islands_cache()
 	_redraw_chart()
 
@@ -390,6 +422,7 @@ func _redraw_chart() -> void:
 
 func _process(delta: float) -> void:
 	_storm_phase = fmod(_storm_phase + delta * 1.1, TAU)
+	_update_chart_lighting()
 	_poll_table_station_controls(delta)
 	_update_accum += delta
 	_cache_accum += delta
@@ -514,53 +547,92 @@ func _build_viewport() -> void:
 	_viewport.add_child(_canvas)
 
 
-func _build_surface_mesh() -> void:
-	if _surface_mesh != null:
-		return
-	_frame_root = Node3D.new()
-	_frame_root.name = "ChartPlate"
-	add_child(_frame_root)
-
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(CHART_WIDTH_M, CHART_DEPTH_M)
-	_surface_mat = StandardMaterial3D.new()
-	_surface_mat.albedo_color = Color(0.92, 0.87, 0.78)
-	_surface_mat.roughness = 0.90
-	_surface_mat.metallic = 0.0
-	var vp_tex := _viewport.get_texture()
-	_surface_mat.albedo_texture = vp_tex
-	# Subtle warm readability glow so the map table stays crisp without washing out in sunlight.
-	_surface_mat.emission_enabled = true
-	_surface_mat.emission = Color(0.96, 0.88, 0.72)
-	_surface_mat.emission_texture = vp_tex
-	_surface_mat.emission_energy_multiplier = 0.06
-
-	_surface_mesh = MeshInstance3D.new()
-	_surface_mesh.name = "ChartSurface"
-	_surface_mesh.mesh = pm
-	_surface_mesh.material_override = _surface_mat
-	_surface_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_frame_root.add_child(_surface_mesh)
-
-	if build_frame:
-		_build_wooden_frame_and_tacks()
-	_apply_surface_height()
+func _are_ship_lanterns_lit() -> bool:
+	if _mounted_ship != null and is_instance_valid(_mounted_ship):
+		return _mounted_ship.lanterns_lit
+	return true
 
 
-func _build_wooden_frame_and_tacks() -> void:
-	# Solid beveled dark-oak backing tray sized to completely enclose both sloop & brigantine baked static maps.
+func _update_chart_lighting() -> void:
+	var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night_t := clampf(1.0 - dl, 0.0, 1.0)
+	var lanterns_on := _are_ship_lanterns_lit()
+	var target_energy := CHART_EMISSION_DAY
+	var target_col := COL_CHART_EMIT_DAY
+	if lanterns_on:
+		# Gentle warm cabin candlelight breath at night (0.97..1.00); exact 0.06 in midday sun.
+		var breath := 1.0 - 0.03 * night_t * (0.5 - 0.5 * cos(_storm_phase * 2.7))
+		target_energy = lerpf(CHART_EMISSION_DAY, CHART_EMISSION_NIGHT_LIT, night_t) * breath
+		target_col = COL_CHART_EMIT_DAY.lerp(COL_CHART_EMIT_NIGHT_LIT, night_t)
+	else:
+		# Running dark at night dims the parchment stealthily to 0.03.
+		target_energy = lerpf(CHART_EMISSION_DAY, CHART_EMISSION_NIGHT_DARK, night_t)
+		target_col = COL_CHART_EMIT_DAY.lerp(COL_CHART_EMIT_NIGHT_DARK, night_t)
+	_chart_emission_energy = target_energy
+	if _surface_mat != null:
+		_surface_mat.emission = target_col
+		_surface_mat.emission_energy_multiplier = target_energy
+
+
+func _create_surface_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.92, 0.87, 0.78)
+	mat.roughness = 0.90
+	mat.metallic = 0.0
+	var vp_tex := _viewport.get_texture() if _viewport != null and is_instance_valid(_viewport) else null
+	mat.albedo_texture = vp_tex
+	# Subtle warm readability glow in daylight, rising to cabin-lantern amber at night.
+	mat.emission_enabled = true
+	mat.emission = COL_CHART_EMIT_DAY
+	mat.emission_texture = vp_tex
+	mat.emission_energy_multiplier = CHART_EMISSION_DAY
+	return mat
+
+
+## Build a crisp 2-tri sculpted ArrayMesh chart plate matching PlaneMesh XZ/UV orientation.
+static func _build_chart_plate_mesh() -> ArrayMesh:
+	var hx := CHART_WIDTH_M * 0.5
+	var hz := CHART_DEPTH_M * 0.5
+	var p0 := Vector3(-hx, 0.0, -hz)
+	var p1 := Vector3(hx, 0.0, -hz)
+	var p2 := Vector3(hx, 0.0, hz)
+	var p3 := Vector3(-hx, 0.0, hz)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# CW winding viewed from +Y with exact UV (0,0)..(1,1) and finite unit +Y normals.
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.index()
+	return st.commit()
+
+
+static func _build_backing_mesh() -> ArrayMesh:
 	var st_wood := SurfaceTool.new()
 	st_wood.begin(Mesh.PRIMITIVE_TRIANGLES)
 	ToolMeshes._append_beveled_box(st_wood, Vector3(CHART_WIDTH_M + 0.18, 0.032, CHART_DEPTH_M + 0.14), 0.006,
 		Transform3D(Basis.IDENTITY, Vector3(0.01, -0.017, 0.0)))
 	st_wood.generate_normals()
-	var board := MeshInstance3D.new()
-	board.name = "ChartBacking"
-	board.mesh = st_wood.commit()
-	board.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.80, 0.04)
-	_frame_root.add_child(board)
+	return st_wood.commit()
 
-	# Four gleaming brass corner pins + nautical divider compass resting on the chart edge.
+
+static func _build_pins_mesh() -> ArrayMesh:
 	var st_brass := SurfaceTool.new()
 	st_brass.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var hx := CHART_WIDTH_M * 0.5 - 0.022
@@ -578,11 +650,64 @@ func _build_wooden_frame_and_tacks() -> void:
 	ToolMeshes._append_tube(st_brass, [Vector3(hx + 0.032, 0.007, -0.10), Vector3(hx + 0.015, 0.006, 0.06)], 0.0035, 6, true)
 	ToolMeshes._append_tube(st_brass, [Vector3(hx + 0.032, 0.007, -0.10), Vector3(hx + 0.048, 0.006, 0.05)], 0.0035, 6, true)
 	st_brass.generate_normals()
-	var pins := MeshInstance3D.new()
-	pins.name = "BrassPins"
-	pins.mesh = st_brass.commit()
-	pins.material_override = ToolMeshes._make_mat(ToolMeshes.COL_BRASS, 0.25, 0.88)
-	_frame_root.add_child(pins)
+	return st_brass.commit()
+
+
+func _restore_surface_visuals() -> void:
+	if _surface_mat == null:
+		_surface_mat = _create_surface_material()
+	var vp_tex := _viewport.get_texture()
+	_surface_mat.albedo_texture = vp_tex
+	_surface_mat.emission_texture = vp_tex
+	if _surface_mesh != null and is_instance_valid(_surface_mesh):
+		if _surface_mesh.mesh == null:
+			_surface_mesh.mesh = _build_chart_plate_mesh()
+		_surface_mesh.material_override = _surface_mat
+	if build_frame:
+		if _backing_mesh != null and is_instance_valid(_backing_mesh) and _backing_mesh.mesh == null:
+			_backing_mesh.mesh = _build_backing_mesh()
+			_backing_mesh.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.80, 0.04)
+		if _pins_mesh != null and is_instance_valid(_pins_mesh) and _pins_mesh.mesh == null:
+			_pins_mesh.mesh = _build_pins_mesh()
+			_pins_mesh.material_override = ToolMeshes._make_mat(ToolMeshes.COL_BRASS, 0.25, 0.88)
+	_update_chart_lighting()
+
+
+func _build_surface_mesh() -> void:
+	if _surface_mesh != null:
+		return
+	_frame_root = Node3D.new()
+	_frame_root.name = "ChartPlate"
+	add_child(_frame_root)
+
+	_surface_mat = _create_surface_material()
+	_surface_mesh = MeshInstance3D.new()
+	_surface_mesh.name = "ChartSurface"
+	_surface_mesh.mesh = _build_chart_plate_mesh()
+	_surface_mesh.material_override = _surface_mat
+	_surface_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_frame_root.add_child(_surface_mesh)
+
+	if build_frame:
+		_build_wooden_frame_and_tacks()
+	_update_chart_lighting()
+	_apply_surface_height()
+
+
+func _build_wooden_frame_and_tacks() -> void:
+	# Solid beveled dark-oak backing tray sized to completely enclose both sloop & brigantine baked static maps.
+	_backing_mesh = MeshInstance3D.new()
+	_backing_mesh.name = "ChartBacking"
+	_backing_mesh.mesh = _build_backing_mesh()
+	_backing_mesh.material_override = ToolMeshes._make_mat(ToolMeshes.COL_OAK_DARK, 0.80, 0.04)
+	_frame_root.add_child(_backing_mesh)
+
+	# Four gleaming brass corner pins + nautical divider compass resting on the chart edge.
+	_pins_mesh = MeshInstance3D.new()
+	_pins_mesh.name = "BrassPins"
+	_pins_mesh.mesh = _build_pins_mesh()
+	_pins_mesh.material_override = ToolMeshes._make_mat(ToolMeshes.COL_BRASS, 0.25, 0.88)
+	_frame_root.add_child(_pins_mesh)
 
 
 func _apply_surface_height() -> void:
@@ -751,12 +876,13 @@ func _build_draw_snapshot() -> Dictionary:
 		course_grid_coord = world_to_grid_coord(course_target)
 		course_bearing_text = format_pin_course_tag(ship_pos, course_target)
 
-	# Scan live world entities: Leviathans, FortBatteries, SunkenShipwrecks, Megalodons, Rival Ships.
+	# Scan live world entities: Leviathans, FortBatteries, SunkenShipwrecks, Megalodons, Rival Ships, WorldEventClouds.
 	var leviathans: Array[Vector3] = []
 	var fort_sieges: Array[Vector3] = []
 	var sunken_shipwrecks: Array[Vector3] = []
 	var megalodons: Array[Vector3] = []
 	var rival_ships: Array[Dictionary] = []
+	var world_event_clouds: Array[Dictionary] = []
 	if is_inside_tree():
 		var seen_lev: Dictionary = {}
 		for grp: StringName in [&"world_events", &"leviathan", &"bosses"]:
@@ -858,6 +984,53 @@ func _build_draw_snapshot() -> Dictionary:
 		for ci in cluster_sums.size():
 			fort_sieges.append(cluster_sums[ci] / float(cluster_counts[ci]))
 
+		for node in get_tree().get_nodes_in_group(&"world_event_clouds"):
+			if not (node is Node3D) or not is_instance_valid(node):
+				continue
+			if node.is_queued_for_deletion():
+				continue
+			var cn := node as Node3D
+			if not cn.visible:
+				continue
+			if cn.has_method(&"is_fading_out") and bool(cn.call(&"is_fading_out")):
+				continue
+			var dis_v: Variant = cn.get(&"dismissed")
+			if dis_v is bool and bool(dis_v):
+				continue
+			var cpos := cn.global_position
+			if not cpos.is_finite():
+				continue
+			var kind_v: Variant = cn.get(&"event_kind")
+			var kind := StringName(String(kind_v)) if kind_v != null else &"fort_siege"
+			if kind != &"fort_siege" and kind != &"ghost_ship" and kind != &"leviathan":
+				kind = &"fort_siege"
+
+			# Deduplicate against overlapping close markers cleanly in XZ.
+			var c2 := Vector2(cpos.x, cpos.z)
+			var dup := false
+			for existing in world_event_clouds:
+				if existing["kind"] == kind:
+					var ep: Vector3 = existing["pos"]
+					if c2.distance_to(Vector2(ep.x, ep.z)) <= CLOUD_DEDUP_RADIUS_M:
+						dup = true
+						break
+			if not dup and kind == &"fort_siege":
+				for fpos in fort_sieges:
+					if c2.distance_to(Vector2(fpos.x, fpos.z)) <= CLOUD_DEDUP_RADIUS_M:
+						dup = true
+						break
+			if not dup and kind == &"leviathan":
+				for lpos in leviathans:
+					if c2.distance_to(Vector2(lpos.x, lpos.z)) <= CLOUD_DEDUP_RADIUS_M:
+						dup = true
+						break
+			if dup:
+				continue
+			world_event_clouds.append({
+				"pos": cpos,
+				"kind": kind,
+			})
+
 	var wind_hdg := Weather.wind_heading if Weather != null else 0.0
 	var wind_spd := Weather.local_wind_speed() if Weather != null else 8.0
 	return {
@@ -883,6 +1056,7 @@ func _build_draw_snapshot() -> Dictionary:
 		"rival_ships": rival_ships,
 		"leviathans": leviathans,
 		"fort_sieges": fort_sieges,
+		"world_event_clouds": world_event_clouds,
 		"station_occupied": _station_player_active,
 		"storm_intensity": Weather.storm_intensity if Weather != null else 0.0,
 		"storm_center": Weather.storm_center if Weather != null else Vector3.ZERO,
@@ -919,6 +1093,11 @@ class _ChartCanvas extends Control:
 	const COL_MEGA_FIN := Color(0.16, 0.22, 0.28, 0.96)
 	const COL_MEGA_SCAR := Color(0.18, 0.62, 0.64, 0.92)
 	const COL_GHOST_TEAL := Color(0.18, 0.58, 0.54, 0.94)
+	const COL_EVENT_FORT := Color(0.10, 0.48, 0.28, 0.96)
+	const COL_EVENT_FORT_GLOW := Color(0.24, 0.78, 0.46, 0.94)
+	const COL_EVENT_GHOST := Color(0.10, 0.50, 0.52, 0.96)
+	const COL_EVENT_LEVIATHAN := Color(0.42, 0.16, 0.56, 0.96)
+	const COL_EVENT_LEVIATHAN_HI := Color(0.64, 0.34, 0.80, 0.90)
 
 	const FRAME_OUTER := 10.0
 	const FRAME_INNER := 30.0
@@ -994,15 +1173,14 @@ class _ChartCanvas extends Control:
 		for isl: Dictionary in islands:
 			_draw_island(isl, px_per_m, font)
 
-		# 6. Active voyage target crimson dashed ring!
+		# 6. Active voyage target pulsing double-ink crimson compass ring!
 		var tpos: Vector3 = snapshot.get("target_pos", Vector3.INF)
 		if tpos.is_finite():
 			var tp := _w2c(Vector2(tpos.x, tpos.z))
-			_draw_dashed_circle(tp, 44.0, COL_CRIMSON, 3.2, 18)
-			_draw_dashed_circle(tp, 50.0, Color(COL_CRIMSON.r, COL_CRIMSON.g, COL_CRIMSON.b, 0.45), 1.5, 22)
+			_draw_pulsing_compass_ring(tp, 44.0, COL_CRIMSON, COL_INK, storm_phase, 18, 3.0)
 
 		# 7. Living-world chart markers: Salvage Wrecks, Sunken Shipwrecks, Megalodons,
-		#    Leviathans, Fort Sieges, and Rival Ships.
+		#    Leviathans, Fort Sieges, WorldEventCloud Sky Beacons, and Rival Ships.
 		for wp: Vector3 in snapshot.get("wrecks", []):
 			var wpx := _w2c(Vector2(wp.x, wp.z))
 			_draw_wreck_marker(wpx, font)
@@ -1022,6 +1200,12 @@ class _ChartCanvas extends Control:
 		for fpos: Vector3 in snapshot.get("fort_sieges", []):
 			var fpx := _w2c(Vector2(fpos.x, fpos.z))
 			_draw_fort_siege_stamp(fpx, font)
+
+		for cdict: Dictionary in snapshot.get("world_event_clouds", []):
+			var cpos: Vector3 = cdict.get("pos", Vector3.INF)
+			if cpos.is_finite():
+				var cpx := _w2c(Vector2(cpos.x, cpos.z))
+				_draw_world_event_cloud_stamp(cpx, cdict.get("kind", &"fort_siege") as StringName, storm_phase, font)
 
 		for rdict: Dictionary in snapshot.get("rival_ships", []):
 			var rpos: Vector3 = rdict.get("pos", Vector3.INF)
@@ -1046,10 +1230,10 @@ class _ChartCanvas extends Control:
 			var tgt_px_c := _w2c(Vector2(ctarget.x, ctarget.z))
 			_draw_course_bearing_line(ship_px_c, tgt_px_c, bearing_txt, bool(snapshot.get("course_from_pin", false)), font)
 
-		# 10. Player-placed chart pin markers.
+		# 10. Player-placed chart pin markers with pulsing double-ink compass target ring.
 		for mp: Vector3 in snapshot.get("markers", []):
 			var mpx := _w2c(Vector2(mp.x, mp.z))
-			_draw_pin_marker(mpx)
+			_draw_pin_marker(mpx, storm_phase)
 
 		# 11. Ship wake breadcrumb trail + Player ship silhouette & live heading arrow!
 		var trail: Array = snapshot.get("trail", [])
@@ -1639,9 +1823,28 @@ class _ChartCanvas extends Control:
 		draw_line(center + fwd * 1.5 - right * 8.2, center + fwd * 1.5 + right * 8.2, trim, 2.4, true)
 		draw_circle(center + fwd * 1.5, 1.8, COL_PARCHMENT)
 
-	func _draw_pin_marker(mpx: Vector2) -> void:
+	func _draw_pulsing_compass_ring(center: Vector2, base_radius: float, primary_col: Color, secondary_col: Color, phase: float, dashes: int, stroke_w: float) -> void:
+		var wave := sin(phase * 2.0)
+		var breath := wave * 3.5
+		var pulse_01 := 0.5 + 0.5 * wave
+		var alpha_hi := 0.72 + 0.24 * pulse_01
+		var alpha_lo := 0.36 + 0.30 * pulse_01
+		var r_inner := maxf(8.0, base_radius + breath * 0.70)
+		var r_outer := maxf(12.0, base_radius + 6.0 + breath)
+		var col_in := Color(primary_col.r, primary_col.g, primary_col.b, primary_col.a * alpha_hi)
+		var col_out := Color(secondary_col.r, secondary_col.g, secondary_col.b, secondary_col.a * alpha_lo)
+		_draw_dashed_circle(center, r_inner, col_in, stroke_w, dashes, phase * 0.18)
+		_draw_dashed_circle(center, r_outer, col_out, maxf(1.3, stroke_w * 0.52), dashes + 4, -phase * 0.12)
+		for dir: Vector2 in [Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, -1.0)]:
+			draw_line(center + dir * (r_outer - 2.6), center + dir * (r_outer + 3.6), col_in, maxf(1.4, stroke_w * 0.56), true)
+
+	func _draw_pin_marker(mpx: Vector2, phase: float = 0.0) -> void:
+		# Pulsing double-ink compass target ring around the player-placed chart tack.
+		var wave := sin(phase * 2.0)
+		var pulse_01 := 0.5 + 0.5 * wave
+		_draw_pulsing_compass_ring(mpx, 17.5, COL_CRIMSON, COL_INK, phase, 14, 2.0)
 		# Crisp crimson-and-gold nautical chart tack medallion with cardinal sighting ticks.
-		draw_circle(mpx, 14.0, Color(COL_CRIMSON.r, COL_CRIMSON.g, COL_CRIMSON.b, 0.14))
+		draw_circle(mpx, 14.0, Color(COL_CRIMSON.r, COL_CRIMSON.g, COL_CRIMSON.b, 0.12 + 0.08 * pulse_01))
 		draw_arc(mpx, 14.0, 0.0, TAU, 24, COL_CRIMSON, 2.6, true)
 		draw_arc(mpx, 10.8, 0.0, TAU, 20, COL_GOLD, 1.4, true)
 		for dir: Vector2 in [Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, -1.0)]:
@@ -1937,10 +2140,142 @@ class _ChartCanvas extends Control:
 			draw_rect(Rect2(px - 4.0, py - 12.0, tw + 8.0, 15.0), Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.80), true)
 			draw_string(font, Vector2(px, py), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, COL_CRIMSON)
 
-	func _draw_dashed_circle(center: Vector2, radius: float, col: Color, width: float, dashes: int) -> void:
+	func _draw_world_event_cloud_stamp(pos: Vector2, kind: StringName, phase: float, font: Font) -> void:
+		var ink_col := COL_EVENT_FORT
+		var wash_col := Color(0.14, 0.44, 0.28, 0.20)
+		var lbl := "FORT"
+		if kind == &"ghost_ship":
+			ink_col = COL_EVENT_GHOST
+			wash_col = Color(0.12, 0.48, 0.50, 0.22)
+			lbl = "GHOST"
+		elif kind == &"leviathan":
+			ink_col = COL_EVENT_LEVIATHAN
+			wash_col = Color(0.36, 0.16, 0.48, 0.22)
+			lbl = "LEVIATHAN"
+
+		# Soft tinted sky-beacon halo & subtle crisp dashed perimeter ring.
+		draw_circle(pos, 20.5, wash_col)
+		_draw_dashed_circle(pos, 21.5, Color(ink_col.r, ink_col.g, ink_col.b, 0.74), 1.6, 14, phase * 0.14)
+
+		if kind == &"ghost_ship":
+			# Aqua-teal ghostly galleon silhouette riding spectral mist waves.
+			var hull := PackedVector2Array([
+				pos + Vector2(-12.5, 4.0),
+				pos + Vector2(-9.5, 8.2),
+				pos + Vector2(8.5, 8.2),
+				pos + Vector2(13.5, 2.2),
+				pos + Vector2(7.0, 4.0),
+				pos + Vector2(-6.5, 3.8),
+				pos + Vector2(-11.5, 0.2),
+			])
+			draw_colored_polygon(hull, Color(0.10, 0.32, 0.36, 0.92))
+			var hull_ring := hull.duplicate()
+			hull_ring.append(hull[0])
+			draw_polyline(hull_ring, ink_col, 1.6, true)
+			# Bowsprit + two billowing tattered ghostly sails.
+			draw_line(pos + Vector2(11.0, 3.0), pos + Vector2(16.5, -1.8), ink_col, 1.5, true)
+			draw_line(pos + Vector2(-2.2, 4.0), pos + Vector2(-2.2, -13.5), ink_col, 1.8, true)
+			draw_line(pos + Vector2(5.2, 4.0), pos + Vector2(5.2, -10.5), ink_col, 1.6, true)
+			var sail_col := Color(0.76, 0.94, 0.90, 0.90)
+			var main_sail := PackedVector2Array([
+				pos + Vector2(-2.2, -11.5),
+				pos + Vector2(3.6, -8.5),
+				pos + Vector2(4.2, -2.5),
+				pos + Vector2(-1.6, 1.0),
+				pos + Vector2(-5.4, -2.5),
+				pos + Vector2(-4.8, -8.8),
+			])
+			draw_colored_polygon(main_sail, sail_col)
+			var ms_ring := main_sail.duplicate()
+			ms_ring.append(main_sail[0])
+			draw_polyline(ms_ring, ink_col, 1.4, true)
+			var fore_sail := PackedVector2Array([
+				pos + Vector2(5.2, -9.2),
+				pos + Vector2(10.0, -6.2),
+				pos + Vector2(10.2, -0.8),
+				pos + Vector2(5.2, 1.2),
+				pos + Vector2(3.6, -4.0),
+			])
+			draw_colored_polygon(fore_sail, sail_col)
+			var fs_ring := fore_sail.duplicate()
+			fs_ring.append(fore_sail[0])
+			draw_polyline(fs_ring, ink_col, 1.3, true)
+			# Masthead phantom pennant + spectral mist wake beneath keel.
+			draw_colored_polygon(PackedVector2Array([
+				pos + Vector2(-2.2, -13.5),
+				pos + Vector2(-9.0, -11.8),
+				pos + Vector2(-2.2, -10.0),
+			]), ink_col)
+			draw_polyline(PackedVector2Array([
+				pos + Vector2(-13.5, 10.5),
+				pos + Vector2(-6.5, 8.8),
+				pos + Vector2(0.0, 10.8),
+				pos + Vector2(6.5, 8.8),
+				pos + Vector2(13.5, 10.5),
+			]), Color(ink_col.r, ink_col.g, ink_col.b, 0.72), 1.4, true)
+		elif kind == &"leviathan":
+			# Amethyst-ink swirling maelstrom spiral with deep abyssal eye.
+			for arm in 3:
+				var pts := PackedVector2Array()
+				var base_a := phase * 0.55 + float(arm) * TAU / 3.0
+				for step in 14:
+					var t := float(step) / 13.0
+					var r := 3.8 + t * 14.5
+					var a := base_a + t * 3.1
+					pts.append(pos + Vector2(cos(a), sin(a)) * r)
+				draw_polyline(pts, ink_col if arm % 2 == 0 else COL_EVENT_LEVIATHAN_HI, 2.2, true)
+			draw_circle(pos, 5.4, COL_INK)
+			draw_arc(pos, 5.4, 0.0, TAU, 16, ink_col, 1.6, true)
+			draw_circle(pos, 2.6, COL_EVENT_LEVIATHAN_HI)
+			draw_circle(pos, 1.1, COL_PARCHMENT)
+		else:
+			# Emerald-ink skull-and-cloud crest for Fort Siege sky beacon.
+			var cloud_fill := Color(0.76, 0.82, 0.73, 0.90)
+			for puff: Vector3 in [Vector3(-7.8, 6.2, 5.6), Vector3(0.0, 7.2, 6.4), Vector3(7.8, 6.2, 5.6)]:
+				var pc := pos + Vector2(puff.x, puff.y)
+				draw_circle(pc, puff.z, cloud_fill)
+				draw_arc(pc, puff.z, 0.0, TAU, 14, ink_col, 1.4, true)
+			var cranium := PackedVector2Array([
+				pos + Vector2(-8.2, -3.2),
+				pos + Vector2(-6.4, -10.2),
+				pos + Vector2(0.0, -12.4),
+				pos + Vector2(6.4, -10.2),
+				pos + Vector2(8.2, -3.2),
+				pos + Vector2(5.6, 2.0),
+				pos + Vector2(4.4, 6.4),
+				pos + Vector2(-4.4, 6.4),
+				pos + Vector2(-5.6, 2.0),
+			])
+			draw_colored_polygon(cranium, Color(0.91, 0.87, 0.75, 0.96))
+			var cr_ring := cranium.duplicate()
+			cr_ring.append(cranium[0])
+			draw_polyline(cr_ring, ink_col, 1.8, true)
+			# Blazing emerald skull eye sockets, nasal notch, and jaw teeth ticks.
+			draw_circle(pos + Vector2(-3.2, -3.8), 2.5, COL_INK)
+			draw_circle(pos + Vector2(3.2, -3.8), 2.5, COL_INK)
+			draw_circle(pos + Vector2(-3.2, -3.8), 1.5, COL_EVENT_FORT_GLOW)
+			draw_circle(pos + Vector2(3.2, -3.8), 1.5, COL_EVENT_FORT_GLOW)
+			draw_colored_polygon(PackedVector2Array([
+				pos + Vector2(0.0, -1.5),
+				pos + Vector2(1.4, 1.2),
+				pos + Vector2(-1.4, 1.2),
+			]), COL_INK)
+			for tx: float in [-2.2, 0.0, 2.2]:
+				draw_line(pos + Vector2(tx, 3.0), pos + Vector2(tx, 6.2), ink_col, 1.3, true)
+
+		if font != null:
+			var fs := 11
+			var tw := font.get_string_size(lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			var px := pos.x - tw * 0.5
+			var py := pos.y + 32.0
+			draw_rect(Rect2(px - 4.0, py - 11.0, tw + 8.0, 14.0), Color(COL_PARCHMENT.r, COL_PARCHMENT.g, COL_PARCHMENT.b, 0.84), true)
+			draw_rect(Rect2(px - 4.0, py - 11.0, tw + 8.0, 14.0), Color(ink_col.r, ink_col.g, ink_col.b, 0.52), false, 1.0)
+			draw_string(font, Vector2(px, py), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink_col)
+
+	func _draw_dashed_circle(center: Vector2, radius: float, col: Color, width: float, dashes: int, angle_offset: float = 0.0) -> void:
 		var seg := TAU / float(dashes)
 		for i in dashes:
-			var a0 := float(i) * seg
+			var a0 := angle_offset + float(i) * seg
 			var a1 := a0 + seg * 0.58
 			draw_arc(center, radius, a0, a1, 6, col, width, true)
 

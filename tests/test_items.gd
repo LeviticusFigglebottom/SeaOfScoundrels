@@ -4014,3 +4014,174 @@ func test_q14a_shanty_notes_spyglass_lens_glint_and_cutlass_blade_gleam() -> voi
 	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q14A teardown clears _fp_hand_mesh_cache cleanly")
 	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q14A teardown clears _fp_hand_mat_cache cleanly")
 
+
+# ---------------------------------------------------------------------------
+# Pass Q24A: Zero-Primitive MapTable Chart Surface, Nocturnal Cabin Glow,
+# Live WorldEventCloud Sky-Beacon Emblems & Pulsing Chart Pin/Target Rings
+# ---------------------------------------------------------------------------
+
+func test_q24a_map_table_zero_primitive_nocturnal_glow_sky_events_and_pulsing_pins() -> void:
+	_begin()
+
+	# 1. Source hygiene: zero PrimitiveMesh constructors & 0 non-ASCII lines in map_table_view.gd.
+	var mtv_src := FileAccess.get_file_as_string("res://src/items/map_table_view.gd")
+	check(not mtv_src.is_empty(), "map_table_view.gd source loads cleanly")
+	for prim: String in ["PlaneMesh.new", "BoxMesh.new", "CylinderMesh.new", "SphereMesh.new",
+			"CapsuleMesh.new", "PrismMesh.new", "QuadMesh.new"]:
+		check(not mtv_src.contains(prim), "map_table_view.gd contains zero raw %s primitives" % prim)
+	var non_ascii_lines := 0
+	for line in mtv_src.split("\n"):
+		for ci in line.length():
+			if line.unicode_at(ci) >= 128:
+				non_ascii_lines += 1
+				break
+	check_eq(non_ascii_lines, 0, "map_table_view.gd has 0 non-ASCII code lines")
+
+	# 2. Zero-primitive sculpted 2-tri ChartSurface ArrayMesh with finite unit +Y normals & exact UVs.
+	var ship := SLOOP_SCENE.instantiate() as Ship
+	ship.enable_effects = false
+	_root.add_child(ship)
+	await physics_frames(4)
+	ship.global_position = Vector3.ZERO
+	ship.rotation = Vector3.ZERO
+	ship.set_lanterns_lit(true)
+
+	var mtv := MapTableView.new()
+	check(mtv.mount_to_ship(ship), "MapTableView mounts cleanly onto sloop for Q24A")
+
+	var surface_mi := mtv.find_child("ChartSurface", true, false) as MeshInstance3D
+	check(surface_mi != null, "MapTableView builds ChartSurface MeshInstance3D")
+	if surface_mi != null:
+		check(surface_mi.mesh is ArrayMesh, "ChartSurface mesh is an ArrayMesh")
+		check(not (surface_mi.mesh is PlaneMesh) and not (surface_mi.mesh is PrimitiveMesh),
+			"ChartSurface mesh is NOT a PlaneMesh or PrimitiveMesh")
+		if surface_mi.mesh is ArrayMesh:
+			var am := surface_mi.mesh as ArrayMesh
+			check_eq(am.get_faces().size(), 6, "ChartSurface ArrayMesh has exact 2 triangles (6 face verts)")
+			var arrays := am.surface_get_arrays(0)
+			var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+			check(verts.size() >= 4 and norms.size() == verts.size() and uvs.size() == verts.size(),
+				"ChartSurface ArrayMesh provides matching vertices, normals, and UVs")
+			var hx := MapTableView.CHART_WIDTH_M * 0.5
+			var hz := MapTableView.CHART_DEPTH_M * 0.5
+			for i in verts.size():
+				var v := verts[i]
+				var n := norms[i]
+				var uv := uvs[i]
+				check_near(v.y, 0.0, 0.0001, "ChartSurface vertex %d lies at y=0.0" % i)
+				check(n.is_finite() and absf(n.length() - 1.0) < 0.01 and n.y >= 0.99,
+					"ChartSurface normal %d is finite unit +Y (got %s)" % [i, str(n)])
+				var exp_u := 1.0 if v.x > 0.0 else 0.0
+				var exp_v := 1.0 if v.z > 0.0 else 0.0
+				check_near(absf(v.x), hx, 0.0001, "ChartSurface vertex %d X matches CHART_WIDTH_M/2" % i)
+				check_near(absf(v.z), hz, 0.0001, "ChartSurface vertex %d Z matches CHART_DEPTH_M/2" % i)
+				check_near(uv.x, exp_u, 0.0001, "ChartSurface vertex %d UV.x matches PlaneMesh orientation" % i)
+				check_near(uv.y, exp_v, 0.0001, "ChartSurface vertex %d UV.y matches PlaneMesh orientation" % i)
+
+	# 3. Nocturnal cabin lantern-lit warm chart emission modulation.
+	Weather.time_of_day = 12.0
+	ship.set_lanterns_lit(true)
+	mtv.step_chart_lighting()
+	var e_day := mtv.get_chart_emission_energy()
+	check_near(e_day, 0.06, 0.01, "midday chart emission stays subtle ~0.06 (got %.3f)" % e_day)
+	if mtv._surface_mat != null:
+		check_near(mtv._surface_mat.emission.r, 0.96, 0.02, "midday emission color matches warm parchment")
+		check_near(mtv._surface_mat.emission.b, 0.72, 0.02, "midday emission blue matches warm parchment")
+
+	Weather.time_of_day = 18.0
+	mtv.step_chart_lighting()
+	var e_dusk := mtv.get_chart_emission_energy()
+	check(e_dusk > e_day + 0.10 and e_dusk < 0.38,
+		"dusk chart emission rises smoothly above midday (got %.3f)" % e_dusk)
+
+	Weather.time_of_day = 0.0
+	mtv.step_chart_lighting()
+	var e_night_lit := mtv.get_chart_emission_energy()
+	check(e_night_lit >= 0.34 and e_night_lit <= 0.40,
+		"midnight lantern-lit chart emission rises >= 0.34 (got %.3f)" % e_night_lit)
+	if mtv._surface_mat != null:
+		check(mtv._surface_mat.emission.r >= 0.98 and mtv._surface_mat.emission.b <= 0.60,
+			"midnight lantern-lit emission shifts to warm candlelight amber")
+
+	ship.set_lanterns_lit(false)
+	mtv.step_chart_lighting()
+	var e_night_dark := mtv.get_chart_emission_energy()
+	check(e_night_dark <= 0.04 and e_night_dark >= 0.02,
+		"midnight running dark (lanterns_lit=false) dims chart emission <= 0.04 (got %.3f)" % e_night_dark)
+
+	ship.set_lanterns_lit(true)
+	mtv.refresh_now()
+	check(mtv.get_chart_emission_energy() >= 0.34,
+		"refresh_now() restores nocturnal lantern-lit emission >= 0.34 when lanterns relit")
+	Weather.time_of_day = 12.0
+
+	# 4. Live WorldEventCloud sky-beacon snapshot collection, deduplication & pulsing pins/targets.
+	var cloud_fort := WorldEventCloud.new()
+	cloud_fort.configure(&"fort_siege", Vector3(-620.0, 0.0, -480.0), true)
+	_root.add_child(cloud_fort)
+
+	var cloud_ghost := WorldEventCloud.new()
+	cloud_ghost.configure(&"ghost_ship", Vector3(460.0, 0.0, -520.0), true)
+	_root.add_child(cloud_ghost)
+
+	var cloud_lev := WorldEventCloud.new()
+	cloud_lev.configure(&"leviathan", Vector3(120.0, 0.0, -880.0), true)
+	_root.add_child(cloud_lev)
+
+	# Overlapping same-kind cloud (should deduplicate cleanly) + fading-out cloud (should be ignored).
+	var cloud_fort_dup := WorldEventCloud.new()
+	cloud_fort_dup.configure(&"fort_siege", Vector3(-590.0, 0.0, -455.0), true)
+	_root.add_child(cloud_fort_dup)
+
+	var cloud_fading := WorldEventCloud.new()
+	cloud_fading.configure(&"ghost_ship", Vector3(-180.0, 0.0, -960.0), true)
+	_root.add_child(cloud_fading)
+	cloud_fading.fade_out_and_free(2.0)
+
+	# Player chart pin via toggle_marker_at() + active voyage target for pulsing double-ink compass rings.
+	check(mtv.toggle_marker_at(Vector3(240.0, 0.0, -360.0)), "toggle_marker_at places player chart pin")
+	mtv.set_voyage_target(Vector3(-240.0, 0.0, -240.0))
+	mtv.view_center = Vector2(0.0, -450.0)
+	mtv.view_span = 2900.0
+	mtv._process(0.25)
+	mtv.refresh_now()
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	var snap := mtv.get_last_snapshot()
+	var clouds: Array = snap.get("world_event_clouds", [])
+	check_eq(clouds.size(), 3, "snapshot collects all 3 distinct active WorldEventCloud beacons (got %d)" % clouds.size())
+	var seen_kinds: Dictionary = {}
+	for entry in clouds:
+		check(entry is Dictionary, "world_event_clouds entry is a Dictionary")
+		if entry is Dictionary:
+			var ed := entry as Dictionary
+			var k: StringName = ed.get("kind", &"")
+			var p: Variant = ed.get("pos", Vector3.INF)
+			check(p is Vector3 and (p as Vector3).is_finite(), "cloud entry carries finite Vector3 pos")
+			seen_kinds[k] = true
+	check(seen_kinds.has(&"fort_siege") and seen_kinds.has(&"ghost_ship") and seen_kinds.has(&"leviathan"),
+		"snapshot includes fort_siege, ghost_ship, and leviathan sky beacons")
+	check_eq((snap.get("markers", []) as Array).size(), 1, "snapshot carries active player chart pin")
+	check((snap.get("target_pos", Vector3.INF) as Vector3).is_finite(), "snapshot carries active voyage target")
+	check(float(snap.get("storm_phase", 0.0)) > 0.0, "snapshot carries live _storm_phase driving pulsing rings")
+
+	# Verify overlapping FortBattery siege deduplicates against fort_siege sky beacon cleanly.
+	var overlap_bat := FortBattery.new()
+	overlap_bat.enable_effects = false
+	overlap_bat.siege_active = true
+	_root.add_child(overlap_bat)
+	overlap_bat.global_position = Vector3(-615.0, 12.0, -475.0)
+	mtv.refresh_now()
+	var snap_dedup := mtv.get_last_snapshot()
+	check_eq((snap_dedup.get("fort_sieges", []) as Array).size(), 1, "active FortBattery registers fort_sieges marker")
+	check_eq((snap_dedup.get("world_event_clouds", []) as Array).size(), 2,
+		"overlapping fort_siege WorldEventCloud deduplicates cleanly against active fort_sieges marker")
+
+	# 5. Clean zero-leak teardown!
+	await _end()
+	check(not is_instance_valid(mtv), "Q24A MapTableView tears down cleanly with 0 leaks")
+	check(WorldEventCloud._mesh_cache.is_empty(), "Q24A teardown clears WorldEventCloud static caches cleanly")
+

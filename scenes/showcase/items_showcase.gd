@@ -172,6 +172,17 @@ func _setup_map_table_shot() -> void:
 	# Place a live storm cell out to the northwest for the cyclone swirl on the chart.
 	Weather.set_storm_cell(Vector3(-420.0, 0.0, -980.0), 340.0, 0.85, 0.0)
 
+	# Mount sample WorldEventCloud beacons so the parchment chart showcases all 3 inked sky-beacon stamps.
+	for spec in [
+		[&"fort_siege", Vector3(-620.0, 220.0, -520.0)],
+		[&"ghost_ship", Vector3(680.0, 220.0, -1040.0)],
+		[&"leviathan", Vector3(-110.0, 220.0, -1260.0)],
+	]:
+		var cloud := WorldEventCloud.new()
+		cloud.event_kind = spec[0] as StringName
+		cloud.position = spec[1] as Vector3
+		add_child(cloud)
+
 	_map_view = MapTableView.new()
 	_map_view.name = "MapTableView"
 	_map_view.mount_to_ship(_ship)
