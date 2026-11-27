@@ -990,3 +990,105 @@ func test_q11b_title_landing_harbour_vista_preview_and_camera_framing() -> void:
 	check(not is_instance_valid(main), "Q11B main scene frees cleanly with 0 leaks")
 	Weather.apply_state(saved_weather)
 	Sea.amp_scale = saved_amp
+
+
+# ---------------------------------------------------------------------------
+# 8. Q19B: Animated Gold Counter Roll-Up & Floating Brass GoldDeltaToast
+# ---------------------------------------------------------------------------
+
+func test_q19b_hud_animated_gold_rollup_and_delta_toast() -> void:
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	add_child(hud)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	var toast := hud.get_gold_delta_toast_label()
+	check(toast != null and toast.name == "GoldDeltaToast",
+		"GameHUD mounts GoldDeltaToast and exposes get_gold_delta_toast_label()")
+	var gold_lbl := hud.find_child("GoldLabel", true, false) as Label
+	check(gold_lbl != null, "GameHUD mounts GoldLabel inside VoyageWhisper")
+
+	# 1. Initial set_gold(500) snaps cleanly with ZERO phantom toast.
+	hud.set_gold(500)
+	check_eq(hud.get_target_gold(), 500, "initial set_gold(500) sets target gold immediately")
+	check_eq(hud.get_displayed_gold(), 500, "initial set_gold(500) snaps displayed gold immediately")
+	if gold_lbl != null:
+		check_eq(gold_lbl.text, "500 Gold", "initial set_gold(500) updates GoldLabel immediately")
+	check(toast != null and not toast.visible, "initial set_gold(500) leaves GoldDeltaToast hidden (no phantom toast)")
+	check_eq(hud.get_gold_delta_toast_text(), "", "initial set_gold(500) leaves toast text empty")
+
+	# 2. Subsequent payout set_gold(850) triggers "+350 Gold" warm gilded toast & ease-out cubic roll-up!
+	hud.set_gold(850)
+	check_eq(hud.get_target_gold(), 850, "set_gold(850) updates get_target_gold() immediately")
+	check_eq(hud.get_displayed_gold(), 500, "set_gold(850) begins smooth roll-up from 500")
+	check_eq(hud.get_gold_delta_toast_text(), "+350 Gold", "set_gold(850) triggers '+350 Gold' delta toast")
+	check(_is_strict_ascii(hud.get_gold_delta_toast_text()), "gain toast text is strict ASCII")
+	if toast != null:
+		check(toast.visible, "GoldDeltaToast becomes visible on gold gain")
+		check_eq(toast.text, "+350 Gold", "GoldDeltaToast Label text matches '+350 Gold'")
+		check(toast.get_theme_color("font_color").is_equal_approx(Color(1.0, 0.86, 0.34, 1.0)),
+			"gain toast renders in warm gilded gold Color(1.0, 0.86, 0.34)")
+	var start_top := toast.offset_top if toast != null else 0.0
+
+	hud.step_gold_animation(0.20)
+	var mid_gold := hud.get_displayed_gold()
+	check(mid_gold > 500 and mid_gold < 850,
+		"step_gold_animation(0.20) rolls displayed gold smoothly between 500 and 850 (got %d)" % mid_gold)
+	if gold_lbl != null:
+		check_eq(gold_lbl.text, "%d Gold" % mid_gold, "GoldLabel tracks rolling displayed gold cleanly")
+	if toast != null:
+		check(toast.offset_top < start_top - 1.5,
+			"GoldDeltaToast floats gently upward during animation (%.2f -> %.2f)" % [start_top, toast.offset_top])
+
+	hud.step_gold_animation(0.50)
+	check_eq(hud.get_displayed_gold(), 850, "gold roll-up settles cleanly at 850 after 0.70 s")
+	if gold_lbl != null:
+		check_eq(gold_lbl.text, "850 Gold", "GoldLabel settles on '850 Gold'")
+
+	# 3. Rapid back-to-back payout within 0.85 s (elapsed = 0.70 s) accumulates "+350" + "+150" -> "+500 Gold"!
+	hud.set_gold(1000)
+	check_eq(hud.get_target_gold(), 1000, "rapid payout updates target gold immediately to 1000")
+	check_eq(hud.get_gold_delta_toast_text(), "+500 Gold",
+		"rapid payout within 0.85 s accumulates into '+500 Gold' running total")
+	if toast != null:
+		check(toast.visible and toast.text == "+500 Gold", "accumulated toast label displays '+500 Gold'")
+	hud.step_gold_animation(0.65)
+	check_eq(hud.get_displayed_gold(), 1000, "accumulated payout rolls cleanly to 1000")
+
+	# 4. Spend set_gold(800) switches cleanly to coral-crimson "-200 Gold" and rolls down 1000 -> 800!
+	hud.set_gold(800)
+	check_eq(hud.get_target_gold(), 800, "spend updates target gold immediately to 800")
+	check_eq(hud.get_gold_delta_toast_text(), "-200 Gold", "spend triggers '-200 Gold' strict-ASCII toast")
+	check(_is_strict_ascii(hud.get_gold_delta_toast_text()), "spend toast text is strict ASCII")
+	if toast != null:
+		check(toast.visible and toast.text == "-200 Gold", "GoldDeltaToast displays '-200 Gold' on spend")
+		check(toast.get_theme_color("font_color").is_equal_approx(Color(0.95, 0.42, 0.36, 1.0)),
+			"spend toast renders in soft coral-crimson Color(0.95, 0.42, 0.36)")
+
+	hud.step_gold_animation(0.25)
+	var mid_spend := hud.get_displayed_gold()
+	check(mid_spend < 1000 and mid_spend > 800,
+		"spend smoothly rolls displayed gold downward (got %d)" % mid_spend)
+	hud.step_gold_animation(0.95)
+	check_eq(hud.get_displayed_gold(), 800, "spend finishes rolling cleanly at 800")
+	if toast != null:
+		check(toast.visible and toast.modulate.a > 0.05 and toast.modulate.a < 0.95,
+			"toast fades smoothly at 1.20 s (alpha=%.3f)" % toast.modulate.a)
+		check(toast.offset_top <= start_top - 12.0,
+			"toast floats ~14 px upward across lifetime (delta=%.2f px)" % (start_top - toast.offset_top))
+
+	# 5. Advancing past 1.65 s (1.8 s total) hides toast cleanly with zero residue.
+	hud.step_gold_animation(0.60)
+	check(toast != null and not toast.visible, "GoldDeltaToast hides cleanly after 1.8 s")
+	check_near(toast.modulate.a if toast != null else -1.0, 0.0, 0.001, "GoldDeltaToast alpha reaches 0.0")
+	check_eq(hud.get_gold_delta_toast_text(), "", "get_gold_delta_toast_text() clears cleanly after fade")
+
+	var checked_ascii := _check_tree_strict_ascii(hud, "Q19B_GameHUD")
+	check(checked_ascii >= 20, "verified 100%% strict ASCII across Q19B GameHUD (checked %d)" % checked_ascii)
+
+	# 6. Clean zero-leak teardown.
+	hud.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(hud), "Q19B GameHUD frees cleanly with 0 leaks")
+

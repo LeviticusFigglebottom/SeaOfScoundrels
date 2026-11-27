@@ -59,6 +59,16 @@ const BALLAST_CURSE_DURATION := 12.0
 const BALLAST_DRAFT_OFFSET := -0.78
 const BALLAST_FLOOD_MULT := 2.25
 const ANCHOR_CURSE_FX_DURATION := 4.5
+const BELL_RIPPLE_DURATION := 0.65
+const BELL_RIPPLE_START_SCALE := 0.25
+const BELL_RIPPLE_END_SCALE := 2.15
+const BELL_RIPPLE_PEAK_ENERGY := 1.35
+const BELL_RIPPLE_VISIBILITY_RANGE := 140.0
+const ANCHOR_SPLASH_DURATION := 1.15
+const ANCHOR_SPLASH_START_SCALE := 0.65
+const ANCHOR_SPLASH_END_SCALE := 3.40
+const ANCHOR_SPLASH_PEAK_ENERGY := 1.25
+const ANCHOR_SPLASH_VISIBILITY_RANGE := 220.0
 const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"firebomb", &"anchorball", &"ballastball", &"flare"]
 const CANNON_ORDNANCE_LABELS := {
 	&"iron": "Iron",
@@ -283,6 +293,14 @@ var ship_bell_interactable: Interactable = null
 var _bell_frame_mi: MeshInstance3D = null
 var _bell_cup_pivot: Node3D = null
 var _bell_cup_mi: MeshInstance3D = null
+var _bell_ripple_mi: MeshInstance3D = null
+var _bell_ripple_mat: StandardMaterial3D = null
+var _bell_ripple_timer: float = 0.0
+var _bell_ripple_energy: float = 0.0
+var _anchor_splash_mi: MeshInstance3D = null
+var _anchor_splash_mat: StandardMaterial3D = null
+var _anchor_splash_timer: float = 0.0
+var _anchor_splash_energy: float = 0.0
 var _lookout_glint: MeshInstance3D = null
 var _lookout_glint_mat: ShaderMaterial = null
 var _lookout_glint_phase: float = 0.0
@@ -304,10 +322,38 @@ static var _bell_frame_mesh: ArrayMesh = null
 static var _bell_cup_mesh: ArrayMesh = null
 static var _bell_iron_mat: StandardMaterial3D = null
 static var _bell_bronze_mat: StandardMaterial3D = null
+static var _bell_ripple_mesh: ArrayMesh = null
+static var _anchor_splash_mesh: ArrayMesh = null
 static var _crows_nest_rungs_sloop: ArrayMesh = null
 static var _crows_nest_rungs_brig: ArrayMesh = null
 static var _crows_nest_rungs_mat: StandardMaterial3D = null
 static var _curse_ring_mesh: ArrayMesh = null
+
+
+## Release all statically cached Ship textures, shaders, meshes, and materials cleanly.
+static func clear_shared_cache() -> void:
+	_smoke_puff_tex = null
+	_muzzle_flash_tex = null
+	_muzzle_spark_tex = null
+	_streamer_mesh_sloop = null
+	_streamer_mesh_brig = null
+	_lookout_glint_mesh = null
+	_lookout_glint_shader = null
+	_lantern_halo_mesh = null
+	_lantern_halo_shader = null
+	_bow_ribbon_mesh_sloop = null
+	_bow_ribbon_mesh_brig = null
+	_bow_ribbon_shader = null
+	_bell_frame_mesh = null
+	_bell_cup_mesh = null
+	_bell_iron_mat = null
+	_bell_bronze_mat = null
+	_bell_ripple_mesh = null
+	_anchor_splash_mesh = null
+	_crows_nest_rungs_sloop = null
+	_crows_nest_rungs_brig = null
+	_crows_nest_rungs_mat = null
+	_curse_ring_mesh = null
 
 
 ## True when this vessel is a two-masted Brigantine.
@@ -365,6 +411,7 @@ func _ready() -> void:
 	_build_hold_water()
 	_build_bow_wake_ribbons()
 	_setup_ship_bell()
+	_build_tactile_vfx()
 	_build_deck_extras()
 	_setup_cabin_furnishings()
 	_setup_ship_nameplate()
@@ -447,6 +494,22 @@ func _exit_tree() -> void:
 	_bell_frame_mi = null
 	_bell_cup_mi = null
 	_bell_cup_pivot = null
+	if _bell_ripple_mi != null and is_instance_valid(_bell_ripple_mi):
+		_bell_ripple_mi.visible = false
+		_bell_ripple_mi.material_override = null
+		_bell_ripple_mi.mesh = null
+	_bell_ripple_mi = null
+	_bell_ripple_mat = null
+	_bell_ripple_timer = 0.0
+	_bell_ripple_energy = 0.0
+	if _anchor_splash_mi != null and is_instance_valid(_anchor_splash_mi):
+		_anchor_splash_mi.visible = false
+		_anchor_splash_mi.material_override = null
+		_anchor_splash_mi.mesh = null
+	_anchor_splash_mi = null
+	_anchor_splash_mat = null
+	_anchor_splash_timer = 0.0
+	_anchor_splash_energy = 0.0
 	if _crows_nest_rungs_mi != null and is_instance_valid(_crows_nest_rungs_mi):
 		_crows_nest_rungs_mi.material_override = null
 		_crows_nest_rungs_mi.mesh = null
@@ -484,26 +547,7 @@ func _exit_tree() -> void:
 	_unregister_ocean_mask()
 	_active_ship_count = maxi(0, _active_ship_count - 1)
 	if _active_ship_count == 0:
-		_smoke_puff_tex = null
-		_muzzle_flash_tex = null
-		_muzzle_spark_tex = null
-		_streamer_mesh_sloop = null
-		_streamer_mesh_brig = null
-		_lookout_glint_mesh = null
-		_lookout_glint_shader = null
-		_lantern_halo_mesh = null
-		_lantern_halo_shader = null
-		_bow_ribbon_mesh_sloop = null
-		_bow_ribbon_mesh_brig = null
-		_bow_ribbon_shader = null
-		_bell_frame_mesh = null
-		_bell_cup_mesh = null
-		_bell_iron_mat = null
-		_bell_bronze_mat = null
-		_crows_nest_rungs_sloop = null
-		_crows_nest_rungs_brig = null
-		_crows_nest_rungs_mat = null
-		_curse_ring_mesh = null
+		clear_shared_cache()
 
 
 # ------------------------------------------------------------------ construction
@@ -2088,6 +2132,257 @@ func _setup_ship_bell() -> void:
 	root.add_child(ship_bell_interactable)
 
 
+func _build_tactile_vfx() -> void:
+	_bell_ripple_mat = _make_tactile_ring_material()
+	_bell_ripple_mi = MeshInstance3D.new()
+	_bell_ripple_mi.name = "BellRippleRing"
+	_bell_ripple_mi.mesh = _get_bell_ripple_mesh()
+	_bell_ripple_mi.material_override = _bell_ripple_mat
+	_bell_ripple_mi.position = _bell_ripple_local_pos()
+	_bell_ripple_mi.scale = Vector3.ONE * BELL_RIPPLE_START_SCALE
+	_bell_ripple_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bell_ripple_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_bell_ripple_mi.visibility_range_end = BELL_RIPPLE_VISIBILITY_RANGE
+	_bell_ripple_mi.extra_cull_margin = 2.5
+	_bell_ripple_mi.visible = false
+	add_child(_bell_ripple_mi)
+
+	_anchor_splash_mat = _make_tactile_ring_material()
+	_anchor_splash_mi = MeshInstance3D.new()
+	_anchor_splash_mi.name = "AnchorSplashRing"
+	_anchor_splash_mi.mesh = _get_anchor_splash_mesh()
+	_anchor_splash_mi.material_override = _anchor_splash_mat
+	_anchor_splash_mi.position = _anchor_splash_base_local_pos()
+	_anchor_splash_mi.scale = Vector3.ONE * ANCHOR_SPLASH_START_SCALE
+	_anchor_splash_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_anchor_splash_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_anchor_splash_mi.visibility_range_end = ANCHOR_SPLASH_VISIBILITY_RANGE
+	_anchor_splash_mi.extra_cull_margin = 4.0
+	_anchor_splash_mi.visible = false
+	add_child(_anchor_splash_mi)
+
+
+func _bell_ripple_local_pos() -> Vector3:
+	if ship_bell_node != null and is_instance_valid(ship_bell_node):
+		return ship_bell_node.position + Vector3(0.0, 0.22 * hull_scale, 0.0)
+	if _bell != null and is_instance_valid(_bell):
+		return _local_to_ship(_bell).origin
+	return ship_point(Vector3(0.0, 3.30, 3.98) if is_brigantine() else Vector3(0.0, 3.08, 2.98))
+
+
+func _anchor_splash_base_local_pos() -> Vector3:
+	return ship_point(Vector3(0.0, 0.10, -6.8 if is_brigantine() else -5.2))
+
+
+## Return the sculpted 96-tri expanding bronze acoustic BellRippleRing MeshInstance3D, or null.
+func get_bell_ripple_node() -> MeshInstance3D:
+	if _bell_ripple_mi != null and is_instance_valid(_bell_ripple_mi):
+		return _bell_ripple_mi
+	return null
+
+
+## Return the current additive acoustic ripple glow energy of BellRippleRing (0.0 when idle; 1.35 -> 0.0 on ring).
+func get_bell_ripple_energy() -> float:
+	return _bell_ripple_energy
+
+
+## Return the sculpted 176-tri concentric waterline AnchorSplashRing MeshInstance3D, or null.
+func get_anchor_splash_node() -> MeshInstance3D:
+	if _anchor_splash_mi != null and is_instance_valid(_anchor_splash_mi):
+		return _anchor_splash_mi
+	return null
+
+
+## Return the current additive splash halo energy of AnchorSplashRing (0.0 when idle; 1.25 -> 0.0 on drop).
+func get_anchor_splash_energy() -> float:
+	return _anchor_splash_energy
+
+
+## Emit bow ocean foam and trigger the expanding 176-tri concentric AnchorSplashRing waterline halo.
+func trigger_anchor_splash() -> void:
+	_anchor_splash_timer = ANCHOR_SPLASH_DURATION
+	if Ocean.current != null and is_instance_valid(Ocean.current) and Ocean.current.has_method(&"add_foam"):
+		var splash_w := global_transform * _anchor_splash_base_local_pos() if is_inside_tree() else _anchor_splash_base_local_pos()
+		Ocean.current.add_foam(splash_w, 2.6 * hull_scale, 0.85)
+	_sync_tactile_vfx_visuals()
+
+
+## Deterministically advance BellRippleRing and AnchorSplashRing tactile ship VFX by `delta` seconds.
+func step_tactile_vfx(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if _bell_ripple_timer > 0.0:
+		_bell_ripple_timer = maxf(0.0, _bell_ripple_timer - dt)
+		if _bell_ripple_timer <= 0.0001:
+			_bell_ripple_timer = 0.0
+	if _anchor_splash_timer > 0.0:
+		_anchor_splash_timer = maxf(0.0, _anchor_splash_timer - dt)
+		if _anchor_splash_timer <= 0.0001:
+			_anchor_splash_timer = 0.0
+	_sync_tactile_vfx_visuals()
+
+
+func _sync_tactile_vfx_visuals() -> void:
+	if _bell_ripple_timer > 0.0001:
+		var u := 1.0 - clampf(_bell_ripple_timer / BELL_RIPPLE_DURATION, 0.0, 1.0)
+		var rem := clampf(1.0 - u, 0.0, 1.0)
+		var expand := 1.0 - rem * rem
+		var ring_sc := lerpf(BELL_RIPPLE_START_SCALE, BELL_RIPPLE_END_SCALE, expand)
+		_bell_ripple_energy = BELL_RIPPLE_PEAK_ENERGY * rem * rem
+		var brass_tint := Color(1.0, 0.90, 0.50).lerp(Color(0.94, 0.68, 0.22), u)
+		if _bell_ripple_mi != null and is_instance_valid(_bell_ripple_mi):
+			_bell_ripple_mi.visible = true
+			_bell_ripple_mi.position = _bell_ripple_local_pos()
+			_bell_ripple_mi.scale = Vector3.ONE * ring_sc
+		if _bell_ripple_mat != null:
+			_bell_ripple_mat.albedo_color = Color(
+				brass_tint.r * _bell_ripple_energy,
+				brass_tint.g * _bell_ripple_energy,
+				brass_tint.b * _bell_ripple_energy,
+				1.0
+			)
+	else:
+		_bell_ripple_timer = 0.0
+		_bell_ripple_energy = 0.0
+		if _bell_ripple_mi != null and is_instance_valid(_bell_ripple_mi):
+			_bell_ripple_mi.visible = false
+			_bell_ripple_mi.scale = Vector3.ONE * BELL_RIPPLE_START_SCALE
+		if _bell_ripple_mat != null:
+			_bell_ripple_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	if _anchor_splash_timer > 0.0001:
+		var u := 1.0 - clampf(_anchor_splash_timer / ANCHOR_SPLASH_DURATION, 0.0, 1.0)
+		var rem := clampf(1.0 - u, 0.0, 1.0)
+		var expand := 1.0 - rem * rem
+		var splash_sc := lerpf(ANCHOR_SPLASH_START_SCALE, ANCHOR_SPLASH_END_SCALE, expand)
+		_anchor_splash_energy = ANCHOR_SPLASH_PEAK_ENERGY * rem * rem
+		var foam_tint := Color(0.88, 0.99, 1.0).lerp(Color(0.46, 0.88, 0.96), u)
+		if _anchor_splash_mi != null and is_instance_valid(_anchor_splash_mi):
+			var base_pos := _anchor_splash_base_local_pos()
+			var aligned_pos := base_pos
+			if is_inside_tree():
+				var bow_world := global_transform * base_pos
+				var sea_y := Sea.height(bow_world.x, bow_world.z)
+				if absf(global_position.y - sea_y) < 4.5:
+					var water_local := global_transform.affine_inverse() * Vector3(bow_world.x, sea_y + 0.10 * hull_scale, bow_world.z)
+					aligned_pos.y = clampf(water_local.y, base_pos.y - 1.6 * hull_scale, base_pos.y + 1.6 * hull_scale)
+			_anchor_splash_mi.visible = true
+			_anchor_splash_mi.position = aligned_pos
+			_anchor_splash_mi.scale = Vector3.ONE * splash_sc
+		if _anchor_splash_mat != null:
+			_anchor_splash_mat.albedo_color = Color(
+				foam_tint.r * _anchor_splash_energy,
+				foam_tint.g * _anchor_splash_energy,
+				foam_tint.b * _anchor_splash_energy,
+				1.0
+			)
+	else:
+		_anchor_splash_timer = 0.0
+		_anchor_splash_energy = 0.0
+		if _anchor_splash_mi != null and is_instance_valid(_anchor_splash_mi):
+			_anchor_splash_mi.visible = false
+			_anchor_splash_mi.scale = Vector3.ONE * ANCHOR_SPLASH_START_SCALE
+		if _anchor_splash_mat != null:
+			_anchor_splash_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
+static func _make_tactile_ring_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
+
+
+static func _get_bell_ripple_mesh() -> ArrayMesh:
+	if _bell_ripple_mesh != null:
+		return _bell_ripple_mesh
+	# Exact 96-tri flat annular gilded-brass acoustic ripple ring (24 radial segs x 2 tapered half-ribbons).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_emit_flat_annulus_ribbon(st, 24, 0.26, 0.38, 0.50, Color(1.0, 0.86, 0.42, 1.0))
+	_bell_ripple_mesh = st.commit()
+	return _bell_ripple_mesh
+
+
+static func _get_anchor_splash_mesh() -> ArrayMesh:
+	if _anchor_splash_mesh != null:
+		return _anchor_splash_mesh
+	# Exact 176-tri concentric 2-ring horizontal water-surface splash halo (22 radial segs x 2 tapered annular ribbons).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_emit_flat_annulus_ribbon(st, 22, 0.14, 0.22, 0.30, Color(0.88, 0.99, 1.0, 1.0))
+	_emit_flat_annulus_ribbon(st, 22, 0.34, 0.42, 0.50, Color(0.62, 0.95, 0.98, 1.0))
+	_anchor_splash_mesh = st.commit()
+	return _anchor_splash_mesh
+
+
+static func _emit_flat_annulus_ribbon(
+	st: SurfaceTool,
+	segs: int,
+	r_in: float,
+	r_mid: float,
+	r_out: float,
+	col_ridge: Color
+) -> void:
+	const UP_NORMAL := Vector3(0.0, 1.0, 0.0)
+	const COL_EDGE := Color(0.0, 0.0, 0.0, 1.0)
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		var c0 := cos(a0)
+		var s0 := sin(a0)
+		var c1 := cos(a1)
+		var s1 := sin(a1)
+		var in0 := Vector3(c0 * r_in, 0.0, s0 * r_in)
+		var in1 := Vector3(c1 * r_in, 0.0, s1 * r_in)
+		var m0 := Vector3(c0 * r_mid, 0.0, s0 * r_mid)
+		var m1 := Vector3(c1 * r_mid, 0.0, s1 * r_mid)
+		var o0 := Vector3(c0 * r_out, 0.0, s0 * r_out)
+		var o1 := Vector3(c1 * r_out, 0.0, s1 * r_out)
+		# Inner half-ribbon (edge -> bright center ridge, 2 tris per segment)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m1)
+		# Outer half-ribbon (bright center ridge -> edge, 2 tris per segment)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(col_ridge)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o1)
+
+
 func _setup_ship_nameplate() -> void:
 	if faction != &"player" or not ResourceLoader.exists(SHIP_NAMEPLATE_PATH):
 		return
@@ -2692,10 +2987,12 @@ func set_anchor(down: bool) -> void:
 	if anchor_down == down:
 		if down and was_manual and anchor_progress < 0.90:
 			Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
+			trigger_anchor_splash()
 		return
 	anchor_down = down
 	if down:
 		Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
+		trigger_anchor_splash()
 	else:
 		_anchor_swing_timer = 0.0
 		_anchor_swing_dir = 0.0
@@ -3185,6 +3482,8 @@ static func _classify_livery_material(mat_name: String, is_lod: bool) -> StringN
 ## Ring the ship's bell (pendulum impulse, maritime bronze bell cue & signals).
 func ring_bell(by_pawn: Node = null) -> void:
 	_bell_vel += 9.5
+	_bell_ripple_timer = BELL_RIPPLE_DURATION
+	_sync_tactile_vfx_visuals()
 	var sfx_pos := global_position
 	if ship_bell_node != null and is_instance_valid(ship_bell_node) and ship_bell_node.is_inside_tree():
 		sfx_pos = ship_bell_node.global_position
@@ -3310,6 +3609,8 @@ func _sync_hole_visuals(slot: Dictionary) -> void:
 	if jet != null and (not breached or patched):
 		jet.emitting = false
 		jet.visible = false
+	if _damage_visuals != null and is_instance_valid(_damage_visuals):
+		_damage_visuals.step_breach_spray(0.0)
 
 
 # ------------------------------------------------------------------ cannons
@@ -3608,6 +3909,8 @@ func apply_anchor_curse() -> bool:
 	set_anchor(true)
 	if was_down:
 		Audio.play_sfx(&"anchor_drop", _anchor_world_pos())
+		if not was_submerged:
+			trigger_anchor_splash()
 	anchor_progress = 1.0
 	if not was_submerged:
 		_was_anchor_submerged = true
@@ -4963,6 +5266,7 @@ func _process(delta: float) -> void:
 	_register_ocean_mask()
 	_update_lod()
 	_update_visuals(delta)
+	step_tactile_vfx(delta)
 	_update_wake(delta)
 
 
@@ -5361,8 +5665,11 @@ func apply_net_state(state: Dictionary) -> void:
 	sail_target = float(state.get("sail_target", sail_target))
 	sail_trim = float(state.get("sail_trim", sail_trim))
 	trim_target = float(state.get("trim_target", trim_target))
+	var prev_anchor_down := anchor_down
 	anchor_down = bool(state.get("anchor_down", anchor_down))
 	anchor_progress = float(state.get("anchor_progress", anchor_progress))
+	if not prev_anchor_down and anchor_down and not Net.is_host():
+		trigger_anchor_splash()
 	water_level = float(state.get("water_level", water_level))
 	is_sinking = bool(state.get("is_sinking", is_sinking))
 	var prev_balls := cannonballs_remaining

@@ -4295,3 +4295,325 @@ func test_q18a_fort_battery_halos_special_cannonball_flight_halos_and_wind_ribbo
 	check_eq(WindRibbons._active_instances, 0, "WindRibbons._active_instances remains 0 after Q18A teardown")
 	check(WindRibbons._ribbon_mesh == null and WindRibbons._ribbon_shader == null,
 		"WindRibbons caches remain released (0 leaks)")
+
+
+func test_q19a_ship_bell_ripple_anchor_splash_and_breach_spray_jets() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	Ship.clear_shared_cache()
+	ShipDamageVisuals.clear_shared_cache()
+
+	# ------------------------------------------------------------------
+	# 1. ShipDamageVisuals Vulkan RD MultiMesh teardown source guard
+	# ------------------------------------------------------------------
+	var dv_src := FileAccess.get_file_as_string("res://src/ship/ship_damage_visuals.gd")
+	check(dv_src.length() > 200, "ship_damage_visuals.gd source loads cleanly for Q19A teardown guard")
+	check(not dv_src.contains("multimesh.mesh = null") and not dv_src.contains("_breach_spray_mm.mesh = null"),
+		"ship_damage_visuals.gd must NOT mutate MultiMesh .mesh = null on teardown (Godot 4.8 Vulkan RD rule)")
+	check(not dv_src.contains("_breach_spray_mm.instance_count = 0"),
+		"ship_damage_visuals.gd must NOT mutate MultiMesh .instance_count = 0 on teardown")
+	check(dv_src.contains("_breach_spray_mmi.visible = false")
+		and dv_src.contains("_breach_spray_mmi.material_override = null")
+		and dv_src.contains("_breach_spray_mmi.multimesh = null"),
+		"ship_damage_visuals.gd tears down BreachSprayMist cleanly via visible=false, material_override=null, multimesh=null")
+
+	var sloop := _spawn_sloop(Vector3(0.0, 0.0, 0.0))
+	var brig_scene: PackedScene = load("res://src/ship/brigantine.tscn")
+	var brig := brig_scene.instantiate() as Ship
+	brig.enable_effects = false
+	_root.add_child(brig)
+	brig.global_position = Vector3(34.0, 0.0, 0.0)
+	await physics_frames(3)
+
+	sloop.set_process(false)
+	sloop.set_physics_process(false)
+	brig.set_process(false)
+	brig.set_physics_process(false)
+	var dv_sloop := sloop.get_damage_visuals()
+	var dv_brig := brig.get_damage_visuals()
+	check(dv_sloop != null and dv_brig != null, "Sloop & Brigantine mount ShipDamageVisuals")
+	dv_sloop.set_process(false)
+	dv_brig.set_process(false)
+
+	# ------------------------------------------------------------------
+	# 2. Ship 96-tri BellRippleRing (0.25 -> 2.15 m, energy 1.35 -> 0.0 over 0.65 s)
+	# ------------------------------------------------------------------
+	var bell_ring := sloop.get_bell_ripple_node()
+	var brig_bell_ring := brig.get_bell_ripple_node()
+	check(bell_ring != null and bell_ring.name == &"BellRippleRing",
+		"Sloop mounts BellRippleRing and exposes get_bell_ripple_node()")
+	check(brig_bell_ring != null and brig_bell_ring.mesh == bell_ring.mesh and bell_ring.mesh == Ship._bell_ripple_mesh,
+		"Sloop & Brigantine share static _bell_ripple_mesh")
+	check(bell_ring.mesh is ArrayMesh and not (bell_ring.mesh is PrimitiveMesh),
+		"BellRippleRing uses zero-primitive ArrayMesh")
+	check_eq(bell_ring.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"BellRippleRing disables shadow casting")
+	check_eq(bell_ring.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"BellRippleRing disables GI")
+	check_near(bell_ring.visibility_range_end, 140.0, 0.01,
+		"BellRippleRing sets visibility_range_end == 140.0 m")
+	check(not bell_ring.visible and is_zero_approx(sloop.get_bell_ripple_energy()),
+		"BellRippleRing starts hidden with 0.0 energy when idle")
+	check(bell_ring.position.is_equal_approx(sloop.ship_bell_node.position + Vector3(0.0, 0.22 * sloop.hull_scale, 0.0)),
+		"BellRippleRing mounts right at the Ship's Bell cup location")
+
+	var bell_am := bell_ring.mesh as ArrayMesh
+	var bell_arr := bell_am.surface_get_arrays(0)
+	var bell_verts: PackedVector3Array = bell_arr[Mesh.ARRAY_VERTEX]
+	var bell_norms: PackedVector3Array = bell_arr[Mesh.ARRAY_NORMAL]
+	var bell_cols: PackedColorArray = bell_arr[Mesh.ARRAY_COLOR]
+	var bell_tris := floori(float(bell_verts.size()) / 3.0)
+	check_eq(bell_tris, 96, "BellRippleRing has exact 96 triangles (24 segs x 2 tapered ribbons, got %d)" % bell_tris)
+	var bell_bad_n := 0
+	for nv: Vector3 in bell_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+			bell_bad_n += 1
+	check_eq(bell_bad_n, 0, "BellRippleRing assigns finite unit (0, 1, 0) normal to every vertex")
+	var bell_black_rim := 0
+	var bell_brass_ridge := 0
+	for cv: Color in bell_cols:
+		if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			bell_black_rim += 1
+		elif cv.r > cv.g and cv.g > cv.b and cv.r >= 0.9:
+			bell_brass_ridge += 1
+	check(bell_black_rim >= 96 and bell_brass_ridge >= 96,
+		"BellRippleRing feathers bright gilded-brass center ridge to pure black inner & outer rims")
+
+	var bell_mat := bell_ring.material_override as StandardMaterial3D
+	check(bell_mat != null and bell_mat.vertex_color_use_as_albedo and bell_mat.vertex_color_is_srgb
+		and bell_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and bell_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and bell_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and bell_mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and bell_mat.albedo_texture == null and bell_mat.emission_texture == null and bell_mat.normal_texture == null,
+		"BellRippleRing uses zero-VRAM unshaded additive sRGB StandardMaterial3D")
+
+	sloop.ring_bell()
+	var bell_e0 := sloop.get_bell_ripple_energy()
+	var bell_s0 := bell_ring.scale.x
+	check(bell_ring.visible, "ring_bell() immediately activates BellRippleRing")
+	check_near(bell_e0, 1.35, 0.01, "BellRippleRing launches at peak energy 1.35 (got %.3f)" % bell_e0)
+	check_near(bell_s0, 0.25, 0.01, "BellRippleRing starts at scale 0.25 m (got %.3f)" % bell_s0)
+	check(bell_mat.albedo_color.r > bell_mat.albedo_color.g and bell_mat.albedo_color.g > bell_mat.albedo_color.b,
+		"BellRippleRing glows warm gilded brass")
+
+	sloop.step_tactile_vfx(0.20)
+	var bell_e1 := sloop.get_bell_ripple_energy()
+	var bell_s1 := bell_ring.scale.x
+	check(bell_ring.visible and bell_s1 > 1.0 and bell_e1 < bell_e0 and bell_e1 > 0.3,
+		"BellRippleRing expands & decays smoothly at 0.20 s (scale=%.2f m, energy=%.2f)" % [bell_s1, bell_e1])
+
+	sloop.step_tactile_vfx(0.38)
+	var bell_e2 := sloop.get_bell_ripple_energy()
+	var bell_s2 := bell_ring.scale.x
+	check(bell_ring.visible and bell_s2 >= 2.05 and bell_s2 <= 2.16 and bell_e2 > 0.0 and bell_e2 < bell_e1,
+		"BellRippleRing approaches 2.15 m max diameter at 0.58 s (scale=%.2f m, energy=%.3f)" % [bell_s2, bell_e2])
+
+	sloop.step_tactile_vfx(0.08)
+	check(not bell_ring.visible and is_zero_approx(sloop.get_bell_ripple_energy()),
+		"BellRippleRing decays cleanly back to hidden & 0.0 energy after 0.65 s")
+	check(bell_mat.albedo_color.r <= 0.001 and bell_mat.albedo_color.g <= 0.001 and bell_mat.albedo_color.b <= 0.001,
+		"BellRippleRing zeroes additive albedo on idle")
+
+	# ------------------------------------------------------------------
+	# 3. Ship 176-tri AnchorSplashRing (0.65 -> 3.40 m, energy 1.25 -> 0.0 over 1.15 s)
+	# ------------------------------------------------------------------
+	var splash_ring := sloop.get_anchor_splash_node()
+	var brig_splash_ring := brig.get_anchor_splash_node()
+	check(splash_ring != null and splash_ring.name == &"AnchorSplashRing",
+		"Sloop mounts AnchorSplashRing and exposes get_anchor_splash_node()")
+	check(brig_splash_ring != null and brig_splash_ring.mesh == splash_ring.mesh
+		and splash_ring.mesh == Ship._anchor_splash_mesh,
+		"Sloop & Brigantine share static _anchor_splash_mesh")
+	check(splash_ring.mesh is ArrayMesh and not (splash_ring.mesh is PrimitiveMesh),
+		"AnchorSplashRing uses zero-primitive ArrayMesh")
+	check_eq(splash_ring.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"AnchorSplashRing disables shadow casting")
+	check_eq(splash_ring.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"AnchorSplashRing disables GI")
+	check_near(splash_ring.visibility_range_end, 220.0, 0.01,
+		"AnchorSplashRing sets visibility_range_end == 220.0 m")
+	check(not splash_ring.visible and is_zero_approx(sloop.get_anchor_splash_energy()),
+		"AnchorSplashRing starts hidden with 0.0 energy when idle")
+	check(splash_ring.position.is_equal_approx(sloop.ship_point(Vector3(0.0, 0.10, -5.2))),
+		"Sloop AnchorSplashRing mounts at bow waterline drop point (0, 0.10, -5.2)")
+	check(brig_splash_ring.position.is_equal_approx(brig.ship_point(Vector3(0.0, 0.10, -6.8))),
+		"Brigantine AnchorSplashRing mounts at bow waterline drop point (0, 0.10, -6.8)")
+
+	var splash_am := splash_ring.mesh as ArrayMesh
+	var splash_arr := splash_am.surface_get_arrays(0)
+	var splash_verts: PackedVector3Array = splash_arr[Mesh.ARRAY_VERTEX]
+	var splash_norms: PackedVector3Array = splash_arr[Mesh.ARRAY_NORMAL]
+	var splash_cols: PackedColorArray = splash_arr[Mesh.ARRAY_COLOR]
+	var splash_tris := floori(float(splash_verts.size()) / 3.0)
+	check_eq(splash_tris, 176,
+		"AnchorSplashRing has exact 176 triangles (22 segs x 2 concentric ribbons, got %d)" % splash_tris)
+	var splash_bad_n := 0
+	for nv: Vector3 in splash_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+			splash_bad_n += 1
+	check_eq(splash_bad_n, 0, "AnchorSplashRing assigns finite unit (0, 1, 0) normal to every vertex")
+	var splash_black_rim := 0
+	var splash_foam_ridge := 0
+	for cv: Color in splash_cols:
+		if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			splash_black_rim += 1
+		elif cv.b >= cv.r and cv.g >= 0.9:
+			splash_foam_ridge += 1
+	check(splash_black_rim >= 176 and splash_foam_ridge >= 176,
+		"AnchorSplashRing feathers frothy sea-foam ridges cleanly to pure black rims")
+
+	var splash_mat := splash_ring.material_override as StandardMaterial3D
+	check(splash_mat != null and splash_mat.vertex_color_use_as_albedo and splash_mat.vertex_color_is_srgb
+		and splash_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and splash_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and splash_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and splash_mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and splash_mat.albedo_texture == null and splash_mat.emission_texture == null and splash_mat.normal_texture == null,
+		"AnchorSplashRing uses zero-VRAM unshaded additive sRGB StandardMaterial3D")
+
+	sloop.set_anchor(true)
+	var splash_e0 := sloop.get_anchor_splash_energy()
+	var splash_s0 := splash_ring.scale.x
+	check(splash_ring.visible, "dropping anchor (false -> true) immediately activates AnchorSplashRing")
+	check_near(splash_e0, 1.25, 0.01, "AnchorSplashRing launches at peak energy 1.25 (got %.3f)" % splash_e0)
+	check_near(splash_s0, 0.65, 0.01, "AnchorSplashRing starts at scale 0.65 m (got %.3f)" % splash_s0)
+	check(splash_mat.albedo_color.b >= splash_mat.albedo_color.r and splash_mat.albedo_color.g >= splash_mat.albedo_color.r,
+		"AnchorSplashRing glows frothy sea-foam aqua-white")
+
+	sloop.step_tactile_vfx(0.40)
+	var splash_e1 := sloop.get_anchor_splash_energy()
+	var splash_s1 := splash_ring.scale.x
+	check(splash_ring.visible and splash_s1 > 1.8 and splash_e1 < splash_e0 and splash_e1 > 0.35,
+		"AnchorSplashRing expands & decays smoothly at 0.40 s (scale=%.2f m, energy=%.2f)" % [splash_s1, splash_e1])
+
+	sloop.step_tactile_vfx(0.65)
+	var splash_e2 := sloop.get_anchor_splash_energy()
+	var splash_s2 := splash_ring.scale.x
+	check(splash_ring.visible and splash_s2 >= 3.25 and splash_s2 <= 3.41 and splash_e2 > 0.0 and splash_e2 < splash_e1,
+		"AnchorSplashRing approaches 3.40 m max splash diameter at 1.05 s (scale=%.2f m, energy=%.3f)" % [splash_s2, splash_e2])
+
+	sloop.step_tactile_vfx(0.12)
+	check(not splash_ring.visible and is_zero_approx(sloop.get_anchor_splash_energy()),
+		"AnchorSplashRing decays cleanly back to hidden & 0.0 energy after 1.15 s")
+	check(splash_mat.albedo_color.r <= 0.001 and splash_mat.albedo_color.g <= 0.001 and splash_mat.albedo_color.b <= 0.001,
+		"AnchorSplashRing zeroes additive albedo on idle")
+
+	brig.trigger_anchor_splash()
+	check(brig_splash_ring.visible and is_equal_approx(brig.get_anchor_splash_energy(), 1.25),
+		"trigger_anchor_splash() directly activates Brigantine AnchorSplashRing at 1.25 energy")
+	brig.step_tactile_vfx(1.20)
+	check(not brig_splash_ring.visible and is_zero_approx(brig.get_anchor_splash_energy()),
+		"Brigantine AnchorSplashRing decays cleanly to hidden")
+
+	# ------------------------------------------------------------------
+	# 4. ShipDamageVisuals 24x12-tri BreachSprayMist pressurized inward seawater jets
+	# ------------------------------------------------------------------
+	var spray_mmi := dv_sloop.get_breach_spray_node()
+	check(spray_mmi != null and spray_mmi.name == &"BreachSprayMist",
+		"ShipDamageVisuals mounts BreachSprayMist MultiMeshInstance3D")
+	check(spray_mmi.multimesh != null and spray_mmi.multimesh.use_colors
+		and spray_mmi.multimesh.instance_count == 24,
+		"BreachSprayMist uses 24 colored MultiMesh instances")
+	check_eq(spray_mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"BreachSprayMist disables shadow casting")
+	check_eq(spray_mmi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"BreachSprayMist disables GI")
+	check_near(spray_mmi.visibility_range_end, 75.0, 0.01,
+		"BreachSprayMist sets visibility_range_end == 75.0 m")
+	check(not spray_mmi.visible and dv_sloop.get_active_breach_spray_count() == 0,
+		"BreachSprayMist stays hidden with 0 active droplets when hull is intact")
+
+	var drop_mesh := spray_mmi.multimesh.mesh as ArrayMesh
+	check(drop_mesh != null and not (spray_mmi.multimesh.mesh is PrimitiveMesh)
+		and drop_mesh == ShipDamageVisuals._spray_drop_mesh,
+		"BreachSprayMist uses static zero-primitive _spray_drop_mesh ArrayMesh")
+	var drop_arr := drop_mesh.surface_get_arrays(0)
+	var drop_verts: PackedVector3Array = drop_arr[Mesh.ARRAY_VERTEX]
+	var drop_norms: PackedVector3Array = drop_arr[Mesh.ARRAY_NORMAL]
+	var drop_tris := floori(float(drop_verts.size()) / 3.0)
+	check_eq(drop_tris, 12, "BreachSprayMist droplet has exact 12 triangles (6-sided teardrop, got %d)" % drop_tris)
+	var drop_bad_n := 0
+	for nv: Vector3 in drop_norms:
+		if not nv.is_finite() or absf(nv.length() - 1.0) > 0.01:
+			drop_bad_n += 1
+	check_eq(drop_bad_n, 0, "BreachSprayMist droplet normals are all finite unit vectors")
+
+	var drop_mat := spray_mmi.material_override as StandardMaterial3D
+	check(drop_mat != null and drop_mat == ShipDamageVisuals._spray_drop_mat
+		and drop_mat.vertex_color_use_as_albedo and drop_mat.vertex_color_is_srgb
+		and drop_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and drop_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA
+		and drop_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and drop_mat.albedo_texture == null and drop_mat.normal_texture == null and drop_mat.roughness_texture == null,
+		"BreachSprayMist uses zero-VRAM unshaded alpha-blended DEPTH_DRAW_DISABLED sRGB StandardMaterial3D")
+
+	# Breach 1 starboard hole -> BreachSprayMist immediately activates and shoots all 24 droplets inward (-X)!
+	var h_stbd := sloop.apply_hull_damage(sloop.global_transform * sloop.ship_point(Vector3(2.0, -0.45, 0.3)), 0.55)
+	check(h_stbd >= 0, "starboard breach created")
+	var stbd_origin := sloop.holes[h_stbd]["local_pos"] as Vector3
+	check(stbd_origin.x > 0.5, "starboard breach sits on +X hull wall (x=%.2f)" % stbd_origin.x)
+	check(spray_mmi.visible and dv_sloop.get_active_breach_spray_count() == 24,
+		"breaching hull immediately reveals BreachSprayMist with 24 active droplets")
+
+	var pos_t0 := dv_sloop.get_breach_spray_positions().duplicate()
+	check_eq(pos_t0.size(), 24, "get_breach_spray_positions returns 24 droplet positions")
+	var stbd_inward_ok := 0
+	for p: Vector3 in pos_t0:
+		if p.x < stbd_origin.x - 0.04 and absf(p.x) < absf(stbd_origin.x):
+			stbd_inward_ok += 1
+	check_eq(stbd_inward_ok, 24, "all 24 droplets from starboard breach spray inward toward x=0")
+
+	dv_sloop.step_breach_spray(0.14)
+	var pos_t1 := dv_sloop.get_breach_spray_positions().duplicate()
+	var moved_drops := 0
+	for i in 24:
+		if pos_t1[i].distance_to(pos_t0[i]) > 0.05:
+			moved_drops += 1
+	check_eq(moved_drops, 24, "step_breach_spray(0.14) smoothly advances all 24 pressurized seawater arcs")
+
+	# Breach a 2nd hole on port side -> droplets split evenly (12 port spraying +X, 12 starboard spraying -X)!
+	var h_port := sloop.apply_hull_damage(sloop.global_transform * sloop.ship_point(Vector3(-2.0, -0.45, -0.9)), 0.55)
+	check(h_port >= 0 and h_port != h_stbd, "second breach created on port side")
+	var port_origin := sloop.holes[h_port]["local_pos"] as Vector3
+	check(port_origin.x < -0.5, "port breach sits on -X hull wall (x=%.2f)" % port_origin.x)
+	dv_sloop.step_breach_spray(0.08)
+	var pos_dual := dv_sloop.get_breach_spray_positions()
+	var near_stbd := 0
+	var near_port := 0
+	for p: Vector3 in pos_dual:
+		if p.x > 0.0 and p.x < stbd_origin.x:
+			near_stbd += 1
+		elif p.x < 0.0 and p.x > port_origin.x:
+			near_port += 1
+	check_eq(near_stbd, 12, "dual breaches distribute 12 droplets evenly to starboard breach (got %d)" % near_stbd)
+	check_eq(near_port, 12, "dual breaches distribute 12 droplets evenly to port breach (got %d)" % near_port)
+
+	# Patch 1 hole -> stays active on remaining open breach; patch last hole -> immediately hides!
+	check(sloop.patch_hole(h_stbd), "patch starboard breach")
+	check(spray_mmi.visible and dv_sloop.get_active_breach_spray_count() == 24,
+		"BreachSprayMist remains active while 1 unpatched breach remains")
+	check(sloop.patch_hole(h_port), "patch final port breach")
+	check(not spray_mmi.visible and dv_sloop.get_active_breach_spray_count() == 0,
+		"patching final hull hole immediately hides BreachSprayMist with active count 0")
+
+	print("    Q19A metrics: BellRippleRing=%d tris (%.2f->%.2f m, %.2f->0.00 e) | AnchorSplashRing=%d tris (%.2f->%.2f m, %.2f->0.00 e) | BreachSprayMist=24x%d=%d tris" % [
+		bell_tris, bell_s0, bell_s2, bell_e0,
+		splash_tris, splash_s0, splash_s2, splash_e0,
+		drop_tris, 24 * drop_tris])
+
+	# ------------------------------------------------------------------
+	# 5. Zero-leak teardown & static cache cleanup
+	# ------------------------------------------------------------------
+	await _end()
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 on Q19A teardown")
+	check(Ship._bell_ripple_mesh == null and Ship._anchor_splash_mesh == null,
+		"Ship auto-releases static _bell_ripple_mesh & _anchor_splash_mesh cleanly (0 leaks)")
+	check_eq(ShipDamageVisuals._active_instances, 0, "ShipDamageVisuals._active_instances returns to 0 on Q19A teardown")
+	check(ShipDamageVisuals._spray_drop_mesh == null and ShipDamageVisuals._spray_drop_mat == null,
+		"ShipDamageVisuals auto-releases static _spray_drop_mesh & _spray_drop_mat cleanly (0 leaks)")
+	Ship.clear_shared_cache()
+	ShipDamageVisuals.clear_shared_cache()
+

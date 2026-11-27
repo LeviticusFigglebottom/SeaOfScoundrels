@@ -156,15 +156,37 @@ var _tool_flash_timer: float = 0.0
 var _hull_alert_active: bool = false
 
 # Gold & Voyage whisper (top-right)
+const GOLD_ROLL_DURATION := 0.65
+const GOLD_TOAST_DURATION := 1.65
+const GOLD_TOAST_ACCUM_WINDOW := 0.85
+const GOLD_TOAST_FLOAT_PX := 14.0
+const GOLD_TOAST_BASE_TOP := 34.0
+const GOLD_TOAST_HEIGHT := 24.0
+const COL_GOLD_GAIN := Color(1.0, 0.86, 0.34, 1.0)
+const COL_GOLD_SPEND := Color(0.95, 0.42, 0.36, 1.0)
+const COL_GOLD_TEXT_BASE := Color(0.56, 0.36, 0.06, 1.0)
+const COL_GOLD_TEXT_ROLL := Color(0.72, 0.48, 0.04, 1.0)
+
 var emissary_badge_text: String = ""
 var _whisper_panel: PanelContainer = null
 var _gold_label: Label = null
+var _gold_delta_toast_label: Label = null
 var _emissary_label: Label = null
 var _voyage_title_label: Label = null
 var _voyage_obj_label: Label = null
 var _whisper_timer: float = 0.0
 var _whisper_alpha: float = 0.0
 var _last_gold: int = -1
+var _gold_initialized: bool = false
+var _target_gold: int = 0
+var _displayed_gold: int = 0
+var _gold_roll_start: int = 0
+var _gold_roll_elapsed: float = 0.0
+var _gold_rolling: bool = false
+var _gold_toast_active: bool = false
+var _gold_toast_amount: int = 0
+var _gold_toast_elapsed: float = 0.0
+var _gold_toast_text: String = ""
 var _custom_voyage_title: String = ""
 var _custom_voyage_obj: String = ""
 
@@ -213,7 +235,13 @@ func _ready() -> void:
 	if Game != null and not Game.notice.is_connected(_on_game_notice):
 		Game.notice.connect(_on_game_notice)
 	if Game != null and Game.profile != null:
-		_last_gold = int(Game.profile.data.get("gold", 0))
+		var init_gold := maxi(0, int(Game.profile.data.get("gold", 0)))
+		_last_gold = init_gold
+		if not _gold_initialized:
+			_target_gold = init_gold
+			_displayed_gold = init_gold
+			_gold_roll_start = init_gold
+	_update_gold_label_text()
 	_sync_quality_button_states()
 	_refresh_crew_roster()
 
@@ -222,6 +250,10 @@ func _exit_tree() -> void:
 	_disconnect_signals()
 	if Game != null and Game.notice.is_connected(_on_game_notice):
 		Game.notice.disconnect(_on_game_notice)
+	_gold_rolling = false
+	_gold_toast_active = false
+	_gold_toast_amount = 0
+	_gold_toast_text = ""
 	_crew_brains.clear()
 	_crew_roster_rows.clear()
 	_crew_roster_entries.clear()
@@ -512,6 +544,8 @@ func set_pause_open(open: bool) -> void:
 	if open:
 		_sync_quality_button_states()
 	_sync_mode_objective_visibility()
+	if _gold_delta_toast_label != null and _gold_toast_active:
+		_gold_delta_toast_label.visible = not pause_open and _gold_delta_toast_label.modulate.a > 0.01
 	_sync_look_pause()
 	pause_changed.emit(pause_open)
 
@@ -702,6 +736,124 @@ func set_voyage_whisper(title: String, objective: String, hold_seconds: float = 
 	_custom_voyage_obj = objective
 	_whisper_timer = maxf(_whisper_timer, hold_seconds)
 	_refresh_whisper_labels()
+
+
+## Update displayed Captain gold. First call (or `instant = true`) snaps immediately with
+## no phantom toast; subsequent changes smoothly roll `_displayed_gold` over 0.65 s and
+## spawn/accumulate a floating strict-ASCII `GoldDeltaToast` beside the gold readout.
+func set_gold(amount: int, instant: bool = false) -> void:
+	var clamped := maxi(0, amount)
+	if instant or not _gold_initialized:
+		_gold_initialized = true
+		_target_gold = clamped
+		_displayed_gold = clamped
+		_gold_roll_start = clamped
+		_gold_roll_elapsed = GOLD_ROLL_DURATION
+		_gold_rolling = false
+		_update_gold_label_text()
+		return
+
+	var delta_gold := clamped - _target_gold
+	if delta_gold == 0:
+		return
+
+	_gold_roll_start = _displayed_gold
+	_target_gold = clamped
+	_gold_roll_elapsed = 0.0
+	_gold_rolling = true
+	_whisper_timer = maxf(_whisper_timer, 5.5)
+
+	var same_sign := (delta_gold > 0 and _gold_toast_amount > 0) or (delta_gold < 0 and _gold_toast_amount < 0)
+	if _gold_toast_active and same_sign and _gold_toast_elapsed <= GOLD_TOAST_ACCUM_WINDOW:
+		_gold_toast_amount += delta_gold
+		_gold_toast_elapsed = 0.0
+	else:
+		_gold_toast_active = true
+		_gold_toast_amount = delta_gold
+		_gold_toast_elapsed = 0.0
+
+	_gold_toast_text = _to_ascii(
+		("+%d Gold" % _gold_toast_amount) if _gold_toast_amount > 0 else ("-%d Gold" % absi(_gold_toast_amount))
+	)
+	_apply_gold_toast_visuals()
+	_update_gold_label_text()
+
+
+## Exact latest gold target immediately after `set_gold()` (even mid roll-up).
+func get_target_gold() -> int:
+	return _target_gold
+
+
+## Currently displayed integer gold value during the 0.65 s ease-out cubic roll-up.
+func get_displayed_gold() -> int:
+	return _displayed_gold
+
+
+## Return the floating strict-ASCII `GoldDeltaToast` Label mounted beside the gold counter.
+func get_gold_delta_toast_label() -> Label:
+	return _gold_delta_toast_label
+
+
+## Return current active strict-ASCII delta toast text (empty string when idle/hidden).
+func get_gold_delta_toast_text() -> String:
+	return _gold_toast_text if _gold_toast_active else ""
+
+
+## Deterministically advance the gold counter ease-out cubic roll-up and floating delta toast.
+func step_gold_animation(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if _gold_rolling:
+		_gold_roll_elapsed += dt
+		var t := clampf(_gold_roll_elapsed / GOLD_ROLL_DURATION, 0.0, 1.0)
+		var ease_t := 1.0 - pow(1.0 - t, 3.0)
+		if t >= 1.0:
+			_displayed_gold = _target_gold
+			_gold_rolling = false
+		else:
+			_displayed_gold = int(roundf(lerpf(float(_gold_roll_start), float(_target_gold), ease_t)))
+		_update_gold_label_text()
+
+	if _gold_toast_active:
+		_gold_toast_elapsed += dt
+		if _gold_toast_elapsed >= GOLD_TOAST_DURATION:
+			_gold_toast_active = false
+			_gold_toast_amount = 0
+			_gold_toast_text = ""
+			if _gold_delta_toast_label != null:
+				_gold_delta_toast_label.text = ""
+				_gold_delta_toast_label.modulate.a = 0.0
+				_gold_delta_toast_label.visible = false
+				_gold_delta_toast_label.offset_top = GOLD_TOAST_BASE_TOP
+				_gold_delta_toast_label.offset_bottom = GOLD_TOAST_BASE_TOP + GOLD_TOAST_HEIGHT
+		else:
+			var u := clampf(_gold_toast_elapsed / GOLD_TOAST_DURATION, 0.0, 1.0)
+			var float_t := 1.0 - pow(1.0 - u, 2.0)
+			var cur_top := GOLD_TOAST_BASE_TOP - GOLD_TOAST_FLOAT_PX * float_t
+			var alpha := 1.0 if u <= 0.55 else (1.0 - smoothstep(0.55, 1.0, u))
+			if _gold_delta_toast_label != null:
+				_gold_delta_toast_label.offset_top = cur_top
+				_gold_delta_toast_label.offset_bottom = cur_top + GOLD_TOAST_HEIGHT
+				_gold_delta_toast_label.modulate.a = alpha
+				_gold_delta_toast_label.visible = not pause_open and alpha > 0.01
+
+
+func _update_gold_label_text() -> void:
+	if _gold_label == null:
+		return
+	_gold_label.text = "%d Gold" % _displayed_gold
+	_gold_label.add_theme_color_override("font_color", COL_GOLD_TEXT_ROLL if _gold_rolling else COL_GOLD_TEXT_BASE)
+
+
+func _apply_gold_toast_visuals() -> void:
+	if _gold_delta_toast_label == null:
+		return
+	var col := COL_GOLD_GAIN if _gold_toast_amount >= 0 else COL_GOLD_SPEND
+	_gold_delta_toast_label.text = _gold_toast_text
+	_gold_delta_toast_label.add_theme_color_override("font_color", col)
+	_gold_delta_toast_label.offset_top = GOLD_TOAST_BASE_TOP
+	_gold_delta_toast_label.offset_bottom = GOLD_TOAST_BASE_TOP + GOLD_TOAST_HEIGHT
+	_gold_delta_toast_label.modulate.a = 1.0
+	_gold_delta_toast_label.visible = _gold_toast_active and not pause_open
 
 
 ## Update the strict-ASCII gilded Emissary Grade badge inside the top-right objective card.
@@ -1254,10 +1406,11 @@ func _build_whisper_card() -> void:
 	_whisper_panel.add_child(vbox)
 
 	_gold_label = Label.new()
-	_gold_label.text = "0 Gold"
+	_gold_label.name = "GoldLabel"
+	_gold_label.text = "%d Gold" % _displayed_gold
 	_gold_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_gold_label.add_theme_font_size_override("font_size", 17)
-	_gold_label.add_theme_color_override("font_color", Color(0.56, 0.36, 0.06))
+	_gold_label.add_theme_color_override("font_color", COL_GOLD_TEXT_BASE)
 	vbox.add_child(_gold_label)
 
 	_emissary_label = Label.new()
@@ -1284,6 +1437,33 @@ func _build_whisper_card() -> void:
 	_voyage_obj_label.add_theme_font_size_override("font_size", 13)
 	_voyage_obj_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
 	vbox.add_child(_voyage_obj_label)
+
+	# Floating brass-gold / coral-crimson gold delta toast right beside _gold_label.
+	_gold_delta_toast_label = Label.new()
+	_gold_delta_toast_label.name = "GoldDeltaToast"
+	_gold_delta_toast_label.anchor_left = 1.0
+	_gold_delta_toast_label.anchor_right = 1.0
+	_gold_delta_toast_label.anchor_top = 0.0
+	_gold_delta_toast_label.anchor_bottom = 0.0
+	_gold_delta_toast_label.offset_left = -312.0
+	_gold_delta_toast_label.offset_right = -148.0
+	_gold_delta_toast_label.offset_top = GOLD_TOAST_BASE_TOP
+	_gold_delta_toast_label.offset_bottom = GOLD_TOAST_BASE_TOP + GOLD_TOAST_HEIGHT
+	_gold_delta_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_gold_delta_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_gold_delta_toast_label.text = ""
+	_gold_delta_toast_label.add_theme_font_size_override("font_size", 16)
+	_gold_delta_toast_label.add_theme_color_override("font_color", COL_GOLD_GAIN)
+	_gold_delta_toast_label.add_theme_color_override("font_outline_color", Color(0.14, 0.08, 0.04, 0.92))
+	_gold_delta_toast_label.add_theme_constant_override("outline_size", 3)
+	_gold_delta_toast_label.add_theme_color_override("font_shadow_color", Color(0.10, 0.06, 0.03, 0.80))
+	_gold_delta_toast_label.add_theme_constant_override("shadow_offset_x", 1)
+	_gold_delta_toast_label.add_theme_constant_override("shadow_offset_y", 1)
+	_gold_delta_toast_label.modulate.a = 0.0
+	_gold_delta_toast_label.visible = false
+	_root.add_child(_gold_delta_toast_label)
+	if _gold_toast_active:
+		_apply_gold_toast_visuals()
 
 
 func _build_mode_objective_card() -> void:
@@ -2467,10 +2647,21 @@ func _refresh_tool_chip() -> void:
 
 func _tick_whisper(delta: float) -> void:
 	if Game != null and Game.profile != null:
-		var g := int(Game.profile.data.get("gold", 0))
-		if g != _last_gold:
+		var g := maxi(0, int(Game.profile.data.get("gold", 0)))
+		if _last_gold < 0:
 			_last_gold = g
+			if not _gold_initialized:
+				_target_gold = g
+				_displayed_gold = g
+				_gold_roll_start = g
+		elif g != _last_gold:
+			_last_gold = g
+			if not _gold_initialized:
+				_gold_initialized = true
+			set_gold(g)
 			_whisper_timer = maxf(_whisper_timer, 5.5)
+
+	step_gold_animation(delta)
 
 	var holding_map := inventory != null and inventory.active_item == &"map"
 	var radial_open := item_radial != null and item_radial.is_open
@@ -2490,8 +2681,7 @@ func _tick_whisper(delta: float) -> void:
 func _refresh_whisper_labels() -> void:
 	if _gold_label == null:
 		return
-	var gold := int(Game.profile.data.get("gold", 0)) if (Game != null and Game.profile != null) else 0
-	_gold_label.text = "%d Gold" % gold
+	_update_gold_label_text()
 	var v_title := _custom_voyage_title
 	var v_obj := _custom_voyage_obj
 	if voyage_manager != null and is_instance_valid(voyage_manager) and voyage_manager.has_active_voyage():

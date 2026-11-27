@@ -35,6 +35,22 @@ const SLASH_ARC_SEGMENTS := 16
 const HITSTOP_LIGHT := 0.024
 const HITSTOP_HEAVY := 0.042
 
+const PARRY_SPARK_POS := Vector3(0.0, 1.32, -0.58)
+const PARRY_SPARK_VISIBILITY_RANGE := 90.0
+const PARRY_SPARK_DURATION := 0.28
+const PARRY_SPARK_START_SCALE := 0.35
+const PARRY_SPARK_END_SCALE := 1.15
+const PARRY_SPARK_PEAK_ENERGY := 1.95
+const PARRY_SPARK_SPIN_RAD := deg_to_rad(135.0)
+const BLOCK_SPARK_DURATION := 0.20
+const BLOCK_SPARK_START_SCALE := 0.25
+const BLOCK_SPARK_END_SCALE := 0.72
+const BLOCK_SPARK_PEAK_ENERGY := 1.25
+const BLOCK_SPARK_SPIN_RAD := deg_to_rad(60.0)
+const COL_PARRY_STAR_CORE := Color(1.00, 0.99, 0.92, 1.0)
+const COL_PARRY_STAR_MID := Color(1.00, 0.86, 0.42, 1.0)
+const COL_PARRY_STAR_TIP := Color(0.00, 0.00, 0.00, 1.0)
+
 const WEAPONS := {
 	&"cutlass": {
 		"type": &"melee", "light_dmg": [18.0, 20.0, 28.0], "heavy_dmg": 44.0,
@@ -99,12 +115,18 @@ var _melee_sphere: SphereShape3D = SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
 var _active_vfx: Array[Node] = []
 var _slash_arcs: Array[Dictionary] = []
+var _parry_spark_mi: MeshInstance3D = null
+var _parry_spark_mat: StandardMaterial3D = null
+var _parry_spark_energy: float = 0.0
+var _parry_spark_elapsed: float = -1.0
+var _parry_spark_is_parry: bool = true
 
 static var _active_combatants: int = 0
 static var _spark_tex: ImageTexture = null
 static var _flash_tex: GradientTexture2D = null
 static var _ember_tex: ImageTexture = null
 static var _slash_arc_mesh: ArrayMesh = null
+static var _parry_star_mesh: ArrayMesh = null
 
 
 func _init() -> void:
@@ -120,17 +142,29 @@ func _exit_tree() -> void:
 	if pawn != null and is_instance_valid(pawn) and pawn.damaged.is_connected(_on_pawn_damaged):
 		pawn.damaged.disconnect(_on_pawn_damaged)
 	_cleanup_all_vfx()
+	_release_parry_spark_refs()
 	_active_combatants = maxi(0, _active_combatants - 1)
 	if _active_combatants == 0:
-		clear_shared_vfx_cache()
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_parry_spark_refs()
 
 
 ## Release all statically cached CombatComponent VFX meshes & textures cleanly.
-static func clear_shared_vfx_cache() -> void:
+static func clear_shared_cache() -> void:
 	_spark_tex = null
 	_flash_tex = null
 	_ember_tex = null
 	_slash_arc_mesh = null
+	_parry_star_mesh = null
+
+
+## Alias for `clear_shared_cache()` releasing all statically cached CombatComponent VFX assets.
+static func clear_shared_vfx_cache() -> void:
+	clear_shared_cache()
 
 
 func _ready() -> void:
@@ -147,6 +181,7 @@ func _ready() -> void:
 	_shape_params.collision_mask = Pawn.LAYER_PAWN | (1 << 5)
 	_shape_params.collide_with_areas = false
 	_shape_params.collide_with_bodies = true
+	_build_parry_spark()
 	add_to_group(&"combatants")
 
 
@@ -310,6 +345,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 		_play_anim(&"parry", 0.35)
 		Audio.play_sfx(&"parry_ring", pawn.eye_position(), 1.5, 0.11)
 		_spawn_clash_vfx(clash_pos, &"parried")
+		if enable_effects:
+			trigger_clash_spark(true)
 		_trigger_hitstop(HITSTOP_HEAVY, 0.30, 1.0)
 		if attacker_cc != null:
 			attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.26, 0.80)
@@ -324,6 +361,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			# Guard broken!
 			Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.8, 0.10)
 			_spawn_clash_vfx(clash_pos, &"heavy")
+			if enable_effects:
+				trigger_clash_spark(false)
 			_trigger_hitstop(HITSTOP_HEAVY, 0.24, 0.85)
 			if attacker_cc != null:
 				attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.28, 0.90)
@@ -336,6 +375,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			stamina_depleted.emit(14.0)
 			Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.4, 0.10)
 			_spawn_clash_vfx(clash_pos, &"heavy")
+			if enable_effects:
+				trigger_clash_spark(false)
 			_trigger_hitstop(HITSTOP_HEAVY, 0.22, 0.75)
 			if attacker_cc != null:
 				attacker_cc._trigger_hitstop(HITSTOP_HEAVY, 0.24, 0.80)
@@ -346,6 +387,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 			_spend_stamina(16.0)
 		Audio.play_sfx(&"sword_clash", pawn.eye_position(), 0.0, 0.10)
 		_spawn_clash_vfx(clash_pos, &"blocked")
+		if enable_effects:
+			trigger_clash_spark(false)
 		_trigger_recoil_pulse(0.45)
 		blocked.emit(attacker_pawn)
 		return &"blocked"
@@ -359,6 +402,8 @@ func receive_melee_hit(attacker_cc: CombatComponent, raw_damage: float, is_heavy
 	var is_big_hit := is_heavy or is_combo_finisher
 	if is_big_hit:
 		_spawn_clash_vfx(clash_pos, &"heavy")
+		if enable_effects and is_heavy:
+			trigger_clash_spark(false)
 	_trigger_hitstop(
 		HITSTOP_HEAVY if is_big_hit else HITSTOP_LIGHT,
 		0.24 if is_heavy else (0.20 if is_combo_finisher else 0.16),
@@ -388,6 +433,8 @@ func _process(delta: float) -> void:
 		_hitstop_timer = maxf(0.0, _hitstop_timer - delta)
 	# Briefly slow active slash-arc sweep during visual hitstop so the blade visually bites on impact.
 	_tick_slash_arcs(delta * 0.18 if in_hitstop else delta)
+	if _parry_spark_elapsed >= 0.0:
+		step_clash_spark(delta)
 
 	if _recoil_pulse <= 0.0005 and not in_hitstop:
 		_recoil_strength = 0.0
@@ -1579,3 +1626,216 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	cleanup.autostart = true
 	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
 	fx_root.add_child(cleanup)
+
+
+# ==============================================================================
+# 3D World-Space Steel-Clash `ParrySparkStar` Burst VFX (Zero-VRAM 24-Tri Star)
+# ==============================================================================
+
+## Return the 3D world-space steel-clash `ParrySparkStar` MeshInstance3D mounted on this Pawn.
+func get_parry_spark_node() -> MeshInstance3D:
+	return _parry_spark_mi
+
+
+## Return current `ParrySparkStar` additive bloom energy (0.0 when idle or after decay).
+func get_parry_spark_energy() -> float:
+	return _parry_spark_energy
+
+
+## Trigger the 3D steel-clash `ParrySparkStar` burst at chest/blade height.
+## `is_parry = true` ignites a blazing white-gold flare (0.35->1.15 m, energy 1.95->0.0 over 0.28 s);
+## `is_parry = false` ignites a crisp warm steel-amber block glint (0.25->0.72 m, energy 1.25->0.0 over 0.20 s).
+func trigger_clash_spark(is_parry: bool = true) -> void:
+	if _parry_spark_mi == null or not is_instance_valid(_parry_spark_mi):
+		_build_parry_spark()
+	if _parry_spark_mi == null:
+		return
+	_parry_spark_is_parry = is_parry
+	_parry_spark_elapsed = 0.0
+	if pawn != null and is_instance_valid(pawn):
+		var fwd := pawn.facing()
+		_parry_spark_mi.position = Vector3(0.0, PARRY_SPARK_POS.y, 0.0) + fwd * absf(PARRY_SPARK_POS.z)
+	step_clash_spark(0.0)
+
+
+## Deterministically advance the `ParrySparkStar` expansion, crisp spin & energy decay.
+func step_clash_spark(delta: float) -> void:
+	if _parry_spark_mi == null or not is_instance_valid(_parry_spark_mi):
+		_parry_spark_energy = 0.0
+		_parry_spark_elapsed = -1.0
+		return
+	if _parry_spark_elapsed < 0.0:
+		_parry_spark_energy = 0.0
+		_parry_spark_mi.visible = false
+		if _parry_spark_mat != null:
+			_parry_spark_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+
+	var dur := PARRY_SPARK_DURATION if _parry_spark_is_parry else BLOCK_SPARK_DURATION
+	_parry_spark_elapsed += maxf(delta, 0.0)
+	var u := clampf(_parry_spark_elapsed / maxf(dur, 0.001), 0.0, 1.0)
+	if u >= 1.0:
+		_parry_spark_elapsed = -1.0
+		_parry_spark_energy = 0.0
+		_parry_spark_mi.visible = false
+		_parry_spark_mi.rotation.z = 0.0
+		_parry_spark_mi.position = PARRY_SPARK_POS
+		if _parry_spark_mat != null:
+			_parry_spark_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+
+	var peak_e := PARRY_SPARK_PEAK_ENERGY if _parry_spark_is_parry else BLOCK_SPARK_PEAK_ENERGY
+	var start_s := PARRY_SPARK_START_SCALE if _parry_spark_is_parry else BLOCK_SPARK_START_SCALE
+	var end_s := PARRY_SPARK_END_SCALE if _parry_spark_is_parry else BLOCK_SPARK_END_SCALE
+	var spin_max := PARRY_SPARK_SPIN_RAD if _parry_spark_is_parry else BLOCK_SPARK_SPIN_RAD
+
+	var expand_t := 1.0 - pow(1.0 - u, 2.2)
+	var decay := pow(1.0 - u, 1.65)
+	_parry_spark_energy = peak_e * decay
+	var cur_scale := lerpf(start_s, end_s, expand_t)
+	_parry_spark_mi.visible = true
+	_parry_spark_mi.scale = Vector3.ONE * cur_scale
+	_parry_spark_mi.rotation.z = spin_max * expand_t
+	if _parry_spark_mat != null:
+		if _parry_spark_is_parry:
+			_parry_spark_mat.albedo_color = Color(
+				_parry_spark_energy,
+				0.96 * _parry_spark_energy,
+				0.74 * _parry_spark_energy,
+				1.0
+			)
+		else:
+			_parry_spark_mat.albedo_color = Color(
+				_parry_spark_energy,
+				0.78 * _parry_spark_energy,
+				0.42 * _parry_spark_energy,
+				1.0
+			)
+
+
+func _build_parry_spark() -> void:
+	if _parry_spark_mi != null and is_instance_valid(_parry_spark_mi):
+		return
+	if pawn == null or not is_instance_valid(pawn):
+		return
+
+	_parry_spark_mat = StandardMaterial3D.new()
+	_parry_spark_mat.vertex_color_use_as_albedo = true
+	_parry_spark_mat.vertex_color_is_srgb = true
+	_parry_spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_parry_spark_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_parry_spark_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_parry_spark_mat.billboard_keep_scale = true
+	_parry_spark_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_parry_spark_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_parry_spark_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_parry_spark_mi = MeshInstance3D.new()
+	_parry_spark_mi.name = "ParrySparkStar"
+	_parry_spark_mi.position = PARRY_SPARK_POS
+	_parry_spark_mi.scale = Vector3.ONE * PARRY_SPARK_START_SCALE
+	_parry_spark_mi.mesh = _get_parry_star_mesh()
+	_parry_spark_mi.material_override = _parry_spark_mat
+	_parry_spark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_parry_spark_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_parry_spark_mi.visibility_range_end = PARRY_SPARK_VISIBILITY_RANGE
+	_parry_spark_mi.extra_cull_margin = 1.2
+	_parry_spark_mi.visible = false
+	_parry_spark_energy = 0.0
+	_parry_spark_elapsed = -1.0
+
+	if pawn.is_node_ready():
+		pawn.add_child(_parry_spark_mi)
+	else:
+		call_deferred(&"_attach_parry_spark_deferred")
+
+
+func _attach_parry_spark_deferred() -> void:
+	if _parry_spark_mi == null or not is_instance_valid(_parry_spark_mi):
+		return
+	if _parry_spark_mi.get_parent() != null:
+		return
+	if pawn != null and is_instance_valid(pawn) and not pawn.is_queued_for_deletion():
+		pawn.add_child(_parry_spark_mi)
+
+
+func _release_parry_spark_refs() -> void:
+	if _parry_spark_mi != null and is_instance_valid(_parry_spark_mi):
+		_parry_spark_mi.visible = false
+		_parry_spark_mi.material_override = null
+		_parry_spark_mi.set_mesh(null)
+		if _parry_spark_mi.get_parent() == null:
+			_parry_spark_mi.queue_free()
+		elif pawn != null and is_instance_valid(pawn) and not pawn.is_queued_for_deletion():
+			_parry_spark_mi.queue_free()
+	_parry_spark_mi = null
+	_parry_spark_mat = null
+	_parry_spark_energy = 0.0
+	_parry_spark_elapsed = -1.0
+
+
+static func _get_parry_star_mesh() -> ArrayMesh:
+	if _parry_star_mesh != null:
+		return _parry_star_mesh
+	_parry_star_mesh = _build_parry_star_mesh()
+	return _parry_star_mesh
+
+
+static func _build_parry_star_mesh() -> ArrayMesh:
+	# Exact 24-tri 4-point incandescent steel-clash star billboard ArrayMesh (diameter 1.0 m):
+	# 4 tapered star rays x 6 tris/ray grading white-gold core -> gilded mid -> pure black
+	# tips & outer valley rim for seamless additive feathering, with finite (0, 0, 1) unit
+	# normals and zero VRAM textures.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const RAYS := 4
+	const INNER_VALLEY_R := 0.09
+	const OUTER_VALLEY_R := 0.17
+	const RAY_MID_R := 0.24
+	const RAY_TIP_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in RAYS:
+		var a_ray := float(i) * (PI * 0.5)
+		var a_prev := a_ray - PI * 0.25
+		var a_next := a_ray + PI * 0.25
+		var dir_ray := Vector3(cos(a_ray), sin(a_ray), 0.0)
+		var dir_prev := Vector3(cos(a_prev), sin(a_prev), 0.0)
+		var dir_next := Vector3(cos(a_next), sin(a_next), 0.0)
+
+		var v_in_l := dir_prev * INNER_VALLEY_R
+		var v_in_r := dir_next * INNER_VALLEY_R
+		var v_out_l := dir_prev * OUTER_VALLEY_R
+		var v_out_r := dir_next * OUTER_VALLEY_R
+		var ray_mid := dir_ray * RAY_MID_R
+		var ray_tip := dir_ray * RAY_TIP_R
+
+		# Inner incandescent white-gold core wedges (2 tris/ray).
+		_emit_parry_star_tri(st, ctr, COL_PARRY_STAR_CORE, v_in_l, COL_PARRY_STAR_MID, ray_mid, COL_PARRY_STAR_MID, FRONT_NORMAL)
+		_emit_parry_star_tri(st, ctr, COL_PARRY_STAR_CORE, ray_mid, COL_PARRY_STAR_MID, v_in_r, COL_PARRY_STAR_MID, FRONT_NORMAL)
+		# Soft shoulder skirts feathering to pure black valley rim (2 tris/ray).
+		_emit_parry_star_tri(st, v_in_l, COL_PARRY_STAR_MID, v_out_l, COL_PARRY_STAR_TIP, ray_mid, COL_PARRY_STAR_MID, FRONT_NORMAL)
+		_emit_parry_star_tri(st, ray_mid, COL_PARRY_STAR_MID, v_out_r, COL_PARRY_STAR_TIP, v_in_r, COL_PARRY_STAR_MID, FRONT_NORMAL)
+		# Razor-tapered star ray blades feathering to pure black tips (2 tris/ray).
+		_emit_parry_star_tri(st, ray_mid, COL_PARRY_STAR_MID, v_out_l, COL_PARRY_STAR_TIP, ray_tip, COL_PARRY_STAR_TIP, FRONT_NORMAL)
+		_emit_parry_star_tri(st, ray_mid, COL_PARRY_STAR_MID, ray_tip, COL_PARRY_STAR_TIP, v_out_r, COL_PARRY_STAR_TIP, FRONT_NORMAL)
+	return st.commit()
+
+
+static func _emit_parry_star_tri(
+	st: SurfaceTool,
+	a: Vector3, ca: Color,
+	b: Vector3, cb: Color,
+	c: Vector3, cc: Color,
+	normal: Vector3
+) -> void:
+	st.set_normal(normal)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.set_color(cc)
+	st.add_vertex(c)
+

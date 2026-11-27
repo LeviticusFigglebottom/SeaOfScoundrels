@@ -1807,3 +1807,161 @@ func test_q16a_powder_keg_urgent_countdown_fuse_halo() -> void:
 		"PowderKeg releases all static caches including _fuse_halo_mesh cleanly (0 leaks)")
 
 
+func test_q19b_combat_3d_parry_and_block_clash_spark_star() -> void:
+	_begin()
+	_fast(false)
+	_ground()
+	CombatComponent.clear_shared_cache()
+
+	var atk_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var def_pair := _fighter(Vector3(0.0, 5.05, -1.6), &"drowned", PI)
+	var atk_pawn: Pawn = atk_pair[0]
+	var atk_cc: CombatComponent = atk_pair[1]
+	var def_pawn: Pawn = def_pair[0]
+	var def_cc: CombatComponent = def_pair[1]
+	await physics_frames(3)
+	atk_cc.set_process(false)
+	def_cc.set_process(false)
+
+	# 1. Audit sculpted 24-tri ParrySparkStar ArrayMesh (0 PrimitiveMesh, finite (0,0,1) normals,
+	#    zero VRAM textures, shared static mesh, isolated per-instance additive billboard material,
+	#    hidden & 0.0 energy when idle).
+	var atk_spark := atk_cc.get_parry_spark_node()
+	var def_spark := def_cc.get_parry_spark_node()
+	check(atk_spark != null and atk_spark.name == "ParrySparkStar"
+		and atk_pawn.get_node_or_null(^"ParrySparkStar") == atk_spark,
+		"CombatComponent mounts ParrySparkStar on Pawn and exposes get_parry_spark_node()")
+	check(def_spark != null and def_pawn.get_node_or_null(^"ParrySparkStar") == def_spark,
+		"defender CombatComponent mounts ParrySparkStar cleanly on defender Pawn")
+	if atk_spark == null or def_spark == null:
+		await _end()
+		return
+
+	check(atk_spark.position.is_equal_approx(Vector3(0.0, 1.32, -0.58)),
+		"ParrySparkStar mounts at chest/blade height (0.0, 1.32, -0.58) in pawn local space")
+	check(not atk_spark.visible and not def_spark.visible,
+		"ParrySparkStar starts cleanly hidden when idle")
+	check_near(atk_cc.get_parry_spark_energy(), 0.0, 0.0001,
+		"get_parry_spark_energy() == 0.0 when idle")
+	check_eq(atk_spark.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"ParrySparkStar disables shadows")
+	check_eq(atk_spark.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"ParrySparkStar disables GI")
+	check_near(atk_spark.visibility_range_end, 90.0, 0.01,
+		"ParrySparkStar sets visibility_range_end == 90.0 m")
+	check(atk_spark.mesh is ArrayMesh and not (atk_spark.mesh is PrimitiveMesh),
+		"ParrySparkStar uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(atk_spark.mesh == def_spark.mesh and atk_spark.mesh == CombatComponent._parry_star_mesh,
+		"CombatComponents share statically cached _parry_star_mesh")
+	check(atk_spark.material_override != def_spark.material_override,
+		"distinct combatants use isolated per-instance ParrySparkStar StandardMaterial3D")
+
+	var star_am := atk_spark.mesh as ArrayMesh
+	var star_arr := star_am.surface_get_arrays(0)
+	var verts: PackedVector3Array = star_arr[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = star_arr[Mesh.ARRAY_NORMAL]
+	var cols: PackedColorArray = star_arr[Mesh.ARRAY_COLOR]
+	var tri_count := floori(float(verts.size()) / 3.0)
+	check_eq(tri_count, 24, "ParrySparkStar mesh has exact 24 triangles (4 rays x 6 tris)")
+	check_eq(norms.size(), verts.size(), "ParrySparkStar has normal per vertex")
+	check_eq(cols.size(), verts.size(), "ParrySparkStar has color per vertex")
+	var bad_normals := 0
+	for nv: Vector3 in norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			bad_normals += 1
+	check_eq(bad_normals, 0, "ParrySparkStar assigns exact finite unit (0, 0, 1) normals to every vertex")
+
+	var saw_core := false
+	var saw_black_tip := false
+	for cv: Color in cols:
+		if cv.r >= 0.95 and cv.g >= 0.95 and cv.b >= 0.85:
+			saw_core = true
+		elif cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+			saw_black_tip = true
+	check(saw_core and saw_black_tip,
+		"ParrySparkStar grades bright white-gold center to pure Color(0, 0, 0, 1) black tips")
+
+	var smat := atk_spark.material_override as StandardMaterial3D
+	check(smat != null and smat.vertex_color_use_as_albedo and smat.vertex_color_is_srgb
+		and smat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and smat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and smat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and smat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and smat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and smat.billboard_keep_scale
+		and smat.albedo_texture == null and smat.normal_texture == null and smat.roughness_texture == null,
+		"ParrySparkStar uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+
+	# 2. Real block clang triggers warm steel-amber glint (scale 0.25 -> 0.72 m, energy 1.25 -> 0.0 over 0.20 s).
+	def_cc.set_blocking(true)
+	def_cc._block_elapsed = CombatComponent.PARRY_WINDOW + 0.15
+	var block_res := def_cc.receive_melee_hit(atk_cc, 20.0, false, false)
+	check_eq(block_res, &"blocked", "late block returns &'blocked'")
+	var block_peak_e := def_cc.get_parry_spark_energy()
+	var block_start_s := def_spark.scale.x
+	check(def_spark.visible, "blocked clash displays ParrySparkStar")
+	check_near(block_peak_e, 1.25, 0.02, "block clang peak energy ~1.25 (got %.3f)" % block_peak_e)
+	check_near(block_start_s, 0.25, 0.01, "block clang starts at 0.25 m scale (got %.3f)" % block_start_s)
+	def_cc.step_clash_spark(0.10)
+	var block_mid_e := def_cc.get_parry_spark_energy()
+	var block_mid_s := def_spark.scale.x
+	check(block_mid_e > 0.05 and block_mid_e < block_peak_e,
+		"block clang energy decays smoothly mid-burst (%.3f -> %.3f)" % [block_peak_e, block_mid_e])
+	check(block_mid_s > block_start_s + 0.20 and block_mid_s <= 0.73,
+		"block clang expands toward 0.72 m (got %.3f m)" % block_mid_s)
+	def_cc.step_clash_spark(0.12)
+	check(not def_spark.visible and is_zero_approx(def_cc.get_parry_spark_energy()),
+		"block clang decays cleanly to 0.0 energy / hidden after 0.20 s")
+
+	# 3. Real timed parry triggers blazing white-gold flare (scale 0.35 -> 1.15 m, energy 1.95 -> 0.0, spinning over 0.28 s)!
+	def_cc.set_blocking(false)
+	def_cc.set_blocking(true)
+	def_cc._block_elapsed = 0.04
+	var parry_res := def_cc.receive_melee_hit(atk_cc, 24.0, false, false)
+	check_eq(parry_res, &"parried", "timed parry returns &'parried'")
+	var parry_peak_e := def_cc.get_parry_spark_energy()
+	var parry_start_s := def_spark.scale.x
+	check(def_spark.visible, "timed parry displays ParrySparkStar")
+	check_near(parry_peak_e, 1.95, 0.02, "perfect parry peak energy ~1.95 (got %.3f)" % parry_peak_e)
+	check(parry_peak_e > block_peak_e + 0.50,
+		"parry peak energy exceeds block clang peak (%.2f > %.2f)" % [parry_peak_e, block_peak_e])
+	check_near(parry_start_s, 0.35, 0.01, "perfect parry starts at 0.35 m scale (got %.3f)" % parry_start_s)
+	def_cc.step_clash_spark(0.14)
+	var parry_mid_e := def_cc.get_parry_spark_energy()
+	var parry_mid_s := def_spark.scale.x
+	var parry_mid_rot := def_spark.rotation.z
+	check(parry_mid_e > 0.15 and parry_mid_e < parry_peak_e,
+		"parry energy decays smoothly mid-burst (%.3f -> %.3f)" % [parry_peak_e, parry_mid_e])
+	check(parry_mid_s > block_mid_s + 0.20 and parry_mid_s <= 1.16,
+		"parry scale expands further than block clang toward 1.15 m (%.3f > %.3f)" % [parry_mid_s, block_mid_s])
+	check(parry_mid_rot > 0.5, "parry star spins crisply during flare (rot_z=%.2f rad)" % parry_mid_rot)
+	def_cc.step_clash_spark(0.15)
+	check(not def_spark.visible and is_zero_approx(def_cc.get_parry_spark_energy()),
+		"parry flare decays cleanly to 0.0 energy / hidden after 0.28 s")
+
+	# 4. Direct trigger_clash_spark() API expands & decays cleanly on attacker combatant too!
+	atk_cc.trigger_clash_spark(true)
+	check(atk_spark.visible and atk_cc.get_parry_spark_energy() >= 1.90,
+		"trigger_clash_spark(true) ignites attacker ParrySparkStar immediately")
+	atk_cc.step_clash_spark(0.14)
+	check(atk_spark.scale.x > 0.75 and atk_cc.get_parry_spark_energy() < 1.50,
+		"trigger_clash_spark() expands and decays via step_clash_spark()")
+	atk_cc.step_clash_spark(0.15)
+	check(not atk_spark.visible and is_zero_approx(atk_cc.get_parry_spark_energy()),
+		"trigger_clash_spark() returns cleanly to hidden / 0.0 energy after 0.28 s")
+
+	print("    Q19B ParrySparkStar: %d tris | parry energy=%.2f->%.2f->0.0 scale=%.2f->%.2f | block energy=%.2f->%.2f->0.0 scale=%.2f->%.2f" % [
+		tri_count, parry_peak_e, parry_mid_e, parry_start_s, parry_mid_s,
+		block_peak_e, block_mid_e, block_start_s, block_mid_s])
+
+	# 5. Clean teardown & 0 ObjectDB leaks!
+	await _end()
+	CombatComponent.clear_shared_cache()
+	check_eq(CombatComponent._active_combatants, 0, "CombatComponent._active_combatants == 0 after Q19B teardown")
+	check(CombatComponent._parry_star_mesh == null and CombatComponent._slash_arc_mesh == null
+		and CombatComponent._spark_tex == null and CombatComponent._flash_tex == null
+		and CombatComponent._ember_tex == null,
+		"CombatComponent.clear_shared_cache() releases _parry_star_mesh & all static caches cleanly (0 leaks)")
+
+
+

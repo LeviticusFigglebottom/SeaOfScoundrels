@@ -16,6 +16,7 @@ extends Node3D
 ## 2. Reusable Chainshot Spar Splinter & Tattered Canvas Shred Burst Pool (`SPLINTER_POOL_SIZE`)
 ##    with zero per-hit node/mesh allocations.
 ## 3. Sculpted Multi-Pointed Cannon Priming Fuse Spark Star (`_fuse_spark_mi`).
+## 4. Batched Pressurized Hull-Breach Seawater Spray Mist (`BreachSprayMist`, 24×12-tri MultiMesh).
 
 const SLOOP_BILGE_POS := Vector3(0.0, -0.85, -2.1)
 const BRIG_BILGE_POS := Vector3(0.0, -0.95, 2.0)
@@ -27,6 +28,12 @@ const SPLINTER_POOL_SIZE := 14
 const SPLINTER_WOOD_COUNT := 9
 const SPLINTER_BURST_DURATION := 1.45
 const FUSE_FLASH_DURATION := 0.24
+const BREACH_SPRAY_COUNT := 24
+const BREACH_SPRAY_VISIBILITY_RANGE := 75.0
+const BREACH_SPRAY_MIN_REACH := 0.45
+const BREACH_SPRAY_MAX_REACH := 1.45
+const BREACH_SPRAY_MIN_PERIOD := 0.55
+const BREACH_SPRAY_MAX_PERIOD := 0.85
 
 const TEX_OAK_NORMAL := "res://assets/generated/textures/ship_oak_normal.png"
 const TEX_OAK_ROUGH := "res://assets/generated/textures/ship_oak_rough.png"
@@ -88,6 +95,24 @@ var _splinter_pool: Array[Dictionary] = []
 var _fuse_spark_mi: MeshInstance3D = null
 var _all_mesh_instances: Array[MeshInstance3D] = []
 
+var _breach_spray_mmi: MultiMeshInstance3D = null
+var _breach_spray_mm: MultiMesh = null
+var _is_brigantine: bool = false
+
+# Preallocated breach spray buffers (zero steady-state heap allocations).
+var _breach_origins: PackedVector3Array = PackedVector3Array()
+var _active_breach_count: int = 0
+var _active_spray_count: int = 0
+var _spray_phase: PackedFloat32Array = PackedFloat32Array()
+var _spray_period: PackedFloat32Array = PackedFloat32Array()
+var _spray_reach: PackedFloat32Array = PackedFloat32Array()
+var _spray_arc_lift: PackedFloat32Array = PackedFloat32Array()
+var _spray_drop_fall: PackedFloat32Array = PackedFloat32Array()
+var _spray_z_jitter: PackedFloat32Array = PackedFloat32Array()
+var _spray_y_jitter: PackedFloat32Array = PackedFloat32Array()
+var _spray_scale: PackedFloat32Array = PackedFloat32Array()
+var _spray_positions: PackedVector3Array = PackedVector3Array()
+
 # Runtime animation state
 var _pump_active_timer: float = 0.0
 var _pump_phase: float = 0.0
@@ -111,17 +136,19 @@ static var _pump_water_mesh: ArrayMesh = null
 static var _splinter_mesh: ArrayMesh = null
 static var _canvas_shred_mesh: ArrayMesh = null
 static var _fuse_spark_mesh: ArrayMesh = null
+static var _spray_drop_mesh: ArrayMesh = null
 static var _oak_mat: StandardMaterial3D = null
 static var _iron_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
 static var _canvas_mat: StandardMaterial3D = null
 static var _water_mat: StandardMaterial3D = null
 static var _fuse_mat: StandardMaterial3D = null
+static var _spray_drop_mat: StandardMaterial3D = null
 
 
 ## Release all statically cached sculpted ArrayMeshes, PBR materials, and WeakRef textures cleanly.
 static func clear_shared_cache() -> void:
-	for mat: StandardMaterial3D in [_oak_mat, _iron_mat, _brass_mat, _canvas_mat, _water_mat, _fuse_mat]:
+	for mat: StandardMaterial3D in [_oak_mat, _iron_mat, _brass_mat, _canvas_mat, _water_mat, _fuse_mat, _spray_drop_mat]:
 		if mat != null:
 			mat.normal_texture = null
 			mat.roughness_texture = null
@@ -135,12 +162,14 @@ static func clear_shared_cache() -> void:
 	_splinter_mesh = null
 	_canvas_shred_mesh = null
 	_fuse_spark_mesh = null
+	_spray_drop_mesh = null
 	_oak_mat = null
 	_iron_mat = null
 	_brass_mat = null
 	_canvas_mat = null
 	_water_mat = null
 	_fuse_mat = null
+	_spray_drop_mat = null
 	_pbr_tex_cache.clear()
 
 
@@ -152,6 +181,7 @@ func _ready() -> void:
 	_ensure_shared_assets()
 	_build_visuals()
 	_sync_pump_visuals()
+	step_breach_spray(0.0)
 
 
 func _exit_tree() -> void:
@@ -161,6 +191,24 @@ func _exit_tree() -> void:
 			mi.mesh = null
 	_all_mesh_instances.clear()
 	_splinter_pool.clear()
+	if _breach_spray_mmi != null and is_instance_valid(_breach_spray_mmi):
+		_breach_spray_mmi.visible = false
+		_breach_spray_mmi.material_override = null
+		_breach_spray_mmi.multimesh = null
+	_breach_spray_mmi = null
+	_breach_spray_mm = null
+	_breach_origins.clear()
+	_spray_phase.clear()
+	_spray_period.clear()
+	_spray_reach.clear()
+	_spray_arc_lift.clear()
+	_spray_drop_fall.clear()
+	_spray_z_jitter.clear()
+	_spray_y_jitter.clear()
+	_spray_scale.clear()
+	_spray_positions.clear()
+	_active_breach_count = 0
+	_active_spray_count = 0
 	_pump_oak_mi = null
 	_pump_iron_mi = null
 	_pump_brass_mi = null
@@ -274,6 +322,23 @@ func is_fuse_flash_active() -> bool:
 		and is_instance_valid(_fuse_spark_mi) and _fuse_spark_mi.visible
 
 
+## Return the batched 24-instance pressurized hull-breach seawater spray MultiMeshInstance3D (`BreachSprayMist`).
+func get_breach_spray_node() -> MultiMeshInstance3D:
+	if _breach_spray_mmi != null and is_instance_valid(_breach_spray_mmi):
+		return _breach_spray_mmi
+	return null
+
+
+## Return the active spraying droplet instance count (0 when hull intact; 24 while any hole is unpatched).
+func get_active_breach_spray_count() -> int:
+	return _active_spray_count
+
+
+## Return the latest ship-local positions of all 24 breach spray droplets (headless-safe MultiMesh mirror).
+func get_breach_spray_positions() -> PackedVector3Array:
+	return _spray_positions
+
+
 # ==============================================================================
 # Per-Frame Animation Update
 # ==============================================================================
@@ -282,7 +347,7 @@ func _process(delta: float) -> void:
 	step(delta)
 
 
-## Advance pump lever rocking, water plume surge/fade, splinter tumbling, and fuse flash.
+## Advance pump lever rocking, water plume surge/fade, splinter tumbling, fuse flash, and breach spray jets.
 func step(delta: float) -> void:
 	if delta <= 0.0:
 		return
@@ -347,6 +412,86 @@ func step(delta: float) -> void:
 				_fuse_spark_mi.transparency = clampf(1.0 - t * 1.25, 0.0, 1.0)
 				_fuse_spark_mi.visible = true
 
+	# 4. Pressurized inward seawater spray jets from active unpatched hull breaches.
+	step_breach_spray(delta)
+
+
+## Deterministically step pressurized inward hull-breach seawater spray arcs (zero steady-state allocations).
+func step_breach_spray(delta: float) -> void:
+	if _breach_spray_mmi == null or not is_instance_valid(_breach_spray_mmi) or _breach_spray_mm == null:
+		return
+	var breach_cnt := _collect_active_breaches()
+	if breach_cnt <= 0:
+		if _active_spray_count > 0 or _breach_spray_mmi.visible:
+			_active_spray_count = 0
+			_breach_spray_mmi.visible = false
+			for i in _spray_positions.size():
+				_spray_positions[i] = Vector3.ZERO
+		return
+
+	_active_spray_count = BREACH_SPRAY_COUNT
+	_breach_spray_mmi.visible = true
+	var dt := maxf(delta, 0.0)
+	var sc := maxf(visual_scale, 0.5)
+	var floor_y := (-0.92 if _is_brigantine else -0.82) * sc
+	var mm := _breach_spray_mm
+
+	for i in BREACH_SPRAY_COUNT:
+		var period := _spray_period[i]
+		var t := fposmod(_spray_phase[i] + dt / period, 1.0)
+		_spray_phase[i] = t
+		var origin := _breach_origins[i % breach_cnt]
+		var inward_x := -1.0 if origin.x >= 0.0 else 1.0
+		var reach := _spray_reach[i]
+		var lift := _spray_arc_lift[i]
+		var fall := _spray_drop_fall[i]
+		var dx := inward_x * (0.06 + reach * t)
+		var dy := _spray_y_jitter[i] + lift * t - fall * t * t
+		var dz := _spray_z_jitter[i] * (0.35 + 0.65 * t)
+		var pos := Vector3(origin.x + dx, maxf(origin.y + dy, floor_y), origin.z + dz)
+		_spray_positions[i] = pos
+
+		var vel := Vector3(inward_x * reach / period, (lift - 2.0 * fall * t) / period, _spray_z_jitter[i] * 0.65 / period)
+		var y_dir := vel.normalized() if vel.length_squared() > 1e-6 else Vector3(inward_x, -0.3, 0.0).normalized()
+		var ref_v := Vector3.FORWARD if absf(y_dir.z) < 0.92 else Vector3.RIGHT
+		var x_dir := y_dir.cross(ref_v).normalized()
+		var z_dir := x_dir.cross(y_dir).normalized()
+
+		var life_env := smoothstep(0.0, 0.10, t) * smoothstep(1.0, 0.78, t)
+		var rad_sc := sc * _spray_scale[i] * (0.50 + 0.58 * life_env)
+		var len_sc := rad_sc * lerpf(1.45, 0.85, t)
+		var drop_basis := Basis(x_dir * rad_sc, y_dir * len_sc, z_dir * rad_sc)
+		mm.set_instance_transform(i, Transform3D(drop_basis, pos))
+
+		var foam_mix := clampf(0.30 + 0.60 * (1.0 - t) + 0.18 * sin(t * PI), 0.0, 1.0)
+		var col := COL_WATER_MID.lerp(COL_WATER_FOAM, foam_mix)
+		col.a = clampf(0.18 + 0.76 * life_env, 0.0, 0.94)
+		mm.set_instance_color(i, col)
+
+
+func _collect_active_breaches() -> int:
+	_active_breach_count = 0
+	if ship == null or not is_instance_valid(ship):
+		return 0
+	var holes_val: Variant = ship.get(&"holes")
+	if not (holes_val is Array):
+		return 0
+	var holes_arr := holes_val as Array
+	var n := holes_arr.size()
+	if _breach_origins.size() < n:
+		_breach_origins.resize(n)
+	for i in n:
+		var slot_val: Variant = holes_arr[i]
+		if not (slot_val is Dictionary):
+			continue
+		var slot := slot_val as Dictionary
+		if bool(slot.get("breached", false)) and not bool(slot.get("patched", false)):
+			var lp_val: Variant = slot.get("local_pos", Vector3.ZERO)
+			if lp_val is Vector3:
+				_breach_origins[_active_breach_count] = lp_val as Vector3
+				_active_breach_count += 1
+	return _active_breach_count
+
 
 func _sync_pump_visuals() -> void:
 	if _pump_handle_pivot != null and is_instance_valid(_pump_handle_pivot):
@@ -374,6 +519,7 @@ func _build_visuals() -> void:
 
 	var is_brig := ship != null and is_instance_valid(ship) \
 		and ship.has_method(&"is_brigantine") and bool(ship.call(&"is_brigantine"))
+	_is_brigantine = is_brig
 	var unscaled_bilge := BRIG_BILGE_POS if is_brig else SLOOP_BILGE_POS
 	var bilge_pos := unscaled_bilge * visual_scale
 	if ship != null and is_instance_valid(ship) and ship.has_method(&"ship_point"):
@@ -437,6 +583,55 @@ func _build_visuals() -> void:
 	_fuse_spark_mi = _add_mesh_node(self, "CannonFuseSpark", _fuse_spark_mesh, _fuse_mat)
 	_fuse_spark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_fuse_spark_mi.visible = false
+
+	# Batched 24-instance pressurized hull-breach seawater spray MultiMeshInstance3D (zero MeshInstance3D overhead).
+	_build_breach_spray()
+
+
+func _build_breach_spray() -> void:
+	_breach_origins.resize(10)
+	_spray_phase.resize(BREACH_SPRAY_COUNT)
+	_spray_period.resize(BREACH_SPRAY_COUNT)
+	_spray_reach.resize(BREACH_SPRAY_COUNT)
+	_spray_arc_lift.resize(BREACH_SPRAY_COUNT)
+	_spray_drop_fall.resize(BREACH_SPRAY_COUNT)
+	_spray_z_jitter.resize(BREACH_SPRAY_COUNT)
+	_spray_y_jitter.resize(BREACH_SPRAY_COUNT)
+	_spray_scale.resize(BREACH_SPRAY_COUNT)
+	_spray_positions.resize(BREACH_SPRAY_COUNT)
+
+	for i in BREACH_SPRAY_COUNT:
+		var fi := float(i)
+		_spray_phase[i] = fposmod(fi * 0.61803398875, 1.0)
+		_spray_period[i] = lerpf(BREACH_SPRAY_MIN_PERIOD, BREACH_SPRAY_MAX_PERIOD, fposmod(fi * 0.38196601125 + 0.17, 1.0))
+		_spray_reach[i] = lerpf(BREACH_SPRAY_MIN_REACH, BREACH_SPRAY_MAX_REACH, fposmod(fi * 0.75487766624 + 0.09, 1.0))
+		_spray_arc_lift[i] = lerpf(0.22, 0.46, fposmod(fi * 0.54321 + 0.21, 1.0))
+		_spray_drop_fall[i] = lerpf(0.68, 1.12, fposmod(fi * 0.41421356 + 0.33, 1.0))
+		_spray_z_jitter[i] = lerpf(-0.15, 0.15, fposmod(fi * 0.27182818 + 0.11, 1.0))
+		_spray_y_jitter[i] = lerpf(-0.08, 0.08, fposmod(fi * 0.31415926 + 0.27, 1.0))
+		_spray_scale[i] = lerpf(0.82, 1.30, fposmod(fi * 0.69314718 + 0.05, 1.0))
+		_spray_positions[i] = Vector3.ZERO
+
+	_breach_spray_mm = MultiMesh.new()
+	_breach_spray_mm.transform_format = MultiMesh.TRANSFORM_3D
+	_breach_spray_mm.use_colors = true
+	_breach_spray_mm.use_custom_data = false
+	_breach_spray_mm.mesh = _spray_drop_mesh
+	_breach_spray_mm.instance_count = BREACH_SPRAY_COUNT
+	for i in BREACH_SPRAY_COUNT:
+		_breach_spray_mm.set_instance_transform(i, Transform3D.IDENTITY)
+		_breach_spray_mm.set_instance_color(i, COL_WATER_FOAM)
+
+	_breach_spray_mmi = MultiMeshInstance3D.new()
+	_breach_spray_mmi.name = "BreachSprayMist"
+	_breach_spray_mmi.multimesh = _breach_spray_mm
+	_breach_spray_mmi.material_override = _spray_drop_mat
+	_breach_spray_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_breach_spray_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_breach_spray_mmi.visibility_range_end = BREACH_SPRAY_VISIBILITY_RANGE
+	_breach_spray_mmi.extra_cull_margin = 10.0
+	_breach_spray_mmi.visible = false
+	add_child(_breach_spray_mmi)
 
 
 func _add_mesh_node(parent: Node3D, node_name: String, mesh_res: ArrayMesh, mat_res: StandardMaterial3D) -> MeshInstance3D:
@@ -526,6 +721,16 @@ static func _ensure_shared_assets() -> void:
 		fm.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fm.albedo_color = Color(1.0, 1.0, 1.0, 0.96)
 		_fuse_mat = fm
+	if _spray_drop_mat == null:
+		var sm := StandardMaterial3D.new()
+		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		sm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		sm.vertex_color_use_as_albedo = true
+		sm.vertex_color_is_srgb = true
+		sm.albedo_color = Color(1.0, 1.0, 1.0, 0.86)
+		_spray_drop_mat = sm
 
 	if _pump_oak_mesh == null:
 		_pump_oak_mesh = _build_pump_oak_mesh()
@@ -547,6 +752,8 @@ static func _ensure_shared_assets() -> void:
 		_canvas_shred_mesh = _build_canvas_shred_mesh()
 	if _fuse_spark_mesh == null:
 		_fuse_spark_mesh = _build_fuse_spark_mesh()
+	if _spray_drop_mesh == null:
+		_spray_drop_mesh = _build_spray_drop_mesh()
 
 
 static func _build_pump_oak_mesh() -> ArrayMesh:
@@ -902,6 +1109,37 @@ static func _build_fuse_spark_mesh() -> ArrayMesh:
 		for k in 4:
 			var k1 := (k + 1) % 4
 			_emit_outward_tri(st, ring[k], ring[k1], tip, Vector3.ZERO, COL_SPARK_CORE, COL_SPARK_GOLD, tip_col)
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_spray_drop_mesh() -> ArrayMesh:
+	# Exact 12-tri 6-sided faceted teardrop/bipyramid seawater droplet with glistening turquoise-white vertex colors.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const SIDES := 6
+	const RADIUS := 0.036
+	const EQ_Y := -0.015
+	var apex_top := Vector3(0.0, 0.088, 0.0)
+	var apex_bot := Vector3(0.0, -0.062, 0.0)
+	var col_tip := COL_WATER_FOAM
+	var col_eq_hi := COL_WATER_FOAM.lerp(COL_WATER_MID, 0.38)
+	var col_eq_lo := COL_WATER_MID
+	var col_tail := COL_WATER_MID.lerp(COL_WATER_DEEP, 0.55)
+
+	var ring: Array[Vector3] = []
+	for s in SIDES:
+		var ang := TAU * float(s) / float(SIDES)
+		ring.append(Vector3(cos(ang) * RADIUS, EQ_Y, sin(ang) * RADIUS))
+
+	for s in SIDES:
+		var s1 := (s + 1) % SIDES
+		var eq_c0 := col_eq_hi if (s % 2 == 0) else col_eq_lo
+		var eq_c1 := col_eq_hi if (s1 % 2 == 0) else col_eq_lo
+		_emit_outward_tri(st, ring[s], ring[s1], apex_top, Vector3.ZERO, eq_c0, eq_c1, col_tip)
+		_emit_outward_tri(st, ring[s1], ring[s], apex_bot, Vector3.ZERO, eq_c1, eq_c0, col_tail)
 
 	st.generate_normals()
 	return st.commit()
