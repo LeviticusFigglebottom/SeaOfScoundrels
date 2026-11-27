@@ -8,7 +8,7 @@ extends Node3D
 ## Replaces bare flat 2D terrain slopes and smooth cliff cones with 8–12 strictly
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
-##   1. `GrassClumps`          — 28-blade slender 3-tuft swaying grass + 3 golden plumed seed-stalks (`foliage_wind.gdshader`)
+##   1. `GrassClumps`          — 32-blade slender 3-tuft swaying grass + 7 golden plumed sea-oat seed-stalks (`foliage_wind.gdshader`)
 ##   2. `JungleFerns`          — 10-frond 2-tier pinnate serrated fern rosettes (`foliage_wind.gdshader`)
 ##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
@@ -961,7 +961,9 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 5.2
 	if cname.begins_with("SundialPlaza") or cname.begins_with("MapTent") \
 			or cname.begins_with("SmugglerHoist") or cname.begins_with("VolcForge") \
-			or cname.begins_with("KrakenShrine") or cname.begins_with("DragonMaw"):
+			or cname.begins_with("KrakenShrine") or cname.begins_with("DragonMaw") \
+			or cname.begins_with("NavGazebo") or cname.begins_with("SunSerpent") \
+			or cname.begins_with("BarricadeCamp") or cname.begins_with("LavaGate"):
 		return 5.0
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
 			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
@@ -3358,7 +3360,7 @@ static func _get_lantern_halo_mesh() -> ArrayMesh:
 	return _lantern_halo_mesh
 
 
-# ------------------------------------------------------------------ Mesh 1: Sculpted 28-Blade Slender Grass + 3 Plumed Seed-Stalks
+# ------------------------------------------------------------------ Mesh 1: Sculpted 32-Blade Slender Grass + 7 Plumed Sea-Oat Seed-Stalks
 
 static func _scale_flora_linear(col_lin: Color, gain: float) -> Color:
 	# Normalize linear luminance gain into [0..1] UNORM8 vertex-color headroom so
@@ -3392,9 +3394,9 @@ static func _build_grass_mesh() -> ArrayMesh:
 	var col_mid := Color(0.92, 0.96, 0.86, 1.0).srgb_to_linear()
 	var col_tip := Color(1.00, 1.00, 0.95, 1.0).srgb_to_linear()
 
-	# 28 slender arching tropical meadow grass blades (`base_half_w = 0.026..0.042 m`) clustered
-	# organically across 3 natural sub-tufts (12 central + 8 offset A + 8 offset B):
-	# [azimuth, root_off, height, arch_out, base_half_w, twist_rad, droop, phase_01, cx, cz]
+	# 32 slender arching tropical meadow grass blades (`base_half_w = 0.026..0.042 m`) clustered
+	# organically across 3 natural sub-tufts (12 central + 8 offset A + 8 offset B + 4 base-weaving fillers):
+	# [azimuth, root_off, height, arch_out, base_half_w, twist_rad, droop, phase_01, cx, cz, optional_root_ao]
 	var blades: Array[Array] = [
 		# Central lush tuft (12 slender blades)
 		[0.10, 0.04, 0.88, 0.40, 0.042,  0.22, 0.12, 0.03,  0.00,  0.00],
@@ -3427,6 +3429,11 @@ static func _build_grass_mesh() -> ArrayMesh:
 		[4.42, 0.10, 0.50, 0.46, 0.031,  0.22, 0.15, 0.76, -0.46, -0.30],
 		[5.22, 0.06, 0.62, 0.43, 0.034, -0.18, 0.14, 0.88, -0.46, -0.30],
 		[6.02, 0.11, 0.42, 0.45, 0.028,  0.21, 0.16, 0.97, -0.46, -0.30],
+		# 4 slender mid-height filler blades weaving across the tuft bases (grounded 0.50 root AO -> sunlit arched tips)
+		[1.98, 0.05, 0.56, 0.44, 0.031,  0.23, 0.15, 0.15,  0.24,  0.12, 0.50],
+		[5.18, 0.06, 0.48, 0.46, 0.028, -0.21, 0.16, 0.42,  0.20, -0.14, 0.50],
+		[4.92, 0.05, 0.54, 0.45, 0.030, -0.22, 0.15, 0.67, -0.22, -0.14, 0.50],
+		[2.52, 0.06, 0.46, 0.47, 0.027,  0.20, 0.17, 0.90, -0.18,  0.16, 0.50],
 	]
 
 	var t_steps: Array[float] = [0.0, 0.36, 0.72, 1.0]
@@ -3442,6 +3449,7 @@ static func _build_grass_mesh() -> ArrayMesh:
 		var droop: float = float(spec[6])
 		var phase_01: float = float(spec[7])
 		var tuft_off := Vector3(float(spec[8]), 0.0, float(spec[9]))
+		var root_ao: float = float(spec[10]) if spec.size() > 10 else 0.76
 
 		var rad := Vector3(cos(az), 0.0, sin(az))
 		var side := Vector3(-sin(az), 0.0, cos(az))
@@ -3468,10 +3476,10 @@ static func _build_grass_mesh() -> ArrayMesh:
 				c = col_mid
 			elif si >= 3:
 				c = col_tip
-			var gain := _flora_contact_ao_gain(y, t, 0.76, 1.065, 0.44)
+			var gain := _flora_contact_ao_gain(y, t, root_ao, 1.065, 0.44)
 			cols.append(_scale_flora_linear(c, gain))
 
-		# 2 tapered curved quads + 1 sharp pointed grass tip = 5 tris/blade (140 tris across 28 blades).
+		# 2 tapered curved quads + 1 sharp pointed grass tip = 5 tris/blade (160 tris across 32 blades).
 		for si in range(t_steps.size() - 1):
 			var t0: float = t_steps[si]
 			var t1: float = t_steps[si + 1]
@@ -3493,18 +3501,28 @@ static func _build_grass_mesh() -> ArrayMesh:
 					Vector2(0.0, 1.0 - t0), Vector2(0.5, 0.0), Vector2(1.0, 1.0 - t0),
 					uv2_0, uv2_1, uv2_0)
 
-	# 3 delicate tall golden-ochre plumed coastal seed-stalks rising gracefully above the 3 sub-tufts:
-	# [azimuth, root_off, height, arch_out, droop, phase_01, cx, cz]
+	# 7 delicate arching coastal sea-oat / foxtail seed-plume stalks rising gracefully across the 3 sub-tufts
+	# (3 taller inner crown plumes + 4 perimeter sea-oat plumes at varied 0.66..0.86 m heights):
+	# [azimuth, root_off, height, arch_out, droop, phase_01, cx, cz, plume_r, is_wheat_oat]
 	var stalks: Array[Array] = [
-		[0.52, 0.04, 0.96, 0.30, 0.13, 0.17,  0.00,  0.00],
-		[2.46, 0.05, 0.86, 0.28, 0.12, 0.53,  0.50,  0.24],
-		[4.64, 0.04, 0.80, 0.29, 0.12, 0.86, -0.46, -0.30],
+		# 3 inner crown golden-ochre seed-stalks
+		[0.52, 0.04, 0.96, 0.30, 0.13, 0.17,  0.00,  0.00, 0.032, false],
+		[2.46, 0.05, 0.86, 0.28, 0.12, 0.53,  0.50,  0.24, 0.031, false],
+		[4.64, 0.04, 0.80, 0.29, 0.12, 0.86, -0.46, -0.30, 0.030, false],
+		# 4 perimeter nodding coastal sea-oat / foxtail seed-plume stalks (0.66..0.86 m)
+		[2.08, 0.11, 0.86, 0.35, 0.14, 0.31,  0.00,  0.00, 0.029, true],
+		[5.42, 0.12, 0.74, 0.34, 0.13, 0.68,  0.00,  0.00, 0.027, true],
+		[0.18, 0.11, 0.66, 0.34, 0.13, 0.41,  0.50,  0.24, 0.026, true],
+		[3.38, 0.11, 0.80, 0.35, 0.14, 0.74, -0.46, -0.30, 0.028, true],
 	]
 	var col_stalk_hi := Color(0.95, 0.88, 0.56, 1.0).srgb_to_linear()
 	var col_plume_base := _scale_flora_linear(Color(0.96, 0.76, 0.36, 1.0).srgb_to_linear(), 1.04)
 	var col_plume_mid := _scale_flora_linear(Color(1.00, 0.80, 0.40, 1.0).srgb_to_linear(), 1.065)
 	var col_plume_tip := _scale_flora_linear(Color(1.00, 0.88, 0.52, 1.0).srgb_to_linear(), 1.075)
-	var stalk_t: Array[float] = [0.0, 0.25, 0.50, 0.75]
+	var col_oat_base := _scale_flora_linear(Color(0.98, 0.80, 0.42, 1.0).srgb_to_linear(), 1.04)
+	var col_oat_mid := _scale_flora_linear(Color(1.00, 0.86, 0.48, 1.0).srgb_to_linear(), 1.065)
+	var col_oat_tip := _scale_flora_linear(Color(1.00, 0.93, 0.60, 1.0).srgb_to_linear(), 1.075)
+	var stalk_t: Array[float] = [0.0, 0.28, 0.57, 0.85]
 	var stalk_hw: Array[float] = [0.011, 0.009, 0.007, 0.0055]
 
 	for sspec in stalks:
@@ -3515,6 +3533,11 @@ static func _build_grass_mesh() -> ArrayMesh:
 		var droop: float = float(sspec[4])
 		var phase_01: float = float(sspec[5])
 		var tuft_off := Vector3(float(sspec[6]), 0.0, float(sspec[7]))
+		var plume_r: float = float(sspec[8])
+		var is_wheat_oat: bool = bool(sspec[9])
+		var c_pb: Color = col_oat_base if is_wheat_oat else col_plume_base
+		var c_pm: Color = col_oat_mid if is_wheat_oat else col_plume_mid
+		var c_pt: Color = col_oat_tip if is_wheat_oat else col_plume_tip
 
 		var rad := Vector3(cos(az), 0.0, sin(az))
 		var side := Vector3(-sin(az), 0.0, cos(az))
@@ -3524,7 +3547,7 @@ static func _build_grass_mesh() -> ArrayMesh:
 			var r_s := roff + arch_out * pow(t_val, 1.48)
 			return tuft_off + rad * r_s + Vector3(0.0, y_s, 0.0)
 
-		# Slender curved stalk ribbon (3 quads = 6 tris/stalk).
+		# Slender curved green stem ribbon (UV2.x 0.0 -> 0.85, 3 quads = 6 tris/stalk).
 		var s_left: Array[Vector3] = []
 		var s_right: Array[Vector3] = []
 		var s_cols: Array[Color] = []
@@ -3534,8 +3557,8 @@ static func _build_grass_mesh() -> ArrayMesh:
 			var hw: float = stalk_hw[si]
 			s_left.append(ctr - side * hw)
 			s_right.append(ctr + side * hw)
-			var sc_col := col_root.lerp(col_low, smoothstep(0.0, 0.42, tv)).lerp(col_stalk_hi, smoothstep(0.35, 0.75, tv))
-			s_cols.append(_scale_flora_linear(sc_col, _flora_contact_ao_gain(ctr.y, tv, 0.76, 1.065, 0.44)))
+			var sc_col := col_root.lerp(col_low, smoothstep(0.0, 0.45, tv)).lerp(col_stalk_hi, smoothstep(0.45, 0.85, tv))
+			s_cols.append(_scale_flora_linear(sc_col, _flora_contact_ao_gain(ctr.y, tv, 0.72, 1.06, 0.44)))
 
 		for si in range(stalk_t.size() - 1):
 			var uv2_0 := Vector2(stalk_t[si], phase_01)
@@ -3549,14 +3572,13 @@ static func _build_grass_mesh() -> ArrayMesh:
 				Vector2(0.0, 1.0 - stalk_t[si]), Vector2(1.0, 1.0 - stalk_t[si + 1]), Vector2(1.0, 1.0 - stalk_t[si]),
 				uv2_0, uv2_1, uv2_0)
 
-		# Feathered 3D golden-wheat diamond plume head (8 spindle tris + 4 feathery awn spikelets = 12 tris/stalk).
-		var p_base: Vector3 = eval_stalk.call(0.73)
-		var p_belly: Vector3 = eval_stalk.call(0.85)
-		var p_tip: Vector3 = eval_stalk.call(1.00)
+		# Feathered 3D nodding golden-ochre / wheat-straw seed-head spike (UV2.x 0.85 -> 1.00, 8 spindle + 4 awn = 12 tris/stalk).
+		var p_base: Vector3 = eval_stalk.call(0.83)
+		var p_belly: Vector3 = eval_stalk.call(0.95)
+		var p_tip: Vector3 = eval_stalk.call(1.07)
 		var p_dir := (p_tip - p_base).normalized()
 		var u_ax := side
 		var v_ax := p_dir.cross(u_ax).normalized()
-		var plume_r := 0.032
 
 		var ring: Array[Vector3] = [
 			p_belly + u_ax * plume_r,
@@ -3564,33 +3586,36 @@ static func _build_grass_mesh() -> ArrayMesh:
 			p_belly - u_ax * plume_r,
 			p_belly - v_ax * (plume_r * 0.88),
 		]
-		var uv2_pb := Vector2(0.73, phase_01)
-		var uv2_pm := Vector2(0.86, phase_01)
+		var ref_lo := p_base.lerp(p_belly, 0.55)
+		var ref_hi := p_belly.lerp(p_tip, 0.45)
+		var uv2_pb := Vector2(0.85, phase_01)
+		var uv2_pm := Vector2(0.92, phase_01)
 		var uv2_pt := Vector2(1.00, phase_01)
 		for k in 4:
 			var nk := (k + 1) % 4
-			_add_outward_tri_uv2(st, p_base, ring[k], ring[nk], p_belly,
-				col_plume_base, col_plume_mid, col_plume_mid, uv2_pb, uv2_pm, uv2_pm)
-			_add_outward_tri_uv2(st, ring[k], p_tip, ring[nk], p_belly,
-				col_plume_mid, col_plume_tip, col_plume_mid, uv2_pm, uv2_pt, uv2_pm)
+			_add_outward_tri_uv2(st, p_base, ring[k], ring[nk], ref_lo,
+				c_pb, c_pm, c_pm, uv2_pb, uv2_pm, uv2_pm)
+			_add_outward_tri_uv2(st, ring[k], p_tip, ring[nk], ref_hi,
+				c_pm, c_pt, c_pm, uv2_pm, uv2_pt, uv2_pm)
 
 		# 4 crisp outward-flaring feathery golden wheat spikelets (2 pairs in orthogonal planes).
+		# [curve_t, out_axis, uv2_base, uv2_mid, uv2_tip]
 		var awn_specs: Array[Array] = [
-			[0.78,  u_ax, 0.82, 0.90],
-			[0.78, -u_ax, 0.82, 0.90],
-			[0.86,  v_ax, 0.89, 0.97],
-			[0.86, -v_ax, 0.89, 0.97],
+			[0.87,  u_ax, 0.87, 0.91, 0.96],
+			[0.87, -u_ax, 0.87, 0.91, 0.96],
+			[0.95,  v_ax, 0.91, 0.95, 1.00],
+			[0.95, -v_ax, 0.91, 0.95, 1.00],
 		]
 		for aspec in awn_specs:
 			var ta: float = float(aspec[0])
 			var out_v: Vector3 = aspec[1] as Vector3
-			var uv2_a0 := Vector2(ta, phase_01)
-			var uv2_a1 := Vector2(float(aspec[2]), phase_01)
-			var uv2_at := Vector2(float(aspec[3]), phase_01)
+			var uv2_a0 := Vector2(float(aspec[2]), phase_01)
+			var uv2_a1 := Vector2(float(aspec[3]), phase_01)
+			var uv2_at := Vector2(float(aspec[4]), phase_01)
 			var ab0: Vector3 = eval_stalk.call(ta) + out_v * 0.010
 			var ab1: Vector3 = ab0 + p_dir * 0.026
 			var atip: Vector3 = ab0 + p_dir * 0.064 + out_v * 0.044
-			_add_foliage_tri(st, ab0, ab1, atip, col_plume_base, col_plume_mid, col_plume_tip,
+			_add_foliage_tri(st, ab0, ab1, atip, c_pb, c_pm, c_pt,
 				Vector2(0.0, 0.3), Vector2(0.3, 0.6), Vector2(1.0, 1.0), uv2_a0, uv2_a1, uv2_at)
 
 	st.generate_normals()
