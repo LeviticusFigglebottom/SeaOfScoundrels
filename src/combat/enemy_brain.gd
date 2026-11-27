@@ -133,6 +133,34 @@ var combat: CombatComponent = null
 var home_pos: Vector3 = Vector3.ZERO
 var target: Pawn = null
 
+const ENEMY_AURA_HALO_WEDGES := 8
+const ENEMY_AURA_HALO_INNER_R := 0.055
+const ENEMY_AURA_HALO_OUTER_R := 0.24
+const ENEMY_AURA_VISIBILITY_RANGE := 95.0
+const COL_ENEMY_AURA_CORE := Color(1.00, 1.00, 1.00, 1.0)
+const COL_ENEMY_AURA_MID := Color(0.32, 0.32, 0.32, 1.0)
+const COL_ENEMY_AURA_RIM := Color(0.0, 0.0, 0.0, 1.0)
+
+const DROWNED_EYE_HALO_POS := Vector3(0.0, 1.62, -0.14)
+const DROWNED_EYE_DAY_ENERGY := 0.18
+const DROWNED_EYE_NIGHT_ENERGY := 0.76
+const DROWNED_EYE_SURGE_ENERGY := 1.32
+const DROWNED_EYE_FLARE_DURATION := 0.85
+const DROWNED_EYE_BASE_SCALE := 1.0
+const DROWNED_EYE_SURGE_SCALE := 1.28
+const COL_DROWNED_EYE_BASE := Color(0.16, 0.96, 0.62, 1.0)
+const COL_DROWNED_EYE_SURGE := Color(0.46, 1.00, 0.78, 1.0)
+
+const TIDECALLER_CAST_HALO_POS := Vector3(0.0, 1.92, -0.12)
+const TIDECALLER_DAY_ENERGY := 0.28
+const TIDECALLER_NIGHT_ENERGY := 0.68
+const TIDECALLER_FLARE_ENERGY := 1.52
+const TIDECALLER_FLARE_DURATION := 0.68
+const TIDECALLER_BASE_SCALE := 1.45
+const TIDECALLER_PEAK_SCALE := 2.35
+const COL_TIDECALLER_BASE := Color(0.14, 0.92, 0.96, 1.0)
+const COL_TIDECALLER_SURGE := Color(0.58, 1.00, 0.98, 1.0)
+
 var _attack_cd: float = 0.0
 var _special_cd: float = 4.0
 var _rally_cd: float = 6.5
@@ -146,12 +174,22 @@ var _strike_telegraph: MeshInstance3D = null
 var _stagger_clock: float = 0.0
 var _telegraph_elapsed: float = 0.0
 var _telegraph_dur: float = 0.34
+var _drowned_eye_halo: MeshInstance3D = null
+var _drowned_eye_halo_mat: StandardMaterial3D = null
+var _drowned_eye_halo_energy: float = 0.0
+var _drowned_eye_flare_timer: float = 0.0
+var _tidecaller_cast_halo: MeshInstance3D = null
+var _tidecaller_cast_halo_mat: StandardMaterial3D = null
+var _tidecaller_cast_halo_energy: float = 0.0
+var _tidecaller_flare_timer: float = 0.0
+var _aura_clock: float = 0.0
 
 static var _active_brains: int = 0
 static var _stagger_stars_mesh: ArrayMesh = null
 static var _stagger_stars_mat: StandardMaterial3D = null
 static var _telegraph_mesh: ArrayMesh = null
 static var _telegraph_mat: StandardMaterial3D = null
+static var _enemy_aura_halo_mesh: ArrayMesh = null
 static var _fireball_tex: ImageTexture = null
 static var _smoke_puff_tex: ImageTexture = null
 static var _streak_tex: ImageTexture = null
@@ -173,7 +211,9 @@ func _exit_tree() -> void:
 	# VFX live on host so explosions/geysers finish cleanly after pawn death;
 	# each VFX node releases its own GPU resources on tree_exiting.
 	_active_vfx.clear()
-	for node_mi: MeshInstance3D in [_stagger_stars, _strike_telegraph]:
+	if combat != null and is_instance_valid(combat) and combat.ranged_fired.is_connected(_on_combat_ranged_fired):
+		combat.ranged_fired.disconnect(_on_combat_ranged_fired)
+	for node_mi: MeshInstance3D in [_stagger_stars, _strike_telegraph, _drowned_eye_halo, _tidecaller_cast_halo]:
 		if node_mi != null and is_instance_valid(node_mi):
 			node_mi.visible = false
 			node_mi.material_override = null
@@ -182,6 +222,14 @@ func _exit_tree() -> void:
 				node_mi.queue_free()
 	_stagger_stars = null
 	_strike_telegraph = null
+	_drowned_eye_halo = null
+	_drowned_eye_halo_mat = null
+	_drowned_eye_halo_energy = 0.0
+	_drowned_eye_flare_timer = 0.0
+	_tidecaller_cast_halo = null
+	_tidecaller_cast_halo_mat = null
+	_tidecaller_cast_halo_energy = 0.0
+	_tidecaller_flare_timer = 0.0
 	_active_brains = maxi(0, _active_brains - 1)
 	if _active_brains == 0:
 		clear_shared_vfx_cache()
@@ -195,6 +243,7 @@ static func clear_shared_vfx_cache() -> void:
 	_stagger_stars_mat = null
 	_telegraph_mesh = null
 	_telegraph_mat = null
+	_enemy_aura_halo_mesh = null
 	_fireball_tex = null
 	_smoke_puff_tex = null
 	_streak_tex = null
@@ -212,6 +261,30 @@ func get_strike_telegraph_node() -> MeshInstance3D:
 	return _strike_telegraph
 
 
+## Return the sculpted 24-tri spectral emerald DrownedEyeHalo MeshInstance3D, or null for non-Drowned.
+func get_drowned_eye_halo() -> MeshInstance3D:
+	if _drowned_eye_halo != null and is_instance_valid(_drowned_eye_halo):
+		return _drowned_eye_halo
+	return null
+
+
+## Return the current additive glow energy of DrownedEyeHalo (0.0 when hidden/dead or non-Drowned).
+func get_drowned_eye_halo_energy() -> float:
+	return _drowned_eye_halo_energy
+
+
+## Return the sculpted 24-tri bioluminescent TidecallerCastHalo MeshInstance3D, or null for non-Tidecaller.
+func get_tidecaller_cast_halo() -> MeshInstance3D:
+	if _tidecaller_cast_halo != null and is_instance_valid(_tidecaller_cast_halo):
+		return _tidecaller_cast_halo
+	return null
+
+
+## Return the current additive glow energy of TidecallerCastHalo (0.0 when hidden/dead or non-Tidecaller).
+func get_tidecaller_cast_halo_energy() -> float:
+	return _tidecaller_cast_halo_energy
+
+
 func _ready() -> void:
 	name = "EnemyBrain"
 	pawn = get_parent() as Pawn
@@ -222,6 +295,9 @@ func _ready() -> void:
 	_ensure_combat()
 	_configure_archetype()
 	_build_combat_telegraphs()
+	_build_enemy_auras()
+	if archetype == &"tidecaller" and combat != null and not combat.ranged_fired.is_connected(_on_combat_ranged_fired):
+		combat.ranged_fired.connect(_on_combat_ranged_fired)
 	pawn.died.connect(_on_died)
 
 
@@ -331,7 +407,7 @@ func detonate_keg(trigger: Node = null) -> void:
 	const BLAST_RADIUS := 6.5
 	Audio.play_sfx(&"cannon_fire", blast_pos, 2.0)
 
-	# Damage all nearby pawns (including friendly Drowned — shooting a keg clears packs!).
+	# Damage all nearby pawns (including friendly Drowned -- shooting a keg clears packs!).
 	for node in get_tree().get_nodes_in_group(&"combatants"):
 		var cc := node as CombatComponent
 		if cc == null or cc.pawn == null or cc.pawn == pawn or cc.pawn.dead:
@@ -360,6 +436,7 @@ func detonate_keg(trigger: Node = null) -> void:
 
 func _on_died() -> void:
 	_hide_combat_telegraphs()
+	_hide_enemy_auras()
 	enemy_defeated.emit(archetype, pawn.global_position)
 
 
@@ -367,6 +444,7 @@ func _on_died() -> void:
 
 func _physics_process(delta: float) -> void:
 	_tick_combat_telegraphs(delta)
+	step_enemy_auras(delta)
 	if not Net.is_host() or pawn == null or pawn.dead:
 		if pawn != null:
 			pawn.wish_dir = Vector3.ZERO
@@ -566,6 +644,7 @@ func _tick_tidecaller(dir: Vector3, dist: float) -> void:
 	if _attack_cd <= 0.0 and dist < 30.0:
 		combat.equip_weapon(&"tide_staff")
 		if combat.primary_attack():
+			trigger_tidecaller_cast_flare()
 			_attack_cd = 2.1
 			if _rng.randf() < 0.4:
 				_strafe_sign = -_strafe_sign
@@ -583,7 +662,13 @@ func _perform_captain_rally() -> void:
 		if cc != null and cc.faction == combat.faction and cc.pawn != null and not cc.pawn.dead:
 			if cc.pawn.global_position.distance_to(pawn.global_position) < 18.0:
 				cc.apply_rally_buff(7.0, 1.35)
+				if cc.faction == &"drowned" and cc.pawn != pawn:
+					var ally_brain := cc.pawn.get_node_or_null(^"EnemyBrain") as EnemyBrain
+					if ally_brain != null:
+						ally_brain._trigger_drowned_eye_surge()
 				buffed += 1
+	if combat != null and combat.faction == &"drowned":
+		_trigger_drowned_eye_surge()
 	Audio.play_sfx(&"crew_shout", pawn.global_position, 1.0, 0.04)
 	if enable_effects:
 		_spawn_captain_rally_vfx(pawn.global_position)
@@ -594,6 +679,8 @@ func _summon_water_hazard(at: Vector3) -> void:
 	var host := pawn.get_parent()
 	if host == null:
 		return
+	if archetype == &"tidecaller":
+		trigger_tidecaller_cast_flare()
 	Audio.play_sfx(&"splash_small", at, 1.0)
 
 	# Phase 1 (1.1 s Telegraph): ground-hugging shader coral-rune vortex + rising mist.
@@ -1544,13 +1631,7 @@ func _tick_combat_telegraphs(delta: float) -> void:
 
 	# 2. Crimson-gold parryable heavy-strike & lunge telegraph flash during WINDUP.
 	if _strike_telegraph != null and is_instance_valid(_strike_telegraph):
-		var is_windup := combat.state == CombatComponent.State.WINDUP
-		var show_flash := false
-		if is_windup:
-			var is_heavy: bool = combat._attack_is_heavy
-			var is_lunge: bool = archetype in [&"drowned_captain", &"rival_captain", &"corsair_raider"] \
-					and combat.combo_step == 3
-			show_flash = is_heavy or is_lunge
+		var show_flash := _is_melee_telegraph_active()
 		if show_flash:
 			if not _strike_telegraph.visible:
 				_telegraph_elapsed = 0.0
@@ -1746,3 +1827,237 @@ static func _emit_outward_quad(st: SurfaceTool, a: Vector3, ca: Color,
 		ref_center: Vector3) -> void:
 	_emit_outward_tri(st, a, ca, b, cb, c, cc, ref_center)
 	_emit_outward_tri(st, a, ca, c, cc, d, cd, ref_center)
+
+
+# ==============================================================================
+# Nocturnal DrownedEyeHalo & Bioluminescent TidecallerCastHalo (Q26A)
+# ==============================================================================
+
+func _build_enemy_auras() -> void:
+	if pawn == null or combat == null:
+		return
+	var mount: Node3D = pawn.get_node_or_null(^"Visual") as Node3D
+	if mount == null:
+		mount = pawn
+
+	if combat.faction == &"drowned":
+		var halo_mesh := _ensure_enemy_aura_halo_mesh()
+		_drowned_eye_halo_mat = _make_enemy_aura_material()
+		_drowned_eye_halo = MeshInstance3D.new()
+		_drowned_eye_halo.name = "DrownedEyeHalo"
+		_drowned_eye_halo.mesh = halo_mesh
+		_drowned_eye_halo.material_override = _drowned_eye_halo_mat
+		_drowned_eye_halo.position = DROWNED_EYE_HALO_POS if mount != pawn else Basis(Vector3.UP, pawn.look_yaw) * DROWNED_EYE_HALO_POS
+		_drowned_eye_halo.scale = Vector3.ONE * DROWNED_EYE_BASE_SCALE
+		_drowned_eye_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_drowned_eye_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_drowned_eye_halo.visibility_range_end = ENEMY_AURA_VISIBILITY_RANGE
+		_drowned_eye_halo.extra_cull_margin = 0.8
+		if mount.is_node_ready():
+			mount.add_child(_drowned_eye_halo)
+		else:
+			mount.add_child.call_deferred(_drowned_eye_halo)
+	elif archetype == &"tidecaller":
+		var halo_mesh := _ensure_enemy_aura_halo_mesh()
+		_tidecaller_cast_halo_mat = _make_enemy_aura_material()
+		_tidecaller_cast_halo = MeshInstance3D.new()
+		_tidecaller_cast_halo.name = "TidecallerCastHalo"
+		_tidecaller_cast_halo.mesh = halo_mesh
+		_tidecaller_cast_halo.material_override = _tidecaller_cast_halo_mat
+		_tidecaller_cast_halo.position = TIDECALLER_CAST_HALO_POS if mount != pawn else Basis(Vector3.UP, pawn.look_yaw) * TIDECALLER_CAST_HALO_POS
+		_tidecaller_cast_halo.scale = Vector3.ONE * TIDECALLER_BASE_SCALE
+		_tidecaller_cast_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_tidecaller_cast_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_tidecaller_cast_halo.visibility_range_end = ENEMY_AURA_VISIBILITY_RANGE
+		_tidecaller_cast_halo.extra_cull_margin = 1.0
+		if mount.is_node_ready():
+			mount.add_child(_tidecaller_cast_halo)
+		else:
+			mount.add_child.call_deferred(_tidecaller_cast_halo)
+
+	step_enemy_auras(0.0)
+
+
+func _hide_enemy_auras() -> void:
+	_drowned_eye_flare_timer = 0.0
+	_drowned_eye_halo_energy = 0.0
+	if _drowned_eye_halo != null and is_instance_valid(_drowned_eye_halo):
+		_drowned_eye_halo.visible = false
+	if _drowned_eye_halo_mat != null:
+		_drowned_eye_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_tidecaller_flare_timer = 0.0
+	_tidecaller_cast_halo_energy = 0.0
+	if _tidecaller_cast_halo != null and is_instance_valid(_tidecaller_cast_halo):
+		_tidecaller_cast_halo.visible = false
+	if _tidecaller_cast_halo_mat != null:
+		_tidecaller_cast_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
+func _on_combat_ranged_fired(weapon: StringName, _origin: Vector3, _hit_pos: Vector3) -> void:
+	if archetype == &"tidecaller" and weapon == &"tide_staff":
+		trigger_tidecaller_cast_flare()
+
+
+func _trigger_drowned_eye_surge() -> void:
+	if pawn == null or pawn.dead or _drowned_eye_halo == null or not is_instance_valid(_drowned_eye_halo):
+		return
+	_drowned_eye_flare_timer = DROWNED_EYE_FLARE_DURATION
+	step_enemy_auras(0.0)
+
+
+## Trigger a bioluminescent aquamarine cast flare (1.52 -> base, scale 1.45 -> 2.35 -> 1.45 over 0.68 s) on Tidecaller.
+func trigger_tidecaller_cast_flare() -> void:
+	if pawn == null or pawn.dead or _tidecaller_cast_halo == null or not is_instance_valid(_tidecaller_cast_halo):
+		return
+	_tidecaller_flare_timer = TIDECALLER_FLARE_DURATION
+	step_enemy_auras(0.0)
+
+
+func _is_melee_telegraph_active() -> bool:
+	if combat == null or combat.state != CombatComponent.State.WINDUP:
+		return false
+	var is_heavy: bool = combat._attack_is_heavy
+	var is_lunge: bool = archetype in [&"drowned_captain", &"rival_captain", &"corsair_raider"] \
+			and combat.combo_step == 3
+	return is_heavy or is_lunge
+
+
+## Deterministically advance DrownedEyeHalo and TidecallerCastHalo nocturnal glow & surge animation.
+func step_enemy_auras(delta: float) -> void:
+	var dt := maxf(0.0, delta)
+	if pawn == null or pawn.dead:
+		_hide_enemy_auras()
+		return
+
+	_aura_clock += dt
+	_drowned_eye_flare_timer = maxf(0.0, _drowned_eye_flare_timer - dt)
+	_tidecaller_flare_timer = maxf(0.0, _tidecaller_flare_timer - dt)
+
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var storm := clampf(Weather.storminess, 0.0, 1.0) if Weather != null else 0.0
+	var gloom := clampf(night + storm * 0.25, 0.0, 1.0)
+
+	if _drowned_eye_halo != null and is_instance_valid(_drowned_eye_halo):
+		var simmer := 1.0 + 0.04 * sin(_aura_clock * 3.4)
+		var base_e := lerpf(DROWNED_EYE_DAY_ENERGY, DROWNED_EYE_NIGHT_ENERGY, gloom) * simmer
+		var surge := 0.0
+		if _drowned_eye_flare_timer > 0.0:
+			var frem := clampf(_drowned_eye_flare_timer / DROWNED_EYE_FLARE_DURATION, 0.0, 1.0)
+			var hold := clampf(frem * 1.15, 0.0, 1.0)
+			surge = hold * hold
+		if _is_melee_telegraph_active():
+			surge = 1.0
+		var energy := lerpf(base_e, DROWNED_EYE_SURGE_ENERGY, surge)
+		var halo_sc := lerpf(DROWNED_EYE_BASE_SCALE, DROWNED_EYE_SURGE_SCALE, surge)
+		var tint := COL_DROWNED_EYE_BASE.lerp(COL_DROWNED_EYE_SURGE, surge)
+		_drowned_eye_halo_energy = energy
+		_drowned_eye_halo.visible = energy > 0.005
+		_drowned_eye_halo.scale = Vector3.ONE * halo_sc
+		if _drowned_eye_halo.get_parent() == pawn:
+			_drowned_eye_halo.position = Basis(Vector3.UP, pawn.look_yaw) * DROWNED_EYE_HALO_POS
+		if _drowned_eye_halo_mat != null:
+			_drowned_eye_halo_mat.albedo_color = Color(
+				tint.r * energy,
+				tint.g * energy,
+				tint.b * energy,
+				1.0
+			)
+	else:
+		_drowned_eye_halo_energy = 0.0
+
+	if _tidecaller_cast_halo != null and is_instance_valid(_tidecaller_cast_halo):
+		var simmer := 1.0 + 0.04 * sin(_aura_clock * 3.1 + 0.9)
+		var base_e := lerpf(TIDECALLER_DAY_ENERGY, TIDECALLER_NIGHT_ENERGY, gloom) * simmer
+		var energy := base_e
+		var halo_sc := TIDECALLER_BASE_SCALE
+		var tint := COL_TIDECALLER_BASE
+		if _tidecaller_flare_timer > 0.0:
+			var fu := 1.0 - clampf(_tidecaller_flare_timer / TIDECALLER_FLARE_DURATION, 0.0, 1.0)
+			var frem := 1.0 - fu
+			var flare_curve := frem * frem
+			energy = lerpf(base_e, TIDECALLER_FLARE_ENERGY, flare_curve)
+			halo_sc = lerpf(TIDECALLER_BASE_SCALE, TIDECALLER_PEAK_SCALE, sin(fu * PI))
+			tint = COL_TIDECALLER_BASE.lerp(COL_TIDECALLER_SURGE, flare_curve)
+		_tidecaller_cast_halo_energy = energy
+		_tidecaller_cast_halo.visible = energy > 0.005
+		_tidecaller_cast_halo.scale = Vector3.ONE * halo_sc
+		if _tidecaller_cast_halo.get_parent() == pawn:
+			_tidecaller_cast_halo.position = Basis(Vector3.UP, pawn.look_yaw) * TIDECALLER_CAST_HALO_POS
+		if _tidecaller_cast_halo_mat != null:
+			_tidecaller_cast_halo_mat.albedo_color = Color(
+				tint.r * energy,
+				tint.g * energy,
+				tint.b * energy,
+				1.0
+			)
+	else:
+		_tidecaller_cast_halo_energy = 0.0
+
+
+static func _make_enemy_aura_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
+
+
+static func _ensure_enemy_aura_halo_mesh() -> ArrayMesh:
+	if _enemy_aura_halo_mesh == null:
+		_enemy_aura_halo_mesh = _build_enemy_aura_halo_mesh()
+	return _enemy_aura_halo_mesh
+
+
+static func _build_enemy_aura_halo_mesh() -> ArrayMesh:
+	# Exact 24-tri 8-wedge soft-feathered additive billboard halo (INNER_R=0.055, OUTER_R=0.24)
+	# with subdued mid-ring luminance (<= 0.36) fading smoothly to pure Color(0, 0, 0, 1) rim.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in ENEMY_AURA_HALO_WEDGES:
+		var a0 := TAU * float(i) / float(ENEMY_AURA_HALO_WEDGES)
+		var a1 := TAU * float(i + 1) / float(ENEMY_AURA_HALO_WEDGES)
+		var m0 := Vector3(cos(a0) * ENEMY_AURA_HALO_INNER_R, sin(a0) * ENEMY_AURA_HALO_INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * ENEMY_AURA_HALO_INNER_R, sin(a1) * ENEMY_AURA_HALO_INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * ENEMY_AURA_HALO_OUTER_R, sin(a0) * ENEMY_AURA_HALO_OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * ENEMY_AURA_HALO_OUTER_R, sin(a1) * ENEMY_AURA_HALO_OUTER_R, 0.0)
+		# Inner luminous core wedge (8 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_MID)
+		st.add_vertex(m0)
+		# Outer soft-feathered skirt fading smoothly to pure black rim (16 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_ENEMY_AURA_RIM)
+		st.add_vertex(o0)
+	return st.commit()
+

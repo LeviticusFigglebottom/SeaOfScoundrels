@@ -601,3 +601,187 @@ func test_q10b_rowboat_lantern_halo_and_oar_splash_bursts() -> void:
 		and Rowboat._oar_splash_mat == null and Rowboat._oar_splash_proc == null,
 		"Rowboat clears all lantern halo & oar splash static caches cleanly with zero leaks")
 
+
+func test_q26b_rowboat_launch_splash_ring_and_nocturnal_biolum_wake() -> void:
+	_begin()
+
+	# 1. Static hygiene guards: zero raw PrimitiveMesh calls & 0 non-ASCII lines in src/ship/rowboat.gd.
+	var rb_src := FileAccess.get_file_as_string("res://src/ship/rowboat.gd")
+	for bad_prim: String in [
+		"QuadMesh.new", "BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"TorusMesh.new", "PlaneMesh.new", "PrismMesh.new", "CapsuleMesh.new"
+	]:
+		check(not rb_src.contains(bad_prim), "rowboat.gd contains zero %s calls" % bad_prim)
+	var non_ascii_lines := 0
+	for src_line: String in rb_src.split("\n"):
+		if not _is_strict_ascii(src_line):
+			non_ascii_lines += 1
+	check_eq(non_ascii_lines, 0, "src/ship/rowboat.gd has 0 non-ASCII lines")
+
+	var sloop := SLOOP_SCENE.instantiate() as Ship
+	sloop.enable_effects = false
+	_root.add_child(sloop)
+	sloop.global_position = Vector3.ZERO
+	sloop.set_anchor(true)
+	sloop.anchor_progress = 1.0
+
+	var rb := Rowboat.new()
+	rb.name = "Q26BRowboat"
+	_root.add_child(rb)
+	rb.set_physics_process(false)
+	rb.attach_to_ship(sloop)
+	await physics_frames(2)
+
+	# 2. Verify sculpted 96-tri RowboatSplashRing mesh, zero-rim feathering & additive sRGB material.
+	var ring := rb.get_splash_ring()
+	check(ring != null, "Rowboat exposes RowboatSplashRing via get_splash_ring()")
+	if ring == null:
+		await _end()
+		return
+	check_eq(ring.name, "RowboatSplashRing", "Splash ring node is named RowboatSplashRing")
+	check(ring.mesh is ArrayMesh and not (ring.mesh is PrimitiveMesh),
+		"RowboatSplashRing uses zero-primitive SurfaceTool ArrayMesh")
+	var ring_am := ring.mesh as ArrayMesh
+	var ring_tris := floori(float(ring_am.get_faces().size()) / 3.0) if ring_am != null else 0
+	check_eq(ring_tris, 96, "RowboatSplashRing has exact 96 sculpted triangles (got %d)" % ring_tris)
+
+	var bad_ring_norms := 0
+	var bad_rim_colors := 0
+	var rim_vert_count := 0
+	var crest_vert_count := 0
+	if ring_am != null and ring_am.get_surface_count() > 0:
+		var arr := ring_am.surface_get_arrays(0)
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+		var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+		for vi in norms.size():
+			var nv := norms[vi]
+			if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+				bad_ring_norms += 1
+			if vi < cols.size() and vi < uvs.size():
+				var vc := cols[vi]
+				var v_uv := uvs[vi].y
+				if v_uv <= 0.01 or v_uv >= 0.99:
+					rim_vert_count += 1
+					if vc.r > 0.001 or vc.g > 0.001 or vc.b > 0.001:
+						bad_rim_colors += 1
+				elif absf(v_uv - 0.5) <= 0.02:
+					crest_vert_count += 1
+	check_eq(bad_ring_norms, 0, "RowboatSplashRing normals are all finite (0, 1, 0) unit vectors")
+	check(rim_vert_count > 0 and crest_vert_count > 0, "RowboatSplashRing has inner/outer rims and crest ridge")
+	check_eq(bad_rim_colors, 0, "RowboatSplashRing fades smoothly to pure Color(0, 0, 0, 1) on inner & outer rims")
+
+	var rmat := ring.material_override as StandardMaterial3D
+	check(rmat != null, "RowboatSplashRing uses per-instance StandardMaterial3D")
+	if rmat != null:
+		check(rmat.vertex_color_use_as_albedo and rmat.vertex_color_is_srgb,
+			"RowboatSplashRing material enables sRGB vertex colors")
+		check_eq(rmat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED,
+			"RowboatSplashRing material is unshaded")
+		check_eq(rmat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD,
+			"RowboatSplashRing material uses BLEND_MODE_ADD")
+		check_eq(rmat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"RowboatSplashRing material disables depth draw")
+		check_eq(rmat.cull_mode, BaseMaterial3D.CULL_DISABLED,
+			"RowboatSplashRing material disables culling")
+		check_eq(rmat.render_priority, 2, "RowboatSplashRing material uses render_priority = 2")
+		check(rmat.albedo_texture == null and rmat.normal_texture == null and rmat.roughness_texture == null,
+			"RowboatSplashRing material allocates zero extra VRAM textures")
+	check_eq(ring.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"RowboatSplashRing disables shadow casting")
+	check_eq(ring.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"RowboatSplashRing disables GI mode")
+	check_near(ring.visibility_range_end, 180.0, 0.1, "RowboatSplashRing visibility_range_end == 180.0 m")
+
+	# 3. Strictly hidden while DOCKED.
+	check(rb.is_docked(), "Rowboat starts DOCKED on Sloop stern davits")
+	check(not ring.visible, "RowboatSplashRing is strictly hidden while DOCKED")
+	check_near(rb.get_splash_ring_energy(), 0.0, 0.0001, "RowboatSplashRing energy is 0.0 while DOCKED")
+	for _i in 10:
+		rb.step_physics(1.0 / 60.0)
+	check(not ring.visible and rb.get_splash_ring_energy() == 0.0,
+		"RowboatSplashRing remains strictly hidden across physics ticks while DOCKED")
+
+	# 4. Launch triggers dramatic 0.95 s seafoam splash burst (scale 0.65 -> > 2.0, energy >= 1.15 -> mid -> 0.0).
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	check(rb.launch(), "Rowboat launches onto water cleanly")
+	var e_start := rb.get_splash_ring_energy()
+	var sc_start := ring.scale.x
+	check(ring.visible, "RowboatSplashRing becomes visible immediately on launch()")
+	check(e_start >= 1.15, "Launch splash peak energy >= 1.15 (got %.3f)" % e_start)
+	check_near(sc_start, 0.65, 0.02, "Launch splash starts at scale 0.65 (got %.3f)" % sc_start)
+	check_near(ring.position.y, 0.14, 0.03, "Launch splash hovers cleanly at y = 0.14 m above waterline")
+
+	for _i in 27:
+		rb.step_physics(1.0 / 60.0)
+	var e_mid := rb.get_splash_ring_energy()
+	var sc_mid := ring.scale.x
+	check(ring.visible, "Launch splash remains visible at mid-burst (~0.45 s)")
+	check(e_mid > 0.15 and e_mid < e_start, "Launch splash energy decays smoothly at mid-burst (%.3f -> %.3f)" % [e_start, e_mid])
+	check(sc_mid > sc_start + 0.50, "Launch splash expands briskly at mid-burst (%.2f -> %.2f)" % [sc_start, sc_mid])
+
+	var max_burst_scale := sc_mid
+	for _i in 33:
+		rb.step_physics(1.0 / 60.0)
+		max_burst_scale = maxf(max_burst_scale, ring.scale.x)
+	var e_end := rb.get_splash_ring_energy()
+	check(max_burst_scale > 2.0, "Launch splash expands past scale 2.0 over 0.95 s (max=%.2f)" % max_burst_scale)
+	check_near(e_end, 0.0, 0.0001, "Launch splash energy settles cleanly to 0.0 after 0.95 s")
+	check(not ring.visible, "RowboatSplashRing hides cleanly when stationary after burst completes")
+
+	# 5. Rowing forward sustains wake shimmer (energy >= 0.25) shifting daylight seafoam -> nocturnal cyan!
+	Weather.time_of_day = 12.0
+	for _i in 65:
+		rb.oar_station.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		rb.step_physics(1.0 / 60.0)
+	var day_speed := rb.get_speed()
+	var day_wake_e := rb.get_splash_ring_energy()
+	var day_biolum := rb.get_splash_ring_biolum_blend()
+	var day_scale := ring.scale.x
+	var day_col := rmat.albedo_color if rmat != null else Color.BLACK
+	check(day_speed >= 2.5, "Rowing forward reaches >= 2.5 m/s (got %.2f m/s)" % day_speed)
+	check(ring.visible, "RowboatSplashRing stays visible while actively rowing")
+	check(day_wake_e >= 0.25 and day_wake_e <= 0.52,
+		"Daylight rowing wake energy stays in [0.25, 0.52] (got %.3f)" % day_wake_e)
+	check(day_scale >= 1.04 and day_scale <= 1.36,
+		"Rowing wake ring scale pulses within ~1.05..1.35 (got %.3f)" % day_scale)
+	check(day_biolum <= 0.10, "Midday (12.0) wake biolum_blend <= 0.10 (got %.3f)" % day_biolum)
+	check(day_col.r >= day_col.b * 0.75, "Midday wake tint stays crisp seafoam-white (%s)" % str(day_col))
+
+	Weather.time_of_day = 22.5
+	for _i in 15:
+		rb.oar_station.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		rb.step_physics(1.0 / 60.0)
+	var night_speed := rb.get_speed()
+	var night_wake_e := rb.get_splash_ring_energy()
+	var night_biolum := rb.get_splash_ring_biolum_blend()
+	var night_col := rmat.albedo_color if rmat != null else Color.BLACK
+	check(night_speed >= 2.5, "Nocturnal rowing keeps speed >= 2.5 m/s (got %.2f m/s)" % night_speed)
+	check(ring.visible, "Nocturnal bioluminescent wake stays visible while rowing")
+	check(night_wake_e >= 0.25 and night_wake_e <= 0.52,
+		"Nocturnal rowing wake energy stays in [0.25, 0.52] (got %.3f)" % night_wake_e)
+	check(night_biolum >= 0.85, "Night (22.5) wake biolum_blend >= 0.85 (got %.3f)" % night_biolum)
+	check(night_col.g > night_col.r * 2.5 and night_col.b > night_col.r * 2.5,
+		"Night wake shifts cleanly to glowing bioluminescent turquoise-cyan (%s)" % str(night_col))
+
+	# 6. Re-docking hides RowboatSplashRing immediately!
+	var dock_w := rb.get_dock_world_transform(sloop).origin
+	rb.global_position = dock_w + Vector3(0.0, 0.0, 3.5)
+	check(rb.dock_to_ship(sloop), "Rowboat re-docks cleanly to Sloop")
+	check(not ring.visible, "RowboatSplashRing hides immediately on dock_to_ship()")
+	check_near(rb.get_splash_ring_energy(), 0.0, 0.0001,
+		"RowboatSplashRing energy resets immediately to 0.0 on dock_to_ship()")
+
+	print("    Q26B splash ring (%d tris): burst e=%.2f->%.2f->%.2f (sc=%.2f->%.2f), wake day_e=%.3f (biolum=%.2f) -> night_e=%.3f (biolum=%.2f)" % [
+		ring_tris, e_start, e_mid, e_end, sc_start, max_burst_scale,
+		day_wake_e, day_biolum, night_wake_e, night_biolum
+	])
+
+	# 7. Clean zero-leak teardown!
+	await _end()
+	check_eq(Rowboat._active_instances, 0, "Rowboat _active_instances == 0 after Q26B teardown")
+	check(Rowboat._splash_ring_mesh == null,
+		"Rowboat clears static _splash_ring_mesh cleanly on teardown with zero leaks")
+
+

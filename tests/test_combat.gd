@@ -2245,5 +2245,270 @@ func test_q23a_ghost_ship_spectral_wake_motes_phase_ring_and_ascii() -> void:
 		"Ship releases _spectral_mote_mesh, _spectral_mote_mat, and _spectral_phase_ring_mesh automatically (0 leaks)")
 
 
+func test_q26a_enemy_drowned_eye_halo_and_tidecaller_cast_aura() -> void:
+	_begin()
+	_fast(false)
+	_ground()
+	EnemyBrain.clear_shared_vfx_cache()
+
+	# 1. Strict-ASCII guard on src/combat/enemy_brain.gd (0 non-ASCII characters).
+	var eb_src := FileAccess.get_file_as_string("res://src/combat/enemy_brain.gd")
+	check(eb_src.length() > 500, "enemy_brain.gd source loads cleanly for Q26A ASCII audit")
+	var non_ascii_count := 0
+	for ci in eb_src.length():
+		if eb_src.unicode_at(ci) >= 128:
+			non_ascii_count += 1
+	check_eq(non_ascii_count, 0, "src/combat/enemy_brain.gd must contain 0 non-ASCII characters (got %d)" % non_ascii_count)
+
+	# 2. Spawn Drowned Captain, Drowned Cutlass, Tidecaller, Corsair Raider, and Rival Captain.
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 10.0, 0.0)
+
+	var cap_pawn := EnemyBrain.spawn_enemy(&"drowned_captain", Vector3(0.0, 5.05, 0.0), _root)
+	var cut_pawn := EnemyBrain.spawn_enemy(&"drowned_cutlass", Vector3(4.0, 5.05, 0.0), _root)
+	var tc_pawn := EnemyBrain.spawn_enemy(&"tidecaller", Vector3(10.0, 5.05, 0.0), _root)
+	var cor_pawn := EnemyBrain.spawn_enemy(&"corsair_raider", Vector3(-6.0, 5.05, 0.0), _root)
+	var riv_pawn := EnemyBrain.spawn_enemy(&"rival_captain", Vector3(-10.0, 5.05, 0.0), _root)
+
+	var cap_brain := cap_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	var cut_brain := cut_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	var tc_brain := tc_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	var cor_brain := cor_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	var riv_brain := riv_pawn.get_node(^"EnemyBrain") as EnemyBrain
+
+	for b: EnemyBrain in [cap_brain, cut_brain, tc_brain, cor_brain, riv_brain]:
+		b.aggro_range = 0.0
+		b.set_physics_process(false)
+	await physics_frames(2)
+
+	# 3. Audit mounting isolation across factions / archetypes.
+	var cap_eye := cap_brain.get_drowned_eye_halo()
+	var cut_eye := cut_brain.get_drowned_eye_halo()
+	var tc_halo := tc_brain.get_tidecaller_cast_halo()
+
+	check(cap_eye != null and cap_eye.name == &"DrownedEyeHalo",
+		"drowned_captain mounts DrownedEyeHalo and exposes get_drowned_eye_halo()")
+	check(cap_brain.get_tidecaller_cast_halo() == null and is_zero_approx(cap_brain.get_tidecaller_cast_halo_energy()),
+		"drowned_captain does NOT mount TidecallerCastHalo")
+	check(cut_eye != null and cut_eye.name == &"DrownedEyeHalo",
+		"drowned_cutlass mounts DrownedEyeHalo cleanly")
+
+	check(tc_halo != null and tc_halo.name == &"TidecallerCastHalo",
+		"tidecaller mounts TidecallerCastHalo and exposes get_tidecaller_cast_halo()")
+	check(tc_brain.get_drowned_eye_halo() == null and is_zero_approx(tc_brain.get_drowned_eye_halo_energy()),
+		"tidecaller does NOT mount DrownedEyeHalo")
+
+	check(cor_brain.get_drowned_eye_halo() == null and cor_brain.get_tidecaller_cast_halo() == null,
+		"corsair_raider mounts NEITHER DrownedEyeHalo nor TidecallerCastHalo")
+	check(riv_brain.get_drowned_eye_halo() == null and riv_brain.get_tidecaller_cast_halo() == null,
+		"rival_captain mounts NEITHER DrownedEyeHalo nor TidecallerCastHalo")
+	cor_brain.trigger_tidecaller_cast_flare()
+	cor_brain.step_enemy_auras(0.1)
+	check(is_zero_approx(cor_brain.get_drowned_eye_halo_energy()) and is_zero_approx(cor_brain.get_tidecaller_cast_halo_energy()),
+		"corsair_raider aura energy remains strictly 0.0")
+
+	if cap_eye == null or cut_eye == null or tc_halo == null:
+		await _end()
+		return
+
+	# Verify Visual-parent mounting & skull/crest local offsets so halos track enemy look_yaw.
+	check(cap_eye.get_parent() == cap_pawn.get_node(^"Visual"),
+		"DrownedEyeHalo mounts inside Pawn Visual node so it rotates cleanly with facing yaw")
+	check(cap_eye.position.is_equal_approx(Vector3(0.0, 1.62, -0.14)),
+		"DrownedEyeHalo mounts at skull/eye offset (0.0, 1.62, -0.14)")
+	check(tc_halo.get_parent() == tc_pawn.get_node(^"Visual"),
+		"TidecallerCastHalo mounts inside Pawn Visual node so it rotates cleanly with facing yaw")
+	check(tc_halo.position.is_equal_approx(Vector3(0.0, 1.92, -0.12)),
+		"TidecallerCastHalo mounts at crown/staff crest offset (0.0, 1.92, -0.12)")
+
+	# 4. Audit shared 24-tri 8-wedge soft-feathered ArrayMesh (zero PrimitiveMesh, zero VRAM textures,
+	#    INNER_R=0.055, OUTER_R=0.24 <= 0.25 m, subdued mid-ring <= 0.36, pure black rim, unit (0,0,1) normals).
+	check(cap_eye.mesh is ArrayMesh and not (cap_eye.mesh is PrimitiveMesh),
+		"DrownedEyeHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(cap_eye.mesh == EnemyBrain._enemy_aura_halo_mesh
+		and cap_eye.mesh == cut_eye.mesh
+		and cap_eye.mesh == tc_halo.mesh,
+		"Drowned and Tidecaller auras reuse one statically shared _enemy_aura_halo_mesh")
+	check(cap_eye.material_override != cut_eye.material_override
+		and cap_eye.material_override != tc_halo.material_override,
+		"each enemy instance uses an isolated per-instance StandardMaterial3D")
+
+	for mi: MeshInstance3D in [cap_eye, tc_halo]:
+		check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadows" % String(mi.name))
+		check_eq(mi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"%s disables GI" % String(mi.name))
+		check_near(mi.visibility_range_end, 95.0, 0.01,
+			"%s sets visibility_range_end == 95.0 m" % String(mi.name))
+		var am_mat := mi.material_override as StandardMaterial3D
+		check(am_mat != null and am_mat.vertex_color_use_as_albedo and am_mat.vertex_color_is_srgb
+			and am_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and am_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and am_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and am_mat.billboard_keep_scale
+			and am_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and am_mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and am_mat.albedo_texture == null and am_mat.normal_texture == null and am_mat.roughness_texture == null,
+			"%s uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D" % String(mi.name))
+
+	var aura_am := cap_eye.mesh as ArrayMesh
+	var arr := aura_am.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+	var tri_count := floori(float(verts.size()) / 3.0)
+	check_eq(tri_count, 24, "shared enemy aura halo has exact 24 triangles (8 wedges, got %d)" % tri_count)
+	check_eq(norms.size(), verts.size(), "enemy aura halo has normal per vertex")
+	check_eq(cols.size(), verts.size(), "enemy aura halo has color per vertex")
+
+	var bad_normals := 0
+	var max_r := 0.0
+	var inner_r_seen := 0.0
+	var mid_max_lum := 0.0
+	var saw_core := false
+	var saw_mid := false
+	var saw_black_rim := false
+	for vi in verts.size():
+		var nv := norms[vi]
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			bad_normals += 1
+		var r := Vector2(verts[vi].x, verts[vi].y).length()
+		max_r = maxf(max_r, r)
+		var cv := cols[vi]
+		if r < 0.001:
+			if cv.r >= 0.95 and cv.g >= 0.95 and cv.b >= 0.95:
+				saw_core = true
+		elif r < 0.10:
+			inner_r_seen = r
+			saw_mid = true
+			mid_max_lum = maxf(mid_max_lum, maxf(cv.r, maxf(cv.g, cv.b)))
+		else:
+			if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+				saw_black_rim = true
+	check_eq(bad_normals, 0, "enemy aura halo assigns exact finite unit (0, 0, 1) normal to every vertex")
+	check(max_r <= 0.25 and absf(max_r - 0.24) < 0.005,
+		"enemy aura halo OUTER_R is delicate 0.24 m <= 0.25 m (got %.3f m)" % max_r)
+	check_near(inner_r_seen, 0.055, 0.003, "enemy aura halo INNER_R == 0.055 m (got %.4f m)" % inner_r_seen)
+	check(saw_core and saw_mid and saw_black_rim,
+		"enemy aura halo grades bright core -> subdued mid-ring -> pure Color(0, 0, 0, 1) rim")
+	check(mid_max_lum <= 0.36, "enemy aura halo mid-ring luminance <= 0.36 for seamless feathering (got %.3f)" % mid_max_lum)
+
+	# 5. Drowned Captain midday (~0.18) -> midnight (>= 0.70) -> rally surge (>= 1.25) -> melee telegraph -> death hide!
+	Weather.time_of_day = 12.0
+	cap_brain._aura_clock = 0.0
+	cap_brain.step_enemy_auras(0.0)
+	var cap_day_e := cap_brain.get_drowned_eye_halo_energy()
+	check(cap_eye.visible and absf(cap_day_e - 0.18) < 0.03,
+		"DrownedEyeHalo shows subtle midday glint ~0.18 (got %.3f)" % cap_day_e)
+	check_near(cap_eye.scale.x, 1.0, 0.01, "DrownedEyeHalo stays at delicate 1.0 base scale at rest")
+	var cap_mat := cap_eye.material_override as StandardMaterial3D
+	check(cap_mat.albedo_color.g > cap_mat.albedo_color.r * 2.0,
+		"DrownedEyeHalo renders spectral emerald tint (g > r)")
+
+	Weather.time_of_day = 0.0
+	cap_brain._aura_clock = 0.0
+	cap_brain.step_enemy_auras(0.0)
+	var cap_night_e := cap_brain.get_drowned_eye_halo_energy()
+	check(cap_night_e >= 0.70 and cap_night_e > cap_day_e * 3.5,
+		"DrownedEyeHalo escalates to eerie midnight emerald glow >= 0.70 (got %.3f)" % cap_night_e)
+
+	cap_brain._perform_captain_rally()
+	var cap_rally_e := cap_brain.get_drowned_eye_halo_energy()
+	check(cap_rally_e >= 1.25 and cap_rally_e > cap_night_e + 0.45,
+		"Drowned Captain rally surges DrownedEyeHalo >= 1.25 (got %.3f)" % cap_rally_e)
+	check(cut_brain.get_drowned_eye_halo_energy() >= 1.25,
+		"nearby rallied Drowned ally eye halo also flares during rally")
+	cap_brain.step_enemy_auras(0.90)
+	check(cap_brain.get_drowned_eye_halo_energy() < 0.85 and cap_brain.get_drowned_eye_halo_energy() >= 0.70,
+		"DrownedEyeHalo rally surge decays smoothly back to midnight baseline (got %.3f)" % cap_brain.get_drowned_eye_halo_energy())
+
+	# Heavy strike windup telegraph flare also surges DrownedEyeHalo!
+	cap_brain.combat.state = CombatComponent.State.IDLE
+	cap_brain.combat.stamina = cap_brain.combat.max_stamina
+	check(cap_brain.combat.heavy_attack(), "Drowned Captain starts heavy strike WINDUP")
+	cap_brain.step_enemy_auras(0.02)
+	check(cap_brain.get_drowned_eye_halo_energy() >= 1.25,
+		"DrownedEyeHalo flares >= 1.25 during heavy melee telegraph WINDUP (got %.3f)" % cap_brain.get_drowned_eye_halo_energy())
+
+	# Death hides DrownedEyeHalo immediately and zeroes energy.
+	cap_pawn.apply_damage(999.0)
+	check(cap_pawn.dead and not cap_eye.visible and is_zero_approx(cap_brain.get_drowned_eye_halo_energy()),
+		"DrownedEyeHalo hides immediately with 0.0 energy on pawn.died")
+	cap_brain.step_enemy_auras(0.1)
+	check(not cap_eye.visible and is_zero_approx(cap_brain.get_drowned_eye_halo_energy()),
+		"DrownedEyeHalo stays hidden after death across step_enemy_auras()")
+
+	# 6. Tidecaller midday (~0.28) -> midnight (>= 0.62) -> cast surge (>= 1.45, scale 1.45->2.35->1.45 over 0.68 s) -> death hide!
+	Weather.time_of_day = 12.0
+	tc_brain._aura_clock = 0.0
+	tc_brain.step_enemy_auras(0.0)
+	var tc_day_e := tc_brain.get_tidecaller_cast_halo_energy()
+	check(tc_halo.visible and absf(tc_day_e - 0.28) < 0.03,
+		"TidecallerCastHalo simmers softly at midday ~0.28 (got %.3f)" % tc_day_e)
+	check_near(tc_halo.scale.x, 1.45, 0.01, "TidecallerCastHalo rests at base scale 1.45 (got %.3f)" % tc_halo.scale.x)
+	var tc_mat := tc_halo.material_override as StandardMaterial3D
+	check(tc_mat.albedo_color.b > tc_mat.albedo_color.r * 2.5 and tc_mat.albedo_color.g > tc_mat.albedo_color.r * 2.5,
+		"TidecallerCastHalo renders bioluminescent aquamarine-cyan tint")
+
+	Weather.time_of_day = 0.0
+	tc_brain._aura_clock = 0.0
+	tc_brain.step_enemy_auras(0.0)
+	var tc_night_e := tc_brain.get_tidecaller_cast_halo_energy()
+	check(tc_night_e >= 0.62 and tc_night_e > tc_day_e * 2.0,
+		"TidecallerCastHalo escalates at midnight >= 0.62 (got %.3f)" % tc_night_e)
+
+	tc_brain.trigger_tidecaller_cast_flare()
+	var tc_flare_e0 := tc_brain.get_tidecaller_cast_halo_energy()
+	var tc_flare_s0 := tc_halo.scale.x
+	check(tc_flare_e0 >= 1.45 and absf(tc_flare_e0 - 1.52) < 0.03,
+		"trigger_tidecaller_cast_flare() surges TidecallerCastHalo >= 1.45 (~1.52, got %.3f)" % tc_flare_e0)
+	check_near(tc_flare_s0, 1.45, 0.02, "TidecallerCastHalo cast surge starts at scale 1.45")
+
+	tc_brain.step_enemy_auras(0.34)
+	var tc_flare_e_mid := tc_brain.get_tidecaller_cast_halo_energy()
+	var tc_flare_s_mid := tc_halo.scale.x
+	check(tc_flare_e_mid > tc_night_e and tc_flare_e_mid < tc_flare_e0,
+		"TidecallerCastHalo cast surge energy decays smoothly mid-flare (%.3f -> %.3f)" % [tc_flare_e0, tc_flare_e_mid])
+	check(tc_flare_s_mid >= 2.28 and tc_flare_s_mid <= 2.38,
+		"TidecallerCastHalo cast surge peaks scale near 2.35 at 0.34 s (got %.3f)" % tc_flare_s_mid)
+
+	tc_brain.step_enemy_auras(0.36)
+	var tc_flare_e_end := tc_brain.get_tidecaller_cast_halo_energy()
+	var tc_flare_s_end := tc_halo.scale.x
+	check(absf(tc_flare_e_end - tc_night_e) < 0.08,
+		"TidecallerCastHalo returns smoothly to midnight base energy after 0.68 s (got %.3f)" % tc_flare_e_end)
+	check_near(tc_flare_s_end, 1.45, 0.02,
+		"TidecallerCastHalo returns smoothly to 1.45 scale after 0.68 s (got %.3f)" % tc_flare_s_end)
+
+	# Real water bolt & geyser summon also trigger TidecallerCastHalo surge!
+	tc_brain.combat.equip_weapon(&"tide_staff")
+	tc_brain.combat.state = CombatComponent.State.IDLE
+	check(tc_brain.combat.primary_attack(), "Tidecaller fires tide_staff water bolt")
+	check(tc_brain.get_tidecaller_cast_halo_energy() >= 1.45,
+		"Tidecaller water bolt cast triggers cast halo surge >= 1.45 (got %.3f)" % tc_brain.get_tidecaller_cast_halo_energy())
+	tc_brain.step_enemy_auras(0.75)
+	tc_brain._summon_water_hazard(Vector3(10.0, 5.05, -4.0))
+	check(tc_brain.get_tidecaller_cast_halo_energy() >= 1.45,
+		"Tidecaller geyser summon triggers cast halo surge >= 1.45 (got %.3f)" % tc_brain.get_tidecaller_cast_halo_energy())
+
+	# Death hides TidecallerCastHalo immediately and zeroes energy.
+	tc_pawn.apply_damage(999.0)
+	check(tc_pawn.dead and not tc_halo.visible and is_zero_approx(tc_brain.get_tidecaller_cast_halo_energy()),
+		"TidecallerCastHalo hides immediately with 0.0 energy on pawn.died")
+
+	print("    Q26A EnemyAuras: %d tris (r=%.3f/%.3f m, mid_lum=%.2f) | Drowned day=%.2f night=%.2f rally=%.2f | Tidecaller day=%.2f night=%.2f flare=%.2f->%.2f->%.2f scale=%.2f->%.2f->%.2f | non-ASCII=%d" % [
+		tri_count, inner_r_seen, max_r, mid_max_lum,
+		cap_day_e, cap_night_e, cap_rally_e,
+		tc_day_e, tc_night_e, tc_flare_e0, tc_flare_e_mid, tc_flare_e_end,
+		tc_flare_s0, tc_flare_s_mid, tc_flare_s_end, non_ascii_count])
+
+	# 7. Clean teardown & ZERO ObjectDB/resource leaks!
+	await _end()
+	check_eq(EnemyBrain._active_brains, 0, "all EnemyBrains exited cleanly with 0 leaks")
+	check(EnemyBrain._enemy_aura_halo_mesh == null,
+		"EnemyBrain clears shared _enemy_aura_halo_mesh automatically on teardown (0 leaks)")
+
+
+
 
 

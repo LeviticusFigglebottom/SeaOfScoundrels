@@ -88,6 +88,20 @@ const COL_ROPE_LO := Color(0.38, 0.29, 0.17)
 const COL_GLASS_LIT := Color(1.0, 0.86, 0.52)
 const COL_GLASS_DIM := Color(0.55, 0.48, 0.38)
 
+# Sculpted 96-tri concentric launch splash & nocturnal bioluminescent rowing wake ring.
+const SPLASH_RING_Y_LOCAL := 0.14
+const SPLASH_RING_VISIBILITY_END := 180.0
+const SPLASH_RING_BURST_DURATION := 0.95
+const SPLASH_RING_BURST_SCALE_START := 0.65
+const SPLASH_RING_BURST_SCALE_END := 2.35
+const SPLASH_RING_BURST_PEAK_ENERGY := 1.25
+const SPLASH_RING_WAKE_SPEED_MIN := 1.0
+const SPLASH_RING_WAKE_SPEED_FULL := 4.4
+const COL_SPLASH_RIM_BLACK := Color(0.0, 0.0, 0.0, 1.0)
+const COL_SPLASH_CREST_WHITE := Color(0.32, 0.44, 0.48, 1.0)
+const COL_SPLASH_DAY := Color(0.88, 0.96, 0.99)
+const COL_SPLASH_NIGHT_BIOLUM := Color(0.20, 0.92, 0.96)
+
 ## Visual scale (dinghy stays realistic 1.0x human size regardless of mother ship hull_scale).
 @export var visual_scale: float = 1.0
 ## Whether the stern boat lantern is currently lit.
@@ -120,6 +134,8 @@ var _starboard_oar_mi: MeshInstance3D = null
 var _port_oar_splash: GPUParticles3D = null
 var _stbd_oar_splash: GPUParticles3D = null
 var _slings_mi: MeshInstance3D = null
+var _splash_ring_mi: MeshInstance3D = null
+var _splash_ring_mat: StandardMaterial3D = null
 
 # Runtime buoyancy, rowing & cargo state
 var _cargo: Array[Carryable] = []
@@ -145,6 +161,10 @@ var _stbd_splash_timer: float = 0.0
 var _port_splash_cd: float = 0.0
 var _stbd_splash_cd: float = 0.0
 var _oar_splash_count: int = 0
+var _splash_burst_timer: float = 0.0
+var _splash_ring_energy: float = 0.0
+var _splash_ring_biolum_blend: float = 0.0
+var _splash_ring_clock: float = 0.0
 
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
 var _ray_result: Variant = ClassDB.instantiate(&"PhysicsIntersectRayResult3D") if ClassDB.class_exists(&"PhysicsIntersectRayResult3D") else null
@@ -165,6 +185,7 @@ static var _oar_splash_mat: ShaderMaterial = null
 static var _oar_splash_proc: ParticleProcessMaterial = null
 static var _oar_mesh: ArrayMesh = null
 static var _slings_mesh: ArrayMesh = null
+static var _splash_ring_mesh: ArrayMesh = null
 static var _oak_mat: StandardMaterial3D = null
 static var _iron_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
@@ -192,6 +213,7 @@ static func clear_shared_cache() -> void:
 	_oar_splash_proc = null
 	_oar_mesh = null
 	_slings_mesh = null
+	_splash_ring_mesh = null
 	_oak_mat = null
 	_iron_mat = null
 	_brass_mat = null
@@ -242,7 +264,8 @@ func _exit_tree() -> void:
 
 	for mi: MeshInstance3D in [
 		_hull_oak_mi, _trim_oak_mi, _fittings_iron_mi, _fittings_brass_mi,
-		_lantern_glass_mi, _lantern_halo_mi, _port_oar_mi, _starboard_oar_mi, _slings_mi
+		_lantern_glass_mi, _lantern_halo_mi, _port_oar_mi, _starboard_oar_mi, _slings_mi,
+		_splash_ring_mi
 	]:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
@@ -260,6 +283,7 @@ func _exit_tree() -> void:
 	if _lantern_halo_mat != null:
 		_lantern_halo_mat.shader = null
 		_lantern_halo_mat = null
+	_splash_ring_mat = null
 	_hull_oak_mi = null
 	_trim_oak_mi = null
 	_fittings_iron_mi = null
@@ -274,8 +298,13 @@ func _exit_tree() -> void:
 	_port_oar_splash = null
 	_stbd_oar_splash = null
 	_slings_mi = null
+	_splash_ring_mi = null
 	_visual_root = null
 	_last_lantern_halo_energy = 0.0
+	_splash_burst_timer = 0.0
+	_splash_ring_energy = 0.0
+	_splash_ring_biolum_blend = 0.0
+	_splash_ring_clock = 0.0
 	oar_station = null
 	dock_interactable = null
 	cargo_interactable = null
@@ -322,6 +351,121 @@ func has_lantern_halo() -> bool:
 ## Total oar-dip sea spray & blade foam bursts triggered while rowing this dinghy.
 func get_oar_splash_count() -> int:
 	return _oar_splash_count
+
+
+## Sculpted 96-tri concentric launch splash & nocturnal bioluminescent wake ring node.
+func get_splash_ring() -> MeshInstance3D:
+	if _splash_ring_mi != null and is_instance_valid(_splash_ring_mi):
+		return _splash_ring_mi
+	return null
+
+
+## Current launch splash / active rowing wake ring additive intensity (0.0 when docked or idle).
+func get_splash_ring_energy() -> float:
+	return _splash_ring_energy
+
+
+## Current 0..1 nocturnal bioluminescent tint blend (0.0 midday seafoam -> 1.0 night cyan).
+func get_splash_ring_biolum_blend() -> float:
+	return _splash_ring_biolum_blend
+
+
+## Trigger the dramatic expanding seafoam launch splash ring burst & ocean foam stamp.
+func trigger_launch_splash() -> void:
+	if state == State.DOCKED:
+		_hide_splash_ring(false)
+		return
+	_splash_burst_timer = SPLASH_RING_BURST_DURATION
+	_splash_ring_energy = SPLASH_RING_BURST_PEAK_ENERGY
+	_splash_ring_clock = 0.0
+	var biolum := _compute_nocturnal_biolum_blend()
+	_splash_ring_biolum_blend = biolum
+	if Ocean.current != null and is_instance_valid(Ocean.current):
+		Ocean.current.add_foam(global_position, 3.6, 0.90)
+	var burst_tint := COL_SPLASH_DAY.lerp(COL_SPLASH_NIGHT_BIOLUM, biolum * 0.65)
+	_apply_splash_ring_visual(SPLASH_RING_BURST_SCALE_START, _splash_ring_energy, burst_tint, 0.0)
+
+
+## Deterministic splash burst & nocturnal bioluminescent rowing wake tick.
+func step_splash_ring(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if state == State.DOCKED:
+		_hide_splash_ring(false)
+		return
+
+	_splash_ring_clock += dt
+	var biolum := _compute_nocturnal_biolum_blend()
+	_splash_ring_biolum_blend = biolum
+
+	if _splash_burst_timer > 0.0:
+		_splash_burst_timer = maxf(0.0, _splash_burst_timer - dt)
+		if _splash_burst_timer > 0.0:
+			var u := 1.0 - clampf(_splash_burst_timer / SPLASH_RING_BURST_DURATION, 0.0, 1.0)
+			var expand_t := 1.0 - (1.0 - u) * (1.0 - u)
+			var burst_scale := lerpf(SPLASH_RING_BURST_SCALE_START, SPLASH_RING_BURST_SCALE_END, expand_t)
+			var burst_energy := SPLASH_RING_BURST_PEAK_ENERGY * pow(1.0 - u, 1.45)
+			var burst_tint := COL_SPLASH_DAY.lerp(COL_SPLASH_NIGHT_BIOLUM, biolum * 0.65)
+			_splash_ring_energy = burst_energy
+			_apply_splash_ring_visual(burst_scale, burst_energy, burst_tint, 0.0)
+			return
+		# Hold full expanded scale when the launch burst completes cleanly at 0.95 s.
+		if _splash_ring_mi != null and is_instance_valid(_splash_ring_mi):
+			_splash_ring_mi.scale = Vector3.ONE * (SPLASH_RING_BURST_SCALE_END * visual_scale)
+
+	var spd := get_speed()
+	if spd >= SPLASH_RING_WAKE_SPEED_MIN:
+		var speed_t := clampf(
+			(spd - SPLASH_RING_WAKE_SPEED_MIN) / (SPLASH_RING_WAKE_SPEED_FULL - SPLASH_RING_WAKE_SPEED_MIN),
+			0.0, 1.0
+		)
+		var pulse := 0.94 + 0.06 * sin(_splash_ring_clock * 4.2)
+		var night_lift := lerpf(1.0, 1.10, biolum)
+		var wake_energy := clampf(lerpf(0.17, 0.47, speed_t) * pulse * night_lift, 0.15, 0.52)
+		var wake_scale := clampf(lerpf(1.08, 1.30, speed_t) + 0.045 * sin(_splash_ring_clock * 3.6 + 0.7), 1.05, 1.35)
+		var wake_tint := COL_SPLASH_DAY.lerp(COL_SPLASH_NIGHT_BIOLUM, biolum)
+		var wake_z := lerpf(0.12, 0.34, speed_t)
+		_splash_ring_energy = wake_energy
+		_apply_splash_ring_visual(wake_scale, wake_energy, wake_tint, wake_z)
+		return
+
+	_hide_splash_ring(true)
+
+
+func _compute_nocturnal_biolum_blend() -> float:
+	var day_f := Weather.daylight() if Weather != null else 1.0
+	return clampf(1.0 - day_f, 0.0, 1.0)
+
+
+func _apply_splash_ring_visual(ring_scale: float, energy: float, tint: Color, local_z: float) -> void:
+	if _splash_ring_mi != null and is_instance_valid(_splash_ring_mi):
+		var ring_y := SPLASH_RING_Y_LOCAL
+		if Sea != null and is_inside_tree():
+			var sea_y := Sea.height(global_position.x, global_position.z)
+			ring_y = clampf((sea_y - global_position.y) + SPLASH_RING_Y_LOCAL, 0.10, 0.42)
+		_splash_ring_mi.position = Vector3(0.0, ring_y, local_z * visual_scale)
+		_splash_ring_mi.scale = Vector3.ONE * (ring_scale * visual_scale)
+		_splash_ring_mi.visible = energy > 0.0005
+	if _splash_ring_mat != null:
+		_splash_ring_mat.albedo_color = Color(
+			tint.r * energy,
+			tint.g * energy,
+			tint.b * energy,
+			1.0
+		)
+
+
+func _hide_splash_ring(preserve_scale: bool) -> void:
+	_splash_ring_energy = 0.0
+	if not preserve_scale:
+		_splash_burst_timer = 0.0
+		_splash_ring_biolum_blend = 0.0
+	if _splash_ring_mi != null and is_instance_valid(_splash_ring_mi):
+		_splash_ring_mi.visible = false
+		if not preserve_scale:
+			_splash_ring_mi.position = Vector3(0.0, SPLASH_RING_Y_LOCAL, 0.0)
+			_splash_ring_mi.scale = Vector3.ONE * (SPLASH_RING_BURST_SCALE_START * visual_scale)
+	if _splash_ring_mat != null:
+		_splash_ring_mat.albedo_color = COL_SPLASH_RIM_BLACK
 
 
 ## Total sculpted triangle count across all MeshInstance3D nodes in this Rowboat.
@@ -494,8 +638,7 @@ func launch(by_pawn: Node = null, seat_pawn: bool = false) -> bool:
 	if is_inside_tree():
 		Audio.play_sfx(&"splash_large", global_position, -1.0)
 		Audio.play_sfx(&"rope_creak", global_position, -2.0)
-	if Ocean.current != null and is_instance_valid(Ocean.current):
-		Ocean.current.add_foam(global_position, 1.35, 0.85)
+	trigger_launch_splash()
 
 	if seat_pawn and by_pawn is Pawn and is_instance_valid(by_pawn) and oar_station != null:
 		var p := by_pawn as Pawn
@@ -670,6 +813,7 @@ func step_physics(delta: float) -> void:
 				set_lantern_lit(mother_ship.lanterns_lit)
 		_update_lantern_halo(dt)
 		_update_oar_visuals(dt, true)
+		step_splash_ring(dt)
 		_sync_stowed_cargo()
 		return
 
@@ -677,6 +821,7 @@ func step_physics(delta: float) -> void:
 		_step_launched_physics(dt)
 	_update_lantern_halo(dt)
 	_update_oar_visuals(dt, false)
+	step_splash_ring(dt)
 	_sync_stowed_cargo()
 
 
@@ -862,6 +1007,8 @@ func _sync_state_visuals() -> void:
 	var docked_now := state == State.DOCKED
 	if _slings_mi != null and is_instance_valid(_slings_mi):
 		_slings_mi.visible = docked_now
+	if docked_now:
+		_hide_splash_ring(false)
 	if oar_station != null and is_instance_valid(oar_station) and oar_station.interactable != null:
 		oar_station.interactable.enabled = (not docked_now) and (not oar_station.is_occupied())
 	if dock_interactable != null and is_instance_valid(dock_interactable):
@@ -1162,6 +1309,33 @@ func _build_visuals() -> void:
 	_slings_mi.visible = (state == State.DOCKED)
 	_visual_root.add_child(_slings_mi)
 
+	# Sculpted 96-tri concentric launch splash & nocturnal bioluminescent rowing wake ring
+	# mounted directly on Rowboat (outside _visual_root, excluded from hull triangle counts).
+	_splash_ring_mat = StandardMaterial3D.new()
+	_splash_ring_mat.vertex_color_use_as_albedo = true
+	_splash_ring_mat.vertex_color_is_srgb = true
+	_splash_ring_mat.uv1_triplanar = true
+	_splash_ring_mat.uv1_world_triplanar = false
+	_splash_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_splash_ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_splash_ring_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_splash_ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_splash_ring_mat.render_priority = 2
+	_splash_ring_mat.albedo_color = COL_SPLASH_RIM_BLACK
+
+	_splash_ring_mi = MeshInstance3D.new()
+	_splash_ring_mi.name = "RowboatSplashRing"
+	_splash_ring_mi.position = Vector3(0.0, SPLASH_RING_Y_LOCAL, 0.0)
+	_splash_ring_mi.scale = Vector3.ONE * (SPLASH_RING_BURST_SCALE_START * visual_scale)
+	_splash_ring_mi.mesh = _splash_ring_mesh
+	_splash_ring_mi.material_override = _splash_ring_mat
+	_splash_ring_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_splash_ring_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_splash_ring_mi.visibility_range_end = SPLASH_RING_VISIBILITY_END
+	_splash_ring_mi.extra_cull_margin = 3.5 * visual_scale
+	_splash_ring_mi.visible = false
+	add_child(_splash_ring_mi)
+
 
 static func _make_oar_splash_emitter(node_name: String, local_pos: Vector3) -> GPUParticles3D:
 	var gp := GPUParticles3D.new()
@@ -1274,6 +1448,97 @@ static func _ensure_shared_assets() -> void:
 		_oar_mesh = _build_oar_mesh()
 	if _slings_mesh == null:
 		_slings_mesh = _build_slings_mesh()
+	if _splash_ring_mesh == null:
+		_splash_ring_mesh = _build_splash_ring_mesh()
+
+
+static func _build_splash_ring_mesh() -> ArrayMesh:
+	# Exact 96-tri concentric horizontal elliptical splash & wake ring
+	# (24 radial segments x 2 tapered annular ribbons, finite +Y normals, pure black zero-rim edges).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 24
+	const RX_IN := 0.92
+	const RX_MID := 1.08
+	const RX_OUT := 1.28
+	const RZ_IN := 1.60
+	const RZ_MID := 1.80
+	const RZ_OUT := 2.04
+	const UP_NORMAL := Vector3(0.0, 1.0, 0.0)
+	for i in SEGS:
+		var u0 := float(i) / float(SEGS)
+		var u1 := float(i + 1) / float(SEGS)
+		var a0 := TAU * u0
+		var a1 := TAU * u1
+		var w0 := 1.0 + 0.035 * sin(a0 * 6.0) + 0.020 * cos(a0 * 4.0)
+		var w1 := 1.0 + 0.035 * sin(a1 * 6.0) + 0.020 * cos(a1 * 4.0)
+		var c0 := cos(a0)
+		var s0 := sin(a0)
+		var c1 := cos(a1)
+		var s1 := sin(a1)
+
+		var in0 := Vector3(c0 * RX_IN * w0, 0.0, s0 * RZ_IN * w0)
+		var in1 := Vector3(c1 * RX_IN * w1, 0.0, s1 * RZ_IN * w1)
+		var m0 := Vector3(c0 * RX_MID * w0, 0.0, s0 * RZ_MID * w0)
+		var m1 := Vector3(c1 * RX_MID * w1, 0.0, s1 * RZ_MID * w1)
+		var o0 := Vector3(c0 * RX_OUT * w0, 0.0, s0 * RZ_OUT * w0)
+		var o1 := Vector3(c1 * RX_OUT * w1, 0.0, s1 * RZ_OUT * w1)
+
+		# Inner annular half-ribbon (pure zero-rim black -> bright crest ridge, 2 tris/seg).
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 0.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m1)
+
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 0.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 0.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(in1)
+
+		# Outer annular half-ribbon (bright crest ridge -> pure zero-rim black, 2 tris/seg).
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 1.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(o0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 1.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(o1)
+
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u0, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 1.0))
+		st.set_color(COL_SPLASH_RIM_BLACK)
+		st.add_vertex(o1)
+		st.set_normal(UP_NORMAL)
+		st.set_uv(Vector2(u1, 0.5))
+		st.set_color(COL_SPLASH_CREST_WHITE)
+		st.add_vertex(m1)
+
+	return st.commit()
 
 
 static func _build_lantern_halo_quad() -> ArrayMesh:
