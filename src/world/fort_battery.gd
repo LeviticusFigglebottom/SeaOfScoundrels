@@ -29,6 +29,16 @@ const TRUNNION_HEIGHT := 0.88
 const TRUNNION_Z := -0.18
 const MUZZLE_TIP_Z := -1.62
 const BREECH_VENT_LOCAL := Vector3(0.0, 0.255, 0.56)
+const MUZZLE_BLAST_LOCAL := Vector3(0.0, 0.0, MUZZLE_TIP_Z - 0.14)
+const HALO_VISIBILITY_RANGE := 420.0
+const FUSE_HALO_MIN_SCALE := 0.35
+const FUSE_HALO_MAX_SCALE := 0.85
+const FUSE_HALO_MIN_ENERGY := 0.55
+const FUSE_HALO_MAX_ENERGY := 1.55
+const MUZZLE_BLAST_DURATION := 0.24
+const MUZZLE_BLAST_START_SCALE := 1.15
+const MUZZLE_BLAST_END_SCALE := 2.40
+const MUZZLE_BLAST_PEAK_ENERGY := 1.85
 
 # Painterly stylized fort-gun material palette.
 const COL_OAK_LIGHT := Color(0.50, 0.33, 0.19)
@@ -41,6 +51,13 @@ const COL_IRON_DARK := Color(0.08, 0.085, 0.10)
 const COL_IRON_BORE := Color(0.03, 0.03, 0.035)
 const COL_IRON_BAND := Color(0.30, 0.28, 0.24)
 const COL_IRON_SCORCH := Color(0.10, 0.09, 0.09)
+const COL_HALO_CORE := Color(1.00, 1.00, 0.98, 1.0)
+const COL_HALO_MID := Color(0.46, 0.44, 0.40, 1.0)
+const COL_HALO_RIM := Color(0.00, 0.00, 0.00, 1.0)
+const COL_FUSE_HALO_START := Color(1.00, 0.52, 0.12)
+const COL_FUSE_HALO_PEAK := Color(1.00, 0.74, 0.22)
+const COL_MUZZLE_BLAST_HOT := Color(1.00, 0.96, 0.72)
+const COL_MUZZLE_BLAST_AMBER := Color(1.00, 0.48, 0.10)
 
 @export var siege_active: bool = false
 @export var fire_range: float = 220.0
@@ -73,6 +90,13 @@ var _iron_mat: StandardMaterial3D = null
 var _fuse_orb: MeshInstance3D = null
 var _fuse_mat: StandardMaterial3D = null
 var _fuse_light: OmniLight3D = null
+var _fuse_halo_mi: MeshInstance3D = null
+var _fuse_halo_mat: StandardMaterial3D = null
+var _fuse_halo_energy: float = 0.0
+var _muzzle_blast_halo_mi: MeshInstance3D = null
+var _muzzle_blast_halo_mat: StandardMaterial3D = null
+var _muzzle_blast_timer: float = 0.0
+var _muzzle_blast_energy: float = 0.0
 var _fuse_particles: GPUParticles3D = null
 var _smolder_particles: GPUParticles3D = null
 var _shot_meshes: Array[MeshInstance3D] = []
@@ -85,12 +109,14 @@ var _telegraph_timer: float = 0.0
 var _recoil: float = 0.0
 var _damage_flash: float = 0.0
 var _clock: float = 0.0
+var _vfx_clock: float = 0.0
 var _tracked_ship: Ship = null
 
 static var _active_batteries: int = 0
 static var _fuse_spark_mesh: ArrayMesh = null
 static var _coastal_shot_mesh: ArrayMesh = null
 static var _coastal_shot_mat: StandardMaterial3D = null
+static var _halo_mesh: ArrayMesh = null
 static var _smoke_puff_tex: ImageTexture = null
 static var _spark_streak_tex: ImageTexture = null
 static var _flash_radial_tex: GradientTexture2D = null
@@ -101,6 +127,7 @@ static func clear_shared_cache() -> void:
 	_fuse_spark_mesh = null
 	_coastal_shot_mesh = null
 	_coastal_shot_mat = null
+	_halo_mesh = null
 	_smoke_puff_tex = null
 	_spark_streak_tex = null
 	_flash_radial_tex = null
@@ -140,6 +167,21 @@ func _exit_tree() -> void:
 		_fuse_orb.material_override = null
 		_fuse_orb.mesh = null
 	_fuse_orb = null
+	if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+		_fuse_halo_mi.visible = false
+		_fuse_halo_mi.material_override = null
+		_fuse_halo_mi.mesh = null
+	_fuse_halo_mi = null
+	_fuse_halo_mat = null
+	_fuse_halo_energy = 0.0
+	if _muzzle_blast_halo_mi != null and is_instance_valid(_muzzle_blast_halo_mi):
+		_muzzle_blast_halo_mi.visible = false
+		_muzzle_blast_halo_mi.material_override = null
+		_muzzle_blast_halo_mi.mesh = null
+	_muzzle_blast_halo_mi = null
+	_muzzle_blast_halo_mat = null
+	_muzzle_blast_timer = 0.0
+	_muzzle_blast_energy = 0.0
 	for sm in _shot_meshes:
 		if sm != null and is_instance_valid(sm):
 			sm.material_override = null
@@ -178,6 +220,37 @@ func is_telegraphing() -> bool:
 	return _telegraph_timer > 0.0 and not destroyed
 
 
+## Return the telegraphing incandescent FortFuseHalo MeshInstance3D mounted at `_fuse_orb`.
+func get_fuse_halo_node() -> MeshInstance3D:
+	return _fuse_halo_mi
+
+
+## Return the explosive FortMuzzleBlastHalo MeshInstance3D mounted at the cannon muzzle mouth.
+func get_muzzle_blast_halo_node() -> MeshInstance3D:
+	return _muzzle_blast_halo_mi
+
+
+## Return current FortFuseHalo additive glow energy (0.0 when idle/destroyed; 0.55..1.55 during telegraph).
+func get_fuse_halo_energy() -> float:
+	return _fuse_halo_energy
+
+
+## Return current FortMuzzleBlastHalo additive blast energy (0.0 normally; 1.85 -> 0.0 over 0.24 s on fire).
+func get_muzzle_blast_energy() -> float:
+	return _muzzle_blast_energy
+
+
+## Deterministically advance FortBattery fuse & muzzle-blast halo VFX by `delta` seconds.
+func step_vfx(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	_vfx_clock += dt
+	if _muzzle_blast_timer > 0.0:
+		_muzzle_blast_timer = maxf(0.0, _muzzle_blast_timer - dt)
+		if _muzzle_blast_timer <= 0.0001:
+			_muzzle_blast_timer = 0.0
+	_update_halo_visuals()
+
+
 ## Enable or disable autonomous Fort Siege tracking and firing.
 func set_siege_active(active: bool) -> void:
 	siege_active = active
@@ -196,6 +269,9 @@ func repair_battery() -> void:
 	_telegraph_timer = 0.0
 	_recoil = 0.0
 	_damage_flash = 0.0
+	_muzzle_blast_timer = 0.0
+	_muzzle_blast_energy = 0.0
+	_fuse_halo_energy = 0.0
 	_aim_yaw = 0.0
 	_aim_pitch = 0.08
 	_set_telegraph_visuals(false)
@@ -253,6 +329,8 @@ func fire_battery(shooter_pawn: Node = null) -> Cannonball:
 	ball.velocity = muzzle_dir * MUZZLE_SPEED
 
 	_recoil = 0.44
+	_muzzle_blast_timer = MUZZLE_BLAST_DURATION
+	_update_halo_visuals()
 	_spawn_muzzle_vfx(muzzle_pos, muzzle_dir)
 	Audio.play_sfx(&"cannon_fire", muzzle_pos)
 	battery_fired.emit(ball)
@@ -273,6 +351,10 @@ func get_aim_direction() -> Vector3:
 
 
 # ============================================================ simulation
+
+func _process(delta: float) -> void:
+	step_vfx(delta)
+
 
 func _physics_process(delta: float) -> void:
 	_clock += delta
@@ -326,6 +408,7 @@ func _tick_host_ai(delta: float) -> void:
 func _begin_telegraph() -> void:
 	_telegraph_timer = TELEGRAPH_DURATION
 	_set_telegraph_visuals(true)
+	_update_halo_visuals()
 	if _barrel_pivot != null and is_inside_tree():
 		var breech_world := _barrel_pivot.global_transform * BREECH_VENT_LOCAL
 		Audio.play_sfx(&"lantern_click", breech_world, -2.0)
@@ -334,6 +417,7 @@ func _begin_telegraph() -> void:
 func _cancel_telegraph() -> void:
 	_telegraph_timer = 0.0
 	_set_telegraph_visuals(false)
+	_update_halo_visuals()
 
 
 func _find_nearest_player_ship() -> Ship:
@@ -405,6 +489,8 @@ func _solve_ballistic_aim(target: Ship) -> Dictionary:
 
 func _silence_battery() -> void:
 	destroyed = true
+	_muzzle_blast_timer = 0.0
+	_muzzle_blast_energy = 0.0
 	_cancel_telegraph()
 	if interactable != null:
 		interactable.enabled = false
@@ -484,6 +570,61 @@ func _apply_visual_state(_delta: float) -> void:
 		if _fuse_light != null:
 			_fuse_light.visible = true
 			_fuse_light.light_energy = lerpf(2.8, 6.2, urgency) * pulse
+
+	_update_halo_visuals()
+
+
+func _update_halo_visuals() -> void:
+	if _telegraph_timer > 0.0 and not destroyed:
+		var urgency := 1.0 - clampf(_telegraph_timer / TELEGRAPH_DURATION, 0.0, 1.0)
+		var crackle := 1.0 + 0.05 * sin(_vfx_clock * (22.0 + urgency * 20.0)) * sin(urgency * PI)
+		var fuse_scale := clampf(lerpf(FUSE_HALO_MIN_SCALE, FUSE_HALO_MAX_SCALE, urgency) * crackle,
+			FUSE_HALO_MIN_SCALE, FUSE_HALO_MAX_SCALE)
+		_fuse_halo_energy = clampf(lerpf(FUSE_HALO_MIN_ENERGY, FUSE_HALO_MAX_ENERGY, urgency) * crackle,
+			FUSE_HALO_MIN_ENERGY, FUSE_HALO_MAX_ENERGY)
+		var fuse_tint := COL_FUSE_HALO_START.lerp(COL_FUSE_HALO_PEAK, urgency)
+		if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+			_fuse_halo_mi.visible = true
+			_fuse_halo_mi.scale = Vector3.ONE * fuse_scale
+		if _fuse_halo_mat != null:
+			_fuse_halo_mat.albedo_color = Color(
+				fuse_tint.r * _fuse_halo_energy,
+				fuse_tint.g * _fuse_halo_energy,
+				fuse_tint.b * _fuse_halo_energy,
+				1.0
+			)
+	else:
+		_fuse_halo_energy = 0.0
+		if _fuse_halo_mi != null and is_instance_valid(_fuse_halo_mi):
+			_fuse_halo_mi.visible = false
+		if _fuse_halo_mat != null:
+			_fuse_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	if _muzzle_blast_timer > 0.0001 and not destroyed:
+		var u := 1.0 - clampf(_muzzle_blast_timer / MUZZLE_BLAST_DURATION, 0.0, 1.0)
+		var rem := clampf(1.0 - u, 0.0, 1.0)
+		var quad_decay := rem * rem
+		var expand := 1.0 - rem * rem
+		var blast_scale := lerpf(MUZZLE_BLAST_START_SCALE, MUZZLE_BLAST_END_SCALE, expand)
+		_muzzle_blast_energy = MUZZLE_BLAST_PEAK_ENERGY * quad_decay
+		var blast_tint := COL_MUZZLE_BLAST_HOT.lerp(COL_MUZZLE_BLAST_AMBER, u)
+		if _muzzle_blast_halo_mi != null and is_instance_valid(_muzzle_blast_halo_mi):
+			_muzzle_blast_halo_mi.visible = true
+			_muzzle_blast_halo_mi.scale = Vector3.ONE * blast_scale
+		if _muzzle_blast_halo_mat != null:
+			_muzzle_blast_halo_mat.albedo_color = Color(
+				blast_tint.r * _muzzle_blast_energy,
+				blast_tint.g * _muzzle_blast_energy,
+				blast_tint.b * _muzzle_blast_energy,
+				1.0
+			)
+	else:
+		_muzzle_blast_timer = 0.0
+		_muzzle_blast_energy = 0.0
+		if _muzzle_blast_halo_mi != null and is_instance_valid(_muzzle_blast_halo_mi):
+			_muzzle_blast_halo_mi.visible = false
+		if _muzzle_blast_halo_mat != null:
+			_muzzle_blast_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 
 
 func _set_telegraph_visuals(active: bool) -> void:
@@ -650,6 +791,36 @@ func _build_telegraph_and_smolder_vfx() -> void:
 	_fuse_light.position = BREECH_VENT_LOCAL + Vector3(0.0, 0.24, 0.0)
 	_fuse_light.visible = false
 	_barrel_pivot.add_child(_fuse_light)
+
+	var halo_mesh := _get_halo_mesh()
+
+	_fuse_halo_mat = _make_halo_material()
+	_fuse_halo_mi = MeshInstance3D.new()
+	_fuse_halo_mi.name = "FortFuseHalo"
+	_fuse_halo_mi.mesh = halo_mesh
+	_fuse_halo_mi.material_override = _fuse_halo_mat
+	_fuse_halo_mi.position = _fuse_orb.position
+	_fuse_halo_mi.scale = Vector3.ONE * FUSE_HALO_MIN_SCALE
+	_fuse_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fuse_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_fuse_halo_mi.visibility_range_end = HALO_VISIBILITY_RANGE
+	_fuse_halo_mi.extra_cull_margin = 1.5
+	_fuse_halo_mi.visible = false
+	_barrel_pivot.add_child(_fuse_halo_mi)
+
+	_muzzle_blast_halo_mat = _make_halo_material()
+	_muzzle_blast_halo_mi = MeshInstance3D.new()
+	_muzzle_blast_halo_mi.name = "FortMuzzleBlastHalo"
+	_muzzle_blast_halo_mi.mesh = halo_mesh
+	_muzzle_blast_halo_mi.material_override = _muzzle_blast_halo_mat
+	_muzzle_blast_halo_mi.position = MUZZLE_BLAST_LOCAL
+	_muzzle_blast_halo_mi.scale = Vector3.ONE * MUZZLE_BLAST_START_SCALE
+	_muzzle_blast_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_muzzle_blast_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_muzzle_blast_halo_mi.visibility_range_end = HALO_VISIBILITY_RANGE
+	_muzzle_blast_halo_mi.extra_cull_margin = 3.0
+	_muzzle_blast_halo_mi.visible = false
+	_barrel_pivot.add_child(_muzzle_blast_halo_mi)
 
 	if DisplayServer.get_name() == "headless":
 		return
@@ -1574,3 +1745,71 @@ static func _st_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
 	st.set_smooth_group(-1)
 	st.set_color(cc)
 	st.add_vertex(c)
+
+
+static func _make_halo_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
+
+
+static func _get_halo_mesh() -> ArrayMesh:
+	if _halo_mesh != null:
+		return _halo_mesh
+	# Exact 48-tri 16-wedge radial-gradient billboard disc (diameter 1.0 m -> scale = world meters)
+	# grading incandescent core -> softly feathered mid -> pure Color(0, 0, 0, 1) black rim
+	# with exact finite unit (0, 0, 1) normals for zero box/circle edge under additive blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner incandescent core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered skirt quad fading smoothly to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+	_halo_mesh = st.commit()
+	return _halo_mesh
+

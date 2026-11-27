@@ -72,11 +72,9 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	if _mmi != null and is_instance_valid(_mmi):
+		_mmi.visible = false
 		_mmi.material_override = null
 		_mmi.multimesh = null
-	if _mm != null:
-		_mm.instance_count = 0
-		_mm.mesh = null
 	_mmi = null
 	_mm = null
 	_mat = null

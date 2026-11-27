@@ -3613,3 +3613,463 @@ func test_q17a_megalodon_and_leviathan_boss_halos_spray_and_vortex_motes() -> vo
 		"Leviathan releases all static caches including _eye_halo_mesh, _vortex_mote_mesh & _vortex_mote_mat (0 leaks)")
 
 
+func test_q18b_merchant_sale_halo_island_crab_telegraph_and_reef_eel_ambush_vfx() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	var saved_profile: Dictionary = Game.profile.data.duplicate(true)
+
+	# 1. Static source guards: zero raw PrimitiveMesh allocations & strict Vulkan teardown compliance!
+	var stall_src := FileAccess.get_file_as_string("res://src/world/merchant_stall.gd")
+	var crab_src := FileAccess.get_file_as_string("res://src/combat/island_crab.gd")
+	var eel_src := FileAccess.get_file_as_string("res://src/combat/reef_eel.gd")
+	for src_pair: Array in [
+		[stall_src, "merchant_stall.gd"],
+		[crab_src, "island_crab.gd"],
+		[eel_src, "reef_eel.gd"],
+	]:
+		var txt := String(src_pair[0])
+		var fname := String(src_pair[1])
+		for bad_prim: String in [
+			"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+			"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+		]:
+			check(not txt.contains(bad_prim), "%s contains zero %s calls" % [fname, bad_prim])
+	check(not stall_src.contains("_coin_burst.mesh = null") and not stall_src.contains(".mesh = null"),
+		"merchant_stall.gd follows Godot 4.8 Vulkan rule (never nulls .mesh on CPUParticles3D teardown)")
+	check(stall_src.contains("_coin_burst.visible = false"),
+		"merchant_stall.gd hides CPUParticles3D cleanly on teardown")
+	check(not eel_src.contains("multimesh.mesh = null") and not eel_src.contains("mm.mesh = null"),
+		"reef_eel.gd follows Godot 4.8 Vulkan rule (never nulls .mesh on a live MultiMesh)")
+
+	# 2. MerchantStall: 48-tri celebratory SaleGoldHalo flash + decay & live sale trigger!
+	var stall_a := MerchantStall.new()
+	stall_a.name = "MerchantStallQ18B_A"
+	var stall_b := MerchantStall.new()
+	stall_b.name = "MerchantStallQ18B_B"
+	_root.add_child(stall_a)
+	_root.add_child(stall_b)
+	stall_a.set_process(false)
+	stall_b.set_process(false)
+
+	var sh_a := stall_a.get_sale_halo_node()
+	var sh_b := stall_b.get_sale_halo_node()
+	check(sh_a != null and sh_a.name == "SaleGoldHalo",
+		"MerchantStall mounts SaleGoldHalo MeshInstance3D via get_sale_halo_node()")
+	var sale_halo_tris := 0
+	var sale_halo_bad_normals := 0
+	var sale_halo_has_core := false
+	var sale_halo_has_black_rim := false
+	if sh_a != null and sh_b != null:
+		check(sh_a.position.distance_to(Vector3(0.0, 1.48, 0.0)) < 0.001,
+			"SaleGoldHalo mounts above merchant counter at (0.0, 1.48, 0.0)")
+		check_eq(sh_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"SaleGoldHalo disables shadow casting")
+		check_eq(sh_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"SaleGoldHalo disables GI mode")
+		check_near(sh_a.visibility_range_end, 110.0, 0.05,
+			"SaleGoldHalo sets visibility_range_end = 110.0 m")
+		check(sh_a.mesh is ArrayMesh and not (sh_a.mesh is PrimitiveMesh),
+			"SaleGoldHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(sh_a.mesh, sh_b.mesh, "MerchantStalls share statically cached _sale_halo_mesh")
+		check(sh_a.material_override != sh_b.material_override,
+			"distinct MerchantStalls use isolated per-instance SaleGoldHalo materials")
+
+		if sh_a.mesh is ArrayMesh:
+			var arr := (sh_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			sale_halo_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					sale_halo_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					sale_halo_has_black_rim = true
+				if cv.r >= 0.95 and cv.g >= 0.90 and cv.b >= 0.50:
+					sale_halo_has_core = true
+		check_eq(sale_halo_tris, 48, "SaleGoldHalo mesh has exact 48 triangles (16 radial wedges)")
+		check_eq(sale_halo_bad_normals, 0, "SaleGoldHalo normals are all finite (0, 0, 1) unit vectors")
+		check(sale_halo_has_core and sale_halo_has_black_rim,
+			"SaleGoldHalo grades doubloon-gold core to pure Color(0, 0, 0, 1) black rim")
+
+		var smat := sh_a.material_override as StandardMaterial3D
+		check(smat != null and smat.vertex_color_use_as_albedo and smat.vertex_color_is_srgb \
+				and smat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and smat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and smat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and smat.billboard_keep_scale \
+				and smat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and smat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"SaleGoldHalo uses unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+		if smat != null:
+			check(smat.albedo_texture == null and smat.normal_texture == null and smat.roughness_texture == null,
+				"SaleGoldHalo allocates 0 extra VRAM textures")
+
+	check(sh_a != null and not sh_a.visible and is_equal_approx(stall_a.get_sale_halo_energy(), 0.0),
+		"SaleGoldHalo starts hidden at 0.0 energy when idle")
+
+	stall_a.trigger_sale_flash()
+	var sale_peak_e := stall_a.get_sale_halo_energy()
+	var sale_start_s := sh_a.scale.x if sh_a != null else 0.0
+	check(sh_a != null and sh_a.visible and sale_peak_e >= 1.40 and sale_peak_e <= 1.50,
+		"trigger_sale_flash() ignites SaleGoldHalo peak (~1.45, got %.3f)" % sale_peak_e)
+	check_near(sale_start_s, 0.75, 0.01, "SaleGoldHalo starts expanding from 0.75 m scale")
+	check(sh_b != null and not sh_b.visible and is_equal_approx(stall_b.get_sale_halo_energy(), 0.0),
+		"trigger_sale_flash() on stall_a does not affect idle stall_b")
+
+	stall_a.step_vfx(0.45)
+	var sale_mid_e := stall_a.get_sale_halo_energy()
+	var sale_mid_s := sh_a.scale.x if sh_a != null else 0.0
+	check(sh_a != null and sh_a.visible and sale_mid_e > 0.20 and sale_mid_e < sale_peak_e * 0.65,
+		"SaleGoldHalo decays smoothly mid-flash (%.3f -> %.3f)" % [sale_peak_e, sale_mid_e])
+	check(sale_mid_s > 1.35 and sale_mid_s < 1.85,
+		"SaleGoldHalo blooms outward toward 1.85 m during flash (mid_scale=%.2f m)" % sale_mid_s)
+
+	stall_a.step_vfx(0.50)
+	check_near(stall_a.get_sale_halo_energy(), 0.0, 0.0001,
+		"SaleGoldHalo decays cleanly to 0.0 energy after 0.90 s")
+	check(sh_a != null and not sh_a.visible, "SaleGoldHalo hides cleanly once sale flash completes")
+
+	# Verify real treasure sale via accept_carryable() fires SaleGoldHalo automatically!
+	var crate := Carryable.new()
+	crate.item_name = "Golden Chalice"
+	_root.add_child(crate)
+	check(stall_b.accept_carryable(crate), "stall_b accepts Carryable treasure sale")
+	check(sh_b != null and sh_b.visible and stall_b.get_sale_halo_energy() >= 1.40,
+		"accept_carryable() triggers celebratory SaleGoldHalo flash automatically (e=%.3f)" % stall_b.get_sale_halo_energy())
+	stall_b.step_vfx(0.95)
+	check(sh_b != null and not sh_b.visible and is_equal_approx(stall_b.get_sale_halo_energy(), 0.0),
+		"stall_b SaleGoldHalo decays cleanly to hidden after sale")
+
+	# 3. IslandCrab: 24-tri 4-point ClawTelegraphHalo danger glint!
+	var crab_a := IslandCrab.spawn_at(_root, Vector3(12.0, 5.0, 0.0), 12.0)
+	var crab_b := IslandCrab.spawn_at(_root, Vector3(-12.0, 5.0, 0.0), 12.0)
+	crab_a.set_physics_process(false)
+	crab_b.set_physics_process(false)
+
+	var ch_a := crab_a.get_telegraph_halo_node()
+	var ch_b := crab_b.get_telegraph_halo_node()
+	check(ch_a != null and ch_a.name == "ClawTelegraphHalo",
+		"IslandCrab mounts ClawTelegraphHalo MeshInstance3D via get_telegraph_halo_node()")
+	var crab_halo_tris := 0
+	var crab_halo_bad_normals := 0
+	var crab_halo_has_core := false
+	var crab_halo_has_black_tip := false
+	if ch_a != null and ch_b != null:
+		check_eq(ch_a.get_parent(), crab_a._body_root,
+			"ClawTelegraphHalo mounts inside IslandCrab _body_root")
+		check(ch_a.position.distance_to(Vector3(0.0, 0.56, -0.34)) < 0.001,
+			"ClawTelegraphHalo mounts above raised front pincers at (0.0, 0.56, -0.34)")
+		check_eq(ch_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ClawTelegraphHalo disables shadow casting")
+		check_eq(ch_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"ClawTelegraphHalo disables GI mode")
+		check_near(ch_a.visibility_range_end, 75.0, 0.05,
+			"ClawTelegraphHalo sets visibility_range_end = 75.0 m")
+		check(ch_a.mesh is ArrayMesh and not (ch_a.mesh is PrimitiveMesh),
+			"ClawTelegraphHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(ch_a.mesh, ch_b.mesh, "IslandCrabs share statically cached _telegraph_halo_mesh")
+		check(ch_a.material_override != ch_b.material_override,
+			"distinct IslandCrabs use isolated per-instance ClawTelegraphHalo materials")
+
+		if ch_a.mesh is ArrayMesh:
+			var arr := (ch_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			crab_halo_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					crab_halo_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					crab_halo_has_black_tip = true
+				if cv.r >= 0.95 and cv.g >= 0.90 and cv.b >= 0.65:
+					crab_halo_has_core = true
+		check_eq(crab_halo_tris, 24, "ClawTelegraphHalo 4-point star has exact 24 triangles")
+		check_eq(crab_halo_bad_normals, 0, "ClawTelegraphHalo normals are all finite (0, 0, 1) unit vectors")
+		check(crab_halo_has_core and crab_halo_has_black_tip,
+			"ClawTelegraphHalo fades from bright star core to pure Color(0, 0, 0, 1) black tips")
+
+		var cmat := ch_a.material_override as StandardMaterial3D
+		check(cmat != null and cmat.vertex_color_use_as_albedo and cmat.vertex_color_is_srgb \
+				and cmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and cmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and cmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and cmat.billboard_keep_scale \
+				and cmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and cmat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"ClawTelegraphHalo uses unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+		if cmat != null:
+			check(cmat.albedo_texture == null and cmat.normal_texture == null and cmat.roughness_texture == null,
+				"ClawTelegraphHalo allocates 0 extra VRAM textures")
+
+	var crab_raw_prims := 0
+	for n in crab_a.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			crab_raw_prims += 1
+	check_eq(crab_raw_prims, 0, "IslandCrab contains zero raw PrimitiveMeshes")
+
+	check(ch_a != null and not ch_a.visible and is_equal_approx(crab_a.get_telegraph_halo_energy(), 0.0),
+		"ClawTelegraphHalo starts hidden when crab is GUARD_IDLE")
+
+	# Escalating amber-crimson flash across 0.55 s raised-claw TELEGRAPH windup!
+	crab_a.state = IslandCrab.State.TELEGRAPH
+	crab_a._state_timer = 0.53
+	crab_a._update_telegraph_halo()
+	var c_early_e := crab_a.get_telegraph_halo_energy()
+	var c_early_s := ch_a.scale.x if ch_a != null else 0.0
+
+	crab_a._state_timer = 0.27
+	crab_a._update_telegraph_halo()
+	var c_mid_e := crab_a.get_telegraph_halo_energy()
+	var c_mid_s := ch_a.scale.x if ch_a != null else 0.0
+
+	crab_a._state_timer = 0.02
+	crab_a._update_telegraph_halo()
+	var c_late_e := crab_a.get_telegraph_halo_energy()
+	var c_late_s := ch_a.scale.x if ch_a != null else 0.0
+
+	check(ch_a != null and ch_a.visible and c_early_e >= 0.64 and c_early_e <= 0.80,
+		"ClawTelegraphHalo activates on early TELEGRAPH (~0.65, got %.3f)" % c_early_e)
+	check(c_mid_e > c_early_e and c_mid_s > c_early_s,
+		"ClawTelegraphHalo escalates through mid TELEGRAPH (e %.2f->%.2f, s %.2f->%.2f)" % [
+			c_early_e, c_mid_e, c_early_s, c_mid_s
+		])
+	check(c_late_e > c_mid_e and c_late_e >= 1.44 and c_late_e <= 1.56 \
+			and c_late_s >= 0.58 and c_late_s <= 0.63,
+		"ClawTelegraphHalo peaks brightly right before lunge strike (e=%.3f, s=%.2f m)" % [c_late_e, c_late_s])
+
+	# Verify sharp fade on LUNGE completion -> RECOVER, immediate hide on STAGGERED & DEAD!
+	crab_a.state = IslandCrab.State.LUNGE
+	crab_a._state_timer = IslandCrab.LUNGE_DURATION * 0.40
+	crab_a._update_telegraph_halo()
+	var c_lunge_e := crab_a.get_telegraph_halo_energy()
+	check(c_lunge_e < c_late_e * 0.35,
+		"ClawTelegraphHalo fades sharply during LUNGE (%.3f -> %.3f)" % [c_late_e, c_lunge_e])
+
+	crab_a.state = IslandCrab.State.RECOVER
+	crab_a._update_telegraph_halo()
+	check(ch_a != null and not ch_a.visible and is_equal_approx(crab_a.get_telegraph_halo_energy(), 0.0),
+		"ClawTelegraphHalo hides cleanly after LUNGE completion")
+
+	crab_a.state = IslandCrab.State.TELEGRAPH
+	crab_a._state_timer = 0.25
+	crab_a._update_telegraph_halo()
+	check(ch_a != null and ch_a.visible, "ClawTelegraphHalo re-illuminates during TELEGRAPH")
+	crab_a.apply_stagger(1.35)
+	check(ch_a != null and not ch_a.visible and is_equal_approx(crab_a.get_telegraph_halo_energy(), 0.0),
+		"ClawTelegraphHalo hides immediately on windup interrupt STAGGERED")
+
+	crab_b.state = IslandCrab.State.TELEGRAPH
+	crab_b._state_timer = 0.20
+	crab_b._update_telegraph_halo()
+	check(ch_b != null and ch_b.visible, "crab_b ClawTelegraphHalo visible before lethal blow")
+	crab_b.apply_damage(999.0)
+	check(crab_b.dead and ch_b != null and not ch_b.visible \
+			and is_equal_approx(crab_b.get_telegraph_halo_energy(), 0.0),
+		"ClawTelegraphHalo hides immediately on IslandCrab defeat")
+
+	# 4. ReefEel: 48-tri EelEyeGlint (day < night < ambush lunge) & 10x12-tri AmbushBubbleBurst!
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	var eel_a := ReefEel.spawn_at(_root, Vector3(24.0, -3.2, 24.0), 18.0, 3.2)
+	var eel_b := ReefEel.spawn_at(_root, Vector3(-24.0, -1.5, 24.0), 18.0, 1.5)
+	eel_a.set_physics_process(false)
+	eel_b.set_physics_process(false)
+
+	var eg_a := eel_a.get_eye_glint_node()
+	var eg_b := eel_b.get_eye_glint_node()
+	check(eg_a != null and eg_a.name == "EelEyeGlint",
+		"ReefEel mounts EelEyeGlint MeshInstance3D via get_eye_glint_node()")
+
+	var eel_glint_tris := 0
+	var eel_glint_bad_normals := 0
+	var eel_glint_has_core := false
+	var eel_glint_has_black_rim := false
+	if eg_a != null and eg_b != null:
+		check_eq(eg_a.get_parent(), eel_a.segments[0],
+			"EelEyeGlint mounts on sculpted head Segment_0")
+		check_eq(eg_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"EelEyeGlint disables shadow casting")
+		check_eq(eg_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"EelEyeGlint disables GI mode")
+		check_near(eg_a.visibility_range_end, 70.0, 0.05,
+			"EelEyeGlint sets visibility_range_end = 70.0 m")
+		check(eg_a.mesh is ArrayMesh and not (eg_a.mesh is PrimitiveMesh),
+			"EelEyeGlint uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(eg_a.mesh, eg_b.mesh, "ReefEels share statically cached _eye_glint_mesh")
+		check(eg_a.material_override != eg_b.material_override,
+			"distinct ReefEels use isolated per-instance EelEyeGlint materials")
+
+		if eg_a.mesh is ArrayMesh:
+			var arr := (eg_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			eel_glint_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					eel_glint_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					eel_glint_has_black_rim = true
+				if cv.r >= 0.80 and cv.g >= 0.95 and cv.b >= 0.25:
+					eel_glint_has_core = true
+		check_eq(eel_glint_tris, 48, "EelEyeGlint mesh has exact 48 triangles (16 radial wedges)")
+		check_eq(eel_glint_bad_normals, 0, "EelEyeGlint normals are all finite (0, 0, 1) unit vectors")
+		check(eel_glint_has_core and eel_glint_has_black_rim,
+			"EelEyeGlint grades chartreuse-emerald core to pure Color(0, 0, 0, 1) black rim")
+
+		var emat := eg_a.material_override as StandardMaterial3D
+		check(emat != null and emat.vertex_color_use_as_albedo and emat.vertex_color_is_srgb \
+				and emat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and emat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and emat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and emat.billboard_keep_scale \
+				and emat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and emat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"EelEyeGlint uses unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+		if emat != null:
+			check(emat.albedo_texture == null and emat.normal_texture == null and emat.roughness_texture == null,
+				"EelEyeGlint allocates 0 extra VRAM textures")
+
+	# Verify EelEyeGlint day < night < ambush lunge flare -> 0.0 hidden on defeat!
+	eel_a.state = ReefEel.State.LURK
+	Weather.time_of_day = 12.0
+	eel_a.step_vfx(0.0)
+	var e_day := eel_a.get_eye_glint_energy()
+
+	Weather.time_of_day = 0.5
+	eel_a.step_vfx(0.0)
+	var e_night := eel_a.get_eye_glint_energy()
+
+	Weather.time_of_day = 12.0
+	eel_a.state = ReefEel.State.DART
+	eel_a.step_vfx(0.0)
+	var e_lunge := eel_a.get_eye_glint_energy()
+
+	check(e_day >= 0.24 and e_day <= 0.32,
+		"EelEyeGlint glows subtly while lurking in daytime coral (~0.28, got %.3f)" % e_day)
+	check(e_night > e_day * 1.9 and e_night >= 0.58 and e_night <= 0.72,
+		"EelEyeGlint brightens eerily at night (~0.65, day=%.3f -> night=%.3f)" % [e_day, e_night])
+	check(e_lunge > e_night * 1.8 and e_lunge >= 1.28 and e_lunge <= 1.42,
+		"EelEyeGlint flares fiercely chartreuse-gold during ambush lunge (~1.35, got %.3f)" % e_lunge)
+
+	eel_a.apply_damage(999.0)
+	check(eel_a.dead and eg_a != null and not eg_a.visible \
+			and is_equal_approx(eel_a.get_eye_glint_energy(), 0.0),
+		"EelEyeGlint hides at 0.0 energy immediately upon ReefEel defeat")
+
+	# Verify AmbushBubbleBurst: 10x12-tri sculpted bubbles, hidden idle, rising & strictly submerged!
+	var bub_a := eel_a.get_ambush_bubbles_node()
+	var bub_b := eel_b.get_ambush_bubbles_node()
+	check(bub_b != null and bub_b.name == "AmbushBubbleBurst",
+		"ReefEel mounts AmbushBubbleBurst MultiMeshInstance3D via get_ambush_bubbles_node()")
+
+	var eel_bub_tris := 0
+	var eel_bub_bad_normals := 0
+	if bub_b != null and bub_a != null:
+		check_eq(bub_b.get_parent(), eel_b,
+			"AmbushBubbleBurst mounts directly under ReefEel")
+		check_eq(bub_b.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"AmbushBubbleBurst disables shadow casting")
+		check_eq(bub_b.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"AmbushBubbleBurst disables GI mode")
+		check_near(bub_b.visibility_range_end, 70.0, 0.05,
+			"AmbushBubbleBurst sets visibility_range_end = 70.0 m")
+		var bmm := bub_b.multimesh
+		check(bmm != null and bmm.instance_count == 10 and bmm.use_colors,
+			"AmbushBubbleBurst configures 10 per-instance colored underwater bubbles")
+		check(bmm != null and bmm.mesh is ArrayMesh and not (bmm.mesh is PrimitiveMesh),
+			"AmbushBubbleBurst uses sculpted ArrayMesh (zero SphereMesh)")
+		if bub_a.multimesh != null and bmm != null:
+			check_eq(bmm.mesh, bub_a.multimesh.mesh,
+				"ReefEels share statically cached 12-tri _bubble_mesh")
+			check_eq(bub_b.material_override, bub_a.material_override,
+				"ReefEels share statically cached _bubble_mat")
+		if bmm != null and bmm.mesh is ArrayMesh:
+			var arr := (bmm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			eel_bub_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					eel_bub_bad_normals += 1
+		check_eq(eel_bub_tris, 12, "sculpted 6-sided faceted bubble mesh has exact 12 triangles")
+		check_eq(eel_bub_bad_normals, 0, "all AmbushBubbleBurst bubble normals are finite unit vectors")
+
+		var bmat := bub_b.material_override as StandardMaterial3D
+		check(bmat != null and bmat.vertex_color_use_as_albedo and bmat.vertex_color_is_srgb \
+				and bmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and bmat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and bmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"AmbushBubbleBurst uses unshaded translucent sRGB depth-draw-disabled StandardMaterial3D")
+		if bmat != null:
+			check(bmat.albedo_texture == null and bmat.normal_texture == null and bmat.roughness_texture == null,
+				"AmbushBubbleBurst allocates 0 extra VRAM textures")
+
+	check(bub_b != null and not bub_b.visible,
+		"AmbushBubbleBurst stays hidden when ReefEel is calm/lurking")
+
+	# Pitch shallow ReefEel upward (stressing world-aligned upward drift & y <= -0.15 m surface clamp!).
+	eel_b.rotation = Vector3(0.45, 0.7, 0.0)
+	eel_b.trigger_ambush_bubbles()
+	check(bub_b != null and bub_b.visible,
+		"trigger_ambush_bubbles() activates AmbushBubbleBurst immediately")
+	var bp0 := eel_b.get_ambush_bubble_positions()
+	check_eq(bp0.size(), 10, "get_ambush_bubble_positions() returns all 10 bubbles")
+
+	eel_b.step_vfx(0.25)
+	var bp1 := eel_b.get_ambush_bubble_positions()
+	var rose_count := 0
+	for i in 10:
+		if bp1[i].y > bp0[i].y + 0.15:
+			rose_count += 1
+	check_eq(rose_count, 10, "all 10 AmbushBubbleBurst bubbles drift cleanly upward on step_vfx(0.25)")
+
+	var max_world_bub_y := -INF
+	for _s in 6:
+		eel_b.step_vfx(0.14)
+		var bps := eel_b.get_ambush_bubble_positions()
+		for i in 10:
+			var wy_add := eel_b.global_position.y + bps[i].y
+			var wy_xf := (bub_b.global_transform * bps[i]).y
+			max_world_bub_y = maxf(max_world_bub_y, maxf(wy_add, wy_xf))
+	check(max_world_bub_y <= -0.15 + 0.001,
+		"all AmbushBubbleBurst bubbles stay strictly submerged y <= -0.15 m (max_y=%.3f)" % max_world_bub_y)
+
+	# Step past 1.15 s lifetime -> decays cleanly to hidden!
+	eel_b.step_vfx(0.20)
+	check(bub_b != null and not bub_b.visible,
+		"AmbushBubbleBurst decays cleanly to hidden after 1.15 s lifetime")
+
+	print("    Q18B polish: SaleGoldHalo=%d tris (%.2f->%.2f->0.0), ClawTelegraphHalo=%d tris (%.2f->%.2f->%.2f), EelEyeGlint=%d tris (%.2f->%.2f->%.2f), AmbushBubbles=10x%d tris (max_y=%.2f)" % [
+		sale_halo_tris, sale_peak_e, sale_mid_e,
+		crab_halo_tris, c_early_e, c_mid_e, c_late_e,
+		eel_glint_tris, e_day, e_night, e_lunge,
+		eel_bub_tris, max_world_bub_y,
+	])
+
+	# 5. Full Vulkan-safe zero-leak teardown releases ALL static caches cleanly to null!
+	await _end()
+	Game.profile.data = saved_profile
+	check_eq(MerchantStall._active_stalls, 0, "MerchantStall._active_stalls == 0 after Q18B teardown")
+	check(MerchantStall._doubloon_mesh == null and MerchantStall._doubloon_mat == null \
+			and MerchantStall._sale_halo_mesh == null,
+		"MerchantStall releases all static caches including _sale_halo_mesh (0 leaks)")
+	check_eq(IslandCrab._active_crabs, 0, "IslandCrab._active_crabs == 0 after Q18B teardown")
+	check(IslandCrab._telegraph_halo_mesh == null,
+		"IslandCrab releases _telegraph_halo_mesh cleanly (0 leaks)")
+	check_eq(ReefEel._active_eels, 0, "ReefEel._active_eels == 0 after Q18B teardown")
+	check(ReefEel._eye_glint_mesh == null and ReefEel._bubble_mesh == null \
+			and ReefEel._bubble_mat == null,
+		"ReefEel releases all static caches including _eye_glint_mesh, _bubble_mesh & _bubble_mat (0 leaks)")
+
+
+

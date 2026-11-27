@@ -48,6 +48,21 @@ const COL_LEG_TIP := Color(0.32, 0.14, 0.09)
 const COL_EYE_STALK := Color(0.88, 0.38, 0.16)
 const COL_EYE_BLACK := Color(0.06, 0.06, 0.08)
 
+# Crisp 4-point combat-telegraph danger glint constants (zero extra texture VRAM).
+const TELEGRAPH_HALO_POS := Vector3(0.0, 0.56, -0.34)
+const TELEGRAPH_HALO_VISIBILITY_RANGE := 75.0
+const TELEGRAPH_SCALE_MIN := 0.28
+const TELEGRAPH_SCALE_MAX := 0.62
+const TELEGRAPH_ENERGY_MIN := 0.65
+const TELEGRAPH_ENERGY_MAX := 1.55
+const COL_TELEGRAPH_CORE := Color(1.00, 0.96, 0.72, 1.0)
+const COL_TELEGRAPH_MID := Color(1.00, 0.52, 0.14, 1.0)
+const COL_TELEGRAPH_WAIST := Color(0.96, 0.24, 0.10, 1.0)
+const COL_TELEGRAPH_TIP := Color(0.00, 0.00, 0.00, 1.0)
+
+static var _active_crabs: int = 0
+static var _telegraph_halo_mesh: ArrayMesh = null
+
 @export var max_health: float = 45.0
 @export var faction: StringName = &"beast"
 @export var guard_origin: Vector3 = Vector3.ZERO
@@ -75,6 +90,9 @@ var _eye_r: Node3D = null
 var _legs: Array[Dictionary] = []
 var _shell_mat: StandardMaterial3D = null
 var _eye_mat: StandardMaterial3D = null
+var _telegraph_halo_mi: MeshInstance3D = null
+var _telegraph_halo_mat: StandardMaterial3D = null
+var _telegraph_halo_energy: float = 0.0
 
 var _state_timer: float = 0.0
 var _attack_cd: float = 0.0
@@ -91,6 +109,11 @@ var _origin_locked: bool = false
 var _rng := RandomNumberGenerator.new()
 
 
+## Release statically cached sculpted telegraph halo assets cleanly.
+static func clear_shared_cache() -> void:
+	_telegraph_halo_mesh = null
+
+
 ## Spawn a coral-armored IslandCrab anchored at `world_pos`.
 static func spawn_at(parent: Node, world_pos: Vector3, p_guard_radius: float = 12.0) -> IslandCrab:
 	var crab := IslandCrab.new()
@@ -105,8 +128,31 @@ static func spawn_at(parent: Node, world_pos: Vector3, p_guard_radius: float = 1
 
 
 func _enter_tree() -> void:
+	_active_crabs += 1
 	add_to_group(GROUP)
 	add_to_group(CRAB_GROUP)
+
+
+func _exit_tree() -> void:
+	_release_local_refs()
+	_active_crabs = maxi(0, _active_crabs - 1)
+	if _active_crabs == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+
+
+func _release_local_refs() -> void:
+	if _telegraph_halo_mi != null and is_instance_valid(_telegraph_halo_mi):
+		_telegraph_halo_mi.visible = false
+		_telegraph_halo_mi.material_override = null
+		_telegraph_halo_mi.set_mesh(null)
+	_telegraph_halo_mi = null
+	_telegraph_halo_mat = null
+	_telegraph_halo_energy = 0.0
 
 
 func _ready() -> void:
@@ -133,6 +179,7 @@ func _ready() -> void:
 
 	_build_collision()
 	_build_anatomy()
+	_update_telegraph_halo()
 
 
 # ------------------------------------------------------------------ combat API
@@ -143,6 +190,16 @@ func is_staggered() -> bool:
 
 func is_telegraphing() -> bool:
 	return state == State.TELEGRAPH
+
+
+## Return the additive 4-point ClawTelegraphHalo MeshInstance3D mounted above the raised pincers.
+func get_telegraph_halo_node() -> MeshInstance3D:
+	return _telegraph_halo_mi
+
+
+## Return current ClawTelegraphHalo additive energy (0.0 when idle/staggered/dead).
+func get_telegraph_halo_energy() -> float:
+	return _telegraph_halo_energy
 
 
 func facing() -> Vector3:
@@ -208,6 +265,7 @@ func apply_stagger(duration: float = 1.5) -> void:
 	_hit_this_lunge = false
 	velocity.x *= 0.25
 	velocity.z *= 0.25
+	_update_telegraph_halo()
 	staggered.emit(duration)
 
 
@@ -221,19 +279,21 @@ func _physics_process(delta: float) -> void:
 	if dead:
 		_death_timer += delta
 		_animate_death(delta)
+		_update_telegraph_halo()
 		if Net.is_host() and _death_timer >= DEATH_DESPAWN_DELAY:
 			queue_free()
 		return
 
 	_idle_phase += delta
 	_hit_flash = maxf(0.0, _hit_flash - delta)
-	_update_hit_flash()
 
 	if Net.is_host():
 		_tick_ai(delta)
 		_tick_motion(delta)
 
+	_update_hit_flash()
 	_animate_crab(delta)
+	_update_telegraph_halo()
 
 
 func _tick_ai(delta: float) -> void:
@@ -331,6 +391,7 @@ func _tick_ai(delta: float) -> void:
 		_state_timer = telegraph_duration
 		_lunge_dir = dir
 		_hit_this_lunge = false
+		_update_telegraph_halo()
 		attack_telegraphed.emit(self, target)
 		if Audio.has_sound(&"skeleton_rattle"):
 			Audio.play_sfx(&"skeleton_rattle", global_position + Vector3(0.0, 0.6, 0.0), -6.0, 0.16)
@@ -460,6 +521,7 @@ func _die() -> void:
 	collision_layer = 0
 	velocity = Vector3.ZERO
 	_death_timer = 0.0
+	_update_telegraph_halo()
 
 	var drop_pos := global_position + Vector3(0.0, 0.25, 0.0)
 	var drop_item := {
@@ -628,6 +690,59 @@ func _update_hit_flash() -> void:
 		_shell_mat.emission_energy_multiplier = 0.0
 
 
+func _update_telegraph_halo() -> void:
+	if _telegraph_halo_mi == null or not is_instance_valid(_telegraph_halo_mi):
+		_telegraph_halo_energy = 0.0
+		return
+
+	if dead or state == State.DEAD or state == State.STAGGERED:
+		_telegraph_halo_energy = 0.0
+		_telegraph_halo_mi.visible = false
+		if _telegraph_halo_mat != null:
+			_telegraph_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+
+	if state == State.TELEGRAPH:
+		var t := clampf(1.0 - (_state_timer / maxf(telegraph_duration, 0.05)), 0.0, 1.0)
+		var ramp := smoothstep(0.0, 1.0, t)
+		var pulse_boost := 0.07 * (0.5 + 0.5 * sin(_idle_phase * 28.0)) * (0.25 + 0.75 * t)
+		var energy := lerpf(TELEGRAPH_ENERGY_MIN, TELEGRAPH_ENERGY_MAX - 0.07, ramp) + pulse_boost
+		var halo_scale := lerpf(TELEGRAPH_SCALE_MIN, TELEGRAPH_SCALE_MAX, t)
+		var tint := Color(1.00, 0.78, 0.36).lerp(Color(1.00, 0.38, 0.16), t)
+		_telegraph_halo_energy = energy
+		_telegraph_halo_mi.visible = true
+		_telegraph_halo_mi.scale = Vector3.ONE * halo_scale
+		if _telegraph_halo_mat != null:
+			_telegraph_halo_mat.albedo_color = Color(
+				tint.r * energy,
+				tint.g * energy,
+				tint.b * energy,
+				1.0
+			)
+		return
+
+	if state == State.LUNGE:
+		var lt := clampf(_state_timer / maxf(LUNGE_DURATION, 0.05), 0.0, 1.0)
+		var energy := 0.85 * lt * lt
+		if energy > 0.01:
+			_telegraph_halo_energy = energy
+			_telegraph_halo_mi.visible = true
+			_telegraph_halo_mi.scale = Vector3.ONE * lerpf(0.22, 0.50, lt)
+			if _telegraph_halo_mat != null:
+				_telegraph_halo_mat.albedo_color = Color(
+					1.00 * energy,
+					0.34 * energy,
+					0.14 * energy,
+					1.0
+				)
+			return
+
+	_telegraph_halo_energy = 0.0
+	_telegraph_halo_mi.visible = false
+	if _telegraph_halo_mat != null:
+		_telegraph_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
 # ------------------------------------------------------------------ procedural meshes
 
 func _build_collision() -> void:
@@ -728,6 +843,103 @@ func _build_anatomy() -> void:
 	claw_r.position = Vector3(0.46, 0.46, -0.34)
 	add_child(claw_r)
 	_snap_jaw_r = claw_r.get_node_or_null(^"SnapJaw") as Node3D
+
+	# 5. Crisp 4-point amber-crimson combat telegraph star glint right above raised front pincers.
+	_build_telegraph_halo()
+
+
+func _build_telegraph_halo() -> void:
+	if _telegraph_halo_mi != null or _body_root == null:
+		return
+	_ensure_shared_assets()
+
+	_telegraph_halo_mat = StandardMaterial3D.new()
+	_telegraph_halo_mat.vertex_color_use_as_albedo = true
+	_telegraph_halo_mat.vertex_color_is_srgb = true
+	_telegraph_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_telegraph_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_telegraph_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_telegraph_halo_mat.billboard_keep_scale = true
+	_telegraph_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_telegraph_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_telegraph_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_telegraph_halo_mi = MeshInstance3D.new()
+	_telegraph_halo_mi.name = "ClawTelegraphHalo"
+	_telegraph_halo_mi.position = TELEGRAPH_HALO_POS
+	_telegraph_halo_mi.scale = Vector3.ONE * TELEGRAPH_SCALE_MIN
+	_telegraph_halo_mi.mesh = _telegraph_halo_mesh
+	_telegraph_halo_mi.material_override = _telegraph_halo_mat
+	_telegraph_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_telegraph_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_telegraph_halo_mi.visibility_range_end = TELEGRAPH_HALO_VISIBILITY_RANGE
+	_telegraph_halo_mi.extra_cull_margin = 0.8
+	_telegraph_halo_mi.visible = false
+	_telegraph_halo_energy = 0.0
+	_body_root.add_child(_telegraph_halo_mi)
+
+
+static func _ensure_shared_assets() -> void:
+	if _telegraph_halo_mesh == null:
+		_telegraph_halo_mesh = _build_telegraph_halo_mesh()
+
+
+static func _build_telegraph_halo_mesh() -> ArrayMesh:
+	# Exact 24-triangle 4-point combat-telegraph star glint ArrayMesh (zero primitives / zero VRAM).
+	# Incandescent pale-gold center -> crisp amber-crimson rays -> pure Color(0, 0, 0, 1) feathered tips.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SPOKES := 8
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var inner_pts: Array[Vector3] = []
+	var outer_pts: Array[Vector3] = []
+	var inner_cols: Array[Color] = []
+
+	for i in SPOKES:
+		var ang := float(i) / float(SPOKES) * TAU
+		var ca := cos(ang)
+		var sa := sin(ang)
+		var is_major := (i % 2 == 0)
+		var r_in := 0.14 if is_major else 0.065
+		var r_out := (0.52 if (i == 2 or i == 6) else 0.48) if is_major else 0.16
+		inner_pts.append(Vector3(ca * r_in, sa * r_in, 0.0))
+		outer_pts.append(Vector3(ca * r_out, sa * r_out, 0.0))
+		inner_cols.append(COL_TELEGRAPH_MID if is_major else COL_TELEGRAPH_WAIST)
+
+	for i in SPOKES:
+		var ni := (i + 1) % SPOKES
+		var in_a := inner_pts[i]
+		var in_b := inner_pts[ni]
+		var out_a := outer_pts[i]
+		var out_b := outer_pts[ni]
+		var col_a := inner_cols[i]
+		var col_b := inner_cols[ni]
+
+		# Inner bright star core (8 tris).
+		st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_CORE); st.add_vertex(center)
+		st.set_normal(FRONT_NORMAL); st.set_color(col_b); st.add_vertex(in_b)
+		st.set_normal(FRONT_NORMAL); st.set_color(col_a); st.add_vertex(in_a)
+
+		# Outer symmetric tapered star rays feathering cleanly to black tips (16 tris).
+		if i % 2 == 0:
+			st.set_normal(FRONT_NORMAL); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_b)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_a)
+
+			st.set_normal(FRONT_NORMAL); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(FRONT_NORMAL); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_b)
+		else:
+			st.set_normal(FRONT_NORMAL); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_b)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_a)
+
+			st.set_normal(FRONT_NORMAL); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(FRONT_NORMAL); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(FRONT_NORMAL); st.set_color(COL_TELEGRAPH_TIP); st.add_vertex(out_a)
+
+	return st.commit()
 
 
 func _build_claw_assembly(node_name: String, side_sign: float, claw_scale: float) -> Node3D:

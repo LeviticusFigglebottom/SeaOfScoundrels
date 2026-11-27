@@ -3965,3 +3965,333 @@ func test_q15a_ship_harpoon_muzzle_spark_and_magnetic_lock_glint() -> void:
 	ShipHarpoon.clear_shared_cache()
 
 
+func test_q18a_fort_battery_halos_special_cannonball_flight_halos_and_wind_ribbons_teardown() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 10.0, 0.0)
+	WindRibbons.clear_shared_cache()
+	FortBattery.clear_shared_cache()
+	Cannonball.clear_shared_cache()
+
+	# ------------------------------------------------------------------
+	# 1. WindRibbons Vulkan RD MultiMesh teardown source-guard & 0-leak lifecycle
+	# ------------------------------------------------------------------
+	var wr_src := FileAccess.get_file_as_string("res://src/ship/wind_ribbons.gd")
+	check(wr_src.length() > 100, "wind_ribbons.gd source loads cleanly for Q18A teardown guard")
+	check(not wr_src.contains(".mesh = null"),
+		"wind_ribbons.gd must NOT mutate MultiMesh .mesh = null on teardown (Godot 4.8 Vulkan RD rule)")
+	check(not wr_src.contains(".instance_count = 0"),
+		"wind_ribbons.gd must NOT mutate MultiMesh .instance_count = 0 on teardown")
+	check(wr_src.contains("_mmi.visible = false")
+		and wr_src.contains("_mmi.material_override = null")
+		and wr_src.contains("_mmi.multimesh = null"),
+		"wind_ribbons.gd tears down MultiMeshInstance3D cleanly via visible=false, material_override=null, multimesh=null")
+
+	var wr := WindRibbons.new()
+	_root.add_child(wr)
+	await physics_frames(2)
+	check(wr.get_multimesh_instance() != null and wr.get_ribbon_count() == 14,
+		"WindRibbons initializes 14 airborne ribbons cleanly")
+	wr._step_ribbons(0.1)
+	wr.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(wr), "WindRibbons frees cleanly")
+	check_eq(WindRibbons._active_instances, 0, "WindRibbons._active_instances drops to 0 on teardown")
+	check(WindRibbons._ribbon_mesh == null and WindRibbons._ribbon_shader == null,
+		"WindRibbons releases static mesh & shader caches with 0 leaks")
+
+	# ------------------------------------------------------------------
+	# 2. FortBattery 48-tri FortFuseHalo & FortMuzzleBlastHalo
+	# ------------------------------------------------------------------
+	var bat := FortBattery.new()
+	bat.enable_effects = false
+	_root.add_child(bat)
+	bat.global_position = Vector3(0.0, 2.0, 0.0)
+	await physics_frames(2)
+	bat.set_process(false)
+	bat.set_physics_process(false)
+
+	var fuse_halo := bat.get_fuse_halo_node()
+	var blast_halo := bat.get_muzzle_blast_halo_node()
+	check(fuse_halo != null and fuse_halo.name == &"FortFuseHalo",
+		"FortBattery mounts FortFuseHalo and exposes get_fuse_halo_node()")
+	check(blast_halo != null and blast_halo.name == &"FortMuzzleBlastHalo",
+		"FortBattery mounts FortMuzzleBlastHalo and exposes get_muzzle_blast_halo_node()")
+	check(fuse_halo.mesh == blast_halo.mesh and fuse_halo.mesh == FortBattery._halo_mesh,
+		"FortFuseHalo and FortMuzzleBlastHalo share static _halo_mesh")
+	check(fuse_halo.position.is_equal_approx(bat._fuse_orb.position),
+		"FortFuseHalo is positioned directly at _fuse_orb")
+	check(blast_halo.position.z < FortBattery.MUZZLE_TIP_Z,
+		"FortMuzzleBlastHalo is positioned right at the cannon muzzle mouth")
+	check(not fuse_halo.visible and is_zero_approx(bat.get_fuse_halo_energy()),
+		"FortFuseHalo starts hidden with 0.0 energy when idle")
+	check(not blast_halo.visible and is_zero_approx(bat.get_muzzle_blast_energy()),
+		"FortMuzzleBlastHalo starts hidden with 0.0 energy when idle")
+
+	var fort_halo_tris := 0
+	for h_spec: Array in [[fuse_halo, "FortFuseHalo"], [blast_halo, "FortMuzzleBlastHalo"]]:
+		var hmi := h_spec[0] as MeshInstance3D
+		var hlbl := String(h_spec[1])
+		check(hmi.mesh is ArrayMesh and not (hmi.mesh is PrimitiveMesh),
+			"%s uses zero-primitive ArrayMesh" % hlbl)
+		check_eq(hmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadow casting" % hlbl)
+		check_eq(hmi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"%s disables GI" % hlbl)
+		check_near(hmi.visibility_range_end, 420.0, 0.01,
+			"%s sets visibility_range_end == 420.0 m" % hlbl)
+		var ham := hmi.mesh as ArrayMesh
+		var harr := ham.surface_get_arrays(0)
+		var hverts: PackedVector3Array = harr[Mesh.ARRAY_VERTEX]
+		var hnorms: PackedVector3Array = harr[Mesh.ARRAY_NORMAL]
+		var hcols: PackedColorArray = harr[Mesh.ARRAY_COLOR]
+		var htris := floori(float(hverts.size()) / 3.0)
+		check_eq(htris, 48, "%s has exact 48 triangles (16 radial wedges, got %d)" % [hlbl, htris])
+		fort_halo_tris = htris
+		var bad_n := 0
+		for nv: Vector3 in hnorms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				bad_n += 1
+		check_eq(bad_n, 0, "%s assigns finite unit (0, 0, 1) normal to every vertex" % hlbl)
+		var black_rim_verts := 0
+		for cv: Color in hcols:
+			if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+				black_rim_verts += 1
+		check(black_rim_verts >= 32, "%s feathers outer rim cleanly to pure Color(0, 0, 0, 1)" % hlbl)
+		var hmat := hmi.material_override as StandardMaterial3D
+		check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb
+			and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and hmat.billboard_keep_scale
+			and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and hmat.albedo_texture == null and hmat.emission_texture == null and hmat.normal_texture == null,
+			"%s uses zero-VRAM sRGB unshaded additive scale-preserving billboard StandardMaterial3D" % hlbl)
+
+	# 2a. Fuse telegraph escalation: scale 0.35 -> 0.85 m, energy 0.55 -> 1.55 in incandescent amber-orange!
+	bat._begin_telegraph()
+	check(bat.is_telegraphing() and fuse_halo.visible,
+		"FortFuseHalo activates immediately when firing fuse telegraph begins")
+	var fuse_e0 := bat.get_fuse_halo_energy()
+	var fuse_s0 := fuse_halo.scale.x
+	check_near(fuse_e0, 0.55, 0.04, "FortFuseHalo initial telegraph energy ~0.55 (got %.3f)" % fuse_e0)
+	check_near(fuse_s0, 0.35, 0.03, "FortFuseHalo initial telegraph scale ~0.35 m (got %.3f)" % fuse_s0)
+	var fuse_mat := fuse_halo.material_override as StandardMaterial3D
+	check(fuse_mat.albedo_color.r > fuse_mat.albedo_color.g and fuse_mat.albedo_color.g > fuse_mat.albedo_color.b,
+		"FortFuseHalo glows incandescent amber-orange")
+
+	bat._telegraph_timer = 0.02
+	bat.step_vfx(0.05)
+	var fuse_e1 := bat.get_fuse_halo_energy()
+	var fuse_s1 := fuse_halo.scale.x
+	check(fuse_e1 > fuse_e0 + 0.85 and fuse_e1 >= 1.45 and fuse_e1 <= 1.56,
+		"FortFuseHalo intensifies rapidly during fuse telegraph (%.2f -> %.2f)" % [fuse_e0, fuse_e1])
+	check(fuse_s1 > fuse_s0 + 0.42 and fuse_s1 >= 0.78 and fuse_s1 <= 0.86,
+		"FortFuseHalo swells dramatically during fuse telegraph (%.2f -> %.2f m)" % [fuse_s0, fuse_s1])
+
+	# 2b. Cannon fire blast flare (1.15 -> 2.40 m, 1.85 -> 0.0 quadratic decay over 0.24 s)!
+	var blast_mat := blast_halo.material_override as StandardMaterial3D
+	var fort_ball := bat.fire_battery(null)
+	check(fort_ball != null and is_instance_valid(fort_ball), "FortBattery.fire_battery() launches FortCannonball")
+	if fort_ball != null:
+		fort_ball.set_physics_process(false)
+	check(not fuse_halo.visible and is_zero_approx(bat.get_fuse_halo_energy()),
+		"firing cannon cancels FortFuseHalo cleanly")
+	check(blast_halo.visible, "firing cannon immediately erupts FortMuzzleBlastHalo")
+	var blast_e0 := bat.get_muzzle_blast_energy()
+	var blast_s0 := blast_halo.scale.x
+	check_near(blast_e0, 1.85, 0.02, "FortMuzzleBlastHalo erupts at peak 1.85 energy (got %.3f)" % blast_e0)
+	check_near(blast_s0, 1.15, 0.02, "FortMuzzleBlastHalo erupts at 1.15 m scale (got %.3f)" % blast_s0)
+	var blue_ratio_t0 := blast_mat.albedo_color.b / maxf(blast_mat.albedo_color.r, 0.001)
+
+	bat.step_vfx(0.06)
+	var blast_e1 := bat.get_muzzle_blast_energy()
+	var blast_s1 := blast_halo.scale.x
+	check(blast_halo.visible, "FortMuzzleBlastHalo stays visible at 0.06 s")
+	check_near(blast_e1, 1.85 * 0.75 * 0.75, 0.03,
+		"FortMuzzleBlastHalo follows quadratic energy decay at 0.06 s (got %.3f)" % blast_e1)
+	check(blast_s1 > blast_s0 + 0.35, "FortMuzzleBlastHalo expands rapidly at 0.06 s (%.2f -> %.2f m)" % [blast_s0, blast_s1])
+
+	bat.step_vfx(0.06)
+	var blast_e2 := bat.get_muzzle_blast_energy()
+	var blast_s2 := blast_halo.scale.x
+	var blue_ratio_t2 := blast_mat.albedo_color.b / maxf(blast_mat.albedo_color.r, 0.001)
+	check(blast_halo.visible, "FortMuzzleBlastHalo stays visible at 0.12 s")
+	check_near(blast_e2, 1.85 * 0.50 * 0.50, 0.03,
+		"FortMuzzleBlastHalo follows quadratic energy decay at 0.12 s (got %.3f)" % blast_e2)
+	check(blast_s2 > blast_s1 + 0.25, "FortMuzzleBlastHalo continues expanding toward 2.40 m (%.2f m)" % blast_s2)
+	check(blue_ratio_t2 < blue_ratio_t0,
+		"FortMuzzleBlastHalo cools from blazing white-gold toward rich amber during decay")
+
+	bat.step_vfx(0.06)
+	var blast_e3 := bat.get_muzzle_blast_energy()
+	var blast_s3 := blast_halo.scale.x
+	check(blast_halo.visible, "FortMuzzleBlastHalo stays visible at 0.18 s before 0.24 s cutoff")
+	check_near(blast_e3, 1.85 * 0.25 * 0.25, 0.02,
+		"FortMuzzleBlastHalo quadratic decay at 0.18 s (got %.3f)" % blast_e3)
+	check(blast_s3 > 2.25 and blast_s3 <= 2.41,
+		"FortMuzzleBlastHalo nears 2.40 m max blast diameter (got %.2f m)" % blast_s3)
+
+	bat.step_vfx(0.06)
+	check(not blast_halo.visible and is_zero_approx(bat.get_muzzle_blast_energy()),
+		"FortMuzzleBlastHalo decays cleanly back to hidden at 0.24 s")
+	check(blast_mat.albedo_color.r <= 0.001 and blast_mat.albedo_color.g <= 0.001 and blast_mat.albedo_color.b <= 0.001,
+		"FortMuzzleBlastHalo zeroes additive albedo at 0.24 s")
+
+	# Silencing/destroying a battery while telegraphing immediately hides FortFuseHalo!
+	bat._begin_telegraph()
+	check(fuse_halo.visible, "re-ignited telegraph shows FortFuseHalo before lethal hit")
+	bat.take_damage(bat.max_health)
+	check(bat.destroyed and not fuse_halo.visible and is_zero_approx(bat.get_fuse_halo_energy()),
+		"destroyed FortBattery hides FortFuseHalo cleanly")
+
+	if fort_ball != null and is_instance_valid(fort_ball):
+		fort_ball.queue_free()
+	bat.queue_free()
+	await physics_frames(2)
+	check_eq(FortBattery._active_batteries, 0, "FortBattery._active_batteries drops to 0 on Q18A teardown")
+	check(FortBattery._halo_mesh == null and FortBattery._fuse_spark_mesh == null
+		and FortBattery._coastal_shot_mesh == null,
+		"FortBattery auto-releases static _halo_mesh & caches cleanly (0 leaks)")
+
+	# ------------------------------------------------------------------
+	# 3. Cannonball 48-tri OrdnanceFlightHalo across plain & special ammo
+	# ------------------------------------------------------------------
+	var ball_halo_tris := 0
+	for plain_style: StringName in [&"round", &"iron", &"chainshot"]:
+		var cb := Cannonball.new()
+		cb.enable_effects = false
+		cb.ordnance_style = plain_style
+		_root.add_child(cb)
+		cb.global_position = Vector3(0.0, 60.0, 0.0)
+		cb.set_physics_process(false)
+		await physics_frames(1)
+		var fhalo := cb.get_flight_halo_node()
+		check(fhalo != null and fhalo.name == &"OrdnanceFlightHalo",
+			"Cannonball %s mounts OrdnanceFlightHalo" % String(plain_style))
+		check(fhalo.mesh is ArrayMesh and not (fhalo.mesh is PrimitiveMesh),
+			"Cannonball %s OrdnanceFlightHalo uses zero-primitive ArrayMesh" % String(plain_style))
+		var fam := fhalo.mesh as ArrayMesh
+		var farr := fam.surface_get_arrays(0)
+		var fverts: PackedVector3Array = farr[Mesh.ARRAY_VERTEX]
+		var fnorms: PackedVector3Array = farr[Mesh.ARRAY_NORMAL]
+		var fcols: PackedColorArray = farr[Mesh.ARRAY_COLOR]
+		var ftris := floori(float(fverts.size()) / 3.0)
+		check_eq(ftris, 48, "Cannonball %s OrdnanceFlightHalo has exact 48 triangles (got %d)" % [String(plain_style), ftris])
+		ball_halo_tris = ftris
+		var bad_fn := 0
+		for nv: Vector3 in fnorms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				bad_fn += 1
+		check_eq(bad_fn, 0, "Cannonball %s OrdnanceFlightHalo has finite unit (0,0,1) normals" % String(plain_style))
+		var black_rim := 0
+		for cv: Color in fcols:
+			if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+				black_rim += 1
+		check(black_rim >= 32, "Cannonball %s OrdnanceFlightHalo rim feathers to pure black" % String(plain_style))
+		check_eq(fhalo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"OrdnanceFlightHalo disables shadows")
+		check_eq(fhalo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"OrdnanceFlightHalo disables GI")
+		check_near(fhalo.visibility_range_end, 450.0, 0.01,
+			"OrdnanceFlightHalo sets visibility_range_end == 450.0 m")
+		var fmat := fhalo.material_override as StandardMaterial3D
+		check(fmat != null and fmat.vertex_color_use_as_albedo and fmat.vertex_color_is_srgb
+			and fmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and fmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and fmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and fmat.billboard_keep_scale
+			and fmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and fmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and fmat.albedo_texture == null,
+			"OrdnanceFlightHalo uses zero-VRAM sRGB unshaded additive scale-preserving billboard StandardMaterial3D")
+		check(not fhalo.visible and is_zero_approx(cb.get_flight_halo_energy()),
+			"plain ordnance %s strictly hides OrdnanceFlightHalo with 0.0 energy" % String(plain_style))
+		cb.queue_free()
+	await physics_frames(2)
+
+	var special_specs: Array[Array] = [
+		[&"firebomb", 0.68, 1.35],
+		[&"flare", 0.76, 1.45],
+		[&"anchorball", 0.72, 1.35],
+		[&"ballastball", 0.72, 1.35],
+	]
+	var hue_vecs: Dictionary = {}
+	var special_energies: Dictionary = {}
+	for s_spec: Array in special_specs:
+		var s_style: StringName = s_spec[0]
+		var exp_sc: float = float(s_spec[1])
+		var exp_en: float = float(s_spec[2])
+		var cb := Cannonball.new()
+		cb.enable_effects = false
+		cb.ordnance_style = s_style
+		_root.add_child(cb)
+		cb.global_position = Vector3(0.0, 60.0, 0.0)
+		cb.set_physics_process(false)
+		await physics_frames(1)
+
+		var fhalo := cb.get_flight_halo_node()
+		var fmat := fhalo.material_override as StandardMaterial3D
+		var en := cb.get_flight_halo_energy()
+		special_energies[s_style] = en
+		check(fhalo != null and fhalo.visible, "special ammo %s displays active OrdnanceFlightHalo" % String(s_style))
+		check_near(en, exp_en, 0.05, "special ammo %s flight halo energy ~%.2f (got %.3f)" % [String(s_style), exp_en, en])
+		check_near(fhalo.scale.x, exp_sc, 0.05,
+			"special ammo %s flight halo scale ~%.2f m (got %.3f m)" % [String(s_style), exp_sc, fhalo.scale.x])
+		var ac := fmat.albedo_color
+		var hv := Vector3(ac.r, ac.g, ac.b).normalized()
+		hue_vecs[s_style] = hv
+
+		match s_style:
+			&"firebomb":
+				check(ac.r > ac.g and ac.g > ac.b and ac.b < ac.r * 0.25,
+					"firebomb OrdnanceFlightHalo glows blazing molten orange-gold")
+				# Step mid-flight to confirm crackling pulse modulates firebomb halo!
+				var fb_e_start := en
+				cb._physics_process(0.05)
+				check(not is_equal_approx(cb.get_flight_halo_energy(), fb_e_start),
+					"firebomb OrdnanceFlightHalo crackles dynamically during flight")
+			&"flare":
+				check(ac.r > ac.b and ac.b > ac.g and ac.r > ac.g * 2.5,
+					"flare OrdnanceFlightHalo glows radiant crimson-rose")
+			&"anchorball":
+				check(ac.g > ac.b and ac.b > ac.r and ac.g > ac.r * 3.0,
+					"anchorball OrdnanceFlightHalo glows spectral emerald-jade")
+			&"ballastball":
+				check(ac.b > ac.r and ac.r > ac.g and ac.b > ac.g * 2.2,
+					"ballastball OrdnanceFlightHalo glows abyssal violet-blue")
+
+		# Impact immediately hides OrdnanceFlightHalo and zeroes energy!
+		cb._mark_impacted(cb.global_position, null, 0.2)
+		check(not fhalo.visible and is_zero_approx(cb.get_flight_halo_energy()),
+			"special ammo %s hides OrdnanceFlightHalo cleanly on impact" % String(s_style))
+		cb.queue_free()
+
+	# Confirm all 4 special ordnance hues are pairwise distinct!
+	var style_keys: Array[StringName] = [&"firebomb", &"flare", &"anchorball", &"ballastball"]
+	for i in style_keys.size():
+		for j in range(i + 1, style_keys.size()):
+			var vi := hue_vecs[style_keys[i]] as Vector3
+			var vj := hue_vecs[style_keys[j]] as Vector3
+			var dist_ij := vi.distance_to(vj)
+			check(dist_ij >= 0.25,
+				"special flight halo hues %s vs %s are clearly distinct (rgb_dist=%.3f)" % [
+					String(style_keys[i]), String(style_keys[j]), dist_ij])
+
+	print("    Q18A metrics: fort_halos=%d tris (fuse %.2f->%.2f e / %.2f->%.2f m, blast %.2f->0.00 e / %.2f->%.2f m) | ball_halo=%d tris (firebomb=%.2f flare=%.2f anchor=%.2f ballast=%.2f)" % [
+		fort_halo_tris, fuse_e0, fuse_e1, fuse_s0, fuse_s1, blast_e0, blast_s0, blast_s3,
+		ball_halo_tris, float(special_energies[&"firebomb"]), float(special_energies[&"flare"]),
+		float(special_energies[&"anchorball"]), float(special_energies[&"ballastball"])])
+
+	# 4. Clean 0-leak teardown of all Cannonball, FortBattery, and WindRibbons static caches!
+	await _end()
+	check_eq(Cannonball._active_cannonballs, 0, "Cannonball._active_cannonballs returns to 0 on Q18A teardown")
+	check(Cannonball._flight_halo_mesh == null and Cannonball._ball_meshes.is_empty(),
+		"Cannonball auto-releases static _flight_halo_mesh & ordnance caches cleanly (0 leaks)")
+	check_eq(FortBattery._active_batteries, 0, "FortBattery._active_batteries remains 0 after Q18A teardown")
+	check(FortBattery._halo_mesh == null, "FortBattery._halo_mesh remains released (0 leaks)")
+	check_eq(WindRibbons._active_instances, 0, "WindRibbons._active_instances remains 0 after Q18A teardown")
+	check(WindRibbons._ribbon_mesh == null and WindRibbons._ribbon_shader == null,
+		"WindRibbons caches remain released (0 leaks)")

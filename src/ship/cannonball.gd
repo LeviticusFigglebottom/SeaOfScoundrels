@@ -23,6 +23,22 @@ const CHAINSHOT_SAIL_DAMAGE := 14.0
 const FIREBOMB_SPLASH_DAMAGE := 12.0
 const FIREBOMB_SPLASH_RADIUS := 4.2
 const CURSED_BREACH_RADIUS := 0.22
+const FLIGHT_HALO_VISIBILITY_RANGE := 450.0
+const COL_FLIGHT_HALO_CORE := Color(1.00, 1.00, 0.98, 1.0)
+const COL_FLIGHT_HALO_MID := Color(0.46, 0.44, 0.40, 1.0)
+const COL_FLIGHT_HALO_RIM := Color(0.00, 0.00, 0.00, 1.0)
+const FLIGHT_HALO_FIREBOMB_COLOR := Color(1.00, 0.56, 0.14)
+const FLIGHT_HALO_FLARE_COLOR := Color(1.00, 0.28, 0.34)
+const FLIGHT_HALO_ANCHORBALL_COLOR := Color(0.24, 0.98, 0.62)
+const FLIGHT_HALO_BALLASTBALL_COLOR := Color(0.62, 0.36, 1.00)
+const FLIGHT_HALO_FIREBOMB_SCALE := 0.68
+const FLIGHT_HALO_FLARE_SCALE := 0.76
+const FLIGHT_HALO_ANCHORBALL_SCALE := 0.72
+const FLIGHT_HALO_BALLASTBALL_SCALE := 0.72
+const FLIGHT_HALO_FIREBOMB_ENERGY := 1.35
+const FLIGHT_HALO_FLARE_ENERGY := 1.45
+const FLIGHT_HALO_ANCHORBALL_ENERGY := 1.35
+const FLIGHT_HALO_BALLASTBALL_ENERGY := 1.35
 
 ## World-space velocity (m/s).
 var velocity: Vector3 = Vector3.ZERO
@@ -55,6 +71,9 @@ var curse_light: OmniLight3D = null
 var _ball_mesh: MeshInstance3D = null
 var _ball_mat: StandardMaterial3D = null
 var _core_glow_mat: StandardMaterial3D = null
+var _flight_halo_mi: MeshInstance3D = null
+var _flight_halo_mat: StandardMaterial3D = null
+var _flight_halo_energy: float = 0.0
 var _resolved_style: StringName = &"iron"
 var _base_muzzle_emission: float = 0.35
 var _age: float = 0.0
@@ -72,6 +91,7 @@ static var _ball_meshes: Dictionary = {}
 static var _firebomb_mesh: ArrayMesh = null
 static var _anchorball_mesh: ArrayMesh = null
 static var _ballastball_mesh: ArrayMesh = null
+static var _flight_halo_mesh: ArrayMesh = null
 static var _splinter_mesh: ArrayMesh = null
 static var _splinter_mat: StandardMaterial3D = null
 static var _foam_puff_tex: ImageTexture = null
@@ -87,6 +107,7 @@ static func clear_shared_cache() -> void:
 	_firebomb_mesh = null
 	_anchorball_mesh = null
 	_ballastball_mesh = null
+	_flight_halo_mesh = null
 	_splinter_mesh = null
 	_splinter_mat = null
 	_foam_puff_tex = null
@@ -97,6 +118,16 @@ static func clear_shared_cache() -> void:
 ## Return the resolved ordnance variant (&"iron", &"heavy", &"swivel", &"chainshot", &"firebomb", &"anchorball", &"ballastball", or &"flare").
 func get_resolved_ordnance_style() -> StringName:
 	return _resolved_style
+
+
+## Return the zero-VRAM additive OrdnanceFlightHalo MeshInstance3D mounted on this projectile.
+func get_flight_halo_node() -> MeshInstance3D:
+	return _flight_halo_mi
+
+
+## Return current OrdnanceFlightHalo additive glow energy (0.0 for plain iron/chainshot or after impact).
+func get_flight_halo_energy() -> float:
+	return _flight_halo_energy
 
 
 func _enter_tree() -> void:
@@ -123,6 +154,13 @@ func _exit_tree() -> void:
 	_ball_mesh = null
 	_ball_mat = null
 	_core_glow_mat = null
+	if _flight_halo_mi != null and is_instance_valid(_flight_halo_mi):
+		_flight_halo_mi.visible = false
+		_flight_halo_mi.material_override = null
+		_flight_halo_mi.mesh = null
+	_flight_halo_mi = null
+	_flight_halo_mat = null
+	_flight_halo_energy = 0.0
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.visible = false
 	flare_light = null
@@ -393,6 +431,18 @@ func _build_visuals() -> void:
 
 	add_child(_ball_mesh)
 
+	_flight_halo_mat = _make_flight_halo_material()
+	_flight_halo_mi = MeshInstance3D.new()
+	_flight_halo_mi.name = "OrdnanceFlightHalo"
+	_flight_halo_mi.mesh = _get_flight_halo_mesh()
+	_flight_halo_mi.material_override = _flight_halo_mat
+	_flight_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_flight_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_flight_halo_mi.visibility_range_end = FLIGHT_HALO_VISIBILITY_RANGE
+	_flight_halo_mi.extra_cull_margin = 1.5
+	add_child(_flight_halo_mi)
+	_update_flight_halo(1.0)
+
 	if ClassDB.class_exists(&"Trail3D"):
 		var t_obj: Variant = ClassDB.instantiate(&"Trail3D")
 		if t_obj is Node3D:
@@ -489,12 +539,14 @@ func _physics_process(delta: float) -> void:
 			_ball_mat.emission_energy_multiplier = _base_muzzle_emission * burn_env
 		if _core_glow_mat != null:
 			_core_glow_mat.emission_energy_multiplier = 4.2 * burn_env * pulse
+		_update_flight_halo(burn_env)
 	elif _resolved_style == &"firebomb":
 		var flick := 0.86 + 0.14 * sin(_age * 24.0) * cos(_age * 13.0)
 		if firebomb_light != null and is_instance_valid(firebomb_light):
 			firebomb_light.light_energy = 2.6 * flick
 		if _core_glow_mat != null:
 			_core_glow_mat.emission_energy_multiplier = 3.8 * flick
+		_update_flight_halo(1.0)
 		velocity.y -= GRAVITY * delta
 		velocity *= maxf(0.0, 1.0 - drag * delta)
 	elif _resolved_style == &"anchorball" or _resolved_style == &"ballastball":
@@ -505,6 +557,7 @@ func _physics_process(delta: float) -> void:
 			_ball_mat.emission_energy_multiplier = _base_muzzle_emission * (0.88 + 0.12 * sin(_age * 11.0))
 		if _core_glow_mat != null:
 			_core_glow_mat.emission_energy_multiplier = 3.6 * curse_pulse
+		_update_flight_halo(1.0)
 		velocity.y -= GRAVITY * delta
 		velocity *= maxf(0.0, 1.0 - drag * delta)
 	else:
@@ -829,6 +882,7 @@ func _mark_impacted(hit_pos: Vector3, target: Node, cleanup_delay: float = 0.5) 
 	_cleanup_timer = cleanup_delay
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
+	_hide_flight_halo()
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.light_energy = 0.0
 		flare_light.visible = false
@@ -848,6 +902,7 @@ func _finish_without_impact() -> void:
 	_cleanup_timer = 0.1
 	if _ball_mesh != null:
 		_ball_mesh.visible = false
+	_hide_flight_halo()
 	if flare_light != null and is_instance_valid(flare_light):
 		flare_light.light_energy = 0.0
 		flare_light.visible = false
@@ -859,6 +914,62 @@ func _finish_without_impact() -> void:
 		curse_light.visible = false
 	if trail != null:
 		trail.set(&"emitting", false)
+
+
+func _update_flight_halo(burn_env: float = 1.0) -> void:
+	if _flight_halo_mi == null or not is_instance_valid(_flight_halo_mi) or _impacted:
+		_hide_flight_halo()
+		return
+	match _resolved_style:
+		&"firebomb":
+			var crackle := 1.0 + 0.12 * sin(_age * 24.0) * cos(_age * 13.0)
+			var sc_pulse := 1.0 + 0.08 * sin(_age * 31.0)
+			_apply_flight_halo_state(FLIGHT_HALO_FIREBOMB_COLOR,
+				FLIGHT_HALO_FIREBOMB_SCALE * sc_pulse,
+				FLIGHT_HALO_FIREBOMB_ENERGY * crackle)
+		&"flare":
+			var pulse := 1.0 + 0.07 * sin(_age * 19.0)
+			var env := clampf(burn_env, 0.0, 1.0)
+			if env <= 0.001:
+				_hide_flight_halo()
+			else:
+				_apply_flight_halo_state(FLIGHT_HALO_FLARE_COLOR,
+					FLIGHT_HALO_FLARE_SCALE * lerpf(0.65, 1.0, env),
+					FLIGHT_HALO_FLARE_ENERGY * env * pulse)
+		&"anchorball":
+			var pulse := 1.0 + 0.10 * sin(_age * 16.0)
+			_apply_flight_halo_state(FLIGHT_HALO_ANCHORBALL_COLOR,
+				FLIGHT_HALO_ANCHORBALL_SCALE * (0.96 + 0.04 * cos(_age * 14.0)),
+				FLIGHT_HALO_ANCHORBALL_ENERGY * pulse)
+		&"ballastball":
+			var pulse := 1.0 + 0.10 * sin(_age * 16.0)
+			_apply_flight_halo_state(FLIGHT_HALO_BALLASTBALL_COLOR,
+				FLIGHT_HALO_BALLASTBALL_SCALE * (0.96 + 0.04 * cos(_age * 14.0)),
+				FLIGHT_HALO_BALLASTBALL_ENERGY * pulse)
+		_:
+			_hide_flight_halo()
+
+
+func _apply_flight_halo_state(tint: Color, scale_m: float, energy: float) -> void:
+	_flight_halo_energy = maxf(0.0, energy)
+	if _flight_halo_mi != null and is_instance_valid(_flight_halo_mi):
+		_flight_halo_mi.visible = _flight_halo_energy > 0.001
+		_flight_halo_mi.scale = Vector3.ONE * scale_m
+	if _flight_halo_mat != null:
+		_flight_halo_mat.albedo_color = Color(
+			tint.r * _flight_halo_energy,
+			tint.g * _flight_halo_energy,
+			tint.b * _flight_halo_energy,
+			1.0
+		)
+
+
+func _hide_flight_halo() -> void:
+	_flight_halo_energy = 0.0
+	if _flight_halo_mi != null and is_instance_valid(_flight_halo_mi):
+		_flight_halo_mi.visible = false
+	if _flight_halo_mat != null:
+		_flight_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 
 
 static func _find_ship(node: Node) -> Node3D:
@@ -2167,3 +2278,71 @@ static func _emit_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector
 	st.set_smooth_group(-1)
 	st.set_color(cc)
 	st.add_vertex(c)
+
+
+static func _make_flight_halo_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
+
+
+static func _get_flight_halo_mesh() -> ArrayMesh:
+	if _flight_halo_mesh != null:
+		return _flight_halo_mesh
+	# Exact 48-tri 16-wedge radial-gradient billboard disc (diameter 1.0 m -> scale = world meters)
+	# grading incandescent core -> softly feathered mid -> pure Color(0, 0, 0, 1) black rim
+	# with exact finite unit (0, 0, 1) normals for zero box/circle edge under additive blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner incandescent core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered skirt quad fading smoothly to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_FLIGHT_HALO_RIM)
+		st.add_vertex(o0)
+	_flight_halo_mesh = st.commit()
+	return _flight_halo_mesh
+

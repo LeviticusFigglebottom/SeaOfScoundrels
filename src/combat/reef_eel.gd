@@ -36,6 +36,29 @@ const COL_GULLET := Color(0.58, 0.14, 0.16)
 const COL_FANG_IVORY := Color(0.96, 0.92, 0.80)
 const COL_EYE_AMBER := Color(1.0, 0.76, 0.14)
 
+# Bioluminescent EelEyeGlint & AmbushBubbleBurst VFX constants (zero extra texture VRAM).
+const EYE_GLINT_POS := Vector3(0.0, 0.12, -0.36)
+const EYE_GLINT_VISIBILITY_RANGE := 70.0
+const EYE_GLINT_DAY_ENERGY := 0.28
+const EYE_GLINT_NIGHT_ENERGY := 0.65
+const EYE_GLINT_LUNGE_ENERGY := 1.35
+const COL_EYE_GLINT_CORE := Color(0.86, 1.00, 0.34, 1.0)
+const COL_EYE_GLINT_MID := Color(0.14, 0.72, 0.36, 1.0)
+const COL_EYE_GLINT_RIM := Color(0.00, 0.00, 0.00, 1.0)
+
+const AMBUSH_BUBBLE_COUNT := 10
+const AMBUSH_BUBBLE_LIFETIME := 1.15
+const AMBUSH_BUBBLE_VISIBILITY_RANGE := 70.0
+const AMBUSH_BUBBLE_SURFACE_MARGIN := 0.15
+const COL_BUBBLE_TOP := Color(0.95, 1.00, 0.99, 1.0)
+const COL_BUBBLE_MID := Color(0.70, 0.96, 0.94, 1.0)
+const COL_BUBBLE_BOT := Color(0.42, 0.86, 0.88, 1.0)
+
+static var _active_eels: int = 0
+static var _eye_glint_mesh: ArrayMesh = null
+static var _bubble_mesh: ArrayMesh = null
+static var _bubble_mat: StandardMaterial3D = null
+
 @export var max_health: float = 35.0
 @export var faction: StringName = &"beast"
 @export var lair_origin: Vector3 = Vector3.ZERO
@@ -59,6 +82,20 @@ var lower_jaw: Node3D = null
 var _hitbox: EelHitbox = null
 var _skin_mat: StandardMaterial3D = null
 var _eye_mat: StandardMaterial3D = null
+var _eye_glint_mi: MeshInstance3D = null
+var _eye_glint_mat: StandardMaterial3D = null
+var _eye_glint_energy: float = 0.0
+var _bubbles_mmi: MultiMeshInstance3D = null
+var _bubble_burst_elapsed: float = -1.0
+
+# Preallocated per-bubble buffers (zero steady-state heap allocations during ambush bursts).
+var _bubble_origin: PackedVector3Array = PackedVector3Array()
+var _bubble_pos: PackedVector3Array = PackedVector3Array()
+var _bubble_rise_speed: PackedFloat32Array = PackedFloat32Array()
+var _bubble_drift_phase: PackedFloat32Array = PackedFloat32Array()
+var _bubble_drift_rad: PackedFloat32Array = PackedFloat32Array()
+var _bubble_drift_freq: PackedFloat32Array = PackedFloat32Array()
+var _bubble_scale: PackedFloat32Array = PackedFloat32Array()
 
 var _swim_phase: float = 0.0
 var _clock: float = 0.0
@@ -70,6 +107,13 @@ var _hit_flash: float = 0.0
 var _death_timer: float = 0.0
 var _origin_locked: bool = false
 var _rng := RandomNumberGenerator.new()
+
+
+## Release all statically cached ReefEel VFX meshes and materials cleanly.
+static func clear_shared_cache() -> void:
+	_eye_glint_mesh = null
+	_bubble_mesh = null
+	_bubble_mat = null
 
 
 ## Hittable physics proxy forwarding ranged/cannonball damage straight to its ReefEel.
@@ -107,8 +151,37 @@ static func spawn_at(parent: Node, world_pos: Vector3, p_lair_radius: float = 18
 
 
 func _enter_tree() -> void:
+	_active_eels += 1
 	add_to_group(GROUP)
 	add_to_group(EEL_GROUP)
+
+
+func _exit_tree() -> void:
+	_release_local_refs()
+	_active_eels = maxi(0, _active_eels - 1)
+	if _active_eels == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+
+
+func _release_local_refs() -> void:
+	if _eye_glint_mi != null and is_instance_valid(_eye_glint_mi):
+		_eye_glint_mi.visible = false
+		_eye_glint_mi.material_override = null
+		_eye_glint_mi.set_mesh(null)
+	if _bubbles_mmi != null and is_instance_valid(_bubbles_mmi):
+		_bubbles_mmi.visible = false
+		_bubbles_mmi.material_override = null
+		_bubbles_mmi.multimesh = null
+	_eye_glint_mi = null
+	_eye_glint_mat = null
+	_eye_glint_energy = 0.0
+	_bubbles_mmi = null
+	_bubble_burst_elapsed = -1.0
 
 
 func _ready() -> void:
@@ -130,14 +203,71 @@ func _ready() -> void:
 		_origin_locked = global_position != Vector3.ZERO
 
 	_build_anatomy()
+	_build_ambush_bubbles()
 	_build_hitbox()
 	_update_undulation(0.0)
+	_update_material_glow()
 
 
 # ------------------------------------------------------------------ combat API
 
 func eye_position() -> Vector3:
 	return global_position + Vector3(0.0, 0.12, 0.0)
+
+
+## Return the bioluminescent additive EelEyeGlint MeshInstance3D mounted on Segment_0.
+func get_eye_glint_node() -> MeshInstance3D:
+	return _eye_glint_mi
+
+
+## Return current EelEyeGlint additive energy (day < night < ambush lunge, 0.0 when defeated).
+func get_eye_glint_energy() -> float:
+	return _eye_glint_energy
+
+
+## Return the sculpted AmbushBubbleBurst MultiMeshInstance3D mounted directly under ReefEel.
+func get_ambush_bubbles_node() -> MultiMeshInstance3D:
+	return _bubbles_mmi
+
+
+## Return the current world-aligned local positions of all 10 ambush burst bubbles.
+func get_ambush_bubble_positions() -> PackedVector3Array:
+	return _bubble_pos.duplicate()
+
+
+## Launch a lively burst of 10 rising underwater bubbles from the ambush lunge/bite.
+func trigger_ambush_bubbles() -> void:
+	if _bubbles_mmi == null or not is_instance_valid(_bubbles_mmi):
+		return
+	var origin_pos := global_position if is_inside_tree() else position
+	var sea_y := Sea.height(origin_pos.x, origin_pos.z)
+	var max_world_y := minf(sea_y - AMBUSH_BUBBLE_SURFACE_MARGIN, -AMBUSH_BUBBLE_SURFACE_MARGIN)
+	var max_local_y := max_world_y - origin_pos.y
+	var head_off := (global_transform.basis * Vector3(0.0, 0.04, -0.42)) if is_inside_tree() else Vector3(0.0, 0.04, -0.42)
+
+	for i in AMBUSH_BUBBLE_COUNT:
+		var ang := (float(i) / float(AMBUSH_BUBBLE_COUNT)) * TAU + _rng.randf_range(-0.22, 0.22)
+		var rad := _rng.randf_range(0.08, 0.36)
+		var oy := minf(head_off.y + _rng.randf_range(-0.20, 0.08), max_local_y)
+		_bubble_origin[i] = Vector3(head_off.x + cos(ang) * rad, oy, head_off.z + sin(ang) * rad)
+		_bubble_pos[i] = _bubble_origin[i]
+		_bubble_rise_speed[i] = _rng.randf_range(0.95, 1.55)
+		_bubble_drift_phase[i] = _rng.randf() * TAU
+		_bubble_drift_rad[i] = _rng.randf_range(0.05, 0.13)
+		_bubble_drift_freq[i] = _rng.randf_range(3.2, 5.4)
+		_bubble_scale[i] = _rng.randf_range(0.72, 1.38)
+
+	_bubble_burst_elapsed = 0.0
+	_bubbles_mmi.visible = true
+	_step_ambush_bubbles(0.0)
+
+
+## Deterministically advance EelEyeGlint glow and AmbushBubbleBurst rising kinematics.
+func step_vfx(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	_clock += dt
+	_update_material_glow()
+	_step_ambush_bubbles(dt)
 
 
 ## Host-authoritative damage entry point. Wounded eels immediately retreat to their crevice.
@@ -180,9 +310,10 @@ func _physics_process(delta: float) -> void:
 	_clock += delta
 	_hit_flash = maxf(0.0, _hit_flash - delta)
 	_jaw_snap_timer = maxf(0.0, _jaw_snap_timer - delta)
-	_update_material_glow()
 
 	if dead:
+		_update_material_glow()
+		_step_ambush_bubbles(delta)
 		_death_timer += delta
 		_animate_death(delta)
 		if Net.is_host() and _death_timer >= DEATH_DESPAWN_DELAY:
@@ -193,6 +324,8 @@ func _physics_process(delta: float) -> void:
 		_tick_ai(delta)
 
 	_update_undulation(delta)
+	_update_material_glow()
+	_step_ambush_bubbles(delta)
 
 
 func _tick_ai(delta: float) -> void:
@@ -235,6 +368,7 @@ func _tick_ai(delta: float) -> void:
 				state = State.DART
 				_state_timer = DART_MAX_DURATION
 				Audio.play_sfx(&"splash_small", global_position, -1.5, 0.12)
+				trigger_ambush_bubbles()
 
 		State.DART:
 			if target == null or not is_instance_valid(target) or target.dead or not target.is_swimming():
@@ -294,6 +428,7 @@ func _execute_bite(victim: Pawn) -> void:
 	_bite_cd = bite_cooldown
 	state = State.RETREAT
 	_state_timer = RETREAT_DURATION
+	trigger_ambush_bubbles()
 
 	var victim_cc := _combat_of(victim)
 	if victim_cc != null and victim_cc.is_invulnerable():
@@ -348,6 +483,7 @@ func _die() -> void:
 	_death_timer = 0.0
 	if _hitbox != null:
 		_hitbox.collision_layer = 0
+	_update_material_glow()
 	defeated.emit(self, global_position)
 
 
@@ -423,6 +559,105 @@ func _update_material_glow() -> void:
 	if _eye_mat != null:
 		var energy := 0.2 if dead else (3.4 if (state == State.COIL or state == State.DART) else 1.8)
 		_eye_mat.emission_energy_multiplier = energy
+	_update_eye_glint()
+
+
+func _update_eye_glint() -> void:
+	if _eye_glint_mi == null or not is_instance_valid(_eye_glint_mi):
+		_eye_glint_energy = 0.0
+		return
+
+	if dead or state == State.DEAD:
+		_eye_glint_energy = 0.0
+		_eye_glint_mi.visible = false
+		if _eye_glint_mat != null:
+			_eye_glint_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var pulse := 0.96 + 0.04 * sin(_clock * 3.4)
+	var lurk_e := lerpf(EYE_GLINT_DAY_ENERGY, EYE_GLINT_NIGHT_ENERGY, night) * pulse
+	var energy := lurk_e
+	var halo_scale := lerpf(0.24, 0.34, night)
+	var tint := Color(0.76, 1.00, 0.56).lerp(Color(0.86, 1.00, 0.48), night)
+
+	if state == State.DART or _jaw_snap_timer > 0.0:
+		var flare_pulse := 0.97 + 0.03 * sin(_clock * 14.0)
+		energy = EYE_GLINT_LUNGE_ENERGY * flare_pulse
+		halo_scale = 0.52
+		tint = Color(1.00, 0.96, 0.42)
+	elif state == State.COIL:
+		var coil_t := 1.0 - clampf(_state_timer / COIL_DURATION, 0.0, 1.0)
+		energy = lerpf(maxf(lurk_e, 0.82), 1.16, coil_t)
+		halo_scale = lerpf(0.36, 0.46, coil_t)
+		tint = Color(0.86, 1.00, 0.46).lerp(Color(1.00, 0.94, 0.40), coil_t)
+	elif state == State.RETREAT:
+		energy = lurk_e * 0.85
+		halo_scale = lerpf(0.22, 0.30, night)
+
+	_eye_glint_energy = energy
+	_eye_glint_mi.visible = energy > 0.005
+	_eye_glint_mi.scale = Vector3.ONE * halo_scale
+	if _eye_glint_mat != null:
+		_eye_glint_mat.albedo_color = Color(
+			tint.r * energy,
+			tint.g * energy,
+			tint.b * energy,
+			1.0
+		)
+
+
+func _step_ambush_bubbles(delta: float) -> void:
+	if _bubbles_mmi == null or not is_instance_valid(_bubbles_mmi):
+		return
+	if _bubble_burst_elapsed < 0.0:
+		_bubbles_mmi.visible = false
+		return
+	var mm := _bubbles_mmi.multimesh
+	if mm == null or _bubble_origin.size() != AMBUSH_BUBBLE_COUNT:
+		return
+
+	_bubble_burst_elapsed += maxf(delta, 0.0)
+	var u := clampf(_bubble_burst_elapsed / AMBUSH_BUBBLE_LIFETIME, 0.0, 1.0)
+	if u >= 1.0:
+		_bubble_burst_elapsed = -1.0
+		_bubbles_mmi.visible = false
+		return
+
+	# Keep bubble burst axes world-aligned so rising bubbles drift vertically (+Y)
+	# even while the ambushing eel pitches steeply toward a swimmer!
+	if is_inside_tree():
+		var gb := global_transform.basis
+		if absf(gb.determinant()) > 1e-6:
+			_bubbles_mmi.basis = gb.inverse()
+		else:
+			_bubbles_mmi.basis = Basis.IDENTITY
+
+	var origin_pos := global_position if is_inside_tree() else position
+	var sea_y := Sea.height(origin_pos.x, origin_pos.z)
+	var max_world_y := minf(sea_y - AMBUSH_BUBBLE_SURFACE_MARGIN, -AMBUSH_BUBBLE_SURFACE_MARGIN)
+	var max_local_y := max_world_y - origin_pos.y
+
+	var fade_in := smoothstep(0.0, 0.12, u)
+	var fade_out := 1.0 - smoothstep(0.68, 1.0, u)
+	var env := clampf(lerpf(0.55, 1.0, fade_in) * fade_out, 0.0, 1.0)
+
+	_bubbles_mmi.visible = true
+	for i in AMBUSH_BUBBLE_COUNT:
+		var base_p := _bubble_origin[i]
+		var ang := _bubble_drift_phase[i] + _bubble_burst_elapsed * _bubble_drift_freq[i]
+		var wobble := _bubble_drift_rad[i] * (0.25 + 0.75 * u)
+		var bx := base_p.x + cos(ang) * wobble
+		var bz := base_p.z + sin(ang) * wobble
+		var by := minf(base_p.y + _bubble_rise_speed[i] * _bubble_burst_elapsed, max_local_y)
+		var pos := Vector3(bx, by, bz)
+		_bubble_pos[i] = pos
+
+		var s := _bubble_scale[i] * lerpf(0.32, 1.0, env)
+		var b_basis := Basis(Vector3.UP, ang * 0.6) * Basis.from_scale(Vector3(s, s, s))
+		mm.set_instance_transform(i, Transform3D(b_basis, pos))
+		mm.set_instance_color(i, Color(0.84, 0.98, 0.96, clampf(0.84 * env, 0.0, 1.0)))
 
 
 # ------------------------------------------------------------------ procedural anatomy
@@ -490,6 +725,9 @@ func _build_anatomy() -> void:
 		eye.material_override = _eye_mat
 		head.add_child(eye)
 
+	# Bioluminescent additive chartreuse-emerald predator eye glint right between the brow sockets.
+	_build_eye_glint(head)
+
 	add_child(head)
 	segments.append(head)
 
@@ -516,6 +754,165 @@ func _build_anatomy() -> void:
 	tail.add_child(tail_mi)
 	add_child(tail)
 	segments.append(tail)
+
+
+func _build_eye_glint(head: Node3D) -> void:
+	if _eye_glint_mi != null or head == null:
+		return
+	_ensure_vfx_assets()
+
+	_eye_glint_mat = StandardMaterial3D.new()
+	_eye_glint_mat.vertex_color_use_as_albedo = true
+	_eye_glint_mat.vertex_color_is_srgb = true
+	_eye_glint_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_eye_glint_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_eye_glint_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_eye_glint_mat.billboard_keep_scale = true
+	_eye_glint_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_eye_glint_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_eye_glint_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_eye_glint_mi = MeshInstance3D.new()
+	_eye_glint_mi.name = "EelEyeGlint"
+	_eye_glint_mi.position = EYE_GLINT_POS
+	_eye_glint_mi.scale = Vector3.ONE * 0.24
+	_eye_glint_mi.mesh = _eye_glint_mesh
+	_eye_glint_mi.material_override = _eye_glint_mat
+	_eye_glint_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_eye_glint_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_eye_glint_mi.visibility_range_end = EYE_GLINT_VISIBILITY_RANGE
+	_eye_glint_mi.extra_cull_margin = 0.8
+	head.add_child(_eye_glint_mi)
+
+
+func _build_ambush_bubbles() -> void:
+	if _bubbles_mmi != null:
+		return
+	_ensure_vfx_assets()
+
+	_bubble_origin.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_pos.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_rise_speed.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_drift_phase.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_drift_rad.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_drift_freq.resize(AMBUSH_BUBBLE_COUNT)
+	_bubble_scale.resize(AMBUSH_BUBBLE_COUNT)
+	for i in AMBUSH_BUBBLE_COUNT:
+		_bubble_origin[i] = Vector3.ZERO
+		_bubble_pos[i] = Vector3.ZERO
+		_bubble_rise_speed[i] = 1.2
+		_bubble_drift_phase[i] = 0.0
+		_bubble_drift_rad[i] = 0.08
+		_bubble_drift_freq[i] = 4.0
+		_bubble_scale[i] = 1.0
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _bubble_mesh
+	mm.instance_count = AMBUSH_BUBBLE_COUNT
+	for i in AMBUSH_BUBBLE_COUNT:
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+		mm.set_instance_color(i, Color(0.84, 0.98, 0.96, 0.0))
+
+	_bubbles_mmi = MultiMeshInstance3D.new()
+	_bubbles_mmi.name = "AmbushBubbleBurst"
+	_bubbles_mmi.multimesh = mm
+	_bubbles_mmi.material_override = _bubble_mat
+	_bubbles_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bubbles_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_bubbles_mmi.visibility_range_end = AMBUSH_BUBBLE_VISIBILITY_RANGE
+	_bubbles_mmi.custom_aabb = AABB(Vector3(-2.5, -1.5, -2.5), Vector3(5.0, 5.5, 5.0))
+	_bubbles_mmi.visible = false
+	_bubble_burst_elapsed = -1.0
+	add_child(_bubbles_mmi)
+
+
+static func _ensure_vfx_assets() -> void:
+	if _eye_glint_mesh == null:
+		_eye_glint_mesh = _build_eye_glint_mesh()
+	if _bubble_mesh == null:
+		_bubble_mesh = _build_bubble_mesh()
+	if _bubble_mat == null:
+		_bubble_mat = StandardMaterial3D.new()
+		_bubble_mat.albedo_color = Color(0.90, 1.00, 0.98, 0.80)
+		_bubble_mat.vertex_color_use_as_albedo = true
+		_bubble_mat.vertex_color_is_srgb = true
+		_bubble_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_bubble_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_bubble_mat.cull_mode = BaseMaterial3D.CULL_BACK
+
+
+static func _build_eye_glint_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial-gradient billboard disc (diameter 1.0 m) grading
+	# chartreuse-emerald predator core -> soft deep-jade mid -> pure Color(0, 0, 0, 1) rim,
+	# with finite unit (0, 0, 1) normals for seamless additive underwater glow.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.18
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner chartreuse-emerald predator core wedge (16 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_MID)
+		st.add_vertex(m0)
+		# Outer deep-jade skirt feathering cleanly to pure black (32 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_EYE_GLINT_RIM)
+		st.add_vertex(o0)
+	return st.commit()
+
+
+static func _build_bubble_mesh() -> ArrayMesh:
+	# Exact 12-triangle 6-sided faceted sea-foam aqua bubble bipyramid (zero SphereMesh).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SIDES := 6
+	const R_EQ := 0.068
+	const R_POLE := 0.058
+	var top := Vector3(0.0, R_POLE, 0.0)
+	var bot := Vector3(0.0, -R_POLE, 0.0)
+	var ring: Array[Vector3] = []
+	for s in SIDES:
+		var ang := float(s) / float(SIDES) * TAU
+		ring.append(Vector3(cos(ang) * R_EQ, 0.0, sin(ang) * R_EQ))
+	for s in SIDES:
+		var ns := (s + 1) % SIDES
+		_add_outward_tri(st, ring[s], top, ring[ns], Vector3.ZERO, COL_BUBBLE_MID, COL_BUBBLE_TOP, COL_BUBBLE_MID)
+		_add_outward_tri(st, ring[ns], bot, ring[s], Vector3.ZERO, COL_BUBBLE_MID, COL_BUBBLE_BOT, COL_BUBBLE_MID)
+	return st.commit()
 
 
 static func _build_head_upper_mesh() -> ArrayMesh:
