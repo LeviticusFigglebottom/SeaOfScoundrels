@@ -556,12 +556,14 @@ void fragment() {
 		magma_core = crack_hot;
 	}
 
-	// Height-modulated crisp rock/turf splat mask: rock ledges & fractures punch decisively through
-	// emerald slopes instead of blurry 5-meter airbrushed green-tan transitions!
-	float cliff_ny = smooth_n.y;
-	float rock_splat_jit = (strata_band - 0.5) * 0.15 - (fracture - 0.5) * 0.11
-		+ (macro_n - 0.5) * 0.10 + (brush_n - 0.5) * 0.14 + (tussock_n - 0.5) * 0.12 + (grain_n - 0.5) * 0.06;
-	float slope_cliff = smoothstep(0.74, 0.59, cliff_ny + rock_splat_jit);
+	// Height-modulated organic rock/turf splat mask: rock ledges & fractures punch decisively through
+	// emerald slopes while gentle steep-face bias + rich world-space noise breakup prevent both
+	// heightmap-grid sawtooth grass spikes and hard triangle-diagonal seams at steep cliff bases!
+	float steep_face_bias = smoothstep(0.70, 0.36, face_n.y);
+	float cliff_ny = mix(smooth_n.y, min(smooth_n.y, face_n.y), steep_face_bias * 0.38);
+	float rock_splat_jit = (strata_band - 0.5) * 0.16 - (fracture - 0.5) * 0.12
+		+ (macro_n - 0.5) * 0.16 + (brush_n - 0.5) * 0.22 + (tussock_n - 0.5) * 0.16 + (grain_n - 0.5) * 0.06;
+	float slope_cliff = smoothstep(0.76, 0.54, cliff_ny + rock_splat_jit);
 	float summit_lo = mix(17.0, 34.0, lush_jungle_amount) - volc * 6.0;
 	float summit_hi = mix(29.0, 56.0, lush_jungle_amount) - volc * 8.0;
 	// Check both smooth_n.y and face_n.y so flat highland plateaus stay lush green while
