@@ -184,10 +184,10 @@ const STEPPING_STONE_VOLCANIC_PALETTE: Array[Color] = [
 ]
 
 const STEPPING_STONE_SLATE_PALETTE: Array[Color] = [
-	Color(0.56, 0.63, 0.54, 1.0),  # Mossy carved highland slate
-	Color(0.62, 0.65, 0.63, 1.0),  # Ancient temple blue-grey flagstone
-	Color(0.66, 0.68, 0.58, 1.0),  # Lichen-dusted citadel ashlar
-	Color(0.49, 0.57, 0.50, 1.0),  # Deep shaded ruin moss-slate
+	Color(0.67, 0.65, 0.54, 1.0),  # Moss-dusted highland sandstone-slate
+	Color(0.72, 0.68, 0.58, 1.0),  # Warm weathered temple flagstone
+	Color(0.69, 0.66, 0.55, 1.0),  # Lichen-warmed citadel ashlar
+	Color(0.59, 0.60, 0.50, 1.0),  # Deep shaded ruin moss-stone
 ]
 
 const STEPPING_SLATE_ARCHETYPES: Array[StringName] = [
@@ -885,7 +885,8 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("CitadelTimberBridge") or cname.begins_with("CanyonTimberBridge") \
 			or cname.begins_with("BluffTimberBridge"):
 		return 5.8
-	if cname.begins_with("PirateCamp") or cname.begins_with("CannonBastion"):
+	if cname.begins_with("PirateCamp") or cname.begins_with("CannonBastion") \
+			or cname.begins_with("VolcanicBridgeRuin"):
 		return 5.6
 	if cname.begins_with("PirateWatchpost"):
 		return 5.5
@@ -896,16 +897,17 @@ static func _prop_keepout_radius(cname: String) -> float:
 		return 5.2
 	if cname.begins_with("SundialPlaza"):
 		return 5.0
-	if cname.begins_with("TreasureVault"):
+	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
-			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast"):
+			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
+			or cname.begins_with("RumDistillery"):
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
-			or cname.begins_with("StoneWell"):
+			or cname.begins_with("StoneWell") or cname.begins_with("SerpentTotem"):
 		return 4.2
 	if cname.begins_with("SignalBrazier"):
 		return 4.0
@@ -1854,7 +1856,7 @@ static func _place_trail_stepping_stones(island: Island, arch: StringName, rng: 
 							and _trail_distance(pt, trail_ctx) >= min_curb_clear \
 							and _grid_is_clear(stone_grid, cell_size, pt, 1.95):
 						var h := island.surface_height(pt.x, pt.y)
-						if h >= 0.65:
+						if h >= 1.25:
 							var n := island.surface_normal(pt.x, pt.y)
 							if n.y >= 0.62:
 								var sx := rng.randf_range(0.58, 0.98)

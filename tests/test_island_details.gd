@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (50 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (54 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -91,6 +91,13 @@ const FORT_VAULT_LANDMARKS: Array[String] = [
 	"wooden_shipwreck_crow_nest_mast.glb",
 ]
 
+const ISLAND_LORE_LANDMARKS: Array[String] = [
+	"pirate_rum_distillery_shack.glb",
+	"ancient_jade_serpent_totem.glb",
+	"coastal_driftwood_arch_camp.glb",
+	"volcanic_obsidian_bridge_ruin.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -142,6 +149,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ruined_sea_fort_cannon_bastion.glb": 1,
 	"pirate_treasure_vault_door.glb": 1,
 	"wooden_shipwreck_crow_nest_mast.glb": 1,
+	"pirate_rum_distillery_shack.glb": 1,
+	"ancient_jade_serpent_totem.glb": 1,
+	"coastal_driftwood_arch_camp.glb": 1,
+	"volcanic_obsidian_bridge_ruin.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -182,6 +193,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ruined_sea_fort_cannon_bastion.glb": ["Lantern_Bastion*"],
 	"pirate_treasure_vault_door.glb": ["Lantern_Vault*"],
 	"wooden_shipwreck_crow_nest_mast.glb": ["Lantern_CrowNest*"],
+	"pirate_rum_distillery_shack.glb": ["Lantern_Still*"],
+	"ancient_jade_serpent_totem.glb": ["Lantern_Serpent*"],
+	"coastal_driftwood_arch_camp.glb": ["Lantern_Bivouac*"],
+	"volcanic_obsidian_bridge_ruin.glb": ["Lantern_VolcBridge*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -224,6 +239,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"CannonBastion_",
 	"TreasureVault_",
 	"CrowNestMast_",
+	"RumDistillery_",
+	"SerpentTotem_",
+	"DriftwoodCamp_",
+	"VolcanicBridgeRuin_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -360,7 +379,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(ONFOOT_CRAFT_LANDMARKS)
 	all_landmarks.append_array(STORY_CRAFT_LANDMARKS)
 	all_landmarks.append_array(FORT_VAULT_LANDMARKS)
-	check_eq(all_landmarks.size(), 50, "expected 50 sculpted landmark GLBs")
+	all_landmarks.append_array(ISLAND_LORE_LANDMARKS)
+	check_eq(all_landmarks.size(), 54, "expected 54 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -466,14 +486,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 50 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 54 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check(unique_pbr_paths.size() >= 1 and unique_pbr_paths.size() <= 36,
-		"expected <= 36 unique shared landmark PBR texture paths across all 50 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected <= 36 unique shared landmark PBR texture paths across all 54 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -1258,6 +1278,28 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(fv_glb),
 			"Wave I-12 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 400 m offshore LOD cap)" % fv_glb)
 
+	# 2h-4. Verify Wave I-13 (54-Landmark Island-Lore Milestone) landmarks (pirate rum distillery shack,
+	#       ancient jade serpent totem, coastal driftwood arch camp & volcanic obsidian bridge ruin)
+	#       + MID_RANGE_FILES offshore LOD cap!
+	var rum_distillery_total := 0
+	var serpent_totem_total := 0
+	var driftwood_camp_total := 0
+	var volcanic_bridge_total := 0
+	for isl_i13 in all_islands:
+		rum_distillery_total += isl_i13.find_children("RumDistillery_*", "Node3D", true, false).size()
+		serpent_totem_total += isl_i13.find_children("SerpentTotem_*", "Node3D", true, false).size()
+		driftwood_camp_total += isl_i13.find_children("DriftwoodCamp_*", "Node3D", true, false).size()
+		volcanic_bridge_total += isl_i13.find_children("VolcanicBridgeRuin_*", "Node3D", true, false).size()
+	print("    wave_i13 island_lore landmarks: distilleries=%d serptotems=%d driftwood_camps=%d volc_bridges=%d" % [
+		rum_distillery_total, serpent_totem_total, driftwood_camp_total, volcanic_bridge_total])
+	check(rum_distillery_total >= 4, "Wave I-13 spawns >= 4 RumDistillery_* landmarks (got %d)" % rum_distillery_total)
+	check(serpent_totem_total >= 4, "Wave I-13 spawns >= 4 SerpentTotem_* landmarks (got %d)" % serpent_totem_total)
+	check(driftwood_camp_total >= 4, "Wave I-13 spawns >= 4 DriftwoodCamp_* landmarks (got %d)" % driftwood_camp_total)
+	check(volcanic_bridge_total >= 3, "Wave I-13 spawns >= 3 VolcanicBridgeRuin_* landmarks (got %d)" % volcanic_bridge_total)
+	for il_glb in ISLAND_LORE_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(il_glb),
+			"Wave I-13 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 400 m offshore LOD cap)" % il_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1300,7 +1342,7 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i12 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i13 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
 	check(grounded_checked >= 50,
 		"grounding audit must inspect >= 50 land landmarks across 14 islands (got %d)" % grounded_checked)

@@ -1,5 +1,5 @@
 extends Node3D
-## Visual verification showcase for Wave I-2..I-12 sculpted 3D island landmarks (50 BC7 PBR GLBs),
+## Visual verification showcase for Wave I-2..I-13 sculpted 3D island landmarks (54 BC7 PBR GLBs),
 ## winding walkable terrain trails, and native batched MultiMesh `IslandDetails` ground foliage,
 ## highland cliff-ledge scrub, coastal dressing, living shore fauna & steep-slope cliff buttresses across all 14 islands.
 ##
@@ -7,12 +7,12 @@ extends Node3D
 ##   tools/capture.sh res://scenes/showcase/island_landmarks_showcase.tscn cutlass_overhaul 2 5 -- shot=cutlass_overhaul
 ##
 ## User args (after `--`), all optional:
-##   shot=<name>       35 visual audit shots (11 galleries + all 14 archipelago islands + 10 2.2 m first-person on-foot walk-up shots):
-##                     gallery_geology|gallery_setpieces|gallery_storytelling|gallery_skyline|gallery_coastal|gallery_harbour_ruins|gallery_maritime_relics|gallery_world_craft|gallery_onfoot_craft|gallery_story_craft|gallery_fort_vault|
+##   shot=<name>       40 visual audit shots (12 galleries + all 14 archipelago islands + 14 2.2 m first-person on-foot walk-up shots — 100% 14-of-14 island coverage):
+##                     gallery_geology|gallery_setpieces|gallery_storytelling|gallery_skyline|gallery_coastal|gallery_harbour_ruins|gallery_maritime_relics|gallery_world_craft|gallery_onfoot_craft|gallery_story_craft|gallery_fort_vault|gallery_island_lore|
 ##                     cutlass_overhaul|skull_bluff|emerald_temple|galleons_catwalk|cinder_basalt|gulls_arch|
 ##                     sovereigns_bastion|ironwatch_fort|crescent_atoll|barnacle_haven|
 ##                     wreckers_shoal|sirens_tooth|smugglers_cove|port_scoundrel|
-##                     onfoot_cutlass_trail|onfoot_port_harbour|onfoot_emerald_canyon|onfoot_smugglers_cove|onfoot_crescent_lagoon|onfoot_cinder_caldera|onfoot_skull_bluff|onfoot_galleons_reach|onfoot_sovereigns_bastion|onfoot_ironwatch_fort
+##                     onfoot_cutlass_trail|onfoot_port_harbour|onfoot_emerald_canyon|onfoot_smugglers_cove|onfoot_crescent_lagoon|onfoot_cinder_caldera|onfoot_skull_bluff|onfoot_galleons_reach|onfoot_sovereigns_bastion|onfoot_ironwatch_fort|onfoot_barnacle_haven|onfoot_gulls_arch|onfoot_wreckers_shoal|onfoot_sirens_tooth
 ##   time=<hour>       hour of day (auto per-shot sunlit / golden-hour default)
 ##   storm=<0..1>      storminess (default 0.0)
 ##   cloud=<0..1>      cloudiness (default 0.30)
@@ -28,7 +28,7 @@ extends Node3D
 ##   E=barnacle_haven      R=wreckers_shoal      T=sirens_tooth       Y=smugglers_cove
 ##   U=port_scoundrel      I=gallery_skyline     O=gallery_coastal    P=gallery_harbour_ruins
 ##   L=gallery_maritime_relics K=gallery_world_craft J=gallery_onfoot_craft H=gallery_story_craft
-##   G=gallery_fort_vault
+##   G=gallery_fort_vault  F=gallery_island_lore
 
 const LANDMARK_DIR := "res://assets/generated/landmarks/"
 
@@ -119,6 +119,13 @@ const FORT_VAULT_GLBS: Array[String] = [
 	"ruined_sea_fort_cannon_bastion.glb",
 	"pirate_treasure_vault_door.glb",
 	"wooden_shipwreck_crow_nest_mast.glb",
+]
+
+const ISLAND_LORE_GLBS: Array[String] = [
+	"pirate_rum_distillery_shack.glb",
+	"ancient_jade_serpent_totem.glb",
+	"coastal_driftwood_arch_camp.glb",
+	"volcanic_obsidian_bridge_ruin.glb",
 ]
 
 ## Open sunlit tropical water well clear of all 14 archipelago islands for gallery staging.
@@ -353,6 +360,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			next_shot = "gallery_story_craft"
 		KEY_G:
 			next_shot = "gallery_fort_vault"
+		KEY_F:
+			next_shot = "gallery_island_lore"
 	if next_shot != "" and next_shot != _shot:
 		_shot = next_shot
 		_clock = 0.0
@@ -404,6 +413,8 @@ func _apply_shot_weather() -> void:
 			default_time = 15.6
 		"gallery_fort_vault":
 			default_time = 15.6
+		"gallery_island_lore":
+			default_time = 15.6
 		"cutlass_overhaul":
 			default_time = 10.4
 		"skull_bluff":
@@ -452,6 +463,14 @@ func _apply_shot_weather() -> void:
 			default_time = 15.6
 		"onfoot_ironwatch_fort":
 			default_time = 10.4
+		"onfoot_barnacle_haven":
+			default_time = 10.2
+		"onfoot_gulls_arch":
+			default_time = 10.4
+		"onfoot_wreckers_shoal":
+			default_time = 15.8
+		"onfoot_sirens_tooth":
+			default_time = 10.1
 	var default_cloud := 0.30 if _shot.begins_with("gallery_") else 0.34
 	if _shot == "cinder_basalt":
 		default_cloud = 0.44
@@ -459,9 +478,11 @@ func _apply_shot_weather() -> void:
 		default_cloud = 0.42
 	elif _shot == "crescent_atoll" or _shot == "onfoot_crescent_lagoon":
 		default_cloud = 0.28
-	elif _shot == "port_scoundrel" or _shot == "onfoot_cutlass_trail" or _shot == "onfoot_port_harbour" or _shot == "onfoot_emerald_canyon":
+	elif _shot == "port_scoundrel" or _shot == "onfoot_cutlass_trail" or _shot == "onfoot_port_harbour" \
+			or _shot == "onfoot_emerald_canyon" or _shot == "onfoot_barnacle_haven" or _shot == "onfoot_gulls_arch":
 		default_cloud = 0.30
-	elif _shot == "barnacle_haven" or _shot == "onfoot_smugglers_cove" or _shot == "onfoot_galleons_reach" or _shot == "onfoot_sovereigns_bastion" or _shot == "onfoot_ironwatch_fort":
+	elif _shot == "barnacle_haven" or _shot == "onfoot_smugglers_cove" or _shot == "onfoot_galleons_reach" \
+			or _shot == "onfoot_sovereigns_bastion" or _shot == "onfoot_ironwatch_fort" or _shot == "onfoot_sirens_tooth":
 		default_cloud = 0.32
 	elif _shot == "wreckers_shoal":
 		default_cloud = 0.36
@@ -474,7 +495,7 @@ func _apply_shot_weather() -> void:
 	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, storm)
 	if _shot.begins_with("gallery_"):
 		Sea.amp_scale = 0.28
-	elif _shot == "cutlass_overhaul" or _shot == "gulls_arch":
+	elif _shot == "cutlass_overhaul" or _shot == "gulls_arch" or _shot == "onfoot_gulls_arch":
 		Sea.amp_scale = 0.46
 	elif _shot == "onfoot_cutlass_trail" or _shot == "onfoot_sovereigns_bastion" or _shot == "onfoot_ironwatch_fort":
 		Sea.amp_scale = 0.44
@@ -492,11 +513,11 @@ func _apply_shot_weather() -> void:
 		Sea.amp_scale = 0.36
 	elif _shot == "port_scoundrel":
 		Sea.amp_scale = 0.38
-	elif _shot == "barnacle_haven" or _shot == "onfoot_galleons_reach":
+	elif _shot == "barnacle_haven" or _shot == "onfoot_galleons_reach" or _shot == "onfoot_barnacle_haven":
 		Sea.amp_scale = 0.40
-	elif _shot == "wreckers_shoal":
+	elif _shot == "wreckers_shoal" or _shot == "onfoot_wreckers_shoal":
 		Sea.amp_scale = 0.50
-	elif _shot == "sirens_tooth":
+	elif _shot == "sirens_tooth" or _shot == "onfoot_sirens_tooth":
 		Sea.amp_scale = 0.52
 	Sea.time = float(_args.get("t", "36.0"))
 
@@ -735,6 +756,30 @@ func _mount_landmark_lanterns(inst: Node3D, register_island: Island) -> void:
 			light.omni_range = 18.0
 			light.omni_attenuation = 1.28
 			amp = 0.17
+		elif m_name.begins_with("Lantern_Still"):
+			light.light_color = Color(1.0, 0.72, 0.28)
+			light.light_energy = 4.0
+			light.omni_range = 17.0
+			light.omni_attenuation = 1.28
+			amp = 0.18
+		elif m_name.begins_with("Lantern_Serpent"):
+			light.light_color = Color(0.20, 0.98, 0.72)
+			light.light_energy = 4.8
+			light.omni_range = 20.0
+			light.omni_attenuation = 1.25
+			amp = 0.16
+		elif m_name.begins_with("Lantern_Bivouac"):
+			light.light_color = Color(1.0, 0.64, 0.22)
+			light.light_energy = 4.2
+			light.omni_range = 17.0
+			light.omni_attenuation = 1.30
+			amp = 0.20
+		elif m_name.begins_with("Lantern_VolcBridge"):
+			light.light_color = Color(1.0, 0.38, 0.08)
+			light.light_energy = 5.4
+			light.omni_range = 21.0
+			light.omni_attenuation = 1.25
+			amp = 0.22
 		elif m_name.begins_with("Lantern_Rowboat") or m_name.begins_with("Lantern_Gallows") \
 				or m_name.begins_with("Lantern_Brazier") or m_name.begins_with("Lantern_Watchpost"):
 			light.light_color = Color(1.0, 0.72, 0.30)
@@ -896,7 +941,7 @@ func _rebuild_gallery_for_shot() -> void:
 			or _shot == "gallery_coastal" or _shot == "gallery_harbour_ruins" \
 			or _shot == "gallery_maritime_relics" or _shot == "gallery_world_craft" \
 			or _shot == "gallery_onfoot_craft" or _shot == "gallery_story_craft" \
-			or _shot == "gallery_fort_vault"
+			or _shot == "gallery_fort_vault" or _shot == "gallery_island_lore"
 	_gallery_root.visible = is_gallery
 	if not is_gallery:
 		return
@@ -923,8 +968,78 @@ func _rebuild_gallery_for_shot() -> void:
 		_layout_story_craft_gallery()
 	elif _shot == "gallery_fort_vault":
 		_layout_fort_vault_gallery()
+	elif _shot == "gallery_island_lore":
+		_layout_island_lore_gallery()
 	else:
 		_layout_setpieces_gallery()
+
+
+func _layout_island_lore_gallery() -> void:
+	# Stage Wave I-13 pirate rum distillery shack, ancient jade serpent totem, coastal driftwood arch camp & volcanic obsidian bridge ruin on the sunlit sandbar.
+	var items: Array[Dictionary] = []
+	var total_span := 0.0
+	var gap := 4.6
+	for i in ISLAND_LORE_GLBS.size():
+		var fn := ISLAND_LORE_GLBS[i]
+		var inst := _spawn_landmark(fn, _gallery_root, "IslandLore_%02d" % i, Transform3D.IDENTITY, null, true)
+		if inst == null:
+			continue
+		var bb := _compute_visual_aabb(inst)
+		var footprint_w := clampf(maxf(bb.size.x, bb.size.z * 0.78), 6.0, 24.0)
+		items.append({"node": inst, "aabb": bb, "width": footprint_w, "file": fn})
+		total_span += footprint_w
+	if items.is_empty():
+		_gallery_bounds = AABB(Vector3(-24.0, 0.0, -10.0), Vector3(48.0, 14.0, 20.0))
+		return
+	total_span += gap * float(maxi(0, items.size() - 1))
+
+	var cursor_x := -total_span * 0.5
+	var bounds := AABB()
+	var has_bounds := false
+	for i in items.size():
+		var entry: Dictionary = items[i]
+		var inst := entry["node"] as Node3D
+		var bb: AABB = entry["aabb"]
+		var w := float(entry["width"])
+		var fn := String(entry["file"])
+		var cx := cursor_x + w * 0.5
+		cursor_x += w + gap
+
+		var t_norm := cx / maxf(total_span * 0.5, 1.0)
+		var cz := -4.4 + t_norm * t_norm * 4.4
+		if fn == "pirate_rum_distillery_shack.glb":
+			cz += 1.4
+		elif fn == "coastal_driftwood_arch_camp.glb":
+			cz += 1.6
+		elif fn == "volcanic_obsidian_bridge_ruin.glb":
+			cz += 0.8
+		var ground_y := _sandbar_y(cx, cz) - 0.12
+		var yaw := PI - t_norm * 0.24
+		if fn == "pirate_rum_distillery_shack.glb":
+			yaw += 0.28
+		elif fn == "ancient_jade_serpent_totem.glb":
+			yaw += 0.18
+		elif fn == "coastal_driftwood_arch_camp.glb":
+			yaw -= 0.22
+		elif fn == "volcanic_obsidian_bridge_ruin.glb":
+			yaw -= 0.26
+		var center_off := Vector3(bb.get_center().x, 0.0, bb.get_center().z)
+		var rot := Basis(Vector3.UP, yaw)
+		var pos := Vector3(cx, ground_y, cz) - rot * center_off
+		inst.transform = Transform3D(rot, pos)
+
+		var local_bb := _compute_visual_aabb(inst)
+		for ci in 8:
+			var pt := inst.transform * local_bb.get_endpoint(ci)
+			pt.y = maxf(pt.y, 0.0)
+			if not has_bounds:
+				bounds = AABB(pt, Vector3.ZERO)
+				has_bounds = true
+			else:
+				bounds = bounds.expand(pt)
+
+	if has_bounds:
+		_gallery_bounds = bounds
 
 
 func _layout_fort_vault_gallery() -> void:
@@ -1836,7 +1951,7 @@ func _update_camera() -> void:
 		return
 
 	match _shot:
-		"gallery_geology", "gallery_setpieces", "gallery_storytelling", "gallery_skyline", "gallery_coastal", "gallery_harbour_ruins", "gallery_maritime_relics", "gallery_world_craft", "gallery_onfoot_craft", "gallery_story_craft", "gallery_fort_vault":
+		"gallery_geology", "gallery_setpieces", "gallery_storytelling", "gallery_skyline", "gallery_coastal", "gallery_harbour_ruins", "gallery_maritime_relics", "gallery_world_craft", "gallery_onfoot_craft", "gallery_story_craft", "gallery_fort_vault", "gallery_island_lore":
 			var ctr := GALLERY_ORIGIN + _gallery_bounds.get_center()
 			var span_x := maxf(_gallery_bounds.size.x, 30.0)
 			var span_y := maxf(_gallery_bounds.size.y, 10.0)
@@ -2211,6 +2326,78 @@ func _update_camera() -> void:
 			var aim_ground := _ironwatch_fort.surface_height(aim_local.x, aim_local.z)
 			var aim_h := clampf(aim_ground + 4.0, eye_h + 7.5, eye_h + 16.0)
 			var aim := iw_pos + Vector3(aim_local.x, aim_h, aim_local.z)
+			_cam.fov = 68.0
+			_cam.look_at_from_position(eye, aim)
+
+		"onfoot_barnacle_haven":
+			if _barnacle_haven == null:
+				return
+			var bh_pos := _barnacle_haven.global_position
+			var bh_basis := Basis(Vector3.UP, _island_landing_yaw(_barnacle_haven, -0.78))
+			var walk := clampf(_clock * 0.14, 0.0, 1.0)
+			var pan := sin(_clock * 0.38) * 1.2
+			var eye_local := bh_basis * Vector3(lerpf(-21.2, -19.8, walk) + pan * 0.16, 0.0, lerpf(-50.5, -48.5, walk))
+			var ground_y := _barnacle_haven.surface_height(eye_local.x, eye_local.z)
+			var eye_h := maxf(ground_y, 0.6) + 2.2
+			var eye := bh_pos + Vector3(eye_local.x, eye_h, eye_local.z)
+			var aim_local := bh_basis * Vector3(lerpf(9.5, 10.5, walk) + pan, 0.0, lerpf(-22.5, -21.5, walk))
+			var aim_ground := _barnacle_haven.surface_height(aim_local.x, aim_local.z)
+			var aim_h := clampf(aim_ground + 4.8, eye_h + 3.2, eye_h + 5.8)
+			var aim := bh_pos + Vector3(aim_local.x, aim_h, aim_local.z)
+			_cam.fov = 66.0
+			_cam.look_at_from_position(eye, aim)
+
+		"onfoot_gulls_arch":
+			if _gulls_arch == null:
+				return
+			var ga_pos := _gulls_arch.global_position
+			var ga_basis := Basis(Vector3.UP, _island_landing_yaw(_gulls_arch, -2.15))
+			var walk := clampf(_clock * 0.14, 0.0, 1.0)
+			var pan := sin(_clock * 0.38) * 1.2
+			var eye_local := ga_basis * Vector3(lerpf(35.2, 32.5, walk) + pan * 0.18, 0.0, lerpf(-53.8, -50.8, walk))
+			var ground_y := _gulls_arch.surface_height(eye_local.x, eye_local.z)
+			var eye_h := maxf(ground_y, 0.6) + 2.2
+			var eye := ga_pos + Vector3(eye_local.x, eye_h, eye_local.z)
+			var aim_local := ga_basis * Vector3(lerpf(-10.0, -11.0, walk) + pan, 0.0, lerpf(-58.0, -57.5, walk))
+			var aim_ground := _gulls_arch.surface_height(aim_local.x, aim_local.z)
+			var aim_h := clampf(aim_ground + 5.2, eye_h + 1.4, eye_h + 3.4)
+			var aim := ga_pos + Vector3(aim_local.x, aim_h, aim_local.z)
+			_cam.fov = 66.0
+			_cam.look_at_from_position(eye, aim)
+
+		"onfoot_wreckers_shoal":
+			if _wreckers_shoal == null:
+				return
+			var ws_pos := _wreckers_shoal.global_position
+			var ws_basis := Basis(Vector3.UP, _island_landing_yaw(_wreckers_shoal, 0.05))
+			var walk := clampf(_clock * 0.14, 0.0, 1.0)
+			var pan := sin(_clock * 0.38) * 1.2
+			var eye_local := ws_basis * Vector3(lerpf(-35.2, -33.6, walk) + pan * 0.16, 0.0, lerpf(-33.0, -31.8, walk))
+			var ground_y := _wreckers_shoal.surface_height(eye_local.x, eye_local.z)
+			var eye_h := maxf(ground_y, 0.6) + 2.2
+			var eye := ws_pos + Vector3(eye_local.x, eye_h, eye_local.z)
+			var aim_local := ws_basis * Vector3(lerpf(5.5, 6.2, walk) + pan, 0.0, lerpf(-4.2, -3.8, walk))
+			var aim_ground := _wreckers_shoal.surface_height(aim_local.x, aim_local.z)
+			var aim_h := clampf(aim_ground + 2.5, eye_h + 5.5, eye_h + 8.0)
+			var aim := ws_pos + Vector3(aim_local.x, aim_h, aim_local.z)
+			_cam.fov = 68.0
+			_cam.look_at_from_position(eye, aim)
+
+		"onfoot_sirens_tooth":
+			if _sirens_tooth == null:
+				return
+			var st_pos := _sirens_tooth.global_position
+			var st_basis := Basis(Vector3.UP, _island_landing_yaw(_sirens_tooth, -0.62))
+			var walk := clampf(_clock * 0.14, 0.0, 1.0)
+			var pan := sin(_clock * 0.36) * 1.1
+			var eye_local := st_basis * Vector3(lerpf(15.2, 16.2, walk) + pan * 0.16, 0.0, lerpf(-27.2, -25.4, walk))
+			var ground_y := _sirens_tooth.surface_height(eye_local.x, eye_local.z)
+			var eye_h := maxf(ground_y, 0.6) + 2.2
+			var eye := st_pos + Vector3(eye_local.x, eye_h, eye_local.z)
+			var aim_local := st_basis * Vector3(lerpf(-4.2, -3.8, walk) + pan, 0.0, lerpf(-4.0, -3.5, walk))
+			var aim_ground := _sirens_tooth.surface_height(aim_local.x, aim_local.z)
+			var aim_h := clampf(aim_ground + 2.0, eye_h + 8.5, eye_h + 11.5)
+			var aim := st_pos + Vector3(aim_local.x, aim_h, aim_local.z)
 			_cam.fov = 68.0
 			_cam.look_at_from_position(eye, aim)
 
