@@ -14,10 +14,14 @@ const COL_BASALT_LO := Color(0.075, 0.070, 0.085)
 const COL_SULFUR_CRUST := Color(0.68, 0.56, 0.16)
 const COL_MAGMA_CORE := Color(1.00, 0.62, 0.14)
 const COL_MAGMA_EDGE := Color(0.92, 0.28, 0.05)
+const COL_HALO_CORE := Color(1.00, 0.68, 0.16, 1.0)
+const COL_HALO_MID := Color(0.86, 0.30, 0.05, 1.0)
+const COL_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
 
 # Statically cached procedural ArrayMeshes, materials & spray texture shared across fumaroles.
 static var _active_fumaroles: int = 0
 static var _chimney_mesh: ArrayMesh = null
+static var _magma_halo_mesh: ArrayMesh = null
 static var _rock_mat: StandardMaterial3D = null
 static var _throat_mat: StandardMaterial3D = null
 static var _steam_tex: ImageTexture = null
@@ -31,10 +35,13 @@ static var _ember_mat: StandardMaterial3D = null
 @export var enable_effects: bool = true
 
 var chimney_mi: MeshInstance3D = null
+var vent_magma_halo: MeshInstance3D = null
 var steam_plume: GPUParticles3D = null
 var ember_sparks: GPUParticles3D = null
 var vent_light: OmniLight3D = null
 
+var _magma_halo_mat: StandardMaterial3D = null
+var _magma_halo_energy: float = 0.0
 var _cycle_period: float = 6.8
 var _cycle_clock: float = 0.0
 var _eruption_remaining: float = 0.0
@@ -52,11 +59,12 @@ static func create(p_vent_scale: float = 1.0, p_phase_seed: float = 0.0) -> Volc
 	return vf
 
 
-## Release all statically cached fumarole chimney, steam & ember assets cleanly.
+## Release all statically cached fumarole chimney, halo, steam & ember assets cleanly.
 static func clear_shared_cache() -> void:
 	if _steam_mat != null:
 		_steam_mat.albedo_texture = null
 	_chimney_mesh = null
+	_magma_halo_mesh = null
 	_rock_mat = null
 	_throat_mat = null
 	_steam_tex = null
@@ -99,6 +107,28 @@ func _ready() -> void:
 	vent_light.shadow_enabled = false
 	add_child(vent_light)
 
+	# Additive 16-wedge radial-gradient billboard magma glow halo hovering right over the sulfur throat.
+	_magma_halo_mat = StandardMaterial3D.new()
+	_magma_halo_mat.vertex_color_use_as_albedo = true
+	_magma_halo_mat.vertex_color_is_srgb = true
+	_magma_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_magma_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_magma_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_magma_halo_mat.billboard_keep_scale = true
+	_magma_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_magma_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_magma_halo_mat.albedo_color = Color(0.42, 0.42, 0.42, 1.0)
+
+	vent_magma_halo = MeshInstance3D.new()
+	vent_magma_halo.name = "VentMagmaHalo"
+	vent_magma_halo.mesh = _magma_halo_mesh
+	vent_magma_halo.material_override = _magma_halo_mat
+	vent_magma_halo.position = Vector3(0.0, 1.32, 0.0)
+	vent_magma_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	vent_magma_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	vent_magma_halo.visibility_range_end = CULL_DIST + 40.0
+	add_child(vent_magma_halo)
+
 	if enable_effects:
 		steam_plume = _build_steam_plume()
 		steam_plume.position = Vector3(0.0, 1.28, 0.0)
@@ -118,6 +148,9 @@ func _exit_tree() -> void:
 				chimney_mi.set_surface_override_material(si, null)
 		chimney_mi.mesh = null
 		chimney_mi.material_override = null
+	if vent_magma_halo != null and is_instance_valid(vent_magma_halo):
+		vent_magma_halo.material_override = null
+		vent_magma_halo.mesh = null
 	for gp: GPUParticles3D in [steam_plume, ember_sparks]:
 		if gp != null and is_instance_valid(gp):
 			gp.emitting = false
@@ -129,6 +162,9 @@ func _exit_tree() -> void:
 			gp.draw_pass_1 = null
 			gp.process_material = null
 	chimney_mi = null
+	vent_magma_halo = null
+	_magma_halo_mat = null
+	_magma_halo_energy = 0.0
 	steam_plume = null
 	ember_sparks = null
 	vent_light = null
@@ -178,7 +214,17 @@ func get_triangle_count() -> int:
 	return _tri_count
 
 
-## Toggle particle emitters and light cleanly for 190 m distance culling or tests.
+## Return the sculpted additive billboard VentMagmaHalo MeshInstance3D.
+func get_magma_halo_node() -> MeshInstance3D:
+	return vent_magma_halo
+
+
+## Return the active additive magma halo intensity (0.0 when distance-culled).
+func get_magma_halo_energy() -> float:
+	return _magma_halo_energy
+
+
+## Toggle particle emitters, magma halo, and light cleanly for 190 m distance culling or tests.
 func set_distance_active(active: bool) -> void:
 	_distance_active = active
 	_apply_vent_state()
@@ -190,13 +236,34 @@ func _apply_vent_state() -> void:
 	var surge := smoothstep(0.0, 0.35, _eruption_remaining) * smoothstep(ERUPTION_DURATION, ERUPTION_DURATION - 0.18, _eruption_remaining) if erupting else 0.0
 	if erupting and _eruption_remaining >= ERUPTION_DURATION - 0.18:
 		surge = 1.0
+	var flicker := sin(_glow_clock * 7.4) * 0.14 + cos(_glow_clock * 15.2) * 0.08
 
 	if vent_light != null and is_instance_valid(vent_light):
 		vent_light.visible = active
 		if active:
-			var flicker := sin(_glow_clock * 7.4) * 0.14 + cos(_glow_clock * 15.2) * 0.08
 			var base_e := lerpf(1.05, 3.35, surge)
 			vent_light.light_energy = maxf(0.4, base_e + flicker * (1.0 + surge * 1.4))
+
+	if vent_magma_halo != null and is_instance_valid(vent_magma_halo):
+		vent_magma_halo.visible = active
+		if active:
+			var night := clampf(1.0 - (Weather.daylight() if Weather != null else 1.0), 0.0, 1.0)
+			var base_h := lerpf(0.42, 1.25, surge)
+			var night_mul := lerpf(1.0, 1.48, night)
+			var pulse_mul := 1.0 + flicker * (0.28 + surge * 0.25)
+			_magma_halo_energy = maxf(0.18, base_h * night_mul * pulse_mul)
+			var halo_s := lerpf(1.0, 1.48, surge) * lerpf(1.0, 1.16, night) * (1.0 + flicker * 0.14)
+			vent_magma_halo.scale = Vector3(halo_s, halo_s, halo_s)
+			if _magma_halo_mat != null:
+				var warm := Color(1.0, 0.94, 0.86).lerp(Color(1.0, 0.82, 0.58), clampf(night * 0.75 + surge * 0.45, 0.0, 1.0))
+				_magma_halo_mat.albedo_color = Color(
+					warm.r * _magma_halo_energy,
+					warm.g * _magma_halo_energy,
+					warm.b * _magma_halo_energy,
+					1.0
+				)
+		else:
+			_magma_halo_energy = 0.0
 
 	if steam_plume != null and is_instance_valid(steam_plume):
 		steam_plume.visible = active and enable_effects
@@ -345,6 +412,59 @@ static func _ensure_shared_assets() -> void:
 
 	if _chimney_mesh == null:
 		_chimney_mesh = _build_chimney_mesh()
+	if _magma_halo_mesh == null:
+		_magma_halo_mesh = _build_magma_halo_mesh()
+
+
+static func _build_magma_halo_mesh() -> ArrayMesh:
+	# Sculpted 48-tri 16-wedge radial-gradient billboard magma glow halo disc (zero primitives, unit +Z normals).
+	# Incandescent sulfur-amber core -> molten orange mid-ring -> Color(0, 0, 0, 1) rim for seamless additive blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.42
+	const OUTER_R := 1.05
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		st.set_normal(n)
+		st.set_color(COL_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+
+	return st.commit()
 
 
 static func _build_chimney_mesh() -> ArrayMesh:

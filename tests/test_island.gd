@@ -2610,3 +2610,289 @@ func test_q8a_outpost_lantern_halos_campfire_chimney_smoke_and_npc_greetings() -
 			and Outpost._chimney_smoke_mat == null,
 		"Outpost releases all Q8A static shared meshes, shaders & materials cleanly on teardown")
 	Weather.apply_state(saved_weather)
+
+
+func test_q15b_waterfall_rainbow_fumarole_magma_halo_and_emissary_prestige_motes() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+	Weather.storminess = 0.0
+
+	var holder := Node3D.new()
+	add_child(holder)
+
+	# 1. IslandWaterfall: zero-primitive additive sunlit 7-band prismatic WaterfallMistRainbow arch!
+	var wf := IslandWaterfall.create(16.0, 4.2)
+	holder.add_child(wf)
+	await physics_frames(1)
+
+	var rb := wf.get_mist_rainbow_node()
+	check(rb != null and rb.name == "WaterfallMistRainbow",
+		"IslandWaterfall mounts WaterfallMistRainbow MeshInstance3D")
+	check(rb != null and rb.mesh is ArrayMesh and not (rb.mesh is PrimitiveMesh),
+		"WaterfallMistRainbow uses zero-primitive sculpted ArrayMesh")
+	var rb_tris := 0
+	if rb != null and rb.mesh is ArrayMesh:
+		var rb_am := rb.mesh as ArrayMesh
+		check_eq(rb.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"WaterfallMistRainbow disables shadow casting")
+		check(rb.visibility_range_end >= IslandWaterfall.CULL_DIST + 39.5,
+			"WaterfallMistRainbow sets visibility_range_end == CULL_DIST + 40 m")
+		var rmat := rb.material_override as StandardMaterial3D
+		check(rmat != null and rmat.vertex_color_use_as_albedo and rmat.vertex_color_is_srgb,
+			"WaterfallMistRainbow uses sRGB vertex-colored StandardMaterial3D")
+		check(rmat != null and rmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+				and rmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+				and rmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+				and rmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+				and rmat.albedo_texture == null,
+			"WaterfallMistRainbow uses zero-VRAM unshaded additive double-sided material")
+		var rb_bad_n := 0
+		var rb_min_lum := 99.0
+		var rb_max_lum := 0.0
+		for si in rb_am.get_surface_count():
+			var arr := rb_am.surface_get_arrays(si)
+			var verts := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			var norms := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			var cols := arr[Mesh.ARRAY_COLOR] as PackedColorArray
+			rb_tris += floori(float(verts.size()) / 3.0)
+			check_eq(norms.size(), verts.size(), "WaterfallMistRainbow has unit normal per vertex")
+			check_eq(cols.size(), verts.size(), "WaterfallMistRainbow has color per vertex")
+			for nv: Vector3 in norms:
+				if not nv.is_finite() or absf(nv.length() - 1.0) > 0.01:
+					rb_bad_n += 1
+			for cv: Color in cols:
+				var lum := maxf(cv.r, maxf(cv.g, cv.b))
+				rb_min_lum = minf(rb_min_lum, lum)
+				rb_max_lum = maxf(rb_max_lum, lum)
+		check_eq(rb_bad_n, 0, "WaterfallMistRainbow has 100% finite unit normals")
+		check(rb_tris >= 140, "WaterfallMistRainbow builds curved 7-band arch geometry (got %d tris)" % rb_tris)
+		check(rb_min_lum < 0.001 and rb_max_lum > 0.35,
+			"WaterfallMistRainbow feathers cleanly to black rims while preserving spectral core")
+
+	Weather.time_of_day = 12.0
+	Weather.storminess = 0.0
+	wf.tick_atmosphere()
+	var noon_rb := wf.get_mist_rainbow_strength()
+	check(rb != null and rb.visible and noon_rb > 0.35,
+		"WaterfallMistRainbow shines in sunlit clear noon (strength=%.3f)" % noon_rb)
+
+	Weather.time_of_day = 0.5
+	Weather.storminess = 0.0
+	wf.tick_atmosphere()
+	var night_rb := wf.get_mist_rainbow_strength()
+	check(rb != null and not rb.visible and night_rb < 0.02,
+		"WaterfallMistRainbow hides cleanly at midnight 0.5h (strength=%.3f)" % night_rb)
+
+	Weather.time_of_day = 12.0
+	Weather.storminess = 0.95
+	wf.tick_atmosphere()
+	var storm_rb := wf.get_mist_rainbow_strength()
+	check(rb != null and not rb.visible and storm_rb < 0.02,
+		"WaterfallMistRainbow fades cleanly in heavy storm 0.95 (strength=%.3f)" % storm_rb)
+
+	Weather.time_of_day = 12.0
+	Weather.storminess = 0.0
+	wf.tick_atmosphere()
+	check(rb != null and rb.visible and wf.get_mist_rainbow_strength() > 0.35,
+		"WaterfallMistRainbow restores in clear noon")
+	wf.set_distance_active(false)
+	check(rb != null and not rb.visible and is_equal_approx(wf.get_mist_rainbow_strength(), 0.0),
+		"WaterfallMistRainbow respects set_distance_active(false)")
+	wf.set_distance_active(true)
+	check(rb != null and rb.visible and wf.get_mist_rainbow_strength() > 0.35,
+		"WaterfallMistRainbow restores on set_distance_active(true)")
+
+	# 2. VolcanicFumarole: zero-primitive 48-tri additive VentMagmaHalo billboard disc!
+	Weather.time_of_day = 12.0
+	Weather.storminess = 0.0
+	var fum := VolcanicFumarole.create(1.15, 0.42)
+	holder.add_child(fum)
+	await physics_frames(1)
+
+	var halo := fum.get_magma_halo_node()
+	check(halo != null and halo.name == "VentMagmaHalo",
+		"VolcanicFumarole mounts VentMagmaHalo MeshInstance3D")
+	check(halo != null and halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+		"VentMagmaHalo uses zero-primitive sculpted ArrayMesh")
+	var halo_tris := 0
+	if halo != null and halo.mesh is ArrayMesh:
+		var halo_am := halo.mesh as ArrayMesh
+		check(halo.position.distance_to(Vector3(0.0, 1.32, 0.0)) < 0.01,
+			"VentMagmaHalo sits at (0, 1.32, 0) above glowing sulfur throat")
+		check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"VentMagmaHalo disables shadow casting")
+		check(halo.visibility_range_end >= VolcanicFumarole.CULL_DIST + 39.5,
+			"VentMagmaHalo sets visibility_range_end == CULL_DIST + 40 m")
+		var hmat := halo.material_override as StandardMaterial3D
+		check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb
+				and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+				and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+				and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+				and hmat.billboard_keep_scale
+				and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+				and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+				and hmat.albedo_texture == null,
+			"VentMagmaHalo uses zero-VRAM additive unshaded billboard StandardMaterial3D")
+		var h_arr := halo_am.surface_get_arrays(0)
+		var h_verts := h_arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var h_norms := h_arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+		halo_tris = floori(float(h_verts.size()) / 3.0)
+		check_eq(halo_tris, 48, "VentMagmaHalo builds exact 48-tri 16-wedge radial disc")
+		var h_bad_n := 0
+		for nv: Vector3 in h_norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.005:
+				h_bad_n += 1
+		check_eq(h_bad_n, 0, "VentMagmaHalo normals are 100% finite (0, 0, 1) unit vectors")
+
+	Weather.time_of_day = 12.0
+	fum.step_fumarole(0.05)
+	var simmer_day := fum.get_magma_halo_energy()
+	check(simmer_day >= 0.30 and simmer_day <= 0.58,
+		"VentMagmaHalo simmers gently at midday ~0.42 (got %.3f)" % simmer_day)
+
+	Weather.time_of_day = 0.5
+	fum.step_fumarole(0.0)
+	var simmer_night := fum.get_magma_halo_energy()
+	check(simmer_night > simmer_day * 1.25,
+		"VentMagmaHalo brightens warmer at midnight vs midday (%.3f > %.3f)" % [simmer_night, simmer_day])
+
+	Weather.time_of_day = 12.0
+	fum.trigger_eruption_pulse()
+	var erupt_day := fum.get_magma_halo_energy()
+	check(erupt_day > simmer_day * 2.0,
+		"VentMagmaHalo surges fiercely during eruption pulse (%.3f > %.3f)" % [erupt_day, simmer_day])
+
+	fum.set_distance_active(false)
+	check(halo != null and not halo.visible and is_equal_approx(fum.get_magma_halo_energy(), 0.0),
+		"VentMagmaHalo hides cleanly when distance-culled")
+	fum.set_distance_active(true)
+	check(halo != null and halo.visible and fum.get_magma_halo_energy() > 0.5,
+		"VentMagmaHalo restores when back in distance range")
+
+	# 3. ShipEmissaryFlag: zero-primitive 10x8-tri EmissaryGradeMotes MultiMeshInstance3D!
+	var sloop := SLOOP_SCENE.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	holder.add_child(sloop)
+	await physics_frames(2)
+
+	var sflag := ShipEmissaryFlag.mount_to_ship(sloop)
+	check(sflag != null, "ShipEmissaryFlag mounts cleanly onto Sloop")
+	var motes := sflag.get_grade_motes_node() if sflag != null else null
+	check(motes != null and motes.name == "EmissaryGradeMotes",
+		"ShipEmissaryFlag mounts EmissaryGradeMotes MultiMeshInstance3D")
+	check(motes != null and motes.get_parent() != null and motes.get_parent().name == "EmissaryWindPivot",
+		"EmissaryGradeMotes attaches cleanly under EmissaryWindPivot")
+	var mote_tris := 0
+	var mote_count := 0
+	if motes != null:
+		check_eq(motes.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"EmissaryGradeMotes disables shadow casting")
+		check(motes.visibility_range_end >= 219.5,
+			"EmissaryGradeMotes sets visibility_range_end == 220 m")
+		var mmat := motes.material_override as StandardMaterial3D
+		check(mmat != null and mmat.vertex_color_use_as_albedo and mmat.vertex_color_is_srgb
+				and mmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+				and mmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+				and mmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+				and mmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+				and mmat.albedo_texture == null,
+			"EmissaryGradeMotes uses zero-VRAM unshaded additive sRGB material")
+		var mm := motes.multimesh
+		check(mm != null and mm.mesh is ArrayMesh and not (mm.mesh is PrimitiveMesh),
+			"EmissaryGradeMotes MultiMesh uses zero-primitive ArrayMesh")
+		if mm != null and mm.mesh is ArrayMesh:
+			mote_count = mm.instance_count
+			check_eq(mote_count, 10, "EmissaryGradeMotes allocates exact 10 prestige mote instances")
+			var mam := mm.mesh as ArrayMesh
+			var m_arr := mam.surface_get_arrays(0)
+			var m_verts := m_arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			var m_norms := m_arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+			mote_tris = floori(float(m_verts.size()) / 3.0)
+			check_eq(mote_tris, 8, "EmissaryGradeMotes diamond sparkle mesh has exact 8 tris (10x8 = 80)")
+			var m_bad_n := 0
+			for nv: Vector3 in m_norms:
+				if not nv.is_finite() or absf(nv.length() - 1.0) > 0.01:
+					m_bad_n += 1
+			check_eq(m_bad_n, 0, "EmissaryGradeMotes diamond mesh has 100% finite unit normals")
+
+	# Grades 0..3 stay hidden; Grades 4 & 5 activate prestige sparkle aura!
+	for g in range(0, 4):
+		sflag.set_emissary(&"gilded_compass", g)
+		check(not sflag.is_grade_aura_active() and motes != null and not motes.visible,
+			"EmissaryGradeMotes stays hidden at Grade %d" % g)
+
+	sflag.set_emissary(&"gilded_compass", 4)
+	check(sflag.is_grade_aura_active() and motes != null and motes.visible,
+		"EmissaryGradeMotes activates cleanly at Grade 4")
+	var g4_pos0 := sflag.get_grade_mote_positions()[0]
+	var g4_cols := sflag.get_grade_mote_colors()
+	var g4_lum := 0.0
+	for i in mote_count:
+		var c := g4_cols[i]
+		g4_lum += c.r + c.g + c.b
+	sflag.tick_grade_motes(0.25)
+	var g4_pos1 := sflag.get_grade_mote_positions()[0]
+	check(g4_pos1.distance_to(g4_pos0) > 0.05 and g4_pos1.z > g4_pos0.z,
+		"tick_grade_motes(0.25) streams motes smoothly downwind (z=%.3f -> %.3f)" % [g4_pos0.z, g4_pos1.z])
+
+	sflag.set_emissary(&"gilded_compass", 5)
+	check(sflag.is_grade_aura_active() and motes != null and motes.visible,
+		"EmissaryGradeMotes stays active at Grade 5")
+	var g5_cols := sflag.get_grade_mote_colors()
+	var g5_lum := 0.0
+	for i in mote_count:
+		var c := g5_cols[i]
+		g5_lum += c.r + c.g + c.b
+	check(g5_lum > g4_lum * 1.35,
+		"Grade 5 prestige motes shine brighter than Grade 4 (%.2f > %.2f)" % [g5_lum, g4_lum])
+
+	# Verify all 3 Trading Companies switch company aura tints cleanly!
+	var company_cols: Dictionary = {}
+	var company_mats: Dictionary = {}
+	for cid: StringName in [&"gilded_compass", &"sunken_archive", &"iron_tide"]:
+		sflag.set_emissary(cid, 5)
+		sflag.tick_grade_motes(0.05)
+		var mcols := sflag.get_grade_mote_colors()
+		var sum_c := Color(0.0, 0.0, 0.0, 1.0)
+		for i in mote_count:
+			var ic := mcols[i]
+			sum_c.r += ic.r
+			sum_c.g += ic.g
+			sum_c.b += ic.b
+		company_cols[cid] = Color(sum_c.r / float(mote_count), sum_c.g / float(mote_count), sum_c.b / float(mote_count), 1.0)
+		var smat := motes.material_override as StandardMaterial3D
+		if smat != null:
+			company_mats[cid] = smat.albedo_color
+	var c_gc: Color = company_cols[&"gilded_compass"]
+	var c_sa: Color = company_cols[&"sunken_archive"]
+	var c_it: Color = company_cols[&"iron_tide"]
+	check(c_gc.r > c_gc.b and c_gc.g > c_gc.b,
+		"gilded_compass Grade V motes glow warm gold (rgb=%.2f,%.2f,%.2f)" % [c_gc.r, c_gc.g, c_gc.b])
+	check(c_sa.g > c_sa.r and c_sa.b > c_sa.r,
+		"sunken_archive Grade V motes glow arcane turquoise (rgb=%.2f,%.2f,%.2f)" % [c_sa.r, c_sa.g, c_sa.b])
+	check(c_it.r > c_it.g and c_it.r > c_it.b,
+		"iron_tide Grade V motes glow blazing crimson-gold (rgb=%.2f,%.2f,%.2f)" % [c_it.r, c_it.g, c_it.b])
+	check(company_mats[&"gilded_compass"] != company_mats[&"sunken_archive"]
+			and company_mats[&"sunken_archive"] != company_mats[&"iron_tide"],
+		"EmissaryGradeMotes material albedo tint switches cleanly across all 3 Trading Companies")
+
+	print("    q15b prestige atmosphere: rainbow=%d tris (noon=%.2f night=%.2f storm=%.2f), magma_halo=%d tris (simmer=%.2f night=%.2f erupt=%.2f), emissary_motes=%dx%d tris" % [
+		rb_tris, noon_rb, night_rb, storm_rb, halo_tris, simmer_day, simmer_night, erupt_day, mote_count, mote_tris])
+
+	# 4. Vulkan-clean zero-leak teardown across all three systems!
+	holder.queue_free()
+	await physics_frames(3)
+	check_eq(IslandWaterfall._active_waterfalls, 0, "IslandWaterfall active count returns to 0")
+	check(IslandWaterfall._rainbow_mesh == null and IslandWaterfall._rainbow_mat == null,
+		"IslandWaterfall releases _rainbow_mesh and _rainbow_mat with 0 leaks")
+	check_eq(VolcanicFumarole._active_fumaroles, 0, "VolcanicFumarole active count returns to 0")
+	check(VolcanicFumarole._magma_halo_mesh == null,
+		"VolcanicFumarole releases _magma_halo_mesh with 0 leaks")
+	check_eq(ShipEmissaryFlag._active_instances, 0, "ShipEmissaryFlag active count returns to 0")
+	check(ShipEmissaryFlag._mote_mesh == null,
+		"ShipEmissaryFlag releases _mote_mesh with 0 leaks")
+
+	Weather.apply_state(saved_weather)

@@ -2826,3 +2826,173 @@ func test_q13a_treasure_glint_star_distance_gating_color_coding_and_zero_leaks()
 	Carryable.clear_shared_glint_cache()
 	TreasureCatalog.clear_mesh_cache()
 
+
+# ---------------------------------------------------------------------------
+# 11. Q15A: FortVault Golden Treasury Halo & Rising Sovereign Gold Motes
+# ---------------------------------------------------------------------------
+
+func test_q15a_fort_vault_treasury_halo_and_gold_motes() -> void:
+	Net.start_single_player()
+	FortVault.clear_shared_cache()
+
+	var holder := Node3D.new()
+	holder.name = "Q15AFortVaultHolder"
+	add_child(holder)
+
+	var vault := FortVault.new()
+	vault.name = "Q15AFortVault"
+	holder.add_child(vault)
+	vault.set_physics_process(false)
+
+	# 1. Audit sculpted 48-tri 16-wedge VaultTreasuryHalo (0 primitives, exact (0,0,1) normals, sRGB additive billboard).
+	var halo := vault.get_treasury_halo_node()
+	check(halo != null and halo == vault.get_node_or_null(^"VaultTreasuryHalo"),
+		"FortVault mounts VaultTreasuryHalo and exposes get_treasury_halo_node()")
+	check(halo.position.is_equal_approx(Vector3(0.0, 1.55, -0.75)),
+		"VaultTreasuryHalo mounted inside barred treasury chamber at (0, 1.55, -0.75)")
+	check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"VaultTreasuryHalo disables shadow casting")
+	check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+		"VaultTreasuryHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+
+	var halo_am := halo.mesh as ArrayMesh
+	var halo_tris := _count_mesh_triangles(halo_am)
+	check_eq(halo_tris, 48, "VaultTreasuryHalo has exact 48 triangles (16-wedge radial gradient disc)")
+	var halo_arr := halo_am.surface_get_arrays(0)
+	var halo_norms: PackedVector3Array = halo_arr[Mesh.ARRAY_NORMAL]
+	var halo_cols: PackedColorArray = halo_arr[Mesh.ARRAY_COLOR]
+	var halo_bad_norms := 0
+	for nv: Vector3 in halo_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			halo_bad_norms += 1
+	check_eq(halo_bad_norms, 0, "VaultTreasuryHalo assigns exact finite unit (0, 0, 1) normal to every vertex")
+	var halo_gold_core := 0
+	var halo_zero_rim := 0
+	for cv: Color in halo_cols:
+		if cv.r > 0.90 and cv.g > 0.75 and cv.b < 0.55:
+			halo_gold_core += 1
+		elif cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			halo_zero_rim += 1
+	check(halo_gold_core > 0, "VaultTreasuryHalo has warm Sovereign gold core vertices")
+	check(halo_zero_rim > 0, "VaultTreasuryHalo fades outer rim smoothly to Color(0, 0, 0, 1)")
+
+	var halo_mat := halo.material_override as StandardMaterial3D
+	check(halo_mat != null and halo_mat.vertex_color_use_as_albedo and halo_mat.vertex_color_is_srgb
+		and halo_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and halo_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and halo_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and halo_mat.billboard_keep_scale
+		and halo_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and halo_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+		"VaultTreasuryHalo uses sRGB unshaded additive scale-preserving billboard StandardMaterial3D")
+
+	# 2. Audit sculpted 16x8-tri VaultGoldMotes MultiMeshInstance3D (0 primitives, finite unit normals).
+	var motes := vault.get_gold_motes_node()
+	check(motes != null and motes == vault.get_node_or_null(^"VaultGoldMotes"),
+		"FortVault mounts VaultGoldMotes and exposes get_gold_motes_node()")
+	check_eq(motes.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"VaultGoldMotes disables shadow casting")
+	check_near(motes.visibility_range_end, 70.0, 0.01, "VaultGoldMotes visibility_range_end == 70.0")
+	check(motes.multimesh != null and motes.multimesh.instance_count == 16,
+		"VaultGoldMotes allocates 16 floating gold mote instances")
+	check(motes.multimesh.mesh is ArrayMesh and not (motes.multimesh.mesh is PrimitiveMesh),
+		"VaultGoldMotes uses sculpted ArrayMesh (zero PrimitiveMesh)")
+
+	var mote_am := motes.multimesh.mesh as ArrayMesh
+	var mote_tris := _count_mesh_triangles(mote_am)
+	check_eq(mote_tris, 8, "VaultGoldMotes diamond mote has exact 8 triangles (16x8 = 128 instanced tris)")
+	var mote_arr := mote_am.surface_get_arrays(0)
+	var mote_norms: PackedVector3Array = mote_arr[Mesh.ARRAY_NORMAL]
+	var mote_bad_norms := 0
+	for nv: Vector3 in mote_norms:
+		if not nv.is_finite() or absf(nv.length() - 1.0) > 0.002:
+			mote_bad_norms += 1
+	check_eq(mote_bad_norms, 0, "VaultGoldMotes diamond normals are all finite unit vectors")
+
+	var mote_mat := motes.material_override as StandardMaterial3D
+	check(mote_mat != null and mote_mat.vertex_color_use_as_albedo and mote_mat.vertex_color_is_srgb
+		and mote_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and mote_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and mote_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+		"VaultGoldMotes uses sRGB additive unshaded StandardMaterial3D")
+
+	# 3. Verify locked energy/scale, headless step_animation() upward mote rise, and <= 55 m camera gating.
+	var locked_energy := vault.get_treasury_halo_energy()
+	var locked_scale := halo.scale.x
+	check(locked_energy >= 0.55 and locked_energy <= 0.75,
+		"sealed VaultTreasuryHalo pulses warmly near 0.65 (got %.3f)" % locked_energy)
+	check_near(locked_scale, 1.0, 0.05, "sealed VaultTreasuryHalo starts near scale 1.0 (got %.3f)" % locked_scale)
+
+	var pos_before := vault.get_gold_mote_positions().duplicate()
+	check_eq(pos_before.size(), 16, "get_gold_mote_positions() returns all 16 mote positions")
+	var avg_y_before := 0.0
+	for p: Vector3 in pos_before:
+		check(p.y >= 0.249 and p.y <= 2.851, "initial gold mote y=%.3f within 0.25..2.85 m" % p.y)
+		avg_y_before += p.y
+	avg_y_before /= float(pos_before.size())
+
+	vault.step_animation(0.25)
+	var pos_after := vault.get_gold_mote_positions().duplicate()
+	var avg_y_after := 0.0
+	var rose_count := 0
+	for i in pos_after.size():
+		check(pos_after[i].y >= 0.249 and pos_after[i].y <= 2.851,
+			"animated gold mote %d y=%.3f stays inside 0.25..2.85 m" % [i, pos_after[i].y])
+		avg_y_after += pos_after[i].y
+		if pos_after[i].y > pos_before[i].y + 0.05:
+			rose_count += 1
+	avg_y_after /= float(pos_after.size())
+	check(avg_y_after > avg_y_before + 0.08,
+		"headless step_animation(0.25) raises VaultGoldMotes smoothly upward (%.3f -> %.3f m)" % [avg_y_before, avg_y_after])
+	check_eq(rose_count, 16, "all 16 staggered VaultGoldMotes rise smoothly on step_animation(0.25)")
+
+	# Live camera distance gating (> 55 m pauses mote ticks; <= 55 m resumes cleanly).
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.current = true
+	cam.global_position = Vector3(0.0, 4.0, 80.0)
+	var pos_far_before := vault.get_gold_mote_positions().duplicate()
+	vault.step_animation(0.20)
+	var pos_far_after := vault.get_gold_mote_positions().duplicate()
+	check(pos_far_after[0].is_equal_approx(pos_far_before[0]),
+		"VaultGoldMotes distance-gates mote updates when camera is > 55 m away")
+	cam.global_position = Vector3(0.0, 2.0, 14.0)
+	vault.step_animation(0.20)
+	var pos_near_after := vault.get_gold_mote_positions().duplicate()
+	check(pos_near_after[0].y > pos_far_after[0].y + 0.04,
+		"VaultGoldMotes resumes rising smoothly when camera moves within <= 55 m")
+	cam.current = false
+	cam.queue_free()
+
+	# 4. Unlock & open_vault() -> VaultTreasuryHalo surges brighter (~1.35) & broader (1.0 -> 1.42)!
+	vault.set_siege_cleared(true)
+	check(vault.open_vault(), "FortVault.open_vault() opens cleanly for Q15A surge test")
+	for _s in 30:
+		vault.step_animation(0.05)
+	check_near(vault.get_open_progress(), 1.0, 0.001, "FortVault reaches full open progress 1.0")
+	var open_energy := vault.get_treasury_halo_energy()
+	var open_scale := halo.scale.x
+	check(open_energy >= 1.25 and open_energy <= 1.45,
+		"opened VaultTreasuryHalo surges warmly near 1.35 (got %.3f)" % open_energy)
+	check(open_energy > locked_energy * 1.75,
+		"opened VaultTreasuryHalo energy clearly exceeds locked pulse (%.3f -> %.3f)" % [locked_energy, open_energy])
+	check(open_scale >= 1.38 and open_scale <= 1.46,
+		"opened VaultTreasuryHalo scale surges smoothly from 1.0 -> ~1.42 (got %.3f)" % open_scale)
+
+	print("    Q15A FortVault metrics: halo=%d tris (energy %.2f->%.2f, scale %.2f->%.2f) | motes=%dx%d tris (dy=+%.3f m)" % [
+		halo_tris, locked_energy, open_energy, locked_scale, open_scale,
+		motes.multimesh.instance_count, mote_tris, avg_y_after - avg_y_before])
+
+	# 5. Vulkan-safe teardown & 0 ObjectDB leaks!
+	holder.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(vault), "Q15A FortVault freed cleanly")
+	check_eq(FortVault._active_vaults, 0, "FortVault._active_vaults returns to 0 on teardown")
+	check(FortVault._halo_mesh == null and FortVault._gold_mote_mesh == null and FortVault._mote_mat == null
+		and FortVault._frame_mesh == null and FortVault._gate_left_mesh == null and FortVault._gate_right_mesh == null
+		and FortVault._stone_mat == null and FortVault._iron_mat == null and FortVault._brass_mat == null,
+		"FortVault auto-releases all static meshes & materials including halo and motes (0 leaks)")
+	FortVault.clear_shared_cache()
+
+

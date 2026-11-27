@@ -30,6 +30,8 @@ const LOOT_CONE_RADIUS := 2.6
 const FIRE_COOLDOWN := 0.65
 const LOOT_REEL_DURATION := 0.42
 const MISS_FLIGHT_DURATION := 0.32
+const MUZZLE_SPARK_DURATION := 0.20
+const LOCK_GLINT_POLL_INTERVAL := 0.10
 const REEL_SPEED := 11.0
 const YAW_MIN := -1.02
 const YAW_MAX := 1.02
@@ -93,8 +95,12 @@ var _winch_pivot: Node3D = null
 var _winch_drum_mi: MeshInstance3D = null
 var _winch_crank_mi: MeshInstance3D = null
 var _muzzle_point: Node3D = null
+var _muzzle_spark_mi: MeshInstance3D = null
+var _muzzle_spark_mat: StandardMaterial3D = null
 var _spear_node: Node3D = null
 var _spear_mi: MeshInstance3D = null
+var _lock_glint_mi: MeshInstance3D = null
+var _lock_glint_mat: StandardMaterial3D = null
 var _rope_mi: MeshInstance3D = null
 
 # Runtime animation & physics state
@@ -110,6 +116,10 @@ var _recoil: float = 0.0
 var _winch_spin_vel: float = 0.0
 var _reel_sfx_accum: float = 0.0
 var _reeled_this_tick: bool = false
+var _muzzle_spark_timer: float = 0.0
+var _lock_glint_poll_accum: float = 0.0
+var _lock_glint_clock: float = 0.0
+var _has_loot_lock: bool = false
 
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
 var _ray_result: Variant = ClassDB.instantiate(&"PhysicsIntersectRayResult3D") if ClassDB.class_exists(&"PhysicsIntersectRayResult3D") else null
@@ -127,6 +137,8 @@ static var _winch_drum_mesh: ArrayMesh = null
 static var _winch_crank_mesh: ArrayMesh = null
 static var _spear_mesh: ArrayMesh = null
 static var _rope_tube_mesh: ArrayMesh = null
+static var _muzzle_spark_mesh: ArrayMesh = null
+static var _lock_glint_mesh: ArrayMesh = null
 static var _oak_mat: StandardMaterial3D = null
 static var _iron_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
@@ -148,6 +160,8 @@ static func clear_shared_cache() -> void:
 	_winch_crank_mesh = null
 	_spear_mesh = null
 	_rope_tube_mesh = null
+	_muzzle_spark_mesh = null
+	_lock_glint_mesh = null
 	_oak_mat = null
 	_iron_mat = null
 	_brass_mat = null
@@ -167,6 +181,8 @@ func _ready() -> void:
 	_ray_params.collide_with_bodies = true
 	_apply_aim_transforms()
 	_sync_spear_and_rope_visuals()
+	_sync_muzzle_spark_visual()
+	_sync_lock_glint_visual()
 
 
 func _exit_tree() -> void:
@@ -178,7 +194,8 @@ func _exit_tree() -> void:
 	for mi: MeshInstance3D in [
 		_pedestal_oak_mi, _pedestal_iron_mi, _yoke_mi,
 		_launcher_iron_mi, _launcher_brass_mi,
-		_winch_drum_mi, _winch_crank_mi, _spear_mi, _rope_mi
+		_winch_drum_mi, _winch_crank_mi, _spear_mi, _rope_mi,
+		_muzzle_spark_mi, _lock_glint_mi
 	]:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
@@ -192,6 +209,12 @@ func _exit_tree() -> void:
 	_winch_crank_mi = null
 	_spear_mi = null
 	_rope_mi = null
+	_muzzle_spark_mi = null
+	_muzzle_spark_mat = null
+	_lock_glint_mi = null
+	_lock_glint_mat = null
+	_muzzle_spark_timer = 0.0
+	_has_loot_lock = false
 	_visual_root = null
 	_yaw_pivot = null
 	_pitch_pivot = null
@@ -243,13 +266,42 @@ func get_aim_direction_world() -> Vector3:
 	return (global_basis * (-local_b.z)).normalized()
 
 
+## Return the sculpted additive HarpoonMuzzleSpark MeshInstance3D mounted at _muzzle_point.
+func get_muzzle_spark_node() -> MeshInstance3D:
+	return _muzzle_spark_mi
+
+
+## Return the sculpted additive HarpoonLockGlint MeshInstance3D mounted near the stowed spear tip.
+func get_lock_glint_node() -> MeshInstance3D:
+	return _lock_glint_mi
+
+
+## True when a snag-able Carryable, SupplyBarrel, or FlotsamCluster sits in the 2.6 m loot cone
+## up to 38.0 m while the harpoon is stowed in State.IDLE (read-only, zero side effects).
+func has_magnetic_loot_target() -> bool:
+	if not is_inside_tree() or state != State.IDLE:
+		return false
+	var muzzle := get_muzzle_world_pos()
+	var aim_dir := get_aim_direction_world()
+	return not _find_cone_loot_target(muzzle, aim_dir).is_empty()
+
+
+## Immediately evaluate the magnetic loot cone and update HarpoonLockGlint visibility.
+func refresh_lock_glint() -> bool:
+	_lock_glint_poll_accum = 0.0
+	_has_loot_lock = has_magnetic_loot_target()
+	_sync_lock_glint_visual()
+	return _has_loot_lock
+
+
 ## Total sculpted triangle count across all MeshInstance3D nodes in this ShipHarpoon.
 func get_triangle_count() -> int:
 	var tris := 0
 	for mi: MeshInstance3D in [
 		_pedestal_oak_mi, _pedestal_iron_mi, _yoke_mi,
 		_launcher_iron_mi, _launcher_brass_mi,
-		_winch_drum_mi, _winch_crank_mi, _spear_mi, _rope_mi
+		_winch_drum_mi, _winch_crank_mi, _spear_mi, _rope_mi,
+		_muzzle_spark_mi, _lock_glint_mi
 	]:
 		if mi != null and mi.mesh is ArrayMesh:
 			var am := mi.mesh as ArrayMesh
@@ -278,6 +330,10 @@ func fire(shooter_pawn: Node = null) -> Dictionary:
 	_recoil = 0.14
 	_winch_spin_vel = 18.0
 	_apply_aim_transforms()
+	_trigger_muzzle_spark()
+	_has_loot_lock = false
+	_lock_glint_poll_accum = 0.0
+	_sync_lock_glint_visual()
 
 	var muzzle := get_muzzle_world_pos()
 	var aim_dir := get_aim_direction_world()
@@ -296,6 +352,7 @@ func fire(shooter_pawn: Node = null) -> Dictionary:
 			if label == "":
 				label = "Treasure"
 			_begin_carryable_reel(item, aim_dir)
+			_emit_ocean_splash_foam(_reel_start_pos, false)
 			loot_snagged.emit(label)
 			var res_loot := {
 				"hit": true,
@@ -309,28 +366,32 @@ func fire(shooter_pawn: Node = null) -> Dictionary:
 
 		elif hit_kind == &"supply_barrel" and hit_node != null:
 			var label := _collect_supply_barrel(hit_node, shooter_pawn)
-			_begin_quick_retract(hit_node.global_position + Vector3.UP * 0.45, aim_dir)
+			var barrel_pos := hit_node.global_position
+			_begin_quick_retract(barrel_pos + Vector3.UP * 0.45, aim_dir)
+			_emit_ocean_splash_foam(barrel_pos, false)
 			loot_snagged.emit(label)
 			var res_barrel := {
 				"hit": true,
 				"kind": &"supply_barrel",
 				"target": hit_node,
 				"label": label,
-				"position": hit_node.global_position,
+				"position": barrel_pos,
 			}
 			fired.emit(res_barrel)
 			return res_barrel
 
 		elif hit_kind == &"flotsam" and hit_node != null:
 			var label := _collect_flotsam_cluster(hit_node, shooter_pawn)
-			_begin_quick_retract(hit_node.global_position + Vector3.UP * 0.25, aim_dir)
+			var flotsam_pos := hit_node.global_position
+			_begin_quick_retract(flotsam_pos + Vector3.UP * 0.25, aim_dir)
+			_emit_ocean_splash_foam(flotsam_pos, true)
 			loot_snagged.emit(label)
 			var res_flotsam := {
 				"hit": true,
 				"kind": &"flotsam",
 				"target": hit_node,
 				"label": label,
-				"position": hit_node.global_position,
+				"position": flotsam_pos,
 			}
 			fired.emit(res_flotsam)
 			return res_flotsam
@@ -389,19 +450,22 @@ func fire(shooter_pawn: Node = null) -> Dictionary:
 			fired.emit(res_tether)
 			return res_tether
 
-	# 3. Miss in open water/air: shoot out briefly (0.32 s) with splash_small and retract cleanly.
+	# 3. Miss in open water/air: shoot out briefly (0.32 s) with splash_small & wave foam, then retract cleanly.
 	var miss_dist := 22.0
+	var hit_waves := false
 	if aim_dir.y < -0.04:
 		var sea_y := Sea.height(muzzle.x + aim_dir.x * 12.0, muzzle.z + aim_dir.z * 12.0) if Sea != null else 0.0
 		var t_water := (sea_y - muzzle.y) / aim_dir.y
 		if t_water > 1.5 and t_water < MAX_RANGE:
 			miss_dist = t_water
+			hit_waves = true
 	_flight_target_pos = muzzle + aim_dir * minf(miss_dist, MAX_RANGE)
 	_flight_elapsed = 0.0
 	_flight_duration = MISS_FLIGHT_DURATION
 	_tether_spear_dir = aim_dir
 	state = State.EXTENDING
 	_sync_spear_and_rope_visuals()
+	_emit_ocean_splash_foam(_flight_target_pos, hit_waves)
 	Audio.play_sfx(&"pistol_shot", muzzle, -2.0)
 	Audio.play_sfx(&"splash_small", _flight_target_pos, -1.0)
 	var res_miss := {
@@ -436,7 +500,10 @@ func release(play_audio: bool = true) -> void:
 	tether_length = 0.0
 	is_reeling = false
 	state = State.IDLE
+	_has_loot_lock = false
+	_lock_glint_poll_accum = 0.0
 	_sync_spear_and_rope_visuals()
+	_sync_lock_glint_visual()
 	if was_active:
 		if play_audio and is_inside_tree():
 			Audio.play_sfx(&"rope_creak", get_muzzle_world_pos(), -2.0)
@@ -447,9 +514,28 @@ func release(play_audio: bool = true) -> void:
 # Simulation & Visual Tick
 # ==============================================================================
 
-func _physics_process(delta: float) -> void:
+## Deterministic simulation & VFX tick (called from _physics_process and directly testable).
+func step_harpoon(delta: float) -> void:
 	if cooldown > 0.0:
 		cooldown = maxf(0.0, cooldown - delta)
+
+	if _muzzle_spark_timer > 0.0:
+		_muzzle_spark_timer = maxf(0.0, _muzzle_spark_timer - delta)
+		if _muzzle_spark_timer <= 0.0001:
+			_muzzle_spark_timer = 0.0
+		_sync_muzzle_spark_visual()
+
+	if state == State.IDLE:
+		_lock_glint_poll_accum += delta
+		if _lock_glint_poll_accum >= LOCK_GLINT_POLL_INTERVAL:
+			_lock_glint_poll_accum = 0.0
+			_has_loot_lock = has_magnetic_loot_target()
+		if _has_loot_lock:
+			_lock_glint_clock += delta
+	else:
+		_lock_glint_poll_accum = 0.0
+		_has_loot_lock = false
+	_sync_lock_glint_visual()
 
 	if not Net.is_host():
 		return
@@ -472,6 +558,10 @@ func _physics_process(delta: float) -> void:
 				is_reeling = false
 				_step_tether_physics(false, delta)
 			_reeled_this_tick = false
+
+
+func _physics_process(delta: float) -> void:
+	step_harpoon(delta)
 
 
 func _process(delta: float) -> void:
@@ -835,6 +925,61 @@ func _orient_spear_world(pos: Vector3, forward_dir: Vector3) -> void:
 	_spear_node.global_transform = Transform3D(Basis(x, y, -f) * Basis.from_scale(Vector3.ONE * visual_scale), pos)
 
 
+func _trigger_muzzle_spark() -> void:
+	_muzzle_spark_timer = MUZZLE_SPARK_DURATION
+	_sync_muzzle_spark_visual()
+
+
+func _sync_muzzle_spark_visual() -> void:
+	if _muzzle_spark_mi == null or not is_instance_valid(_muzzle_spark_mi):
+		return
+	if _muzzle_spark_timer <= 0.0:
+		_muzzle_spark_mi.visible = false
+		_muzzle_spark_mi.scale = Vector3.ONE * 0.1
+		if _muzzle_spark_mat != null:
+			_muzzle_spark_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+	var u := clampf(1.0 - _muzzle_spark_timer / MUZZLE_SPARK_DURATION, 0.0, 1.0)
+	var expand := lerpf(0.72, 1.38, smoothstep(0.0, 0.28, u))
+	var taper := lerpf(1.0, 0.58, smoothstep(0.45, 1.0, u))
+	var sc := expand * taper
+	var energy := 1.48 * pow(1.0 - u, 1.45)
+	_muzzle_spark_mi.visible = true
+	_muzzle_spark_mi.scale = Vector3(sc, sc, sc)
+	if _muzzle_spark_mat != null:
+		_muzzle_spark_mat.albedo_color = Color(energy, energy, energy, 1.0)
+
+
+func _sync_lock_glint_visual() -> void:
+	if _lock_glint_mi == null or not is_instance_valid(_lock_glint_mi):
+		return
+	var active := _has_loot_lock and state == State.IDLE and is_inside_tree()
+	if not active:
+		_lock_glint_mi.visible = false
+		if _lock_glint_mat != null:
+			_lock_glint_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+	var pulse := 0.5 + 0.5 * sin(_lock_glint_clock * 7.5)
+	var energy := lerpf(0.78, 1.38, pulse)
+	var sc := lerpf(0.86, 1.18, pulse)
+	_lock_glint_mi.visible = true
+	_lock_glint_mi.scale = Vector3(sc, sc, sc)
+	if _lock_glint_mat != null:
+		_lock_glint_mat.albedo_color = Color(energy, energy, energy, 1.0)
+
+
+func _emit_ocean_splash_foam(hit_pos: Vector3, force_water: bool) -> void:
+	if Ocean.current == null or not is_instance_valid(Ocean.current):
+		return
+	if not Ocean.current.has_method(&"add_foam"):
+		return
+	if not force_water:
+		var sea_y := Sea.height(hit_pos.x, hit_pos.z) if Sea != null else 0.0
+		if hit_pos.y > sea_y + 2.8:
+			return
+	Ocean.current.add_foam(hit_pos, 1.35, 0.58)
+
+
 # ==============================================================================
 # Scene Construction & Shared WeakRef PBR Asset Builders (0 Primitives)
 # ==============================================================================
@@ -907,6 +1052,16 @@ func _build_visuals() -> void:
 	_muzzle_point.position = Vector3(0.0, 0.04, -0.78)
 	_pitch_pivot.add_child(_muzzle_point)
 
+	_muzzle_spark_mat = _make_vfx_billboard_mat()
+	_muzzle_spark_mi = MeshInstance3D.new()
+	_muzzle_spark_mi.name = "HarpoonMuzzleSpark"
+	_muzzle_spark_mi.mesh = _muzzle_spark_mesh
+	_muzzle_spark_mi.material_override = _muzzle_spark_mat
+	_muzzle_spark_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_muzzle_spark_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_muzzle_spark_mi.visible = false
+	_muzzle_point.add_child(_muzzle_spark_mi)
+
 	_spear_node = Node3D.new()
 	_spear_node.name = "HarpoonSpear"
 	add_child(_spear_node)
@@ -917,6 +1072,17 @@ func _build_visuals() -> void:
 	_spear_mi.material_override = _iron_mat
 	_spear_node.add_child(_spear_mi)
 
+	_lock_glint_mat = _make_vfx_billboard_mat()
+	_lock_glint_mi = MeshInstance3D.new()
+	_lock_glint_mi.name = "HarpoonLockGlint"
+	_lock_glint_mi.position = Vector3(0.0, 0.0, -0.72)
+	_lock_glint_mi.mesh = _lock_glint_mesh
+	_lock_glint_mi.material_override = _lock_glint_mat
+	_lock_glint_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_lock_glint_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_lock_glint_mi.visible = false
+	_spear_node.add_child(_lock_glint_mi)
+
 	_rope_mi = MeshInstance3D.new()
 	_rope_mi.name = "HarpoonRopeLine"
 	_rope_mi.mesh = _rope_tube_mesh
@@ -924,6 +1090,22 @@ func _build_visuals() -> void:
 	_rope_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_rope_mi.visible = false
 	add_child(_rope_mi)
+
+
+static func _make_vfx_billboard_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.uv1_triplanar = true
+	mat.uv1_world_triplanar = false
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -995,6 +1177,93 @@ static func _ensure_shared_assets() -> void:
 		_spear_mesh = _build_spear_mesh()
 	if _rope_tube_mesh == null:
 		_rope_tube_mesh = _build_rope_tube_mesh()
+	if _muzzle_spark_mesh == null:
+		_muzzle_spark_mesh = _build_muzzle_spark_mesh()
+	if _lock_glint_mesh == null:
+		_lock_glint_mesh = _build_lock_glint_mesh()
+
+
+static func _emit_billboard_tri(st: SurfaceTool, a: Vector3, ca: Color,
+		b: Vector3, cb: Color, c: Vector3, cc: Color) -> void:
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	st.set_normal(FRONT_NORMAL)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_normal(FRONT_NORMAL)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_normal(FRONT_NORMAL)
+	st.set_color(cc)
+	st.add_vertex(c)
+
+
+static func _build_star_billboard_mesh(
+	mid_tip_x: float,
+	mid_tip_y: float,
+	mid_val: float,
+	out_tip_x: float,
+	out_tip_y: float,
+	out_val: float,
+	col_core: Color,
+	col_mid_tip: Color,
+	col_mid_val: Color
+) -> ArrayMesh:
+	# Exact 24-tri 2-ring 4-point star billboard (8 inner core tris + 16 feathered outer skirt tris)
+	# with finite unit (0, 0, 1) normals and zero-edge Color(0, 0, 0, 1) outer rim.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var ctr := Vector3.ZERO
+	var col_zero := Color(0.0, 0.0, 0.0, 1.0)
+	var mid_ring: Array[Vector3] = [
+		Vector3(0.0, mid_tip_y, 0.0),
+		Vector3(mid_val, mid_val, 0.0),
+		Vector3(mid_tip_x, 0.0, 0.0),
+		Vector3(mid_val, -mid_val, 0.0),
+		Vector3(0.0, -mid_tip_y, 0.0),
+		Vector3(-mid_val, -mid_val, 0.0),
+		Vector3(-mid_tip_x, 0.0, 0.0),
+		Vector3(-mid_val, mid_val, 0.0),
+	]
+	var out_ring: Array[Vector3] = [
+		Vector3(0.0, out_tip_y, 0.0),
+		Vector3(out_val, out_val, 0.0),
+		Vector3(out_tip_x, 0.0, 0.0),
+		Vector3(out_val, -out_val, 0.0),
+		Vector3(0.0, -out_tip_y, 0.0),
+		Vector3(-out_val, -out_val, 0.0),
+		Vector3(-out_tip_x, 0.0, 0.0),
+		Vector3(-out_val, out_val, 0.0),
+	]
+	for k in 8:
+		var nk := (k + 1) % 8
+		var ck := col_mid_tip if (k % 2 == 0) else col_mid_val
+		var cnk := col_mid_tip if (nk % 2 == 0) else col_mid_val
+		_emit_billboard_tri(st, ctr, col_core, mid_ring[k], ck, mid_ring[nk], cnk)
+		_emit_billboard_tri(st, mid_ring[k], ck, out_ring[k], col_zero, out_ring[nk], col_zero)
+		_emit_billboard_tri(st, mid_ring[k], ck, out_ring[nk], col_zero, mid_ring[nk], cnk)
+	return st.commit()
+
+
+static func _build_muzzle_spark_mesh() -> ArrayMesh:
+	# 24-tri 4-point brass-gold launch spark fading smoothly to black rim.
+	return _build_star_billboard_mesh(
+		0.22, 0.24, 0.075,
+		0.52, 0.56, 0.20,
+		Color(1.0, 0.98, 0.84, 1.0),
+		Color(1.0, 0.78, 0.24, 1.0),
+		Color(0.92, 0.60, 0.14, 1.0)
+	)
+
+
+static func _build_lock_glint_mesh() -> ArrayMesh:
+	# 24-tri turquoise-gold diamond star magnetic-loot lock glint fading smoothly to black rim.
+	return _build_star_billboard_mesh(
+		0.13, 0.16, 0.055,
+		0.32, 0.38, 0.14,
+		Color(0.96, 1.0, 0.92, 1.0),
+		Color(0.30, 0.98, 0.86, 1.0),
+		Color(1.0, 0.84, 0.30, 1.0)
+	)
 
 
 static func _build_pedestal_oak_mesh() -> ArrayMesh:

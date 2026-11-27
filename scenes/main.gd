@@ -4150,15 +4150,12 @@ func _apply_hero_shot(mode: String) -> void:
 					out_dir.y = 0.0
 					out_dir = out_dir.normalized() if out_dir.length_squared() > 0.001 else sea_dir
 					var side_dir := (-out_dir).cross(Vector3.UP).normalized()
-					var stand_off := clampf(er * 0.42, 40.0, 58.0)
-					var cam_p := Vector3(wf_pos.x, 0.0, wf_pos.z) + out_dir * stand_off - side_dir * 14.0 \
-						+ Vector3(0.0, clampf(epk * 0.36, 18.0, 30.0), 0.0)
-					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 6.5)
-					var wf_mid_y := clampf(maxf(wf_pos.y * 0.50, epk * 0.24), 9.0, 30.0)
-					var look_p := Vector3(wf_pos.x, wf_mid_y, wf_pos.z).lerp(
-						epos + Vector3(0.0, epk * 0.30, 0.0), 0.16
-					)
-					_mount_shot_camera(cam_p, look_p, 56.0)
+					var rb_node := wf_node.get_node_or_null(^"WaterfallMistRainbow") as Node3D
+					var focus_p := rb_node.global_position if rb_node != null else (wf_pos + out_dir * 6.0 + Vector3(0.0, -7.0, 0.0))
+					var cam_p := focus_p + out_dir * 16.5 - side_dir * 4.5 + Vector3(0.0, 3.8, 0.0)
+					cam_p.y = maxf(cam_p.y, emerald.world_surface_height(cam_p) + 2.6)
+					var look_p := focus_p.lerp(wf_pos, 0.25) + Vector3(0.0, 1.8, 0.0)
+					_mount_shot_camera(cam_p, look_p, 60.0)
 				else:
 					var side_dir := (-sea_dir).cross(Vector3.UP).normalized()
 					var cam_p := epos + sea_dir * (er + 42.0) + side_dir * 14.0 \

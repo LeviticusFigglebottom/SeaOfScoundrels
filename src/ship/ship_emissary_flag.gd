@@ -62,6 +62,16 @@ const COMPANY_PALETTES := {
 	],
 }
 
+const GRADE_MOTE_COUNT := 10
+const GRADE_MOTE_VISIBILITY_RANGE := 220.0
+
+# Company Grade IV-V prestige aura sparkle palettes: [primary_glow, accent_spark] (sRGB).
+const COMPANY_AURA_COLORS := {
+	&"gilded_compass": [Color(1.00, 0.84, 0.28, 1.0), Color(1.00, 0.96, 0.68, 1.0)],
+	&"sunken_archive": [Color(0.18, 0.94, 0.86, 1.0), Color(0.68, 1.00, 0.96, 1.0)],
+	&"iron_tide": [Color(1.00, 0.42, 0.14, 1.0), Color(1.00, 0.80, 0.28, 1.0)],
+}
+
 @export var ship_class: StringName = &"sloop"
 
 var active_company: StringName = &""
@@ -74,6 +84,19 @@ var _banner_pivot: Node3D = null
 var _banner_mi: MeshInstance3D = null
 var _grade_pennants: Array[MeshInstance3D] = []
 var _all_mesh_instances: Array[MeshInstance3D] = []
+var _grade_motes: MultiMeshInstance3D = null
+var _grade_motes_mm: MultiMesh = null
+var _grade_motes_mat: StandardMaterial3D = null
+var _mote_clock: float = 0.0
+var _mote_phase_off: PackedFloat32Array = PackedFloat32Array()
+var _mote_y_off: PackedFloat32Array = PackedFloat32Array()
+var _mote_x_amp: PackedFloat32Array = PackedFloat32Array()
+var _mote_speed_mul: PackedFloat32Array = PackedFloat32Array()
+var _mote_spin_rate: PackedFloat32Array = PackedFloat32Array()
+var _mote_positions: PackedVector3Array = PackedVector3Array()
+var _mote_colors: PackedColorArray = PackedColorArray()
+var _mote_primary_col: Color = Color(1.00, 0.84, 0.28, 1.0)
+var _mote_accent_col: Color = Color(1.00, 0.96, 0.68, 1.0)
 var _flutter_time: float = 0.0
 var _current_wind_yaw: float = 0.0
 
@@ -83,6 +106,7 @@ static var _pbr_tex_cache: Dictionary = {}  # String path -> WeakRef(Texture2D)
 static var _oak_mesh: ArrayMesh = null
 static var _brass_mesh: ArrayMesh = null
 static var _pennant_mesh: ArrayMesh = null
+static var _mote_mesh: ArrayMesh = null
 static var _banner_meshes: Dictionary = {}  # StringName company_id -> ArrayMesh
 static var _oak_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
@@ -124,6 +148,7 @@ static func clear_shared_cache() -> void:
 	_oak_mesh = null
 	_brass_mesh = null
 	_pennant_mesh = null
+	_mote_mesh = null
 	_banner_meshes.clear()
 	_oak_mat = null
 	_brass_mat = null
@@ -183,6 +208,9 @@ func _process(delta: float) -> void:
 			pen.rotation.y = sin(_flutter_time * 2.85 + float(i) * 0.85) * 0.13
 			pen.rotation.z = sin(_flutter_time * 2.15 + float(i) * 1.10) * 0.055
 
+	if is_grade_aura_active():
+		tick_grade_motes(dt)
+
 
 # ==============================================================================
 # Public Emissary API & Introspection
@@ -198,6 +226,8 @@ func set_emissary(company_id: StringName, grade: int) -> void:
 		for pen: MeshInstance3D in _grade_pennants:
 			if pen != null and is_instance_valid(pen):
 				pen.visible = false
+		if _grade_motes != null and is_instance_valid(_grade_motes):
+			_grade_motes.visible = false
 		return
 
 	visible = true
@@ -207,6 +237,14 @@ func set_emissary(company_id: StringName, grade: int) -> void:
 		var pen := _grade_pennants[i]
 		if pen != null and is_instance_valid(pen):
 			pen.visible = (i < emissary_grade)
+
+	var aura_pal: Array = COMPANY_AURA_COLORS.get(active_company, COMPANY_AURA_COLORS[&"gilded_compass"])
+	_mote_primary_col = aura_pal[0] as Color
+	_mote_accent_col = aura_pal[1] as Color
+	if is_grade_aura_active():
+		tick_grade_motes(0.0)
+	elif _grade_motes != null and is_instance_valid(_grade_motes):
+		_grade_motes.visible = false
 
 
 ## Return total sculpted triangle count across all mounted flag MeshInstance3Ds.
@@ -228,6 +266,69 @@ func get_visible_grade_pennants() -> int:
 		if pen != null and is_instance_valid(pen) and pen.visible:
 			count += 1
 	return count
+
+
+## Return the MultiMeshInstance3D rendering the 10 Grade IV-V prestige diamond sparkles.
+func get_grade_motes_node() -> MultiMeshInstance3D:
+	return _grade_motes
+
+
+## Return the pre-allocated local-space positions of the 10 prestige sparkles (headless-safe).
+func get_grade_mote_positions() -> PackedVector3Array:
+	return _mote_positions
+
+
+## Return the pre-allocated instance colors of the 10 prestige sparkles (headless-safe).
+func get_grade_mote_colors() -> PackedColorArray:
+	return _mote_colors
+
+
+## True while the vessel flies a prestigious Grade IV or V Emissary Flag aura.
+func is_grade_aura_active() -> bool:
+	return visible and active_company != &"" and emissary_grade >= 4
+
+
+## Advance the 10 company-colored prestige sparkles streaming downwind off the stern banner (0 allocations).
+func tick_grade_motes(delta: float) -> void:
+	if _grade_motes == null or not is_instance_valid(_grade_motes) or _grade_motes_mm == null:
+		return
+	if not is_grade_aura_active():
+		_grade_motes.visible = false
+		return
+
+	_grade_motes.visible = true
+	var dt := maxf(0.0, delta)
+	var is_g5 := (emissary_grade >= 5)
+	var speed_base := 0.92 if is_g5 else 0.55
+	var bright_mul := 1.18 if is_g5 else 0.72
+	var scale_mul := 1.22 if is_g5 else 0.92
+	_mote_clock = fmod(_mote_clock + dt * speed_base, 1000.0)
+
+	if _grade_motes_mat != null:
+		var mat_tint := _mote_primary_col.lerp(Color.WHITE, 0.50)
+		_grade_motes_mat.albedo_color = Color(mat_tint.r, mat_tint.g, mat_tint.b, 1.0)
+
+	for i in GRADE_MOTE_COUNT:
+		var phase := fposmod(_mote_clock * _mote_speed_mul[i] + _mote_phase_off[i], 1.0)
+		var env := smoothstep(0.0, 0.16, phase) * smoothstep(0.0, 0.30, 1.0 - phase)
+		var z := lerpf(0.26, 2.32, phase)
+		var sway := phase * TAU + _mote_phase_off[i] * TAU
+		var x := sin(sway * 1.15) * _mote_x_amp[i] * (0.35 + 0.65 * phase)
+		var y := _mote_y_off[i] + sin(sway) * 0.10 + phase * 0.24
+		var sc := maxf(0.02, lerpf(0.45, 1.15, env) * scale_mul)
+		var rot_y := _mote_clock * _mote_spin_rate[i] + float(i) * 0.7
+		var rot_x := rot_y * 0.65
+		var mote_pos := Vector3(x, y, z)
+		var mote_basis := Basis.from_euler(Vector3(rot_x, rot_y, 0.0)).scaled(Vector3(sc, sc, sc))
+		_mote_positions[i] = mote_pos
+		_grade_motes_mm.set_instance_transform(i, Transform3D(mote_basis, mote_pos))
+
+		var accent_t := 0.5 + 0.5 * sin(sway * 1.7 + float(i))
+		var base_c := _mote_primary_col.lerp(_mote_accent_col, accent_t)
+		var lum := env * bright_mul
+		var mote_col := Color(base_c.r * lum, base_c.g * lum, base_c.b * lum, 1.0)
+		_mote_colors[i] = mote_col
+		_grade_motes_mm.set_instance_color(i, mote_col)
 
 
 # ==============================================================================
@@ -258,7 +359,60 @@ func _ensure_built() -> void:
 		pen.visible = false
 		_grade_pennants.append(pen)
 
+	_build_grade_motes()
 	visible = false
+
+
+func _build_grade_motes() -> void:
+	_grade_motes_mat = StandardMaterial3D.new()
+	_grade_motes_mat.vertex_color_use_as_albedo = true
+	_grade_motes_mat.vertex_color_is_srgb = true
+	_grade_motes_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_grade_motes_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_grade_motes_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_grade_motes_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_grade_motes_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0xE115A415
+	_mote_phase_off.resize(GRADE_MOTE_COUNT)
+	_mote_y_off.resize(GRADE_MOTE_COUNT)
+	_mote_x_amp.resize(GRADE_MOTE_COUNT)
+	_mote_speed_mul.resize(GRADE_MOTE_COUNT)
+	_mote_spin_rate.resize(GRADE_MOTE_COUNT)
+	_mote_positions.resize(GRADE_MOTE_COUNT)
+	_mote_colors.resize(GRADE_MOTE_COUNT)
+	for i in GRADE_MOTE_COUNT:
+		var base_p := (float(i) + 0.5) / float(GRADE_MOTE_COUNT)
+		_mote_phase_off[i] = clampf(base_p + rng.randf_range(-0.025, 0.025), 0.04, 0.94)
+		_mote_y_off[i] = rng.randf_range(-0.30, 0.30)
+		_mote_x_amp[i] = rng.randf_range(0.09, 0.22)
+		_mote_speed_mul[i] = rng.randf_range(0.84, 1.18)
+		_mote_spin_rate[i] = rng.randf_range(2.2, 4.8) * (1.0 if (i % 2 == 0) else -1.0)
+		_mote_positions[i] = Vector3.ZERO
+		_mote_colors[i] = Color(0.0, 0.0, 0.0, 1.0)
+
+	_grade_motes_mm = MultiMesh.new()
+	_grade_motes_mm.transform_format = MultiMesh.TRANSFORM_3D
+	_grade_motes_mm.use_colors = true
+	_grade_motes_mm.use_custom_data = false
+	_grade_motes_mm.mesh = _mote_mesh
+	_grade_motes_mm.instance_count = GRADE_MOTE_COUNT
+	for i in GRADE_MOTE_COUNT:
+		_grade_motes_mm.set_instance_transform(i, Transform3D.IDENTITY)
+		_grade_motes_mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 1.0))
+
+	_grade_motes = MultiMeshInstance3D.new()
+	_grade_motes.name = "EmissaryGradeMotes"
+	_grade_motes.position = Vector3(0.0, BANNER_PIVOT_Y, 0.0)
+	_grade_motes.multimesh = _grade_motes_mm
+	_grade_motes.material_override = _grade_motes_mat
+	_grade_motes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_grade_motes.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_grade_motes.visibility_range_end = GRADE_MOTE_VISIBILITY_RANGE
+	_grade_motes.extra_cull_margin = 2.6
+	_grade_motes.visible = false
+	_banner_pivot.add_child(_grade_motes)
 
 
 func _add_mesh_node(parent: Node3D, node_name: String, mesh_res: ArrayMesh,
@@ -273,6 +427,15 @@ func _add_mesh_node(parent: Node3D, node_name: String, mesh_res: ArrayMesh,
 
 
 func _release_mesh_refs() -> void:
+	if _grade_motes != null and is_instance_valid(_grade_motes):
+		_grade_motes.visible = false
+		_grade_motes.material_override = null
+		_grade_motes.multimesh = null
+	_grade_motes = null
+	_grade_motes_mm = null
+	_grade_motes_mat = null
+	_mote_positions.clear()
+	_mote_colors.clear()
 	for mi: MeshInstance3D in _all_mesh_instances:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
@@ -346,9 +509,21 @@ static func _ensure_shared_assets() -> void:
 		_brass_mesh = _build_brass_finial_and_hardware_mesh()
 	if _pennant_mesh == null:
 		_pennant_mesh = _build_grade_pennant_mesh()
+	if _mote_mesh == null:
+		_mote_mesh = _build_prestige_mote_mesh()
 	for cid: StringName in COMPANY_PALETTES.keys():
 		if not _banner_meshes.has(cid):
 			_banner_meshes[cid] = _build_company_banner_mesh(cid)
+
+
+static func _build_prestige_mote_mesh() -> ArrayMesh:
+	# Exact 8-triangle faceted prestige diamond sparkle shard (zero primitives, finite unit normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_diamond_shard(st, Vector3.ZERO, Vector3(0.032, 0.068, 0.032),
+		Color(1.00, 1.00, 1.00, 1.0), Color(0.84, 0.86, 0.92, 1.0))
+	st.generate_normals()
+	return st.commit()
 
 
 static func _get_banner_mesh(company_id: StringName) -> ArrayMesh:

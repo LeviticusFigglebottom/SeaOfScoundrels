@@ -3795,3 +3795,173 @@ func test_q12a_ship_fire_smoke_embers_halo_and_cabin_candle_halo() -> void:
 	ShipFire.clear_shared_cache()
 	CaptainCabinFurnishings.clear_shared_cache()
 
+
+func test_q15a_ship_harpoon_muzzle_spark_and_magnetic_lock_glint() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	ShipHarpoon.clear_shared_cache()
+
+	var sloop := _spawn_sloop(Vector3.ZERO)
+	sloop.start_anchored = true
+	await physics_frames(4)
+	sloop.freeze = true
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+	await physics_frames(2)
+
+	var hp := sloop.get_harpoon(&"port")
+	check(hp != null and is_instance_valid(hp), "Sloop mounts port ShipHarpoon for Q15A audit")
+	hp.set_physics_process(false)
+
+	# 1. Audit sculpted 24-tri HarpoonMuzzleSpark & HarpoonLockGlint (0 primitives, exact (0,0,1) normals, sRGB additive billboard).
+	var spark := hp.get_muzzle_spark_node()
+	var glint := hp.get_lock_glint_node()
+	check(spark != null and spark.name == &"HarpoonMuzzleSpark",
+		"ShipHarpoon mounts HarpoonMuzzleSpark and exposes get_muzzle_spark_node()")
+	check(glint != null and glint.name == &"HarpoonLockGlint",
+		"ShipHarpoon mounts HarpoonLockGlint and exposes get_lock_glint_node()")
+	check(spark.get_parent() != null and spark.get_parent().name == &"MuzzlePoint",
+		"HarpoonMuzzleSpark is mounted directly at MuzzlePoint")
+	check(glint.get_parent() != null and glint.get_parent().name == &"HarpoonSpear",
+		"HarpoonLockGlint is mounted on HarpoonSpear near the stowed spear tip")
+	check(not spark.visible, "HarpoonMuzzleSpark starts hidden by default")
+	check(not glint.visible, "HarpoonLockGlint starts hidden by default")
+
+	var spark_tris := 0
+	var glint_tris := 0
+	for spec: Array in [[spark, "HarpoonMuzzleSpark"], [glint, "HarpoonLockGlint"]]:
+		var mi := spec[0] as MeshInstance3D
+		var lbl := String(spec[1])
+		check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadow casting" % lbl)
+		check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"%s uses sculpted ArrayMesh (zero PrimitiveMesh)" % lbl)
+		var am := mi.mesh as ArrayMesh
+		var arr := am.surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+		var tris := floori(float(verts.size()) / 3.0)
+		check_eq(tris, 24, "%s has exact 24 sculpted star triangles (got %d)" % [lbl, tris])
+		if lbl == "HarpoonMuzzleSpark":
+			spark_tris = tris
+		else:
+			glint_tris = tris
+		var bad_norms := 0
+		for nv: Vector3 in norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				bad_norms += 1
+		check_eq(bad_norms, 0, "%s assigns exact finite unit (0, 0, 1) normal to every vertex" % lbl)
+		var zero_rim := 0
+		for cv: Color in cols:
+			if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+				zero_rim += 1
+		check(zero_rim > 0, "%s feathers outer tips smoothly to Color(0, 0, 0, 1)" % lbl)
+
+		var mat := mi.material_override as StandardMaterial3D
+		check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb
+			and mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and mat.billboard_keep_scale
+			and mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"%s uses sRGB unshaded additive scale-preserving billboard StandardMaterial3D" % lbl)
+
+	# 2. Magnetic loot-cone lock glint turns ON when a Carryable sits in the 2.6 m cone and OFF when aimed away!
+	check(not hp.has_magnetic_loot_target(), "has_magnetic_loot_target() is false with no loot in cone")
+	check(not hp.refresh_lock_glint() and not glint.visible,
+		"refresh_lock_glint() keeps HarpoonLockGlint hidden with no target")
+
+	var chest := Carryable.new()
+	chest.name = "Q15AFloatingChest"
+	chest.item_name = "Sovereign Casket"
+	chest.freeze = true
+	chest.add_to_group(&"carryables")
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.6, 0.45, 0.45)
+	col.shape = box
+	chest.add_child(col)
+	_root.add_child(chest)
+
+	var muzzle := hp.get_muzzle_world_pos()
+	var aim_dir := hp.get_aim_direction_world()
+	var lateral := aim_dir.cross(Vector3.UP).normalized()
+	chest.global_position = muzzle + aim_dir * 14.0 + lateral * 1.4  # Inside 2.6 m magnetic loot cone!
+
+	check(hp.has_magnetic_loot_target(), "has_magnetic_loot_target() detects Carryable inside 2.6 m cone")
+	check_eq(hp.state, ShipHarpoon.State.IDLE, "has_magnetic_loot_target() has zero state side effects")
+	check(hp.refresh_lock_glint(), "refresh_lock_glint() returns true when Carryable sits inside 2.6 m cone")
+	check(glint.visible, "HarpoonLockGlint turns ON immediately via refresh_lock_glint()")
+
+	# Aim away beyond the 2.6 m cone -> lock glint turns cleanly OFF!
+	hp.aim(0.95, 0.0)
+	check(not hp.has_magnetic_loot_target(), "has_magnetic_loot_target() is false when aimed away from loot")
+	check(not hp.refresh_lock_glint(), "refresh_lock_glint() returns false when aimed away")
+	check(not glint.visible, "HarpoonLockGlint turns OFF cleanly when aimed away")
+
+	# Aim back onto loot -> rate-limited 0.10 s poll in step_harpoon() re-enables lock glint automatically!
+	hp.aim(0.0, 0.0)
+	hp.step_harpoon(0.05)
+	check(not glint.visible, "live cone poll stays rate-limited before 0.10 s interval")
+	hp.step_harpoon(0.06)
+	check(glint.visible, "rate-limited 0.10 s live poll turns HarpoonLockGlint ON when aimed at loot")
+
+	# 3. fire() flares HarpoonMuzzleSpark crisply, expands, then decays back to hidden at 0.20 s!
+	var spark_mat := spark.material_override as StandardMaterial3D
+	var fire_res := hp.fire(null)
+	check(bool(fire_res.get("hit", false)) and fire_res.get("kind") == &"loot",
+		"ShipHarpoon.fire() snags locked Carryable inside 2.6 m cone")
+	check(not glint.visible, "fire() immediately hides HarpoonLockGlint while harpoon is in flight/reeling")
+	check(spark.visible, "fire() immediately flares HarpoonMuzzleSpark visible")
+	var sc_t0 := spark.scale.x
+	var energy_t0 := spark_mat.albedo_color.r
+	check(energy_t0 > 1.2, "HarpoonMuzzleSpark ignites with bright brass-gold energy (%.2f)" % energy_t0)
+
+	hp.step_harpoon(0.05)
+	check(spark.visible, "HarpoonMuzzleSpark remains visible at 0.05 s")
+	var sc_t1 := spark.scale.x
+	check(sc_t1 > sc_t0 + 0.25,
+		"HarpoonMuzzleSpark expands crisply after launch (%.2f -> %.2f)" % [sc_t0, sc_t1])
+	var energy_t1 := spark_mat.albedo_color.r
+	check(energy_t1 < energy_t0, "HarpoonMuzzleSpark decays smoothly in brightness (%.2f -> %.2f)" % [energy_t0, energy_t1])
+
+	hp.step_harpoon(0.05)
+	hp.step_harpoon(0.05)
+	check(spark.visible, "HarpoonMuzzleSpark still visible at 0.15 s before 0.20 s cutoff")
+	check(spark_mat.albedo_color.r < energy_t1, "HarpoonMuzzleSpark continues smooth decay toward hidden")
+
+	hp.step_harpoon(0.05)
+	check(not spark.visible, "HarpoonMuzzleSpark decays cleanly back to hidden at 0.20 s")
+	check_near(spark_mat.albedo_color.r, 0.0, 0.001, "HarpoonMuzzleSpark zeroes additive albedo at 0.20 s")
+
+	# Finish loot reel and also test open-water miss shot firing spark cleanly.
+	for _r in 12:
+		hp.step_harpoon(0.05)
+	check_eq(hp.state, ShipHarpoon.State.IDLE, "harpoon completes loot reel back to IDLE")
+	hp.cooldown = 0.0
+	hp.aim(0.85, -0.22)
+	var miss_res := hp.fire(null)
+	check(not bool(miss_res.get("hit", true)) and miss_res.get("kind") == &"miss",
+		"downward open-water harpoon shot registers clean miss into waves")
+	check(spark.visible, "open-water miss shot also flares HarpoonMuzzleSpark cleanly")
+	for _m in 4:
+		hp.step_harpoon(0.05)
+	check(not spark.visible, "miss shot HarpoonMuzzleSpark decays back to hidden cleanly at 0.20 s")
+
+	print("    Q15A ShipHarpoon metrics: spark=%d tris (scale %.2f->%.2f, energy %.2f->0.00 over 0.20 s) | lock_glint=%d tris" % [
+		spark_tris, sc_t0, sc_t1, energy_t0, glint_tris])
+
+	# 4. Clean 0-leak teardown of all ShipHarpoon static caches!
+	await _end()
+	check_eq(ShipHarpoon._active_instances, 0, "ShipHarpoon._active_instances returns to 0 on Q15A teardown")
+	check(ShipHarpoon._muzzle_spark_mesh == null and ShipHarpoon._lock_glint_mesh == null
+		and ShipHarpoon._pedestal_oak_mesh == null and ShipHarpoon._spear_mesh == null
+		and ShipHarpoon._oak_mat == null and ShipHarpoon._pbr_tex_cache.is_empty(),
+		"ShipHarpoon auto-releases all static caches including _muzzle_spark_mesh & _lock_glint_mesh (0 leaks)")
+	ShipHarpoon.clear_shared_cache()
+
+

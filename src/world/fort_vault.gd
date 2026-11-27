@@ -13,6 +13,19 @@ const OPEN_DURATION := 1.35
 const OPEN_ANGLE_RAD := deg_to_rad(108.0)
 const GATE_HALF_SPAN := 1.52
 
+const HALO_POS := Vector3(0.0, 1.55, -0.75)
+const HALO_ENERGY_LOCKED := 0.65
+const HALO_ENERGY_OPEN := 1.35
+const HALO_SCALE_LOCKED := 1.0
+const HALO_SCALE_OPEN := 1.42
+const HALO_VISIBILITY_RANGE := 95.0
+
+const GOLD_MOTE_COUNT := 16
+const MOTE_Y_MIN := 0.25
+const MOTE_Y_MAX := 2.85
+const MOTE_ACTIVE_DIST := 55.0
+const MOTE_VISIBILITY_RANGE := 70.0
+
 # Warm buff coral-limestone, dark soot-black wrought iron, and gleaming pirate-brass palette (sRGB).
 const COL_STONE_LIGHT := Color(0.80, 0.70, 0.52)
 const COL_STONE_MID := Color(0.66, 0.56, 0.40)
@@ -28,13 +41,24 @@ const COL_BRASS_HI := Color(0.98, 0.78, 0.26)
 const COL_BRASS_MID := Color(0.82, 0.60, 0.16)
 const COL_BRASS_DARK := Color(0.50, 0.34, 0.09)
 
+const COL_HALO_CORE := Color(1.0, 0.88, 0.36, 1.0)
+const COL_HALO_MID := Color(0.62, 0.40, 0.08, 1.0)
+const COL_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
+
+const COL_MOTE_TOP := Color(1.0, 0.96, 0.72, 1.0)
+const COL_MOTE_MID := Color(1.0, 0.80, 0.24, 1.0)
+const COL_MOTE_BOT := Color(0.86, 0.56, 0.10, 1.0)
+
 static var _active_vaults: int = 0
 static var _frame_mesh: ArrayMesh = null
 static var _gate_left_mesh: ArrayMesh = null
 static var _gate_right_mesh: ArrayMesh = null
+static var _halo_mesh: ArrayMesh = null
+static var _gold_mote_mesh: ArrayMesh = null
 static var _stone_mat: StandardMaterial3D = null
 static var _iron_mat: StandardMaterial3D = null
 static var _brass_mat: StandardMaterial3D = null
+static var _mote_mat: StandardMaterial3D = null
 
 var is_open: bool = false
 var is_locked: bool = true
@@ -47,21 +71,38 @@ var treasury_light: OmniLight3D = null
 var _frame_mi: MeshInstance3D = null
 var _left_gate_mi: MeshInstance3D = null
 var _right_gate_mi: MeshInstance3D = null
+var _halo_mi: MeshInstance3D = null
+var _halo_mat: StandardMaterial3D = null
+var _gold_motes_mmi: MultiMeshInstance3D = null
 var _blocker_body: StaticBody3D = null
 var _blocker_shape: CollisionShape3D = null
 
 var _open_elapsed: float = 0.0
 var _open_anim_active: bool = false
 var _glow_clock: float = 0.0
+var _treasury_halo_energy: float = HALO_ENERGY_LOCKED
+
+# Pre-allocated fixed-size buffers for VaultGoldMotes (zero steady-state heap allocations).
+var _mote_age: PackedFloat32Array = PackedFloat32Array()
+var _mote_speed: PackedFloat32Array = PackedFloat32Array()
+var _mote_base_x: PackedFloat32Array = PackedFloat32Array()
+var _mote_base_z: PackedFloat32Array = PackedFloat32Array()
+var _mote_phase: PackedFloat32Array = PackedFloat32Array()
+var _mote_swirl_r: PackedFloat32Array = PackedFloat32Array()
+var _mote_scale: PackedFloat32Array = PackedFloat32Array()
+var _mote_positions: PackedVector3Array = PackedVector3Array()
 
 
 static func clear_shared_cache() -> void:
 	_frame_mesh = null
 	_gate_left_mesh = null
 	_gate_right_mesh = null
+	_halo_mesh = null
+	_gold_mote_mesh = null
 	_stone_mat = null
 	_iron_mat = null
 	_brass_mat = null
+	_mote_mat = null
 
 
 func _enter_tree() -> void:
@@ -70,13 +111,23 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
-	for mi: MeshInstance3D in [_frame_mi, _left_gate_mi, _right_gate_mi]:
+	for mi: MeshInstance3D in [_frame_mi, _left_gate_mi, _right_gate_mi, _halo_mi]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
 				for si in mi.mesh.get_surface_count():
 					mi.set_surface_override_material(si, null)
 			mi.mesh = null
 			mi.material_override = null
+	_frame_mi = null
+	_left_gate_mi = null
+	_right_gate_mi = null
+	_halo_mi = null
+	_halo_mat = null
+	if _gold_motes_mmi != null and is_instance_valid(_gold_motes_mmi):
+		_gold_motes_mmi.visible = false
+		_gold_motes_mmi.material_override = null
+		_gold_motes_mmi.multimesh = null
+	_gold_motes_mmi = null
 	_active_vaults = maxi(0, _active_vaults - 1)
 	if _active_vaults == 0:
 		clear_shared_cache()
@@ -85,9 +136,11 @@ func _exit_tree() -> void:
 func _ready() -> void:
 	_ensure_shared_assets()
 	_build_structure()
+	_build_treasury_vfx()
 	_build_blocker()
 	_build_interactable()
 	_apply_gate_angles(0.0)
+	_update_treasury_vfx(0.0)
 
 
 # ==============================================================================
@@ -136,6 +189,26 @@ func is_blocking() -> bool:
 	return (not _blocker_shape.disabled) and _blocker_body.collision_layer != 0
 
 
+## Return the sculpted additive VaultTreasuryHalo MeshInstance3D inside the vault chamber.
+func get_treasury_halo_node() -> MeshInstance3D:
+	return _halo_mi
+
+
+## Return the sculpted VaultGoldMotes MultiMeshInstance3D drifting inside the vault chamber.
+func get_gold_motes_node() -> MultiMeshInstance3D:
+	return _gold_motes_mmi
+
+
+## Return the latest computed additive brightness energy for VaultTreasuryHalo.
+func get_treasury_halo_energy() -> float:
+	return _treasury_halo_energy
+
+
+## Return the preallocated local-space positions of all 16 rising VaultGoldMotes.
+func get_gold_mote_positions() -> PackedVector3Array:
+	return _mote_positions
+
+
 func step_animation(delta: float) -> void:
 	_glow_clock += delta
 	if _open_anim_active:
@@ -149,6 +222,7 @@ func step_animation(delta: float) -> void:
 		var base_e := 2.35 if is_open else 1.75
 		var pulse := sin(_glow_clock * 3.6) * 0.14 + sin(_glow_clock * 8.1 + 0.9) * 0.07
 		treasury_light.light_energy = base_e + pulse
+	_update_treasury_vfx(delta)
 
 
 func _physics_process(delta: float) -> void:
@@ -233,6 +307,122 @@ func _build_structure() -> void:
 	add_child(treasury_light)
 
 
+func _build_treasury_vfx() -> void:
+	# 1. Sculpted 48-tri 16-wedge radial-gradient additive golden treasury halo inside the chamber.
+	_halo_mat = StandardMaterial3D.new()
+	_halo_mat.vertex_color_use_as_albedo = true
+	_halo_mat.vertex_color_is_srgb = true
+	_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_halo_mat.billboard_keep_scale = true
+	_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_halo_mat.albedo_color = Color(HALO_ENERGY_LOCKED, HALO_ENERGY_LOCKED, HALO_ENERGY_LOCKED, 1.0)
+
+	_halo_mi = MeshInstance3D.new()
+	_halo_mi.name = "VaultTreasuryHalo"
+	_halo_mi.position = HALO_POS
+	_halo_mi.mesh = _halo_mesh
+	_halo_mi.material_override = _halo_mat
+	_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_halo_mi.visibility_range_end = HALO_VISIBILITY_RANGE
+	_halo_mi.extra_cull_margin = 2.0
+	add_child(_halo_mi)
+
+	# 2. Preallocate deterministic buffers for 16 rising faceted Sovereign gold motes (zero runtime allocations).
+	_mote_age.resize(GOLD_MOTE_COUNT)
+	_mote_speed.resize(GOLD_MOTE_COUNT)
+	_mote_base_x.resize(GOLD_MOTE_COUNT)
+	_mote_base_z.resize(GOLD_MOTE_COUNT)
+	_mote_phase.resize(GOLD_MOTE_COUNT)
+	_mote_swirl_r.resize(GOLD_MOTE_COUNT)
+	_mote_scale.resize(GOLD_MOTE_COUNT)
+	_mote_positions.resize(GOLD_MOTE_COUNT)
+
+	for i in GOLD_MOTE_COUNT:
+		var fi := float(i)
+		_mote_age[i] = lerpf(0.04, 0.68, fi / float(GOLD_MOTE_COUNT))
+		_mote_speed[i] = lerpf(0.16, 0.25, fposmod(fi * 0.618034, 1.0))
+		_mote_base_x[i] = lerpf(-1.18, 1.18, fposmod(fi * 0.381966 + 0.13, 1.0))
+		_mote_base_z[i] = lerpf(-1.45, -0.08, fposmod(fi * 0.754877 + 0.27, 1.0))
+		_mote_phase[i] = fi / float(GOLD_MOTE_COUNT) * TAU
+		_mote_swirl_r[i] = lerpf(0.05, 0.15, fposmod(fi * 0.414213, 1.0))
+		_mote_scale[i] = lerpf(0.75, 1.32, fposmod(fi * 0.543689, 1.0))
+		_mote_positions[i] = Vector3(_mote_base_x[i], lerpf(MOTE_Y_MIN, MOTE_Y_MAX, _mote_age[i]), _mote_base_z[i])
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _gold_mote_mesh
+	mm.instance_count = GOLD_MOTE_COUNT
+	for i in GOLD_MOTE_COUNT:
+		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, _mote_positions[i]))
+		mm.set_instance_color(i, Color(1.0, 0.90, 0.45, 1.0))
+
+	_gold_motes_mmi = MultiMeshInstance3D.new()
+	_gold_motes_mmi.name = "VaultGoldMotes"
+	_gold_motes_mmi.multimesh = mm
+	_gold_motes_mmi.material_override = _mote_mat
+	_gold_motes_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_gold_motes_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_gold_motes_mmi.visibility_range_end = MOTE_VISIBILITY_RANGE
+	_gold_motes_mmi.extra_cull_margin = 3.0
+	add_child(_gold_motes_mmi)
+
+
+func _update_treasury_vfx(delta: float) -> void:
+	var open_t := get_open_progress()
+	var open_eased := open_t * open_t * (3.0 - 2.0 * open_t)
+	var halo_pulse := sin(_glow_clock * 2.8) * 0.045 + sin(_glow_clock * 6.1 + 0.7) * 0.020
+	_treasury_halo_energy = lerpf(HALO_ENERGY_LOCKED, HALO_ENERGY_OPEN, open_eased) + halo_pulse
+
+	if _halo_mat != null:
+		_halo_mat.albedo_color = Color(_treasury_halo_energy, _treasury_halo_energy, _treasury_halo_energy, 1.0)
+	if _halo_mi != null and is_instance_valid(_halo_mi):
+		var halo_scale := lerpf(HALO_SCALE_LOCKED, HALO_SCALE_OPEN, open_eased) * (1.0 + sin(_glow_clock * 2.8) * 0.015)
+		_halo_mi.scale = Vector3(halo_scale, halo_scale, halo_scale)
+
+	if _gold_motes_mmi == null or not is_instance_valid(_gold_motes_mmi):
+		return
+	var mm := _gold_motes_mmi.multimesh
+	if mm == null:
+		return
+
+	# Distance-gate mote updates cleanly to <= 55 m in live gameplay when a Camera3D exists;
+	# headless deterministic step_animation(delta) (no active Camera3D) always animates.
+	if delta > 0.0 and is_inside_tree():
+		var vp := get_viewport()
+		var cam := vp.get_camera_3d() if vp != null else null
+		if cam != null and cam.global_position.distance_to(global_position) > MOTE_ACTIVE_DIST:
+			return
+
+	var speed_mul := lerpf(1.0, 1.28, open_eased)
+	var glow_mul := lerpf(0.82, 1.38, open_eased)
+	for i in GOLD_MOTE_COUNT:
+		var age := _mote_age[i]
+		if delta > 0.0:
+			age = fposmod(age + _mote_speed[i] * speed_mul * delta, 1.0)
+			_mote_age[i] = age
+		var y := lerpf(MOTE_Y_MIN, MOTE_Y_MAX, age)
+		var ang := _mote_phase[i] + _glow_clock * 1.35 + age * TAU * 0.65
+		var sr := _mote_swirl_r[i]
+		var pos := Vector3(
+			_mote_base_x[i] + cos(ang) * sr,
+			y,
+			_mote_base_z[i] + sin(ang) * sr
+		)
+		_mote_positions[i] = pos
+		var env := smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.82, 1.0, age))
+		var s := maxf(0.24, _mote_scale[i] * lerpf(0.55, 1.15, env) * lerpf(1.0, 1.18, open_eased))
+		var rot_b := Basis(Vector3.UP, ang * 1.4) * Basis(Vector3.RIGHT, _glow_clock * 1.9 + float(i) * 0.6)
+		mm.set_instance_transform(i, Transform3D(rot_b.scaled(Vector3(s, s, s)), pos))
+		var lum := clampf(env * glow_mul, 0.0, 1.8)
+		mm.set_instance_color(i, Color(lum, lum * 0.94, lum * 0.72, 1.0))
+
+
 func _build_blocker() -> void:
 	_blocker_body = StaticBody3D.new()
 	_blocker_body.name = "VaultBlocker"
@@ -281,12 +471,92 @@ static func _ensure_shared_assets() -> void:
 		_brass_mat.vertex_color_is_srgb = true
 		_brass_mat.roughness = 0.26
 		_brass_mat.metallic = 0.78
+	if _mote_mat == null:
+		_mote_mat = StandardMaterial3D.new()
+		_mote_mat.vertex_color_use_as_albedo = true
+		_mote_mat.vertex_color_is_srgb = true
+		_mote_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_mote_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_mote_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	if _frame_mesh == null:
 		_frame_mesh = _build_stone_arch_frame_mesh()
 	if _gate_left_mesh == null:
 		_gate_left_mesh = _build_gate_leaf_mesh(true)
 	if _gate_right_mesh == null:
 		_gate_right_mesh = _build_gate_leaf_mesh(false)
+	if _halo_mesh == null:
+		_halo_mesh = _build_treasury_halo_mesh()
+	if _gold_mote_mesh == null:
+		_gold_mote_mesh = _build_gold_mote_mesh()
+
+
+static func _build_treasury_halo_mesh() -> ArrayMesh:
+	# Sculpted 48-tri 16-wedge radial-gradient Sovereign gold halo disc with finite (0, 0, 1) unit normals.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.56
+	const OUTER_R := 1.45
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered skirt quad fading smoothly to Color(0, 0, 0, 1) (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
+
+
+static func _build_gold_mote_mesh() -> ArrayMesh:
+	# Exact 8-tri faceted golden diamond bipyramid mote (finite outward unit normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top := Vector3(0.0, 0.068, 0.0)
+	var bot := Vector3(0.0, -0.056, 0.0)
+	const R := 0.036
+	var ring: Array[Vector3] = [
+		Vector3(R, 0.0, 0.0),
+		Vector3(0.0, 0.0, R),
+		Vector3(-R, 0.0, 0.0),
+		Vector3(0.0, 0.0, -R),
+	]
+	for k in 4:
+		var k1 := (k + 1) % 4
+		_emit_outward_tri(st, top, COL_MOTE_TOP, ring[k], COL_MOTE_MID, ring[k1], COL_MOTE_MID, Vector3.ZERO)
+		_emit_outward_tri(st, bot, COL_MOTE_BOT, ring[k1], COL_MOTE_MID, ring[k], COL_MOTE_MID, Vector3.ZERO)
+	st.generate_normals()
+	return st.commit()
 
 
 static func _build_stone_arch_frame_mesh() -> ArrayMesh:
