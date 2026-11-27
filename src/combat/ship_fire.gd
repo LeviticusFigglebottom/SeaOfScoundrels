@@ -58,6 +58,15 @@ const HULL_CHAR_INTERVAL := 18.0
 const HULL_CHAR_RADIUS := 0.35
 const NEIGHBOR_COOL_AMOUNT := 0.35
 const FIRE_LIGHT_RANGE := 10.5
+const EMBER_COUNT := 30
+const SMOKE_COUNT := 20
+const EMBER_Y_MIN := 0.30
+const EMBER_Y_MAX := 4.20
+const SMOKE_Y_MIN := 0.80
+const SMOKE_Y_MAX := 6.20
+const EMBER_VISIBILITY_RANGE := 180.0
+const SMOKE_VISIBILITY_RANGE := 260.0
+const HALO_VISIBILITY_RANGE := 260.0
 
 # sRGB-calibrated fiery painterly palette (charcoal embers -> crimson -> fiery orange -> incandescent white-gold).
 const COL_COAL_DARK := Color(0.11, 0.08, 0.07)
@@ -68,6 +77,12 @@ const COL_FLAME_ORANGE := Color(1.0, 0.48, 0.07)
 const COL_FLAME_AMBER := Color(1.0, 0.72, 0.16)
 const COL_FLAME_GOLD := Color(1.0, 0.88, 0.38)
 const COL_FLAME_CORE := Color(1.0, 0.98, 0.82)
+const COL_SMOKE_BASE := Color(0.24, 0.14, 0.10)
+const COL_SMOKE_SOOT := Color(0.11, 0.10, 0.12)
+const COL_SMOKE_ASH := Color(0.20, 0.20, 0.22)
+const COL_HALO_CENTER := Color(1.0, 0.72, 0.24, 1.0)
+const COL_HALO_MID := Color(0.60, 0.26, 0.05, 1.0)
+const COL_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
 
 ## Visual scale matched to the owning ship's hull_scale.
 @export var visual_scale: float = 1.0
@@ -79,22 +94,56 @@ var _zone_local_positions: Array[Vector3] = []
 var _zone_intensity: Array[float] = []
 var _zone_nodes: Array[MeshInstance3D] = []
 var _fire_light: OmniLight3D = null
+var _ember_mmi: MultiMeshInstance3D = null
+var _smoke_mmi: MultiMeshInstance3D = null
+var _fire_halo: MeshInstance3D = null
+var _halo_mat: StandardMaterial3D = null
+var _fire_halo_energy: float = 0.0
+var _vfx_active_last_sync: bool = false
+
+# Pre-allocated fixed-size per-particle arrays (zero steady-state allocations in _process/tick_fire_vfx).
+var _active_zone_buf: PackedInt32Array = PackedInt32Array()
+var _ember_age: PackedFloat32Array = PackedFloat32Array()
+var _ember_speed: PackedFloat32Array = PackedFloat32Array()
+var _ember_phase: PackedFloat32Array = PackedFloat32Array()
+var _ember_swirl_r: PackedFloat32Array = PackedFloat32Array()
+var _ember_swirl_freq: PackedFloat32Array = PackedFloat32Array()
+var _ember_scale: PackedFloat32Array = PackedFloat32Array()
+var _ember_pos: PackedVector3Array = PackedVector3Array()
+
+var _smoke_age: PackedFloat32Array = PackedFloat32Array()
+var _smoke_speed: PackedFloat32Array = PackedFloat32Array()
+var _smoke_phase: PackedFloat32Array = PackedFloat32Array()
+var _smoke_swirl_r: PackedFloat32Array = PackedFloat32Array()
+var _smoke_scale: PackedFloat32Array = PackedFloat32Array()
+var _smoke_pos: PackedVector3Array = PackedVector3Array()
+var _smoke_live_scale: PackedFloat32Array = PackedFloat32Array()
 
 var _spread_accum: float = 0.0
 var _scorch_accum: float = 0.0
 var _char_timer: float = 0.0
 var _anim_clock: float = 0.0
 
-# Ref-counted static sculpted flame cluster mesh & material cache (0 extra VRAM, 0 leaks).
+# Ref-counted static sculpted flame, ember, smoke & halo caches (0 extra VRAM, 0 leaks).
 static var _active_instances: int = 0
 static var _flame_mesh: ArrayMesh = null
 static var _flame_mat: StandardMaterial3D = null
+static var _ember_mesh: ArrayMesh = null
+static var _ember_mat: StandardMaterial3D = null
+static var _smoke_mesh: ArrayMesh = null
+static var _smoke_mat: StandardMaterial3D = null
+static var _halo_mesh: ArrayMesh = null
 
 
-## Release all statically cached sculpted flame geometry & material cleanly.
+## Release all statically cached sculpted fire geometry & materials cleanly.
 static func clear_shared_cache() -> void:
 	_flame_mesh = null
 	_flame_mat = null
+	_ember_mesh = null
+	_ember_mat = null
+	_smoke_mesh = null
+	_smoke_mat = null
+	_halo_mesh = null
 
 
 func _enter_tree() -> void:
@@ -110,7 +159,7 @@ func _ready() -> void:
 			visual_scale = float(hs)
 	_ensure_shared_assets()
 	_build_zones()
-	_sync_visuals()
+	_sync_visuals(0.0)
 
 
 func _exit_tree() -> void:
@@ -121,6 +170,24 @@ func _exit_tree() -> void:
 	_zone_nodes.clear()
 	_zone_local_positions.clear()
 	_zone_intensity.clear()
+	if _ember_mmi != null and is_instance_valid(_ember_mmi):
+		_ember_mmi.visible = false
+		_ember_mmi.material_override = null
+		_ember_mmi.multimesh = null
+	_ember_mmi = null
+	if _smoke_mmi != null and is_instance_valid(_smoke_mmi):
+		_smoke_mmi.visible = false
+		_smoke_mmi.material_override = null
+		_smoke_mmi.multimesh = null
+	_smoke_mmi = null
+	if _fire_halo != null and is_instance_valid(_fire_halo):
+		_fire_halo.material_override = null
+		_fire_halo.mesh = null
+		_fire_halo.visible = false
+	_fire_halo = null
+	_halo_mat = null
+	_fire_halo_energy = 0.0
+	_vfx_active_last_sync = false
 	if _fire_light != null and is_instance_valid(_fire_light):
 		_fire_light.light_energy = 0.0
 		_fire_light.visible = false
@@ -136,9 +203,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	_anim_clock += delta
 	if has_active_fire():
-		_sync_visuals()
+		tick_fire_vfx(delta)
 
 
 # ==============================================================================
@@ -425,6 +491,54 @@ func get_fire_light() -> OmniLight3D:
 	return null
 
 
+## Return the batched 30-instance sculpted ember spark MultiMeshInstance3D (`FireEmberSwarm`).
+func get_ember_swarm_node() -> MultiMeshInstance3D:
+	if _ember_mmi != null and is_instance_valid(_ember_mmi):
+		return _ember_mmi
+	return null
+
+
+## Return the batched 20-instance sculpted soot smoke plume MultiMeshInstance3D (`FireSmokePlumes`).
+func get_smoke_plumes_node() -> MultiMeshInstance3D:
+	if _smoke_mmi != null and is_instance_valid(_smoke_mmi):
+		return _smoke_mmi
+	return null
+
+
+## Return the sculpted additive radial-gradient fire bloom billboard (`FireGlowHalo`).
+func get_fire_halo_node() -> MeshInstance3D:
+	if _fire_halo != null and is_instance_valid(_fire_halo):
+		return _fire_halo
+	return null
+
+
+## Return the current atmospheric bloom energy of `FireGlowHalo` (0.0 when no fire burns).
+func get_fire_halo_energy() -> float:
+	return _fire_halo_energy
+
+
+## Return the latest ship-local positions of all 30 ember instances (headless-safe mirror of MultiMesh).
+func get_ember_positions() -> PackedVector3Array:
+	return _ember_pos
+
+
+## Return the latest ship-local positions of all 20 smoke puff instances (headless-safe mirror of MultiMesh).
+func get_smoke_positions() -> PackedVector3Array:
+	return _smoke_pos
+
+
+## Return the latest uniform growth scales of all 20 smoke puff instances (headless-safe mirror of MultiMesh).
+func get_smoke_scales() -> PackedFloat32Array:
+	return _smoke_live_scale
+
+
+## Advance flame flicker, swirling wind-driven embers, billowing soot smoke plumes, and fire halo glow.
+func tick_fire_vfx(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	_anim_clock += dt
+	_sync_visuals(dt)
+
+
 # ==============================================================================
 # Internal Fire Mechanics
 # ==============================================================================
@@ -610,8 +724,143 @@ func _build_zones() -> void:
 	_fire_light.visible = false
 	add_child(_fire_light)
 
+	_build_fire_vfx()
 
-func _sync_visuals() -> void:
+
+func _build_fire_vfx() -> void:
+	_active_zone_buf.resize(ZONE_COUNT)
+
+	_ember_age.resize(EMBER_COUNT)
+	_ember_speed.resize(EMBER_COUNT)
+	_ember_phase.resize(EMBER_COUNT)
+	_ember_swirl_r.resize(EMBER_COUNT)
+	_ember_swirl_freq.resize(EMBER_COUNT)
+	_ember_scale.resize(EMBER_COUNT)
+	_ember_pos.resize(EMBER_COUNT)
+	for i in EMBER_COUNT:
+		var fi := float(i)
+		_ember_speed[i] = lerpf(0.36, 0.56, fposmod(fi * 0.381966, 1.0))
+		_ember_phase[i] = fi / float(EMBER_COUNT) * TAU
+		_ember_swirl_r[i] = lerpf(0.18, 0.44, fposmod(fi * 0.618034, 1.0))
+		_ember_swirl_freq[i] = lerpf(2.8, 5.2, fposmod(fi * 0.271828, 1.0)) * (1.0 if (i % 2 == 0) else -1.0)
+		_ember_scale[i] = lerpf(0.72, 1.38, fposmod(fi * 0.754877, 1.0))
+		_ember_pos[i] = Vector3.ZERO
+
+	_smoke_age.resize(SMOKE_COUNT)
+	_smoke_speed.resize(SMOKE_COUNT)
+	_smoke_phase.resize(SMOKE_COUNT)
+	_smoke_swirl_r.resize(SMOKE_COUNT)
+	_smoke_scale.resize(SMOKE_COUNT)
+	_smoke_pos.resize(SMOKE_COUNT)
+	_smoke_live_scale.resize(SMOKE_COUNT)
+	for i in SMOKE_COUNT:
+		var fi := float(i)
+		_smoke_speed[i] = lerpf(0.20, 0.30, fposmod(fi * 0.381966, 1.0))
+		_smoke_phase[i] = fi / float(SMOKE_COUNT) * TAU
+		_smoke_swirl_r[i] = lerpf(0.10, 0.28, fposmod(fi * 0.618034, 1.0))
+		_smoke_scale[i] = lerpf(0.84, 1.24, fposmod(fi * 0.754877, 1.0))
+		_smoke_pos[i] = Vector3.ZERO
+		_smoke_live_scale[i] = 0.0
+
+	_reset_vfx_ages()
+
+	var ember_mm := MultiMesh.new()
+	ember_mm.transform_format = MultiMesh.TRANSFORM_3D
+	ember_mm.use_colors = true
+	ember_mm.use_custom_data = false
+	ember_mm.mesh = _ember_mesh
+	ember_mm.instance_count = EMBER_COUNT
+	for i in EMBER_COUNT:
+		ember_mm.set_instance_transform(i, Transform3D.IDENTITY)
+		ember_mm.set_instance_color(i, COL_FLAME_GOLD)
+
+	_ember_mmi = MultiMeshInstance3D.new()
+	_ember_mmi.name = "FireEmberSwarm"
+	_ember_mmi.multimesh = ember_mm
+	_ember_mmi.material_override = _ember_mat
+	_ember_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ember_mmi.visibility_range_end = EMBER_VISIBILITY_RANGE
+	_ember_mmi.extra_cull_margin = 8.0
+	_ember_mmi.visible = false
+	add_child(_ember_mmi)
+
+	var smoke_mm := MultiMesh.new()
+	smoke_mm.transform_format = MultiMesh.TRANSFORM_3D
+	smoke_mm.use_colors = true
+	smoke_mm.use_custom_data = false
+	smoke_mm.mesh = _smoke_mesh
+	smoke_mm.instance_count = SMOKE_COUNT
+	for i in SMOKE_COUNT:
+		smoke_mm.set_instance_transform(i, Transform3D.IDENTITY)
+		smoke_mm.set_instance_color(i, Color(COL_SMOKE_SOOT.r, COL_SMOKE_SOOT.g, COL_SMOKE_SOOT.b, 0.0))
+
+	_smoke_mmi = MultiMeshInstance3D.new()
+	_smoke_mmi.name = "FireSmokePlumes"
+	_smoke_mmi.multimesh = smoke_mm
+	_smoke_mmi.material_override = _smoke_mat
+	_smoke_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_smoke_mmi.visibility_range_end = SMOKE_VISIBILITY_RANGE
+	_smoke_mmi.extra_cull_margin = 12.0
+	_smoke_mmi.visible = false
+	add_child(_smoke_mmi)
+
+	_halo_mat = StandardMaterial3D.new()
+	_halo_mat.vertex_color_use_as_albedo = true
+	_halo_mat.vertex_color_is_srgb = true
+	_halo_mat.emission_enabled = true
+	_halo_mat.emission = Color(1.0, 0.50, 0.14)
+	_halo_mat.emission_energy_multiplier = 0.0
+	_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_halo_mat.billboard_keep_scale = true
+	_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_fire_halo = MeshInstance3D.new()
+	_fire_halo.name = "FireGlowHalo"
+	_fire_halo.mesh = _halo_mesh
+	_fire_halo.material_override = _halo_mat
+	_fire_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_fire_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_fire_halo.visibility_range_end = HALO_VISIBILITY_RANGE
+	_fire_halo.extra_cull_margin = 2.0
+	_fire_halo.visible = false
+	add_child(_fire_halo)
+	_fire_halo_energy = 0.0
+	_vfx_active_last_sync = false
+
+
+func _reset_vfx_ages() -> void:
+	for i in EMBER_COUNT:
+		_ember_age[i] = lerpf(0.02, 0.46, float(i) / float(EMBER_COUNT))
+	for i in SMOKE_COUNT:
+		_smoke_age[i] = lerpf(0.02, 0.44, float(i) / float(SMOKE_COUNT))
+
+
+func _get_local_up_and_wind() -> Basis:
+	# Pack local_up in .y, local_wind in .x (unnormalized), and unused .z so zero heap allocations occur.
+	var world_wind := Weather.wind_vector() if Weather != null else Vector3(3.0, 0.0, -2.0)
+	var local_up := Vector3.UP
+	var local_wind := world_wind
+	if is_inside_tree():
+		var gb := global_basis
+		if absf(gb.determinant()) > 1e-6:
+			var inv_b := gb.inverse()
+			local_up = (inv_b * Vector3.UP).normalized()
+			local_wind = inv_b * world_wind
+	elif ship != null and is_instance_valid(ship) and ship.is_inside_tree():
+		var sb := ship.global_basis
+		if absf(sb.determinant()) > 1e-6:
+			var inv_sb := sb.inverse()
+			local_up = (inv_sb * Vector3.UP).normalized()
+			local_wind = inv_sb * world_wind
+	var wind_h := local_wind - local_up * local_wind.dot(local_up)
+	return Basis(wind_h, local_up, Vector3.ZERO)
+
+
+func _sync_visuals(vfx_delta: float = 0.0) -> void:
 	var sc := maxf(visual_scale, 0.5)
 	var active_count := 0
 	var centroid := Vector3.ZERO
@@ -625,6 +874,8 @@ func _sync_visuals() -> void:
 		var is_lit := inten > 0.01
 		mi.visible = is_lit
 		if is_lit:
+			if active_count < _active_zone_buf.size():
+				_active_zone_buf[active_count] = i
 			active_count += 1
 			total_intensity += inten
 			centroid += _zone_local_positions[i]
@@ -635,9 +886,11 @@ func _sync_visuals() -> void:
 			mi.scale = Vector3(base_s * sway_xz, base_s * lick_y, base_s * sway_xz)
 			mi.rotation.y = fi * 1.05 + sin(_anim_clock * 3.6 + fi * 1.4) * 0.16
 
+	if active_count > 0:
+		centroid /= float(active_count)
+
 	if _fire_light != null and is_instance_valid(_fire_light):
 		if active_count > 0:
-			centroid /= float(active_count)
 			_fire_light.position = centroid + Vector3(0.0, 0.90 * sc, 0.0)
 			var flick := 0.88 + 0.12 * sin(_anim_clock * 14.2) * cos(_anim_clock * 8.9)
 			var base_energy := lerpf(2.1, 4.0, clampf(total_intensity / 3.0, 0.0, 1.0))
@@ -647,9 +900,121 @@ func _sync_visuals() -> void:
 			_fire_light.light_energy = 0.0
 			_fire_light.visible = false
 
+	if active_count <= 0:
+		_fire_halo_energy = 0.0
+		_vfx_active_last_sync = false
+		if _fire_halo != null and is_instance_valid(_fire_halo):
+			_fire_halo.visible = false
+		if _halo_mat != null:
+			_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		if _ember_mmi != null and is_instance_valid(_ember_mmi):
+			_ember_mmi.visible = false
+		if _smoke_mmi != null and is_instance_valid(_smoke_mmi):
+			_smoke_mmi.visible = false
+		return
+
+	var fresh_ignite := not _vfx_active_last_sync
+	if fresh_ignite:
+		_reset_vfx_ages()
+		_vfx_active_last_sync = true
+
+	# Update sculpted radial-gradient FireGlowHalo centered smoothly above burning deck zones.
+	var intensity_t := clampf(total_intensity / 3.0, 0.0, 1.0)
+	var night := clampf(1.0 - (Weather.daylight() if Weather != null else 1.0), 0.0, 1.0)
+	var halo_flick := 0.94 + 0.06 * sin(_anim_clock * 13.5) * cos(_anim_clock * 8.1)
+	_fire_halo_energy = lerpf(0.32, 0.68, intensity_t) * lerpf(1.0, 2.25, night) * halo_flick
+	if _fire_halo != null and is_instance_valid(_fire_halo):
+		var target_halo_pos := centroid + Vector3(0.0, 0.75 * sc, 0.0)
+		if fresh_ignite or vfx_delta <= 0.0:
+			_fire_halo.position = target_halo_pos
+		else:
+			_fire_halo.position = _fire_halo.position.lerp(target_halo_pos, clampf(vfx_delta * 8.0, 0.0, 1.0))
+		var halo_r := lerpf(1.75, 3.45, intensity_t) * lerpf(1.0, 1.24, night) * sc * (0.96 + 0.04 * halo_flick)
+		_fire_halo.scale = Vector3(halo_r, halo_r, halo_r)
+		_fire_halo.visible = true
+	if _halo_mat != null:
+		_halo_mat.albedo_color = Color(_fire_halo_energy, _fire_halo_energy, _fire_halo_energy, 1.0)
+
+	_update_embers_and_smoke(active_count, sc, vfx_delta)
+
+
+func _update_embers_and_smoke(active_count: int, sc: float, vfx_delta: float) -> void:
+	var frame_info := _get_local_up_and_wind()
+	var wind_h := frame_info.x
+	var local_up := frame_info.y
+	var wind_spd := wind_h.length()
+	var wind_dir := wind_h / wind_spd if wind_spd > 0.001 else Vector3.ZERO
+	var ref_ax := Vector3.RIGHT if absf(local_up.dot(Vector3.RIGHT)) < 0.85 else Vector3.FORWARD
+	var tan_u := local_up.cross(ref_ax).normalized()
+	var tan_v := local_up.cross(tan_u).normalized()
+
+	var ember_drift_max := clampf(wind_spd * 0.24, 0.35, 3.80) * sc if wind_spd > 0.001 else 0.0
+	var smoke_drift_max := clampf(wind_spd * 0.38, 0.60, 6.20) * sc if wind_spd > 0.001 else 0.0
+
+	if _ember_mmi != null and is_instance_valid(_ember_mmi):
+		_ember_mmi.visible = true
+		var ember_mm := _ember_mmi.multimesh
+		if ember_mm != null:
+			for i in EMBER_COUNT:
+				var age := _ember_age[i]
+				if vfx_delta > 0.0:
+					age = fposmod(age + _ember_speed[i] * vfx_delta, 1.0)
+					_ember_age[i] = age
+				var z_idx := _active_zone_buf[i % active_count]
+				var base_pos := _zone_local_positions[z_idx]
+				var z_inten := _zone_intensity[z_idx]
+				var rise := lerpf(EMBER_Y_MIN, EMBER_Y_MAX, age) * sc
+				var ang := _ember_phase[i] + _anim_clock * _ember_swirl_freq[i] + age * TAU * 1.15
+				var swirl_rad := _ember_swirl_r[i] * sc * (0.45 + 0.75 * age)
+				var drift := ember_drift_max * pow(age, 1.2)
+				var pos := base_pos + local_up * rise + wind_dir * drift \
+					+ (tan_u * cos(ang) + tan_v * sin(ang)) * swirl_rad
+				_ember_pos[i] = pos
+				var env := smoothstep(0.0, 0.08, age) * (1.0 - 0.65 * smoothstep(0.76, 1.0, age))
+				var s := maxf(0.18, _ember_scale[i] * env * lerpf(0.70, 1.18, z_inten) * sc)
+				var spin_b := Basis(Vector3.UP, ang * 0.9) * Basis(Vector3.RIGHT, _anim_clock * 3.4 + float(i) * 0.7)
+				ember_mm.set_instance_transform(i, Transform3D(spin_b.scaled(Vector3(s, s, s)), pos))
+				var col: Color
+				if age < 0.45:
+					col = COL_FLAME_GOLD.lerp(COL_FLAME_ORANGE, age / 0.45)
+				else:
+					col = COL_FLAME_ORANGE.lerp(COL_FLAME_CRIMSON, (age - 0.45) / 0.55)
+				ember_mm.set_instance_color(i, col)
+
+	if _smoke_mmi != null and is_instance_valid(_smoke_mmi):
+		_smoke_mmi.visible = true
+		var smoke_mm := _smoke_mmi.multimesh
+		if smoke_mm != null:
+			for i in SMOKE_COUNT:
+				var age := _smoke_age[i]
+				if vfx_delta > 0.0:
+					age = fposmod(age + _smoke_speed[i] * vfx_delta, 1.0)
+					_smoke_age[i] = age
+				var z_idx := _active_zone_buf[i % active_count]
+				var base_pos := _zone_local_positions[z_idx]
+				var z_inten := _zone_intensity[z_idx]
+				var rise := lerpf(SMOKE_Y_MIN, SMOKE_Y_MAX, age) * sc
+				var ang := _smoke_phase[i] + _anim_clock * 0.75 + age * 2.2
+				var sway_rad := _smoke_swirl_r[i] * sc * (0.40 + 0.85 * age)
+				var drift := smoke_drift_max * pow(age, 1.25)
+				var pos := base_pos + local_up * rise + wind_dir * drift \
+					+ (tan_u * cos(ang) + tan_v * sin(ang)) * sway_rad
+				var grow := lerpf(0.55, 1.85, age) * _smoke_scale[i] * lerpf(0.75, 1.15, z_inten) * sc
+				_smoke_pos[i] = pos
+				_smoke_live_scale[i] = grow
+				var puff_b := Basis(Vector3.UP, _smoke_phase[i] + _anim_clock * 0.35) * Basis(Vector3.RIGHT, sin(ang) * 0.22)
+				smoke_mm.set_instance_transform(i, Transform3D(puff_b.scaled(Vector3(grow * 1.12, grow * 0.88, grow * 1.12)), pos))
+				var alpha := smoothstep(0.0, 0.14, age) * (1.0 - smoothstep(0.68, 1.0, age)) * lerpf(0.52, 0.78, z_inten)
+				var base_col: Color
+				if age < 0.22:
+					base_col = COL_SMOKE_BASE.lerp(COL_SMOKE_SOOT, age / 0.22)
+				else:
+					base_col = COL_SMOKE_SOOT.lerp(COL_SMOKE_ASH, (age - 0.22) / 0.78)
+				smoke_mm.set_instance_color(i, Color(base_col.r, base_col.g, base_col.b, alpha))
+
 
 # ==============================================================================
-# 100% Sculpted Zero-Primitive Multi-Tongue Flame Cluster Builder (>= 420 tris)
+# 100% Sculpted Zero-Primitive Multi-Tongue Flame Cluster & VFX Builders
 # ==============================================================================
 
 static func _ensure_shared_assets() -> void:
@@ -664,6 +1029,132 @@ static func _ensure_shared_assets() -> void:
 		_flame_mat.metallic = 0.0
 	if _flame_mesh == null:
 		_flame_mesh = _build_flame_cluster_mesh()
+	if _ember_mat == null:
+		_ember_mat = StandardMaterial3D.new()
+		_ember_mat.vertex_color_use_as_albedo = true
+		_ember_mat.vertex_color_is_srgb = true
+		_ember_mat.emission_enabled = true
+		_ember_mat.emission = Color(1.0, 0.52, 0.12)
+		_ember_mat.emission_energy_multiplier = 2.10
+		_ember_mat.roughness = 0.30
+		_ember_mat.metallic = 0.0
+	if _ember_mesh == null:
+		_ember_mesh = _build_ember_mesh()
+	if _smoke_mat == null:
+		_smoke_mat = StandardMaterial3D.new()
+		_smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_smoke_mat.vertex_color_use_as_albedo = true
+		_smoke_mat.vertex_color_is_srgb = true
+		_smoke_mat.roughness = 0.95
+		_smoke_mat.metallic = 0.0
+	if _smoke_mesh == null:
+		_smoke_mesh = _build_smoke_puff_mesh()
+	if _halo_mesh == null:
+		_halo_mesh = _build_fire_halo_mesh()
+
+
+static func _build_ember_mesh() -> ArrayMesh:
+	# Sculpted 8-tri faceted diamond bipyramid ember spark (finite unit normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top := Vector3(0.0, 0.088, 0.0)
+	var bot := Vector3(0.0, -0.072, 0.0)
+	const R := 0.044
+	var ring: Array[Vector3] = [
+		Vector3(R, 0.0, 0.0),
+		Vector3(0.0, 0.0, R),
+		Vector3(-R, 0.0, 0.0),
+		Vector3(0.0, 0.0, -R),
+	]
+	var c_top := Color(1.0, 0.99, 0.94)
+	var c_mid := Color(1.0, 0.95, 0.86)
+	var c_bot := Color(0.92, 0.84, 0.74)
+	for k in 4:
+		var k1 := (k + 1) % 4
+		_emit_outward_tri(st, top, ring[k], ring[k1], Vector3.ZERO, c_top, c_mid, c_mid)
+		_emit_outward_tri(st, bot, ring[k1], ring[k], Vector3.ZERO, c_bot, c_mid, c_mid)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_smoke_puff_mesh() -> ArrayMesh:
+	# Sculpted 24-tri organic multi-faceted billowing low-poly soot smoke puff (finite unit normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 6
+	var north := Vector3(0.02, 0.48, -0.02)
+	var south := Vector3(-0.02, -0.44, 0.02)
+	var upper: Array[Vector3] = []
+	var lower: Array[Vector3] = []
+	for k in SEGS:
+		var a_u := TAU * float(k) / float(SEGS)
+		var r_u := 0.44 * (1.0 + 0.14 * sin(float(k) * 2.1 + 0.4))
+		var y_u := 0.20 + 0.05 * cos(float(k) * 1.7)
+		upper.append(Vector3(cos(a_u) * r_u, y_u, sin(a_u) * r_u))
+
+		var a_l := a_u + PI / float(SEGS)
+		var r_l := 0.47 * (1.0 + 0.15 * cos(float(k) * 2.5 - 0.3))
+		var y_l := -0.18 + 0.04 * sin(float(k) * 2.3)
+		lower.append(Vector3(cos(a_l) * r_l, y_l, sin(a_l) * r_l))
+
+	var c_top := Color(1.0, 0.98, 0.96)
+	var c_mid := Color(0.84, 0.82, 0.84)
+	var c_bot := Color(0.62, 0.60, 0.64)
+	for k in SEGS:
+		var k1 := (k + 1) % SEGS
+		_emit_outward_tri(st, north, upper[k], upper[k1], Vector3.ZERO, c_top, c_mid, c_mid)
+		_emit_outward_quad(st, upper[k], lower[k], lower[k1], upper[k1], Vector3.ZERO, c_mid, c_bot, c_bot, c_mid)
+		_emit_outward_tri(st, south, lower[k1], lower[k], Vector3.ZERO, c_bot, c_bot, c_bot)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_fire_halo_mesh() -> ArrayMesh:
+	# Sculpted 16-wedge radial-gradient halo disc (center amber-gold -> rim black for seamless additive feathering).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.42
+	const OUTER_R := 1.0
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner core wedge facing +Z
+		st.set_normal(n)
+		st.set_color(COL_HALO_CENTER)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered skirt quad facing +Z
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
 
 
 static func _build_flame_cluster_mesh() -> ArrayMesh:

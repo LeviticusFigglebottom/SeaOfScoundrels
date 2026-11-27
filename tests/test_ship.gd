@@ -3522,3 +3522,276 @@ func test_q11b_sea_soundscape_harbour_mooring_storm_lash_and_whale_call() -> voi
 	await _end()
 	check(not is_instance_valid(soundscape), "Q11B SeaSoundscape frees cleanly with zero leaks")
 	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 after Q11B teardown")
+
+
+func test_q12a_ship_fire_smoke_embers_halo_and_cabin_candle_halo() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 10.0, deg_to_rad(90.0))
+
+	var sloop := _spawn_sloop(Vector3.ZERO)
+	sloop.start_anchored = true
+	await physics_frames(4)
+	sloop.freeze = true
+	# Rotate hull 55 deg to verify Weather.wind_vector() -> ship-local conversion cleanly!
+	sloop.rotation = Vector3(0.0, deg_to_rad(55.0), 0.0)
+	sloop.linear_velocity = Vector3.ZERO
+	sloop.angular_velocity = Vector3.ZERO
+	await physics_frames(2)
+
+	var sf := sloop.get_ship_fire()
+	check(sf != null, "Sloop mounts ShipFire for Q12A audit")
+	sf.set_process(false)
+
+	# 1. Audit FireEmberSwarm (30), FireSmokePlumes (20), and FireGlowHalo when idle (active_count == 0).
+	var embers := sf.get_ember_swarm_node()
+	var smoke := sf.get_smoke_plumes_node()
+	var halo := sf.get_fire_halo_node()
+	check(embers != null and embers.name == &"FireEmberSwarm", "ShipFire builds FireEmberSwarm MultiMeshInstance3D")
+	check(smoke != null and smoke.name == &"FireSmokePlumes", "ShipFire builds FireSmokePlumes MultiMeshInstance3D")
+	check(halo != null and halo.name == &"FireGlowHalo", "ShipFire builds FireGlowHalo MeshInstance3D")
+
+	check(not embers.visible, "FireEmberSwarm hidden when active_count == 0")
+	check(not smoke.visible, "FireSmokePlumes hidden when active_count == 0")
+	check(not halo.visible, "FireGlowHalo hidden when active_count == 0")
+	check_near(sf.get_fire_halo_energy(), 0.0, 0.0001, "FireGlowHalo energy is 0.0 when no fire burns")
+
+	# Verify zero raw primitives, exact counts, finite unit normals, shadowless, and materials.
+	check(embers.multimesh != null and embers.multimesh.instance_count == 30,
+		"FireEmberSwarm allocates 30 ember instances")
+	check(embers.multimesh.mesh is ArrayMesh and not (embers.multimesh.mesh is PrimitiveMesh),
+		"FireEmberSwarm uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(embers.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"FireEmberSwarm disables shadow casting")
+	check_near(embers.visibility_range_end, 180.0, 0.01, "FireEmberSwarm visibility_range_end == 180.0")
+	var emb_mat := embers.material_override as StandardMaterial3D
+	check(emb_mat != null and emb_mat.vertex_color_use_as_albedo and emb_mat.vertex_color_is_srgb
+		and emb_mat.emission_enabled,
+		"FireEmberSwarm uses emissive sRGB vertex-color StandardMaterial3D")
+	var emb_tris := 0
+	var emb_bad_norms := 0
+	var emb_am := embers.multimesh.mesh as ArrayMesh
+	for si in emb_am.get_surface_count():
+		var arr := emb_am.surface_get_arrays(si)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		emb_tris += floori(float(verts.size()) / 3.0)
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				emb_bad_norms += 1
+	check_eq(emb_tris, 8, "FireEmberSwarm ember spark is sculpted 8-tri bipyramid")
+	check_eq(emb_bad_norms, 0, "FireEmberSwarm normals are all finite unit vectors")
+
+	check(smoke.multimesh != null and smoke.multimesh.instance_count == 20,
+		"FireSmokePlumes allocates 20 smoke puff instances")
+	check(smoke.multimesh.mesh is ArrayMesh and not (smoke.multimesh.mesh is PrimitiveMesh),
+		"FireSmokePlumes uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(smoke.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"FireSmokePlumes disables shadow casting")
+	check_near(smoke.visibility_range_end, 260.0, 0.01, "FireSmokePlumes visibility_range_end == 260.0")
+	var smk_mat := smoke.material_override as StandardMaterial3D
+	check(smk_mat != null and smk_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA
+		and smk_mat.vertex_color_use_as_albedo and smk_mat.vertex_color_is_srgb and smk_mat.roughness >= 0.90,
+		"FireSmokePlumes uses translucent rough sRGB vertex-color StandardMaterial3D")
+	var smk_tris := 0
+	var smk_bad_norms := 0
+	var smk_am := smoke.multimesh.mesh as ArrayMesh
+	for si in smk_am.get_surface_count():
+		var arr := smk_am.surface_get_arrays(si)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		smk_tris += floori(float(verts.size()) / 3.0)
+		for nv in norms:
+			if not nv.is_finite() or nv.length_squared() < 0.5:
+				smk_bad_norms += 1
+	check_eq(smk_tris, 24, "FireSmokePlumes puff is sculpted 24-tri faceted cloud")
+	check_eq(smk_bad_norms, 0, "FireSmokePlumes normals are all finite unit vectors")
+
+	check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+		"FireGlowHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"FireGlowHalo disables shadow casting")
+	var halo_mat := halo.material_override as StandardMaterial3D
+	check(halo_mat != null and halo_mat.vertex_color_use_as_albedo and halo_mat.vertex_color_is_srgb
+		and halo_mat.emission_enabled and halo_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and halo_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and halo_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and halo_mat.billboard_keep_scale and halo_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+		"FireGlowHalo uses sRGB emissive unshaded additive billboard StandardMaterial3D")
+	var halo_bad_norms := 0
+	var halo_am := halo.mesh as ArrayMesh
+	for si in halo_am.get_surface_count():
+		var arr := halo_am.surface_get_arrays(si)
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		for nv in norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				halo_bad_norms += 1
+	check_eq(halo_bad_norms, 0, "FireGlowHalo assigns exact unit (0,0,1) normal to every vertex")
+
+	# 2. Ignite zone 0 -> all 3 layers reveal, tick_fire_vfx(0.25) rises & drifts downwind, night bloom > midday!
+	check(sf.ignite_zone(0, 1.0), "ShipFire ignites zone 0 cleanly")
+	check(embers.visible and smoke.visible and halo.visible,
+		"Igniting zone 0 reveals FireEmberSwarm, FireSmokePlumes, and FireGlowHalo")
+	var midday_halo_e := sf.get_fire_halo_energy()
+	var halo_scale_1z := halo.scale.x
+	check(midday_halo_e > 0.15, "Midday FireGlowHalo energy is positive (got %.3f)" % midday_halo_e)
+
+	var emb_pts_before := sf.get_ember_positions()
+	var smk_pts_before := sf.get_smoke_positions()
+	var smk_sc_before := sf.get_smoke_scales()
+	check_eq(emb_pts_before.size(), 30, "ShipFire tracks all 30 ember positions")
+	check_eq(smk_pts_before.size(), 20, "ShipFire tracks all 20 smoke puff positions")
+	var emb_pos_before := Vector3.ZERO
+	for i in emb_pts_before.size():
+		emb_pos_before += sf.global_transform * emb_pts_before[i]
+	emb_pos_before /= float(emb_pts_before.size())
+
+	var smk_pos_before := Vector3.ZERO
+	var smk_scale_before := 0.0
+	for i in smk_pts_before.size():
+		smk_pos_before += sf.global_transform * smk_pts_before[i]
+		smk_scale_before += smk_sc_before[i]
+	smk_pos_before /= float(smk_pts_before.size())
+	smk_scale_before /= float(smk_pts_before.size())
+
+	sf.tick_fire_vfx(0.25)
+
+	var emb_pts_after := sf.get_ember_positions()
+	var smk_pts_after := sf.get_smoke_positions()
+	var smk_sc_after := sf.get_smoke_scales()
+	var emb_pos_after := Vector3.ZERO
+	for i in emb_pts_after.size():
+		emb_pos_after += sf.global_transform * emb_pts_after[i]
+	emb_pos_after /= float(emb_pts_after.size())
+
+	var smk_pos_after := Vector3.ZERO
+	var smk_scale_after := 0.0
+	for i in smk_pts_after.size():
+		smk_pos_after += sf.global_transform * smk_pts_after[i]
+		smk_scale_after += smk_sc_after[i]
+	smk_pos_after /= float(smk_pts_after.size())
+	smk_scale_after /= float(smk_pts_after.size())
+
+	var emb_delta := emb_pos_after - emb_pos_before
+	var smk_delta := smk_pos_after - smk_pos_before
+	var wind_dir := Weather.wind_vector().normalized()
+	var emb_horiz := Vector3(emb_delta.x, 0.0, emb_delta.z)
+	var smk_horiz := Vector3(smk_delta.x, 0.0, smk_delta.z)
+	var emb_wind_dot := emb_horiz.normalized().dot(wind_dir) if emb_horiz.length() > 0.001 else -1.0
+	var smk_wind_dot := smk_horiz.normalized().dot(wind_dir) if smk_horiz.length() > 0.001 else -1.0
+
+	check(emb_delta.y > 0.20, "tick_fire_vfx(0.25) raises FireEmberSwarm smoothly upward (dy=%.3f m)" % emb_delta.y)
+	check(smk_delta.y > 0.18, "tick_fire_vfx(0.25) raises FireSmokePlumes smoothly upward (dy=%.3f m)" % smk_delta.y)
+	check(smk_scale_after > smk_scale_before + 0.03,
+		"FireSmokePlumes puffs expand as they rise (%.3f -> %.3f)" % [smk_scale_before, smk_scale_after])
+	check(emb_wind_dot > 0.85,
+		"FireEmberSwarm drifts downwind along Weather.wind_vector() on rotated hull (dot=%.3f)" % emb_wind_dot)
+	check(smk_wind_dot > 0.85,
+		"FireSmokePlumes drift downwind along Weather.wind_vector() on rotated hull (dot=%.3f)" % smk_wind_dot)
+
+	# Dusk/night atmospheric bloom rises cleanly over midday!
+	Weather.time_of_day = 23.0
+	sf.tick_fire_vfx(0.05)
+	var night_halo_e := sf.get_fire_halo_energy()
+	check(night_halo_e > midday_halo_e * 1.5,
+		"Night FireGlowHalo energy exceeds midday bloom (day=%.3f, night=%.3f)" % [midday_halo_e, night_halo_e])
+
+	# Additional active fire zone scales FireGlowHalo smoothly larger!
+	sf.ignite_zone(1, 1.0)
+	sf.tick_fire_vfx(0.05)
+	check(halo.scale.x > halo_scale_1z,
+		"Additional active fire zone scales FireGlowHalo larger (1z=%.2f -> 2z=%.2f)" % [halo_scale_1z, halo.scale.x])
+
+	# Dousing all fires cleanly hides all 3 atmospheric layers and zeroes halo energy!
+	sf.douse_all()
+	check(not embers.visible, "douse_all() hides FireEmberSwarm cleanly")
+	check(not smoke.visible, "douse_all() hides FireSmokePlumes cleanly")
+	check(not halo.visible, "douse_all() hides FireGlowHalo cleanly")
+	check_near(sf.get_fire_halo_energy(), 0.0, 0.0001, "douse_all() zeroes FireGlowHalo energy")
+
+	# 3. CaptainCabinFurnishings mounts sculpted zero-primitive CandleFlameHalo synced with candle_light!
+	var furn := sloop.cabin_furnishings
+	check(furn != null, "Player Sloop mounts CaptainCabinFurnishings")
+	var chalo := furn.candle_halo
+	check(chalo != null and chalo.name == &"CandleFlameHalo",
+		"CaptainCabinFurnishings mounts CandleFlameHalo on TrophyLectern")
+	check(chalo.get_parent() == furn.trophy_lectern, "CandleFlameHalo is mounted atop TrophyLectern")
+	check(chalo.mesh is ArrayMesh and not (chalo.mesh is PrimitiveMesh),
+		"CandleFlameHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check_eq(chalo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"CandleFlameHalo disables shadow casting")
+	var ch_mat := chalo.material_override as StandardMaterial3D
+	check(ch_mat != null and ch_mat.vertex_color_use_as_albedo and ch_mat.vertex_color_is_srgb
+		and ch_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and ch_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and ch_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and ch_mat.billboard_keep_scale and ch_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+		"CandleFlameHalo uses sRGB unshaded additive billboard StandardMaterial3D")
+	var ch_bad_norms := 0
+	var ch_am := chalo.mesh as ArrayMesh
+	for si in ch_am.get_surface_count():
+		var arr := ch_am.surface_get_arrays(si)
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		for nv in norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				ch_bad_norms += 1
+	check_eq(ch_bad_norms, 0, "CandleFlameHalo assigns exact unit (0,0,1) normal to every vertex")
+
+	# Verify CandleFlameHalo visibility syncs with candle_light distance culling (> 18 m) & warms at night!
+	var cam := Camera3D.new()
+	_root.add_child(cam)
+	cam.current = true
+	cam.global_position = furn.candle_light.global_position + Vector3(0.0, 0.4, -2.5)
+	await get_tree().process_frame
+
+	Weather.time_of_day = 12.0
+	furn._process(0.05)
+	check(furn.candle_light.visible and chalo.visible,
+		"CandleFlameHalo and CabinCandleLight are both visible when camera <= 18 m")
+	var ch_day_lum := ch_mat.albedo_color.r
+	var ch_day_scale := chalo.scale.x
+
+	Weather.time_of_day = 23.0
+	furn._process(0.05)
+	var ch_night_lum := ch_mat.albedo_color.r
+	var ch_night_scale := chalo.scale.x
+	check(ch_night_lum > ch_day_lum * 1.4,
+		"CandleFlameHalo glows warmer/stronger at night (day=%.3f, night=%.3f)" % [ch_day_lum, ch_night_lum])
+	check(ch_night_scale > ch_day_scale,
+		"CandleFlameHalo gently swells at night (day=%.3f, night=%.3f)" % [ch_day_scale, ch_night_scale])
+
+	# Move camera beyond CANDLE_LIGHT_CULL_DIST (18 m) -> both candle_light & CandleFlameHalo cull cleanly!
+	cam.global_position = furn.candle_light.global_position + Vector3(0.0, 2.0, -30.0)
+	furn._process(0.05)
+	check(not furn.candle_light.visible and not chalo.visible,
+		"CandleFlameHalo distance-culls cleanly in sync with CabinCandleLight at > 18 m")
+
+	# Move camera back inside cabin -> both restore cleanly!
+	cam.global_position = furn.candle_light.global_position + Vector3(0.0, 0.4, -2.5)
+	furn._process(0.05)
+	check(furn.candle_light.visible and chalo.visible,
+		"CandleFlameHalo restores visibility cleanly when camera returns within 18 m")
+
+	print("    Q12A metrics: embers=%d (%d tris, dy=%.2f, dot=%.2f) | smoke=%d (%d tris, dy=%.2f, dot=%.2f) | fire_halo=%.2f->%.2f | candle_halo=%.2f->%.2f" % [
+		embers.multimesh.instance_count, emb_tris, emb_delta.y, emb_wind_dot,
+		smoke.multimesh.instance_count, smk_tris, smk_delta.y, smk_wind_dot,
+		midday_halo_e, night_halo_e, ch_day_lum, ch_night_lum])
+
+	# 4. Clean 0-leak teardown of ALL static caches across ShipFire & CaptainCabinFurnishings!
+	await _end()
+	check_eq(ShipFire._active_instances, 0, "ShipFire._active_instances returns to 0 on Q12A teardown")
+	check(ShipFire._flame_mesh == null and ShipFire._flame_mat == null
+		and ShipFire._ember_mesh == null and ShipFire._ember_mat == null
+		and ShipFire._smoke_mesh == null and ShipFire._smoke_mat == null
+		and ShipFire._halo_mesh == null,
+		"ShipFire auto-releases all static flame/ember/smoke/halo caches cleanly (0 leaks)")
+	check_eq(CaptainCabinFurnishings._active_instances, 0,
+		"CaptainCabinFurnishings._active_instances returns to 0 on Q12A teardown")
+	check(CaptainCabinFurnishings._candle_halo_mesh == null
+		and CaptainCabinFurnishings._lectern_mesh == null
+		and CaptainCabinFurnishings._astrolabe_base_mesh == null,
+		"CaptainCabinFurnishings auto-releases all static caches including _candle_halo_mesh (0 leaks)")
+	ShipFire.clear_shared_cache()
+	CaptainCabinFurnishings.clear_shared_cache()
+

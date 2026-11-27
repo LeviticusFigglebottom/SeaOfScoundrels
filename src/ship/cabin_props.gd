@@ -46,6 +46,9 @@ const COL_CRIMSON_LO := Color(0.48, 0.09, 0.09)
 const COL_WAX := Color(0.96, 0.91, 0.78)
 const COL_FLAME_CORE := Color(1.00, 0.95, 0.72)
 const COL_FLAME_TIP := Color(1.00, 0.58, 0.14)
+const COL_CANDLE_HALO_CENTER := Color(1.00, 0.80, 0.36, 1.0)
+const COL_CANDLE_HALO_MID := Color(0.54, 0.30, 0.08, 1.0)
+const COL_CANDLE_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
 const COL_ARCHIVE_TEAL := Color(0.16, 0.92, 0.76)
 const COL_ARCHIVE_HOT := Color(0.56, 1.00, 0.92)
 
@@ -63,6 +66,7 @@ static var _astrolabe_base_mesh: ArrayMesh = null
 static var _astrolabe_rings_mesh: ArrayMesh = null
 static var _orrery_globe_mesh: ArrayMesh = null
 static var _lectern_mesh: ArrayMesh = null
+static var _candle_halo_mesh: ArrayMesh = null
 static var _medallion_compass_mesh: ArrayMesh = null
 static var _medallion_archive_mesh: ArrayMesh = null
 static var _medallion_iron_mesh: ArrayMesh = null
@@ -77,10 +81,12 @@ var astrolabe_interactable: Interactable = null
 
 var trophy_lectern: Node3D = null
 var candle_light: OmniLight3D = null
+var candle_halo: MeshInstance3D = null
 var medallions: Dictionary = {}  # StringName company_id -> MeshInstance3D
 
 var _pedestal_mi: MeshInstance3D = null
 var _lectern_mi: MeshInstance3D = null
+var _candle_halo_mat: StandardMaterial3D = null
 var _clock: float = 0.0
 var _spin_boost: float = 0.0
 
@@ -98,6 +104,7 @@ static func clear_shared_cache() -> void:
 	_astrolabe_rings_mesh = null
 	_orrery_globe_mesh = null
 	_lectern_mesh = null
+	_candle_halo_mesh = null
 	_medallion_compass_mesh = null
 	_medallion_archive_mesh = null
 	_medallion_iron_mesh = null
@@ -121,6 +128,7 @@ func _exit_tree() -> void:
 		astrolabe_rings,
 		orrery_globe,
 		_lectern_mi,
+		candle_halo,
 	]
 	for comp_id: StringName in medallions:
 		var m := medallions[comp_id] as MeshInstance3D
@@ -142,6 +150,8 @@ func _exit_tree() -> void:
 	_lectern_mi = null
 	trophy_lectern = null
 	candle_light = null
+	candle_halo = null
+	_candle_halo_mat = null
 	_active_instances = maxi(0, _active_instances - 1)
 	if _active_instances == 0:
 		clear_shared_cache()
@@ -159,21 +169,34 @@ func _process(delta: float) -> void:
 	if orrery_globe != null and is_instance_valid(orrery_globe):
 		orrery_globe.rotation.y -= (0.34 + _spin_boost * 0.75) * delta
 
-	# Distance-culled warm flickering cabin candlelight (0.00 ms when camera > 18 m away!).
+	# Distance-culled warm flickering cabin candlelight & additive flame halo (0.00 ms when camera > 18 m away!).
 	if candle_light != null and is_instance_valid(candle_light):
 		var vp := get_viewport()
 		var cam := vp.get_camera_3d() if vp != null else null
+		var show_light := visible
 		if cam != null:
 			var dist_sq := candle_light.global_position.distance_squared_to(cam.global_position)
-			var show_light := visible and dist_sq <= CANDLE_LIGHT_CULL_DIST * CANDLE_LIGHT_CULL_DIST
-			candle_light.visible = show_light
-			if not show_light:
-				return
-		else:
-			candle_light.visible = visible
-		if candle_light.visible:
-			var flick := sin(_clock * 6.8) * 0.05 + sin(_clock * 14.3 + 1.1) * 0.028
-			candle_light.light_energy = 0.56 + flick
+			show_light = visible and dist_sq <= CANDLE_LIGHT_CULL_DIST * CANDLE_LIGHT_CULL_DIST
+		candle_light.visible = show_light
+		if candle_halo != null and is_instance_valid(candle_halo):
+			candle_halo.visible = show_light
+		if not show_light:
+			return
+		var flick := sin(_clock * 6.8) * 0.05 + sin(_clock * 14.3 + 1.1) * 0.028
+		candle_light.light_energy = 0.56 + flick
+		if candle_halo != null and is_instance_valid(candle_halo):
+			var night := clampf(1.0 - (Weather.daylight() if Weather != null else 1.0), 0.0, 1.0)
+			var halo_s := lerpf(0.95, 1.18, night) * (1.0 + flick * 1.45)
+			candle_halo.scale = Vector3(halo_s, halo_s, halo_s)
+			if _candle_halo_mat != null:
+				var energy := lerpf(0.58, 1.12, night) * (1.0 + flick * 1.15)
+				var warm_tint := Color(1.0, 0.94, 0.84).lerp(Color(1.0, 0.78, 0.52), night)
+				_candle_halo_mat.albedo_color = Color(
+					warm_tint.r * energy,
+					warm_tint.g * energy,
+					warm_tint.b * energy,
+					1.0
+				)
 
 
 ## Toggle and polish the 3 sculpted Trading Company Renown medallions from `profile`.
@@ -286,6 +309,28 @@ func _build_trophy_lectern_station() -> void:
 	candle_light.shadow_enabled = false
 	trophy_lectern.add_child(candle_light)
 
+	_candle_halo_mat = StandardMaterial3D.new()
+	_candle_halo_mat.vertex_color_use_as_albedo = true
+	_candle_halo_mat.vertex_color_is_srgb = true
+	_candle_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_candle_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_candle_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_candle_halo_mat.billboard_keep_scale = true
+	_candle_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_candle_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_candle_halo_mat.albedo_color = Color(0.68, 0.62, 0.52, 1.0)
+
+	candle_halo = MeshInstance3D.new()
+	candle_halo.name = "CandleFlameHalo"
+	candle_halo.mesh = _candle_halo_mesh
+	candle_halo.material_override = _candle_halo_mat
+	candle_halo.position = Vector3(-0.22, 1.131, 0.08)
+	candle_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	candle_halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	candle_halo.extra_cull_margin = 0.25
+	candle_halo.visible = candle_light.visible
+	trophy_lectern.add_child(candle_halo)
+
 	# 3 sculpted 3D Trading Company medallions mounted cleanly in the brass trophy rack behind the logbook!
 	var med_specs: Array[Array] = [
 		[&"gilded_compass", "Medallion_gilded_compass", _medallion_compass_mesh, Vector3(-0.20, 1.21, 0.165)],
@@ -392,12 +437,61 @@ static func _ensure_shared_assets() -> void:
 		_orrery_globe_mesh = _build_orrery_globe_mesh()
 	if _lectern_mesh == null:
 		_lectern_mesh = _build_lectern_mesh()
+	if _candle_halo_mesh == null:
+		_candle_halo_mesh = _build_candle_halo_mesh()
 	if _medallion_compass_mesh == null:
 		_medallion_compass_mesh = _build_medallion_compass_mesh()
 	if _medallion_archive_mesh == null:
 		_medallion_archive_mesh = _build_medallion_archive_mesh()
 	if _medallion_iron_mesh == null:
 		_medallion_iron_mesh = _build_medallion_iron_mesh()
+
+
+static func _build_candle_halo_mesh() -> ArrayMesh:
+	# Sculpted 16-wedge radial-gradient candlelight halo disc (warm golden-amber center -> black rim, unit +Z normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.088
+	const OUTER_R := 0.210
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_CENTER)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_MID)
+		st.add_vertex(m0)
+
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_CANDLE_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
 
 
 static func _build_astrolabe_base_mesh() -> ArrayMesh:

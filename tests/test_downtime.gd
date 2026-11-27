@@ -326,3 +326,201 @@ func test_cooking_stove_sculpted_hearth_food_steam_and_teardown() -> void:
 	check(not is_instance_valid(bare_pan), "bare CookingStove freed cleanly")
 
 
+func test_q12b_cooking_hearth_halo_sizzle_motes_and_fishing_ripples_night_lure() -> void:
+	Net.start_single_player()
+	var saved_tod := Weather.time_of_day
+
+	# --- 1. CookingStove (build_hearth = true): HearthFireHalo & SkilletSizzleMotes ---
+	var stove := CookingStove.new()
+	add_child(stove)
+
+	var halo := stove.get_hearth_halo_node()
+	check(halo != null and halo.name == &"HearthFireHalo", "CookingStove (build_hearth = true) mounts HearthFireHalo")
+	check(halo.mesh is ArrayMesh, "HearthFireHalo uses sculpted procedural ArrayMesh")
+	check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "HearthFireHalo has cast_shadow OFF")
+	check(halo.position.distance_to(Vector3(-0.30, 0.30, 0.0)) < 0.01, "HearthFireHalo sits at -X firebox grate")
+	var halo_am := halo.mesh as ArrayMesh
+	var halo_arr := halo_am.surface_get_arrays(0)
+	var halo_verts: PackedVector3Array = halo_arr[Mesh.ARRAY_VERTEX]
+	var halo_norms: PackedVector3Array = halo_arr[Mesh.ARRAY_NORMAL]
+	var halo_cols: PackedColorArray = halo_arr[Mesh.ARRAY_COLOR]
+	check(halo_verts.size() >= 48, "HearthFireHalo has 16-wedge radial geometry (%d verts)" % halo_verts.size())
+	check_eq(halo_norms.size(), halo_verts.size(), "HearthFireHalo carries explicit vertex normals")
+	var halo_norms_ok := true
+	var halo_has_black_rim := false
+	for i in halo_norms.size():
+		var n := halo_norms[i]
+		if not n.is_finite() or absf(n.length() - 1.0) > 0.01 or n.z < 0.99:
+			halo_norms_ok = false
+			break
+		if halo_cols[i].r < 0.01 and halo_cols[i].g < 0.01 and halo_cols[i].b < 0.01:
+			halo_has_black_rim = true
+	check(halo_norms_ok, "HearthFireHalo normals are all finite unit (0,0,1)")
+	check(halo_has_black_rim, "HearthFireHalo fades cleanly to black at rim")
+	var halo_mat := halo.material_override as StandardMaterial3D
+	check(halo_mat != null and halo_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD, "HearthFireHalo uses additive blending")
+	check(halo_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED and halo_mat.billboard_keep_scale, "HearthFireHalo uses scale-preserving billboard")
+	check(halo_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED and halo_mat.vertex_color_is_srgb, "HearthFireHalo disables depth draw & uses sRGB vertex colors")
+
+	var motes := stove.get_sizzle_motes_node()
+	check(motes != null and motes.name == &"SkilletSizzleMotes", "CookingStove mounts SkilletSizzleMotes MultiMeshInstance3D")
+	check_eq(motes.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "SkilletSizzleMotes has cast_shadow OFF")
+	check(motes.multimesh != null and motes.multimesh.instance_count == 14, "SkilletSizzleMotes has 14 instances")
+	check(motes.multimesh.mesh is ArrayMesh, "SkilletSizzleMotes uses sculpted diamond ArrayMesh")
+	var mote_verts: PackedVector3Array = (motes.multimesh.mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	check_eq(mote_verts.size(), 24, "SkilletSizzleMotes diamond mesh has exact 8 triangles (24 flat verts)")
+	check(not motes.visible, "SkilletSizzleMotes stays hidden when stove is empty")
+
+	# Verify ZERO raw primitives anywhere under CookingStove (MeshInstance3D & MultiMeshInstance3D).
+	var stove_prims := 0
+	for child in stove.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi != null and mi.mesh != null:
+			var m := mi.mesh
+			if m is BoxMesh or m is CylinderMesh or m is CapsuleMesh or m is SphereMesh or m is PrismMesh:
+				stove_prims += 1
+	check_eq(stove_prims, 0, "CookingStove still contains zero raw primitive meshes after Q12B")
+
+	# Place food -> raw -> cooked -> burnt: verify distinct colors, rising height bands, and golden sheen pulse!
+	check(stove.place_food({"id": &"azure_snapper", "name": "Azure Snapper", "heal": 35.0}), "place fish activates sizzle motes")
+	stove.step(0.25)
+	check(motes.visible, "SkilletSizzleMotes activates on place_food()")
+	var col_raw := stove.get_sizzle_mode_color()
+	var raw_pts := stove.get_sizzle_mote_positions()
+	check_eq(raw_pts.size(), 14, "14 sizzle mote positions tracked")
+	var raw_max_y := -1.0
+	var raw_sum_y := 0.0
+	for p in raw_pts:
+		raw_max_y = maxf(raw_max_y, p.y)
+		raw_sum_y += p.y
+	var raw_mean_y := raw_sum_y / float(raw_pts.size())
+	check(col_raw.b > 0.70, "raw sizzle droplets have warm-cream tint (b=%.2f)" % col_raw.b)
+	check(raw_max_y >= 0.14 and raw_max_y <= 0.25, "raw sizzle droplets dance low 0.02..0.24 m (max=%.3f)" % raw_max_y)
+	if DisplayServer.get_name() != "headless":
+		check(motes.multimesh.get_instance_transform(0).origin.distance_to(raw_pts[0]) < 0.001, "GPU MultiMesh transform matches cached mote position")
+
+	stove.step(CookingStove.COOK_TIME + 0.5)
+	check_eq(stove.cook_state, &"cooked", "stove reaches cooked state")
+	var col_cooked := stove.get_sizzle_mode_color()
+	var cooked_pts := stove.get_sizzle_mote_positions()
+	var cooked_max_y := -1.0
+	var cooked_sum_y := 0.0
+	for p in cooked_pts:
+		cooked_max_y = maxf(cooked_max_y, p.y)
+		cooked_sum_y += p.y
+	var cooked_mean_y := cooked_sum_y / float(cooked_pts.size())
+	check(col_cooked.r > 0.90 and col_cooked.g > 0.70 and col_cooked.b < 0.40, "cooked motes shift to savory gold (%.2f, %.2f, %.2f)" % [col_cooked.r, col_cooked.g, col_cooked.b])
+	check(cooked_max_y > raw_max_y + 0.12 and cooked_mean_y > raw_mean_y + 0.08, "cooked golden aroma motes drift noticeably higher than raw (%.3f -> %.3f)" % [raw_max_y, cooked_max_y])
+	var food_mi := stove.get_node_or_null(^"SizzlingFood") as MeshInstance3D
+	var food_mat := (food_mi.material_override as StandardMaterial3D) if food_mi != null else null
+	check(food_mat != null and food_mat.emission_enabled and food_mat.emission_energy_multiplier > 0.10, "cooked food shows gentle golden sheen glow pulse")
+
+	stove.step(CookingStove.BURN_TIME - CookingStove.COOK_TIME + 1.0)
+	check_eq(stove.cook_state, &"burnt", "stove reaches burnt state")
+	var col_burnt := stove.get_sizzle_mode_color()
+	var burnt_pts := stove.get_sizzle_mote_positions()
+	var burnt_max_y := -1.0
+	var burnt_sum_y := 0.0
+	for p in burnt_pts:
+		burnt_max_y = maxf(burnt_max_y, p.y)
+		burnt_sum_y += p.y
+	var burnt_mean_y := burnt_sum_y / float(burnt_pts.size())
+	check(col_burnt.r > 0.90 and col_burnt.g < 0.45 and col_burnt.b < 0.15, "burnt motes shift to urgent orange-red burn warning embers (%.2f, %.2f, %.2f)" % [col_burnt.r, col_burnt.g, col_burnt.b])
+	check(burnt_max_y > cooked_max_y + 0.08 and burnt_mean_y > cooked_mean_y + 0.05, "burnt embers shoot higher than cooked aroma motes (%.3f -> %.3f)" % [cooked_max_y, burnt_max_y])
+	check(food_mat != null and not food_mat.emission_enabled, "burnt food clears golden sheen emission")
+
+	stove.take_food()
+	check(not motes.visible, "taking food hides SkilletSizzleMotes")
+
+	# Bare-pan & campfire-tripod modes: no HearthFireHalo, SkilletSizzleMotes hidden when empty, zero raw primitives.
+	var bare_pan := CookingStove.new()
+	bare_pan.build_hearth = false
+	add_child(bare_pan)
+	check(bare_pan.get_hearth_halo_node() == null and bare_pan.get_node_or_null(^"HearthFireHalo") == null, "bare-pan CookingStove has no HearthFireHalo")
+	check(bare_pan.get_sizzle_motes_node() != null and not bare_pan.get_sizzle_motes_node().visible, "bare-pan SkilletSizzleMotes stays hidden when empty")
+
+	var tripod := CookingStove.new()
+	tripod.build_hearth = false
+	tripod.build_campfire_tripod = true
+	add_child(tripod)
+	check(tripod.get_hearth_halo_node() == null, "campfire-tripod CookingStove skips HearthFireHalo")
+	check(tripod.get_sizzle_motes_node() != null and tripod.get_sizzle_motes_node().position.distance_to(CookingStove.TRIPOD_STEAM_POS) < 0.01, "campfire-tripod SkilletSizzleMotes sits cleanly above hanging skillet")
+
+	# --- 2. FishingLine: BobberRippleRings & NightLureHalo ---
+	var rod := FishingLine.new()
+	add_child(rod)
+
+	var ripples := rod.get_bobber_ripples_node()
+	var night_lure := rod.get_night_lure_halo_node()
+	check(ripples != null and ripples.name == &"BobberRippleRings", "FishingLine builds BobberRippleRings")
+	check(ripples.top_level and ripples.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "BobberRippleRings is top_level and shadowless")
+	check(ripples.mesh is ArrayMesh, "BobberRippleRings uses sculpted zero-primitive ArrayMesh")
+	var rip_arr := (ripples.mesh as ArrayMesh).surface_get_arrays(0)
+	var rip_norms: PackedVector3Array = rip_arr[Mesh.ARRAY_NORMAL]
+	check(rip_norms.size() >= 144, "BobberRippleRings builds 2 concentric beveled rings (%d verts)" % rip_norms.size())
+	var rip_norms_ok := true
+	for n in rip_norms:
+		if not n.is_finite() or absf(n.length() - 1.0) > 0.01 or n.y < 0.99:
+			rip_norms_ok = false
+			break
+	check(rip_norms_ok, "BobberRippleRings normals are all finite upward unit (0,1,0)")
+
+	check(night_lure != null and night_lure.name == &"NightLureHalo", "FishingLine builds NightLureHalo")
+	check(night_lure.get_parent() != null and night_lure.get_parent().name == &"Bobber", "NightLureHalo attaches directly to Bobber")
+	check(night_lure.position.distance_to(Vector3(0.0, FishingLine.BOBBER_SWIVEL_Y, 0.0)) < 0.005, "NightLureHalo sits at BOBBER_SWIVEL_Y")
+	check(night_lure.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF and night_lure.mesh is ArrayMesh, "NightLureHalo is shadowless sculpted ArrayMesh")
+	var nl_mat := night_lure.material_override as StandardMaterial3D
+	check(nl_mat != null and nl_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD and nl_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED and nl_mat.billboard_keep_scale, "NightLureHalo uses additive scale-preserving billboard")
+	check(not ripples.visible and not night_lure.visible, "BobberRippleRings and NightLureHalo hidden in State.IDLE")
+
+	# Cast line at midday first -> ripples visible & expanding calmly, night lure very dim.
+	Weather.time_of_day = 12.5
+	check(rod.cast_line(Vector3.ZERO, Vector3.FORWARD, 10.0), "cast_line succeeds for Q12B test")
+	check(ripples.visible, "BobberRippleRings visible on cast_line()")
+	var s_init := rod.get_ripple_scale()
+	var noon_lure := rod.get_night_lure_intensity()
+	var expected_y := Sea.height(rod.bobber_pos.x, rod.bobber_pos.z) + 0.035
+	check(absf(ripples.global_position.y - expected_y) < 0.02, "BobberRippleRings floats smoothly at Sea.height + 0.035")
+
+	rod.step(0.30, Vector3.ZERO, false)
+	var s_wait := rod.get_ripple_scale()
+	check(s_wait > s_init + 0.12 and s_wait <= 1.36, "WAITING ripples expand calmly over step() (%.2f -> %.2f)" % [s_init, s_wait])
+
+	# Compare nocturnal lure brightness at midnight (0.5) vs noon (12.5)!
+	Weather.time_of_day = 0.5
+	rod.step(0.05, Vector3.ZERO, false)
+	var midnight_lure := rod.get_night_lure_intensity()
+	check(midnight_lure > noon_lure * 4.0 and midnight_lure > 0.80, "NightLureHalo glows dramatically brighter at midnight (%.2f) than noon (%.2f)" % [midnight_lure, noon_lure])
+
+	# Trigger bite (HOOKED & fish_fighting) -> ripples surge 2.6x faster and wider!
+	rod._bite_timer = 0.01
+	rod.step(0.05, Vector3.ZERO, false)
+	check_eq(rod.state, FishingLine.State.HOOKED, "fish bites cleanly")
+	rod.fish_fighting = true
+	rod._fight_timer = 5.0
+	rod.step(0.30, Vector3.ZERO, false)
+	var s_fight := rod.get_ripple_scale()
+	var hooked_midnight_lure := rod.get_night_lure_intensity()
+	check(s_fight > s_wait + 0.35 and s_fight <= 2.16, "HOOKED fighting ripples surge faster & wider than WAITING (wait=%.2f, fight=%.2f)" % [s_wait, s_fight])
+	check(hooked_midnight_lure > midnight_lure * 1.15, "NightLureHalo surges extra bright during a hooked bite (%.2f -> %.2f)" % [midnight_lure, hooked_midnight_lure])
+
+	# cancel_cast() cleanly hides ripples & night lure.
+	rod.cancel_cast()
+	check(not ripples.visible and not night_lure.visible, "cancel_cast() hides BobberRippleRings and NightLureHalo")
+	check_near(rod.get_ripple_scale(), 0.0, 0.001)
+	check_near(rod.get_night_lure_intensity(), 0.0, 0.001)
+
+	# Restore Weather.time_of_day and verify full teardown leaves 0 ObjectDB leaks!
+	Weather.time_of_day = saved_tod
+	stove.queue_free()
+	bare_pan.queue_free()
+	tripod.queue_free()
+	rod.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(stove) and not is_instance_valid(halo) and not is_instance_valid(motes), "CookingStove + Q12B hearth halo & sizzle motes freed cleanly")
+	check(not is_instance_valid(bare_pan) and not is_instance_valid(tripod), "bare-pan and campfire-tripod stoves freed cleanly")
+	check(not is_instance_valid(rod) and not is_instance_valid(ripples) and not is_instance_valid(night_lure), "FishingLine + Q12B ripples & night lure halo freed cleanly")
+
+
+

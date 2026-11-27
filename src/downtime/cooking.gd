@@ -45,6 +45,13 @@ const COL_COAL_HOT := Color(1.00, 0.38, 0.07)
 const COL_COAL_DEEP := Color(0.74, 0.14, 0.03)
 const COL_COAL_ASH := Color(0.22, 0.08, 0.04)
 
+const HEARTH_HALO_POS := Vector3(-0.30, 0.30, 0.0)
+const SIZZLE_MOTE_COUNT := 14
+const COL_SIZZLE_EMPTY := Color(0.0, 0.0, 0.0, 0.0)
+const COL_SIZZLE_RAW := Color(0.98, 0.94, 0.82, 0.86)
+const COL_SIZZLE_COOKED := Color(1.00, 0.80, 0.24, 0.94)
+const COL_SIZZLE_BURNT := Color(1.00, 0.28, 0.05, 0.98)
+
 # Neutral-warm value mask colors for sculpted food (multiplied by _food_mat.albedo_color).
 const COL_FISH_FLANK := Color(0.96, 0.94, 0.92)
 const COL_FISH_DORSAL := Color(0.76, 0.77, 0.80)
@@ -71,19 +78,32 @@ var _hearth_mesh: MeshInstance3D = null
 var _tripod_mesh: MeshInstance3D = null
 var _coal_mesh: MeshInstance3D = null
 var _hearth_light: OmniLight3D = null
+var _hearth_halo_mesh: MeshInstance3D = null
 var _skillet_mesh: MeshInstance3D = null
 var _food_mesh: MeshInstance3D = null
 var _steam_particles: GPUParticles3D = null
+var _sizzle_motes: MultiMeshInstance3D = null
 
 var _iron_mat: StandardMaterial3D = null
 var _brass_mat: StandardMaterial3D = null
 var _skillet_iron_mat: StandardMaterial3D = null
 var _copper_mat: StandardMaterial3D = null
 var _coal_mat: StandardMaterial3D = null
+var _hearth_halo_mat: StandardMaterial3D = null
 var _food_mat: StandardMaterial3D = null
 
 var _fish_mesh: ArrayMesh = null
 var _crab_mesh: ArrayMesh = null
+
+var _sizzle_mm: MultiMesh = null
+var _sizzle_mesh: ArrayMesh = null
+var _sizzle_mat: StandardMaterial3D = null
+var _sizzle_mode_color: Color = COL_SIZZLE_EMPTY
+var _sizzle_phase_off: PackedFloat32Array = PackedFloat32Array()
+var _sizzle_angle_off: PackedFloat32Array = PackedFloat32Array()
+var _sizzle_rad_frac: PackedFloat32Array = PackedFloat32Array()
+var _sizzle_spin_rate: PackedFloat32Array = PackedFloat32Array()
+var _sizzle_positions: PackedVector3Array = PackedVector3Array()
 
 var _steam_tex: ImageTexture = null
 var _steam_mat: StandardMaterial3D = null
@@ -94,6 +114,7 @@ var _steam_scale_tex: CurveTexture = null
 
 var _anim_time: float = 0.0
 var _food_base_yaw: float = 0.32
+var _in_physics_step: bool = false
 
 
 func _ready() -> void:
@@ -121,7 +142,11 @@ func _exit_tree() -> void:
 	if _steam_proc != null:
 		_steam_proc.color_ramp = null
 		_steam_proc.scale_curve = null
-	for mi: MeshInstance3D in [_hearth_mesh, _tripod_mesh, _coal_mesh, _skillet_mesh, _food_mesh]:
+	if _sizzle_motes != null and is_instance_valid(_sizzle_motes):
+		_sizzle_motes.visible = false
+		_sizzle_motes.material_override = null
+		_sizzle_motes.multimesh = null
+	for mi: MeshInstance3D in [_hearth_mesh, _tripod_mesh, _coal_mesh, _hearth_halo_mesh, _skillet_mesh, _food_mesh]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
 				for surf_i in mi.mesh.get_surface_count():
@@ -131,8 +156,16 @@ func _exit_tree() -> void:
 	_hearth_mesh = null
 	_tripod_mesh = null
 	_coal_mesh = null
+	_hearth_light = null
+	_hearth_halo_mesh = null
 	_skillet_mesh = null
 	_food_mesh = null
+	_sizzle_motes = null
+	_sizzle_mm = null
+	_sizzle_mesh = null
+	_sizzle_mat = null
+	_sizzle_mode_color = COL_SIZZLE_EMPTY
+	_sizzle_positions.clear()
 	_steam_tex = null
 	_steam_mat = null
 	_steam_proc = null
@@ -144,9 +177,30 @@ func _exit_tree() -> void:
 	_skillet_iron_mat = null
 	_copper_mat = null
 	_coal_mat = null
+	_hearth_halo_mat = null
 	_food_mat = null
 	_fish_mesh = null
 	_crab_mesh = null
+
+
+## Return the additive billboard HearthFireHalo MeshInstance3D (null when build_hearth == false).
+func get_hearth_halo_node() -> MeshInstance3D:
+	return _hearth_halo_mesh
+
+
+## Return the MultiMeshInstance3D rendering the 14 rising faceted skillet sizzle/aroma/ember motes.
+func get_sizzle_motes_node() -> MultiMeshInstance3D:
+	return _sizzle_motes
+
+
+## Return the active skillet sizzle mote palette tint for the current cook_state.
+func get_sizzle_mode_color() -> Color:
+	return _sizzle_mode_color
+
+
+## Return the latest local-space positions of the 14 rising skillet sizzle/aroma/ember motes.
+func get_sizzle_mote_positions() -> PackedVector3Array:
+	return _sizzle_positions
 
 
 func _food_base_pos() -> Vector3:
@@ -235,7 +289,27 @@ func _build_hearth_visual() -> void:
 	_hearth_light.shadow_enabled = false
 	add_child(_hearth_light)
 
-	# 1d. Heavy copper-rimmed cast-iron frying skillet resting on cooktop.
+	# 1d. Atmospheric 16-wedge additive billboard firebox glow halo hugging the -X grate.
+	_hearth_halo_mat = StandardMaterial3D.new()
+	_hearth_halo_mat.vertex_color_use_as_albedo = true
+	_hearth_halo_mat.vertex_color_is_srgb = true
+	_hearth_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_hearth_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_hearth_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_hearth_halo_mat.billboard_keep_scale = true
+	_hearth_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_hearth_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_hearth_halo_mat.albedo_color = Color(0.86, 0.80, 0.72, 1.0)
+
+	_hearth_halo_mesh = MeshInstance3D.new()
+	_hearth_halo_mesh.name = "HearthFireHalo"
+	_hearth_halo_mesh.position = HEARTH_HALO_POS
+	_hearth_halo_mesh.mesh = _build_hearth_halo_mesh()
+	_hearth_halo_mesh.material_override = _hearth_halo_mat
+	_hearth_halo_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_hearth_halo_mesh)
+
+	# 1e. Heavy copper-rimmed cast-iron frying skillet resting on cooktop.
 	_mount_skillet_mesh(SKILLET_CENTER)
 
 
@@ -806,6 +880,110 @@ func _build_food_visual() -> void:
 	add_child(_food_mesh)
 
 	_build_steam_particles()
+	_build_sizzle_motes()
+
+
+func _build_sizzle_motes() -> void:
+	_sizzle_mesh = _build_sizzle_diamond_mesh()
+
+	_sizzle_mat = StandardMaterial3D.new()
+	_sizzle_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_sizzle_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_sizzle_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_sizzle_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_sizzle_mat.vertex_color_use_as_albedo = true
+	_sizzle_mat.vertex_color_is_srgb = true
+	_sizzle_mat.cull_mode = BaseMaterial3D.CULL_BACK
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x51221E14
+	_sizzle_phase_off.resize(SIZZLE_MOTE_COUNT)
+	_sizzle_angle_off.resize(SIZZLE_MOTE_COUNT)
+	_sizzle_rad_frac.resize(SIZZLE_MOTE_COUNT)
+	_sizzle_spin_rate.resize(SIZZLE_MOTE_COUNT)
+	_sizzle_positions.resize(SIZZLE_MOTE_COUNT)
+	for i in SIZZLE_MOTE_COUNT:
+		_sizzle_phase_off[i] = rng.randf_range(-0.03, 0.03)
+		_sizzle_angle_off[i] = rng.randf_range(0.0, TAU)
+		_sizzle_rad_frac[i] = rng.randf_range(0.28, 1.0)
+		_sizzle_spin_rate[i] = rng.randf_range(-2.6, 2.6)
+		_sizzle_positions[i] = Vector3.ZERO
+
+	_sizzle_mm = MultiMesh.new()
+	_sizzle_mm.transform_format = MultiMesh.TRANSFORM_3D
+	_sizzle_mm.use_colors = true
+	_sizzle_mm.use_custom_data = false
+	_sizzle_mm.mesh = _sizzle_mesh
+	_sizzle_mm.instance_count = SIZZLE_MOTE_COUNT
+	for i in SIZZLE_MOTE_COUNT:
+		_sizzle_mm.set_instance_transform(i, Transform3D.IDENTITY)
+		_sizzle_mm.set_instance_color(i, COL_SIZZLE_EMPTY)
+
+	_sizzle_motes = MultiMeshInstance3D.new()
+	_sizzle_motes.name = "SkilletSizzleMotes"
+	_sizzle_motes.position = _steam_base_pos()
+	_sizzle_motes.multimesh = _sizzle_mm
+	_sizzle_motes.material_override = _sizzle_mat
+	_sizzle_motes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sizzle_motes.extra_cull_margin = 0.85
+	_sizzle_motes.visible = false
+	add_child(_sizzle_motes)
+
+
+static func _build_hearth_halo_mesh() -> ArrayMesh:
+	# Sculpted 16-wedge radial-gradient additive billboard halo disc (bright fiery amber core -> black rim).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const OUTER_R := 0.26
+	const MID_R := 0.115
+	var col_core := Color(1.00, 0.72, 0.24, 1.0)
+	var col_mid := Color(0.86, 0.34, 0.06, 1.0)
+	var col_rim := Color(0.0, 0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var norm := Vector3(0.0, 0.0, 1.0)
+	for i in WEDGES:
+		var a0 := float(i) / float(WEDGES) * TAU
+		var a1 := float(i + 1) / float(WEDGES) * TAU
+		var m0 := Vector3(cos(a0) * MID_R, sin(a0) * MID_R, 0.0)
+		var m1 := Vector3(cos(a1) * MID_R, sin(a1) * MID_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		st.set_normal(norm); st.set_color(col_core); st.add_vertex(center)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m1)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m1)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o1)
+
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o1)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o0)
+	return st.commit()
+
+
+static func _build_sizzle_diamond_mesh() -> ArrayMesh:
+	# Sculpted 8-triangle faceted diamond crystal mote (4 upper + 4 lower faces, zero raw primitives).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_hi := Color(1.00, 1.00, 1.00, 1.0)
+	var col_mid := Color(0.92, 0.90, 0.88, 1.0)
+	var col_lo := Color(0.76, 0.74, 0.72, 1.0)
+	var top := Vector3(0.0, 0.018, 0.0)
+	var bot := Vector3(0.0, -0.014, 0.0)
+	var ring: Array[Vector3] = [
+		Vector3(0.010, 0.0, 0.0),
+		Vector3(0.0, 0.0, 0.010),
+		Vector3(-0.010, 0.0, 0.0),
+		Vector3(0.0, 0.0, -0.010),
+	]
+	for k in 4:
+		var nk := (k + 1) % 4
+		_emit_outward_tri(st, top, col_hi, ring[k], col_mid, ring[nk], col_mid, Vector3.ZERO)
+		_emit_outward_tri(st, bot, col_lo, ring[nk], col_mid, ring[k], col_mid, Vector3.ZERO)
+	st.generate_normals()
+	return st.commit()
 
 
 func _build_steam_particles() -> void:
@@ -1160,12 +1338,16 @@ func _update_food_visual() -> void:
 	if not active:
 		_food_mesh.position = _food_base_pos()
 		_food_mesh.rotation = Vector3(0.0, _food_base_yaw, 0.0)
+		_food_mat.emission_enabled = false
+		_food_mat.emission_energy_multiplier = 0.0
+		_update_sizzle_motes()
 		return
 
 	var is_crab := String(cooking_item.get("id", "")).contains("crab")
 	_food_mesh.mesh = _crab_mesh if is_crab else _fish_mesh
 	_update_food_tint()
 	_update_steam_profile()
+	_update_sizzle_motes()
 
 
 func _update_food_tint() -> void:
@@ -1184,19 +1366,28 @@ func _update_food_tint() -> void:
 		_food_mat.clearcoat_enabled = true
 		_food_mat.clearcoat = lerpf(0.36, 0.46, sear_blend)
 		_food_mat.clearcoat_roughness = 0.22
+		_food_mat.emission_enabled = false
+		_food_mat.emission_energy_multiplier = 0.0
 	elif cook_state == &"cooked":
 		var burn_u := clampf((elapsed - COOK_TIME) / maxf(BURN_TIME - COOK_TIME, 0.1), 0.0, 1.0)
 		var dark_warn := clampf((burn_u - 0.65) / 0.35, 0.0, 1.0) * 0.32
+		var sheen_pulse := 0.5 + 0.5 * sin(_anim_time * 4.4)
 		_food_mat.albedo_color = cooked_col.lerp(burnt_col, dark_warn)
 		_food_mat.roughness = lerpf(0.38, 0.54, dark_warn)
 		_food_mat.clearcoat_enabled = true
-		_food_mat.clearcoat = lerpf(0.56, 0.25, dark_warn)
+		_food_mat.clearcoat = lerpf(0.56, 0.25, dark_warn) + 0.10 * sheen_pulse * (1.0 - dark_warn)
 		_food_mat.clearcoat_roughness = 0.20
+		# Subtle savory warm golden sheen pulse so any pirate immediately sees a perfectly seared meal!
+		_food_mat.emission_enabled = true
+		_food_mat.emission = Color(1.00, 0.70, 0.20)
+		_food_mat.emission_energy_multiplier = (0.24 + 0.18 * sheen_pulse) * (1.0 - dark_warn * 0.8)
 	else:
 		_food_mat.albedo_color = burnt_col
 		_food_mat.roughness = 0.94
 		_food_mat.clearcoat_enabled = false
 		_food_mat.clearcoat = 0.0
+		_food_mat.emission_enabled = false
+		_food_mat.emission_energy_multiplier = 0.0
 
 
 func _update_steam_profile() -> void:
@@ -1289,18 +1480,15 @@ func take_food(pawn: Node = null) -> Dictionary:
 
 
 func _physics_process(delta: float) -> void:
+	_in_physics_step = true
 	step(delta)
+	_in_physics_step = false
 	_anim_time += delta
 
-	# Gentle dual-frequency firebox coal & warm hearth OmniLight3D flicker.
-	var active_cook := not cooking_item.is_empty()
-	var flick := sin(_anim_time * 5.7) * 0.55 + sin(_anim_time * 13.1 + 1.3) * 0.30 + cos(_anim_time * 2.9) * 0.15
-	if _coal_mat != null:
-		var base_em := 2.65 if active_cook else 2.25
-		_coal_mat.emission_energy_multiplier = base_em + flick * 0.38
-	if _hearth_light != null and is_instance_valid(_hearth_light):
-		var base_e := 0.50 if active_cook else 0.44
-		_hearth_light.light_energy = base_e + flick * 0.065
+	_update_hearth_flicker()
+	_update_sizzle_motes()
+	if cook_state == &"cooked":
+		_update_food_tint()
 
 	# Subtle lively sizzling pan-jiggle & rock while cooking!
 	if _food_mesh != null and _food_mesh.visible:
@@ -1316,7 +1504,94 @@ func _physics_process(delta: float) -> void:
 		)
 
 
+func _update_hearth_flicker() -> void:
+	# Gentle dual-frequency firebox coal, warm hearth OmniLight3D, and additive HearthFireHalo flicker.
+	var active_cook := not cooking_item.is_empty()
+	var flick := sin(_anim_time * 5.7) * 0.55 + sin(_anim_time * 13.1 + 1.3) * 0.30 + cos(_anim_time * 2.9) * 0.15
+	if _coal_mat != null:
+		var base_em := 2.65 if active_cook else 2.25
+		_coal_mat.emission_energy_multiplier = base_em + flick * 0.38
+	if _hearth_light != null and is_instance_valid(_hearth_light):
+		var base_e := 0.50 if active_cook else 0.44
+		_hearth_light.light_energy = base_e + flick * 0.065
+	if _hearth_halo_mat != null and _hearth_halo_mesh != null and is_instance_valid(_hearth_halo_mesh):
+		var base_g := 0.96 if active_cook else 0.78
+		var glow := clampf(base_g + flick * 0.16, 0.45, 1.25)
+		_hearth_halo_mat.albedo_color = Color(glow, glow * 0.93, glow * 0.82, 1.0)
+		var hs := (1.06 if active_cook else 0.96) + flick * 0.07
+		_hearth_halo_mesh.scale = Vector3(hs, hs, hs)
+
+
+func _update_sizzle_motes() -> void:
+	if _sizzle_motes == null or not is_instance_valid(_sizzle_motes) or _sizzle_mm == null:
+		return
+	if cook_state == &"empty" or cooking_item.is_empty():
+		_sizzle_motes.visible = false
+		_sizzle_mode_color = COL_SIZZLE_EMPTY
+		return
+
+	_sizzle_motes.visible = true
+	var y_min := 0.02
+	var y_max := 0.24
+	var rise_speed := 0.62
+	var rad_max := 0.13
+	var scale_lo := 0.46
+	var scale_hi := 0.74
+	var wiggle_amp := 0.015
+	var wiggle_freq := 4.2
+
+	if cook_state == &"raw":
+		_sizzle_mode_color = COL_SIZZLE_RAW
+	elif cook_state == &"cooked":
+		_sizzle_mode_color = COL_SIZZLE_COOKED
+		y_min = 0.04
+		y_max = 0.52
+		rise_speed = 0.48
+		rad_max = 0.165
+		scale_lo = 0.70
+		scale_hi = 1.08
+		wiggle_amp = 0.026
+		wiggle_freq = 3.1
+	else:
+		_sizzle_mode_color = COL_SIZZLE_BURNT
+		y_min = 0.06
+		y_max = 0.68
+		rise_speed = 1.18
+		rad_max = 0.195
+		scale_lo = 0.78
+		scale_hi = 1.26
+		wiggle_amp = 0.036
+		wiggle_freq = 8.4
+
+	for i in SIZZLE_MOTE_COUNT:
+		var u := fposmod(float(i) / float(SIZZLE_MOTE_COUNT) + _sizzle_phase_off[i] + _anim_time * rise_speed, 1.0)
+		var y := lerpf(y_min, y_max, u)
+		var ang := _sizzle_angle_off[i] + _anim_time * _sizzle_spin_rate[i] + u * 2.4
+		var r := _sizzle_rad_frac[i] * rad_max * (0.45 + 0.55 * u)
+		var x := cos(ang) * r + sin(_anim_time * wiggle_freq + float(i) * 1.7) * wiggle_amp * u
+		var z := sin(ang) * r + cos(_anim_time * wiggle_freq * 0.85 + float(i) * 2.3) * wiggle_amp * u
+		var env := smoothstep(0.0, 0.14, u) * (1.0 - smoothstep(0.76, 1.0, u))
+		var sc := lerpf(scale_lo, scale_hi, _sizzle_rad_frac[i]) * maxf(env, 0.18)
+		var rot := Basis.from_euler(Vector3(_anim_time * 2.4 + float(i), ang, _anim_time * 1.8 - float(i) * 0.7))
+		var pos := Vector3(x, y, z)
+		_sizzle_positions[i] = pos
+		_sizzle_mm.set_instance_transform(i, Transform3D(rot.scaled(Vector3(sc, sc * 1.15, sc)), pos))
+
+		var col := _sizzle_mode_color
+		if cook_state == &"burnt":
+			var flare := 0.5 + 0.5 * sin(_anim_time * 18.0 + float(i) * 2.1)
+			col = col.lerp(Color(1.0, 0.64, 0.12, col.a), 0.35 * flare)
+		elif cook_state == &"cooked":
+			var shimmer := 0.5 + 0.5 * sin(_anim_time * 5.2 + float(i) * 1.3)
+			col = col.lerp(Color(1.0, 0.94, 0.58, col.a), 0.28 * shimmer)
+		col.a *= clampf(0.25 + 0.75 * env, 0.0, 1.0)
+		_sizzle_mm.set_instance_color(i, col)
+
+
 func step(delta: float) -> void:
+	if not _in_physics_step:
+		_anim_time += delta
+		_update_hearth_flicker()
 	if not Net.is_host() or cooking_item.is_empty():
 		return
 	elapsed += delta
@@ -1326,6 +1601,7 @@ func step(delta: float) -> void:
 	elif elapsed >= COOK_TIME:
 		next_state = &"cooked"
 	if next_state != cook_state:
+		var prev_state := cook_state
 		cook_state = next_state
 		cooking_item["cooked_state"] = cook_state
 		var nm := String(cooking_item.get("name", "Fish"))
@@ -1333,12 +1609,17 @@ func step(delta: float) -> void:
 			interactable.prompt = "Take %s %s" % [String(cook_state), nm]
 		if cook_state == &"cooked":
 			Game.post_notice("%s is golden and cooked!" % nm)
+			if prev_state == &"raw":
+				var cue_pos := global_transform * _food_base_pos() if is_inside_tree() else global_position
+				Audio.play_sfx(&"lantern_click", cue_pos, -1.5, 0.04)
 		elif cook_state == &"burnt":
 			Game.post_notice("%s has burnt on the stove!" % nm)
 		_update_food_visual()
 		food_state_changed.emit(cook_state, cooking_item)
 	else:
 		_update_food_tint()
+		if not _in_physics_step:
+			_update_sizzle_motes()
 
 
 func _on_interacted(pawn: Node) -> void:

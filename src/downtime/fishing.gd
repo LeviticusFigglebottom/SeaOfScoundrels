@@ -26,6 +26,13 @@ const BOBBER_SWIVEL_Y := 0.252
 const ROD_BUTT_LEN := 0.95
 const ROD_MID_LEN := 0.85
 const ROD_TIP_LEN := 0.75
+const RIPPLE_WAIT_PERIOD := 1.6
+const RIPPLE_FIGHT_SPEED_MULT := 2.6
+const RIPPLE_WAIT_SCALE_MIN := 0.45
+const RIPPLE_WAIT_SCALE_MAX := 1.35
+const RIPPLE_FIGHT_SCALE_MIN := 0.55
+const RIPPLE_FIGHT_SCALE_MAX := 2.15
+const RIPPLE_WATER_OFFSET := 0.035
 
 # Painterly pirate palette for bobber, bamboo rod, catenary line, and leaping fish.
 const COL_CORK_BASE := Color(0.88, 0.78, 0.56)
@@ -71,6 +78,15 @@ var _cast_forward: Vector3 = Vector3.FORWARD
 var _bobber_mesh: MeshInstance3D = null
 var _bobber_mat: StandardMaterial3D = null
 
+var _ripple_mesh: MeshInstance3D = null
+var _ripple_mat: StandardMaterial3D = null
+var _ripple_phase: float = 0.0
+var _ripple_scale: float = 0.0
+
+var _night_lure_halo: MeshInstance3D = null
+var _night_lure_mat: StandardMaterial3D = null
+var _night_lure_intensity: float = 0.0
+
 var _rod_root: Node3D = null
 var _rod_butt_mesh: MeshInstance3D = null
 var _rod_mid_pivot: Node3D = null
@@ -104,6 +120,7 @@ var _rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	_rng.randomize()
 	_build_bobber()
+	_build_bobber_ripples()
 	_build_fishing_rod()
 	_build_line_ribbon()
 	_build_splash_particles()
@@ -129,6 +146,14 @@ func _exit_tree() -> void:
 	if _line_mesh_inst != null and is_instance_valid(_line_mesh_inst):
 		_line_mesh_inst.mesh = null
 		_line_mesh_inst.material_override = null
+	if _night_lure_halo != null and is_instance_valid(_night_lure_halo):
+		_night_lure_halo.visible = false
+		_night_lure_halo.mesh = null
+		_night_lure_halo.material_override = null
+	if _ripple_mesh != null and is_instance_valid(_ripple_mesh):
+		_ripple_mesh.visible = false
+		_ripple_mesh.mesh = null
+		_ripple_mesh.material_override = null
 	if _bobber_mesh != null and is_instance_valid(_bobber_mesh):
 		_bobber_mesh.mesh = null
 		_bobber_mesh.material_override = null
@@ -140,12 +165,40 @@ func _exit_tree() -> void:
 		_splash_mat.albedo_texture = null
 	_line_mesh = null
 	_line_mat = null
+	_bobber_mesh = null
 	_bobber_mat = null
+	_ripple_mesh = null
+	_ripple_mat = null
+	_ripple_phase = 0.0
+	_ripple_scale = 0.0
+	_night_lure_halo = null
+	_night_lure_mat = null
+	_night_lure_intensity = 0.0
 	_rod_mat = null
 	_splash_tex = null
 	_splash_mat = null
 	_fish_body_mat = null
 	_fish_eye_mat = null
+
+
+## Return the concentric water-ripple MeshInstance3D floating beneath the bobber.
+func get_bobber_ripples_node() -> MeshInstance3D:
+	return _ripple_mesh
+
+
+## Return the additive billboard nocturnal NightLureHalo MeshInstance3D attached to the bobber.
+func get_night_lure_halo_node() -> MeshInstance3D:
+	return _night_lure_halo
+
+
+## Return the current brightness intensity of the nocturnal moonlit lure halo.
+func get_night_lure_intensity() -> float:
+	return _night_lure_intensity
+
+
+## Return the current horizontal expansion scale of the concentric water ripple rings.
+func get_ripple_scale() -> float:
+	return _ripple_scale
 
 
 ## Return the world-space position of the flexing bamboo fishing rod's tip eyelet.
@@ -174,16 +227,22 @@ func cast_line(origin: Vector3, forward: Vector3, cast_dist: float = 11.0) -> bo
 	state = State.WAITING
 	_bite_timer = _rng.randf_range(3.0, 7.5)
 	_splash_timer = 0.0
+	_ripple_phase = 0.0
+	_ripple_scale = RIPPLE_WAIT_SCALE_MIN
 
 	_set_stowed_prop_visible(false)
 	if _bobber_mesh != null:
 		_bobber_mesh.visible = true
+	if _ripple_mesh != null:
+		_ripple_mesh.visible = true
 	if _rod_root != null:
 		_rod_root.visible = true
 	if _line_mesh_inst != null:
 		_line_mesh_inst.visible = true
 
 	_update_bobber_transform()
+	_update_bobber_ripples(0.0)
+	_update_night_lure_halo()
 	_update_rod_transform(origin)
 	_update_line_ribbon()
 
@@ -201,8 +260,15 @@ func cancel_cast() -> void:
 	fish_fighting = false
 	hooked_species = {}
 	_splash_timer = 0.0
+	_ripple_phase = 0.0
+	_ripple_scale = 0.0
+	_night_lure_intensity = 0.0
 	if _bobber_mesh != null:
 		_bobber_mesh.visible = false
+	if _ripple_mesh != null:
+		_ripple_mesh.visible = false
+	if _night_lure_halo != null:
+		_night_lure_halo.visible = false
 	if _rod_root != null:
 		_rod_root.visible = false
 	if _line_mesh_inst != null:
@@ -236,17 +302,22 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 			fish_fighting = true
 			_fight_timer = _rng.randf_range(1.2, 2.2)
 			_splash_timer = SPLASH_INTERVAL
+			_ripple_phase = 0.0
 			bobber_pos.y = surf - 0.045
 			Audio.play_sfx(&"splash_small", bobber_pos, 2.0)
 			if Ocean.current != null:
 				Ocean.current.add_foam(bobber_pos, 1.1, 0.75)
 			_trigger_splash_burst(bobber_pos)
 			_update_bobber_transform()
+			_update_bobber_ripples(0.0)
+			_update_night_lure_halo()
 			_update_rod_transform(caster_pos)
 			_update_line_ribbon()
 			fish_hooked.emit(hooked_species)
 			return
 		_update_bobber_transform()
+		_update_bobber_ripples(delta)
+		_update_night_lure_halo()
 		_update_rod_transform(caster_pos)
 		_update_line_ribbon()
 		return
@@ -310,6 +381,8 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 		fish_caught.emit(caught)
 	else:
 		_update_bobber_transform()
+		_update_bobber_ripples(delta)
+		_update_night_lure_halo()
 		_update_rod_transform(caster_pos)
 		_update_line_ribbon()
 
@@ -394,6 +467,218 @@ func _build_bobber() -> void:
 	_bobber_mesh.visible = false
 	_bobber_mesh.top_level = true
 	add_child(_bobber_mesh)
+
+	# Nocturnal bioluminescent moonlit lure halo riding at the bobber quill swivel tip.
+	_night_lure_mat = StandardMaterial3D.new()
+	_night_lure_mat.vertex_color_use_as_albedo = true
+	_night_lure_mat.vertex_color_is_srgb = true
+	_night_lure_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_night_lure_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_night_lure_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_night_lure_mat.billboard_keep_scale = true
+	_night_lure_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_night_lure_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	_night_lure_halo = MeshInstance3D.new()
+	_night_lure_halo.name = "NightLureHalo"
+	_night_lure_halo.position = Vector3(0.0, BOBBER_SWIVEL_Y, 0.0)
+	_night_lure_halo.mesh = _build_night_lure_halo_mesh()
+	_night_lure_halo.material_override = _night_lure_mat
+	_night_lure_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_night_lure_halo.visible = false
+	_bobber_mesh.add_child(_night_lure_halo)
+
+
+func _build_bobber_ripples() -> void:
+	_ripple_mat = StandardMaterial3D.new()
+	_ripple_mat.vertex_color_use_as_albedo = true
+	_ripple_mat.vertex_color_is_srgb = true
+	_ripple_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ripple_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ripple_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_ripple_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_ripple_mat.albedo_color = Color(0.84, 0.96, 1.00, 0.65)
+
+	_ripple_mesh = MeshInstance3D.new()
+	_ripple_mesh.name = "BobberRippleRings"
+	_ripple_mesh.mesh = _build_ripple_rings_mesh()
+	_ripple_mesh.material_override = _ripple_mat
+	_ripple_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ripple_mesh.visible = false
+	_ripple_mesh.top_level = true
+	add_child(_ripple_mesh)
+
+
+static func _build_ripple_rings_mesh() -> ArrayMesh:
+	# Sculpted concentric 2-ring horizontal water-ripple mesh (feathered bevel profile, finite upward unit normals).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 24
+	var norm := Vector3(0.0, 1.0, 0.0)
+	# Each ring spec: [r_in, r_mid, r_out, y_crest, peak_alpha]
+	var ring_specs: Array[Array] = [
+		[0.19, 0.25, 0.31, 0.008, 0.92],
+		[0.42, 0.48, 0.54, 0.006, 0.72],
+	]
+	for spec in ring_specs:
+		var r_in := float(spec[0])
+		var r_mid := float(spec[1])
+		var r_out := float(spec[2])
+		var y_crest := float(spec[3])
+		var peak_a := float(spec[4])
+		var col_in := Color(0.84, 0.96, 1.00, 0.0)
+		var col_peak := Color(0.98, 1.00, 1.00, peak_a)
+		var col_out := Color(0.80, 0.95, 1.00, 0.0)
+		for i in SEGS:
+			var a0 := float(i) / float(SEGS) * TAU
+			var a1 := float(i + 1) / float(SEGS) * TAU
+			var c0 := cos(a0)
+			var s0 := sin(a0)
+			var c1 := cos(a1)
+			var s1 := sin(a1)
+			var p_in0 := Vector3(c0 * r_in, 0.0, s0 * r_in)
+			var p_in1 := Vector3(c1 * r_in, 0.0, s1 * r_in)
+			var p_mid0 := Vector3(c0 * r_mid, y_crest, s0 * r_mid)
+			var p_mid1 := Vector3(c1 * r_mid, y_crest, s1 * r_mid)
+			var p_out0 := Vector3(c0 * r_out, 0.0, s0 * r_out)
+			var p_out1 := Vector3(c1 * r_out, 0.0, s1 * r_out)
+
+			# Inner bevel slope: r_in -> r_mid (CW from +Y so (c - a).cross(b - a) points +Y).
+			st.set_normal(norm); st.set_color(col_in); st.add_vertex(p_in0)
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid0)
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid1)
+
+			st.set_normal(norm); st.set_color(col_in); st.add_vertex(p_in0)
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid1)
+			st.set_normal(norm); st.set_color(col_in); st.add_vertex(p_in1)
+
+			# Outer bevel slope: r_mid -> r_out.
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid0)
+			st.set_normal(norm); st.set_color(col_out); st.add_vertex(p_out0)
+			st.set_normal(norm); st.set_color(col_out); st.add_vertex(p_out1)
+
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid0)
+			st.set_normal(norm); st.set_color(col_out); st.add_vertex(p_out1)
+			st.set_normal(norm); st.set_color(col_peak); st.add_vertex(p_mid1)
+	return st.commit()
+
+
+static func _build_night_lure_halo_mesh() -> ArrayMesh:
+	# Sculpted 16-wedge radial-gradient additive billboard halo disc (moonlit cyan-gold core -> black rim).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const OUTER_R := 0.36
+	const MID_R := 0.16
+	var col_core := Color(0.86, 0.99, 0.88, 1.0)
+	var col_mid := Color(0.28, 0.84, 0.80, 1.0)
+	var col_rim := Color(0.0, 0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var norm := Vector3(0.0, 0.0, 1.0)
+	for i in WEDGES:
+		var a0 := float(i) / float(WEDGES) * TAU
+		var a1 := float(i + 1) / float(WEDGES) * TAU
+		var m0 := Vector3(cos(a0) * MID_R, sin(a0) * MID_R, 0.0)
+		var m1 := Vector3(cos(a1) * MID_R, sin(a1) * MID_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		st.set_normal(norm); st.set_color(col_core); st.add_vertex(center)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m1)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m1)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o1)
+
+		st.set_normal(norm); st.set_color(col_mid); st.add_vertex(m0)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o1)
+		st.set_normal(norm); st.set_color(col_rim); st.add_vertex(o0)
+	return st.commit()
+
+
+func _update_bobber_ripples(delta: float) -> void:
+	if _ripple_mesh == null or not is_instance_valid(_ripple_mesh) or _ripple_mat == null:
+		return
+	if state == State.IDLE:
+		_ripple_mesh.visible = false
+		_ripple_scale = 0.0
+		return
+
+	_ripple_mesh.visible = true
+	var speed_mult := 1.0
+	var s_min := RIPPLE_WAIT_SCALE_MIN
+	var s_max := RIPPLE_WAIT_SCALE_MAX
+	var base_col := Color(0.82, 0.96, 1.00, 1.0)
+	var peak_alpha := 0.68
+
+	if state == State.HOOKED:
+		if fish_fighting:
+			speed_mult = RIPPLE_FIGHT_SPEED_MULT
+			s_min = RIPPLE_FIGHT_SCALE_MIN
+			s_max = RIPPLE_FIGHT_SCALE_MAX
+			base_col = Color(0.96, 1.00, 1.00, 1.0)
+			peak_alpha = 0.94
+		else:
+			speed_mult = 1.45
+			s_min = 0.50
+			s_max = 1.68
+			base_col = Color(0.88, 0.98, 1.00, 1.0)
+			peak_alpha = 0.78
+
+	_ripple_phase = fposmod(_ripple_phase + (delta * speed_mult) / RIPPLE_WAIT_PERIOD, 1.0)
+	var u := _ripple_phase
+	var ease_u := lerpf(u, 1.0 - (1.0 - u) * (1.0 - u), 0.30)
+	_ripple_scale = lerpf(s_min, s_max, ease_u)
+
+	var fade_in := lerpf(0.45, 1.0, smoothstep(0.0, 0.12, u))
+	var fade_out := pow(clampf(1.0 - u, 0.0, 1.0), 1.30)
+	var alpha := fade_in * fade_out * peak_alpha
+	_ripple_mat.albedo_color = Color(base_col.r, base_col.g, base_col.b, alpha)
+
+	var y_surf := Sea.height(bobber_pos.x, bobber_pos.z)
+	var pos := Vector3(bobber_pos.x, y_surf + RIPPLE_WATER_OFFSET, bobber_pos.z)
+	var sea_n := Sea.normal(bobber_pos.x, bobber_pos.z)
+	var up := sea_n.lerp(Vector3.UP, 0.50).normalized()
+	var ref := Vector3.FORWARD if absf(up.dot(Vector3.FORWARD)) < 0.95 else Vector3.RIGHT
+	var right := up.cross(ref).normalized()
+	var fwd := right.cross(up).normalized()
+	var wave_basis := Basis(right, up, fwd) * Basis(Vector3.UP, _anim_clock * 0.22)
+	_ripple_mesh.global_transform = Transform3D(
+		wave_basis.scaled(Vector3(_ripple_scale, 1.0, _ripple_scale)),
+		pos
+	)
+
+
+func _update_night_lure_halo() -> void:
+	if _night_lure_halo == null or not is_instance_valid(_night_lure_halo) or _night_lure_mat == null:
+		return
+	if state == State.IDLE:
+		_night_lure_halo.visible = false
+		_night_lure_intensity = 0.0
+		return
+
+	var dl := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var darkness := clampf(1.0 - dl, 0.0, 1.0)
+	var breathe := 0.90 + 0.10 * sin(_anim_clock * 3.6)
+	var bite_surge := 0.0
+	if state == State.HOOKED:
+		var strike_pulse := 0.84 + 0.16 * sin(_anim_clock * 14.5)
+		bite_surge = (0.55 if fish_fighting else 0.30) * strike_pulse
+	var base_glow := lerpf(0.05, 1.15, darkness)
+	_night_lure_intensity = (base_glow + bite_surge) * breathe
+
+	# Moonlit cyan-gold nocturnal glow that flares warmer gold when a fish strikes!
+	var hooked_warm := 0.45 if state == State.HOOKED else 0.0
+	var tint := Color(0.68, 0.98, 0.92, 1.0).lerp(Color(1.00, 0.90, 0.62, 1.0), hooked_warm)
+	_night_lure_mat.albedo_color = Color(
+		tint.r * _night_lure_intensity,
+		tint.g * _night_lure_intensity,
+		tint.b * _night_lure_intensity,
+		1.0
+	)
+	var h_scale := lerpf(0.58, 1.32, clampf(_night_lure_intensity / 1.5, 0.0, 1.0))
+	_night_lure_halo.scale = Vector3(h_scale, h_scale, h_scale)
+	_night_lure_halo.visible = true
 
 
 func _update_bobber_transform() -> void:
