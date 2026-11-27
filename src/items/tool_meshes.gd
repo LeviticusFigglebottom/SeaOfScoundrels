@@ -69,6 +69,14 @@ const COL_FLAME := Color(1.0, 0.90, 0.46)
 const COL_BELLOWS_RED := Color(0.68, 0.20, 0.16)
 const COL_BELLOWS_CREAM := Color(0.88, 0.80, 0.62)
 
+# Q30A bucket water slosh & nocturnal bioluminescence tuning.
+const BUCKET_WATER_BASE_Y := -0.144
+const BUCKET_SLOSH_MAX_RAD := 9.0 * PI / 180.0
+const COL_WATER_EMIT_DAY := Color(0.06, 0.26, 0.28)
+const COL_WATER_EMIT_NIGHT := Color(0.08, 0.72, 0.84)
+const BUCKET_EMIT_DAY := 0.22
+const BUCKET_EMIT_NIGHT := 0.68
+
 # Zero-extra-VRAM ship PBR normal & roughness maps already resident in VRAM.
 const _PBR_FAMILY_SPECS := {
 	&"oak": {
@@ -118,16 +126,17 @@ static var _fp_hand_mat_cache: Dictionary = {}
 ## Lazy WeakRef caches of shared held-lantern atmospheric halo mesh & shader (zero shutdown leaks).
 static var _lantern_halo_mesh: WeakRef = null
 static var _lantern_halo_shader: WeakRef = null
-## Lazy WeakRef caches of Q14A/Q28A sculpted shanty notes, spyglass lens glint & cutlass blade gleam assets.
+## Lazy WeakRef caches of Q14A/Q28A/Q30A sculpted shanty notes, lens glint, blade gleam & toast halo assets.
 static var _shanty_note_mesh_ref: WeakRef = null
 static var _shanty_note_mat_ref: WeakRef = null
 static var _shanty_note_particle_mesh_ref: WeakRef = null
 static var _shanty_note_particle_mat_ref: WeakRef = null
 static var _spyglass_glint_mesh_ref: WeakRef = null
 static var _cutlass_gleam_mesh_ref: WeakRef = null
+static var _tankard_toast_mesh_ref: WeakRef = null
 
 
-## Clear cached shared PBR texture, hand mesh, lantern halo, and Q14A/Q28A VFX caches cleanly on teardown.
+## Clear cached shared PBR texture, hand mesh, lantern halo, and Q14A/Q28A/Q30A VFX caches cleanly on teardown.
 static func clear_shared_cache() -> void:
 	_pbr_tex_cache.clear()
 	_fp_hand_mesh_cache.clear()
@@ -140,6 +149,7 @@ static func clear_shared_cache() -> void:
 	_shanty_note_particle_mat_ref = null
 	_spyglass_glint_mesh_ref = null
 	_cutlass_gleam_mesh_ref = null
+	_tankard_toast_mesh_ref = null
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -314,11 +324,17 @@ static func set_compass_pin_mode(compass_node: Node3D, pin_active: bool) -> void
 
 ## Toggle the visible bilge water disc inside a Bucket node.
 static func set_bucket_full(bucket_node: Node3D, full: bool) -> void:
-	if bucket_node == null:
+	if bucket_node == null or not is_instance_valid(bucket_node):
 		return
 	var wf := bucket_node.get_node_or_null(^"WaterFill") as Node3D
 	if wf != null:
 		wf.visible = full
+		if not full:
+			wf.rotation = Vector3.ZERO
+			wf.position.y = BUCKET_WATER_BASE_Y * maxf(wf.scale.y, 0.1)
+			bucket_node.set_meta(&"_q30a_bucket_vel", Vector2.ZERO)
+			bucket_node.set_meta(&"q30a_bucket_slosh_rad", 0.0)
+			bucket_node.set_meta(&"q30a_bucket_biolum", 0.0)
 
 
 ## Expand or squeeze a Concertina node's bellows (`stretch_01` in 0..1, 0.5 = rest).
@@ -476,7 +492,8 @@ static func update_spyglass_glint(tool_root: Node3D, zoom_01: float, has_sightin
 
 
 ## Slide and brighten the sculpted metallic star-gleam (`CutlassBladeGleam`) along
-## the curved steel fuller of a Cutlass (`slide_01`: 0 = hilt -> 1 = tip; hidden when strength <= 0.01).
+## the curved steel fuller of a Cutlass (`slide_01`: 0 = hilt -> 1 = tip) or the curved
+## crescent steel cutting edge of a Boarding Axe (0 = upper horn -> 1 = lower beard tip).
 static func update_cutlass_gleam(tool_root: Node3D, strength_01: float, slide_01: float) -> void:
 	if tool_root == null or not is_instance_valid(tool_root):
 		return
@@ -485,14 +502,26 @@ static func update_cutlass_gleam(tool_root: Node3D, strength_01: float, slide_01
 		return
 	var s := clampf(strength_01, 0.0, 1.5)
 	var u := clampf(slide_01, 0.0, 1.0)
-	var t := lerpf(0.10, 0.94, u)
-	var y := 0.105 + t * 0.64
-	var sweep_z := 0.072 * pow(t, 1.95) - 0.012 * sin(t * PI)
-	var width := 0.056 * (1.0 + 0.24 * sin(t * PI * 0.82)) * (1.0 - 0.88 * pow(t, 4.2))
-	var edge_z := sweep_z - width * 0.62
-	var spine_z := sweep_z + width * 0.38
-	var fuller_z := lerpf(edge_z, spine_z, 0.42)
-	gleam.position = Vector3(0.010, y, fuller_z)
+	if tool_root.name == "Tool_BoardingAxe":
+		# Slide along the convex crescent steel cutting edge from upper horn -> center belly -> lower beard tip.
+		var t_axe := lerpf(0.94, 0.06, u)
+		var y_axe := lerpf(0.335, 0.635, t_axe)
+		var u_mid := (t_axe - 0.50) * 2.0
+		var abs_u := absf(u_mid)
+		var back_z := -0.026 - 0.105 * pow(abs_u, 1.85)
+		var front_z := -0.242 + 0.072 * (u_mid * u_mid)
+		var bevel_z := lerpf(front_z, back_z, 0.26)
+		var edge_z := lerpf(front_z, bevel_z, 0.32)
+		gleam.position = Vector3(0.012, y_axe, edge_z)
+	else:
+		var t := lerpf(0.10, 0.94, u)
+		var y := 0.105 + t * 0.64
+		var sweep_z := 0.072 * pow(t, 1.95) - 0.012 * sin(t * PI)
+		var width := 0.056 * (1.0 + 0.24 * sin(t * PI * 0.82)) * (1.0 - 0.88 * pow(t, 4.2))
+		var edge_z := sweep_z - width * 0.62
+		var spine_z := sweep_z + width * 0.38
+		var fuller_z := lerpf(edge_z, spine_z, 0.42)
+		gleam.position = Vector3(0.010, y, fuller_z)
 
 	if s <= 0.01:
 		gleam.visible = false
@@ -512,6 +541,148 @@ static func update_cutlass_gleam(tool_root: Node3D, strength_01: float, slide_01
 		mat.albedo_color = Color(col.r * s, col.g * s, col.b * s, 1.0)
 	tool_root.set_meta(&"q14a_cutlass_gleam_strength", s)
 	tool_root.set_meta(&"q14a_cutlass_gleam_slide", u)
+
+
+## Animate a held Bucket's visible `WaterFill` disc with damped counter-tilt slosh (+/- 9 deg),
+## subtle ripple bob (+/- 0.004 m), and smooth midday sea-teal (0.22) -> midnight bioluminescent
+## cyan-turquoise (0.68) water emission shift. Resets cleanly to zero tilt when empty.
+static func update_bucket_water(tool_root: Node3D, dt: float, sway_xz: Vector2, night_01: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var wf := tool_root.get_node_or_null(^"WaterFill") as Node3D
+	if wf == null:
+		return
+	var base_y := BUCKET_WATER_BASE_Y * maxf(wf.scale.y, 0.1)
+	if not wf.visible:
+		wf.rotation = Vector3.ZERO
+		wf.position.y = base_y
+		tool_root.set_meta(&"_q30a_bucket_vel", Vector2.ZERO)
+		tool_root.set_meta(&"q30a_bucket_slosh_rad", 0.0)
+		tool_root.set_meta(&"q30a_bucket_biolum", 0.0)
+		return
+
+	var step_dt := clampf(dt, 0.0, 0.05)
+	var phase := float(tool_root.get_meta(&"_q30a_bucket_phase", 0.0)) + step_dt
+	tool_root.set_meta(&"_q30a_bucket_phase", phase)
+
+	var ripple_rad := 1.1 * PI / 180.0
+	var ripple_x := sin(phase * 3.4) * ripple_rad
+	var ripple_z := sin(phase * 2.7) * ripple_rad
+	var tgt := Vector2(
+		-sway_xz.y * BUCKET_SLOSH_MAX_RAD + ripple_x,
+		-sway_xz.x * BUCKET_SLOSH_MAX_RAD + ripple_z
+	).limit_length(BUCKET_SLOSH_MAX_RAD)
+
+	var cur := Vector2(wf.rotation.x, wf.rotation.z)
+	var vel_v: Variant = tool_root.get_meta(&"_q30a_bucket_vel", Vector2.ZERO)
+	var vel := vel_v as Vector2 if vel_v is Vector2 else Vector2.ZERO
+	if step_dt > 0.0:
+		var accel := (tgt - cur) * 52.0 - vel * 9.5
+		vel = (vel + accel * step_dt).limit_length(3.2)
+		cur = (cur + vel * step_dt).limit_length(BUCKET_SLOSH_MAX_RAD)
+	else:
+		cur = tgt
+		vel = Vector2.ZERO
+	tool_root.set_meta(&"_q30a_bucket_vel", vel)
+	wf.rotation = Vector3(cur.x, 0.0, cur.y)
+
+	var sway_mag := clampf(sway_xz.length(), 0.0, 1.0)
+	var bob_amp := lerpf(0.0018, 0.004, sway_mag)
+	var bob_y := sin(phase * 4.2) * bob_amp
+	wf.position.y = base_y + bob_y
+
+	var night := clampf(night_01, 0.0, 1.0)
+	var emit_energy := lerpf(BUCKET_EMIT_DAY, BUCKET_EMIT_NIGHT, night)
+	var emit_col := COL_WATER_EMIT_DAY.lerp(COL_WATER_EMIT_NIGHT, night)
+	if wf is MeshInstance3D:
+		var wmi := wf as MeshInstance3D
+		if wmi.material_override is StandardMaterial3D:
+			var mat := wmi.material_override as StandardMaterial3D
+			mat.emission_enabled = true
+			mat.emission = emit_col
+			mat.emission_energy_multiplier = emit_energy
+
+	tool_root.set_meta(&"q30a_bucket_slosh_rad", cur.length())
+	tool_root.set_meta(&"q30a_bucket_biolum", night)
+
+
+## Scale & illuminate a held Tankard's golden `TankardToastHalo` (0.0 -> 1.25 celebratory shimmer)
+## and give `FoamTop` a subtle joyful frothy bob (+0.005 * sin(...) * strength_01).
+static func update_tankard_toast(tool_root: Node3D, strength_01: float, phase: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var halo := tool_root.get_node_or_null(^"TankardToastHalo") as MeshInstance3D
+	var foam := tool_root.get_node_or_null(^"FoamTop") as Node3D
+	var s := clampf(strength_01, 0.0, 1.25)
+	if s <= 0.01:
+		if halo != null:
+			halo.visible = false
+			halo.position = Vector3(0.0, 0.115, -0.095)
+			halo.scale = Vector3.ONE * 0.01
+			if halo.material_override is StandardMaterial3D:
+				(halo.material_override as StandardMaterial3D).albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		if foam != null:
+			foam.position.y = 0.0
+		tool_root.set_meta(&"q30a_tankard_toast_strength", 0.0)
+		tool_root.set_meta(&"q30a_tankard_foam_bob", 0.0)
+		return
+
+	var s_norm := clampf(s, 0.0, 1.0)
+	var pulse := 0.92 + 0.08 * sin(phase * 14.0 + 0.4)
+	var energy := clampf(s * 1.25 * pulse, 0.0, 1.25)
+	var foam_bob := 0.005 * sin(phase * 16.0 + 0.5) * s_norm
+	if halo != null:
+		halo.visible = true
+		halo.position = Vector3(0.0, 0.115 + 0.006 * sin(phase * 10.0) * s_norm, -0.095)
+		var sc := lerpf(0.45, 1.25, clampf(energy / 1.25, 0.0, 1.0))
+		halo.scale = Vector3.ONE * sc
+		if halo.material_override is StandardMaterial3D:
+			var mat := halo.material_override as StandardMaterial3D
+			var col := Color(1.00, 0.84, 0.32).lerp(Color(1.00, 0.96, 0.72), clampf(s_norm * 0.55, 0.0, 0.55))
+			mat.albedo_color = Color(col.r * energy, col.g * energy, col.b * energy, 1.0)
+	if foam != null:
+		foam.position.y = foam_bob
+	tool_root.set_meta(&"q30a_tankard_toast_strength", energy)
+	tool_root.set_meta(&"q30a_tankard_foam_bob", foam_bob)
+
+
+## Slide and brighten the sculpted metallic star-gleam (`ShovelBladeGleam`) along
+## the beveled iron spade edge toward its pointed tip (`slide_01`: 0 = shoulder -> 1 = tip).
+static func update_shovel_gleam(tool_root: Node3D, strength_01: float, slide_01: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var gleam := tool_root.get_node_or_null(^"ShovelBladeGleam") as MeshInstance3D
+	if gleam == null:
+		return
+	var s := clampf(strength_01, 0.0, 1.5)
+	var u := clampf(slide_01, 0.0, 1.0)
+	var t := lerpf(0.18, 0.98, u)
+	var y := lerpf(0.41, 0.73, t)
+	var hw := lerpf(0.115, 0.012, pow(t, 1.75))
+	var cup := 0.020 * (1.0 - t * 0.6)
+	var z_off := -0.014 * sin(t * PI * 0.7)
+	gleam.position = Vector3(hw * 0.72, y, z_off - cup + 0.008)
+
+	if s <= 0.01:
+		gleam.visible = false
+		gleam.scale = Vector3.ONE * 0.01
+		if gleam.material_override is StandardMaterial3D:
+			(gleam.material_override as StandardMaterial3D).albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		tool_root.set_meta(&"q30a_shovel_gleam_strength", 0.0)
+		tool_root.set_meta(&"q30a_shovel_gleam_slide", u)
+		return
+
+	gleam.visible = true
+	var sc := lerpf(0.40, 1.24, clampf(s / 1.25, 0.0, 1.0)) * (0.80 + 0.26 * sin(u * PI))
+	gleam.scale = Vector3.ONE * sc
+	if gleam.material_override is StandardMaterial3D:
+		var mat := gleam.material_override as StandardMaterial3D
+		var is_relic := StringName(tool_root.get_meta(&"tool_variant_id", &"")) != &""
+		var base_col := Color(1.00, 0.92, 0.62) if is_relic else Color(0.96, 0.94, 0.84)
+		var col := base_col.lerp(Color(1.00, 0.88, 0.44), clampf(s * 0.55, 0.0, 0.65))
+		mat.albedo_color = Color(col.r * s, col.g * s, col.b * s, 1.0)
+	tool_root.set_meta(&"q30a_shovel_gleam_strength", s)
+	tool_root.set_meta(&"q30a_shovel_gleam_slide", u)
 
 
 ## Apply visible 3D first-person/third-person styling for Economy `tool_variant` sidegrades
@@ -605,6 +776,8 @@ static func apply_tool_variant_visual(item_id: StringName, node: Node3D, variant
 			for child_n: Node3D in [staves, bands, water]:
 				if child_n != null:
 					child_n.scale = target_scale
+			if water != null:
+				water.position.y = BUCKET_WATER_BASE_Y * target_scale.y
 			if bands != null:
 				if is_heavy_bailer:
 					bands.material_override = _make_mat(Color(0.32, 0.34, 0.39), 0.20, 0.92)
@@ -942,6 +1115,18 @@ static func _build_boarding_axe() -> Node3D:
 	_append_loft(st_steel, spike_rings, true)
 	st_steel.generate_normals()
 	root.add_child(_make_mesh_node("AxeBlade", st_steel.commit(), _make_mat(COL_STEEL, 0.24, 0.90)))
+
+	# Sculpted 24-tri additive metallic blade star-gleam sweeping along the curved crescent edge.
+	var gleam := MeshInstance3D.new()
+	gleam.name = "CutlassBladeGleam"
+	gleam.mesh = _get_cutlass_gleam_mesh()
+	gleam.material_override = _make_star_flare_mat()
+	gleam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gleam.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	gleam.extra_cull_margin = 0.25
+	gleam.visible = false
+	root.add_child(gleam)
+	update_cutlass_gleam(root, 0.0, 0.0)
 	return root
 
 
@@ -1570,6 +1755,18 @@ static func _build_shovel() -> Node3D:
 	_append_loft(st_iron, spade_rings, true)
 	st_iron.generate_normals()
 	root.add_child(_make_mesh_node("SpadeBlade", st_iron.commit(), _make_mat(COL_IRON, 0.44, 0.76)))
+
+	# Sculpted 24-tri sunlit-brass/steel additive glint sweeping along the forged iron spade tip.
+	var gleam := MeshInstance3D.new()
+	gleam.name = "ShovelBladeGleam"
+	gleam.mesh = _get_cutlass_gleam_mesh()
+	gleam.material_override = _make_star_flare_mat()
+	gleam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gleam.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	gleam.extra_cull_margin = 0.25
+	gleam.visible = false
+	root.add_child(gleam)
+	update_shovel_gleam(root, 0.0, 0.0)
 	return root
 
 
@@ -1627,16 +1824,21 @@ static func _build_bucket() -> Node3D:
 	st_iron.generate_normals()
 	root.add_child(_make_mesh_node("IronBands", st_iron.commit(), _make_mat(COL_IRON, 0.46, 0.74)))
 
-	# Toggleable `WaterFill` disc inside bucket near top rim (hidden when empty).
+	# Toggleable `WaterFill` disc inside bucket near top rim (hidden when empty),
+	# centered around its own surface pivot so slosh tilts stay cleanly inside the oak staves.
 	var water_mesh := _lathe_mesh([
-		Vector2(0.0, -0.148),
-		Vector2(0.118, -0.148),
-		Vector2(0.118, -0.142),
-		Vector2(0.0, -0.140),
+		Vector2(0.0, -0.004),
+		Vector2(0.114, -0.004),
+		Vector2(0.114, 0.002),
+		Vector2(0.0, 0.004),
 	], 12)
-	var water_mi := _make_mesh_node("WaterFill", water_mesh, _make_mat(COL_WATER, 0.12, 0.08, Color(0.06, 0.24, 0.24), 0.35, true))
+	var water_mi := _make_mesh_node("WaterFill", water_mesh,
+		_make_mat(COL_WATER, 0.12, 0.08, COL_WATER_EMIT_DAY, BUCKET_EMIT_DAY, true))
+	water_mi.position = Vector3(0.0, BUCKET_WATER_BASE_Y, 0.0)
 	water_mi.visible = false
 	root.add_child(water_mi)
+	root.set_meta(&"q30a_bucket_slosh_rad", 0.0)
+	root.set_meta(&"q30a_bucket_biolum", 0.0)
 	return root
 
 
@@ -1753,6 +1955,19 @@ static func _build_tankard() -> Node3D:
 		], 8, Transform3D(Basis.IDENTITY, c))
 	st_foam.generate_normals()
 	root.add_child(_make_mesh_node("FoamTop", st_foam.commit(), _make_mat(COL_FOAM, 0.86, 0.0, Color.BLACK, 0.0, false, &"none")))
+
+	# Sculpted 24-tri warm gilded-amber additive toast halo above FoamTop (hidden by default).
+	var halo := MeshInstance3D.new()
+	halo.name = "TankardToastHalo"
+	halo.mesh = _get_tankard_toast_mesh()
+	halo.material_override = _make_star_flare_mat()
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	halo.extra_cull_margin = 0.25
+	halo.position = Vector3(0.0, 0.115, -0.095)
+	halo.visible = false
+	root.add_child(halo)
+	update_tankard_toast(root, 0.0, 0.0)
 	return root
 
 
@@ -3580,6 +3795,21 @@ static func _get_cutlass_gleam_mesh() -> ArrayMesh:
 		Color(0.76, 0.72, 0.52, 1.0)
 	)
 	_cutlass_gleam_mesh_ref = weakref(built)
+	return built
+
+
+static func _get_tankard_toast_mesh() -> ArrayMesh:
+	if _tankard_toast_mesh_ref != null:
+		var existing: Variant = _tankard_toast_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_star_flare_mesh(
+		0.020, 0.010, 0.072, 0.078, 0.026,
+		Color(1.00, 0.98, 0.86, 1.0),
+		Color(1.00, 0.84, 0.34, 1.0),
+		Color(0.92, 0.62, 0.16, 1.0)
+	)
+	_tankard_toast_mesh_ref = weakref(built)
 	return built
 
 

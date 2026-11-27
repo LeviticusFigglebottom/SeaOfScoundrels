@@ -17,6 +17,11 @@ const MAX_ALT_Y := 17.0
 const RIBBON_SEGS := 14
 const RIBBON_LENGTH := 7.4
 const RIBBON_HALF_WIDTH := 0.145
+const COL_MIDDAY := Color(0.97, 0.96, 0.91)
+const COL_GOLDEN := Color(1.00, 0.85, 0.64)
+const COL_NIGHT := Color(0.54, 0.78, 0.92)
+const COL_STORM := Color(0.84, 0.90, 0.95)
+const COL_STORM_NIGHT := Color(0.58, 0.72, 0.84)
 
 static var _active_instances: int = 0
 static var _ribbon_mesh: ArrayMesh = null
@@ -27,6 +32,8 @@ var _mm: MultiMesh = null
 var _mat: ShaderMaterial = null
 var _clock: float = 0.0
 var _wind_dir: Vector3 = Vector3.FORWARD
+var _current_ribbon_color: Color = COL_MIDDAY
+var _current_vis_alpha: float = 0.0
 
 # Per-ribbon deterministic lanes: {u, lat, alt, phase, length_scale, speed_scale, roll}.
 var _lanes: Array[Dictionary] = []
@@ -50,7 +57,7 @@ func _ready() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = _ribbon_shader
 	_mat.set_shader_parameter(&"wind_time", 0.0)
-	_mat.set_shader_parameter(&"ribbon_color", Color(0.97, 0.96, 0.91))
+	_mat.set_shader_parameter(&"ribbon_color", COL_MIDDAY)
 
 	_mm = MultiMesh.new()
 	_mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -78,6 +85,8 @@ func _exit_tree() -> void:
 	_mmi = null
 	_mm = null
 	_mat = null
+	_current_ribbon_color = COL_MIDDAY
+	_current_vis_alpha = 0.0
 	_lanes.clear()
 	_ribbon_world_xforms.clear()
 	_active_instances = maxi(0, _active_instances - 1)
@@ -86,6 +95,11 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	_step_ribbons(delta)
+
+
+## Deterministically step wind ribbon positions, sky-harmonized tint, and opacity.
+func step_ribbons(delta: float) -> void:
 	_step_ribbons(delta)
 
 
@@ -102,6 +116,16 @@ func get_ribbon_count() -> int:
 ## Return the latest horizontal world-space unit wind direction tracked by the ribbons.
 func get_wind_direction() -> Vector3:
 	return _wind_dir
+
+
+## Return the current time-of-day and storm harmonized ribbon palette color.
+func get_ribbon_color() -> Color:
+	return _current_ribbon_color
+
+
+## Return the current sky- and storm-harmonized wind ribbon visibility alpha multiplier.
+func get_ribbon_visibility_alpha() -> float:
+	return _current_vis_alpha
 
 
 ## Return the world-space forward (-Z) direction of ribbon instance `idx`.
@@ -151,13 +175,31 @@ func _step_ribbons(delta: float) -> void:
 	else:
 		_wind_dir = horiz / wind_spd
 
+	var ship_origin := global_position if is_inside_tree() else Vector3.ZERO
+	var inv_self := global_transform.affine_inverse() if is_inside_tree() else Transform3D.IDENTITY
+
+	# Smooth Time-of-Day & Storm palette harmonization driven by sun elevation (deg) and storminess.
+	var sun_el := rad_to_deg(asin(clampf(Weather.sun_height(), -1.0, 1.0)))
+	var golden := clampf(1.0 - absf(sun_el - 6.0) / 14.0, 0.0, 1.0)
+	var night := clampf((-sun_el - 2.0) / 16.0, 0.0, 1.0)
+	var raw_storm := Weather.local_storminess(ship_origin) if is_inside_tree() else Weather.storminess
+	var storm := clampf(raw_storm, 0.0, 1.0)
+
+	var sky_col := COL_MIDDAY.lerp(COL_GOLDEN, golden).lerp(COL_NIGHT, night)
+	var storm_col := COL_STORM.lerp(COL_STORM_NIGHT, night * 0.65)
+	_current_ribbon_color = sky_col.lerp(storm_col, storm)
+	_mat.set_shader_parameter(&"ribbon_color", _current_ribbon_color)
+
 	var eff_spd := maxf(wind_spd, Weather.wind_speed)
 	var speed_norm := clampf((eff_spd - 2.0) / 18.0, 0.0, 1.0)
 	# Travel rate across the 38 m dome scales smoothly with wind speed.
 	var travel_mps := lerpf(5.8, 18.5, speed_norm)
-	var vis_alpha := clampf(lerpf(0.18, 0.56, speed_norm), 0.0, 0.60)
-	if wind_spd < 0.25 and Weather.wind_speed < 0.25:
-		vis_alpha = 0.0
+	var tod_alpha_mult := lerpf(1.0, 1.05, golden) * lerpf(1.0, 0.68, night)
+	var vis_alpha := 0.0
+	if wind_spd >= 0.25 or Weather.wind_speed >= 0.25:
+		var base_alpha := lerpf(0.18, 0.56, speed_norm)
+		vis_alpha = clampf(base_alpha * tod_alpha_mult + 0.12 * storm, 0.0, 0.64)
+	_current_vis_alpha = vis_alpha
 
 	_clock += delta * lerpf(0.85, 2.35, speed_norm)
 	_mat.set_shader_parameter(&"wind_time", _clock)
@@ -169,9 +211,6 @@ func _step_ribbons(delta: float) -> void:
 	else:
 		wind_right = wind_right.normalized()
 	var wind_basis := Basis(wind_right, Vector3.UP, -_wind_dir)
-
-	var ship_origin := global_position if is_inside_tree() else Vector3.ZERO
-	var inv_self := global_transform.affine_inverse() if is_inside_tree() else Transform3D.IDENTITY
 
 	for i in RIBBON_COUNT:
 		var lane: Dictionary = _lanes[i]
@@ -317,7 +356,7 @@ void fragment() {
 	float across = abs(UV.y * 2.0 - 1.0);
 	float cross_fade = smoothstep(1.0, 0.14, across);
 	float wisp = 0.78 + 0.22 * sin(UV.x * 15.0 - wind_time * 3.8 + v_phase);
-	float alpha = clamp(long_fade * cross_fade * v_life * v_alpha_mult * wisp, 0.0, 0.62);
+	float alpha = clamp(long_fade * cross_fade * v_life * v_alpha_mult * wisp, 0.0, 0.64);
 	if (alpha < 0.008) {
 		discard;
 	}

@@ -582,13 +582,15 @@ func test_q6a_sailing_rudder_bar_and_strict_ascii_controls() -> void:
 	ship.sail_trim = ship.ideal_sail_trim()
 	ship.helm = 0.0
 	hud._process(0.05)
+	hud._process(0.25)
 	var ctr_txt := hud.get_sailing_telemetry_text()
 	check(hud.is_sailing_telemetry_visible(), "SailingTrimPill visible at helm")
 	check(ctr_txt.contains("[---|---]") and ctr_txt.contains("CTR") and ctr_txt.ends_with("kt  |  FULL WIND"),
 		"centered full-wind pill shows rudder bar + FULL WIND (got '%s')" % ctr_txt)
 	check(hud.is_sailing_full_wind_highlighted(), "Full-Billow Wind Catch activates nautical gold highlight")
-	check(hud.get_sailing_pill_border_color().is_equal_approx(HudIcons.COL_GOLD),
-		"Full-Billow sailing pill border gleams in HudIcons.COL_GOLD")
+	var full_border := hud.get_sailing_pill_border_color()
+	check(full_border.r >= HudIcons.COL_GOLD.r - 0.02 and full_border.g >= HudIcons.COL_GOLD.g - 0.02 and full_border.r > full_border.b + 0.45,
+		"Full-Billow sailing pill border gleams in burnished nautical gold (got %s)" % str(full_border))
 	check(_is_strict_ascii(ctr_txt), "centered sailing pill text is strict ASCII")
 
 	ship.helm = -0.45
@@ -1886,4 +1888,308 @@ func test_q27a_hud_spyglass_compass_lock_and_low_health_vignette() -> void:
 	check(not is_instance_valid(hud), "Q27A GameHUD frees cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# 13. Q30B: WindRibbons ToD/Storm Palette + GameHUD Pause Fade & Full-Wind Glow
+# ---------------------------------------------------------------------------
 
+func test_q30b_wind_ribbons_tod_palette_and_hud_pause_full_wind_polish() -> void:
+	var saved_weather := Weather.get_state()
+	var saved_amp := Sea.amp_scale
+	Net.start_single_player()
+	Weather.day_length_seconds = 0.0
+	Weather.lightning_enabled = false
+	Sea.amp_scale = 0.0
+
+	var root := Node3D.new()
+	add_child(root)
+
+	# ------------------------------------------------------------------
+	# 1. WindRibbons dynamic Time-of-Day & Storm palette harmonization
+	# ------------------------------------------------------------------
+	WindRibbons.clear_shared_cache()
+	var wr := WindRibbons.new()
+	root.add_child(wr)
+	await get_tree().process_frame
+	wr.set_process(false)
+
+	var mmi := wr.get_multimesh_instance()
+	var mat := mmi.material_override as ShaderMaterial if mmi != null else null
+	check(mmi != null and mat != null, "WindRibbons mounts MultiMeshInstance3D with ShaderMaterial")
+
+	# Midday (sun_el ~ 70.7 deg, clear): crisp sunlit sea-cream Color(0.97, 0.96, 0.91).
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 10.0, 0.0)
+	wr.step_ribbons(0.05)
+	var mid_col := wr.get_ribbon_color()
+	var mid_alpha := wr.get_ribbon_visibility_alpha()
+	check(mid_col.is_equal_approx(WindRibbons.COL_MIDDAY),
+		"Midday WindRibbons palette is sunlit sea-cream (got %s)" % str(mid_col))
+	check(mid_alpha > 0.25 and mid_alpha < 0.50,
+		"Midday WindRibbons visibility alpha is moderate (got %.3f)" % mid_alpha)
+	if mat != null:
+		var u_col: Color = mat.get_shader_parameter(&"ribbon_color")
+		check(u_col.is_equal_approx(mid_col), "WindRibbons shader ribbon_color uniform matches Midday color")
+
+	# Golden Hour / Sunset (sun_el ~ 5.7 deg, clear): warm gilded peach-gold (r > b + 0.20).
+	Weather.time_of_day = 17.6
+	Weather.set_weather(0.0, 10.0, 0.0)
+	wr.step_ribbons(0.05)
+	var gold_col := wr.get_ribbon_color()
+	var gold_alpha := wr.get_ribbon_visibility_alpha()
+	check(gold_col.r > gold_col.b + 0.20,
+		"Golden Hour WindRibbons warms into peach-gold (r=%.3f, b=%.3f)" % [gold_col.r, gold_col.b])
+	check(gold_alpha >= mid_alpha - 0.001,
+		"Golden Hour WindRibbons keeps warm visibility >= Midday (gold=%.3f, mid=%.3f)" % [gold_alpha, mid_alpha])
+	if mat != null:
+		var u_gold: Color = mat.get_shader_parameter(&"ribbon_color")
+		check(u_gold.is_equal_approx(gold_col), "WindRibbons shader ribbon_color uniform updates for Golden Hour")
+
+	# Midnight (sun_el ~ -70.7 deg, clear): moonlit silver-cyan (b > r + 0.25) & dimmed alpha vs midday!
+	Weather.time_of_day = 0.0
+	Weather.set_weather(0.0, 10.0, 0.0)
+	wr.step_ribbons(0.05)
+	var night_col := wr.get_ribbon_color()
+	var night_alpha := wr.get_ribbon_visibility_alpha()
+	check(night_col.b > night_col.r + 0.25,
+		"Midnight WindRibbons shifts to moonlit silver-cyan (r=%.3f, b=%.3f)" % [night_col.r, night_col.b])
+	check(night_alpha < mid_alpha * 0.78 and night_alpha > 0.12,
+		"Midnight WindRibbons subtly dims alpha vs Midday (night=%.3f, mid=%.3f)" % [night_alpha, mid_alpha])
+
+	# Storm Squall (midday gale, storm=0.95, wind=18.0): crisp storm-slate mist & boosted alpha <= 0.64.
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.95, 18.0, 0.4)
+	wr.step_ribbons(0.05)
+	var storm_col := wr.get_ribbon_color()
+	var storm_alpha := wr.get_ribbon_visibility_alpha()
+	check(storm_col.b > storm_col.r + 0.05,
+		"Storm Squall WindRibbons cools toward storm-slate mist (r=%.3f, b=%.3f)" % [storm_col.r, storm_col.b])
+	check(storm_alpha > mid_alpha + 0.15 and storm_alpha <= 0.6401,
+		"Storm Squall boosts WindRibbons gale visibility cleanly <= 0.64 (storm=%.3f, mid=%.3f)" % [storm_alpha, mid_alpha])
+
+	# Dead calm wind drops visibility strictly to 0.0.
+	Weather.set_weather(0.0, 0.0, 0.0)
+	wr.step_ribbons(0.05)
+	check_near(wr.get_ribbon_visibility_alpha(), 0.0, 0.0005,
+		"Dead calm wind hides WindRibbons cleanly (alpha=0.0)")
+
+	# Clean 0-leak WindRibbons teardown!
+	mat = null
+	mmi = null
+	wr.queue_free()
+	await physics_frames(2)
+	check(not is_instance_valid(wr), "WindRibbons frees cleanly")
+	check_eq(WindRibbons._active_instances, 0, "WindRibbons._active_instances returns to 0 on teardown")
+	check(WindRibbons._ribbon_mesh == null and WindRibbons._ribbon_shader == null,
+		"WindRibbons releases static mesh and shader caches with 0 leaks")
+
+	# ------------------------------------------------------------------
+	# 2. GameHUD Pause Menu 0.18 s ease-out fade & rate-limited ui_tick hover
+	# ------------------------------------------------------------------
+	check(Audio != null and Audio.has_sound(GameHUD.SFX_PAUSE_HOVER_TICK),
+		"Audio manifest registers GameHUD pause hover tick SFX '%s'" % String(GameHUD.SFX_PAUSE_HOVER_TICK))
+	check(Audio != null and Audio.has_sound(&"ui_open") and Audio.has_sound(&"ui_back") and Audio.has_sound(&"ui_select"),
+		"Audio manifest registers Pause UI open/back/select SFX ids")
+	var warned_before: int = Audio._warned.size() if Audio != null else 0
+
+	var hud := GameHUD.new()
+	hud.input_enabled = false
+	root.add_child(hud)
+	await get_tree().process_frame
+	hud.set_process(false)
+
+	check(hud.play_pause_hover_audio, "GameHUD defaults play_pause_hover_audio = true")
+	check_near(hud.get_pause_fade_alpha(), 0.0, 0.0005, "closed Pause menu reports fade alpha 0.0")
+	check_eq(hud.get_pause_hover_tick_count(), 0, "Pause menu starts with 0 hover ticks")
+
+	# Open Pause -> fade starts at 0.0, eases smoothly 0.0 -> mid -> 1.0 over 0.18 s with 0 spurious ticks!
+	hud.set_pause_open(true)
+	check(hud.pause_open and hud.pause_overlay != null and hud.pause_overlay.visible,
+		"set_pause_open(true) reveals PauseOverlay")
+	check_near(hud.get_pause_fade_alpha(), 0.0, 0.0005, "Pause fade alpha starts at 0.0 immediately on open")
+	check_near(hud.pause_overlay.modulate.a, 0.0, 0.0005, "PauseOverlay modulate.a starts at 0.0 on open")
+	check_eq(hud.get_pause_hover_tick_count(), 0,
+		"opening Pause and focusing ResumeButton emits 0 spurious hover ticks")
+
+	hud._process(0.045)
+	var fade_q1 := hud.get_pause_fade_alpha()
+	check(fade_q1 > 0.40 and fade_q1 < 0.75,
+		"Pause ease-out cubic fade advances smoothly at 0.045 s (got %.3f)" % fade_q1)
+	check_near(hud.pause_overlay.modulate.a, fade_q1, 0.002,
+		"PauseOverlay modulate.a tracks get_pause_fade_alpha() mid-fade")
+
+	hud._process(0.045)
+	var fade_half := hud.get_pause_fade_alpha()
+	check(fade_half > fade_q1 and fade_half < 0.98,
+		"Pause ease-out cubic fade rises monotonically at 0.09 s (got %.3f)" % fade_half)
+
+	hud._process(0.09)
+	check_near(hud.get_pause_fade_alpha(), 1.0, 0.0005,
+		"Pause ease-out fade settles cleanly at 1.0 after 0.18 s")
+	check_near(hud.pause_overlay.modulate.a, 1.0, 0.0005,
+		"PauseOverlay modulate.a reaches 1.0 after 0.18 s")
+
+	# Hover rate-limiting (0.07 s cooldown) across Pause & Quality/Co-op buttons!
+	var save_btn := hud.find_child("SaveProfileButton", true, false) as Button
+	var ret_btn := hud.find_child("ReturnToTitleButton", true, false) as Button
+	var oq_hi := hud.find_child("Ocean_HIGH", true, false) as Button
+	var host_btn := hud.find_child("HostCoopButton", true, false) as Button
+	check(save_btn != null and ret_btn != null and oq_hi != null and host_btn != null,
+		"PauseOverlay mounts Save, Main Menu, Quality, and Co-op buttons")
+
+	if save_btn != null and ret_btn != null and oq_hi != null and host_btn != null:
+		save_btn.mouse_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 1, "first Pause button hover increments hover tick count to 1")
+
+		# Rapid sweeps within 0.07 s cooldown are suppressed!
+		ret_btn.mouse_entered.emit()
+		oq_hi.focus_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 1, "fast sweep within 0.07 s cooldown does NOT spam ui_tick")
+
+		hud.step_pause_transition(0.03)
+		host_btn.mouse_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 1, "hover at 0.03 s (< 0.07 s) remains rate-limited")
+
+		hud.step_pause_transition(0.04)
+		host_btn.focus_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 2, "focus_entered after 0.07 s cooldown increments hover tick count to 2")
+
+		# Respect play_pause_hover_audio = false!
+		hud.play_pause_hover_audio = false
+		hud.step_pause_transition(0.10)
+		oq_hi.mouse_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 2, "play_pause_hover_audio = false suppresses hover ticks")
+		hud.play_pause_hover_audio = true
+
+		# Closing Pause resets fade alpha to 0.0 and suppresses hover ticks!
+		hud.set_pause_open(false)
+		check_near(hud.get_pause_fade_alpha(), 0.0, 0.0005, "closing Pause resets get_pause_fade_alpha() to 0.0")
+		hud.step_pause_transition(0.10)
+		save_btn.mouse_entered.emit()
+		check_eq(hud.get_pause_hover_tick_count(), 2, "closed Pause menu suppresses hover ticks cleanly")
+
+	if Audio != null:
+		check_eq(Audio._warned.size(), warned_before,
+			"Pause open/hover/close emits ZERO unknown-SFX warnings")
+
+	# ------------------------------------------------------------------
+	# 3. GameHUD Full-Wind Sailing Telemetry Pill smooth golden rim glow & pulse
+	# ------------------------------------------------------------------
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 12.0, 0.0)
+	var sloop_scene := load("res://src/ship/sloop.tscn") as PackedScene
+	var pawn_scene := load("res://src/characters/pawn.tscn") as PackedScene
+	var ship := sloop_scene.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = true
+	root.add_child(ship)
+	ship.global_position = Vector3.ZERO
+
+	var captain := pawn_scene.instantiate() as Pawn
+	root.add_child(captain)
+	captain.board(ship, ship.ship_point(Vector3(0.0, 2.02, 4.1)))
+	hud.bind(captain, null, null, null, ship, null, null)
+	await physics_frames(2)
+
+	var helm_st := ship.get_station(&"helm")
+	check(helm_st != null and captain.enter_station(helm_st), "captain enters Station_Helm for Q30B sailing pill check")
+	var pill := hud.find_child("SailingTrimPill", true, false) as PanelContainer
+	var sb_ref := pill.get_theme_stylebox("panel") as StyleBoxFlat if pill != null else null
+	check(pill != null and sb_ref != null, "SailingTrimPill uses a single cached StyleBoxFlat")
+
+	# Anchored -> glow stays strictly 0.0.
+	hud._process(0.05)
+	check_near(hud.get_full_wind_glow(), 0.0, 0.001, "anchored ship keeps get_full_wind_glow() at 0.0")
+
+	# Catch full wind (sail_eff >= 0.90, sail_len = 0.85, unanchored) -> glow ramps > 0.7 with 2.2 Hz pulse!
+	ship.anchor_down = false
+	ship.sail_set = 0.85
+	ship.sail_trim = ship.ideal_sail_trim()
+	check(ship.wind_catch() >= 0.90, "aligned sail achieves wind_catch >= 0.90 (got %.3f)" % ship.wind_catch())
+
+	hud._process(0.05)
+	var glow_early := hud.get_full_wind_glow()
+	check(glow_early > 0.10 and glow_early < 0.50,
+		"full-wind glow ramps smoothly on entry (got %.3f)" % glow_early)
+
+	hud._process(0.20)
+	check(hud.get_full_wind_glow() > 0.70,
+		"full-wind glow rises strongly (> 0.70) when catching full wind (got %.3f)" % hud.get_full_wind_glow())
+
+	# Sample 2.2 Hz burnished-gold border shimmer and confirm zero StyleBoxFlat reallocation!
+	var min_lum := 999.0
+	var max_lum := 0.0
+	for _s in 10:
+		hud._process(0.045)
+		var bc := hud.get_sailing_pill_border_color()
+		var lum := bc.r * 0.299 + bc.g * 0.587 + bc.b * 0.114
+		min_lum = minf(min_lum, lum)
+		max_lum = maxf(max_lum, lum)
+	check(max_lum - min_lum > 0.04,
+		"full-wind golden rim shimmers smoothly at 2.2 Hz (min_lum=%.3f, max_lum=%.3f)" % [min_lum, max_lum])
+	if pill != null and sb_ref != null:
+		check_eq(pill.get_theme_stylebox("panel"), sb_ref,
+			"SailingTrimPill mutates cached StyleBoxFlat in place (0 per-frame allocations)")
+
+	# Luffing sails smoothly relaxes glow back toward 0.0 and restores parchment-brass rim!
+	ship.sail_trim = wrapf(ship.ideal_sail_trim() + 1.4, -PI, PI)
+	hud._process(0.10)
+	var glow_drop := hud.get_full_wind_glow()
+	check(glow_drop > 0.10 and glow_drop < 0.85,
+		"luffing sails smoothly decays full-wind glow (got %.3f)" % glow_drop)
+	hud._process(0.30)
+	check_near(hud.get_full_wind_glow(), 0.0, 0.001,
+		"luffing sails settles full-wind glow cleanly back to 0.0")
+	check(hud.get_sailing_pill_border_color().is_equal_approx(GameHUD.COL_SAIL_PILL_BORDER_BASE),
+		"relaxed sailing pill restores standard parchment-brass border")
+
+	# Re-engage full wind, then drop anchor -> glow drops smoothly to 0.0!
+	ship.sail_trim = ship.ideal_sail_trim()
+	hud._process(0.25)
+	check(hud.get_full_wind_glow() > 0.70, "full-wind glow re-engages smoothly (> 0.70)")
+	ship.anchor_down = true
+	hud._process(0.35)
+	check_near(hud.get_full_wind_glow(), 0.0, 0.001, "dropping anchor drops full-wind glow cleanly to 0.0")
+
+	# Re-engage full wind, then step off helm -> glow relaxes cleanly to 0.0!
+	ship.anchor_down = false
+	hud._process(0.25)
+	check(hud.get_full_wind_glow() > 0.70, "full-wind glow active before stepping off helm")
+	captain.leave_station()
+	hud._process(0.35)
+	check_near(hud.get_full_wind_glow(), 0.0, 0.001, "stepping off helm relaxes full-wind glow cleanly to 0.0")
+
+	# ------------------------------------------------------------------
+	# 4. Strict Code Hygiene: 0 PrimitiveMesh & 0 non-ASCII in target files
+	# ------------------------------------------------------------------
+	var prim_tokens: Array[String] = [
+		"PrimitiveMesh.new(",
+		"QuadMesh.new(",
+		"PlaneMesh.new(",
+		"BoxMesh.new(",
+		"SphereMesh.new(",
+		"CylinderMesh.new(",
+		"CapsuleMesh.new(",
+	]
+	for script_path: String in ["res://src/ship/wind_ribbons.gd", "res://src/ui/hud.gd"]:
+		var src_text := FileAccess.get_file_as_string(script_path)
+		check(src_text.length() > 100, "loaded source text of %s" % script_path)
+		var non_ascii := 0
+		for i in src_text.length():
+			if src_text.unicode_at(i) >= 128:
+				non_ascii += 1
+		check_eq(non_ascii, 0, "%s has 0 non-ASCII characters" % script_path)
+		for tok in prim_tokens:
+			check(not src_text.contains(tok), "%s contains zero '%s' primitive allocations" % [script_path, tok])
+	var hud_widgets := _check_tree_strict_ascii(hud, "Q30B_GameHUD")
+	check(hud_widgets >= 20, "verified 100%% strict ASCII across Q30B GameHUD tree (checked %d)" % hud_widgets)
+
+	# ------------------------------------------------------------------
+	# 5. Clean zero-leak teardown!
+	# ------------------------------------------------------------------
+	sb_ref = null
+	root.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(root) and not is_instance_valid(hud),
+		"Q30B test nodes free cleanly with 0 leaks")
+	Weather.apply_state(saved_weather)
+	Sea.amp_scale = saved_amp

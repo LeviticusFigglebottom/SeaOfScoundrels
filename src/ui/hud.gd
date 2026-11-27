@@ -96,9 +96,24 @@ var crew_hold_fire: bool = false
 const LOW_HP_VIGNETTE_THRESHOLD := 0.30
 const LOW_HP_HEARTBEAT_HZ := 1.6
 const SFX_SPYGLASS_LOCK_TICK := &"ui_tick"
+const PAUSE_FADE_DURATION := 0.18
+const PAUSE_HOVER_TICK_COOLDOWN := 0.07
+const SFX_PAUSE_HOVER_TICK := &"ui_tick"
+const PAUSE_HOVER_TICK_DB := -8.0
+const FULL_WIND_GLOW_RISE_RATE := 4.0
+const FULL_WIND_GLOW_FALL_RATE := 3.5
+const FULL_WIND_PULSE_HZ := 2.2
+const COL_SAIL_PILL_BG_BASE := Color(0.92, 0.85, 0.70, 0.90)
+const COL_SAIL_PILL_BG_FULL := Color(0.97, 0.91, 0.72, 0.95)
+const COL_SAIL_PILL_BG_GLINT := Color(0.99, 0.94, 0.78, 0.96)
+const COL_SAIL_PILL_BORDER_BASE := Color(0.50, 0.38, 0.21, 0.92)
+const COL_SAIL_PILL_BORDER_GLINT := Color(1.00, 0.86, 0.42, 1.0)
+const COL_SAIL_PILL_SHADOW_BASE := Color(0.08, 0.05, 0.02, 0.30)
+const COL_SAIL_PILL_SHADOW_GOLD := Color(0.94, 0.74, 0.22, 0.56)
 
 var play_spyglass_lock_audio: bool = true
 var spyglass_lock_tick_count: int = 0
+var play_pause_hover_audio: bool = true
 
 var _radial_open_time: float = 0.0
 var _radial_initial_hover: int = -1
@@ -147,6 +162,8 @@ var _sailing_pill_panel: PanelContainer = null
 var _sailing_pill_style: StyleBoxFlat = null
 var _sailing_pill_label: Label = null
 var _sailing_full_wind_active: bool = false
+var _full_wind_glow: float = 0.0
+var _full_wind_pulse_clock: float = 0.0
 
 # Active tool / supplies chip & always-visible diegetic keycap strip (bottom-right)
 var _keycap_strip: HBoxContainer = null
@@ -211,13 +228,19 @@ var _vitals_vignette_env: float = 0.0
 var _vitals_vignette_phase: float = 0.0
 var _vitals_vignette_strength: float = 0.0
 
-# Pause menu widget references
+# Pause menu widget references & smooth transition state
 var _ocean_qual_btns: Array[Button] = []
 var _cloud_qual_btns: Array[Button] = []
 var _bus_sliders: Dictionary = {}  # StringName -> HSlider
 var _coop_addr_edit: LineEdit = null
 var _coop_port_edit: LineEdit = null
 var _coop_status_label: Label = null
+var _pause_resume_btn: Button = null
+var _pause_fade_t: float = 0.0
+var _pause_hover_cooldown_remaining: float = 0.0
+var _pause_last_hover_tick_ms: int = -1
+var _pause_hover_tick_count: int = 0
+var _pause_syncing_ui: bool = false
 
 const CREW_ROSTER_REFRESH_INTERVAL := 0.20
 
@@ -268,6 +291,16 @@ func _exit_tree() -> void:
 	_vitals_vignette_env = 0.0
 	_vitals_vignette_phase = 0.0
 	_vitals_vignette_strength = 0.0
+	_pause_fade_t = 0.0
+	_pause_hover_cooldown_remaining = 0.0
+	_pause_last_hover_tick_ms = -1
+	_pause_resume_btn = null
+	_sailing_full_wind_active = false
+	_full_wind_glow = 0.0
+	_full_wind_pulse_clock = 0.0
+	_sailing_pill_style = null
+	_tool_panel_style = null
+	_ordnance_pill_style = null
 	_theme = null
 	_crew_brains.clear()
 	_crew_roster_rows.clear()
@@ -318,6 +351,10 @@ func bind(
 	_vitals_vignette_env = 0.0
 	_vitals_vignette_phase = 0.0
 	_vitals_vignette_strength = 0.0
+	_sailing_full_wind_active = false
+	_full_wind_glow = 0.0
+	_full_wind_pulse_clock = 0.0
+	_apply_sailing_pill_style()
 	if _vitals_vignette != null:
 		_vitals_vignette.set_state(0.0, _is_colorblind_mode(), pause_open)
 	clear_directional_damage_arcs()
@@ -333,7 +370,7 @@ func bind(
 	_sync_damage_vignette(0.0)
 	_refresh_item_radial_entries()
 	_refresh_tool_chip()
-	_tick_sailing_telemetry()
+	_tick_sailing_telemetry(0.0)
 	_sync_quality_button_states()
 	_refresh_crew_roster()
 
@@ -555,14 +592,21 @@ func set_pause_open(open: bool) -> void:
 			item_radial.close_wheel(false)
 		if command_wheel != null and command_wheel.is_open:
 			command_wheel.close_wheel(false)
-		Audio.play_sfx(&"ui_open", Vector3.INF, -2.5)
+		if Audio != null and Audio.has_sound(&"ui_open"):
+			Audio.play_sfx(&"ui_open", Vector3.INF, -2.5)
 	else:
-		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
+		if Audio != null and Audio.has_sound(&"ui_back"):
+			Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 	pause_open = open
+	_pause_fade_t = 0.0
+	_pause_hover_cooldown_remaining = 0.0
+	_pause_last_hover_tick_ms = -1
 	if pause_overlay != null:
 		pause_overlay.visible = open
+	_apply_pause_fade()
 	if open:
 		_sync_quality_button_states()
+		_focus_pause_primary_button()
 	_sync_mode_objective_visibility()
 	if _vitals_vignette != null:
 		_vitals_vignette.set_state(_vitals_vignette_strength, _is_colorblind_mode(), pause_open)
@@ -574,6 +618,32 @@ func set_pause_open(open: bool) -> void:
 
 func toggle_pause() -> void:
 	set_pause_open(not pause_open)
+
+
+## Deterministically advance the Pause overlay 0.18 s ease-out fade and hover-tick cooldown.
+func step_pause_transition(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if _pause_hover_cooldown_remaining > 0.0:
+		_pause_hover_cooldown_remaining = maxf(0.0, _pause_hover_cooldown_remaining - dt)
+		if _pause_hover_cooldown_remaining <= 0.0001:
+			_pause_hover_cooldown_remaining = 0.0
+	if pause_open and _pause_fade_t < 1.0 and dt > 0.0:
+		_pause_fade_t = clampf(_pause_fade_t + dt / PAUSE_FADE_DURATION, 0.0, 1.0)
+		if _pause_fade_t >= 0.999:
+			_pause_fade_t = 1.0
+		_apply_pause_fade()
+
+
+## Return the Pause overlay ease-out cubic fade alpha in [0.0..1.0] (0.0 while closed).
+func get_pause_fade_alpha() -> float:
+	if not pause_open:
+		return 0.0
+	return _ease_out_cubic(_pause_fade_t)
+
+
+## Return the count of rate-limited tactile hover ticks emitted across Pause overlay buttons.
+func get_pause_hover_tick_count() -> int:
+	return _pause_hover_tick_count
 
 
 ## Cleanly hide or show the gameplay HUD (e.g. while First-Launch TitleMenu is open).
@@ -961,9 +1031,14 @@ func is_sailing_full_wind_highlighted() -> bool:
 	return _sailing_full_wind_active
 
 
+## Smooth full-wind golden rim glow intensity in [0.0..1.0] for the sailing telemetry pill.
+func get_full_wind_glow() -> float:
+	return _full_wind_glow
+
+
 ## Current border Color of the sailing telemetry pill StyleBoxFlat.
 func get_sailing_pill_border_color() -> Color:
-	return _sailing_pill_style.border_color if _sailing_pill_style != null else HudIcons.COL_INK_SOFT
+	return _sailing_pill_style.border_color if _sailing_pill_style != null else COL_SAIL_PILL_BORDER_BASE
 
 
 ## True while the diegetic Voyage Title Card is active and visible on screen.
@@ -1728,7 +1803,7 @@ func _build_sailing_telemetry_pill() -> void:
 	_sailing_pill_panel = PanelContainer.new()
 	_sailing_pill_panel.name = "SailingTrimPill"
 	_sailing_pill_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_sailing_pill_style = HudIcons.make_parchment_box(Color(0.92, 0.85, 0.70, 0.90), HudIcons.COL_INK_SOFT, 2, 6, 16, 6)
+	_sailing_pill_style = HudIcons.make_parchment_box(COL_SAIL_PILL_BG_BASE, COL_SAIL_PILL_BORDER_BASE, 2, 6, 16, 6)
 	_sailing_pill_panel.add_theme_stylebox_override("panel", _sailing_pill_style)
 	_sailing_pill_panel.visible = false
 	holder.add_child(_sailing_pill_panel)
@@ -1887,6 +1962,7 @@ func _build_pause_overlay() -> void:
 	pause_overlay.name = "PauseOverlay"
 	pause_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	pause_overlay.color = Color(0.06, 0.04, 0.02, 0.52)
+	pause_overlay.modulate.a = 0.0
 	pause_overlay.visible = false
 	pause_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_root.add_child(pause_overlay)
@@ -1913,7 +1989,7 @@ func _build_pause_overlay() -> void:
 	title.add_theme_color_override("font_color", HudIcons.COL_INK)
 	root_v.add_child(title)
 
-	# Top action buttons: Resume & Save Profile.
+	# Top action buttons: Resume, Save Profile & Main Menu.
 	var top_row := HBoxContainer.new()
 	top_row.add_theme_constant_override("separation", 10)
 	top_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1924,9 +2000,12 @@ func _build_pause_overlay() -> void:
 	resume_btn.text = "Resume Voyage"
 	resume_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	resume_btn.pressed.connect(func() -> void:
-		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+		if Audio != null and Audio.has_sound(&"ui_select"):
+			Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 		set_pause_open(false)
 	)
+	_wire_pause_button_hover(resume_btn)
+	_pause_resume_btn = resume_btn
 	top_row.add_child(resume_btn)
 
 	var save_btn := Button.new()
@@ -1934,11 +2013,13 @@ func _build_pause_overlay() -> void:
 	save_btn.text = "Save Profile"
 	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	save_btn.pressed.connect(func() -> void:
-		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+		if Audio != null and Audio.has_sound(&"ui_select"):
+			Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 		if Game != null:
 			Game.save()
 			Game.post_notice("Captain's profile saved.")
 	)
+	_wire_pause_button_hover(save_btn)
 	top_row.add_child(save_btn)
 
 	var title_btn := Button.new()
@@ -1946,10 +2027,12 @@ func _build_pause_overlay() -> void:
 	title_btn.text = "Main Menu"
 	title_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_btn.pressed.connect(func() -> void:
-		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
+		if Audio != null and Audio.has_sound(&"ui_select"):
+			Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 		set_pause_open(false)
 		return_to_title_requested.emit()
 	)
+	_wire_pause_button_hover(title_btn)
 	top_row.add_child(title_btn)
 
 	root_v.add_child(_make_section_divider("QUALITY PRESETS"))
@@ -1957,13 +2040,15 @@ func _build_pause_overlay() -> void:
 	# Ocean Quality row
 	_ocean_qual_btns.clear()
 	root_v.add_child(_make_quality_row("Ocean", _ocean_qual_btns, func(lv: int) -> void:
-		Audio.play_sfx(&"ui_select", Vector3.INF, -3.0)
+		if Audio != null and Audio.has_sound(&"ui_select"):
+			Audio.play_sfx(&"ui_select", Vector3.INF, -3.0)
 		set_ocean_quality(lv)
 	))
 	# Cloud Quality row
 	_cloud_qual_btns.clear()
 	root_v.add_child(_make_quality_row("Clouds", _cloud_qual_btns, func(lv: int) -> void:
-		Audio.play_sfx(&"ui_select", Vector3.INF, -3.0)
+		if Audio != null and Audio.has_sound(&"ui_select"):
+			Audio.play_sfx(&"ui_select", Vector3.INF, -3.0)
 		set_cloud_quality(lv)
 	))
 
@@ -2027,6 +2112,7 @@ func _build_pause_overlay() -> void:
 	host_btn.text = "Host LAN Co-op"
 	host_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	host_btn.pressed.connect(_on_host_coop_pressed)
+	_wire_pause_button_hover(host_btn)
 	coop_btns.add_child(host_btn)
 
 	var join_btn := Button.new()
@@ -2034,6 +2120,7 @@ func _build_pause_overlay() -> void:
 	join_btn.text = "Join LAN Co-op"
 	join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	join_btn.pressed.connect(_on_join_coop_pressed)
+	_wire_pause_button_hover(join_btn)
 	coop_btns.add_child(join_btn)
 
 	_coop_status_label = Label.new()
@@ -2097,6 +2184,7 @@ func _make_quality_row(label_text: String, out_btns: Array[Button], on_pick: Cal
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var lv := i
 		btn.pressed.connect(func() -> void: on_pick.call(lv))
+		_wire_pause_button_hover(btn)
 		row.add_child(btn)
 		out_btns.append(btn)
 	return row
@@ -2157,6 +2245,7 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	step_pause_transition(delta)
 	_tick_banner(delta)
 	_tick_boss_bar(delta)
 	_tick_voyage_title(delta)
@@ -2166,7 +2255,7 @@ func _process(delta: float) -> void:
 	_tick_spyglass(delta)
 	_tick_directional_damage(delta)
 	_tick_context_prompt(delta)
-	_tick_sailing_telemetry()
+	_tick_sailing_telemetry(delta)
 	_tick_tool_chip(delta)
 	_tick_whisper(delta)
 	_tick_crosshair(delta)
@@ -2401,9 +2490,10 @@ static func _crew_task_badge(task: StringName) -> Dictionary:
 			return {"label": "READY", "color": Color(0.36, 0.30, 0.22, 1.0)}
 
 
-func _tick_sailing_telemetry() -> void:
+func _tick_sailing_telemetry(delta: float = 0.0) -> void:
 	if _sailing_pill_panel == null or _sailing_pill_label == null:
 		return
+	var dt := maxf(delta, 0.0)
 	var on_sailing_station := false
 	if pawn != null and is_instance_valid(pawn) and not pawn.dead \
 			and pawn.station != null and is_instance_valid(pawn.station):
@@ -2415,6 +2505,12 @@ func _tick_sailing_telemetry() -> void:
 		and not is_any_overlay_open()
 	if not show_pill:
 		_sailing_full_wind_active = false
+		if dt > 0.0:
+			_full_wind_glow = move_toward(_full_wind_glow, 0.0, dt * FULL_WIND_GLOW_FALL_RATE)
+		if _full_wind_glow <= 0.001:
+			_full_wind_glow = 0.0
+			_full_wind_pulse_clock = 0.0
+		_apply_sailing_pill_style()
 		_sailing_pill_panel.visible = false
 		return
 
@@ -2422,7 +2518,7 @@ func _tick_sailing_telemetry() -> void:
 	var rudder_txt := format_rudder_bar(ship.helm)
 	var sail_pct := clampi(int(roundf(ship.sail_set * 100.0)), 0, 100)
 	var efficiency := ship.wind_catch()
-	var full_billow := not ship.anchor_down and ship.sail_set >= 0.25 and efficiency >= 0.88
+	var full_billow := not ship.anchor_down and ship.sail_set >= 0.25 and efficiency >= 0.85
 	var state_txt := "TRIM SAILS"
 	var ink_col := HudIcons.COL_INK_SOFT
 	if ship.anchor_down:
@@ -2442,15 +2538,16 @@ func _tick_sailing_telemetry() -> void:
 			ink_col = HudIcons.COL_INK_SOFT
 
 	_sailing_full_wind_active = full_billow
-	if _sailing_pill_style != null:
-		if full_billow:
-			_sailing_pill_style.border_color = HudIcons.COL_GOLD
-			_sailing_pill_style.bg_color = Color(0.97, 0.91, 0.72, 0.95)
-			_sailing_pill_style.set_border_width_all(3)
+	if dt > 0.0:
+		var target_glow := 1.0 if full_billow else 0.0
+		var rate := FULL_WIND_GLOW_RISE_RATE if full_billow else FULL_WIND_GLOW_FALL_RATE
+		_full_wind_glow = move_toward(_full_wind_glow, target_glow, dt * rate)
+		if _full_wind_glow > 0.001:
+			_full_wind_pulse_clock = fmod(_full_wind_pulse_clock + dt, 100.0)
 		else:
-			_sailing_pill_style.border_color = HudIcons.COL_INK_SOFT
-			_sailing_pill_style.bg_color = Color(0.92, 0.85, 0.70, 0.90)
-			_sailing_pill_style.set_border_width_all(2)
+			_full_wind_glow = 0.0
+			_full_wind_pulse_clock = 0.0
+	_apply_sailing_pill_style()
 
 	_sailing_pill_label.text = _to_ascii("%s  |  Sail %d%%  |  %.1f kt  |  %s" % [rudder_txt, sail_pct, kts, state_txt])
 	_sailing_pill_label.add_theme_color_override("font_color", ink_col)
@@ -3088,6 +3185,72 @@ func _sync_quality_button_states() -> void:
 	var cq := int(rig.get(&"cloud_quality")) if rig != null else 1
 	for i in _cloud_qual_btns.size():
 		_style_toggle_btn(_cloud_qual_btns[i], i == cq)
+
+
+func _apply_pause_fade() -> void:
+	if pause_overlay != null and is_instance_valid(pause_overlay):
+		pause_overlay.modulate.a = get_pause_fade_alpha()
+
+
+func _focus_pause_primary_button() -> void:
+	if not pause_open or not is_inside_tree():
+		return
+	if _pause_resume_btn != null and is_instance_valid(_pause_resume_btn) \
+			and _pause_resume_btn.is_visible_in_tree() and not _pause_resume_btn.disabled:
+		var prev_sync := _pause_syncing_ui
+		_pause_syncing_ui = true
+		_pause_resume_btn.grab_focus()
+		_pause_syncing_ui = prev_sync
+
+
+func _wire_pause_button_hover(btn: Button) -> void:
+	if btn == null:
+		return
+	btn.mouse_entered.connect(_on_pause_button_hover.bind(btn))
+	btn.focus_entered.connect(_on_pause_button_hover.bind(btn))
+
+
+func _on_pause_button_hover(btn: Button) -> void:
+	if not pause_open or _pause_syncing_ui or not play_pause_hover_audio:
+		return
+	if btn != null and is_instance_valid(btn) and btn.disabled:
+		return
+	if Audio == null or not Audio.has_sound(SFX_PAUSE_HOVER_TICK):
+		return
+	var now_ms := Time.get_ticks_msec()
+	var cooldown_ms := int(roundf(PAUSE_HOVER_TICK_COOLDOWN * 1000.0))
+	var real_ready := (_pause_last_hover_tick_ms < 0) or ((now_ms - _pause_last_hover_tick_ms) >= cooldown_ms)
+	var sim_ready := (_pause_hover_cooldown_remaining <= 0.0)
+	if not (real_ready or sim_ready):
+		return
+	Audio.play_sfx(SFX_PAUSE_HOVER_TICK, Vector3.INF, PAUSE_HOVER_TICK_DB, 0.03)
+	_pause_last_hover_tick_ms = Time.get_ticks_msec()
+	_pause_hover_cooldown_remaining = PAUSE_HOVER_TICK_COOLDOWN
+	_pause_hover_tick_count += 1
+
+
+func _apply_sailing_pill_style() -> void:
+	if _sailing_pill_style == null:
+		return
+	var g := clampf(_full_wind_glow, 0.0, 1.0)
+	var shimmer := 0.5 + 0.5 * sin(_full_wind_pulse_clock * TAU * FULL_WIND_PULSE_HZ) if g > 0.001 else 0.0
+	var gold_rim := HudIcons.COL_GOLD.lerp(COL_SAIL_PILL_BORDER_GLINT, shimmer * 0.65)
+	_sailing_pill_style.border_color = COL_SAIL_PILL_BORDER_BASE.lerp(gold_rim, g)
+	var gold_bg := COL_SAIL_PILL_BG_FULL.lerp(COL_SAIL_PILL_BG_GLINT, shimmer * 0.35)
+	_sailing_pill_style.bg_color = COL_SAIL_PILL_BG_BASE.lerp(gold_bg, g)
+	var bw := 3 if g >= 0.45 else 2
+	if _sailing_pill_style.border_width_left != bw:
+		_sailing_pill_style.set_border_width_all(bw)
+	_sailing_pill_style.shadow_color = COL_SAIL_PILL_SHADOW_BASE.lerp(
+		COL_SAIL_PILL_SHADOW_GOLD, g * lerpf(0.70, 1.0, shimmer)
+	)
+	_sailing_pill_style.shadow_size = int(roundf(lerpf(5.0, 9.0 + 2.0 * shimmer, g)))
+
+
+static func _ease_out_cubic(t: float) -> float:
+	var c := clampf(t, 0.0, 1.0)
+	var inv := 1.0 - c
+	return 1.0 - inv * inv * inv
 
 
 static func _style_toggle_btn(btn: Button, selected: bool) -> void:

@@ -62,6 +62,8 @@ const SPEAKING_TRUMPET_HAIL_RADIUS := 110.0
 const SPEAKING_TRUMPET_COOLDOWN := 3.5
 const SPEAKING_TRUMPET_DISPLAY_SECONDS := 0.85
 const CUTLASS_GLEAM_DURATION := 0.42
+const TANKARD_TOAST_FLARE_DURATION := 0.85
+const SHOVEL_GLEAM_DURATION := 0.38
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -202,6 +204,10 @@ var _lantern_signal_cd: float = 0.0
 var _lantern_halo_energy: float = 0.0
 var _cutlass_gleam_timer: float = 0.0
 var _cutlass_gleam_peak: float = 0.0
+var _tankard_toast_timer: float = 0.0
+var _tankard_toast_phase: float = 0.0
+var _shovel_gleam_timer: float = 0.0
+var _shovel_gleam_peak: float = 0.0
 var _barrel_smoke_timer: float = 0.0
 var _barrel_smoke: GPUParticles3D = null
 var _started_shanty: bool = false
@@ -340,6 +346,10 @@ func _exit_tree() -> void:
 	_lantern_halo_energy = 0.0
 	_cutlass_gleam_timer = 0.0
 	_cutlass_gleam_peak = 0.0
+	_tankard_toast_timer = 0.0
+	_tankard_toast_phase = 0.0
+	_shovel_gleam_timer = 0.0
+	_shovel_gleam_peak = 0.0
 	_active_inventories = maxi(0, _active_inventories - 1)
 	if _active_inventories == 0:
 		_clod_mesh = null
@@ -551,9 +561,15 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 	if item_id != &"spyglass" and spyglass_zoom > 0.001:
 		_set_spyglass_zoom(0.0)
 		_was_zooming_spyglass = false
-	if item_id != &"cutlass":
+	if item_id != &"cutlass" and item_id != &"boarding_axe":
 		_cutlass_gleam_timer = 0.0
 		_cutlass_gleam_peak = 0.0
+	if item_id != &"tankard":
+		_tankard_toast_timer = 0.0
+		_tankard_toast_phase = 0.0
+	if item_id != &"shovel":
+		_shovel_gleam_timer = 0.0
+		_shovel_gleam_peak = 0.0
 
 	_discover_siblings()
 	if (item_id == &"cutlass" or item_id == &"pistol") and combat != null:
@@ -574,8 +590,14 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 	if item_id == &"spyglass":
 		ToolMeshes.update_spyglass_glint(fp_tool_node, spyglass_zoom, spyglass_sighting != "", _clock)
 		ToolMeshes.update_spyglass_glint(tp_tool_node, spyglass_zoom, spyglass_sighting != "", _clock)
-	elif item_id == &"cutlass":
+	elif item_id == &"cutlass" or item_id == &"boarding_axe":
 		_tick_cutlass_gleam(0.0)
+	elif item_id == &"bucket":
+		_tick_bucket_water(0.0)
+	elif item_id == &"tankard":
+		_tick_tankard_toast(0.0)
+	elif item_id == &"shovel":
+		_tick_shovel_gleam(0.0)
 	elif item_id == &"instrument":
 		if shanty_instrument == &"concertina" or shanty_instrument == &"hurdy_gurdy":
 			ToolMeshes.update_shanty_notes(fp_tool_node, 0.0, playing_shanty, _clock)
@@ -668,6 +690,7 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 					l.light_energy = 0.0
 		&"bucket":
 			ToolMeshes.set_bucket_full(node, bucket_full)
+			ToolMeshes.update_bucket_water(node, 0.0, Vector2.ZERO, _compute_night_01())
 		&"map":
 			if treasure_map_texture != null:
 				ToolMeshes.apply_map_texture(node, treasure_map_texture)
@@ -679,10 +702,15 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 			if needle != null:
 				needle.rotation.y = _compass_needle_angle
 			ToolMeshes.set_compass_pin_mode(node, compass_pin_mode)
-		&"cutlass":
-			if melee_weapon == &"cutlass":
+		&"cutlass", &"boarding_axe":
+			if _is_melee_gleam_active():
 				var slide := clampf(1.0 - (_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION), 0.0, 1.0) if _cutlass_gleam_timer > 0.0 else 0.0
 				ToolMeshes.update_cutlass_gleam(node, get_cutlass_gleam_strength(), slide)
+		&"tankard":
+			ToolMeshes.update_tankard_toast(node, get_tankard_toast_strength(), _tankard_toast_phase)
+		&"shovel":
+			var slide_s := clampf(1.0 - (_shovel_gleam_timer / SHOVEL_GLEAM_DURATION), 0.0, 1.0) if _shovel_gleam_timer > 0.0 else 0.0
+			ToolMeshes.update_shovel_gleam(node, get_shovel_gleam_strength(), slide_s)
 		&"instrument":
 			if shanty_instrument == &"concertina" or shanty_instrument == &"hurdy_gurdy":
 				ToolMeshes.update_shanty_notes(node, 0.0, playing_shanty, _clock)
@@ -736,7 +764,13 @@ func get_lantern_halo_energy() -> float:
 	return _lantern_halo_energy
 
 
-## Trigger a luminous metallic gleam pulse sweeping from hilt to tip along the cutlass blade.
+func _is_melee_gleam_active() -> bool:
+	if active_item == &"boarding_axe":
+		return true
+	return active_item == &"cutlass" and (melee_weapon == &"cutlass" or melee_weapon == &"boarding_axe")
+
+
+## Trigger a luminous metallic gleam pulse sweeping along the active cutlass or boarding axe blade.
 func trigger_cutlass_gleam(strength: float = 1.0) -> void:
 	var s := clampf(strength, 0.0, 1.5)
 	if s <= 0.01:
@@ -744,17 +778,46 @@ func trigger_cutlass_gleam(strength: float = 1.0) -> void:
 	var current_s := get_cutlass_gleam_strength()
 	_cutlass_gleam_peak = maxf(current_s, s)
 	_cutlass_gleam_timer = CUTLASS_GLEAM_DURATION
-	if active_item == &"cutlass" and melee_weapon == &"cutlass":
+	if _is_melee_gleam_active():
 		ToolMeshes.update_cutlass_gleam(fp_tool_node, _cutlass_gleam_peak, 0.0)
 		ToolMeshes.update_cutlass_gleam(tp_tool_node, _cutlass_gleam_peak, 0.0)
 
 
-## Return the current decaying cutlass steel blade gleam strength (0.0 when idle).
+## Return the current decaying cutlass or boarding axe blade gleam strength (0.0 when idle).
 func get_cutlass_gleam_strength() -> float:
 	if _cutlass_gleam_timer <= 0.0 or _cutlass_gleam_peak <= 0.0:
 		return 0.0
 	var frac := clampf(_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION, 0.0, 1.0)
 	return _cutlass_gleam_peak * frac * (0.45 + 0.55 * frac)
+
+
+## Return the current decaying tankard celebratory toast halo strength (0.0 when idle).
+func get_tankard_toast_strength() -> float:
+	if _tankard_toast_timer <= 0.0:
+		return 0.0
+	var frac := clampf(_tankard_toast_timer / TANKARD_TOAST_FLARE_DURATION, 0.0, 1.0)
+	return frac * (0.45 + 0.55 * frac)
+
+
+## Trigger a sunlit-brass/steel metallic gleam sweeping along the iron shovel spade blade.
+func trigger_shovel_gleam(strength: float = 1.0) -> void:
+	var s := clampf(strength, 0.0, 1.5)
+	if s <= 0.01:
+		return
+	var current_s := get_shovel_gleam_strength()
+	_shovel_gleam_peak = maxf(current_s, s)
+	_shovel_gleam_timer = SHOVEL_GLEAM_DURATION
+	if active_item == &"shovel":
+		ToolMeshes.update_shovel_gleam(fp_tool_node, _shovel_gleam_peak, 0.0)
+		ToolMeshes.update_shovel_gleam(tp_tool_node, _shovel_gleam_peak, 0.0)
+
+
+## Return the current decaying iron shovel spade gleam strength (0.0 when idle).
+func get_shovel_gleam_strength() -> float:
+	if _shovel_gleam_timer <= 0.0 or _shovel_gleam_peak <= 0.0:
+		return 0.0
+	var frac := clampf(_shovel_gleam_timer / SHOVEL_GLEAM_DURATION, 0.0, 1.0)
+	return _shovel_gleam_peak * frac * (0.45 + 0.55 * frac)
 
 
 ## Return the current damped harmonic magnetic compass needle yaw angle in radians.
@@ -1103,6 +1166,7 @@ func use_shovel() -> Dictionary:
 			var clamped := flat.limit_length(2.0)
 			strike_pos = Vector3(best_site.global_position.x + clamped.x, best_site.global_position.y, best_site.global_position.z + clamped.y)
 		spawn_shovel_dirt_vfx(strike_pos)
+		trigger_shovel_gleam(1.0)
 		var strikes := maxi(1, dig_power)
 		var last_res: Dictionary = {}
 		for _si in strikes:
@@ -1112,6 +1176,8 @@ func use_shovel() -> Dictionary:
 			last_res = res as Dictionary
 			if not bool(last_res.get("hit", false)) or bool(last_res.get("unearthed", false)):
 				break
+		if bool(last_res.get("unearthed", false)):
+			trigger_shovel_gleam(1.15)
 		if not bool(last_res.get("hit", false)):
 			Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
 		elif not bool(last_res.get("unearthed", false)):
@@ -1119,6 +1185,7 @@ func use_shovel() -> Dictionary:
 		return last_res
 
 	spawn_shovel_dirt_vfx(dig_origin)
+	trigger_shovel_gleam(0.85)
 	Audio.play_sfx(&"dig_sand", dig_origin, -3.0)
 	return {"hit": false, "reason": "no_dig_site"}
 
@@ -1137,6 +1204,7 @@ func use_bucket() -> Dictionary:
 		if active_item == &"bucket":
 			ToolMeshes.set_bucket_full(fp_tool_node, false)
 			ToolMeshes.set_bucket_full(tp_tool_node, false)
+			_tick_bucket_water(0.0)
 		var view := pawn.view_dir()
 		var splash_pos := pawn.eye_position() + view * 0.9
 		Audio.play_sfx(&"bucket_splash", splash_pos, -1.0)
@@ -1185,6 +1253,7 @@ func use_bucket() -> Dictionary:
 			if active_item == &"bucket":
 				ToolMeshes.set_bucket_full(fp_tool_node, true)
 				ToolMeshes.set_bucket_full(tp_tool_node, true)
+				_tick_bucket_water(0.0)
 			Audio.play_sfx(&"splash_small", pawn.global_position, -3.0)
 			bucket_changed.emit(true)
 			return {"action": &"bail", "removed": removed, "full": true}
@@ -1207,6 +1276,7 @@ func use_bucket() -> Dictionary:
 		if active_item == &"bucket":
 			ToolMeshes.set_bucket_full(fp_tool_node, true)
 			ToolMeshes.set_bucket_full(tp_tool_node, true)
+			_tick_bucket_water(0.0)
 		Audio.play_sfx(&"splash_small", pawn.global_position, -2.0)
 		if near_rail_water and Ocean.current != null:
 			var rail_foam := pawn.global_position + pawn.facing() * 1.6
@@ -1239,6 +1309,7 @@ func splash_bucket_forward() -> Dictionary:
 	if active_item == &"bucket":
 		ToolMeshes.set_bucket_full(fp_tool_node, false)
 		ToolMeshes.set_bucket_full(tp_tool_node, false)
+		_tick_bucket_water(0.0)
 	var view := pawn.view_dir()
 	var splash_pos := pawn.eye_position() + view * 0.95
 	Audio.play_sfx(&"bucket_splash", splash_pos, -0.5)
@@ -1398,6 +1469,10 @@ func raise_grog_toast() -> bool:
 	if _grog_toast_cd > 0.0:
 		return false
 	_grog_toast_cd = GROG_TOAST_COOLDOWN
+	_tankard_toast_timer = TANKARD_TOAST_FLARE_DURATION
+	_tankard_toast_phase = 0.0
+	ToolMeshes.update_tankard_toast(fp_tool_node, get_tankard_toast_strength(), _tankard_toast_phase)
+	ToolMeshes.update_tankard_toast(tp_tool_node, get_tankard_toast_strength(), _tankard_toast_phase)
 	_start_swing(&"toast", 0.55)
 	_play_anim(&"drink", 0.65)
 	var sfx_pos := pawn.eye_position()
@@ -1422,6 +1497,11 @@ func raise_grog_toast() -> bool:
 		if nearest_brain != null:
 			nearest_brain.acknowledge_captain_toast()
 	return true
+
+
+## Alias for `raise_grog_toast()` ([RMB] "Cheers!" tankard toast with golden halo flare).
+func toast_tankard() -> bool:
+	return raise_grog_toast()
 
 
 ## Cycle forward through the captain's 3 sculpted shanty instruments (Concertina -> Hurdy-Gurdy -> Bosun's Whistle).
@@ -1812,9 +1892,12 @@ func _process(delta: float) -> void:
 	_tick_concertina(delta)
 	_tick_lantern_flicker(delta)
 	_tick_cutlass_gleam(delta)
+	_tick_shovel_gleam(delta)
+	_tick_tankard_toast(delta)
 	_tick_barrel_smoke(delta)
 	_tick_speaking_trumpet_fx(delta)
 	_tick_viewmodel_pose(delta)
+	_tick_bucket_water(delta)
 	_tick_action_hands(delta)
 	_sync_visibility()
 
@@ -2400,11 +2483,65 @@ func _tick_cutlass_gleam(delta: float) -> void:
 		_cutlass_gleam_timer = maxf(0.0, _cutlass_gleam_timer - maxf(delta, 0.0))
 		if _cutlass_gleam_timer <= 0.0:
 			_cutlass_gleam_peak = 0.0
-	if active_item == &"cutlass" and melee_weapon == &"cutlass":
+	if _is_melee_gleam_active():
 		var strength := get_cutlass_gleam_strength()
 		var slide := clampf(1.0 - (_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION), 0.0, 1.0) if _cutlass_gleam_timer > 0.0 else 1.0
 		ToolMeshes.update_cutlass_gleam(fp_tool_node, strength, slide)
 		ToolMeshes.update_cutlass_gleam(tp_tool_node, strength, slide)
+
+
+func _tick_shovel_gleam(delta: float) -> void:
+	var pawn_dead := pawn != null and is_instance_valid(pawn) and pawn.dead
+	if pawn_dead:
+		_shovel_gleam_timer = 0.0
+		_shovel_gleam_peak = 0.0
+	elif _shovel_gleam_timer > 0.0:
+		_shovel_gleam_timer = maxf(0.0, _shovel_gleam_timer - maxf(delta, 0.0))
+		if _shovel_gleam_timer <= 0.0:
+			_shovel_gleam_peak = 0.0
+	if active_item == &"shovel":
+		var strength := get_shovel_gleam_strength()
+		var slide := clampf(1.0 - (_shovel_gleam_timer / SHOVEL_GLEAM_DURATION), 0.0, 1.0) if _shovel_gleam_timer > 0.0 else 1.0
+		ToolMeshes.update_shovel_gleam(fp_tool_node, strength, slide)
+		ToolMeshes.update_shovel_gleam(tp_tool_node, strength, slide)
+
+
+func _tick_tankard_toast(delta: float) -> void:
+	var pawn_dead := pawn != null and is_instance_valid(pawn) and pawn.dead
+	if pawn_dead or active_item != &"tankard":
+		_tankard_toast_timer = 0.0
+		_tankard_toast_phase = 0.0
+	elif _tankard_toast_timer > 0.0:
+		var dt := maxf(delta, 0.0)
+		_tankard_toast_timer = maxf(0.0, _tankard_toast_timer - dt)
+		_tankard_toast_phase += dt
+	if active_item == &"tankard":
+		var strength := get_tankard_toast_strength()
+		ToolMeshes.update_tankard_toast(fp_tool_node, strength, _tankard_toast_phase)
+		ToolMeshes.update_tankard_toast(tp_tool_node, strength, _tankard_toast_phase)
+
+
+func _compute_night_01() -> float:
+	if Weather == null:
+		return 0.0
+	return clampf(1.0 - Weather.daylight(), 0.0, 1.0)
+
+
+func _tick_bucket_water(delta: float) -> void:
+	if active_item != &"bucket":
+		return
+	var night_01 := _compute_night_01()
+	ToolMeshes.set_bucket_full(fp_tool_node, bucket_full)
+	ToolMeshes.set_bucket_full(tp_tool_node, bucket_full)
+	var move_w := 0.0
+	if pawn != null and is_instance_valid(pawn) and pawn.is_grounded():
+		var rv := pawn.get_relative_velocity()
+		move_w = clampf(Vector2(rv.x, rv.z).length() / 4.2, 0.0, 1.0)
+	var sway_x := clampf(_sway_yaw * 1.15 + _ship_roll_lag * 1.65 + cos(_bob_phase) * 0.45 * move_w, -1.0, 1.0)
+	var sway_z := clampf(_sway_pitch * 1.15 + sin(_bob_phase * 2.0) * 0.32 * move_w, -1.0, 1.0)
+	var sway_xz := Vector2(sway_x, sway_z)
+	ToolMeshes.update_bucket_water(fp_tool_node, delta, sway_xz, night_01)
+	ToolMeshes.update_bucket_water(tp_tool_node, delta, sway_xz, night_01)
 
 
 func _tick_lantern_flicker(delta: float = 0.0) -> void:
@@ -3368,7 +3505,7 @@ func _sync_visibility() -> void:
 func _on_combat_attack_started(kind: StringName) -> void:
 	if kind == &"heavy":
 		_start_swing(&"heavy", 0.76 if melee_weapon == &"boarding_axe" else 0.64)
-		if active_item == &"cutlass" and melee_weapon == &"cutlass":
+		if _is_melee_gleam_active():
 			trigger_cutlass_gleam(1.0)
 	elif kind == &"blunderbuss":
 		_start_swing(&"blunderbuss", 0.46)
@@ -3382,21 +3519,21 @@ func _on_combat_attack_started(kind: StringName) -> void:
 		_start_barrel_smoke(&"pistol")
 	else:
 		_start_swing(kind, 0.50 if melee_weapon == &"boarding_axe" else 0.40)
-		if kind == &"slash_3" and active_item == &"cutlass" and melee_weapon == &"cutlass":
+		if kind == &"slash_3" and _is_melee_gleam_active():
 			trigger_cutlass_gleam(0.88)
 
 
 func _on_combat_parried(_attacker: Pawn) -> void:
-	if active_item == &"cutlass":
+	if active_item == &"cutlass" or active_item == &"boarding_axe":
 		_start_swing(&"parry_clang", 0.26)
-		if melee_weapon == &"cutlass":
+		if _is_melee_gleam_active():
 			trigger_cutlass_gleam(1.0)
 
 
 func _on_combat_blocked(_attacker: Pawn) -> void:
-	if active_item == &"cutlass":
+	if active_item == &"cutlass" or active_item == &"boarding_axe":
 		_start_swing(&"parry_clang", 0.22)
-		if melee_weapon == &"cutlass":
+		if _is_melee_gleam_active():
 			trigger_cutlass_gleam(0.82)
 
 

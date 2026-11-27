@@ -4185,3 +4185,366 @@ func test_q24a_map_table_zero_primitive_nocturnal_glow_sky_events_and_pulsing_pi
 	check(not is_instance_valid(mtv), "Q24A MapTableView tears down cleanly with 0 leaks")
 	check(WorldEventCloud._mesh_cache.is_empty(), "Q24A teardown clears WorldEventCloud static caches cleanly")
 
+
+# ---------------------------------------------------------------------------
+# Pass Q30A: BoardingAxe Curved Crescent Gleam, Bucket Slosh & Nocturnal
+# Bioluminescent Shimmer, Tankard Toast Halo & Foam Bob, Shovel Blade Gleam
+# ---------------------------------------------------------------------------
+
+func test_q30a_boarding_axe_gleam_bucket_slosh_tankard_toast_and_shovel_gleam() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	# 0. Source hygiene: zero PrimitiveMesh constructors & 0 non-ASCII lines in tool_meshes.gd and inventory.gd.
+	for src_path: String in ["res://src/items/tool_meshes.gd", "res://src/items/inventory.gd"]:
+		var src_txt := FileAccess.get_file_as_string(src_path)
+		check(not src_txt.is_empty(), "%s loads cleanly" % src_path)
+		for prim: String in ["PlaneMesh.new", "BoxMesh.new", "CylinderMesh.new", "SphereMesh.new",
+				"CapsuleMesh.new", "PrismMesh.new", "QuadMesh.new"]:
+			check(not src_txt.contains(prim), "%s contains zero raw %s primitives" % [src_path, prim])
+		var non_ascii_lines := 0
+		for line in src_txt.split("\n"):
+			for ci in line.length():
+				if line.unicode_at(ci) >= 128:
+					non_ascii_lines += 1
+					break
+		check_eq(non_ascii_lines, 0, "%s has 0 non-ASCII code lines" % src_path)
+
+	var check_star_flare := func(mi: MeshInstance3D, label: String) -> void:
+		check(mi != null, "%s MeshInstance3D exists" % label)
+		if mi == null:
+			return
+		check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadow casting" % label)
+		check(mi.mesh is ArrayMesh and not (mi.mesh is PrimitiveMesh),
+			"%s uses zero-primitive ArrayMesh" % label)
+		if mi.mesh is ArrayMesh:
+			var am := mi.mesh as ArrayMesh
+			check_eq(am.get_faces().size(), 72,
+				"%s uses exact 24-triangle (72-vertex) star-flare ArrayMesh" % label)
+			var norms: PackedVector3Array = am.surface_get_arrays(0)[Mesh.ARRAY_NORMAL]
+			check(norms.size() > 0, "%s exports explicit normals" % label)
+			for n in norms:
+				check(n.is_finite() and absf(n.length() - 1.0) < 0.01 and n.z > 0.99,
+					"%s normal is finite unit (0,0,1) (got %s)" % [label, str(n)])
+		check(mi.material_override is StandardMaterial3D, "%s uses StandardMaterial3D" % label)
+		if mi.material_override is StandardMaterial3D:
+			var mat := mi.material_override as StandardMaterial3D
+			check_eq(mat.albedo_texture, null, "%s uses 0 texture VRAM" % label)
+			check(not mat.uv1_world_triplanar, "%s has uv1_world_triplanar == false" % label)
+			check_eq(mat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "%s is unshaded" % label)
+			check_eq(mat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD, "%s uses additive blending" % label)
+			check_eq(mat.billboard_mode, BaseMaterial3D.BILLBOARD_ENABLED, "%s enables billboard" % label)
+			check(mat.billboard_keep_scale, "%s enables scale-preserving billboard" % label)
+			check(mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb,
+				"%s uses sRGB vertex colors" % label)
+			check_eq(mat.cull_mode, BaseMaterial3D.CULL_DISABLED, "%s disables culling" % label)
+			check_eq(mat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED, "%s disables depth draw" % label)
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+
+	captain.set_physics_process(false)
+	pc.set_process(false)
+	inv.set_process(false)
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	pc._process(1.0 / 60.0)
+
+	# ------------------------------------------------------------------
+	# 1. Tool_BoardingAxe Curved Crescent Blade Gleam (CutlassBladeGleam)
+	# ------------------------------------------------------------------
+	inv.equip(&"boarding_axe", true)
+	inv._process(1.0 / 60.0)
+	check_eq(inv.active_item, &"cutlass", "equip(&'boarding_axe') maps cleanly to melee slot")
+	check_eq(inv.melee_weapon, &"boarding_axe", "equip(&'boarding_axe') selects boarding_axe melee weapon")
+
+	var fp_axe := inv.fp_tool_node
+	var tp_axe := inv.tp_tool_node
+	check(fp_axe != null and fp_axe.name == "Tool_BoardingAxe", "equipped boarding axe builds Tool_BoardingAxe FP")
+	var axe_gleam := fp_axe.get_node_or_null(^"CutlassBladeGleam") as MeshInstance3D if fp_axe != null else null
+	check_star_flare.call(axe_gleam, "BoardingAxe.CutlassBladeGleam")
+	check(axe_gleam != null and not axe_gleam.visible, "BoardingAxe CutlassBladeGleam starts hidden at idle")
+
+	if tp_axe != null and axe_gleam != null:
+		var tp_axe_gleam := tp_axe.get_node_or_null(^"CutlassBladeGleam") as MeshInstance3D
+		check(tp_axe_gleam != null, "TP BoardingAxe also mounts CutlassBladeGleam")
+		if tp_axe_gleam != null:
+			check(tp_axe_gleam.mesh == axe_gleam.mesh,
+				"FP and TP BoardingAxe share WeakRef-cached 24-tri gleam mesh")
+			check(tp_axe_gleam.material_override != axe_gleam.material_override,
+				"FP and TP BoardingAxe use independent per-instance gleam materials")
+
+	# Heavy cleave flares near upper crescent horn -> sweeps forward along belly -> lower beard tip -> fades hidden!
+	cc.attack_started.emit(&"heavy")
+	check(inv.get_cutlass_gleam_strength() > 0.95, "BoardingAxe heavy cleave triggers CutlassBladeGleam")
+	check(axe_gleam != null and axe_gleam.visible, "BoardingAxe CutlassBladeGleam visible on heavy cleave")
+	var pos_horn := axe_gleam.position if axe_gleam != null else Vector3.ZERO
+	check(pos_horn.y > 0.58 and pos_horn.y < 0.64,
+		"BoardingAxe gleam starts near upper horn (y=%.3f)" % pos_horn.y)
+
+	# Mid-sweep (~0.21 s): passes center crescent belly (lower Y, further forward -Z!).
+	for _i in 13:
+		inv._process(1.0 / 60.0)
+	var pos_belly := axe_gleam.position if axe_gleam != null else Vector3.ZERO
+	var axe_s_mid := inv.get_cutlass_gleam_strength()
+	check(axe_gleam != null and axe_gleam.visible, "BoardingAxe gleam stays visible at crescent belly")
+	check(axe_s_mid > 0.15 and axe_s_mid < 0.72, "BoardingAxe gleam decays smoothly mid-sweep (got %.3f)" % axe_s_mid)
+	check(pos_belly.y < pos_horn.y - 0.10,
+		"BoardingAxe gleam sweeps downward along crescent edge (y: %.3f -> %.3f)" % [pos_horn.y, pos_belly.y])
+	check(pos_belly.z < pos_horn.z - 0.025,
+		"BoardingAxe gleam follows forward convex crescent belly (z: %.3f -> %.3f)" % [pos_horn.z, pos_belly.z])
+
+	# Step near end of sweep (~0.38 s) to inspect lower beard tip before hiding at 0.42 s.
+	for _i in 10:
+		inv._process(1.0 / 60.0)
+	var pos_beard := axe_gleam.position if axe_gleam != null else Vector3.ZERO
+	check(pos_beard.y < pos_belly.y - 0.08,
+		"BoardingAxe gleam continues toward lower beard tip (y: %.3f -> %.3f)" % [pos_belly.y, pos_beard.y])
+
+	for _i in 8:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_cutlass_gleam_strength(), 0.0, 0.0001, "BoardingAxe gleam decays cleanly to 0.0")
+	check(axe_gleam != null and not axe_gleam.visible, "BoardingAxe gleam hides cleanly once decayed")
+
+	# Verify combo finisher (slash_3), timed parry, & block clang also trigger BoardingAxe gleam!
+	cc.attack_started.emit(&"slash_3")
+	check(inv.get_cutlass_gleam_strength() > 0.80, "BoardingAxe combo finisher (slash_3) triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+
+	cc.parried.emit(captain)
+	check(inv.get_cutlass_gleam_strength() > 0.90, "BoardingAxe timed parry triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+
+	cc.blocked.emit(captain)
+	check(inv.get_cutlass_gleam_strength() > 0.70, "BoardingAxe block clang triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_cutlass_gleam_strength(), 0.0, 0.0001, "BoardingAxe block gleam decays cleanly to 0.0")
+
+	# ------------------------------------------------------------------
+	# 2. Tool_Bucket Sloshing WaterFill Tilt & Nocturnal Bioluminescent Shimmer
+	# ------------------------------------------------------------------
+	Weather.time_of_day = 12.0
+	inv.bucket_full = false
+	inv.equip(&"bucket", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_bkt := inv.fp_tool_node
+	check(fp_bkt != null and fp_bkt.name == "Tool_Bucket", "equipped bucket builds Tool_Bucket")
+	var wf := fp_bkt.get_node_or_null(^"WaterFill") as MeshInstance3D if fp_bkt != null else null
+	check(wf != null and not wf.visible, "empty Bucket keeps WaterFill cleanly hidden")
+	check_near(float(fp_bkt.get_meta(&"q30a_bucket_slosh_rad", -1.0)), 0.0, 0.0001,
+		"empty Bucket reports 0.0 slosh metadata")
+	check_near(float(fp_bkt.get_meta(&"q30a_bucket_biolum", -1.0)), 0.0, 0.0001,
+		"empty Bucket reports 0.0 biolum metadata")
+	if wf != null:
+		check_near(wf.rotation.length(), 0.0, 0.0001, "empty Bucket resets WaterFill tilt to zero")
+
+	# Fill bucket at midday (time_of_day = 12.0) -> visible, subtle sea-teal emission = 0.22!
+	inv.bucket_full = true
+	inv._process(1.0 / 60.0)
+	check(wf != null and wf.visible, "full Bucket displays WaterFill")
+	var wmat := wf.material_override as StandardMaterial3D if wf != null else null
+	check(wmat != null, "Bucket WaterFill has StandardMaterial3D")
+	if wmat != null:
+		check(not wmat.uv1_world_triplanar, "Bucket WaterFill has uv1_world_triplanar == false")
+		check(wmat.emission_enabled, "Bucket WaterFill enables emission")
+		check_near(wmat.emission_energy_multiplier, 0.22, 0.01,
+			"midday Bucket WaterFill emission stays subtle ~0.22 (got %.3f)" % wmat.emission_energy_multiplier)
+	check_near(float(fp_bkt.get_meta(&"q30a_bucket_biolum", -1.0)), 0.0, 0.01,
+		"midday Bucket records q30a_bucket_biolum == 0.0")
+
+	# Drive lateral & pitch look sway across ticks -> WaterFill sloshes smoothly within +/- 9 deg & +/- 0.004 m bob!
+	var max_slosh := 0.0
+	var max_bob := 0.0
+	var max_rad := deg_to_rad(9.0) + 0.001
+	for i in 22:
+		captain.look_yaw += 0.055
+		captain.look_pitch = clampf(captain.look_pitch + 0.018 * (1.0 if i < 11 else -1.0), -0.6, 0.6)
+		inv._process(1.0 / 60.0)
+		var sl := float(fp_bkt.get_meta(&"q30a_bucket_slosh_rad", 0.0))
+		max_slosh = maxf(max_slosh, sl)
+		if wf != null:
+			check(absf(wf.rotation.x) <= max_rad and absf(wf.rotation.z) <= max_rad,
+				"Bucket WaterFill tilt stays strictly within +/- 9 deg (rot=%s)" % str(wf.rotation))
+			var bob_d := absf(wf.position.y - ToolMeshes.BUCKET_WATER_BASE_Y)
+			max_bob = maxf(max_bob, bob_d)
+			check(bob_d <= 0.0041, "Bucket WaterFill ripple bob stays within +/- 0.004 m (got %.5f)" % bob_d)
+	check(max_slosh > 0.035 and max_slosh <= max_rad,
+		"Bucket WaterFill sloshes visibly under sway without exceeding 9 deg (max=%.4f rad)" % max_slosh)
+	check(max_bob > 0.0005, "Bucket WaterFill exhibits gentle vertical ripple bob (max=%.5f m)" % max_bob)
+
+	# Shift to midnight (time_of_day = 0.0) -> nocturnal bioluminescent cyan-turquoise emission = 0.68!
+	Weather.time_of_day = 0.0
+	inv._process(1.0 / 60.0)
+	check_near(float(fp_bkt.get_meta(&"q30a_bucket_biolum", -1.0)), 1.0, 0.01,
+		"midnight Bucket records q30a_bucket_biolum == 1.0")
+	if wmat != null:
+		check_near(wmat.emission_energy_multiplier, 0.68, 0.01,
+			"midnight Bucket WaterFill shifts to bioluminescent energy 0.68 (got %.3f)" % wmat.emission_energy_multiplier)
+		check_near(wmat.emission.r, 0.08, 0.02, "midnight WaterFill emission R matches bioluminescent cyan")
+		check_near(wmat.emission.g, 0.72, 0.02, "midnight WaterFill emission G matches bioluminescent cyan")
+		check_near(wmat.emission.b, 0.84, 0.02, "midnight WaterFill emission B matches bioluminescent turquoise")
+
+	# Empty bucket -> WaterFill hides cleanly and resets to zero tilt!
+	inv.bucket_full = false
+	inv._process(1.0 / 60.0)
+	check(wf != null and not wf.visible, "emptied Bucket hides WaterFill cleanly")
+	if wf != null:
+		check_near(wf.rotation.length(), 0.0, 0.0001, "emptied Bucket resets WaterFill rotation to zero")
+		check_near(wf.position.y, ToolMeshes.BUCKET_WATER_BASE_Y, 0.0001,
+			"emptied Bucket resets WaterFill height to rest baseline")
+	check_near(float(fp_bkt.get_meta(&"q30a_bucket_slosh_rad", -1.0)), 0.0, 0.0001,
+		"emptied Bucket clears q30a_bucket_slosh_rad")
+	Weather.time_of_day = 12.0
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+
+	# ------------------------------------------------------------------
+	# 3. Tool_Tankard Golden TankardToastHalo & Frothy FoamTop Bob
+	# ------------------------------------------------------------------
+	inv.equip(&"tankard", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_tnk := inv.fp_tool_node
+	var tp_tnk := inv.tp_tool_node
+	check(fp_tnk != null and fp_tnk.name == "Tool_Tankard", "equipped tankard builds Tool_Tankard")
+	var toast_halo := fp_tnk.get_node_or_null(^"TankardToastHalo") as MeshInstance3D if fp_tnk != null else null
+	var foam_top := fp_tnk.get_node_or_null(^"FoamTop") as Node3D if fp_tnk != null else null
+	check_star_flare.call(toast_halo, "Tankard.TankardToastHalo")
+	check(toast_halo != null and not toast_halo.visible, "TankardToastHalo starts hidden at idle")
+	check(foam_top != null, "Tool_Tankard has FoamTop child")
+	check_near(inv.get_tankard_toast_strength(), 0.0, 0.0001, "Tankard toast strength starts at 0.0")
+	if toast_halo != null:
+		check_near(toast_halo.position.y, 0.115, 0.001, "TankardToastHalo rests above FoamTop at y=0.115")
+		check_near(toast_halo.position.z, -0.095, 0.001, "TankardToastHalo aligns over mug center at z=-0.095")
+	if tp_tnk != null and toast_halo != null:
+		var tp_halo := tp_tnk.get_node_or_null(^"TankardToastHalo") as MeshInstance3D
+		check(tp_halo != null, "TP Tankard also mounts TankardToastHalo")
+		if tp_halo != null:
+			check(tp_halo.mesh == toast_halo.mesh,
+				"FP and TP Tankard share WeakRef-cached 24-tri TankardToastHalo mesh")
+			check(tp_halo.material_override != toast_halo.material_override,
+				"FP and TP Tankard use independent per-instance halo materials")
+
+	# Trigger toast_tankard() -> 0.85 s golden toast flare & joyful FoamTop bob!
+	check(inv.toast_tankard(), "toast_tankard() triggers celebratory toast cleanly")
+	check(inv.get_tankard_toast_strength() > 0.95,
+		"toast_tankard() flares get_tankard_toast_strength() near 1.0 (got %.3f)" % inv.get_tankard_toast_strength())
+	check(toast_halo != null and toast_halo.visible, "toast_tankard() makes TankardToastHalo visible")
+	if toast_halo != null and toast_halo.material_override is StandardMaterial3D:
+		var hcol := (toast_halo.material_override as StandardMaterial3D).albedo_color
+		check(hcol.r > hcol.b and hcol.r > 0.90 and hcol.g > 0.80,
+			"TankardToastHalo glows warm gilded-amber (got %s)" % str(hcol))
+
+	var peak_foam_bob := 0.0
+	for _i in 25:
+		inv._process(1.0 / 60.0)
+		if foam_top != null:
+			peak_foam_bob = maxf(peak_foam_bob, absf(foam_top.position.y))
+			check(absf(foam_top.position.y) <= 0.0051,
+				"FoamTop frothy bob stays within +/- 0.005 m (got %.5f)" % foam_top.position.y)
+	var toast_s_mid := inv.get_tankard_toast_strength()
+	check(toast_halo != null and toast_halo.visible, "TankardToastHalo remains visible mid-toast (~0.42 s)")
+	check(toast_s_mid > 0.15 and toast_s_mid < 0.72,
+		"Tankard toast strength decays smoothly mid-flare (got %.3f)" % toast_s_mid)
+	check(peak_foam_bob > 0.0025,
+		"FoamTop bobs visibly during celebratory toast (peak=%.5f m)" % peak_foam_bob)
+
+	# Step past full 0.85 s duration -> decays cleanly to 0.0, hides halo, resets FoamTop!
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_tankard_toast_strength(), 0.0, 0.0001, "Tankard toast strength decays to 0.0 after 0.85 s")
+	check(toast_halo != null and not toast_halo.visible, "TankardToastHalo hides cleanly after 0.85 s")
+	if foam_top != null:
+		check_near(foam_top.position.y, 0.0, 0.0001, "FoamTop resets to y=0.0 once toast finishes")
+
+	# Verify holstering clears active toast flare cleanly to 0.0.
+	inv._grog_toast_cd = 0.0
+	check(inv.toast_tankard(), "second toast_tankard() after cooldown succeeds")
+	check(inv.get_tankard_toast_strength() > 0.95, "second toast flares before holster")
+	inv.equip(&"compass", true)
+	check_near(inv.get_tankard_toast_strength(), 0.0, 0.0001, "holstering Tankard clears toast strength to 0.0")
+
+	# ------------------------------------------------------------------
+	# 4. Tool_Shovel Dig Blade Gleam (ShovelBladeGleam)
+	# ------------------------------------------------------------------
+	inv.equip(&"shovel", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_shv := inv.fp_tool_node
+	var tp_shv := inv.tp_tool_node
+	check(fp_shv != null and fp_shv.name == "Tool_Shovel", "equipped shovel builds Tool_Shovel")
+	var shv_gleam := fp_shv.get_node_or_null(^"ShovelBladeGleam") as MeshInstance3D if fp_shv != null else null
+	check_star_flare.call(shv_gleam, "Shovel.ShovelBladeGleam")
+	check(shv_gleam != null and not shv_gleam.visible, "ShovelBladeGleam starts hidden at idle")
+	check_near(inv.get_shovel_gleam_strength(), 0.0, 0.0001, "Shovel gleam strength starts at 0.0")
+	if tp_shv != null and shv_gleam != null:
+		var tp_shv_gleam := tp_shv.get_node_or_null(^"ShovelBladeGleam") as MeshInstance3D
+		check(tp_shv_gleam != null, "TP Shovel also mounts ShovelBladeGleam")
+		if tp_shv_gleam != null:
+			check(tp_shv_gleam.mesh == shv_gleam.mesh,
+				"FP and TP Shovel share WeakRef-cached 24-tri ShovelBladeGleam mesh")
+			check(tp_shv_gleam.material_override != shv_gleam.material_override,
+				"FP and TP Shovel use independent per-instance gleam materials")
+
+	# Direct trigger_shovel_gleam(1.0) sweeps from spade shoulder up to pointed iron tip and decays over 0.38 s!
+	inv.trigger_shovel_gleam(1.0)
+	check(inv.get_shovel_gleam_strength() > 0.95, "trigger_shovel_gleam(1.0) flares strength cleanly")
+	check(shv_gleam != null and shv_gleam.visible, "trigger_shovel_gleam(1.0) shows ShovelBladeGleam")
+	var shv_y0 := shv_gleam.position.y if shv_gleam != null else 0.0
+	for _i in 12:
+		inv._process(1.0 / 60.0)
+	var shv_y_mid := shv_gleam.position.y if shv_gleam != null else 0.0
+	var shv_s_mid := inv.get_shovel_gleam_strength()
+	check(shv_gleam != null and shv_gleam.visible, "ShovelBladeGleam stays visible mid-sweep (~0.20 s)")
+	check(shv_s_mid > 0.15 and shv_s_mid < 0.72, "ShovelBladeGleam decays smoothly mid-pulse (got %.3f)" % shv_s_mid)
+	check(shv_y_mid > shv_y0 + 0.10,
+		"ShovelBladeGleam sweeps up spade blade toward pointed tip (y: %.3f -> %.3f)" % [shv_y0, shv_y_mid])
+
+	for _i in 15:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_shovel_gleam_strength(), 0.0, 0.0001, "ShovelBladeGleam decays cleanly to 0.0 after 0.38 s")
+	check(shv_gleam != null and not shv_gleam.visible, "ShovelBladeGleam hides cleanly once decayed")
+
+	# Real use_shovel() ground strike & DigSite strike automatically trigger ShovelBladeGleam!
+	inv._use_cooldown = 0.0
+	inv.use_shovel()
+	check(inv.get_shovel_gleam_strength() > 0.75, "use_shovel() ground strike triggers ShovelBladeGleam")
+	check(shv_gleam != null and shv_gleam.visible, "use_shovel() makes ShovelBladeGleam visible")
+	for _i in 26:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_shovel_gleam_strength(), 0.0, 0.0001, "ground strike ShovelBladeGleam decays to 0.0")
+
+	var site := DigSite.new()
+	site.treasure_id = &"wayfarer_chest"
+	_root.add_child(site)
+	site.global_position = captain.global_position + Vector3(0.0, 0.0, -1.2)
+	inv._use_cooldown = 0.0
+	var dig_res := inv.use_shovel()
+	check(bool(dig_res.get("hit", false)), "use_shovel() strikes nearby DigSite")
+	check(inv.get_shovel_gleam_strength() > 0.95, "use_shovel() DigSite chest strike triggers full ShovelBladeGleam")
+	for _i in 26:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_shovel_gleam_strength(), 0.0, 0.0001, "DigSite ShovelBladeGleam decays cleanly to 0.0")
+
+	# ------------------------------------------------------------------
+	# 5. Clean Zero-Leak Teardown & Shared WeakRef Cache Verification
+	# ------------------------------------------------------------------
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._cutlass_gleam_mesh_ref == null, "Q30A teardown nulls _cutlass_gleam_mesh_ref")
+	check(ToolMeshes._tankard_toast_mesh_ref == null, "Q30A teardown nulls _tankard_toast_mesh_ref")
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "Q30A teardown clears _pbr_tex_cache cleanly")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q30A teardown clears _fp_hand_mesh_cache cleanly")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q30A teardown clears _fp_hand_mat_cache cleanly")
+
+
