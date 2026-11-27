@@ -1622,6 +1622,97 @@ func test_wave35_sea_mermaid_sculpted_beacon_stranded_check_return_warp_and_crew
 		"SeaMermaid.clear_shared_cache() releases all static caches cleanly with zero leaks")
 
 
+func test_q8b_seabird_flock_ship_slipstream_escort_and_return() -> void:
+	_begin()
+	var anchor := Vector3(0.0, 0.0, 0.0)
+	var flock := SeabirdFlock.spawn_over(_root, anchor, 14.0, 16.0, 5)
+	var birds := flock.get_birds()
+	check_eq(birds.size(), 5, "flock spawns 5 coastal gulls")
+	check(flock.get_escort_target_ship() == null, "no escort ship initially")
+	check_eq(flock.get_escorting_bird_count(), 0, "zero gulls escorting before a moving ship arrives")
+
+	# Spawn a sailing Sloop passing 70 m away (within 135 m enter radius) at 5.0 m/s (>= 1.6 m/s).
+	var sloop_scene := preload("res://src/ship/sloop.tscn") as PackedScene
+	var ship := sloop_scene.instantiate() as Ship
+	ship.enable_effects = false
+	ship.start_anchored = false
+	_root.add_child(ship)
+	ship.global_position = Vector3(70.0, 0.0, 0.0)
+	ship.linear_velocity = Vector3(0.0, 0.0, -5.0)
+
+	# Advance 2.5 s in 0.1 s steps so 2 gulls smoothly join the ship's trailing slipstream.
+	for _step in 25:
+		flock.step_flock(0.1)
+
+	check_eq(flock.get_escort_target_ship(), ship, "flock locks onto passing sailing ship within 135 m")
+	check_eq(flock.get_escorting_bird_count(), 2,
+		"up to 2 gulls escort ship while 3 remain circling home loot marker (got %d)" % flock.get_escorting_bird_count())
+	check(flock.get_bird_escort_blend(0) >= 0.95 and flock.get_bird_escort_blend(1) >= 0.95,
+		"escort gulls reach full slipstream blend (b0=%.2f, b1=%.2f)" % [
+			flock.get_bird_escort_blend(0), flock.get_bird_escort_blend(1)
+		])
+
+	# Verify the 2 escort gulls position cleanly in the trailing slipstream astern (+Z) of the ship.
+	for idx in 2:
+		var gp := birds[idx].global_position
+		var aft_off := gp.z - ship.global_position.z
+		var lat_off := absf(gp.x - ship.global_position.x)
+		check(aft_off >= 9.0 and aft_off <= 25.0,
+			"escort gull %d trails astern of ship (aft_off=%.2f m)" % [idx, aft_off])
+		check(lat_off <= 11.5,
+			"escort gull %d stays within slipstream weave width (lat_off=%.2f m)" % [idx, lat_off])
+		check(gp.y >= 6.0 and gp.y <= 17.0,
+			"escort gull %d rides masthead updraft altitude (y=%.2f m)" % [idx, gp.y])
+
+	# Verify the remaining 3 gulls faithfully continue circling the home loot marker!
+	for idx in range(2, 5):
+		check_near(flock.get_bird_escort_blend(idx), 0.0, 0.001,
+			"home loot-marker gull %d keeps zero escort blend" % idx)
+		var hp := birds[idx].global_position
+		var home_horiz := Vector2(hp.x - anchor.x, hp.z - anchor.z).length()
+		check(home_horiz > 5.0 and home_horiz < 32.0,
+			"home gull %d stays orbiting anchor beacon (horiz=%.2f m)" % [idx, home_horiz])
+
+	# Hysteresis check: ship moves to 185 m (between 135 m enter and 240 m exit) and slows to 1.1 m/s
+	# (between 0.75 m/s exit and 1.6 m/s enter) -> gulls stay smoothly locked without flicker!
+	ship.global_position = Vector3(185.0, 0.0, 0.0)
+	ship.linear_velocity = Vector3(0.0, 0.0, -1.1)
+	for _step in 6:
+		flock.step_flock(0.1)
+	check_eq(flock.get_escort_target_ship(), ship,
+		"distance & speed hysteresis retains escort target inside 240 m and >= 0.75 m/s")
+	check_eq(flock.get_escorting_bird_count(), 2, "escort count remains 2 inside hysteresis band")
+
+	# Move ship 300 m away (> 240 m exit radius) and advance 3.0 s -> smooth return to home flock!
+	ship.global_position = Vector3(300.0, 0.0, 0.0)
+	for _step in 30:
+		flock.step_flock(0.1)
+	check(flock.get_escort_target_ship() == null, "flock releases escort target beyond 240 m exit radius")
+	check_eq(flock.get_escorting_bird_count(), 0, "all escort gulls disengage after ship sails away")
+	check(flock.get_bird_escort_blend(0) <= 0.001 and flock.get_bird_escort_blend(1) <= 0.001,
+		"escort blend returns smoothly to 0.0")
+	for idx in 5:
+		var bp := birds[idx].global_position
+		var horiz := Vector2(bp.x - anchor.x, bp.z - anchor.z).length()
+		check(horiz > 5.0 and horiz < 32.0,
+			"gull %d returned smoothly to home elliptical orbit (horiz=%.2f m)" % [idx, horiz])
+
+	# Verify anchored / slow speed (< 0.75 m/s) also releases escorts cleanly!
+	ship.global_position = Vector3(70.0, 0.0, 0.0)
+	ship.linear_velocity = Vector3(0.0, 0.0, -5.0)
+	for _step in 25:
+		flock.step_flock(0.1)
+	check_eq(flock.get_escorting_bird_count(), 2, "gulls re-engage when ship sails back within 135 m")
+	ship.linear_velocity = Vector3(0.0, 0.0, -0.2)
+	for _step in 25:
+		flock.step_flock(0.1)
+	check(flock.get_escort_target_ship() == null, "flock releases escort target when ship drops below 0.75 m/s")
+	check_eq(flock.get_escorting_bird_count(), 0, "escort gulls return home when ship anchors/stops")
+
+	print("    Q8B seabird slipstream escort: enter/hysteresis/exit/anchor verified across all 5 gulls")
+	await _end()
+
+
 
 
 

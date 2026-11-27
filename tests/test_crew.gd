@@ -1045,3 +1045,182 @@ func test_q1b_crew_zero_jitter_hysteresis_and_deck_obstacle_routing() -> void:
 		check(b_route.size() >= 3, "Brigantine fore-to-aft route inserts clean side-aisle waypoints (got %d)" % b_route.size())
 
 	await _end()
+
+
+func test_q8b_ship_bell_crew_rally_and_live_status_report() -> void:
+	_begin()
+	Weather.set_weather(0.0, 12.0, 0.0)
+	var s := SLOOP_SCENE.instantiate() as Ship
+	s.enable_effects = false
+	s.start_anchored = true
+	_root.add_child(s)
+	await physics_frames(12)
+
+	var hs := _ship_scale(s)
+	var captain := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(captain)
+	captain.board(s, Vector3(0.0, 2.02, 4.1) * hs)
+
+	# Bind two onboard crewmates (helmsman connected first, lookout second).
+	var helm_pair := _make_crew(s, captain, &"helmsman", Vector3(-1.35, 1.12, 1.35))
+	var helm_p: Pawn = helm_pair[0]
+	var helm_b: CrewBrain = helm_pair[1]
+	helm_b.hold_fire = true
+
+	var look_pair := _make_crew(s, captain, &"lookout", Vector3(0.0, 1.12, -3.05))
+	var look_p: Pawn = look_pair[0]
+	var look_b: CrewBrain = look_pair[1]
+	look_b.hold_fire = true
+
+	# Also spawn an ashore crewmate bound to the same ship to confirm off-ship crew ignore the bell.
+	var shore_p := PAWN_SCENE.instantiate() as Pawn
+	_root.add_child(shore_p)
+	shore_p.global_position = Vector3(45.0, 2.0, 0.0)
+	var shore_b := CrewBrain.new()
+	shore_b.setup(s, captain, &"carpenter")
+	shore_p.add_child(shore_b)
+	await physics_frames(6)
+
+	var events: Array[Dictionary] = []
+	for cb: CrewBrain in [helm_b, look_b, shore_b]:
+		cb.callout_spoken.connect(func(speaker: String, text: String, cat: StringName) -> void:
+			if cat == &"bell_rally":
+				events.append({"speaker": speaker, "text": text, "cat": cat})
+		)
+
+	# 1. Anchored state: exactly ONE crewmate speaks, BOTH idle onboard crew rally & turn smoothly!
+	helm_p.look_yaw = 0.0
+	look_p.look_yaw = 0.0
+	var prev_yaw := helm_p.look_yaw
+	s.ring_bell(captain)
+	check_eq(events.size(), 1, "ship bell rally emits exactly 1 status callout across 2 onboard crew")
+	check_eq(helm_b.get_bell_rally_count(), 1, "first connected crewmate speaks the bell rally status report")
+	check_eq(look_b.get_bell_rally_count(), 0, "second crewmate does not spam duplicate bell rally callout")
+	check_eq(shore_b.get_bell_rally_count(), 0, "off-ship crewmate ignores ship bell rally")
+	check(helm_b._bell_rally_timer > 1.0 and look_b._bell_rally_timer > 1.0,
+		"both idle onboard crewmates enter 1.6 s bell rally look-turn")
+	check(shore_b._bell_rally_timer <= 0.0, "off-ship crewmate does not trigger bell rally turn")
+	var anchor_report := helm_b.get_last_bell_rally_report()
+	check(anchor_report.contains("Anchor"), "anchored bell report describes anchor fast (%s)" % anchor_report)
+
+	# Verify smooth turning toward Captain without >90 deg yaw flips.
+	var max_yaw_step := 0.0
+	for _t in 18:
+		await physics_frames(1)
+		var step := absf(angle_difference(prev_yaw, helm_p.look_yaw))
+		max_yaw_step = maxf(max_yaw_step, step)
+		prev_yaw = helm_p.look_yaw
+	check(max_yaw_step < PI * 0.5, "bell rally look-turn uses smooth lerp_angle (max step=%.2f rad)" % max_yaw_step)
+	check(absf(angle_difference(0.0, helm_p.look_yaw)) > 0.35,
+		"idle crewmate turns toward Captain/bell aft (look_yaw=%.2f)" % helm_p.look_yaw)
+
+	# Immediate second ring inside 4.5 s cooldown must be suppressed cleanly!
+	s.ring_bell(captain)
+	check_eq(events.size(), 1, "4.5 s per-ship bell rally cooldown suppresses back-to-back spam")
+
+	# 2. Hull breach + bilge water emergency (Priority 1a) & busy-crew non-interruption!
+	CrewBrain.clear_bell_rally_cooldown(s)
+	var slot := s.apply_hull_damage(s.global_transform * (Vector3(2.0, -0.45, 0.4) * hs), 0.5)
+	s.water_level = 0.42
+	await physics_frames(3)
+	check_eq(helm_b.current_task, &"patch_hole", "helmsman switches to patch_hole on open hull breach")
+	helm_b._bell_rally_timer = 0.0
+	s.ring_bell(captain)
+	check_eq(events.size(), 2, "breach emergency bell ring speaks exactly 1 report")
+	check_eq(helm_b.current_task, &"patch_hole", "bell rally never interrupts active hull repair task")
+	check(helm_b._bell_rally_timer <= 0.0, "busy repairing crewmate does not trigger idle rally look-turn")
+	var breach_report := helm_b.get_last_bell_rally_report()
+	check(breach_report.contains("1 hull breach") and breach_report.contains("42%"),
+		"breach report states open breach count and bilge pct (%s)" % breach_report)
+
+	# Patch hole & ignite deck fire -> Priority 1b fire on deck!
+	s.patch_hole(slot)
+	s.water_level = 0.0
+	var fire_pos := s.global_transform * (Vector3(0.0, 1.15, 0.5) * hs)
+	s.ignite_deck_fire(fire_pos, false)
+	check(s.has_deck_fire(), "deck fire ignited for Priority 1b bell test")
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 3, "deck fire bell ring speaks exactly 1 report")
+	var fire_report := helm_b.get_last_bell_rally_report()
+	check(fire_report.contains("Fire on deck"), "deck fire report warns of fire on deck (%s)" % fire_report)
+	s.douse_deck_fire(fire_pos, 16.0)
+	check(not s.has_deck_fire(), "deck fire doused cleanly")
+
+	# High bilge >= 25% -> Priority 1c bilge emergency report.
+	s.water_level = 0.35
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 4, "high bilge bell ring speaks exactly 1 report")
+	var bilge_report := helm_b.get_last_bell_rally_report()
+	check(bilge_report.contains("Bilge") and bilge_report.contains("35%"),
+		"high bilge report states bilge pct (%s)" % bilge_report)
+	s.water_level = 0.0
+
+	# 3. Nearby hostile ship threat within 320 m (Priority 2).
+	var enemy := SLOOP_SCENE.instantiate() as Ship
+	enemy.enable_effects = false
+	enemy.faction = &"drowned"
+	_root.add_child(enemy)
+	enemy.global_position = s.global_position + Vector3(140.0, 0.0, 0.0)
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 5, "hostile threat bell ring speaks exactly 1 report")
+	var threat_report := helm_b.get_last_bell_rally_report()
+	check(threat_report.contains("Battle stations") and threat_report.contains("Hostile") and threat_report.contains("starboard"),
+		"hostile threat report announces battle stations, range, and bearing (%s)" % threat_report)
+	enemy.queue_free()
+	await physics_frames(2)
+
+	# 4. Underway in full wind (Priority 4), off-wind (Priority 5), and shipshape all clear (Priority 6).
+	s.anchor_down = false
+	s.anchor_progress = 0.0
+	s.set_sail_target(1.0)
+	s.sail_set = 1.0
+	var ideal_trim := s.ideal_sail_trim()
+	s.set_trim_target(ideal_trim)
+	s.sail_trim = ideal_trim
+	s.linear_velocity = Vector3(0.0, 0.0, -5.0)
+	check(s.wind_catch() >= 0.85, "ship aligned for full wind test (catch=%.2f)" % s.wind_catch())
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 6, "full wind bell ring speaks exactly 1 report")
+	var wind_report := helm_b.get_last_bell_rally_report()
+	check(wind_report.contains("Full wind") and wind_report.contains("knots"),
+		"full wind report announces full wind and speed in knots (%s)" % wind_report)
+
+	# Off-wind trim warning.
+	s.set_trim_target(1.2)
+	s.sail_trim = 1.2
+	check(s.wind_catch() < 0.72, "ship trimmed off-wind for trim-warning test (catch=%.2f)" % s.wind_catch())
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 7, "off-wind bell ring speaks exactly 1 report")
+	var off_wind_report := helm_b.get_last_bell_rally_report()
+	check(off_wind_report.contains("knots") and off_wind_report.contains("yards"),
+		"off-wind report advises trimming yards (%s)" % off_wind_report)
+
+	# Furled & dry -> shipshape all clear.
+	s.set_sail_target(0.0)
+	s.sail_set = 0.0
+	s.linear_velocity = Vector3.ZERO
+	CrewBrain.clear_bell_rally_cooldown(s)
+	s.ring_bell(captain)
+	check_eq(events.size(), 8, "all-clear bell ring speaks exactly 1 report")
+	var clear_report := helm_b.get_last_bell_rally_report()
+	check(clear_report.contains("All hands") and clear_report.contains("tight"),
+		"shipshape report confirms all hands and tight hull (%s)" % clear_report)
+
+	# 5. Strict ASCII (< 128) verification across every emitted bell rally report.
+	for ev in events:
+		var line := String(ev["text"])
+		for ci in line.length():
+			check(line.unicode_at(ci) < 128, "bell rally report must be strict ASCII ('%s')" % line)
+
+	print("    Q8B bell rally reports (%d): anchor='%s' | breach='%s' | fire='%s' | wind='%s'" % [
+		events.size(), anchor_report, breach_report, fire_report, wind_report
+	])
+	await _end()
+	check(CrewBrain._last_bell_rally_msec_by_ship.is_empty(),
+		"bell rally per-ship cooldown map cleans up cleanly on teardown")
+

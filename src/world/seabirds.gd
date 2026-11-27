@@ -11,6 +11,13 @@ const GROUP := &"seabird_flocks"
 const LOOT_MARKER_GROUP := &"loot_markers"
 const WING_CULL_DISTANCE := 320.0
 const CRY_HEAR_DISTANCE := 210.0
+const SHIP_ESCORT_ENTER_DIST := 135.0
+const SHIP_ESCORT_EXIT_DIST := 240.0
+const SHIP_ESCORT_MIN_SPEED := 1.6
+const SHIP_ESCORT_EXIT_SPEED := 0.75
+const SHIP_ESCORT_MAX_BIRDS := 2
+const SHIP_ESCORT_SCAN_INTERVAL := 0.25
+const SHIP_ESCORT_BLEND_TIME := 1.8
 
 # Painterly sunlit coastal gull palette.
 const COL_BODY_WHITE := Color(0.97, 0.95, 0.90)
@@ -42,6 +49,13 @@ var _plumage_mat: StandardMaterial3D = null
 var _rng := RandomNumberGenerator.new()
 var _cry_timer: float = 4.5
 var _clock: float = 0.0
+var _escort_ship: Node3D = null
+var _escort_scan_timer: float = 0.0
+var _escort_last_ship_pos: Vector3 = Vector3.ZERO
+var _escort_last_ship_aft: Vector3 = Vector3.BACK
+var _escort_last_ship_right: Vector3 = Vector3.RIGHT
+var _escort_last_ship_vel: Vector3 = Vector3.ZERO
+var _has_escort_anchor: bool = false
 
 
 ## Spawn a configured circling gull flock anchored above `world_pos`.
@@ -71,6 +85,11 @@ func _enter_tree() -> void:
 		add_to_group(LOOT_MARKER_GROUP)
 
 
+func _exit_tree() -> void:
+	_escort_ship = null
+	_has_escort_anchor = false
+
+
 func _ready() -> void:
 	if flock_seed != 0:
 		_rng.seed = flock_seed
@@ -97,16 +116,47 @@ func get_birds() -> Array[Node3D]:
 	return out
 
 
+## Return the number of gulls actively riding a nearby ship's slipstream (blend >= 0.45).
+func get_escorting_bird_count() -> int:
+	var n := 0
+	for entry in _birds:
+		if float(entry.get("escort_blend", 0.0)) >= 0.45:
+			n += 1
+	return n
+
+
+## Return the currently escorted sailing ship (or null when no moving ship is in escort range).
+func get_escort_target_ship() -> Node3D:
+	if _escort_ship != null and is_instance_valid(_escort_ship) and _escort_ship.is_inside_tree():
+		return _escort_ship
+	return null
+
+
+## Return the current 0..1 slipstream escort blend weight for bird `idx` (0.0 if out of bounds).
+func get_bird_escort_blend(idx: int) -> float:
+	if idx < 0 or idx >= _birds.size():
+		return 0.0
+	return float(_birds[idx].get("escort_blend", 0.0))
+
+
 func _process(delta: float) -> void:
 	step_flock(delta)
 
 
-## Advance bird orbits, banking rolls, flapping/gliding cycles, and subtle gull cries.
+## Advance bird orbits, ship-following slipstream escorts, banking rolls, flapping/gliding, and gull cries.
 func step_flock(delta: float) -> void:
 	if _birds.is_empty():
 		return
 	var dt := clampf(delta, 0.0, 0.15)
 	_clock += dt
+
+	_escort_scan_timer -= dt
+	var target_invalid := _escort_ship != null and (not is_instance_valid(_escort_ship) or not _escort_ship.is_inside_tree())
+	if dt <= 0.0 or target_invalid or _escort_scan_timer <= 0.0:
+		_escort_scan_timer = SHIP_ESCORT_SCAN_INTERVAL
+		_update_escort_target()
+	if _escort_ship != null:
+		_sync_escort_anchor()
 
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
 	var cam_dist_sq := 0.0
@@ -120,7 +170,16 @@ func step_flock(delta: float) -> void:
 		var wv := Weather.mean_wind_vector()
 		wind_drift = Vector3(wv.x, 0.0, wv.z) * 0.08
 
-	for entry in _birds:
+	var escort_slots := mini(SHIP_ESCORT_MAX_BIRDS, maxi(1, _birds.size() - 2))
+	if _birds.size() <= 2:
+		escort_slots = mini(escort_slots, maxi(0, _birds.size() - 1))
+	var any_blended := false
+	var ship_vel_local := Vector3.ZERO
+	if _escort_ship != null:
+		ship_vel_local = global_basis.inverse() * _escort_last_ship_vel if is_inside_tree() else _escort_last_ship_vel
+
+	for i in _birds.size():
+		var entry: Dictionary = _birds[i]
 		var root := entry["root"] as Node3D
 		if root == null or not is_instance_valid(root):
 			continue
@@ -131,24 +190,54 @@ func step_flock(delta: float) -> void:
 		angle = wrapf(angle + angular_speed * dir_sign * dt, 0.0, TAU)
 		entry["angle"] = angle
 
-		var prev_pos := _orbit_local_pos(entry, angle - angular_speed * dir_sign * 0.04, wind_drift)
-		var cur_pos := _orbit_local_pos(entry, angle, wind_drift)
-		var next_pos := _orbit_local_pos(entry, angle + angular_speed * dir_sign * 0.04, wind_drift)
-		root.position = cur_pos
+		var escort_blend: float = float(entry["escort_blend"])
+		var want_escort := (_escort_ship != null) and (i < escort_slots)
+		if dt > 0.0:
+			var goal_escort := 1.0 if want_escort else 0.0
+			escort_blend = move_toward(escort_blend, goal_escort, dt / SHIP_ESCORT_BLEND_TIME)
+			entry["escort_blend"] = escort_blend
+		if escort_blend > 0.0001:
+			any_blended = true
 
+		var prev_pos := _orbit_local_pos(entry, angle - angular_speed * dir_sign * 0.04, wind_drift)
+		var orbit_pos := _orbit_local_pos(entry, angle, wind_drift)
+		var next_pos := _orbit_local_pos(entry, angle + angular_speed * dir_sign * 0.04, wind_drift)
+		var cur_pos := orbit_pos
 		var vel := (next_pos - prev_pos) / 0.08
+
+		if escort_blend > 0.0001 and _has_escort_anchor:
+			var smooth_b := smoothstep(0.0, 1.0, escort_blend)
+			var escort_pos := _escort_local_pos(entry, _clock)
+			cur_pos = orbit_pos.lerp(escort_pos, smooth_b)
+			if escort_blend >= 0.98 and _escort_ship != null:
+				var e_prev := _escort_local_pos(entry, _clock - 0.04)
+				var e_next := _escort_local_pos(entry, _clock + 0.04)
+				vel = ship_vel_local + (e_next - e_prev) / 0.08
+			elif dt > 0.0001 and bool(entry["has_prev_pos"]):
+				vel = (cur_pos - (entry["prev_pos"] as Vector3)) / dt
+				if _escort_ship != null and Vector2(vel.x, vel.z).length() < 1.0:
+					vel += ship_vel_local * smooth_b
+
+		root.position = cur_pos
+		entry["prev_pos"] = cur_pos
+		entry["has_prev_pos"] = true
+
 		var horiz_len := Vector2(vel.x, vel.z).length()
 		var yaw: float = float(entry["yaw"])
 		var yaw_rate := 0.0
 		if horiz_len > 0.01:
 			var target_yaw := atan2(-vel.x, -vel.z)
 			if bool(entry["has_yaw"]) and dt > 0.0001:
-				var dyaw := wrapf(target_yaw - yaw, -PI, PI)
+				var next_yaw := target_yaw
+				if escort_blend > 0.0001:
+					next_yaw = lerp_angle(yaw, target_yaw, clampf(dt * 5.0, 0.0, 1.0))
+				var dyaw := wrapf(next_yaw - yaw, -PI, PI)
 				yaw_rate = dyaw / dt
+				yaw = next_yaw
 			else:
 				# Analytical curvature yaw rate on first tick so banking is immediate.
 				yaw_rate = dir_sign * angular_speed
-			yaw = target_yaw
+				yaw = target_yaw
 			entry["yaw"] = yaw
 			entry["has_yaw"] = true
 
@@ -168,7 +257,11 @@ func step_flock(delta: float) -> void:
 		if mode_timer <= 0.0:
 			flapping = not flapping
 			entry["flapping"] = flapping
-			mode_timer = _rng.randf_range(1.8, 3.1) if flapping else _rng.randf_range(2.6, 4.6)
+			if escort_blend > 0.35:
+				# Escort gulls ride the vessel's masthead updraft in longer soaring glides.
+				mode_timer = _rng.randf_range(0.9, 1.6) if flapping else _rng.randf_range(4.2, 6.8)
+			else:
+				mode_timer = _rng.randf_range(1.8, 3.1) if flapping else _rng.randf_range(2.6, 4.6)
 		entry["mode_timer"] = mode_timer
 
 		var flap_blend: float = float(entry["flap_blend"])
@@ -182,7 +275,7 @@ func step_flock(delta: float) -> void:
 
 		# Rhythmic downstroke/upstroke mixed smoothly into a gentle banked gull dihedral glide.
 		var raw_flap := sin(flap_phase) * 0.58 - 0.06
-		var glide_dihedral := 0.14 + absf(bank) * 0.12
+		var glide_dihedral := 0.14 + absf(bank) * 0.12 + 0.05 * escort_blend
 		var wing_roll := lerpf(glide_dihedral, raw_flap, flap_blend)
 		var wing_pitch := cos(flap_phase) * 0.14 * flap_blend
 
@@ -192,6 +285,9 @@ func step_flock(delta: float) -> void:
 			wing_l.rotation = Vector3(wing_pitch, 0.0, -wing_roll)
 		if wing_r != null:
 			wing_r.rotation = Vector3(wing_pitch, 0.0, wing_roll)
+
+	if _escort_ship == null and not any_blended:
+		_has_escort_anchor = false
 
 	# Subtle periodic distant gull cries if the sound exists in Audio.catalogue.
 	if dt > 0.0:
@@ -203,6 +299,96 @@ func step_flock(delta: float) -> void:
 				var caller := _birds[idx]["root"] as Node3D
 				if caller != null and is_instance_valid(caller):
 					Audio.play_sfx(&"seagull", caller.global_position, -4.5, 0.11)
+
+
+static func _ship_horizontal_velocity(node: Node3D) -> Vector3:
+	var vel_v: Variant = node.get(&"linear_velocity")
+	if vel_v is Vector3:
+		var v := vel_v as Vector3
+		return Vector3(v.x, 0.0, v.z)
+	return Vector3.ZERO
+
+
+static func _is_ship_sinking(node: Node3D) -> bool:
+	var sinking_v: Variant = node.get(&"is_sinking")
+	return sinking_v is bool and bool(sinking_v)
+
+
+func _update_escort_target() -> void:
+	if not is_inside_tree():
+		_escort_ship = null
+		return
+	var tree := get_tree()
+	if tree == null:
+		_escort_ship = null
+		return
+	var my_pos := global_position
+
+	# Keep current escort target while inside exit distance and above hysteresis exit speed.
+	if _escort_ship != null:
+		if not is_instance_valid(_escort_ship) or not _escort_ship.is_inside_tree() or _is_ship_sinking(_escort_ship):
+			_escort_ship = null
+		else:
+			var sp := _escort_ship.global_position
+			var horiz_d := Vector2(sp.x - my_pos.x, sp.z - my_pos.z).length()
+			var spd := _ship_horizontal_velocity(_escort_ship).length()
+			if horiz_d > SHIP_ESCORT_EXIT_DIST or spd < SHIP_ESCORT_EXIT_SPEED:
+				_escort_ship = null
+
+	# When unengaged, acquire the closest active sailing ship within SHIP_ESCORT_ENTER_DIST.
+	if _escort_ship == null:
+		var best: Node3D = null
+		var best_d := SHIP_ESCORT_ENTER_DIST
+		for grp: StringName in [&"ship", &"ships"]:
+			for node in tree.get_nodes_in_group(grp):
+				var candidate := node as Node3D
+				if candidate == null or not is_instance_valid(candidate) or not candidate.is_inside_tree():
+					continue
+				if _is_ship_sinking(candidate):
+					continue
+				var spd := _ship_horizontal_velocity(candidate).length()
+				if spd < SHIP_ESCORT_MIN_SPEED:
+					continue
+				var cp := candidate.global_position
+				var d := Vector2(cp.x - my_pos.x, cp.z - my_pos.z).length()
+				if d <= best_d:
+					best_d = d
+					best = candidate
+		_escort_ship = best
+
+
+func _sync_escort_anchor() -> void:
+	if _escort_ship == null or not is_instance_valid(_escort_ship) or not _escort_ship.is_inside_tree():
+		return
+	_escort_last_ship_pos = _escort_ship.global_position
+	var hv := _ship_horizontal_velocity(_escort_ship)
+	_escort_last_ship_vel = hv
+	var aft := Vector3.ZERO
+	if hv.length_squared() > 0.04:
+		aft = -hv.normalized()
+	else:
+		var bz := _escort_ship.global_basis.z
+		aft = Vector3(bz.x, 0.0, bz.z)
+		aft = aft.normalized() if aft.length_squared() > 0.001 else Vector3.BACK
+	_escort_last_ship_aft = aft
+	var rt := Vector3.UP.cross(aft)
+	_escort_last_ship_right = rt.normalized() if rt.length_squared() > 0.001 else Vector3.RIGHT
+	_has_escort_anchor = true
+
+
+func _escort_local_pos(entry: Dictionary, t: float) -> Vector3:
+	var aft_dist: float = float(entry["escort_aft"])
+	var lat_amp: float = float(entry["escort_lat"])
+	var base_h: float = float(entry["escort_height"])
+	var phase: float = float(entry["escort_phase"]) + t * float(entry["escort_freq"])
+	var bob: float = sin(t * float(entry["bob_freq"]) + float(entry["bob_phase"])) * float(entry["bob_amp"]) * 0.65
+	var world_pos := _escort_last_ship_pos \
+		+ _escort_last_ship_aft * aft_dist \
+		+ _escort_last_ship_right * (sin(phase) * lat_amp) \
+		+ Vector3.UP * (base_h + bob)
+	if is_inside_tree():
+		return to_local(world_pos)
+	return world_pos - position
 
 
 func _orbit_local_pos(entry: Dictionary, angle: float, wind_drift: Vector3) -> Vector3:
@@ -241,6 +427,7 @@ func _spawn_flock() -> void:
 	var count := maxi(bird_count, 1)
 	var base_dir := 1.0 if _rng.randf() > 0.5 else -1.0
 	var scale_mult := bird_scale * (1.08 if is_loot_marker else 1.0)
+	var seed_abs := absi(flock_seed)
 
 	for i in count:
 		var gull := Node3D.new()
@@ -285,6 +472,13 @@ func _spawn_flock() -> void:
 		var ang_spd := speed_mps / maxf(radius_var, 4.0)
 		var start_flapping := (i % 2 == 0)
 
+		# Deterministic slipstream offsets derived without altering the home-orbit RNG stream.
+		var escort_aft := 11.0 + fposmod(float(i) * 5.7 + float(seed_abs % 17) * 0.35, 12.0)
+		var escort_lat := 5.5 + fposmod(float(i) * 2.1 + float(seed_abs % 13) * 0.25, 4.0)
+		var escort_height := 8.5 + fposmod(float(i) * 2.4 + float(seed_abs % 11) * 0.35, 5.5)
+		var escort_phase := float(i) * PI + fposmod(float(seed_abs % 29) * 0.22, TAU)
+		var escort_freq := 0.55 + fposmod(float(i) * 0.17, 0.25)
+
 		_birds.append({
 			"root": gull,
 			"wing_l": wing_l,
@@ -307,6 +501,14 @@ func _spawn_flock() -> void:
 			"yaw": 0.0,
 			"has_yaw": false,
 			"bank": 0.0,
+			"escort_blend": 0.0,
+			"escort_aft": escort_aft,
+			"escort_lat": escort_lat,
+			"escort_height": escort_height,
+			"escort_phase": escort_phase,
+			"escort_freq": escort_freq,
+			"prev_pos": Vector3.ZERO,
+			"has_prev_pos": false,
 		})
 
 

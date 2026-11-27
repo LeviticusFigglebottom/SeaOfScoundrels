@@ -2422,3 +2422,191 @@ func test_q7a_remaining_outpost_ruin_wreck_and_camp_prop_craft() -> void:
 
 		inst.free()
 
+
+func test_q8a_outpost_lantern_halos_campfire_chimney_smoke_and_npc_greetings() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 9.0, 0.3)
+
+	var outpost := IslandGenerator.build_island(Archipelago.ISLAND_SPECS[0]) as Outpost
+	check(outpost != null, "Port Scoundrel builds cleanly as Outpost")
+	if outpost == null:
+		Weather.apply_state(saved_weather)
+		return
+	add_child(outpost)
+	await physics_frames(2)
+
+	# 1. Warm atmospheric lantern halos (zero raw primitives, role-scaled, strong night vs midday lift).
+	var halo_count := outpost.get_harbour_halo_count()
+	check(halo_count >= 4, "Outpost mounts >= 4 atmospheric lantern halos (got %d)" % halo_count)
+	var beacon_halo := outpost.find_child("Lantern_Beacon_Halo", true, false) as MeshInstance3D
+	var fire_halo := outpost.find_child("Lantern_Fire_Halo", true, false) as MeshInstance3D
+	var tavern_halo := outpost.find_child("Lantern_Tavern_Halo", true, false) as MeshInstance3D
+	var dock_halo := outpost.find_child("Lantern_Dock_Halo", true, false) as MeshInstance3D
+	var stall_halo := outpost.find_child("Lantern_Stall_Halo", true, false) as MeshInstance3D
+	for hmi: MeshInstance3D in [beacon_halo, fire_halo, tavern_halo, dock_halo, stall_halo]:
+		check(hmi != null and hmi.mesh is ArrayMesh and not (hmi.mesh is PrimitiveMesh),
+			"Outpost lantern halo must use shared zero-primitive ArrayMesh")
+		if hmi != null:
+			check_eq(hmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"Outpost lantern halo disables shadows: " + hmi.name)
+			check(hmi.material_override is ShaderMaterial, "Outpost lantern halo binds inline ShaderMaterial: " + hmi.name)
+	if beacon_halo != null:
+		var bmat := beacon_halo.material_override as ShaderMaterial
+		check_near(float(bmat.get_shader_parameter(&"halo_scale")), 3.8, 0.01, "Lantern_Beacon_Halo scale == 3.8 m")
+		check(beacon_halo.visibility_range_end >= 1799.0, "Lantern_Beacon_Halo stays visible out to 1800 m")
+	if fire_halo != null:
+		var fmat := fire_halo.material_override as ShaderMaterial
+		check_near(float(fmat.get_shader_parameter(&"halo_scale")), 1.65, 0.01, "Lantern_Fire_Halo scale == 1.65 m")
+	if tavern_halo != null:
+		var tmat := tavern_halo.material_override as ShaderMaterial
+		check_near(float(tmat.get_shader_parameter(&"halo_scale")), 1.35, 0.01, "Lantern_Tavern_Halo scale == 1.35 m")
+		check_near(tavern_halo.visibility_range_end, 280.0, 1.0, "Lantern_Tavern_Halo culls at 280 m")
+
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.3)
+	for _i in 8:
+		outpost.step_harbour_atmosphere(0.25)
+	var day_energy := outpost.get_harbour_halo_energy()
+	check(day_energy >= 0.10 and day_energy <= 0.25,
+		"Midday harbour halo energy stays subtle (got %.3f)" % day_energy)
+
+	Weather.time_of_day = 23.0
+	Weather.set_weather(0.0, 8.0, 0.3)
+	for _i in 8:
+		outpost.step_harbour_atmosphere(0.25)
+	var night_energy := outpost.get_harbour_halo_energy()
+	check(night_energy > day_energy * 3.0,
+		"Midnight harbour halo energy (%.3f) must exceed 3x midday energy (%.3f)" % [night_energy, day_energy])
+	check(night_energy >= 1.00 and night_energy <= 1.35,
+		"Midnight harbour halo energy sits in rich atmospheric band [1.00..1.35] (got %.3f)" % night_energy)
+
+	# 2. Dancing campfire flames + swirling ember sparks (zero primitives, >= 30 tris).
+	check(outpost.has_campfire_flames(), "Outpost mounts sculpted CampfireFlames cluster")
+	var flame_tris := outpost.get_campfire_flame_tri_count()
+	check(flame_tris >= 30, "CampfireFlames multi-tongue ArrayMesh has >= 30 tris (got %d)" % flame_tris)
+	var flames_mi := outpost.find_child("CampfireFlames", true, false) as MeshInstance3D
+	check(flames_mi != null and flames_mi.mesh is ArrayMesh and not (flames_mi.mesh is PrimitiveMesh),
+		"CampfireFlames uses zero-primitive ArrayMesh")
+	if flames_mi != null:
+		check_eq(flames_mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"CampfireFlames disables shadow casting")
+	var embers_gp := outpost.find_child("CampfireEmbers", true, false) as GPUParticles3D
+	check(embers_gp != null and embers_gp.emitting, "Outpost mounts emitting CampfireEmbers GPUParticles3D")
+	if embers_gp != null:
+		check(embers_gp.draw_pass_1 is ArrayMesh and not (embers_gp.draw_pass_1 is PrimitiveMesh),
+			"CampfireEmbers uses zero-primitive diamond ArrayMesh")
+
+	# 3. Wind-drifting Tavern chimney woodsmoke mounted cleanly at exact chimney flue top!
+	check(outpost.has_tavern_chimney_smoke(), "Outpost mounts TavernChimneySmoke on OutpostTavern")
+	var smoke_gp := outpost.tavern_node.get_node_or_null(^"TavernChimneySmoke") as GPUParticles3D if outpost.tavern_node != null else null
+	check(smoke_gp != null and smoke_gp.emitting, "TavernChimneySmoke is a direct emitting child of OutpostTavern")
+	if smoke_gp != null:
+		check(smoke_gp.position.distance_to(Outpost.TAVERN_CHIMNEY_FLUE_LOCAL) < 0.02,
+			"TavernChimneySmoke sits at exact chimney flue top (3.30, 8.30, 1.85)")
+		check(smoke_gp.draw_pass_1 is ArrayMesh and not (smoke_gp.draw_pass_1 is PrimitiveMesh),
+			"TavernChimneySmoke uses zero-primitive billboard ArrayMesh card")
+
+	var min_wind_dot := 1.0
+	for h_rad: float in [0.0, PI * 0.5, PI]:
+		Weather.set_weather(0.0, 11.0, h_rad)
+		for _s in 6:
+			outpost.step_harbour_atmosphere(0.25)
+		var wv := Weather.wind_vector()
+		var w_dir := Vector2(wv.x, wv.z).normalized()
+		var drift := outpost.get_tavern_chimney_smoke_drift()
+		var d_dir := Vector2(drift.x, drift.z).normalized()
+		var align := w_dir.dot(d_dir)
+		min_wind_dot = minf(min_wind_dot, align)
+		check(align > 0.90,
+			"TavernChimneySmoke drift aligns with Weather.wind_vector() at heading %.2f (dot=%.3f)" % [h_rad, align])
+		if smoke_gp != null and smoke_gp.process_material is ParticleProcessMaterial:
+			var pm := smoke_gp.process_material as ParticleProcessMaterial
+			check(pm.gravity.distance_to(drift) < 0.05,
+				"TavernChimneySmoke ParticleProcessMaterial.gravity tracks cached smoke drift")
+
+	# 4. Expressive Harbour NPC approach greetings (smooth turning, cooldown, bard continuity & depart relaxation).
+	var merch := outpost.find_child("MerchantFactorNPC", true, false) as Node3D
+	var bard := outpost.tavern_bard_node
+	check(merch != null, "Outpost spawns MerchantFactorNPC")
+	check(bard != null, "Outpost spawns TavernBardNPC")
+	var greet_before := outpost.get_harbour_npc_greeting_count()
+	check_eq(greet_before, 0, "No harbour NPC greetings fire before a visitor approaches")
+
+	if merch != null:
+		var home_yaw := merch.rotation.y
+		var merch_parent := merch.get_parent() as Node3D
+		var target_dir_local := Basis(Vector3.UP, home_yaw + 0.72) * Vector3(0.0, 0.0, -3.5)
+		var visitor_near := merch_parent.to_global(merch.position + target_dir_local)
+		var visitor_far := merch.global_position + Vector3(45.0, 0.0, 45.0)
+
+		outpost.step_harbour_atmosphere(0.20, visitor_near)
+		var merch_drv := merch.get_node_or_null(^"AnimationDriver") as AnimationDriver
+		check(merch_drv != null and merch_drv.get_current_action() == &"shout",
+			"MerchantFactorNPC plays valid welcoming AnimationDriver action (&'shout')")
+		for _i in 5:
+			outpost.step_harbour_atmosphere(0.25, visitor_near)
+		var turned_diff := angle_difference(home_yaw, merch.rotation.y)
+		check(turned_diff > 0.35 and absf(turned_diff) <= Outpost.NPC_MAX_TURN_RAD + 0.02,
+			"MerchantFactorNPC turns smoothly toward approaching visitor within clamp (delta=%.3f rad)" % turned_diff)
+		var greet_after_approach := outpost.get_harbour_npc_greeting_count()
+		check(greet_after_approach >= 1,
+			"Approaching within 3.5 m triggers warm harbour NPC greeting (count=%d)" % greet_after_approach)
+
+		# Depart briefly (2.0 s) and return within 14 s cooldown: must NOT spam greeting!
+		for _i in 4:
+			outpost.step_harbour_atmosphere(0.5, visitor_far)
+		for _i in 4:
+			outpost.step_harbour_atmosphere(0.25, visitor_near)
+		check_eq(outpost.get_harbour_npc_greeting_count(), greet_after_approach,
+			"Harbour NPC respects 14.0 s cooldown without spamming greetings")
+
+		# Depart far (> 11 m) for 15.0 s: NPC relaxes cleanly back to home_yaw and cooldown expires.
+		for _i in 30:
+			outpost.step_harbour_atmosphere(0.5, visitor_far)
+		var relaxed_err := absf(angle_difference(home_yaw, merch.rotation.y))
+		check(relaxed_err < 0.04,
+			"MerchantFactorNPC relaxes cleanly back to home_yaw after departure (err=%.4f rad)" % relaxed_err)
+
+		# Re-approaching after 14.0 s cooldown elapsed triggers a fresh greeting!
+		outpost.step_harbour_atmosphere(0.25, visitor_near)
+		check(outpost.get_harbour_npc_greeting_count() > greet_after_approach,
+			"MerchantFactorNPC greets warmly again after 14.0 s cooldown expires")
+
+	if bard != null:
+		var bard_drv := bard.get_node_or_null(^"AnimationDriver") as AnimationDriver
+		var bard_parent := bard.get_parent() as Node3D
+		var bard_home := bard.rotation.y
+		var bard_vis := bard_parent.to_global(bard.position + Basis(Vector3.UP, bard_home - 0.65) * Vector3(0.0, 0.0, -3.0))
+		for _i in 5:
+			outpost.step_harbour_atmosphere(0.25, bard_vis)
+		check(absf(angle_difference(bard_home, bard.rotation.y)) > 0.25,
+			"TavernBardNPC turns gaze gently toward approaching Captain")
+		check(bard_drv != null and bard_drv.get_current_action() == &"play_instrument",
+			"TavernBardNPC keeps playing instrument smoothly while greeting Captain")
+
+	# Confirm ZERO raw PrimitiveMeshes anywhere across the upgraded Outpost!
+	var raw_prims: Array[String] = []
+	for node in outpost.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			raw_prims.append(mi.name)
+	check(raw_prims.is_empty(), "Q8A Outpost must have zero raw PrimitiveMeshes (found: %s)" % str(raw_prims))
+
+	print("    q8a harbour atmosphere: halos=%d (day=%.2f -> night=%.2f), flames=%d tris, wind_align>=%.3f, greetings=%d" % [
+		halo_count, day_energy, night_energy, flame_tris, min_wind_dot, outpost.get_harbour_npc_greeting_count()])
+
+	# 5. Clean zero-leak teardown releases ALL Q8A static caches!
+	outpost.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(flames_mi) and not is_instance_valid(embers_gp) and not is_instance_valid(smoke_gp),
+		"Q8A campfire flames, embers & chimney smoke nodes free cleanly with Outpost")
+	check(Outpost._outpost_halo_mesh == null and Outpost._outpost_halo_shader == null \
+			and Outpost._campfire_flame_mesh == null and Outpost._campfire_flame_shader == null \
+			and Outpost._campfire_ember_mesh == null and Outpost._campfire_ember_mat == null \
+			and Outpost._chimney_smoke_card_mesh == null and Outpost._chimney_smoke_shader == null \
+			and Outpost._chimney_smoke_mat == null,
+		"Outpost releases all Q8A static shared meshes, shaders & materials cleanly on teardown")
+	Weather.apply_state(saved_weather)

@@ -34,6 +34,15 @@ const MOORING_ALONG_PIER := -11.5
 
 const BUNTING_WIND_CULL_DIST := 160.0
 const TAVERN_SIGN_SWAY_CULL_DIST := 120.0
+const HARBOUR_HALO_CULL_DIST := 280.0
+const BEACON_HALO_CULL_DIST := 1800.0
+const CAMPFIRE_EMBER_CULL_DIST := 140.0
+const CHIMNEY_SMOKE_CULL_DIST := 190.0
+const TAVERN_CHIMNEY_FLUE_LOCAL := Vector3(3.30, 8.30, 1.85)
+const NPC_GREET_DIST := 8.5
+const NPC_RELAX_DIST := 11.0
+const NPC_MAX_TURN_RAD := 1.10
+const NPC_GREET_COOLDOWN := 14.0
 const MIN_BUNTING_ROPE_CLEARANCE := 4.75
 const TAVERN_KEG_HEAL := 35.0
 const SIGN_TEX_W := 256
@@ -107,6 +116,15 @@ static var _pier_bell_frame_mesh: ArrayMesh = null
 static var _pier_bell_cup_mesh: ArrayMesh = null
 static var _pier_bell_iron_mat: StandardMaterial3D = null
 static var _pier_bell_bronze_mat: StandardMaterial3D = null
+static var _outpost_halo_mesh: ArrayMesh = null
+static var _outpost_halo_shader: Shader = null
+static var _campfire_flame_mesh: ArrayMesh = null
+static var _campfire_flame_shader: Shader = null
+static var _campfire_ember_mesh: ArrayMesh = null
+static var _campfire_ember_mat: StandardMaterial3D = null
+static var _chimney_smoke_card_mesh: ArrayMesh = null
+static var _chimney_smoke_shader: Shader = null
+static var _chimney_smoke_mat: ShaderMaterial = null
 
 var dock_yaw: float = 0.0
 var dock_node: Node3D = null
@@ -134,7 +152,18 @@ var tavern_bard_interactable: Interactable = null
 var tavern_bard_playing: bool = false
 var campfire_cooking_stove: CookingStove = null
 
-var _harbour_npcs: Array[Dictionary] = []  # {visual, driver, phase, primary, accent, bound, instrument_id, instrument_node, action_timer}
+var _harbour_npcs: Array[Dictionary] = []  # {holder, home_yaw, greet_cooldown, greeted_this_visit, visitor_engaged, visual, driver, phase, primary, accent, bound, instrument_id, instrument_node, action_timer}
+var _harbour_halos: Array[Dictionary] = []  # {mi, mat, cull_dist, role_mult}
+var _last_harbour_halo_energy: float = 0.0
+var _harbour_halo_initialized: bool = false
+var _campfire_flames_mi: MeshInstance3D = null
+var _campfire_flame_mat: ShaderMaterial = null
+var _campfire_flame_tri_count: int = 0
+var _campfire_embers: GPUParticles3D = null
+var _tavern_chimney_smoke: GPUParticles3D = null
+var _last_chimney_smoke_drift: Vector3 = Vector3(0.55, 0.55, -0.55)
+var _chimney_smoke_initialized: bool = false
+var _harbour_npc_greeting_count: int = 0
 var _bard_shanty_motes: GPUParticles3D = null
 var _bunting_mat: ShaderMaterial = null
 var _bunting_clock: float = 0.0
@@ -211,10 +240,226 @@ func _process(delta: float) -> void:
 			_pier_bell_vel = 0.0
 			pier_bell_pivot.rotation.x = 0.0
 
+	step_harbour_atmosphere(delta, _resolve_visitor_world_pos())
+
+
+## Deterministically advance harbour lantern halos, campfire flames & embers,
+## wind-drifting tavern chimney woodsmoke, and harbour NPC approach greetings.
+func step_harbour_atmosphere(delta: float, visitor_world_pos: Vector3 = Vector3.INF) -> void:
+	var dt := maxf(0.0, delta)
+	var cam := get_viewport().get_camera_3d() if (is_inside_tree() and get_viewport() != null) else null
+	var has_cam := cam != null and is_instance_valid(cam)
+	var cam_pos := cam.global_position if has_cam else Vector3.ZERO
+	var dist_sq := global_position.distance_squared_to(cam_pos) if has_cam else 0.0
+
+	_update_harbour_halos(dt, cam_pos, has_cam)
+	_update_campfire_atmosphere(dt, cam_pos, has_cam)
+	_update_tavern_chimney_smoke(dt, cam_pos, has_cam)
+	_update_harbour_npcs(dt, visitor_world_pos, has_cam, dist_sq)
+
+
+## Number of atmospheric billboard lantern halos mounted across this Outpost.
+func get_harbour_halo_count() -> int:
+	var count := 0
+	for entry: Dictionary in _harbour_halos:
+		var mi := entry.get("mi") as MeshInstance3D
+		if mi != null and is_instance_valid(mi):
+			count += 1
+	return count
+
+
+## Current cached base atmospheric halo energy (0.15 midday -> 1.05..1.30 night/storm).
+func get_harbour_halo_energy() -> float:
+	return _last_harbour_halo_energy
+
+
+## True when the sculpted zero-primitive dancing CampfireFlames cluster is mounted.
+func has_campfire_flames() -> bool:
+	return _campfire_flames_mi != null and is_instance_valid(_campfire_flames_mi) \
+		and _campfire_flames_mi.mesh is ArrayMesh
+
+
+## Sculpted triangle count of the multi-tongue CampfireFlames ArrayMesh.
+func get_campfire_flame_tri_count() -> int:
+	return _campfire_flame_tri_count
+
+
+## True when the wind-drifting TavernChimneySmoke GPUParticles3D plume is mounted on OutpostTavern.
+func has_tavern_chimney_smoke() -> bool:
+	return _tavern_chimney_smoke != null and is_instance_valid(_tavern_chimney_smoke) \
+		and tavern_node != null and _tavern_chimney_smoke.get_parent() == tavern_node
+
+
+## Current smoothed world-space wind drift vector driving TavernChimneySmoke.
+func get_tavern_chimney_smoke_drift() -> Vector3:
+	return _last_chimney_smoke_drift
+
+
+## Cumulative count of expressive harbour NPC approach greetings triggered on this Outpost.
+func get_harbour_npc_greeting_count() -> int:
+	return _harbour_npc_greeting_count
+
+
+func _resolve_visitor_world_pos() -> Vector3:
+	if not is_inside_tree():
+		return Vector3.INF
+	var tree := get_tree()
+	if tree == null:
+		return Vector3.INF
+	var origin := global_position
+	var best_pos := Vector3.INF
+	var best_d2 := 160.0 * 160.0
+
+	# 1. Explicit player or friendly pawn groups.
+	for grp: StringName in [&"player", &"pawns"]:
+		for node in tree.get_nodes_in_group(grp):
+			var candidate: Node3D = null
+			if node is Pawn:
+				var p := node as Pawn
+				if not p.dead and not bool(p.get(&"is_enemy")):
+					candidate = p
+			elif node is Node3D and grp == &"player":
+				candidate = node as Node3D
+			if candidate == null or not is_instance_valid(candidate) or not candidate.is_inside_tree():
+				continue
+			var d2 := origin.distance_squared_to(candidate.global_position)
+			if d2 < best_d2:
+				best_d2 = d2
+				best_pos = candidate.global_position
+	if best_pos.is_finite():
+		return best_pos
+
+	# 2. Live-scene player Captain Pawn via player-faction CombatComponent (prefers PlayerController).
+	var fallback_friendly := Vector3.INF
+	var fallback_d2 := best_d2
+	for node in tree.get_nodes_in_group(&"combatants"):
+		if node == null or not is_instance_valid(node):
+			continue
+		if node.get(&"faction") != &"player":
+			continue
+		var par := node.get_parent() as Pawn
+		if par == null or not is_instance_valid(par) or par.dead or not par.is_inside_tree():
+			continue
+		var d2 := origin.distance_squared_to(par.global_position)
+		if par.get_node_or_null(^"PlayerController") != null:
+			if d2 < best_d2:
+				best_d2 = d2
+				best_pos = par.global_position
+		elif d2 < fallback_d2:
+			fallback_d2 = d2
+			fallback_friendly = par.global_position
+	if best_pos.is_finite():
+		return best_pos
+	if fallback_friendly.is_finite():
+		return fallback_friendly
+
+	# 3. Fallback to active Camera3D (or its owning Pawn).
+	var vp := get_viewport()
+	if vp != null:
+		var cam := vp.get_camera_3d()
+		if cam != null and is_instance_valid(cam) and cam.is_inside_tree():
+			var anc := cam.get_parent()
+			while anc != null:
+				if anc is Pawn:
+					var cp := anc as Pawn
+					if not cp.dead:
+						return cp.global_position
+					break
+				anc = anc.get_parent()
+			if origin.distance_squared_to(cam.global_position) < best_d2:
+				return cam.global_position
+	return Vector3.INF
+
+
+func _update_harbour_halos(dt: float, cam_pos: Vector3, has_cam: bool) -> void:
+	if _harbour_halos.is_empty():
+		return
+	var daylight := Weather.daylight() if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var storm := clampf(Weather.storminess, 0.0, 1.0) if Weather != null else 0.0
+	var dusk_mix := clampf(night + storm * 0.55, 0.0, 1.0)
+	var target_e := lerpf(0.15, 1.15, dusk_mix) + night * storm * 0.15
+	if not _harbour_halo_initialized or dt <= 0.0:
+		_last_harbour_halo_energy = target_e
+		_harbour_halo_initialized = true
+	else:
+		var alpha := 1.0 - exp(-dt * 6.0)
+		_last_harbour_halo_energy = lerpf(_last_harbour_halo_energy, target_e, alpha)
+
+	for entry: Dictionary in _harbour_halos:
+		var hmi := entry.get("mi") as MeshInstance3D
+		var hmat := entry.get("mat") as ShaderMaterial
+		if hmi == null or not is_instance_valid(hmi):
+			continue
+		var cull_d := float(entry.get("cull_dist", HARBOUR_HALO_CULL_DIST))
+		var role_mult := float(entry.get("role_mult", 1.0))
+		var in_range := (not has_cam) or (not hmi.is_inside_tree()) \
+			or hmi.global_position.distance_squared_to(cam_pos) <= cull_d * cull_d
+		hmi.visible = in_range
+		if hmat != null:
+			hmat.set_shader_parameter(&"halo_intensity", _last_harbour_halo_energy * role_mult if in_range else 0.0)
+
+
+func _update_campfire_atmosphere(_dt: float, cam_pos: Vector3, has_cam: bool) -> void:
+	if _campfire_flame_mat != null:
+		var night := clampf(1.0 - (Weather.daylight() if Weather != null else 1.0), 0.0, 1.0)
+		_campfire_flame_mat.set_shader_parameter(&"flame_intensity", lerpf(0.95, 1.28, night))
+	if _campfire_flames_mi != null and is_instance_valid(_campfire_flames_mi):
+		_campfire_flames_mi.visible = (not has_cam) or (not _campfire_flames_mi.is_inside_tree()) \
+			or _campfire_flames_mi.global_position.distance_squared_to(cam_pos) <= HARBOUR_HALO_CULL_DIST * HARBOUR_HALO_CULL_DIST
+	if _campfire_embers != null and is_instance_valid(_campfire_embers):
+		var in_range := (not has_cam) or (not _campfire_embers.is_inside_tree()) \
+			or _campfire_embers.global_position.distance_squared_to(cam_pos) <= CAMPFIRE_EMBER_CULL_DIST * CAMPFIRE_EMBER_CULL_DIST
+		_campfire_embers.visible = in_range
+		_campfire_embers.emitting = in_range
+		if in_range:
+			var pm := _campfire_embers.process_material as ParticleProcessMaterial
+			if pm != null:
+				var wind := Weather.wind_vector() if Weather != null else Vector3(3.0, 0.0, -2.0)
+				var wh := Vector3(wind.x, 0.0, wind.z)
+				var wspd := wh.length()
+				var wdir := wh / wspd if wspd > 0.001 else Vector3(0.707, 0.0, -0.707)
+				var em_drift := clampf(wspd * 0.08, 0.15, 1.20)
+				pm.gravity = Vector3(wdir.x * em_drift, 0.48, wdir.z * em_drift)
+
+
+func _update_tavern_chimney_smoke(dt: float, cam_pos: Vector3, has_cam: bool) -> void:
+	if _tavern_chimney_smoke == null or not is_instance_valid(_tavern_chimney_smoke):
+		return
+	var in_range := (not has_cam) or (not _tavern_chimney_smoke.is_inside_tree()) \
+		or _tavern_chimney_smoke.global_position.distance_squared_to(cam_pos) <= CHIMNEY_SMOKE_CULL_DIST * CHIMNEY_SMOKE_CULL_DIST
+	_tavern_chimney_smoke.visible = in_range
+	_tavern_chimney_smoke.emitting = in_range
+
+	var wind := Weather.wind_vector() if Weather != null else Vector3(4.0, 0.0, -3.0)
+	var wh := Vector3(wind.x, 0.0, wind.z)
+	var wspd := wh.length()
+	var wdir := wh / wspd if wspd > 0.001 else Vector3(0.707, 0.0, -0.707)
+	var drift_mag := clampf(wspd * 0.16, 0.40, 2.40)
+	var target_drift := Vector3(wdir.x * drift_mag, 0.55, wdir.z * drift_mag)
+	if not _chimney_smoke_initialized or dt <= 0.0:
+		_last_chimney_smoke_drift = target_drift
+		_chimney_smoke_initialized = true
+	else:
+		var alpha := 1.0 - exp(-dt * 8.0)
+		_last_chimney_smoke_drift = _last_chimney_smoke_drift.lerp(target_drift, alpha)
+
+	var pm := _tavern_chimney_smoke.process_material as ParticleProcessMaterial
+	if pm != null:
+		pm.gravity = _last_chimney_smoke_drift
+	if _chimney_smoke_mat != null:
+		var dl := clampf(Weather.daylight() if Weather != null else 1.0, 0.0, 1.0)
+		var tint := Color(0.46, 0.44, 0.48).lerp(Color(0.95, 0.92, 0.88), dl)
+		_chimney_smoke_mat.set_shader_parameter(&"smoke_tint", Vector3(tint.r, tint.g, tint.b))
+
+
+func _update_harbour_npcs(dt: float, visitor_world_pos: Vector3, has_cam: bool, dist_sq: float) -> void:
 	if _harbour_npcs.is_empty():
 		return
-	if cam != null and dist_sq > 95.0 * 95.0:
+	var has_visitor := visitor_world_pos.is_finite() and absf(visitor_world_pos.x) < 1e8
+	if not has_visitor and has_cam and dist_sq > 95.0 * 95.0:
 		return
+
 	for npc: Dictionary in _harbour_npcs:
 		var drv: AnimationDriver = npc.get("driver") as AnimationDriver
 		var cv: CharacterVisual = npc.get("visual") as CharacterVisual
@@ -223,12 +468,60 @@ func _process(delta: float) -> void:
 		if not bool(npc.get("bound", false)):
 			if not _try_bind_harbour_npc(npc):
 				continue
-		var phase: float = float(npc.get("phase", 0.0)) + delta
+
+		var phase: float = float(npc.get("phase", 0.0)) + dt
 		npc["phase"] = phase
 
+		var greet_cd: float = maxf(0.0, float(npc.get("greet_cooldown", 0.0)) - dt)
+		npc["greet_cooldown"] = greet_cd
+
 		var inst_id: StringName = npc.get("instrument_id", &"") as StringName
+		var holder := npc.get("holder") as Node3D
+		var home_yaw := float(npc.get("home_yaw", 0.0))
+		var engaged := bool(npc.get("visitor_engaged", false))
+		var target_yaw := home_yaw
+		var turn_rate := 3.5
+
+		if has_visitor and holder != null and is_instance_valid(holder):
+			var holder_world := holder.global_position if holder.is_inside_tree() else (transform * holder.position)
+			var dist := holder_world.distance_to(visitor_world_pos)
+			if dist <= NPC_GREET_DIST:
+				engaged = true
+				npc["visitor_engaged"] = true
+				turn_rate = 5.5
+				if inst_id == &"":
+					if not bool(npc.get("greeted_this_visit", false)) and greet_cd <= 0.0:
+						drv.play_action(&"shout")
+						npc["greeted_this_visit"] = true
+						npc["greet_cooldown"] = NPC_GREET_COOLDOWN
+						_harbour_npc_greeting_count += 1
+			elif dist > NPC_RELAX_DIST:
+				engaged = false
+				npc["visitor_engaged"] = false
+				npc["greeted_this_visit"] = false
+				turn_rate = 3.5
+			elif engaged:
+				turn_rate = 4.5
+
+			if engaged:
+				var par := holder.get_parent() as Node3D
+				var vis_local := par.to_local(visitor_world_pos) if (par != null and par.is_inside_tree()) else (transform.affine_inverse() * visitor_world_pos)
+				var to_vis := vis_local - holder.position
+				to_vis.y = 0.0
+				if to_vis.length_squared() > 0.001:
+					var desired_yaw := atan2(-to_vis.x, -to_vis.z)
+					var yaw_diff := angle_difference(home_yaw, desired_yaw)
+					target_yaw = home_yaw + clampf(yaw_diff, -NPC_MAX_TURN_RAD, NPC_MAX_TURN_RAD)
+		else:
+			npc["visitor_engaged"] = false
+			npc["greeted_this_visit"] = false
+
+		if holder != null and is_instance_valid(holder) and dt > 0.0:
+			var yaw_alpha := 1.0 - exp(-dt * turn_rate)
+			holder.rotation.y = lerp_angle(holder.rotation.y, target_yaw, yaw_alpha)
+
 		if inst_id != &"":
-			var act_timer: float = float(npc.get("action_timer", 0.0)) - delta
+			var act_timer: float = float(npc.get("action_timer", 0.0)) - dt
 			if act_timer <= 0.0:
 				drv.play_action(&"play_instrument", 1.60)
 				act_timer = 1.54
@@ -240,18 +533,10 @@ func _process(delta: float) -> void:
 					ToolMeshes.set_concertina_stretch(inst_node, 0.50 + 0.46 * sin(phase * squeeze_rate))
 				elif inst_id == &"hurdy_gurdy":
 					ToolMeshes.set_hurdy_gurdy_crank(inst_node, phase * 4.2)
-			drv.set(&"override_state", {
-				"speed": 0.0,
-				"grounded": true,
-				"look_pitch": sin(phase * 1.4) * 0.10,
-			})
+			drv.demo_look_pitch = sin(phase * 1.4) * 0.10
 		else:
-			drv.set(&"override_state", {
-				"speed": 0.0,
-				"grounded": true,
-				"look_pitch": sin(phase * 0.7) * 0.08,
-			})
-		drv.update_pose(delta)
+			drv.demo_look_pitch = sin(phase * 0.7) * 0.08
+		drv.update_pose(dt)
 
 
 func _exit_tree() -> void:
@@ -264,6 +549,39 @@ func _exit_tree() -> void:
 		beacon_beam.material_override = null
 		beacon_beam.mesh = null
 	beacon_beam = null
+	for entry: Dictionary in _harbour_halos:
+		var hmi := entry.get("mi") as MeshInstance3D
+		if hmi != null and is_instance_valid(hmi):
+			hmi.material_override = null
+			hmi.mesh = null
+		var hmat := entry.get("mat") as ShaderMaterial
+		if hmat != null:
+			hmat.shader = null
+	_harbour_halos.clear()
+	_last_harbour_halo_energy = 0.0
+	_harbour_halo_initialized = false
+	if _campfire_flames_mi != null and is_instance_valid(_campfire_flames_mi):
+		_campfire_flames_mi.material_override = null
+		_campfire_flames_mi.mesh = null
+	if _campfire_flame_mat != null:
+		_campfire_flame_mat.shader = null
+	_campfire_flames_mi = null
+	_campfire_flame_mat = null
+	_campfire_flame_tri_count = 0
+	for gp: GPUParticles3D in [_campfire_embers, _tavern_chimney_smoke]:
+		if gp != null and is_instance_valid(gp):
+			gp.emitting = false
+			gp.visible = false
+			var pm := gp.process_material as ParticleProcessMaterial
+			if pm != null:
+				pm.color_ramp = null
+				pm.scale_curve = null
+			gp.material_override = null
+			gp.draw_pass_1 = null
+			gp.process_material = null
+	_campfire_embers = null
+	_tavern_chimney_smoke = null
+	_chimney_smoke_initialized = false
 	_detach_bard_shanty_motes(false)
 	if tavern_bard_playing:
 		tavern_bard_playing = false
@@ -297,6 +615,9 @@ func _exit_tree() -> void:
 	tavern_bard_node = null
 	campfire_cooking_stove = null
 	for npc: Dictionary in _harbour_npcs:
+		npc["holder"] = null
+		npc["visual"] = null
+		npc["driver"] = null
 		npc["instrument_node"] = null
 	_harbour_npcs.clear()
 	_active_outposts = maxi(0, _active_outposts - 1)
@@ -327,6 +648,17 @@ static func clear_shared_cache() -> void:
 	_pier_bell_cup_mesh = null
 	_pier_bell_iron_mat = null
 	_pier_bell_bronze_mat = null
+	_outpost_halo_mesh = null
+	_outpost_halo_shader = null
+	_campfire_flame_mesh = null
+	_campfire_flame_shader = null
+	_campfire_ember_mesh = null
+	_campfire_ember_mat = null
+	_chimney_smoke_card_mesh = null
+	if _chimney_smoke_mat != null:
+		_chimney_smoke_mat.shader = null
+	_chimney_smoke_mat = null
+	_chimney_smoke_shader = null
 
 
 ## Build all outpost structures on the sculpted harbour terrain.
@@ -367,6 +699,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 	tavern_node = _place_outpost_prop(
 		TAVERN_SCENE, "OutpostTavern", tav_xform, prop_body, props_root)
 	_attach_lantern_from_empty(tavern_node, "Lantern_Tavern", Color(1.0, 0.70, 0.30), 3.0, 20.0, 0.12, rng.randf() * TAU)
+	_build_tavern_chimney_smoke(tavern_node)
 	_build_tavern_shelter(tav_xform)
 	# Sculpted wind-swinging carved tavern hanging signboard off the front-left porch fascia!
 	var sign_xform := tav_xform * Transform3D(Basis.IDENTITY, Vector3(-3.10, 3.12, -5.62))
@@ -418,6 +751,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		CAMPFIRE_SCENE, "OutpostCampfire", Transform3D(Basis(Vector3.UP, rng.randf() * TAU), fire_pos),
 		prop_body, props_root)
 	_attach_lantern_from_empty(fire_node, "Lantern_Fire", Color(1.0, 0.56, 0.18), 3.2, 16.0, 0.22, rng.randf() * TAU)
+	_build_campfire_flames_and_embers(fire_node)
 
 	var campfire_stove := CookingStove.new()
 	campfire_stove.name = "CampfireCookingStove"
@@ -502,6 +836,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		toggle_tavern_bard_shanty(p)
 	)
 	tavern_bard_node.add_child(tavern_bard_interactable)
+	step_harbour_atmosphere(0.0)
 
 
 ## Toggle the campfire TavernBardNPC's 3D-spatialized hearthside shanty & golden rising musical motes.
@@ -675,9 +1010,15 @@ func _spawn_harbour_npc(npc_name: String, parent_node: Node3D, local_pos: Vector
 
 	var drv := AnimationDriver.new()
 	drv.name = "AnimationDriver"
-	drv.set(&"auto_update", false)
+	drv.manual_mode = true
+	drv.set_process(false)
 	holder.add_child(drv)
 	var npc_entry: Dictionary = {
+		"holder": holder,
+		"home_yaw": yaw_rad,
+		"greet_cooldown": 0.0,
+		"greeted_this_visit": false,
+		"visitor_engaged": false,
 		"visual": cv,
 		"driver": drv,
 		"phase": phase,
@@ -1250,6 +1591,33 @@ static func _ensure_shared_outpost_assets() -> void:
 		_pier_bell_frame_mesh = _build_pier_bell_frame_mesh()
 	if _pier_bell_cup_mesh == null:
 		_pier_bell_cup_mesh = _build_pier_bell_cup_mesh()
+
+	if _outpost_halo_mesh == null:
+		_outpost_halo_mesh = _build_outpost_halo_quad()
+	if _outpost_halo_shader == null:
+		_outpost_halo_shader = _build_outpost_halo_shader()
+	if _campfire_flame_mesh == null:
+		_campfire_flame_mesh = _build_campfire_flame_mesh()
+	if _campfire_flame_shader == null:
+		_campfire_flame_shader = _build_campfire_flame_shader()
+	if _campfire_ember_mesh == null:
+		_campfire_ember_mesh = _build_campfire_ember_mesh()
+	if _campfire_ember_mat == null:
+		_campfire_ember_mat = StandardMaterial3D.new()
+		_campfire_ember_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_campfire_ember_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_campfire_ember_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_campfire_ember_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_campfire_ember_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_campfire_ember_mat.vertex_color_use_as_albedo = true
+	if _chimney_smoke_card_mesh == null:
+		_chimney_smoke_card_mesh = _build_chimney_smoke_card_mesh()
+	if _chimney_smoke_shader == null:
+		_chimney_smoke_shader = _build_chimney_smoke_shader()
+	if _chimney_smoke_mat == null:
+		_chimney_smoke_mat = ShaderMaterial.new()
+		_chimney_smoke_mat.shader = _chimney_smoke_shader
+		_chimney_smoke_mat.set_shader_parameter(&"smoke_tint", Vector3(0.95, 0.92, 0.88))
 
 
 static func _build_tavern_grog_keg_mesh() -> ArrayMesh:
@@ -2229,6 +2597,7 @@ func _attach_lantern_from_empty(prop_root: Node3D, empty_name: String, color: Co
 		energy: float, light_range: float, flicker_amp: float, phase: float) -> OmniLight3D:
 	if prop_root == null:
 		return null
+	_ensure_shared_outpost_assets()
 	var marker := prop_root.find_child(empty_name, true, false) as Node3D
 	var light := OmniLight3D.new()
 	light.name = empty_name + "_Light"
@@ -2243,7 +2612,450 @@ func _attach_lantern_from_empty(prop_root: Node3D, empty_name: String, color: Co
 		light.position = Vector3(0.0, 2.5, 0.0)
 	prop_root.add_child(light)
 	register_flicker_light(light, energy, flicker_amp, phase)
+
+	# Mount camera-facing zero-texture additive atmospheric billboard halo alongside OmniLight3D.
+	var halo_scale := 1.35
+	var cull_dist := HARBOUR_HALO_CULL_DIST
+	var role_mult := 1.0
+	var shimmer_amp := 0.08
+	if empty_name == "Lantern_Beacon":
+		halo_scale = 3.8
+		cull_dist = BEACON_HALO_CULL_DIST
+		role_mult = 1.12
+		shimmer_amp = 0.05
+	elif empty_name == "Lantern_Fire":
+		halo_scale = 1.65
+		cull_dist = HARBOUR_HALO_CULL_DIST
+		role_mult = 1.15
+		shimmer_amp = 0.14
+
+	var hmat := ShaderMaterial.new()
+	hmat.shader = _outpost_halo_shader
+	hmat.set_shader_parameter(&"halo_intensity", 0.25)
+	hmat.set_shader_parameter(&"halo_scale", halo_scale)
+	hmat.set_shader_parameter(&"halo_color", color)
+	hmat.set_shader_parameter(&"halo_phase", phase)
+	hmat.set_shader_parameter(&"shimmer_amp", shimmer_amp)
+
+	var hmi := MeshInstance3D.new()
+	hmi.name = empty_name + "_Halo"
+	hmi.mesh = _outpost_halo_mesh
+	hmi.material_override = hmat
+	hmi.transform = light.transform
+	hmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	hmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	hmi.extra_cull_margin = halo_scale * 0.75 + 0.5
+	hmi.visibility_range_end = cull_dist
+	prop_root.add_child(hmi)
+	_harbour_halos.append({
+		"mi": hmi,
+		"mat": hmat,
+		"cull_dist": cull_dist,
+		"role_mult": role_mult,
+	})
 	return light
+
+
+# ------------------------------------------------------------------ Living Harbour Atmosphere Builders (Q8A)
+
+func _build_campfire_flames_and_embers(fire_root: Node3D) -> void:
+	if fire_root == null:
+		return
+	_ensure_shared_outpost_assets()
+	var marker := fire_root.find_child("Lantern_Fire", true, false) as Node3D
+	var marker_pos := _relative_transform(marker, fire_root).origin if marker != null else Vector3(0.0, 0.55, 0.0)
+
+	# 1. Sculpted 5-tongue dancing campfire flame cluster (zero primitives, zero extra VRAM textures).
+	_campfire_flame_mat = ShaderMaterial.new()
+	_campfire_flame_mat.shader = _campfire_flame_shader
+	_campfire_flame_mat.set_shader_parameter(&"flame_intensity", 1.05)
+
+	_campfire_flames_mi = MeshInstance3D.new()
+	_campfire_flames_mi.name = "CampfireFlames"
+	_campfire_flames_mi.mesh = _campfire_flame_mesh
+	_campfire_flames_mi.material_override = _campfire_flame_mat
+	_campfire_flames_mi.position = Vector3(marker_pos.x, 0.16, marker_pos.z)
+	_campfire_flames_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_campfire_flames_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_campfire_flames_mi.extra_cull_margin = 0.65
+	_campfire_flames_mi.visibility_range_end = HARBOUR_HALO_CULL_DIST
+	fire_root.add_child(_campfire_flames_mi)
+	_campfire_flame_tri_count = _count_array_mesh_tris(_campfire_flame_mesh)
+
+	# 2. Distance-gated (<= 140 m) swirling warm campfire ember sparks (zero-primitive diamond ArrayMesh).
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = 0.26
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 28.0
+	proc.initial_velocity_min = 0.55
+	proc.initial_velocity_max = 1.35
+	proc.angular_velocity_min = -6.0
+	proc.angular_velocity_max = 6.0
+	proc.tangential_accel_min = -0.35
+	proc.tangential_accel_max = 0.35
+	proc.gravity = Vector3(0.25, 0.48, -0.25)
+	proc.damping_min = 0.18
+	proc.damping_max = 0.45
+	proc.scale_min = 0.50
+	proc.scale_max = 1.15
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.40))
+	sc_curve.add_point(Vector2(0.25, 1.0))
+	sc_curve.add_point(Vector2(0.78, 0.65))
+	sc_curve.add_point(Vector2(1.0, 0.05))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc_curve
+	proc.scale_curve = sc_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.18, 0.65, 1.0])
+	grad.colors = PackedColorArray([
+		Color(1.0, 0.96, 0.68, 0.0),
+		Color(1.0, 0.78, 0.24, 0.96),
+		Color(1.0, 0.40, 0.08, 0.72),
+		Color(0.65, 0.12, 0.02, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 24
+	ramp.gradient = grad
+	proc.color_ramp = ramp
+
+	var embers := GPUParticles3D.new()
+	embers.name = "CampfireEmbers"
+	embers.position = Vector3(marker_pos.x, 0.42, marker_pos.z)
+	embers.amount = 18
+	embers.lifetime = 2.15
+	embers.preprocess = 0.5
+	embers.randomness = 0.45
+	embers.local_coords = false
+	embers.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	embers.visibility_aabb = AABB(Vector3(-4.0, -0.5, -4.0), Vector3(8.0, 8.0, 8.0))
+	embers.process_material = proc
+	embers.draw_pass_1 = _campfire_ember_mesh
+	embers.material_override = _campfire_ember_mat
+	embers.emitting = true
+	fire_root.add_child(embers)
+	_campfire_embers = embers
+
+
+func _build_tavern_chimney_smoke(tav_root: Node3D) -> void:
+	if tav_root == null:
+		return
+	_ensure_shared_outpost_assets()
+
+	var proc := ParticleProcessMaterial.new()
+	proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	proc.emission_sphere_radius = 0.24
+	proc.direction = Vector3(0.0, 1.0, 0.0)
+	proc.spread = 14.0
+	proc.initial_velocity_min = 0.75
+	proc.initial_velocity_max = 1.25
+	proc.gravity = Vector3(0.55, 0.55, -0.55)
+	proc.damping_min = 0.30
+	proc.damping_max = 0.55
+	proc.scale_min = 0.85
+	proc.scale_max = 1.35
+	var sc_curve := Curve.new()
+	sc_curve.add_point(Vector2(0.0, 0.38))
+	sc_curve.add_point(Vector2(0.35, 1.05))
+	sc_curve.add_point(Vector2(0.75, 1.75))
+	sc_curve.add_point(Vector2(1.0, 2.35))
+	var sc_tex := CurveTexture.new()
+	sc_tex.curve = sc_curve
+	proc.scale_curve = sc_tex
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.58, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0.86, 0.82, 0.76, 0.0),
+		Color(0.84, 0.80, 0.75, 0.42),
+		Color(0.76, 0.74, 0.72, 0.24),
+		Color(0.68, 0.68, 0.70, 0.0),
+	])
+	var ramp := GradientTexture1D.new()
+	ramp.width = 24
+	ramp.gradient = grad
+	proc.color_ramp = ramp
+
+	var smoke := GPUParticles3D.new()
+	smoke.name = "TavernChimneySmoke"
+	smoke.position = TAVERN_CHIMNEY_FLUE_LOCAL
+	smoke.amount = 18
+	smoke.lifetime = 5.4
+	smoke.preprocess = 2.0
+	smoke.randomness = 0.28
+	smoke.local_coords = false
+	smoke.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	smoke.visibility_aabb = AABB(Vector3(-12.0, -1.0, -12.0), Vector3(24.0, 18.0, 24.0))
+	smoke.process_material = proc
+	smoke.draw_pass_1 = _chimney_smoke_card_mesh
+	smoke.material_override = _chimney_smoke_mat
+	smoke.emitting = true
+	tav_root.add_child(smoke)
+	_tavern_chimney_smoke = smoke
+
+
+static func _build_outpost_halo_quad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_outpost_halo_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float halo_intensity = 0.25;
+uniform float halo_scale = 1.35;
+uniform vec3 halo_color : source_color = vec3(1.0, 0.72, 0.32);
+uniform float halo_phase = 0.0;
+uniform float shimmer_amp = 0.08;
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * halo_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge_mask = smoothstep(1.0, 0.72, r);
+	float wave = sin(TIME * 6.4 + halo_phase) * cos(TIME * 4.1 - halo_phase * 0.7);
+	float shimmer = 1.0 - shimmer_amp + shimmer_amp * (0.5 + 0.5 * wave);
+	float core = exp(-r * r * 14.5) * 0.78;
+	float bloom = exp(-r * r * 3.6) * 0.44;
+	float glow = (core + bloom) * edge_mask * shimmer;
+	vec3 col = mix(halo_color, vec3(1.0, 0.96, 0.84), clamp(core * 1.15, 0.0, 1.0));
+	ALBEDO = col * (glow * halo_intensity);
+}
+"""
+	return sh
+
+
+static func _build_campfire_flame_mesh() -> ArrayMesh:
+	# 5 tapered crossed flame tongues (2 intersecting subdivided blades per tongue = 70 tris total, 0 primitives).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# [offset_x, offset_z, height, base_half_w, yaw_rad, lean_x, lean_z, core_bias]
+	var tongue_specs: Array[Array] = [
+		[ 0.00,  0.00, 0.60, 0.165, 0.18,  0.00,  0.00, 1.00],
+		[ 0.15,  0.09, 0.49, 0.132, 0.72,  0.04,  0.03, 0.80],
+		[-0.16,  0.08, 0.46, 0.126, 1.88, -0.04,  0.02, 0.76],
+		[-0.11, -0.15, 0.51, 0.135, 3.35, -0.03, -0.04, 0.82],
+		[ 0.14, -0.12, 0.44, 0.122, 4.92,  0.03, -0.03, 0.74],
+	]
+	const V_ROWS: Array[float] = [0.0, 0.25, 0.50, 0.75, 1.0]
+	const W_PROFILE: Array[float] = [0.78, 1.00, 0.74, 0.38, 0.00]
+
+	for ti in tongue_specs.size():
+		var spec: Array = tongue_specs[ti]
+		var ox := float(spec[0])
+		var oz := float(spec[1])
+		var h_max := float(spec[2])
+		var hw := float(spec[3])
+		var base_yaw := float(spec[4])
+		var lean_x := float(spec[5])
+		var lean_z := float(spec[6])
+		var core_bias := float(spec[7])
+
+		for bi in 2:
+			var ang := base_yaw + float(bi) * (PI * 0.5)
+			var tangent := Vector3(cos(ang), 0.0, sin(ang))
+			var binorm := Vector3(-sin(ang), 0.0, cos(ang))
+			var phase_u := fposmod(float(ti) * 0.20 + float(bi) * 0.07, 1.0)
+			var vcol := Color(phase_u, core_bias, 1.0, 1.0)
+			var curve_sign := 1.0 if bi == 0 else -1.0
+
+			var left_pts: Array[Vector3] = []
+			var right_pts: Array[Vector3] = []
+			for ri in V_ROWS.size():
+				var v := V_ROWS[ri]
+				var w_cur := hw * W_PROFILE[ri]
+				var bend_off := sin(v * PI) * 0.026 * curve_sign
+				var spine := Vector3(
+					ox + lean_x * v * v,
+					v * h_max,
+					oz + lean_z * v * v
+				) + binorm * bend_off
+				left_pts.append(spine - tangent * w_cur)
+				right_pts.append(spine + tangent * w_cur)
+
+			# Lower 3 subdivided quad bands (6 triangles per blade).
+			for ri in 3:
+				var v0 := V_ROWS[ri]
+				var v1 := V_ROWS[ri + 1]
+				var p00 := left_pts[ri]
+				var p10 := right_pts[ri]
+				var p01 := left_pts[ri + 1]
+				var p11 := right_pts[ri + 1]
+				var uv00 := Vector2(0.0, v0)
+				var uv10 := Vector2(1.0, v0)
+				var uv01 := Vector2(0.0, v1)
+				var uv11 := Vector2(1.0, v1)
+				_add_flat_tri_uv(st, p00, p10, p11, vcol, vcol, vcol, uv00, uv10, uv11)
+				_add_flat_tri_uv(st, p00, p11, p01, vcol, vcol, vcol, uv00, uv11, uv01)
+
+			# Pointed licking flame tip triangle (1 triangle per blade).
+			var tip_pt := left_pts[4]
+			_add_flat_tri_uv(st, left_pts[3], right_pts[3], tip_pt,
+				vcol, vcol, vcol, Vector2(0.0, 0.75), Vector2(1.0, 0.75), Vector2(0.5, 1.0))
+
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_campfire_flame_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float flame_intensity = 1.05;
+
+varying float v_phase;
+varying float v_core_bias;
+
+void vertex() {
+	v_phase = COLOR.r * 6.2831853;
+	v_core_bias = COLOR.g;
+	float h = clamp(UV.y, 0.0, 1.0);
+	float bend = h * h;
+	float t = TIME * 6.5 + v_phase;
+	float curl_x = sin(t + h * 5.2) * 0.065 + sin(t * 1.9 - h * 7.8 + v_phase) * 0.032;
+	float curl_z = cos(t * 0.87 + h * 4.8 + v_phase * 1.3) * 0.065 + cos(t * 1.7 + h * 6.5) * 0.028;
+	float stretch = 1.0 + 0.14 * sin(TIME * 9.2 + v_phase * 1.7) * h;
+	VERTEX.x += curl_x * bend;
+	VERTEX.z += curl_z * bend;
+	VERTEX.y *= stretch;
+}
+
+void fragment() {
+	float h = clamp(UV.y, 0.0, 1.0);
+	float edge_x = abs(UV.x * 2.0 - 1.0);
+	float t = TIME * 7.4 + v_phase;
+	float ripple = sin(h * 10.5 - t) * 0.12 + cos(h * 16.0 - t * 1.45 + edge_x * 4.0) * 0.07;
+	float half_w = mix(0.95, 0.14, pow(max(h, 0.0001), 0.85)) + ripple * h;
+	float shape = smoothstep(max(half_w, 0.08), max(half_w * 0.25, 0.02), edge_x);
+	float base_fade = smoothstep(0.0, 0.14, h);
+	float tip_fade = smoothstep(1.0, 0.52, h + ripple * 0.35);
+	float flicker = 0.88 + 0.12 * sin(TIME * 11.3 + v_phase * 2.1);
+	float mask = shape * base_fade * tip_fade * flicker;
+
+	vec3 col_core = vec3(1.0, 0.96, 0.68);
+	vec3 col_mid = vec3(1.0, 0.56, 0.12);
+	vec3 col_tip = vec3(0.88, 0.14, 0.03);
+	float core_w = clamp((1.0 - h * 1.35) * (1.0 - edge_x * 0.7) * v_core_bias, 0.0, 1.0);
+	vec3 col = mix(col_mid, col_tip, smoothstep(0.32, 0.92, h));
+	col = mix(col, col_core, smoothstep(0.25, 0.85, core_w));
+	ALBEDO = col * (mask * flame_intensity * 1.35);
+}
+"""
+	return sh
+
+
+static func _build_campfire_ember_mesh() -> ArrayMesh:
+	# Faceted 8-triangle glowing campfire ember spark diamond (zero raw primitives, zero textures).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var col_hot := Color(1.0, 0.94, 0.62)
+	var col_mid := Color(1.0, 0.52, 0.12)
+	var top := Vector3(0.0, 0.044, 0.0)
+	var bot := Vector3(0.0, -0.044, 0.0)
+	var ring: Array[Vector3] = [
+		Vector3(0.022, 0.0, 0.0),
+		Vector3(0.0, 0.0, 0.022),
+		Vector3(-0.022, 0.0, 0.0),
+		Vector3(0.0, 0.0, -0.022),
+	]
+	for k in 4:
+		var nk := (k + 1) % 4
+		_add_outward_tri(st, top, ring[k], ring[nk], Vector3.ZERO, col_hot, col_mid, col_mid)
+		_add_outward_tri(st, bot, ring[nk], ring[k], Vector3.ZERO, col_mid, col_mid, col_mid)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_chimney_smoke_card_mesh() -> ArrayMesh:
+	# Zero-primitive 2-triangle billboard woodsmoke puff card (1.25 m span).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := 0.625
+	var p0 := Vector3(-h, -h, 0.0)
+	var p1 := Vector3(h, -h, 0.0)
+	var p2 := Vector3(h, h, 0.0)
+	var p3 := Vector3(-h, h, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_chimney_smoke_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform vec3 smoke_tint = vec3(0.95, 0.92, 0.88);
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge = smoothstep(1.0, 0.18, r);
+	float lobe = 0.86 + 0.14 * sin(q.x * 4.2 + TIME * 0.9) * cos(q.y * 4.2 - TIME * 0.7);
+	float alpha = clamp(edge * edge * lobe * COLOR.a, 0.0, 1.0);
+	ALBEDO = COLOR.rgb * smoke_tint;
+	ALPHA = alpha;
+}
+"""
+	return sh
+
+
+static func _count_array_mesh_tris(mesh: ArrayMesh) -> int:
+	if mesh == null:
+		return 0
+	var total := 0
+	for si in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(si)
+		var raw_idx: Variant = arr[Mesh.ARRAY_INDEX]
+		if raw_idx is PackedInt32Array and not (raw_idx as PackedInt32Array).is_empty():
+			total += floori(float((raw_idx as PackedInt32Array).size()) / 3.0)
+		else:
+			var raw_verts: Variant = arr[Mesh.ARRAY_VERTEX]
+			if raw_verts is PackedVector3Array:
+				total += floori(float((raw_verts as PackedVector3Array).size()) / 3.0)
+	return total
 
 
 static func _extract_prop_colliders(prop_root: Node3D, root_to_island: Transform3D,

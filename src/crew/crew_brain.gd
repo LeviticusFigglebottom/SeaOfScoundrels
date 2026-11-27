@@ -128,11 +128,17 @@ const MERMAID_RETURN_COOLDOWN := 6.0
 const MEGALODON_SIGHTED_COOLDOWN := 12.0
 const TRUMPET_HAIL_MAX_RANGE := 115.0
 const TRUMPET_HAIL_ACK_COOLDOWN := 4.0
+const BELL_RALLY_COOLDOWN_SEC := 4.5
+const BELL_RALLY_LOOK_DURATION := 1.6
+const BELL_RALLY_HOSTILE_RANGE := 320.0
 const SIGHTING_ACK_TEMPLATES := {
 	&"helmsman": "Aye, Captain! {target} to the {bearing} - steady as she goes!",
 	&"lookout": "Spotted {target} off the {bearing} - keeping a sharp eye on it!",
 	&"carpenter": "{target} to the {bearing}? Guns and planks at the ready, Captain!",
 }
+
+# Per-ship bell rally coordination (ship instance_id -> last rally Time.get_ticks_msec()).
+static var _last_bell_rally_msec_by_ship: Dictionary = {}
 
 var _rng := RandomNumberGenerator.new()
 var _route: Array[Vector3] = []  # ship-local waypoints when moving across decks
@@ -168,6 +174,7 @@ var _last_wind_heading: float = NAN
 var _was_breached: bool = false
 var _was_on_fire: bool = false
 var _bound_ship: Ship = null
+var _bound_ship_id: int = 0
 var _last_delta: float = 1.0 / 60.0
 var _evading_space: bool = false
 var _space_settle_timer: float = 0.0
@@ -179,6 +186,12 @@ var _stuck_has_ref: bool = false
 var _stuck_bypass_timer: float = 0.0
 var _stuck_bypass_local: Vector3 = Vector3.ZERO
 var _stuck_side: float = 1.0
+var _bell_rally_timer: float = 0.0
+var _bell_rally_look_pos: Vector3 = Vector3.ZERO
+var _bell_rally_look_local: Vector3 = Vector3.ZERO
+var _bell_rally_has_local: bool = false
+var _last_bell_rally_report: String = ""
+var _bell_rally_count: int = 0
 
 
 func _init() -> void:
@@ -249,6 +262,24 @@ func get_melee_target() -> Node3D:
 	return null
 
 
+## Return the most recent live ship-status report spoken by this crewmate on a ship's bell rally.
+func get_last_bell_rally_report() -> String:
+	return _last_bell_rally_report
+
+
+## Return how many ship's bell rally status reports this crewmate has spoken.
+func get_bell_rally_count() -> int:
+	return _bell_rally_count
+
+
+## Reset the per-ship bell rally cooldown timestamp (all ships if `p_ship == null`).
+static func clear_bell_rally_cooldown(p_ship: Ship = null) -> void:
+	if p_ship == null:
+		_last_bell_rally_msec_by_ship.clear()
+	else:
+		_last_bell_rally_msec_by_ship.erase(p_ship.get_instance_id())
+
+
 ## Bind this crewmate to `p_ship` and safely wire optional ship event signals.
 func bind_ship(p_ship: Ship) -> void:
 	_unbind_ship_signals()
@@ -263,6 +294,7 @@ func _bind_ship_signals() -> void:
 	if ship == null or not is_instance_valid(ship):
 		return
 	_bound_ship = ship
+	_bound_ship_id = _bound_ship.get_instance_id()
 	if _bound_ship.has_signal(&"harpoon_loot_snagged"):
 		var cb_harpoon := Callable(self, &"_on_ship_harpoon_loot_snagged")
 		if not _bound_ship.is_connected(&"harpoon_loot_snagged", cb_harpoon):
@@ -275,10 +307,16 @@ func _bind_ship_signals() -> void:
 		var cb_launch := Callable(self, &"_on_ship_pawn_cannon_launched")
 		if not _bound_ship.is_connected(&"pawn_cannon_launched", cb_launch):
 			_bound_ship.connect(&"pawn_cannon_launched", cb_launch)
+	if _bound_ship.has_signal(&"bell_rung"):
+		var cb_bell := Callable(self, &"_on_ship_bell_rung")
+		if not _bound_ship.is_connected(&"bell_rung", cb_bell):
+			_bound_ship.connect(&"bell_rung", cb_bell)
 
 
 func _unbind_ship_signals() -> void:
+	var old_ship_id := _bound_ship_id
 	if _bound_ship != null and is_instance_valid(_bound_ship):
+		old_ship_id = _bound_ship.get_instance_id()
 		if _bound_ship.has_signal(&"harpoon_loot_snagged"):
 			var cb_harpoon := Callable(self, &"_on_ship_harpoon_loot_snagged")
 			if _bound_ship.is_connected(&"harpoon_loot_snagged", cb_harpoon):
@@ -291,7 +329,24 @@ func _unbind_ship_signals() -> void:
 			var cb_launch := Callable(self, &"_on_ship_pawn_cannon_launched")
 			if _bound_ship.is_connected(&"pawn_cannon_launched", cb_launch):
 				_bound_ship.disconnect(&"pawn_cannon_launched", cb_launch)
+		if _bound_ship.has_signal(&"bell_rung"):
+			var cb_bell := Callable(self, &"_on_ship_bell_rung")
+			if _bound_ship.is_connected(&"bell_rung", cb_bell):
+				_bound_ship.disconnect(&"bell_rung", cb_bell)
 	_bound_ship = null
+	_bound_ship_id = 0
+	if old_ship_id != 0:
+		_cleanup_bell_rally_ship_entry(old_ship_id)
+
+
+func _cleanup_bell_rally_ship_entry(ship_id: int) -> void:
+	if not _last_bell_rally_msec_by_ship.has(ship_id):
+		return
+	if is_inside_tree():
+		for cb in _sibling_crew_brains():
+			if cb._bound_ship_id == ship_id and cb._bound_ship != null and is_instance_valid(cb._bound_ship):
+				return
+	_last_bell_rally_msec_by_ship.erase(ship_id)
 
 
 ## Assign ship, captain, and persona in one call.
@@ -589,6 +644,9 @@ func _set_task(t: StringName) -> void:
 		return
 	if current_task == &"follow" and t != &"follow":
 		_clear_melee_combat()
+	if t != &"idle" and t != &"watch":
+		_bell_rally_timer = 0.0
+		_bell_rally_has_local = false
 	# Release station cleanly if switching to a task that does not use it.
 	if pawn.station != null:
 		var st_kind := StringName(pawn.station.get(&"kind"))
@@ -1514,9 +1572,15 @@ func _tick_idle(delta: float) -> void:
 	# Stand calmly at an unobstructed watch post and yield personal space with
 	# proper hysteresis + settle timer so crewmates never ping-pong back and forth.
 	_space_settle_timer = maxf(0.0, _space_settle_timer - delta)
+	if _bell_rally_timer > 0.0:
+		_bell_rally_timer = maxf(0.0, _bell_rally_timer - delta)
+		if _bell_rally_timer <= 0.0:
+			_bell_rally_has_local = false
 	if ship == null or pawn.platform != ship:
 		_evading_space = false
 		_returning_home = false
+		_bell_rally_timer = 0.0
+		_bell_rally_has_local = false
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
 		return
@@ -1598,6 +1662,7 @@ func _tick_idle(delta: float) -> void:
 		_returning_home = false
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
+		_tick_bell_rally_look(delta)
 		return
 
 	var home_flat := Vector2(cur_local.x - home.x, cur_local.z - home.z).length()
@@ -1607,16 +1672,34 @@ func _tick_idle(delta: float) -> void:
 			_route.clear()
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
+			_tick_bell_rally_look(delta)
 		elif _navigate_ship_local(home, IDLE_HOME_ARRIVE_FACTOR * hs, true, 0.80):
 			_returning_home = false
 			pawn.wish_dir = Vector3.ZERO
 			pawn.wish_sprint = false
+			_tick_bell_rally_look(delta)
 	elif home_flat > IDLE_HOME_ENTER_FACTOR * hs:
 		_returning_home = true
 		_navigate_ship_local(home, IDLE_HOME_ARRIVE_FACTOR * hs, true, 0.80)
 	else:
 		pawn.wish_dir = Vector3.ZERO
 		pawn.wish_sprint = false
+		_tick_bell_rally_look(delta)
+
+
+func _tick_bell_rally_look(delta: float) -> void:
+	if _bell_rally_timer <= 0.0 or pawn == null or pawn.station != null:
+		return
+	if ship == null or not is_instance_valid(ship) or pawn.platform != ship:
+		_bell_rally_timer = 0.0
+		_bell_rally_has_local = false
+		return
+	var look_w := ship.global_transform * _bell_rally_look_local if _bell_rally_has_local else _bell_rally_look_pos
+	_bell_rally_look_pos = look_w
+	var look_d := look_w - pawn.global_position
+	look_d.y = 0.0
+	if look_d.length_squared() > 0.01:
+		_turn_toward_dir(look_d, delta, TURN_RATE_IDLE, false)
 
 
 func _min_peer_dist_to(local_pos: Vector3, band: int, peers: Array[Pawn], hs: float) -> float:
@@ -2695,6 +2778,168 @@ func _on_ship_pawn_cannon_launched(_side: Variant = &"", launched_pawn: Variant 
 		for other in _sibling_crew_brains():
 			if other.ship == ship:
 				other._callout_cooldowns["cannon_self_launch"] = CANNON_SELF_LAUNCH_COOLDOWN
+
+
+func _on_ship_bell_rung(ringer: Node = null) -> void:
+	if not Net.is_host():
+		return
+	if pawn == null or not is_instance_valid(pawn) or pawn.dead or not is_inside_tree():
+		return
+	if ship == null or not is_instance_valid(ship) or pawn.platform != ship:
+		return
+
+	# Resolve bell / ringer position for smooth idle rally facing.
+	var ringer_pos := ship.global_position
+	if ringer is Node3D and is_instance_valid(ringer) and (ringer as Node3D).is_inside_tree():
+		ringer_pos = (ringer as Node3D).global_position
+	elif ship.ship_bell_node != null and is_instance_valid(ship.ship_bell_node) and ship.ship_bell_node.is_inside_tree():
+		ringer_pos = ship.ship_bell_node.global_position
+	elif captain != null and is_instance_valid(captain) and captain.is_inside_tree():
+		ringer_pos = captain.global_position
+
+	# All awake idle onboard crewmates briefly turn toward the bell/Captain and salute.
+	# Never interrupt emergency repair, bail, fire, combat, or active station tasks.
+	var is_idle_on_deck := (current_task == &"idle" or current_task == &"watch") and pawn.station == null
+	if is_idle_on_deck:
+		_bell_rally_timer = BELL_RALLY_LOOK_DURATION
+		_bell_rally_look_pos = ringer_pos
+		_bell_rally_look_local = ship.global_transform.affine_inverse() * ringer_pos
+		_bell_rally_has_local = true
+		_play_anim_if_idle(&"shout", 0.92)
+
+	# Coordinate per-ship cooldown so exactly ONE onboard crewmate speaks the live status report.
+	var sid := ship.get_instance_id()
+	var now_msec := Time.get_ticks_msec()
+	var cooldown_msec := int(BELL_RALLY_COOLDOWN_SEC * 1000.0)
+	if _last_bell_rally_msec_by_ship.has(sid):
+		var prev_msec: int = int(_last_bell_rally_msec_by_ship[sid])
+		if (now_msec - prev_msec) < cooldown_msec:
+			return
+	_last_bell_rally_msec_by_ship[sid] = now_msec
+
+	var line := _compose_bell_status_report()
+	if line == "":
+		return
+	_last_bell_rally_report = line
+	_bell_rally_count += 1
+	if Game != null:
+		Game.post_notice(line)
+	if Audio != null:
+		Audio.play_sfx(&"crew_shout", pawn.global_position, -5.5, 0.08)
+	callout_spoken.emit(crew_name(), line, &"bell_rally")
+
+
+func _compose_bell_status_report() -> String:
+	if ship == null or not is_instance_valid(ship):
+		return ""
+	var nm := crew_name()
+	var holes := ship.open_hole_count()
+	var bilge_pct := int(roundf(clampf(ship.water_level, 0.0, 1.0) * 100.0))
+
+	# Priority 1: Hull Breach / Deck Fire / High Bilge Emergency.
+	if holes > 0:
+		var plural := "" if holes == 1 else "es"
+		match persona_id:
+			&"lookout":
+				return "%s: All hands below! %d hull breach%s open and bilge at %d%% -- plugging her now, Cap'n!" % [nm, holes, plural, bilge_pct]
+			&"carpenter":
+				return "%s: All hands! %d hull breach%s split my oak and bilge at %d%% -- hammering planks now, Cap'n!" % [nm, holes, plural, bilge_pct]
+			_:
+				return "%s: All hands! %d hull breach%s open and bilge at %d%% -- patching now, Cap'n!" % [nm, holes, plural, bilge_pct]
+
+	if ship.has_deck_fire():
+		match persona_id:
+			&"lookout":
+				return "%s: Fire on deck, Cap'n! Grab buckets before the rigging catches!" % nm
+			&"carpenter":
+				return "%s: Fire on my clean oak deck, Cap'n! Grab buckets before the planks catch!" % nm
+			_:
+				return "%s: Fire on deck, Cap'n! Grab buckets before the planks catch!" % nm
+
+	if ship.water_level >= 0.25:
+		match persona_id:
+			&"lookout":
+				return "%s: Bilge is at %d%% in the hold, Cap'n -- manning the buckets!" % [nm, bilge_pct]
+			&"carpenter":
+				return "%s: Bilge is up to %d%% over my floorboards, Cap'n -- bailing her dry!" % [nm, bilge_pct]
+			_:
+				return "%s: Bilge is at %d%%, Cap'n -- bailing her dry!" % [nm, bilge_pct]
+
+	# Priority 2: Nearby Hostile Ship Threat within 320 m.
+	var hostile := _find_hostile_vessel_for_report(BELL_RALLY_HOSTILE_RANGE)
+	if hostile != null:
+		var dist_m := int(roundf(ship.global_position.distance_to(hostile.global_position)))
+		var bearing := CrewDialogue.ship_relative_bearing(ship, hostile.global_position)
+		match persona_id:
+			&"lookout":
+				return "%s: Battle stations, Cap'n! Hostile vessel %d m off the %s -- guns ready!" % [nm, dist_m, bearing]
+			&"carpenter":
+				return "%s: Battle stations, Cap'n! Hostile vessel %d m off the %s -- extra planks stacked!" % [nm, dist_m, bearing]
+			_:
+				return "%s: Battle stations, Cap'n! Hostile vessel %d m off the %s!" % [nm, dist_m, bearing]
+
+	# Priority 3: Anchor Dropped.
+	if ship.anchor_down:
+		match persona_id:
+			&"lookout":
+				return "%s: Anchor's fast on the seabed, Cap'n! Horizon's clear and crew stands ready to weigh." % nm
+			&"carpenter":
+				return "%s: Anchor's fast on the seabed, Cap'n! Timbers are dry and capstan's greased to weigh." % nm
+			_:
+				return "%s: Anchor's fast on the seabed, Cap'n! Hull's dry and crew stands ready to weigh." % nm
+
+	# Priority 4 & 5: Underway sail and wind assessment.
+	if ship.sail_set > 0.25:
+		var catch := ship.wind_catch()
+		var knots := int(roundf(ship.speed_knots()))
+		if catch >= 0.85:
+			match persona_id:
+				&"lookout":
+					return "%s: Full wind in the canvas at %d knots, Cap'n! Horizon's clear and flying smooth!" % [nm, knots]
+				&"carpenter":
+					return "%s: Full wind singing in the canvas at %d knots, Cap'n! Hull's tight as a rum cask!" % [nm, knots]
+				_:
+					return "%s: Full wind in the canvas at %d knots, Cap'n! Hull's tight and steady as she goes!" % [nm, knots]
+		if catch < 0.72:
+			match persona_id:
+				&"lookout":
+					return "%s: Making %d knots with slack canvas, Cap'n -- trim the yards to catch full wind!" % [nm, knots]
+				&"carpenter":
+					return "%s: Making %d knots, Cap'n -- swing the yards to catch full wind in the mainsail!" % [nm, knots]
+				_:
+					return "%s: Making %d knots, Cap'n -- trim the yards to catch full wind!" % [nm, knots]
+
+	# Priority 6: Shipshape / All Clear.
+	match persona_id:
+		&"lookout":
+			return "%s: All hands accounted for and eyes sharp, Cap'n! Hull's tight, bilge dry, and decks are clear!" % nm
+		&"carpenter":
+			return "%s: All hands accounted for, Cap'n! Oak's tight, bilge dry as a biscuit, and decks are clear!" % nm
+		_:
+			return "%s: All hands accounted for, Cap'n! Hull's tight, bilge dry, and decks are clear!" % nm
+
+
+func _find_hostile_vessel_for_report(max_dist: float) -> Node3D:
+	if ship == null or not is_instance_valid(ship) or not is_inside_tree():
+		return null
+	var best: Node3D = null
+	var best_d := max_dist
+	for grp: StringName in [&"ship", &"ships"]:
+		for node in get_tree().get_nodes_in_group(grp):
+			var n := node as Node3D
+			if n == null or n == ship or not is_instance_valid(n):
+				continue
+			var sinking_v: Variant = n.get(&"is_sinking")
+			if sinking_v is bool and bool(sinking_v):
+				continue
+			var fac_v: Variant = n.get(&"faction")
+			if fac_v == null or StringName(fac_v) == ship.faction:
+				continue
+			var d := ship.global_position.distance_to(n.global_position)
+			if d <= best_d:
+				best_d = d
+				best = n
+	return best
 
 
 func _speak(category: StringName, vars: Dictionary = {}, cd_key: String = "", cooldown: float = 8.0) -> void:
