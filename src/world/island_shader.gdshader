@@ -460,7 +460,7 @@ void fragment() {
 
 	// Walkable inland worn-earth & weathered stepping-flagstone trails driven by vertex alpha (1.0 - COLOR.a).
 	// Organic domain-warped flagstones embedded naturally into compacted earth tracks with dust/grit
-	// and pebble curbs — reads as hand-laid weathered Caribbean pirate trails, never bright synthetic tiles!
+	// and pebble curbs -- reads as hand-laid weathered Caribbean pirate trails, never bright synthetic tiles!
 	float dirt_path_mask = clamp(1.0 - COLOR.a, 0.0, 1.0) * smoothstep(0.55, 1.65, h);
 	float path_edge_w = 0.0;
 	float path_cobble_top = 0.0;
