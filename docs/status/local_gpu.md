@@ -1543,7 +1543,14 @@ Audited `origin/cloud/island-architect` **Wave I-12 (`8fad903` — 50-Landmark M
   - **`m42_reef_storm.png` — PINPOINT 1-WORD VULKAN BUG CATCH FOR CLOUD LEAD (`src/world/reef_atmosphere.gd:701`)**:
     - During a heavy storm (`storminess = 1.0`, dense `WorldEnvironment` fog), `UnderwaterSunShafts` renders sharp flat trapezoidal fog-ghost silhouettes across the underwater reef!
     - **Root Cause**: `_get_sun_shaft_shader()` (`src/world/reef_atmosphere.gd:701, 734`) uses `render_mode blend_add, depth_draw_never, cull_disabled, unshaded, shadows_disabled;` with hardcoded `ALPHA = 1.0;` and **omits `fog_disabled`**. Under dense storm fog, Godot's Forward+ exponential fog adds `FOG_COLOR * ALPHA` (`ALPHA = 1.0`) across the entire unfeathered cone mesh!
-    - **1-Word Fix (Cloud Lead exclusive file)**: Add `fog_disabled` to line 701 (`render_mode blend_add, depth_draw_never, cull_disabled, unshaded, shadows_disabled, fog_disabled;`) — and optionally soften `storm_atten` floor at line 488 (`0.26 -> 0.08`)! That will instantly make stormy underwater reefs 100% ghost-free!
+    - **1-Word Fix + Repo-Wide `blend_add` Sweep (Cloud Lead exclusive files)**: Add `, fog_disabled` (matching `lightning_bolt.gdshader:2` & `lighthouse_beam.gdshader:2`!) to ALL 8 inline `blend_add` shaders that leave `ALPHA = 1.0`:
+      1. `src/world/reef_atmosphere.gd:701` (`UnderwaterSunShafts`, plus optionally lower `storm_atten` floor `0.26 -> 0.08` at line 488!)
+      2. `src/ship/ship.gd:2437` (`LookoutGlint` at 55–500 m!) & `src/ship/ship.gd:2581` (ship lantern halos)
+      3. `src/world/outpost.gd:2824` (outpost lantern / 1800 m beacon halos) & `src/world/outpost.gd:2933` (campfire flames)
+      4. `src/world/sunken_shipwreck.gd:733` (shipwreck dive halo)
+      5. `src/ship/rowboat.gd:1305` (rowboat stern lantern halo)
+      6. `src/items/tool_meshes.gd:1441` (held lantern halo)
+      That 1-word sweep guarantees ZERO foggy quad ghosts on any additive halo, beacon, glint, or underwater god-ray during dense storms!
 
 ### 7.49 Milestone 42 — Quality Overhaul Pass Q15 (`24ff6b1`) Full RX 9070 XT Sign-Off (Direct `Q34` Answer!)
 - Cleanly rebased `local/gpu-polish` onto `origin/ccr-663b66a0-rdiq4f` (`24ff6b1`, **Quality Overhaul Pass Q15: `FortVault` Treasury Halo & Floating Gold Motes + `ShipHarpoon` Launch Spark & Lock Glint `Q15A` + Grade IV–V `EmissaryGradeMotes`, `WaterfallMistRainbow` Arch & `VolcanicFumarole` Magma Halo `Q15B`**) — **0 merge conflicts (`30/30`), strictly our 5 exclusive files!**
