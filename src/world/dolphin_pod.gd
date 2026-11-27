@@ -17,6 +17,14 @@ const COL_FIN_TIP := Color(0.130, 0.325, 0.375)      # Deep teal dorsal/flipper 
 const COL_SMILE_LINE := Color(0.105, 0.220, 0.265)   # Joyful curved smile & blowhole
 const COL_EYE_DARK := Color(0.035, 0.045, 0.060)     # Wet obsidian glossy eye
 
+# Sculpted concentric nocturnal bioluminescent breach-ring constants (zero extra VRAM).
+const RING_DURATION := 1.15
+const RING_SCALE_START := 0.65
+const RING_SCALE_END := 2.45
+const RING_Y_OFFSET := 0.045
+const COL_RING_DAY := Color(0.92, 0.99, 1.00, 1.0)    # Crisp sunlit sea-foam white-aqua
+const COL_RING_NIGHT := Color(0.18, 0.96, 1.00, 1.0)  # Luminous bioluminescent turquoise-cyan
+
 # Staggered bow-riding formation slots relative to ship (-Z bow, +X starboard):
 # [offset: Vector3, phase_offset: float, leap_height: float, body_scale: float, roll_dir: float]
 const POD_SLOTS: Array[Array] = [
@@ -36,6 +44,8 @@ static var _eye_mat: StandardMaterial3D = null
 static var _spray_tex: ImageTexture = null
 static var _spray_mat: StandardMaterial3D = null
 static var _spray_quad: QuadMesh = null
+static var _breach_ring_mesh: ArrayMesh = null
+static var _breach_ring_mat: StandardMaterial3D = null
 
 @export var pod_count: int = 3
 @export var lifetime: float = 28.0
@@ -48,6 +58,16 @@ var _dolphins: Array[Dictionary] = []  # {root, body_mi, tail_pivot, tail_mi, sl
 var _standalone_dist: float = 0.0
 var _sfx_cooldown: float = 0.0
 var _phase_forced: bool = false
+var _last_ref_origin: Vector3 = Vector3.ZERO
+
+# Pre-allocated concentric breach-ring buffers (1 ring per podmate, zero per-frame allocations).
+var _breach_rings_mmi: MultiMeshInstance3D = null
+var _ring_active: PackedByteArray = PackedByteArray()
+var _ring_age: PackedFloat32Array = PackedFloat32Array()
+var _ring_pos: PackedVector3Array = PackedVector3Array()
+var _ring_yaw: PackedFloat32Array = PackedFloat32Array()
+var _ring_biolum: float = 0.0
+var _active_ring_count: int = 0
 
 
 ## Spawn a bow-riding pod alongside `ship` (or cruising cleanly along -Z when `ship == null`).
@@ -77,6 +97,8 @@ static func clear_shared_cache() -> void:
 	_spray_tex = null
 	_spray_mat = null
 	_spray_quad = null
+	_breach_ring_mesh = null
+	_breach_ring_mat = null
 
 
 func _enter_tree() -> void:
@@ -91,7 +113,22 @@ func _ready() -> void:
 	_update_dolphins(0.0, false)
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_ring_refs()
+
+
+func _release_ring_refs() -> void:
+	if _breach_rings_mmi != null and is_instance_valid(_breach_rings_mmi):
+		_breach_rings_mmi.visible = false
+		_breach_rings_mmi.material_override = null
+		_breach_rings_mmi.multimesh = null
+	_breach_rings_mmi = null
+	_active_ring_count = 0
+
+
 func _exit_tree() -> void:
+	_release_ring_refs()
 	for d: Dictionary in _dolphins:
 		for mi_key: String in ["body_mi", "tail_mi"]:
 			var mi := d.get(mi_key) as MeshInstance3D
@@ -138,6 +175,21 @@ func get_dolphin_nodes() -> Array[Node3D]:
 	return out
 
 
+## Return the sculpted MultiMeshInstance3D rendering concentric translucent breach ripple rings.
+func get_breach_rings_node() -> MultiMeshInstance3D:
+	return _breach_rings_mmi
+
+
+## Return current nocturnal bioluminescence tint factor (0.0 in full daylight -> 1.0 at night).
+func get_breach_ring_biolum() -> float:
+	return _ring_biolum
+
+
+## Return the number of currently expanding concentric breach rings.
+func get_active_ring_count() -> int:
+	return _active_ring_count
+
+
 ## Deterministically pose the pod at `phase_rad` (e.g. `1.25` or `PI * 0.5` for a mid-air leap apex)
 ## with staggered offsets across podmates, updating transforms, tail bend, and breach foam rings immediately.
 func force_leap_phase(phase_rad: float) -> void:
@@ -149,9 +201,12 @@ func force_leap_phase(phase_rad: float) -> void:
 		d["phase"] = phase_rad + stg
 		d["tail_phase"] = (phase_rad + stg) * 3.8
 	_update_dolphins(0.0, false)
-	# Stamp sparkling white breach foam rings & spray directly beneath airborne dolphins!
+	# Stamp sparkling white breach foam rings, concentric ripple rings & spray directly beneath airborne dolphins!
+	for i in _ring_active.size():
+		_ring_active[i] = 0
 	var inv_pod := global_transform.affine_inverse() if is_inside_tree() else transform.affine_inverse()
-	for d: Dictionary in _dolphins:
+	for i in _dolphins.size():
+		var d: Dictionary = _dolphins[i]
 		var d_root := d.get("root") as Node3D
 		if d_root == null or not is_instance_valid(d_root):
 			continue
@@ -161,12 +216,14 @@ func force_leap_phase(phase_rad: float) -> void:
 			var splash_w := Vector3(wp.x, wy + 0.04, wp.z)
 			if Ocean.current != null:
 				Ocean.current.add_foam(splash_w, 1.48, 0.84)
+			_stamp_breach_ring(i, wp, wy, minf(0.18 + float(i) * 0.05, 0.42))
 			var sp := d.get("spray") as GPUParticles3D
 			if sp != null and is_instance_valid(sp):
 				sp.position = inv_pod * splash_w
 				sp.visible = true
 				sp.restart()
 				sp.emitting = true
+	_update_breach_rings(0.0, _last_ref_origin)
 
 
 # ==============================================================================
@@ -227,6 +284,36 @@ func _build_pod() -> void:
 			"spray": spray,
 		})
 
+	# Pre-allocate concentric breach-ring buffers (1 sculpted ring per podmate, zero extra VRAM).
+	_ring_active.resize(count)
+	_ring_age.resize(count)
+	_ring_pos.resize(count)
+	_ring_yaw.resize(count)
+	var ring_mm := MultiMesh.new()
+	ring_mm.transform_format = MultiMesh.TRANSFORM_3D
+	ring_mm.use_colors = true
+	ring_mm.mesh = _breach_ring_mesh
+	ring_mm.instance_count = count
+	var zero_xf := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
+	for i in count:
+		_ring_active[i] = 0
+		_ring_age[i] = 0.0
+		_ring_pos[i] = Vector3.ZERO
+		_ring_yaw[i] = float(i) * 1.37
+		ring_mm.set_instance_transform(i, zero_xf)
+		ring_mm.set_instance_color(i, Color(1.0, 1.0, 1.0, 0.0))
+
+	_breach_rings_mmi = MultiMeshInstance3D.new()
+	_breach_rings_mmi.name = "DolphinBreachRings"
+	_breach_rings_mmi.top_level = true
+	_breach_rings_mmi.multimesh = ring_mm
+	_breach_rings_mmi.material_override = _breach_ring_mat
+	_breach_rings_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_breach_rings_mmi.visibility_range_end = 260.0
+	_breach_rings_mmi.custom_aabb = AABB(Vector3(-24.0, -6.0, -24.0), Vector3(48.0, 12.0, 48.0))
+	_breach_rings_mmi.visible = false
+	add_child(_breach_rings_mmi)
+
 
 func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 	if _dolphins.is_empty():
@@ -248,6 +335,7 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 			cruise_speed = clampf(absf(float(follow_ship.call("forward_speed"))), 4.8, 12.0)
 	else:
 		ref_origin += Vector3(ref_fwd.x, 0.0, ref_fwd.z).normalized() * _standalone_dist
+	_last_ref_origin = ref_origin
 
 	ref_fwd.y = 0.0
 	if ref_fwd.length_squared() < 0.0001:
@@ -273,7 +361,8 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 
 	var inv_pod := global_transform.affine_inverse() if is_inside_tree() else transform.affine_inverse()
 
-	for d: Dictionary in _dolphins:
+	for i in _dolphins.size():
+		var d: Dictionary = _dolphins[i]
 		var d_root := d["root"] as Node3D
 		var tail_pivot := d["tail_pivot"] as Node3D
 		if d_root == null or not is_instance_valid(d_root):
@@ -341,6 +430,7 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 			var splash_w := Vector3(world_xz.x, wave_y + 0.04, world_xz.z)
 			if Ocean.current != null:
 				Ocean.current.add_foam(splash_w, 1.35, 0.72)
+			_stamp_breach_ring(i, world_xz, wave_y, 0.0)
 			if _sfx_cooldown <= 0.0:
 				_sfx_cooldown = 0.42
 				Audio.play_sfx(&"splash_small", splash_w, -5.0, 0.14)
@@ -350,6 +440,80 @@ func _update_dolphins(delta: float, emit_splashes: bool) -> void:
 				sp.visible = true
 				sp.restart()
 				sp.emitting = true
+
+	_update_breach_rings(delta, ref_origin)
+
+
+func _stamp_breach_ring(idx: int, world_xz: Vector3, sea_y: float, initial_age: float = 0.0) -> void:
+	if idx < 0 or idx >= _ring_active.size():
+		return
+	_ring_active[idx] = 1
+	_ring_age[idx] = clampf(initial_age, 0.0, RING_DURATION * 0.95)
+	_ring_pos[idx] = Vector3(world_xz.x, sea_y + RING_Y_OFFSET, world_xz.z)
+	_ring_yaw[idx] = float(idx) * 1.37 + age * 0.75
+
+
+func _update_breach_rings(delta: float, ref_origin: Vector3) -> void:
+	var daylight := Weather.daylight() if Weather != null else 1.0
+	var biolum := clampf(1.0 - daylight, 0.0, 1.0)
+	_ring_biolum = biolum
+
+	if _breach_rings_mmi == null or not is_instance_valid(_breach_rings_mmi):
+		_active_ring_count = 0
+		return
+	var mm := _breach_rings_mmi.multimesh
+	if mm == null:
+		_active_ring_count = 0
+		return
+
+	var mmi_origin := Vector3(ref_origin.x, 0.0, ref_origin.z)
+	if is_inside_tree():
+		_breach_rings_mmi.global_transform = Transform3D(Basis.IDENTITY, mmi_origin)
+	else:
+		_breach_rings_mmi.transform = Transform3D(Basis.IDENTITY, mmi_origin)
+
+	var moon_illum := Weather.moon_illumination() if Weather != null else 0.75
+	var moon_boost := lerpf(1.0, 1.35 + 0.25 * moon_illum, biolum)
+	var base_col := COL_RING_DAY.lerp(COL_RING_NIGHT, biolum)
+	var peak_alpha := lerpf(0.78, 0.94, biolum)
+	var zero_xf := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
+
+	var active_n := 0
+	var dt := maxf(0.0, delta)
+	for i in _ring_active.size():
+		if _ring_active[i] == 0:
+			mm.set_instance_transform(i, zero_xf)
+			mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 0.0))
+			continue
+
+		var r_age := _ring_age[i] + dt
+		if r_age >= RING_DURATION:
+			_ring_active[i] = 0
+			_ring_age[i] = RING_DURATION
+			mm.set_instance_transform(i, zero_xf)
+			mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 0.0))
+			continue
+
+		_ring_age[i] = r_age
+		var t := clampf(r_age / RING_DURATION, 0.0, 1.0)
+		var expand_e := 1.0 - (1.0 - t) * (1.0 - t)
+		var r_scale := lerpf(RING_SCALE_START, RING_SCALE_END, expand_e)
+		var fade_in := smoothstep(0.0, 0.08, t)
+		var r_alpha := clampf(peak_alpha * fade_in * pow(1.0 - t, 1.35), 0.0, 1.0)
+
+		var rp := _ring_pos[i]
+		var live_sea_y := Sea.height(rp.x, rp.z) if Sea != null else 0.0
+		rp.y = live_sea_y + RING_Y_OFFSET
+		_ring_pos[i] = rp
+
+		var local_p := rp - mmi_origin
+		var r_basis := Basis(Vector3.UP, _ring_yaw[i]) * Basis.from_scale(Vector3(r_scale, 1.0, r_scale))
+		mm.set_instance_transform(i, Transform3D(r_basis, local_p))
+		mm.set_instance_color(i, Color(base_col.r * moon_boost, base_col.g * moon_boost, base_col.b * moon_boost, r_alpha))
+		active_n += 1
+
+	_active_ring_count = active_n
+	_breach_rings_mmi.visible = (active_n > 0)
 
 
 func _make_splash_emitter(idx: int) -> GPUParticles3D:
@@ -436,6 +600,17 @@ static func _ensure_shared_assets() -> void:
 		_spray_quad = QuadMesh.new()
 		_spray_quad.size = Vector2(0.26, 0.26)
 		_spray_quad.material = _spray_mat
+
+	if _breach_ring_mat == null:
+		_breach_ring_mat = StandardMaterial3D.new()
+		_breach_ring_mat.vertex_color_use_as_albedo = true
+		_breach_ring_mat.vertex_color_is_srgb = true
+		_breach_ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_breach_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_breach_ring_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_breach_ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if _breach_ring_mesh == null:
+		_breach_ring_mesh = _build_breach_ring_mesh()
 
 	if _body_mesh == null:
 		_body_mesh = _build_dolphin_body_mesh()
@@ -823,3 +998,76 @@ static func _emit_outward_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector
 	st.set_smooth_group(-1)
 	st.set_color(cc)
 	st.add_vertex(c)
+
+
+static func _build_breach_ring_mesh() -> ArrayMesh:
+	# Sculpted 2-ring concentric translucent horizontal water-ripple ArrayMesh (zero raw primitives!):
+	# Outer wave-crest ring (24 segs x 4 tris = 96 tris) + inner secondary ripple (20 segs x 4 tris = 80 tris) = 176 tris.
+	# Every vertex lies flat on y = 0.0 with exact upward (0, 1, 0) unit normal and feathered alpha edges.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Row: [r_in, r_mid, r_out, segs, peak_alpha, wave_amp, wave_phase]
+	var ring_specs: Array[Array] = [
+		[0.66, 0.84, 1.04, 24, 0.95, 0.028, 0.0],
+		[0.28, 0.43, 0.57, 20, 0.78, 0.018, 0.9],
+	]
+
+	for spec in ring_specs:
+		var r_in: float = float(spec[0])
+		var r_mid: float = float(spec[1])
+		var r_out: float = float(spec[2])
+		var segs: int = int(spec[3])
+		var peak_a: float = float(spec[4])
+		var w_amp: float = float(spec[5])
+		var w_ph: float = float(spec[6])
+
+		var c_in := Color(0.84, 0.98, 1.00, 0.0)
+		var c_mid := Color(1.00, 1.00, 1.00, peak_a)
+		var c_out := Color(0.80, 0.96, 1.00, 0.0)
+
+		for k in segs:
+			var a0 := float(k) / float(segs) * TAU
+			var a1 := float(k + 1) / float(segs) * TAU
+			var j0 := sin(a0 * 6.0 + w_ph) * w_amp + cos(a0 * 4.0 - w_ph) * (w_amp * 0.45)
+			var j1 := sin(a1 * 6.0 + w_ph) * w_amp + cos(a1 * 4.0 - w_ph) * (w_amp * 0.45)
+
+			var d0 := Vector3(cos(a0), 0.0, sin(a0))
+			var d1 := Vector3(cos(a1), 0.0, sin(a1))
+
+			var v_in0 := d0 * (r_in + j0 * 0.5)
+			var v_in1 := d1 * (r_in + j1 * 0.5)
+			var v_mid0 := d0 * (r_mid + j0)
+			var v_mid1 := d1 * (r_mid + j1)
+			var v_out0 := d0 * (r_out + j0 * 0.7)
+			var v_out1 := d1 * (r_out + j1 * 0.7)
+
+			_emit_upward_ring_quad(st, v_in0, v_mid0, v_mid1, v_in1, c_in, c_mid)
+			_emit_upward_ring_quad(st, v_mid0, v_out0, v_out1, v_mid1, c_mid, c_out)
+
+	return st.commit()
+
+
+static func _emit_upward_ring_quad(st: SurfaceTool, v_in0: Vector3, v_out0: Vector3,
+		v_out1: Vector3, v_in1: Vector3, c_in: Color, c_out: Color) -> void:
+	# Explicit upward (0, 1, 0) unit normals with Godot CW upward-facing winding.
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.add_vertex(v_in0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.add_vertex(v_out0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.add_vertex(v_out1)
+
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.add_vertex(v_in0)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_out)
+	st.add_vertex(v_out1)
+	st.set_normal(Vector3.UP)
+	st.set_color(c_in)
+	st.add_vertex(v_in1)
+

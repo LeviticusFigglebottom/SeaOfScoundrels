@@ -3667,3 +3667,350 @@ func test_q9b_held_lantern_halo_damped_compass_needle_and_gunsmoke_wisps() -> vo
 	check(Inventory._barrel_smoke_mesh == null and Inventory._barrel_smoke_shader == null \
 		and Inventory._barrel_smoke_mat == null and Inventory._barrel_smoke_proc == null,
 		"Inventory releases all static FirearmBarrelSmoke resources cleanly with 0 leaks")
+
+
+# ---------------------------------------------------------------------------
+# Pass Q14A: Shanty Floating Musical Notes, Spyglass Objective Lens Glint &
+# Cutlass Steel Blade Gleam Pulse
+# ---------------------------------------------------------------------------
+
+func test_q14a_shanty_notes_spyglass_lens_glint_and_cutlass_blade_gleam() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	# 0. Guardrail checks: zero raw primitives and zero unsafe MultiMesh.mesh = null mutations.
+	var tm_src := FileAccess.get_file_as_string("res://src/items/tool_meshes.gd")
+	var inv_src := FileAccess.get_file_as_string("res://src/items/inventory.gd")
+	for prim: String in ["BoxMesh.new", "CylinderMesh.new", "SphereMesh.new", "CapsuleMesh.new", "PrismMesh.new", "QuadMesh.new"]:
+		check(not tm_src.contains(prim) and not inv_src.contains(prim),
+			"tool_meshes.gd & inventory.gd contain zero raw %s primitives" % prim)
+	check(not tm_src.contains(".multimesh.mesh = null") and not inv_src.contains(".multimesh.mesh = null"),
+		"tool_meshes.gd & inventory.gd never mutate multimesh.mesh = null on live MultiMeshes")
+
+	# Helper to validate finite unit normals & zero-primitive ArrayMesh.
+	var check_unit_normals := func(mesh: Mesh, label: String, expect_front_z: bool) -> void:
+		check(mesh is ArrayMesh and not (mesh is PrimitiveMesh), "%s uses sculpted zero-primitive ArrayMesh" % label)
+		if not (mesh is ArrayMesh):
+			return
+		var am := mesh as ArrayMesh
+		check(am.get_surface_count() >= 1, "%s has >= 1 surface" % label)
+		var arrays := am.surface_get_arrays(0)
+		var norms: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		check(norms.size() > 0, "%s includes vertex normals" % label)
+		for n in norms:
+			check(n.is_finite() and absf(n.length() - 1.0) < 0.01,
+				"%s normal is finite unit length (got %s)" % [label, str(n)])
+			if expect_front_z:
+				check_near(n.z, 1.0, 0.01, "%s normal aligns cleanly to (0,0,1)" % label)
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var cc: CombatComponent = rig["combat"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+
+	# Pause auto-process so we drive deterministic 60 Hz ticks cleanly.
+	captain.set_physics_process(false)
+	pc.set_process(false)
+	inv.set_process(false)
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	pc._process(1.0 / 60.0)
+
+	# ------------------------------------------------------------------
+	# 1. Floating Sculpted Shanty Musical Notes (Concertina & Hurdy-Gurdy)
+	# ------------------------------------------------------------------
+	inv.set_shanty_instrument(&"concertina")
+	inv.equip(&"instrument", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_conc := inv.fp_tool_node
+	var tp_conc := inv.tp_tool_node
+	check(fp_conc != null, "equipped concertina builds fp_tool_node")
+	var conc_mmi := fp_conc.get_node_or_null(^"ShantyNotesVFX") as MultiMeshInstance3D if fp_conc != null else null
+	check(conc_mmi != null, "Concertina mounts ShantyNotesVFX MultiMeshInstance3D")
+	if conc_mmi != null:
+		check_eq(conc_mmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"Concertina ShantyNotesVFX disables shadow casting")
+		check(not conc_mmi.visible, "Concertina ShantyNotesVFX starts hidden when silent")
+		check(conc_mmi.multimesh != null, "Concertina ShantyNotesVFX has valid MultiMesh")
+		if conc_mmi.multimesh != null:
+			check_eq(conc_mmi.multimesh.instance_count, 10, "ShantyNotesVFX allocates 10 musical note instances")
+			check(conc_mmi.multimesh.use_colors, "ShantyNotesVFX enables per-instance MultiMesh colors")
+			var note_mesh := conc_mmi.multimesh.mesh
+			check_unit_normals.call(note_mesh, "ShantyNotesVFX eighth-note", true)
+			var note_faces := note_mesh.get_faces().size()
+			check_eq(note_faces % 3, 0, "sculpted eighth-note mesh face vertex count is a multiple of 3")
+			var note_tris := int(roundf(float(note_faces) / 3.0))
+			check(note_tris >= 32 and note_tris <= 52,
+				"sculpted eighth-note mesh stays within 32..52 tris (got %d tris)" % note_tris)
+			var note_cols: PackedColorArray = (note_mesh as ArrayMesh).surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+			check(note_cols.size() > 0, "sculpted eighth-note mesh stores gilded gold/ivory vertex colors")
+		check(conc_mmi.material_override is StandardMaterial3D, "ShantyNotesVFX uses StandardMaterial3D")
+		if conc_mmi.material_override is StandardMaterial3D:
+			var nmat := conc_mmi.material_override as StandardMaterial3D
+			check_eq(nmat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "ShantyNotesVFX material is unshaded")
+			check_eq(nmat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD, "ShantyNotesVFX material is additive")
+			check(nmat.vertex_color_use_as_albedo and nmat.vertex_color_is_srgb,
+				"ShantyNotesVFX material uses sRGB vertex colors")
+			check_eq(nmat.cull_mode, BaseMaterial3D.CULL_DISABLED, "ShantyNotesVFX disables culling")
+			check_eq(nmat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED, "ShantyNotesVFX disables depth draw")
+
+	# Verify FP & TP Concertina share the exact WeakRef-cached eighth-note mesh & material!
+	var shared_note_mesh: Mesh = conc_mmi.multimesh.mesh if (conc_mmi != null and conc_mmi.multimesh != null) else null
+	var shared_note_mat: Material = conc_mmi.material_override if conc_mmi != null else null
+	if tp_conc != null:
+		var tp_conc_mmi := tp_conc.get_node_or_null(^"ShantyNotesVFX") as MultiMeshInstance3D
+		check(tp_conc_mmi != null and tp_conc_mmi.multimesh != null, "TP Concertina mounts ShantyNotesVFX")
+		if tp_conc_mmi != null and tp_conc_mmi.multimesh != null:
+			check(tp_conc_mmi.multimesh.mesh == shared_note_mesh,
+				"FP and TP Concertina share WeakRef-cached eighth-note ArrayMesh")
+			check(tp_conc_mmi.material_override == shared_note_mat,
+				"FP and TP Concertina share WeakRef-cached shanty note material")
+
+	# Start playing shanty on Concertina -> visible & notes rise smoothly within 0.04..0.52 m!
+	inv.set_playing_shanty(true)
+	inv._process(1.0 / 60.0)
+	check(conc_mmi != null and conc_mmi.visible, "Concertina ShantyNotesVFX turns visible when playing_shanty == true")
+	check(bool(fp_conc.get_meta(&"q14a_shanty_active", false)), "Concertina records q14a_shanty_active == true")
+	var h0: PackedFloat32Array = fp_conc.get_meta(&"q14a_shanty_note_heights", PackedFloat32Array())
+	check_eq(h0.size(), 10, "Concertina stores 10 deterministic note heights")
+	for h in h0:
+		check(h >= 0.039 and h <= 0.521, "initial shanty note height in 0.04..0.52 m (got %.3f)" % h)
+
+	for _i in 15:
+		inv._process(1.0 / 60.0)
+	var h1: PackedFloat32Array = fp_conc.get_meta(&"q14a_shanty_note_heights", PackedFloat32Array())
+	var rose_count := 0
+	for i in mini(h0.size(), h1.size()):
+		check(h1[i] >= 0.039 and h1[i] <= 0.521, "advanced shanty note #%d height in 0.04..0.52 m" % i)
+		if h1[i] > h0[i] + 0.01:
+			rose_count += 1
+		if conc_mmi != null and conc_mmi.multimesh != null:
+			var xf := conc_mmi.multimesh.get_instance_transform(i)
+			check(xf.origin.is_finite() and xf.basis.is_finite(), "shanty note #%d transform stays finite" % i)
+	check(rose_count >= 8, "at least 8 of 10 Concertina notes rose smoothly over 0.25 s (rose=%d)" % rose_count)
+
+	# Switch mid-shanty to Hurdy-Gurdy -> shares cached eighth-note mesh & rises smoothly!
+	inv.set_shanty_instrument(&"hurdy_gurdy")
+	inv._process(1.0 / 60.0)
+	var fp_hg := inv.fp_tool_node
+	check(fp_hg != null and fp_hg.name == "Tool_HurdyGurdy", "switching to hurdy_gurdy rebuilds Tool_HurdyGurdy")
+	var hg_mmi := fp_hg.get_node_or_null(^"ShantyNotesVFX") as MultiMeshInstance3D if fp_hg != null else null
+	check(hg_mmi != null and hg_mmi.visible, "Hurdy-Gurdy mounts ShantyNotesVFX visible while playing shanty")
+	if hg_mmi != null and hg_mmi.multimesh != null:
+		check_eq(hg_mmi.multimesh.instance_count, 10, "Hurdy-Gurdy ShantyNotesVFX has 10 instances")
+		check(hg_mmi.multimesh.mesh == shared_note_mesh,
+			"Hurdy-Gurdy shares identical WeakRef-cached eighth-note ArrayMesh with Concertina")
+		check(hg_mmi.material_override == shared_note_mat,
+			"Hurdy-Gurdy shares identical WeakRef-cached shanty note material with Concertina")
+	var hg_h0: PackedFloat32Array = fp_hg.get_meta(&"q14a_shanty_note_heights", PackedFloat32Array())
+	for _i in 15:
+		inv._process(1.0 / 60.0)
+	var hg_h1: PackedFloat32Array = fp_hg.get_meta(&"q14a_shanty_note_heights", PackedFloat32Array())
+	var hg_rose := 0
+	for i in mini(hg_h0.size(), hg_h1.size()):
+		if hg_h1[i] > hg_h0[i] + 0.01:
+			hg_rose += 1
+	check(hg_rose >= 8, "Hurdy-Gurdy sculpted shanty notes rise smoothly over 0.25 s (rose=%d)" % hg_rose)
+
+	# Stopping shanty cleanly hides ShantyNotesVFX and zeros intensity.
+	inv.set_playing_shanty(false)
+	inv._process(1.0 / 60.0)
+	check(hg_mmi != null and not hg_mmi.visible, "stopping shanty hides Hurdy-Gurdy ShantyNotesVFX cleanly")
+	check(not bool(fp_hg.get_meta(&"q14a_shanty_active", true)), "stopping shanty clears q14a_shanty_active")
+	check_near(float(fp_hg.get_meta(&"q14a_shanty_intensity", 1.0)), 0.0, 0.0001,
+		"stopping shanty resets q14a_shanty_intensity to 0.0")
+	inv.set_shanty_instrument(&"concertina")
+
+	# ------------------------------------------------------------------
+	# 2. Brass Spyglass Objective Lens Glint (SpyglassLensGlint)
+	# ------------------------------------------------------------------
+	captain.look_yaw = 0.0  # Look due North (-Z), empty horizon first.
+	captain.look_pitch = 0.0
+	pc._process(1.0 / 60.0)
+	inv.equip(&"spyglass", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_spy := inv.fp_tool_node
+	var tp_spy := inv.tp_tool_node
+	check(fp_spy != null, "equipped spyglass builds fp_tool_node")
+	var spy_glint := fp_spy.get_node_or_null(^"SpyglassLensGlint") as MeshInstance3D if fp_spy != null else null
+	check(spy_glint != null, "Spyglass mounts SpyglassLensGlint MeshInstance3D")
+	if spy_glint != null:
+		check_eq(spy_glint.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"SpyglassLensGlint disables shadow casting")
+		check_unit_normals.call(spy_glint.mesh, "SpyglassLensGlint", true)
+		check_eq(spy_glint.mesh.get_faces().size(), 72,
+			"SpyglassLensGlint uses exact 24-triangle (72-vertex) 4-point star flare ArrayMesh")
+		check(spy_glint.material_override is StandardMaterial3D, "SpyglassLensGlint uses StandardMaterial3D")
+		if spy_glint.material_override is StandardMaterial3D:
+			var smat := spy_glint.material_override as StandardMaterial3D
+			check_eq(smat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "SpyglassLensGlint is unshaded")
+			check_eq(smat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD, "SpyglassLensGlint uses additive blending")
+			check_eq(smat.billboard_mode, BaseMaterial3D.BILLBOARD_ENABLED, "SpyglassLensGlint enables billboard")
+			check(smat.billboard_keep_scale, "SpyglassLensGlint enables scale-preserving billboard")
+			check(smat.vertex_color_use_as_albedo and smat.vertex_color_is_srgb,
+				"SpyglassLensGlint uses sRGB vertex colors")
+			check_eq(smat.cull_mode, BaseMaterial3D.CULL_DISABLED, "SpyglassLensGlint disables culling")
+			check_eq(smat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED, "SpyglassLensGlint disables depth draw")
+
+	if tp_spy != null and spy_glint != null:
+		var tp_glint := tp_spy.get_node_or_null(^"SpyglassLensGlint") as MeshInstance3D
+		check(tp_glint != null, "TP Spyglass also mounts SpyglassLensGlint")
+		if tp_glint != null:
+			check(tp_glint.mesh == spy_glint.mesh, "FP and TP Spyglass share WeakRef-cached 24-tri glint mesh")
+			check(tp_glint.material_override != spy_glint.material_override,
+				"FP and TP Spyglass use independent per-instance glint materials")
+
+	# Idle sparkle (~0.18) and retracted DrawTubes anchor.
+	var spy_tubes := fp_spy.get_node_or_null(^"DrawTubes") as Node3D if fp_spy != null else null
+	var glint_z_idle := spy_glint.position.z if spy_glint != null else 0.0
+	var tubes_z_idle := spy_tubes.position.z if spy_tubes != null else 0.0
+	var energy_idle := float(fp_spy.get_meta(&"q14a_spyglass_glint_energy", -1.0))
+	check(energy_idle >= 0.12 and energy_idle <= 0.24,
+		"Spyglass idle glint energy stays subtle around ~0.18 (got %.3f)" % energy_idle)
+
+	# Zooming in on open horizon: tube extends, glint tracks extension cleanly, energy brightens (~0.55)!
+	inv.set_secondary_held(true)
+	for _i in 35:
+		inv._process(1.0 / 60.0)
+	check(inv.spyglass_zoom > 0.75, "Spyglass reaches high zoom level (got %.2f)" % inv.spyglass_zoom)
+	check_eq(inv.spyglass_sighting, "", "Open North horizon has no sighting yet")
+	var energy_zoomed := float(fp_spy.get_meta(&"q14a_spyglass_glint_energy", -1.0))
+	check(energy_zoomed > energy_idle * 2.2 and energy_zoomed >= 0.42 and energy_zoomed <= 0.72,
+		"Zoomed Spyglass glint brightens cleanly vs idle (idle=%.3f -> zoomed=%.3f)" % [energy_idle, energy_zoomed])
+	if spy_tubes != null and spy_glint != null:
+		var dz_tubes := spy_tubes.position.z - tubes_z_idle
+		var dz_glint := spy_glint.position.z - glint_z_idle
+		check(dz_tubes < -0.10, "Spyglass DrawTubes telescopes forward on zoom (dz=%.3f)" % dz_tubes)
+		check_near(dz_glint, dz_tubes, 0.005,
+			"SpyglassLensGlint stays anchored cleanly to sliding objective rim (glint_dz=%.3f vs tubes_dz=%.3f)" % [dz_glint, dz_tubes])
+
+	# Spotting a distant enemy ship under crosshair flares luminous emerald-gold (~1.05)!
+	var target_ship := SLOOP_SCENE.instantiate() as Ship
+	target_ship.enable_effects = false
+	target_ship.faction = &"corsair"
+	_root.add_child(target_ship)
+	target_ship.global_position = Vector3(0.0, 0.0, -140.0)  # Directly North (-Z) under crosshair!
+	for _i in 18:
+		inv._process(1.0 / 60.0)
+	check(inv.spyglass_sighting != "", "Spyglass spots distant ship under crosshair (got '%s')" % inv.spyglass_sighting)
+	var energy_sight := float(fp_spy.get_meta(&"q14a_spyglass_glint_energy", -1.0))
+	check(energy_sight > energy_zoomed * 1.5 and energy_sight >= 0.90,
+		"Sighting lock flares SpyglassLensGlint strongly around ~1.05 (zoomed=%.3f -> sighting=%.3f)" % [energy_zoomed, energy_sight])
+	if spy_glint != null and spy_glint.material_override is StandardMaterial3D:
+		var lock_col := (spy_glint.material_override as StandardMaterial3D).albedo_color
+		check(lock_col.g > lock_col.b and lock_col.g > 0.85,
+			"Sighting lock shifts SpyglassLensGlint to luminous emerald-gold (got %s)" % str(lock_col))
+
+	# Releasing zoom retracts tube and returns cleanly to subtle idle sparkle!
+	inv.set_secondary_held(false)
+	for _i in 45:
+		inv._process(1.0 / 60.0)
+	var energy_restored := float(fp_spy.get_meta(&"q14a_spyglass_glint_energy", -1.0))
+	check(energy_restored >= 0.12 and energy_restored <= 0.25,
+		"Releasing spyglass restores subtle idle lens sparkle (got %.3f)" % energy_restored)
+
+	# ------------------------------------------------------------------
+	# 3. Cutlass Steel Blade Gleam Pulse (CutlassBladeGleam)
+	# ------------------------------------------------------------------
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
+	inv.equip(&"cutlass", true)
+	inv._process(1.0 / 60.0)
+
+	var fp_cut := inv.fp_tool_node
+	var tp_cut := inv.tp_tool_node
+	check(fp_cut != null, "equipped cutlass builds fp_tool_node")
+	var cut_gleam := fp_cut.get_node_or_null(^"CutlassBladeGleam") as MeshInstance3D if fp_cut != null else null
+	check(cut_gleam != null, "Cutlass mounts CutlassBladeGleam MeshInstance3D")
+	if cut_gleam != null:
+		check_eq(cut_gleam.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"CutlassBladeGleam disables shadow casting")
+		check_unit_normals.call(cut_gleam.mesh, "CutlassBladeGleam", true)
+		check_eq(cut_gleam.mesh.get_faces().size(), 72,
+			"CutlassBladeGleam uses exact 24-triangle (72-vertex) star-gleam ArrayMesh")
+		check(not cut_gleam.visible, "CutlassBladeGleam stays hidden at idle")
+		check(cut_gleam.material_override is StandardMaterial3D, "CutlassBladeGleam uses StandardMaterial3D")
+		if cut_gleam.material_override is StandardMaterial3D:
+			var gmat := cut_gleam.material_override as StandardMaterial3D
+			check_eq(gmat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "CutlassBladeGleam is unshaded")
+			check_eq(gmat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD, "CutlassBladeGleam uses additive blending")
+			check_eq(gmat.billboard_mode, BaseMaterial3D.BILLBOARD_ENABLED, "CutlassBladeGleam enables billboard")
+			check(gmat.billboard_keep_scale, "CutlassBladeGleam enables scale-preserving billboard")
+			check(gmat.vertex_color_use_as_albedo and gmat.vertex_color_is_srgb,
+				"CutlassBladeGleam uses sRGB vertex colors")
+			check_eq(gmat.cull_mode, BaseMaterial3D.CULL_DISABLED, "CutlassBladeGleam disables culling")
+			check_eq(gmat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED, "CutlassBladeGleam disables depth draw")
+
+	if tp_cut != null and cut_gleam != null:
+		var tp_gleam := tp_cut.get_node_or_null(^"CutlassBladeGleam") as MeshInstance3D
+		check(tp_gleam != null, "TP Cutlass also mounts CutlassBladeGleam")
+		if tp_gleam != null:
+			check(tp_gleam.mesh == cut_gleam.mesh, "FP and TP Cutlass share WeakRef-cached 24-tri gleam mesh")
+			check(tp_gleam.material_override != cut_gleam.material_override,
+				"FP and TP Cutlass use independent per-instance gleam materials")
+
+	check_near(inv.get_cutlass_gleam_strength(), 0.0, 0.0001, "Cutlass gleam strength starts at 0.0 at idle")
+
+	# Manual trigger_cutlass_gleam(1.0) flares at hilt, sweeps down blade toward tip, and decays cleanly over 0.42 s!
+	inv.trigger_cutlass_gleam(1.0)
+	check(inv.get_cutlass_gleam_strength() > 0.95, "trigger_cutlass_gleam(1.0) flares strength cleanly to 1.0")
+	check(cut_gleam != null and cut_gleam.visible, "trigger_cutlass_gleam(1.0) makes CutlassBladeGleam visible")
+	var y_hilt := cut_gleam.position.y if cut_gleam != null else 0.0
+	check(y_hilt >= 0.14 and y_hilt <= 0.22, "CutlassBladeGleam begins near hilt fuller (y=%.3f)" % y_hilt)
+
+	# Step ~0.21 s (halfway through 0.42 s pulse) -> smoothly decayed & slid up the blade toward tip!
+	for _i in 13:
+		inv._process(1.0 / 60.0)
+	var s_mid := inv.get_cutlass_gleam_strength()
+	var y_mid := cut_gleam.position.y if cut_gleam != null else 0.0
+	check(cut_gleam != null and cut_gleam.visible, "CutlassBladeGleam remains visible mid-sweep (0.21 s)")
+	check(s_mid > 0.15 and s_mid < 0.72, "CutlassBladeGleam strength decays smoothly mid-pulse (got %.3f)" % s_mid)
+	check(y_mid > y_hilt + 0.20,
+		"CutlassBladeGleam slides smoothly along blade from hilt toward tip (y: %.3f -> %.3f)" % [y_hilt, y_mid])
+
+	# Step past full 0.42 s duration -> decays back to 0.0 and hides cleanly!
+	for _i in 18:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_cutlass_gleam_strength(), 0.0, 0.0001, "CutlassBladeGleam decays to 0.0 after 0.42 s")
+	check(cut_gleam != null and not cut_gleam.visible, "CutlassBladeGleam hides cleanly once decayed")
+
+	# Verify automatic combat signal triggers: heavy lunge, combo finisher (slash_3), parry, & block clang!
+	cc.attack_started.emit(&"heavy")
+	check(inv.get_cutlass_gleam_strength() > 0.90, "Heavy cutlass lunge automatically triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+	check_near(inv.get_cutlass_gleam_strength(), 0.0, 0.0001, "Heavy lunge gleam decays cleanly to 0")
+
+	cc.attack_started.emit(&"slash_3")
+	check(inv.get_cutlass_gleam_strength() > 0.80, "Combo finisher (slash_3) automatically triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+
+	cc.parried.emit(captain)
+	check(inv.get_cutlass_gleam_strength() > 0.90, "Timed parry automatically triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+
+	cc.blocked.emit(captain)
+	check(inv.get_cutlass_gleam_strength() > 0.70, "Block clang automatically triggers CutlassBladeGleam")
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+
+	# ------------------------------------------------------------------
+	# 4. Profile Loadout Hygiene & Zero-Leak WeakRef Teardown
+	# ------------------------------------------------------------------
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._shanty_note_mesh_ref == null, "clear_shared_cache() nulls _shanty_note_mesh_ref")
+	check(ToolMeshes._shanty_note_mat_ref == null, "clear_shared_cache() nulls _shanty_note_mat_ref")
+	check(ToolMeshes._spyglass_glint_mesh_ref == null, "clear_shared_cache() nulls _spyglass_glint_mesh_ref")
+	check(ToolMeshes._cutlass_gleam_mesh_ref == null, "clear_shared_cache() nulls _cutlass_gleam_mesh_ref")
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "Q14A teardown clears _pbr_tex_cache cleanly")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "Q14A teardown clears _fp_hand_mesh_cache cleanly")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "Q14A teardown clears _fp_hand_mat_cache cleanly")
+

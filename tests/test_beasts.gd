@@ -2506,3 +2506,284 @@ func test_q13b_flotsam_salvage_glint_supply_barrel_glint_and_shark_spray() -> vo
 		"Shark releases all static meshes, spray MultiMesh asset & materials cleanly (0 leaks)")
 
 
+func test_q14b_whale_blowhole_spout_and_dolphin_biolum_breach_rings() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 12.0, PI * 0.5)  # Steady breeze blowing toward +X
+
+	# 1. Static source guard: Vulkan-safe MultiMesh teardown (never null .mesh on a live MultiMesh).
+	var whale_src := FileAccess.get_file_as_string("res://src/world/ocean_whale.gd")
+	var pod_src := FileAccess.get_file_as_string("res://src/world/dolphin_pod.gd")
+	for src_pair: Array in [[whale_src, "ocean_whale.gd"], [pod_src, "dolphin_pod.gd"]]:
+		var txt := String(src_pair[0])
+		var fname := String(src_pair[1])
+		check(not txt.contains("multimesh.mesh = null") and not txt.contains("mm.mesh = null"),
+			"%s follows Godot 4.8 Vulkan rule (never nulls .mesh on a live MultiMesh)" % fname)
+
+	# 2. OceanWhale: sculpted zero-primitive WhaleBlowholeSpout (18x24-tri puffs, 0 VRAM, twin V-plume, wind drift).
+	var whale_a := OceanWhale.spawn_breach(_root, Vector3(0.0, 0.0, -40.0), 0.0)
+	whale_a.auto_despawn = false
+	var whale_b := OceanWhale.spawn_breach(_root, Vector3(45.0, 0.0, -40.0), 0.0)
+	whale_b.auto_despawn = false
+
+	var spout_a := whale_a.get_blowhole_spout_node()
+	var spout_b := whale_b.get_blowhole_spout_node()
+	check(spout_a != null and spout_a.name == "WhaleBlowholeSpout",
+		"OceanWhale mounts WhaleBlowholeSpout MultiMeshInstance3D via get_blowhole_spout_node()")
+	check(spout_a != null and spout_a.top_level, "WhaleBlowholeSpout uses top_level = true")
+
+	var puff_tris := 0
+	var puff_bad_normals := 0
+	if spout_a != null:
+		check_eq(spout_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"WhaleBlowholeSpout disables shadow casting")
+		check_near(spout_a.visibility_range_end, 420.0, 0.05,
+			"WhaleBlowholeSpout sets visibility_range_end = 420.0 m")
+		var smm := spout_a.multimesh
+		check(smm != null and smm.instance_count == 18 and smm.use_colors,
+			"WhaleBlowholeSpout configures 18 per-instance colored mist puffs")
+		check(smm != null and smm.mesh is ArrayMesh and not (smm.mesh is PrimitiveMesh),
+			"WhaleBlowholeSpout uses sculpted ArrayMesh (zero raw PrimitiveMesh)")
+		if spout_b != null and spout_b.multimesh != null and smm != null:
+			check_eq(smm.mesh, spout_b.multimesh.mesh,
+				"OceanWhales share statically cached 24-tri blowhole mist-puff ArrayMesh")
+		if smm != null and smm.mesh is ArrayMesh:
+			var arr := (smm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			puff_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					puff_bad_normals += 1
+		check_eq(puff_tris, 24, "sculpted organic blowhole mist-puff mesh has exact 24 triangles")
+		check_eq(puff_bad_normals, 0, "all blowhole mist-puff normals are finite unit vectors")
+
+		var sp_mat := spout_a.material_override as StandardMaterial3D
+		check(sp_mat != null and sp_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and sp_mat.vertex_color_use_as_albedo and sp_mat.vertex_color_is_srgb \
+				and is_equal_approx(sp_mat.roughness, 0.85),
+			"WhaleBlowholeSpout uses translucent sRGB vertex-colored StandardMaterial3D (roughness=0.85)")
+		if sp_mat != null:
+			check(sp_mat.albedo_texture == null and sp_mat.normal_texture == null and sp_mat.roughness_texture == null,
+				"WhaleBlowholeSpout allocates 0 extra VRAM textures")
+
+	# Verify APPROACH activation, upward rise, +X vs -X downwind drift along Weather.wind_vector(),
+	# day->night moonlit aqua tint shift, BREACH_RISE full crest, and clean fade by SUBMERGE/DONE!
+	whale_a.step_breach(0.20)
+	check_eq(whale_a.phase, OceanWhale.Phase.APPROACH, "whale_a is in Phase.APPROACH at 0.20 s")
+	check(whale_a.is_blowhole_spout_active() and spout_a != null and spout_a.visible,
+		"WhaleBlowholeSpout activates during Phase.APPROACH")
+	var pts_app := whale_a.get_spout_puff_positions()
+	check_eq(pts_app.size(), 18, "get_spout_puff_positions() returns pre-allocated 18 puff positions")
+	var app_max_y := -INF
+	var app_min_y := INF
+	for p in pts_app:
+		app_max_y = maxf(app_max_y, p.y)
+		app_min_y = minf(app_min_y, p.y)
+	check(app_min_y >= 0.12, "all APPROACH spout puffs stay safely above Sea.height() + 0.12 m (min_y=%.2f)" % app_min_y)
+
+	# Step into Phase.BREACH_RISE (~2.0 s) and measure towering 4.8 m V-plume & +X downwind drift.
+	for _s in 9:
+		whale_a.step_breach(0.20)
+	check_eq(whale_a.phase, OceanWhale.Phase.BREACH_RISE, "whale_a reaches Phase.BREACH_RISE at 2.0 s")
+	check(whale_a.is_blowhole_spout_active() and spout_a != null and spout_a.visible,
+		"WhaleBlowholeSpout stays active at full height during Phase.BREACH_RISE")
+	var bh_origin_pos := spout_a.global_position
+	var pts_rise_pos_x := whale_a.get_spout_puff_positions()
+	var wind_pos_x := Weather.wind_vector()
+	var wind_dir_pos_x := Vector3(wind_pos_x.x, 0.0, wind_pos_x.z).normalized()
+	var rise_max_y := -INF
+	var mean_pos_x := Vector3.ZERO
+	for p in pts_rise_pos_x:
+		rise_max_y = maxf(rise_max_y, p.y)
+		mean_pos_x += p
+	mean_pos_x /= float(pts_rise_pos_x.size())
+	var drift_dot_pos := (mean_pos_x - bh_origin_pos).dot(wind_dir_pos_x)
+	var crest_height := rise_max_y - bh_origin_pos.y
+	check(rise_max_y > app_max_y + 2.5,
+		"spout puffs rise dramatically upward from APPROACH to BREACH_RISE (%.2f -> %.2f m)" % [app_max_y, rise_max_y])
+	check(crest_height >= 4.2 and crest_height <= 5.0,
+		"BREACH_RISE twin V-plume crests near 4.8 m above blowhole (got %.2f m)" % crest_height)
+	check(drift_dot_pos > 0.75,
+		"spout puffs drift downwind along +X Weather.wind_vector() (dot=%.2f m)" % drift_dot_pos)
+
+	# Flip wind heading to -X and verify puffs immediately drift cleanly toward -X!
+	Weather.set_weather(0.0, 12.0, -PI * 0.5)
+	whale_a.step_breach(0.05)
+	var bh_origin_neg := spout_a.global_position
+	var pts_rise_neg_x := whale_a.get_spout_puff_positions()
+	var wind_neg_x := Weather.wind_vector()
+	var wind_dir_neg_x := Vector3(wind_neg_x.x, 0.0, wind_neg_x.z).normalized()
+	var mean_neg_x := Vector3.ZERO
+	for p in pts_rise_neg_x:
+		mean_neg_x += p
+	mean_neg_x /= float(pts_rise_neg_x.size())
+	var drift_dot_neg := (mean_neg_x - bh_origin_neg).dot(wind_dir_neg_x)
+	check(drift_dot_neg > 0.75 and mean_neg_x.x < bh_origin_neg.x - 0.5,
+		"reversing Weather.wind_vector() flips downwind plume drift cleanly to -X (dot=%.2f m)" % drift_dot_neg)
+
+	# Verify day -> night blowhole mist tint shift (sunlit pearl -> moonlit pale-aqua).
+	Weather.time_of_day = 12.0
+	whale_a.step_breach(0.02)
+	var day_tint := whale_a._spout_tint
+	var day_spout_emit := OceanWhale._spout_puff_mat.emission_energy_multiplier
+	Weather.time_of_day = 0.5
+	whale_a.step_breach(0.02)
+	var night_tint := whale_a._spout_tint
+	var night_spout_emit := OceanWhale._spout_puff_mat.emission_energy_multiplier
+	check(night_tint.r < day_tint.r - 0.15 and night_tint.b > night_tint.r + 0.15,
+		"blowhole mist shifts from sunlit pearl (%.2f,%.2f,%.2f) to moonlit pale-aqua (%.2f,%.2f,%.2f)" % [
+			day_tint.r, day_tint.g, day_tint.b, night_tint.r, night_tint.g, night_tint.b
+		])
+	check(night_spout_emit > day_spout_emit + 0.15,
+		"moonlit spout emission lifts gently at night (%.2f -> %.2f)" % [day_spout_emit, night_spout_emit])
+
+	# Step through APEX_TWIST -> SPLASH_REENTRY -> SUBMERGE -> DONE and verify clean fade-out!
+	var saw_submerge_inactive := false
+	var saw_done_inactive := false
+	for _s in 36:
+		whale_a.step_breach(0.20)
+		if whale_a.phase == OceanWhale.Phase.SUBMERGE:
+			if not whale_a.is_blowhole_spout_active() and not spout_a.visible:
+				saw_submerge_inactive = true
+		elif whale_a.phase == OceanWhale.Phase.DONE:
+			if not whale_a.is_blowhole_spout_active() and not spout_a.visible:
+				saw_done_inactive = true
+	check(saw_submerge_inactive, "WhaleBlowholeSpout fades cleanly inactive during Phase.SUBMERGE")
+	check(saw_done_inactive, "WhaleBlowholeSpout remains inactive and hidden in Phase.DONE")
+
+	# Verify force_breach_apex() activates dramatic mid-plume blowhole silhouette on whale_b!
+	Weather.time_of_day = 12.0
+	whale_b.force_breach_apex()
+	check(whale_b.is_blowhole_spout_active() and spout_b != null and spout_b.visible,
+		"force_breach_apex() activates dramatic mid-plume blowhole silhouette")
+	var apex_pts := whale_b.get_spout_puff_positions()
+	var apex_max_y := -INF
+	for p in apex_pts:
+		apex_max_y = maxf(apex_max_y, p.y)
+	check(apex_max_y > whale_b.global_position.y + 3.0,
+		"force_breach_apex() blowhole plume towers above soaring whale (max_y=%.2f vs whale_y=%.2f)" % [
+			apex_max_y, whale_b.global_position.y
+		])
+
+	# 3. DolphinPod: sculpted zero-primitive DolphinBreachRings (pod_count instances, (0,1,0) normals,
+	#    force_leap_phase stamping, live crossing stamping, clean decay to 0, nocturnal biolum tinting).
+	var pod_a := DolphinPod.spawn_alongside(_root, null, 3, 24.0)
+	var pod_b := DolphinPod.spawn_alongside(_root, null, 2, 24.0)
+
+	var rings_a := pod_a.get_breach_rings_node()
+	var rings_b := pod_b.get_breach_rings_node()
+	check(rings_a != null and rings_a.name == "DolphinBreachRings",
+		"DolphinPod mounts DolphinBreachRings MultiMeshInstance3D via get_breach_rings_node()")
+	check(rings_a != null and rings_a.top_level, "DolphinBreachRings uses top_level = true")
+	check_eq(pod_a.get_active_ring_count(), 0, "DolphinPod starts with 0 active breach rings")
+	check(rings_a != null and not rings_a.visible, "DolphinBreachRings starts hidden when 0 rings active")
+
+	var ring_tris := 0
+	var ring_bad_normals := 0
+	var ring_non_flat_verts := 0
+	if rings_a != null:
+		check_eq(rings_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"DolphinBreachRings disables shadow casting")
+		check_near(rings_a.visibility_range_end, 260.0, 0.05,
+			"DolphinBreachRings sets visibility_range_end = 260.0 m")
+		var rmm := rings_a.multimesh
+		check(rmm != null and rmm.instance_count == 3 and rmm.use_colors,
+			"DolphinBreachRings allocates pod_count (3) per-instance colored rings")
+		if rings_b != null and rings_b.multimesh != null:
+			check_eq(rings_b.multimesh.instance_count, 2,
+				"pod_b DolphinBreachRings matches its pod_count (2)")
+			if rmm != null:
+				check_eq(rmm.mesh, rings_b.multimesh.mesh,
+					"DolphinPods share statically cached concentric breach-ring ArrayMesh")
+		check(rmm != null and rmm.mesh is ArrayMesh and not (rmm.mesh is PrimitiveMesh),
+			"DolphinBreachRings uses sculpted ArrayMesh (zero raw PrimitiveMesh)")
+		if rmm != null and rmm.mesh is ArrayMesh:
+			var arr := (rmm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			ring_tris = floori(float(verts.size()) / 3.0)
+			for v in verts:
+				if absf(v.y) > 0.0001:
+					ring_non_flat_verts += 1
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+					ring_bad_normals += 1
+		check(ring_tris >= 120, "sculpted 2-ring concentric ripple mesh has rich geometry (%d tris)" % ring_tris)
+		check_eq(ring_non_flat_verts, 0, "all breach-ring vertices lie flat in the horizontal XZ plane")
+		check_eq(ring_bad_normals, 0, "all breach-ring normals are exact finite (0, 1, 0) upward unit vectors")
+
+		var r_mat := rings_a.material_override as StandardMaterial3D
+		check(r_mat != null and r_mat.vertex_color_use_as_albedo and r_mat.vertex_color_is_srgb \
+				and r_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and r_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and r_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and r_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"DolphinBreachRings uses unshaded sRGB double-sided translucent depth-draw-disabled StandardMaterial3D")
+		if r_mat != null:
+			check(r_mat.albedo_texture == null and r_mat.normal_texture == null and r_mat.roughness_texture == null,
+				"DolphinBreachRings allocates 0 extra VRAM textures")
+
+	# Verify force_leap_phase(PI * 0.5) immediately stamps glowing rings beneath airborne dolphins!
+	pod_a.force_leap_phase(PI * 0.5)
+	check(pod_a.get_active_ring_count() >= 2 and rings_a != null and rings_a.visible,
+		"force_leap_phase() stamps crisp concentric rings beneath airborne dolphins (active=%d)" % pod_a.get_active_ring_count())
+
+	# Verify normal live breach exit & plunge re-entry crossings stamp rings cleanly on pod_b!
+	var saw_live_rings := false
+	for _f in 90:
+		await physics_frames(1)
+		if pod_b.get_active_ring_count() > 0:
+			saw_live_rings = true
+			break
+	check(saw_live_rings and rings_b != null and rings_b.visible,
+		"normal dolphin breach/plunge crossings stamp concentric breach rings automatically")
+
+	# Verify rings decay cleanly back to 0 active & hidden MMI over > 1.15 s without new crossings!
+	pod_a.force_leap_phase(PI * 0.5)
+	check(pod_a.get_active_ring_count() > 0, "pod_a has active rings right before decay check")
+	# Put pod_a into its smooth dive-out window (dive_out > 0.35 suppresses new stamps) and step 1.35 s!
+	pod_a.age = pod_a.lifetime - 1.5
+	for _d in 9:
+		pod_a._update_dolphins(0.15, true)
+	check_eq(pod_a.get_active_ring_count(), 0,
+		"concentric breach rings decay cleanly back to 0 active rings after 1.15 s")
+	check(rings_a != null and not rings_a.visible,
+		"DolphinBreachRings hides MMI cleanly when 0 rings remain active")
+
+	# Verify nocturnal bioluminescent tint strength rises cleanly from noon -> dusk -> midnight!
+	Weather.time_of_day = 12.0
+	pod_b._update_dolphins(0.0, false)
+	var noon_biolum := pod_b.get_breach_ring_biolum()
+
+	Weather.time_of_day = 18.0
+	pod_b._update_dolphins(0.0, false)
+	var dusk_biolum := pod_b.get_breach_ring_biolum()
+
+	Weather.time_of_day = 0.5
+	pod_b._update_dolphins(0.0, false)
+	var midnight_biolum := pod_b.get_breach_ring_biolum()
+
+	check(noon_biolum < 0.05, "noon breach ring bioluminescence stays near 0.0 (got %.3f)" % noon_biolum)
+	check(midnight_biolum > 0.95, "midnight breach ring bioluminescence rises to ~1.0 (got %.3f)" % midnight_biolum)
+	check(midnight_biolum > dusk_biolum and dusk_biolum > noon_biolum,
+		"breach ring bioluminescence orders midnight (%.2f) > dusk (%.2f) > noon (%.2f)" % [
+			midnight_biolum, dusk_biolum, noon_biolum
+		])
+
+	print("    Q14B open-sea wonder VFX: WhaleBlowholeSpout=18x%d tris (crest=%.2f m, drift=%.2f m), DolphinBreachRings=%d tris (biolum=%.2f->%.2f)" % [
+		puff_tris, crest_height, drift_dot_pos, ring_tris, noon_biolum, midnight_biolum
+	])
+
+	# 4. Full teardown releases ALL static caches cleanly with 0 ObjectDB leaks!
+	await _end()
+	check_eq(OceanWhale._active_whales, 0, "OceanWhale._active_whales == 0 after Q14B teardown")
+	check(OceanWhale._spout_puff_mesh == null and OceanWhale._spout_puff_mat == null \
+			and OceanWhale._body_mesh == null and OceanWhale._whale_mat == null,
+		"OceanWhale releases spout & whale static caches cleanly (0 leaks)")
+	check_eq(DolphinPod._active_pods, 0, "DolphinPod._active_pods == 0 after Q14B teardown")
+	check(DolphinPod._breach_ring_mesh == null and DolphinPod._breach_ring_mat == null \
+			and DolphinPod._body_mesh == null and DolphinPod._skin_mat == null,
+		"DolphinPod releases breach-ring & dolphin static caches cleanly (0 leaks)")

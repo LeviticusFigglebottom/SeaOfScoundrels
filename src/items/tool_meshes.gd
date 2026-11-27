@@ -118,15 +118,24 @@ static var _fp_hand_mat_cache: Dictionary = {}
 ## Lazy WeakRef caches of shared held-lantern atmospheric halo mesh & shader (zero shutdown leaks).
 static var _lantern_halo_mesh: WeakRef = null
 static var _lantern_halo_shader: WeakRef = null
+## Lazy WeakRef caches of Q14A sculpted shanty notes, spyglass lens glint & cutlass blade gleam assets.
+static var _shanty_note_mesh_ref: WeakRef = null
+static var _shanty_note_mat_ref: WeakRef = null
+static var _spyglass_glint_mesh_ref: WeakRef = null
+static var _cutlass_gleam_mesh_ref: WeakRef = null
 
 
-## Clear cached shared PBR texture, hand mesh, and lantern halo caches cleanly on teardown.
+## Clear cached shared PBR texture, hand mesh, lantern halo, and Q14A VFX caches cleanly on teardown.
 static func clear_shared_cache() -> void:
 	_pbr_tex_cache.clear()
 	_fp_hand_mesh_cache.clear()
 	_fp_hand_mat_cache.clear()
 	_lantern_halo_mesh = null
 	_lantern_halo_shader = null
+	_shanty_note_mesh_ref = null
+	_shanty_note_mat_ref = null
+	_spyglass_glint_mesh_ref = null
+	_cutlass_gleam_mesh_ref = null
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -351,13 +360,154 @@ static func set_hurdy_gurdy_crank(inst_node: Node3D, angle_rad: float) -> void:
 			rh.position = Vector3(0.232, 0.004 + cos(angle_rad) * 0.082, 0.006 + sin(angle_rad) * 0.082)
 
 
-## Extend or retract a Spyglass node's telescoping draw tubes (`ext_01` in 0..1).
+## Extend or retract a Spyglass node's telescoping draw tubes (`ext_01` in 0..1)
+## and keep its objective lens rim glint anchored cleanly to the sliding brass tube.
 static func set_spyglass_extension(spy_node: Node3D, ext_01: float) -> void:
 	if spy_node == null:
 		return
 	var tubes := spy_node.get_node_or_null(^"DrawTubes") as Node3D
 	if tubes != null:
 		tubes.position.z = -clampf(ext_01, 0.0, 1.0) * 0.16
+		var glint := spy_node.get_node_or_null(^"SpyglassLensGlint") as Node3D
+		if glint != null:
+			glint.position = Vector3(0.016, 0.018, tubes.position.z - 0.432 * maxf(tubes.scale.z, 0.1))
+
+
+## Animate floating sculpted eighth-note shanty VFX (`ShantyNotesVFX`) above Concertina & Hurdy-Gurdy.
+static func update_shanty_notes(tool_root: Node3D, delta: float, playing: bool, clock: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var mmi := tool_root.get_node_or_null(^"ShantyNotesVFX") as MultiMeshInstance3D
+	if mmi == null or mmi.multimesh == null:
+		return
+	var mm := mmi.multimesh
+	var count := mini(mm.instance_count, 10)
+	if not playing:
+		mmi.visible = false
+		tool_root.set_meta(&"q14a_shanty_active", false)
+		tool_root.set_meta(&"q14a_shanty_intensity", 0.0)
+		var cleared := PackedFloat32Array()
+		cleared.resize(count)
+		tool_root.set_meta(&"q14a_shanty_note_heights", cleared)
+		return
+
+	const CYCLE_S := 2.40
+	const MIN_Y := 0.04
+	const MAX_Y := 0.52
+	var prev_i := float(tool_root.get_meta(&"q14a_shanty_intensity", 0.0))
+	var intensity := 1.0 if delta <= 0.0 else clampf(maxf(prev_i, 0.28) + delta * 3.8, 0.28, 1.0)
+	var heights := PackedFloat32Array()
+	heights.resize(count)
+	var x_bias := 0.045 if tool_root.name == "Tool_HurdyGurdy" else 0.0
+	var denom := float(maxi(count, 1))
+
+	for i in count:
+		var phase := fposmod(clock / CYCLE_S + float(i) / denom, 1.0)
+		var y := lerpf(MIN_Y, MAX_Y, phase)
+		heights[i] = y
+		var side := -1.0 if (i % 2 == 0) else 1.0
+		var x := x_bias + side * (0.032 + 0.145 * pow(phase, 0.85)) \
+			+ sin(clock * 2.8 + float(i) * 1.37) * 0.032 * (0.35 + phase)
+		var z := -0.024 - 0.092 * phase + cos(clock * 2.3 + float(i) * 1.13) * 0.022
+		var rock_z := sin(clock * 4.2 + float(i) * 0.92) * 0.30
+		var yaw_y := cos(clock * 2.6 + float(i) * 1.45) * 0.28
+		var pitch_x := sin(clock * 3.1 + float(i) * 0.77) * 0.12
+		var env_in := smoothstep(0.0, 0.14, phase)
+		var env_out := 1.0 - smoothstep(0.76, 1.0, phase)
+		var beat_pulse := 1.0 + 0.11 * sin(clock * TAU + float(i) * 0.7)
+		var sc := maxf(0.18, lerpf(0.68, 1.18, sin(phase * PI)) * beat_pulse * (0.35 + 0.65 * env_in))
+		var basis := Basis.from_euler(Vector3(pitch_x, yaw_y, rock_z)) * Basis.from_scale(Vector3.ONE * sc)
+		mm.set_instance_transform(i, Transform3D(basis, Vector3(x, y, z)))
+
+		var tint := Color(1.00, 0.86, 0.34, 1.0)
+		if i % 3 == 1:
+			tint = Color(1.00, 0.95, 0.74, 1.0)
+		elif i % 3 == 2:
+			tint = Color(0.98, 0.74, 0.24, 1.0)
+		var fade := clampf(env_in * env_out * intensity, 0.0, 1.0)
+		mm.set_instance_color(i, Color(tint.r * fade, tint.g * fade, tint.b * fade, 1.0))
+
+	mmi.visible = true
+	tool_root.set_meta(&"q14a_shanty_active", true)
+	tool_root.set_meta(&"q14a_shanty_intensity", intensity)
+	tool_root.set_meta(&"q14a_shanty_note_heights", heights)
+
+
+## Update a Spyglass node's additive 4-point objective lens glint (`SpyglassLensGlint`):
+## stays anchored to the telescoping objective rim, brightens smoothly with zoom,
+## and flares luminous emerald-gold whenever a horizon sighting lock is active.
+static func update_spyglass_glint(tool_root: Node3D, zoom_01: float, has_sighting: bool, clock: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var glint := tool_root.get_node_or_null(^"SpyglassLensGlint") as MeshInstance3D
+	if glint == null:
+		return
+	var z := clampf(zoom_01, 0.0, 1.0)
+	var tubes := tool_root.get_node_or_null(^"DrawTubes") as Node3D
+	var tube_z := -z * 0.16
+	var tube_scale_z := 1.0
+	if tubes != null:
+		tube_scale_z = maxf(tubes.scale.z, 0.1)
+		tube_z = tubes.position.z if absf(tubes.position.z) > 0.0005 else (-z * 0.16)
+	glint.position = Vector3(0.016, 0.018, tube_z - 0.432 * tube_scale_z)
+
+	var shimmer := 0.92 + 0.08 * sin(clock * 3.8) * cos(clock * 2.1 + 0.4)
+	var zoom_t := smoothstep(0.20, 0.85, z)
+	var base_energy := lerpf(0.18, 0.56, zoom_t) * shimmer
+	var energy := base_energy
+	var tint := Color(0.84, 0.96, 1.00).lerp(Color(1.00, 0.94, 0.72), zoom_t)
+	if has_sighting:
+		var lock_pulse := 0.96 + 0.08 * sin(clock * 7.5)
+		energy = maxf(base_energy, 1.05 * lock_pulse)
+		tint = Color(0.38, 1.00, 0.64).lerp(Color(1.00, 0.88, 0.34), 0.40 + 0.12 * sin(clock * 5.2))
+
+	var sc := lerpf(0.68, 1.36, clampf(energy / 1.10, 0.0, 1.0))
+	glint.scale = Vector3.ONE * sc
+	glint.visible = energy > 0.005
+	if glint.material_override is StandardMaterial3D:
+		var mat := glint.material_override as StandardMaterial3D
+		mat.albedo_color = Color(tint.r * energy, tint.g * energy, tint.b * energy, 1.0)
+	tool_root.set_meta(&"q14a_spyglass_glint_energy", energy)
+	tool_root.set_meta(&"q14a_spyglass_has_sighting", has_sighting)
+
+
+## Slide and brighten the sculpted metallic star-gleam (`CutlassBladeGleam`) along
+## the curved steel fuller of a Cutlass (`slide_01`: 0 = hilt -> 1 = tip; hidden when strength <= 0.01).
+static func update_cutlass_gleam(tool_root: Node3D, strength_01: float, slide_01: float) -> void:
+	if tool_root == null or not is_instance_valid(tool_root):
+		return
+	var gleam := tool_root.get_node_or_null(^"CutlassBladeGleam") as MeshInstance3D
+	if gleam == null:
+		return
+	var s := clampf(strength_01, 0.0, 1.5)
+	var u := clampf(slide_01, 0.0, 1.0)
+	var t := lerpf(0.10, 0.94, u)
+	var y := 0.105 + t * 0.64
+	var sweep_z := 0.072 * pow(t, 1.95) - 0.012 * sin(t * PI)
+	var width := 0.056 * (1.0 + 0.24 * sin(t * PI * 0.82)) * (1.0 - 0.88 * pow(t, 4.2))
+	var edge_z := sweep_z - width * 0.62
+	var spine_z := sweep_z + width * 0.38
+	var fuller_z := lerpf(edge_z, spine_z, 0.42)
+	gleam.position = Vector3(0.010, y, fuller_z)
+
+	if s <= 0.01:
+		gleam.visible = false
+		gleam.scale = Vector3.ONE * 0.01
+		if gleam.material_override is StandardMaterial3D:
+			(gleam.material_override as StandardMaterial3D).albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		tool_root.set_meta(&"q14a_cutlass_gleam_strength", 0.0)
+		tool_root.set_meta(&"q14a_cutlass_gleam_slide", u)
+		return
+
+	gleam.visible = true
+	var sc := lerpf(0.42, 1.32, clampf(s / 1.25, 0.0, 1.0)) * (0.78 + 0.28 * sin(u * PI))
+	gleam.scale = Vector3.ONE * sc
+	if gleam.material_override is StandardMaterial3D:
+		var mat := gleam.material_override as StandardMaterial3D
+		var col := Color(0.95, 0.96, 1.00).lerp(Color(1.00, 0.90, 0.56), clampf(s * 0.55, 0.0, 0.65))
+		mat.albedo_color = Color(col.r * s, col.g * s, col.b * s, 1.0)
+	tool_root.set_meta(&"q14a_cutlass_gleam_strength", s)
+	tool_root.set_meta(&"q14a_cutlass_gleam_slide", u)
 
 
 ## Apply visible 3D first-person/third-person styling for Economy `tool_variant` sidegrades
@@ -412,6 +562,10 @@ static func apply_tool_variant_visual(item_id: StringName, node: Node3D, variant
 					lens.material_override = _make_mat(COL_LENS, 0.08, 0.25, Color(0.12, 0.26, 0.40), 0.25, true)
 				if accent_ring != null:
 					accent_ring.visible = false
+			if tubes != null:
+				var glint := node.get_node_or_null(^"SpyglassLensGlint") as Node3D
+				if glint != null:
+					glint.position = Vector3(0.016, 0.018, tubes.position.z - 0.432 * maxf(tubes.scale.z, 0.1))
 
 		&"shovel":
 			var blade := node.get_node_or_null(^"SpadeBlade") as MeshInstance3D
@@ -542,6 +696,18 @@ static func _build_cutlass() -> Node3D:
 	_append_tube(st_brass, rib_pts, 0.0065, 6, true)
 	st_brass.generate_normals()
 	root.add_child(_make_mesh_node("BrassHilt", st_brass.commit(), _make_mat(COL_BRASS, 0.28, 0.86)))
+
+	# Sculpted 24-tri additive metallic blade star-gleam sweeping along the upper steel fuller.
+	var gleam := MeshInstance3D.new()
+	gleam.name = "CutlassBladeGleam"
+	gleam.mesh = _get_cutlass_gleam_mesh()
+	gleam.material_override = _make_star_flare_mat()
+	gleam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gleam.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	gleam.extra_cull_margin = 0.25
+	gleam.visible = false
+	root.add_child(gleam)
+	update_cutlass_gleam(root, 0.0, 0.0)
 	return root
 
 
@@ -1122,6 +1288,17 @@ static func _build_spyglass() -> Node3D:
 		Vector2(0.0, 0.412),
 	], 14, Transform3D(rot_z, Vector3.ZERO))
 	draw_tubes.add_child(_make_mesh_node("ObjectiveLens", lens_mesh, _make_mat(COL_LENS, 0.08, 0.25, Color(0.12, 0.26, 0.40), 0.25, true)))
+
+	# Sculpted 24-tri additive 4-point glass star flare anchored cleanly to the sliding objective lens rim.
+	var glint := MeshInstance3D.new()
+	glint.name = "SpyglassLensGlint"
+	glint.mesh = _get_spyglass_glint_mesh()
+	glint.material_override = _make_star_flare_mat()
+	glint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	glint.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	glint.extra_cull_margin = 0.25
+	root.add_child(glint)
+	update_spyglass_glint(root, 0.0, false, 0.0)
 	return root
 
 
@@ -1634,6 +1811,7 @@ static func _build_instrument() -> Node3D:
 			], 6, Transform3D(end_rot, pos))
 		st_btn.generate_normals()
 		end_node.add_child(_make_mesh_node("Buttons", st_btn.commit(), _make_mat(COL_IVORY, 0.45, 0.05)))
+	_mount_shanty_notes_vfx(root)
 	return root
 
 
@@ -1851,6 +2029,7 @@ static func _build_hurdy_gurdy() -> Node3D:
 		Vector2(0.0, 0.060),
 	], 10, Transform3D(rot_x, Vector3(0.038, 0.082, 0.0)))
 	crank.add_child(_make_mesh_node("CrankKnob", knob_mesh, _make_mat(COL_WALNUT, 0.56, 0.05)))
+	_mount_shanty_notes_vfx(root)
 	return root
 
 
@@ -3273,4 +3452,283 @@ static func _append_colored_loft(
 				st.set_color(avg1); st.set_uv(Vector2(0.5, 0.5)); st.add_vertex(c1)
 				st.set_color(last_c[i] as Color); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(last[i] as Vector3)
 				st.set_color(last_c[ni] as Color); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(last[ni] as Vector3)
+
+
+# ==============================================================================
+# Q14A Sculpted Musical Notes, Spyglass Objective Glint & Cutlass Steel Gleam
+# (100% SurfaceTool ArrayMeshes, Zero Raw Primitives, WeakRef-Cached)
+# ==============================================================================
+
+static func _mount_shanty_notes_vfx(root: Node3D) -> void:
+	const NOTE_COUNT := 10
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _get_shanty_note_mesh()
+	mm.instance_count = NOTE_COUNT
+	var hidden_xf := Transform3D(Basis.from_scale(Vector3.ONE * 0.01), Vector3.ZERO)
+	for i in NOTE_COUNT:
+		mm.set_instance_transform(i, hidden_xf)
+		mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 1.0))
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "ShantyNotesVFX"
+	mmi.multimesh = mm
+	mmi.material_override = _get_shanty_note_mat()
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	mmi.extra_cull_margin = 0.75
+	mmi.visible = false
+	root.add_child(mmi)
+
+	var empty_heights := PackedFloat32Array()
+	empty_heights.resize(NOTE_COUNT)
+	root.set_meta(&"q14a_shanty_active", false)
+	root.set_meta(&"q14a_shanty_intensity", 0.0)
+	root.set_meta(&"q14a_shanty_note_heights", empty_heights)
+
+
+static func _get_shanty_note_mesh() -> ArrayMesh:
+	if _shanty_note_mesh_ref != null:
+		var existing: Variant = _shanty_note_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_shanty_note_mesh()
+	_shanty_note_mesh_ref = weakref(built)
+	return built
+
+
+static func _get_shanty_note_mat() -> StandardMaterial3D:
+	if _shanty_note_mat_ref != null:
+		var existing: Variant = _shanty_note_mat_ref.get_ref()
+		if existing is StandardMaterial3D:
+			return existing as StandardMaterial3D
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	_shanty_note_mat_ref = weakref(mat)
+	return mat
+
+
+static func _get_spyglass_glint_mesh() -> ArrayMesh:
+	if _spyglass_glint_mesh_ref != null:
+		var existing: Variant = _spyglass_glint_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_star_flare_mesh(
+		0.015, 0.007, 0.056, 0.062, 0.017,
+		Color(1.00, 0.99, 0.94, 1.0),
+		Color(0.76, 0.94, 0.98, 1.0),
+		Color(0.56, 0.72, 0.68, 1.0)
+	)
+	_spyglass_glint_mesh_ref = weakref(built)
+	return built
+
+
+static func _get_cutlass_gleam_mesh() -> ArrayMesh:
+	if _cutlass_gleam_mesh_ref != null:
+		var existing: Variant = _cutlass_gleam_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_star_flare_mesh(
+		0.018, 0.008, 0.064, 0.078, 0.020,
+		Color(1.00, 0.99, 0.96, 1.0),
+		Color(0.96, 0.93, 0.76, 1.0),
+		Color(0.76, 0.72, 0.52, 1.0)
+	)
+	_cutlass_gleam_mesh_ref = weakref(built)
+	return built
+
+
+static func _make_star_flare_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	return mat
+
+
+static func _emit_xy_vfx_tri(
+	st: SurfaceTool,
+	a: Vector3, ca: Color,
+	b: Vector3, cb: Color,
+	c: Vector3, cc: Color
+) -> void:
+	const FRONT_NORM := Vector3(0.0, 0.0, 1.0)
+	var cross_z := (c - a).cross(b - a).z
+	if absf(cross_z) < 1e-12:
+		return
+	if cross_z < 0.0:
+		st.set_normal(FRONT_NORM); st.set_color(ca); st.add_vertex(a)
+		st.set_normal(FRONT_NORM); st.set_color(cc); st.add_vertex(c)
+		st.set_normal(FRONT_NORM); st.set_color(cb); st.add_vertex(b)
+	else:
+		st.set_normal(FRONT_NORM); st.set_color(ca); st.add_vertex(a)
+		st.set_normal(FRONT_NORM); st.set_color(cb); st.add_vertex(b)
+		st.set_normal(FRONT_NORM); st.set_color(cc); st.add_vertex(c)
+
+
+## Build a sculpted 39-triangle eighth-note musical flourish ArrayMesh:
+## tilted oval notehead (24 tris) + vertical stem (6 tris) + curved pennant flag (9 tris),
+## with exact finite (0, 0, 1) unit normals and warm gilded gold/ivory vertex colors.
+static func _build_shanty_note_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const COL_IVORY_GLOW := Color(1.00, 0.96, 0.80, 1.0)
+	const COL_GOLD_HI := Color(0.98, 0.82, 0.34, 1.0)
+	const COL_GOLD_RIM := Color(0.84, 0.58, 0.16, 1.0)
+
+	# 1. Tilted oval notehead (8 inner core tris + 16 outer bevel ring tris = 24 tris).
+	const SEGS := 8
+	var hc := Vector3(-0.011, -0.020, 0.0)
+	var tilt := deg_to_rad(24.0)
+	var ct := cos(tilt)
+	var sa := sin(tilt)
+	var in_ring: Array[Vector3] = []
+	var out_ring: Array[Vector3] = []
+	for k in SEGS:
+		var ang := float(k) / float(SEGS) * TAU
+		var ca := cos(ang)
+		var sn := sin(ang)
+		var ix := ca * 0.0085
+		var iy := sn * 0.0058
+		var ox := ca * 0.0160
+		var oy := sn * 0.0112
+		in_ring.append(Vector3(hc.x + ix * ct - iy * sa, hc.y + ix * sa + iy * ct, 0.0))
+		out_ring.append(Vector3(hc.x + ox * ct - oy * sa, hc.y + ox * sa + oy * ct, 0.0))
+	for k in SEGS:
+		var nk := (k + 1) % SEGS
+		_emit_xy_vfx_tri(st, hc, COL_IVORY_GLOW, in_ring[nk], COL_GOLD_HI, in_ring[k], COL_GOLD_HI)
+		_emit_xy_vfx_tri(st, in_ring[k], COL_GOLD_HI, in_ring[nk], COL_GOLD_HI, out_ring[nk], COL_GOLD_RIM)
+		_emit_xy_vfx_tri(st, in_ring[k], COL_GOLD_HI, out_ring[nk], COL_GOLD_RIM, out_ring[k], COL_GOLD_RIM)
+
+	# 2. Tapered vertical stem rising from notehead right edge (3 quads = 6 tris).
+	var stem_rows: Array[Array] = [
+		[Vector3(0.0004, -0.017, 0.0), Vector3(0.0052, -0.017, 0.0), COL_GOLD_RIM],
+		[Vector3(0.0005, 0.000, 0.0), Vector3(0.0050, 0.000, 0.0), COL_GOLD_HI],
+		[Vector3(0.0006, 0.018, 0.0), Vector3(0.0048, 0.018, 0.0), COL_IVORY_GLOW],
+		[Vector3(0.0008, 0.036, 0.0), Vector3(0.0046, 0.036, 0.0), COL_GOLD_HI],
+	]
+	for r in range(stem_rows.size() - 1):
+		var l0: Vector3 = stem_rows[r][0] as Vector3
+		var r0: Vector3 = stem_rows[r][1] as Vector3
+		var c0: Color = stem_rows[r][2] as Color
+		var l1: Vector3 = stem_rows[r + 1][0] as Vector3
+		var r1: Vector3 = stem_rows[r + 1][1] as Vector3
+		var c1: Color = stem_rows[r + 1][2] as Color
+		_emit_xy_vfx_tri(st, l0, c0, l1, c1, r1, c1)
+		_emit_xy_vfx_tri(st, l0, c0, r1, c1, r0, c0)
+
+	# 3. Curved musical pennant flag sweeping from stem top into pointed flourish tail (9 tris).
+	var flag_top: Array[Vector3] = [
+		Vector3(0.0046, 0.036, 0.0),
+		Vector3(0.0145, 0.030, 0.0),
+		Vector3(0.0225, 0.020, 0.0),
+		Vector3(0.0255, 0.008, 0.0),
+		Vector3(0.0220, -0.003, 0.0),
+		Vector3(0.0135, -0.010, 0.0),
+	]
+	var flag_bot: Array[Vector3] = [
+		Vector3(0.0046, 0.026, 0.0),
+		Vector3(0.0115, 0.022, 0.0),
+		Vector3(0.0175, 0.014, 0.0),
+		Vector3(0.0205, 0.005, 0.0),
+		Vector3(0.0185, -0.003, 0.0),
+	]
+	var flag_cols: Array[Color] = [
+		COL_IVORY_GLOW,
+		COL_IVORY_GLOW,
+		COL_GOLD_HI,
+		COL_GOLD_HI,
+		COL_GOLD_RIM,
+		COL_GOLD_RIM,
+	]
+	for k in 4:
+		_emit_xy_vfx_tri(st, flag_top[k], flag_cols[k], flag_top[k + 1], flag_cols[k + 1], flag_bot[k + 1], flag_cols[k + 1])
+		_emit_xy_vfx_tri(st, flag_top[k], flag_cols[k], flag_bot[k + 1], flag_cols[k + 1], flag_bot[k], flag_cols[k])
+	_emit_xy_vfx_tri(st, flag_top[4], flag_cols[4], flag_top[5], flag_cols[5], flag_bot[4], flag_cols[4])
+
+	return st.commit()
+
+
+## Build an exact 24-triangle 4-point additive star flare ArrayMesh (8 inner core tris +
+## 16 outer symmetric ray flare tris) with finite (0, 0, 1) normals and black feathered tips.
+static func _build_star_flare_mesh(
+	r_in_major: float,
+	r_in_minor: float,
+	r_out_x: float,
+	r_out_y: float,
+	r_out_minor: float,
+	col_core: Color,
+	col_major: Color,
+	col_minor: Color
+) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SPOKES := 8
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	const COL_TIP := Color(0.0, 0.0, 0.0, 1.0)
+	var center := Vector3.ZERO
+	var inner_pts: Array[Vector3] = []
+	var outer_pts: Array[Vector3] = []
+	var inner_cols: Array[Color] = []
+
+	for i in SPOKES:
+		var ang := float(i) / float(SPOKES) * TAU
+		var ca := cos(ang)
+		var sa := sin(ang)
+		var is_major := (i % 2 == 0)
+		var r_in := r_in_major if is_major else r_in_minor
+		var r_out := (r_out_y if (i == 2 or i == 6) else r_out_x) if is_major else r_out_minor
+		inner_pts.append(Vector3(ca * r_in, sa * r_in, 0.0))
+		outer_pts.append(Vector3(ca * r_out, sa * r_out, 0.0))
+		inner_cols.append(col_major if is_major else col_minor)
+
+	for i in SPOKES:
+		var ni := (i + 1) % SPOKES
+		var in_a := inner_pts[i]
+		var in_b := inner_pts[ni]
+		var out_a := outer_pts[i]
+		var out_b := outer_pts[ni]
+		var col_a := inner_cols[i]
+		var col_b := inner_cols[ni]
+
+		# Inner bright star core (8 tris).
+		st.set_normal(NORM); st.set_color(col_core); st.add_vertex(center)
+		st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+		st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+
+		# Outer symmetric ray flare feathering cleanly to Color(0, 0, 0, 1) tips (16 tris).
+		if i % 2 == 0:
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+		else:
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+			st.set_normal(NORM); st.set_color(col_a); st.add_vertex(in_a)
+			st.set_normal(NORM); st.set_color(col_b); st.add_vertex(in_b)
+			st.set_normal(NORM); st.set_color(COL_TIP); st.add_vertex(out_a)
+
+	return st.commit()
+
 

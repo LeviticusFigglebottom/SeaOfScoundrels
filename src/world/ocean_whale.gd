@@ -28,6 +28,13 @@ const COL_FLIPPER_UNDER := Color(0.925, 0.945, 0.925)  # Iconic bright white Hum
 const COL_BARNACLE := Color(0.840, 0.855, 0.795)       # Pale sea-barnacle tubercle speckles
 const COL_EYE_DARK := Color(0.030, 0.038, 0.052)       # Deep glossy whale eye
 
+# Iconic twin heart-shaped V-plume blowhole spout constants (zero extra VRAM textures).
+const SPOUT_PUFF_COUNT := 18
+const SPOUT_HEIGHT := 4.8
+const BLOWHOLE_LOCAL := Vector3(0.0, 1.35, -3.15)
+const COL_SPOUT_DAY := Color(0.97, 0.99, 0.98, 1.0)    # Sunlit sea-foam pearl
+const COL_SPOUT_NIGHT := Color(0.68, 0.90, 0.97, 1.0)  # Moonlit pale-aqua mist
+
 # Statically cached procedural ArrayMeshes, materials & spray texture shared across whales.
 static var _active_whales: int = 0
 static var _body_mesh: ArrayMesh = null
@@ -40,6 +47,8 @@ static var _spray_mat: StandardMaterial3D = null
 static var _spray_quad: QuadMesh = null
 static var _curtain_mesh: ArrayMesh = null
 static var _curtain_mat: StandardMaterial3D = null
+static var _spout_puff_mesh: ArrayMesh = null
+static var _spout_puff_mat: StandardMaterial3D = null
 
 @export var auto_despawn: bool = true
 @export var enable_effects: bool = true
@@ -59,6 +68,10 @@ var _fluke_mi: MeshInstance3D = null
 var _spray_curtain_mi: MeshInstance3D = null
 var _breach_spray: GPUParticles3D = null
 var _splash_plume: GPUParticles3D = null
+var _spout_mmi: MultiMeshInstance3D = null
+var _spout_active: bool = false
+var _spout_tint: Color = COL_SPOUT_DAY
+var _spout_positions: PackedVector3Array = PackedVector3Array()
 
 var _origin_xz: Vector2 = Vector2.ZERO
 var _heading_yaw: float = 0.0
@@ -96,6 +109,8 @@ static func clear_shared_cache() -> void:
 	_spray_quad = null
 	_curtain_mesh = null
 	_curtain_mat = null
+	_spout_puff_mesh = null
+	_spout_puff_mat = null
 
 
 func _enter_tree() -> void:
@@ -112,7 +127,22 @@ func _ready() -> void:
 	_apply_breach_pose(false)
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_spout_refs()
+
+
+func _release_spout_refs() -> void:
+	if _spout_mmi != null and is_instance_valid(_spout_mmi):
+		_spout_mmi.visible = false
+		_spout_mmi.material_override = null
+		_spout_mmi.multimesh = null
+	_spout_mmi = null
+	_spout_active = false
+
+
 func _exit_tree() -> void:
+	_release_spout_refs()
 	for mi: MeshInstance3D in [_body_mi, _flipper_l_mi, _flipper_r_mi, _fluke_mi, _spray_curtain_mi]:
 		if mi != null and is_instance_valid(mi):
 			if mi.mesh != null:
@@ -143,6 +173,21 @@ func _exit_tree() -> void:
 	_active_whales = maxi(0, _active_whales - 1)
 	if _active_whales == 0:
 		clear_shared_cache()
+
+
+## Return the sculpted MultiMeshInstance3D rendering the Humpback Whale's twin V-shaped blowhole mist plume.
+func get_blowhole_spout_node() -> MultiMeshInstance3D:
+	return _spout_mmi
+
+
+## Return true while the blowhole mist plume is actively billowing.
+func is_blowhole_spout_active() -> bool:
+	return _spout_active
+
+
+## Return pre-allocated world-space positions of all 18 blowhole spout mist puffs.
+func get_spout_puff_positions() -> PackedVector3Array:
+	return _spout_positions
 
 
 func _physics_process(delta: float) -> void:
@@ -245,6 +290,7 @@ func force_breach_apex() -> void:
 		_splash_plume.visible = true
 		_splash_plume.restart()
 		_splash_plume.emitting = true
+	_update_blowhole_spout(true)
 
 
 # ==============================================================================
@@ -302,6 +348,29 @@ func _build_rig() -> void:
 	_fluke_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	_fluke_mi.visibility_range_end = 420.0
 	tail_pivot.add_child(_fluke_mi)
+
+	# Sculpted zero-primitive 18-puff twin V-shaped blowhole water-spout plume (0 extra VRAM).
+	_spout_positions.resize(SPOUT_PUFF_COUNT)
+	var spout_mm := MultiMesh.new()
+	spout_mm.transform_format = MultiMesh.TRANSFORM_3D
+	spout_mm.use_colors = true
+	spout_mm.mesh = _spout_puff_mesh
+	spout_mm.instance_count = SPOUT_PUFF_COUNT
+	for i in SPOUT_PUFF_COUNT:
+		_spout_positions[i] = Vector3.ZERO
+		spout_mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3.ZERO))
+		spout_mm.set_instance_color(i, Color(1.0, 1.0, 1.0, 0.0))
+
+	_spout_mmi = MultiMeshInstance3D.new()
+	_spout_mmi.name = "WhaleBlowholeSpout"
+	_spout_mmi.top_level = true
+	_spout_mmi.multimesh = spout_mm
+	_spout_mmi.material_override = _spout_puff_mat
+	_spout_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_spout_mmi.visibility_range_end = 420.0
+	_spout_mmi.custom_aabb = AABB(Vector3(-8.5, -1.0, -8.5), Vector3(17.0, 9.5, 17.0))
+	_spout_mmi.visible = false
+	add_child(_spout_mmi)
 
 	if enable_effects:
 		_spray_curtain_mi = MeshInstance3D.new()
@@ -394,6 +463,8 @@ func _apply_breach_pose(trigger_events: bool) -> void:
 	if tail_pivot != null:
 		tail_pivot.rotation = Vector3(tail_pitch, 0.0, 0.0)
 
+	_update_blowhole_spout(false)
+
 	if _spray_curtain_mi != null and is_instance_valid(_spray_curtain_mi):
 		var show_curtain := (phase == Phase.BREACH_RISE and rel_y > -0.8) \
 			or phase == Phase.APEX_TWIST \
@@ -439,6 +510,107 @@ func _apply_breach_pose(trigger_events: bool) -> void:
 			_splash_plume.restart()
 			_splash_plume.emitting = true
 		whale_splashed.emit(splash_w)
+
+
+func _update_blowhole_spout(forced_hero: bool) -> void:
+	if _spout_mmi == null or not is_instance_valid(_spout_mmi):
+		return
+	var mm := _spout_mmi.multimesh
+	if mm == null:
+		return
+
+	var intensity := 0.0
+	var height_frac := 0.0
+	if forced_hero:
+		intensity = 0.92
+		height_frac = 0.96
+	else:
+		match phase:
+			Phase.APPROACH:
+				var u_app := clampf(elapsed / T_APPROACH_END, 0.0, 1.0)
+				intensity = lerpf(0.55, 1.0, smoothstep(0.0, 0.55, u_app))
+				height_frac = lerpf(0.28, 0.92, u_app)
+			Phase.BREACH_RISE:
+				var u_rise := clampf((elapsed - T_APPROACH_END) / (T_RISE_END - T_APPROACH_END), 0.0, 1.0)
+				intensity = 1.0
+				height_frac = lerpf(0.92, 1.0, clampf(u_rise * 2.4, 0.0, 1.0))
+			Phase.APEX_TWIST:
+				var u_apex := clampf((elapsed - T_RISE_END) / (T_APEX_END - T_RISE_END), 0.0, 1.0)
+				intensity = lerpf(0.92, 0.24, smoothstep(0.0, 1.0, u_apex))
+				height_frac = 1.0
+			Phase.SPLASH_REENTRY:
+				var u_spl := clampf((elapsed - T_APEX_END) / 0.55, 0.0, 1.0)
+				intensity = lerpf(0.24, 0.0, smoothstep(0.0, 1.0, u_spl))
+				height_frac = 1.0
+			_:
+				intensity = 0.0
+				height_frac = 0.0
+
+	if intensity <= 0.01:
+		_spout_active = false
+		_spout_mmi.visible = false
+		return
+
+	var whale_pos := global_position if is_inside_tree() else position
+	var body_b := body_root.global_basis if (body_root != null and is_inside_tree()) \
+		else (body_root.basis if body_root != null else Basis.IDENTITY)
+	var blowhole_w := whale_pos + body_b * BLOWHOLE_LOCAL
+	var bh_sea_y := Sea.height(blowhole_w.x, blowhole_w.z) if Sea != null else 0.0
+	blowhole_w.y = maxf(blowhole_w.y, bh_sea_y + 0.12)
+
+	if is_inside_tree():
+		_spout_mmi.global_transform = Transform3D(Basis.IDENTITY, blowhole_w)
+	else:
+		_spout_mmi.transform = Transform3D(Basis.IDENTITY, blowhole_w)
+
+	var fwd := Vector3(-sin(_heading_yaw), 0.0, -cos(_heading_yaw))
+	var right := Vector3(cos(_heading_yaw), 0.0, -sin(_heading_yaw))
+	var wind_v := Weather.wind_vector() if Weather != null else Vector3(0.0, 0.0, -4.0)
+	wind_v.y = 0.0
+	var wind_eff := wind_v.limit_length(16.0)
+	var daylight := Weather.daylight() if Weather != null else 1.0
+	var mist_tint := COL_SPOUT_NIGHT.lerp(COL_SPOUT_DAY, daylight)
+	_spout_tint = mist_tint
+	if _spout_puff_mat != null:
+		_spout_puff_mat.emission_energy_multiplier = lerpf(0.24, 0.0, daylight)
+
+	var per_arm_f := float(SPOUT_PUFF_COUNT) * 0.5
+	var phase_t := 0.85 if forced_hero else elapsed
+
+	for i in SPOUT_PUFF_COUNT:
+		var side := -1.0 if (i % 2 == 0) else 1.0
+		var arm_idx := float(i >> 1)
+		var slot_off := (arm_idx + (0.25 if side > 0.0 else 0.0)) / per_arm_f
+		var u := fposmod(slot_off + phase_t * 0.65, 1.0)
+
+		# Iconic 4.8 m tall twin heart-shaped V-plume cresting & curling softly at crown tips!
+		var rise_y := maxf(0.08, SPOUT_HEIGHT * height_frac * sin(u * PI * 0.58))
+		var heart_flare := 0.14 + 1.18 * pow(u, 0.82) + 0.28 * smoothstep(0.68, 1.0, u)
+		var fore_wobble := sin(u * TAU + float(i) * 1.17 + phase_t * 1.6) * (0.12 + 0.22 * u)
+		var side_wobble := cos(u * PI * 1.5 + float(i) * 0.83) * 0.10 * u
+		var drift := wind_eff * (0.26 * pow(u, 1.25) * height_frac)
+
+		var local_off := right * (side * (heart_flare + side_wobble)) \
+			+ fwd * (fore_wobble - 0.18 * u) \
+			+ Vector3(0.0, rise_y, 0.0) \
+			+ drift
+
+		var s_xz := lerpf(0.32, 1.18, pow(u, 0.72)) * lerpf(0.65, 1.0, height_frac)
+		var s_y := s_xz * lerpf(1.38, 0.82, u)
+		var puff_b := Basis(Vector3.UP, float(i) * 1.1 + phase_t * 0.7 * side) \
+			* Basis(Vector3.RIGHT, side * 0.24 * u) \
+			* Basis.from_scale(Vector3(s_xz, s_y, s_xz))
+
+		var fade_in := smoothstep(0.0, 0.09, u)
+		var fade_out := 1.0 - smoothstep(0.76, 1.0, u)
+		var puff_alpha := clampf(intensity * fade_in * fade_out * 0.80, 0.0, 1.0)
+
+		mm.set_instance_transform(i, Transform3D(puff_b, local_off))
+		mm.set_instance_color(i, Color(mist_tint.r, mist_tint.g, mist_tint.b, puff_alpha))
+		_spout_positions[i] = blowhole_w + local_off
+
+	_spout_active = true
+	_spout_mmi.visible = true
 
 
 func _make_spray_emitter(node_name: String, amount_n: int, life_s: float, ring_r: float,
@@ -527,6 +699,18 @@ static func _ensure_shared_assets() -> void:
 		_curtain_mat.vertex_color_is_srgb = true
 	if _curtain_mesh == null:
 		_curtain_mesh = _build_spray_curtain_mesh()
+	if _spout_puff_mat == null:
+		_spout_puff_mat = StandardMaterial3D.new()
+		_spout_puff_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_spout_puff_mat.vertex_color_use_as_albedo = true
+		_spout_puff_mat.vertex_color_is_srgb = true
+		_spout_puff_mat.roughness = 0.85
+		_spout_puff_mat.metallic = 0.0
+		_spout_puff_mat.emission_enabled = true
+		_spout_puff_mat.emission = Color(0.56, 0.88, 0.96)
+		_spout_puff_mat.emission_energy_multiplier = 0.0
+	if _spout_puff_mesh == null:
+		_spout_puff_mesh = _build_spout_puff_mesh()
 
 	if _body_mesh == null:
 		_body_mesh = _build_whale_body_mesh()
@@ -959,3 +1143,49 @@ static func _build_spray_curtain_mesh() -> ArrayMesh:
 
 	st.generate_normals()
 	return st.commit()
+
+
+static func _build_spout_puff_mesh() -> ArrayMesh:
+	# Sculpted 24-triangle organic faceted mist-puff ArrayMesh (zero raw primitives!):
+	# 6-sided snub-twisted 2-ring cloudlet (6 top cap + 12 faceted waist + 6 bottom cap = 24 tris).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	const LON := 6
+	var col_top := Color(1.00, 1.00, 1.00, 1.00)
+	var col_hi := Color(0.96, 0.99, 1.00, 0.96)
+	var col_lo := Color(0.86, 0.94, 0.98, 0.88)
+	var col_bot := Color(0.80, 0.90, 0.96, 0.82)
+
+	var top_pole := Vector3(0.0, 0.44, 0.0)
+	var bot_pole := Vector3(0.0, -0.34, 0.0)
+	var upper_ring: Array[Vector3] = []
+	var lower_ring: Array[Vector3] = []
+	for k in LON:
+		var a_hi := float(k) / float(LON) * TAU
+		var r_hi := 0.40 * (1.0 + 0.13 * sin(a_hi * 2.0 + 0.35) + 0.07 * cos(a_hi * 3.0))
+		var y_hi := 0.18 + 0.04 * cos(a_hi * 2.0 - 0.2)
+		upper_ring.append(Vector3(cos(a_hi) * r_hi, y_hi, sin(a_hi) * r_hi))
+
+		var a_lo := (float(k) + 0.5) / float(LON) * TAU
+		var r_lo := 0.42 * (1.0 + 0.12 * cos(a_lo * 2.0 - 0.45) + 0.06 * sin(a_lo * 3.0))
+		var y_lo := -0.15 + 0.03 * sin(a_lo * 2.0 + 0.5)
+		lower_ring.append(Vector3(cos(a_lo) * r_lo, y_lo, sin(a_lo) * r_lo))
+
+	for k in LON:
+		var nk := (k + 1) % LON
+		# Top cap (6 tris)
+		_emit_outward_tri(st, top_pole, upper_ring[nk], upper_ring[k],
+			Vector3.ZERO, col_top, col_hi, col_hi)
+		# Snub-twisted organic mid-band (12 tris)
+		_emit_outward_tri(st, upper_ring[k], upper_ring[nk], lower_ring[k],
+			Vector3.ZERO, col_hi, col_hi, col_lo)
+		_emit_outward_tri(st, upper_ring[nk], lower_ring[nk], lower_ring[k],
+			Vector3.ZERO, col_hi, col_lo, col_lo)
+		# Bottom cap (6 tris)
+		_emit_outward_tri(st, bot_pole, lower_ring[k], lower_ring[nk],
+			Vector3.ZERO, col_bot, col_lo, col_lo)
+
+	st.generate_normals()
+	return st.commit()
+

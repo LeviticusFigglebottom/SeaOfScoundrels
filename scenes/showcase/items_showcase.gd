@@ -232,6 +232,12 @@ func _setup_hud_shot(sky: Node) -> void:
 			_inventory.set_secondary_held(true)
 			_inventory.set(&"_raise_blend", 1.0)
 			_inventory.call(&"_tick_viewmodel_pose", 0.0)
+		elif _fp_item == &"instrument":
+			_inventory.set_playing_shanty(true)
+		elif _fp_item == &"spyglass":
+			_inventory.set_secondary_held(true)
+			_inventory.spyglass_zoom = 0.85
+			_inventory.spyglass_sighting = "Port Scoundrel"
 
 	if Game != null and Game.profile != null:
 		Game.profile.data["gold"] = 420

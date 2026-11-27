@@ -61,6 +61,7 @@ const GROG_TOAST_COOLDOWN := 4.0
 const SPEAKING_TRUMPET_HAIL_RADIUS := 110.0
 const SPEAKING_TRUMPET_COOLDOWN := 3.5
 const SPEAKING_TRUMPET_DISPLAY_SECONDS := 0.85
+const CUTLASS_GLEAM_DURATION := 0.42
 const COMPASS_16: PackedStringArray = [
 	"N", "NNE", "NE", "ENE",
 	"E", "ESE", "SE", "SSE",
@@ -199,6 +200,8 @@ var _lantern_flare_blend: float = 0.0
 var _lantern_signal_flash: float = 0.0
 var _lantern_signal_cd: float = 0.0
 var _lantern_halo_energy: float = 0.0
+var _cutlass_gleam_timer: float = 0.0
+var _cutlass_gleam_peak: float = 0.0
 var _barrel_smoke_timer: float = 0.0
 var _barrel_smoke: GPUParticles3D = null
 var _started_shanty: bool = false
@@ -318,6 +321,13 @@ func _exit_tree() -> void:
 			pawn.carried_changed.disconnect(_on_pawn_action_state_changed)
 		if pawn.mode_changed.is_connected(_on_pawn_mode_changed):
 			pawn.mode_changed.disconnect(_on_pawn_mode_changed)
+	if combat != null and is_instance_valid(combat):
+		if combat.attack_started.is_connected(_on_combat_attack_started):
+			combat.attack_started.disconnect(_on_combat_attack_started)
+		if combat.parried.is_connected(_on_combat_parried):
+			combat.parried.disconnect(_on_combat_parried)
+		if combat.blocked.is_connected(_on_combat_blocked):
+			combat.blocked.disconnect(_on_combat_blocked)
 	if fp_action_hands != null and is_instance_valid(fp_action_hands):
 		fp_action_hands.queue_free()
 	fp_action_hands = null
@@ -328,6 +338,8 @@ func _exit_tree() -> void:
 	treasure_map_texture = null
 	map_table = null
 	_lantern_halo_energy = 0.0
+	_cutlass_gleam_timer = 0.0
+	_cutlass_gleam_peak = 0.0
 	_active_inventories = maxi(0, _active_inventories - 1)
 	if _active_inventories == 0:
 		_clod_mesh = null
@@ -402,6 +414,8 @@ func _connect_bindings() -> void:
 			combat.attack_started.connect(_on_combat_attack_started)
 		if not combat.parried.is_connected(_on_combat_parried):
 			combat.parried.connect(_on_combat_parried)
+		if not combat.blocked.is_connected(_on_combat_blocked):
+			combat.blocked.connect(_on_combat_blocked)
 	if visual != null and not visual.rig_changed.is_connected(_on_visual_rig_changed):
 		visual.rig_changed.connect(_on_visual_rig_changed)
 
@@ -537,6 +551,9 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 	if item_id != &"spyglass" and spyglass_zoom > 0.001:
 		_set_spyglass_zoom(0.0)
 		_was_zooming_spyglass = false
+	if item_id != &"cutlass":
+		_cutlass_gleam_timer = 0.0
+		_cutlass_gleam_peak = 0.0
 
 	_discover_siblings()
 	if (item_id == &"cutlass" or item_id == &"pistol") and combat != null:
@@ -554,6 +571,15 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 		_tick_lantern_flicker(0.0)
 	else:
 		_lantern_halo_energy = 0.0
+	if item_id == &"spyglass":
+		ToolMeshes.update_spyglass_glint(fp_tool_node, spyglass_zoom, spyglass_sighting != "", _clock)
+		ToolMeshes.update_spyglass_glint(tp_tool_node, spyglass_zoom, spyglass_sighting != "", _clock)
+	elif item_id == &"cutlass":
+		_tick_cutlass_gleam(0.0)
+	elif item_id == &"instrument":
+		if shanty_instrument == &"concertina" or shanty_instrument == &"hurdy_gurdy":
+			ToolMeshes.update_shanty_notes(fp_tool_node, 0.0, playing_shanty, _clock)
+			ToolMeshes.update_shanty_notes(tp_tool_node, 0.0, playing_shanty, _clock)
 	_tick_action_hands(0.0)
 	_sync_visibility()
 	item_equipped.emit(active_item)
@@ -630,6 +656,7 @@ func _configure_fp_node(node: Node3D) -> void:
 func _sync_tool_visual_state(node: Node3D) -> void:
 	if node == null:
 		return
+	ToolMeshes.apply_tool_variant_visual(active_item, node, tool_variant_id)
 	match active_item:
 		&"lantern":
 			var is_tp_dup := (node == tp_tool_node and fp_tool_node != null)
@@ -646,12 +673,19 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 				ToolMeshes.apply_map_texture(node, treasure_map_texture)
 		&"spyglass":
 			ToolMeshes.set_spyglass_extension(node, spyglass_zoom)
+			ToolMeshes.update_spyglass_glint(node, spyglass_zoom, spyglass_sighting != "", _clock)
 		&"compass":
 			var needle := node.get_node_or_null(^"Needle") as Node3D
 			if needle != null:
 				needle.rotation.y = _compass_needle_angle
 			ToolMeshes.set_compass_pin_mode(node, compass_pin_mode)
-	ToolMeshes.apply_tool_variant_visual(active_item, node, tool_variant_id)
+		&"cutlass":
+			if melee_weapon == &"cutlass":
+				var slide := clampf(1.0 - (_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION), 0.0, 1.0) if _cutlass_gleam_timer > 0.0 else 0.0
+				ToolMeshes.update_cutlass_gleam(node, get_cutlass_gleam_strength(), slide)
+		&"instrument":
+			if shanty_instrument == &"concertina" or shanty_instrument == &"hurdy_gurdy":
+				ToolMeshes.update_shanty_notes(node, 0.0, playing_shanty, _clock)
 
 
 # ==============================================================================
@@ -700,6 +734,27 @@ func is_compass_pacing() -> bool:
 ## Return the cached held-lantern atmospheric halo glow intensity (0.0 when doused or unequipped).
 func get_lantern_halo_energy() -> float:
 	return _lantern_halo_energy
+
+
+## Trigger a luminous metallic gleam pulse sweeping from hilt to tip along the cutlass blade.
+func trigger_cutlass_gleam(strength: float = 1.0) -> void:
+	var s := clampf(strength, 0.0, 1.5)
+	if s <= 0.01:
+		return
+	var current_s := get_cutlass_gleam_strength()
+	_cutlass_gleam_peak = maxf(current_s, s)
+	_cutlass_gleam_timer = CUTLASS_GLEAM_DURATION
+	if active_item == &"cutlass" and melee_weapon == &"cutlass":
+		ToolMeshes.update_cutlass_gleam(fp_tool_node, _cutlass_gleam_peak, 0.0)
+		ToolMeshes.update_cutlass_gleam(tp_tool_node, _cutlass_gleam_peak, 0.0)
+
+
+## Return the current decaying cutlass steel blade gleam strength (0.0 when idle).
+func get_cutlass_gleam_strength() -> float:
+	if _cutlass_gleam_timer <= 0.0 or _cutlass_gleam_peak <= 0.0:
+		return 0.0
+	var frac := clampf(_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION, 0.0, 1.0)
+	return _cutlass_gleam_peak * frac * (0.45 + 0.55 * frac)
 
 
 ## Return the current damped harmonic magnetic compass needle yaw angle in radians.
@@ -1433,6 +1488,9 @@ func set_playing_shanty(on: bool) -> void:
 			_started_shanty = false
 		_attach_captain_shanty_motes()
 		_play_anim(&"play_instrument", 1.2)
+		if active_item == &"instrument" and (shanty_instrument == &"concertina" or shanty_instrument == &"hurdy_gurdy"):
+			ToolMeshes.update_shanty_notes(fp_tool_node, 0.0, true, _clock)
+			ToolMeshes.update_shanty_notes(tp_tool_node, 0.0, true, _clock)
 	else:
 		_detach_captain_shanty_motes(true)
 		_last_shanty_audio_beat = -1.0
@@ -1446,6 +1504,11 @@ func set_playing_shanty(on: bool) -> void:
 			if shanty_instrument == &"concertina":
 				ToolMeshes.set_concertina_stretch(fp_tool_node, 0.5)
 				ToolMeshes.set_concertina_stretch(tp_tool_node, 0.5)
+				ToolMeshes.update_shanty_notes(fp_tool_node, 0.0, false, _clock)
+				ToolMeshes.update_shanty_notes(tp_tool_node, 0.0, false, _clock)
+			elif shanty_instrument == &"hurdy_gurdy":
+				ToolMeshes.update_shanty_notes(fp_tool_node, 0.0, false, _clock)
+				ToolMeshes.update_shanty_notes(tp_tool_node, 0.0, false, _clock)
 			elif shanty_instrument == &"whistle" and tp_tool_node != null and is_instance_valid(tp_tool_node):
 				tp_tool_node.rotation_degrees = Vector3.ZERO
 	shanty_playing_changed.emit(playing_shanty)
@@ -1748,6 +1811,7 @@ func _process(delta: float) -> void:
 	_tick_compass(delta)
 	_tick_concertina(delta)
 	_tick_lantern_flicker(delta)
+	_tick_cutlass_gleam(delta)
 	_tick_barrel_smoke(delta)
 	_tick_speaking_trumpet_fx(delta)
 	_tick_viewmodel_pose(delta)
@@ -1857,6 +1921,11 @@ func _tick_spyglass(delta: float) -> void:
 		spyglass_sighting_bearing = ""
 		_spyglass_target_pos = Vector3.ZERO
 		sighting_updated.emit("", 0.0)
+
+	if active_item == &"spyglass":
+		var has_sight := spyglass_sighting != ""
+		ToolMeshes.update_spyglass_glint(fp_tool_node, spyglass_zoom, has_sight, _clock)
+		ToolMeshes.update_spyglass_glint(tp_tool_node, spyglass_zoom, has_sight, _clock)
 
 
 func _set_spyglass_zoom(v: float) -> void:
@@ -2301,12 +2370,16 @@ func _tick_concertina(delta: float) -> void:
 			var stretch := 0.5 + 0.48 * sin(_shanty_phase * PI) if playing_shanty else 0.5
 			ToolMeshes.set_concertina_stretch(fp_tool_node, stretch)
 			ToolMeshes.set_concertina_stretch(tp_tool_node, stretch)
+			ToolMeshes.update_shanty_notes(fp_tool_node, delta, playing_shanty, _clock)
+			ToolMeshes.update_shanty_notes(tp_tool_node, delta, playing_shanty, _clock)
 		&"hurdy_gurdy":
 			_whistle_rot_deg = Vector3.ZERO
 			if playing_shanty:
 				var crank_rad := _shanty_phase * TAU * 0.5
 				ToolMeshes.set_hurdy_gurdy_crank(fp_tool_node, crank_rad)
 				ToolMeshes.set_hurdy_gurdy_crank(tp_tool_node, crank_rad)
+			ToolMeshes.update_shanty_notes(fp_tool_node, delta, playing_shanty, _clock)
+			ToolMeshes.update_shanty_notes(tp_tool_node, delta, playing_shanty, _clock)
 		&"whistle":
 			if playing_shanty:
 				var sway_deg := sin(_shanty_phase * PI) * 9.0
@@ -2316,6 +2389,22 @@ func _tick_concertina(delta: float) -> void:
 				_whistle_rot_deg = Vector3.ZERO
 			if tp_tool_node != null and is_instance_valid(tp_tool_node):
 				tp_tool_node.rotation_degrees = _whistle_rot_deg
+
+
+func _tick_cutlass_gleam(delta: float) -> void:
+	var pawn_dead := pawn != null and is_instance_valid(pawn) and pawn.dead
+	if pawn_dead:
+		_cutlass_gleam_timer = 0.0
+		_cutlass_gleam_peak = 0.0
+	elif _cutlass_gleam_timer > 0.0:
+		_cutlass_gleam_timer = maxf(0.0, _cutlass_gleam_timer - maxf(delta, 0.0))
+		if _cutlass_gleam_timer <= 0.0:
+			_cutlass_gleam_peak = 0.0
+	if active_item == &"cutlass" and melee_weapon == &"cutlass":
+		var strength := get_cutlass_gleam_strength()
+		var slide := clampf(1.0 - (_cutlass_gleam_timer / CUTLASS_GLEAM_DURATION), 0.0, 1.0) if _cutlass_gleam_timer > 0.0 else 1.0
+		ToolMeshes.update_cutlass_gleam(fp_tool_node, strength, slide)
+		ToolMeshes.update_cutlass_gleam(tp_tool_node, strength, slide)
 
 
 func _tick_lantern_flicker(delta: float = 0.0) -> void:
@@ -3279,6 +3368,8 @@ func _sync_visibility() -> void:
 func _on_combat_attack_started(kind: StringName) -> void:
 	if kind == &"heavy":
 		_start_swing(&"heavy", 0.76 if melee_weapon == &"boarding_axe" else 0.64)
+		if active_item == &"cutlass" and melee_weapon == &"cutlass":
+			trigger_cutlass_gleam(1.0)
 	elif kind == &"blunderbuss":
 		_start_swing(&"blunderbuss", 0.46)
 		_reload_dur = 1.85
@@ -3291,11 +3382,22 @@ func _on_combat_attack_started(kind: StringName) -> void:
 		_start_barrel_smoke(&"pistol")
 	else:
 		_start_swing(kind, 0.50 if melee_weapon == &"boarding_axe" else 0.40)
+		if kind == &"slash_3" and active_item == &"cutlass" and melee_weapon == &"cutlass":
+			trigger_cutlass_gleam(0.88)
 
 
 func _on_combat_parried(_attacker: Pawn) -> void:
 	if active_item == &"cutlass":
 		_start_swing(&"parry_clang", 0.26)
+		if melee_weapon == &"cutlass":
+			trigger_cutlass_gleam(1.0)
+
+
+func _on_combat_blocked(_attacker: Pawn) -> void:
+	if active_item == &"cutlass":
+		_start_swing(&"parry_clang", 0.22)
+		if melee_weapon == &"cutlass":
+			trigger_cutlass_gleam(0.82)
 
 
 func _start_swing(kind: StringName, dur: float) -> void:
@@ -3517,6 +3619,12 @@ func _detach_barrel_smoke(detach_from_parent: bool = true) -> void:
 static func _clear_tool_node_materials(node: Node3D) -> void:
 	if node == null or not is_instance_valid(node):
 		return
+	for child in node.find_children("*", "MultiMeshInstance3D", true, false):
+		var mmi := child as MultiMeshInstance3D
+		if mmi != null:
+			mmi.visible = false
+			mmi.material_override = null
+			mmi.multimesh = null
 	for child in node.find_children("*", "MeshInstance3D", true, false):
 		var mi := child as MeshInstance3D
 		if mi != null:
