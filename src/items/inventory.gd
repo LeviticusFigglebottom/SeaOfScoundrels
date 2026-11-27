@@ -179,8 +179,10 @@ var _lantern_pendulum_z: float = 0.0
 var _lantern_pendulum_vx: float = 0.0
 var _lantern_pendulum_vz: float = 0.0
 var _clock: float = 0.0
-var _needle_angle: float = 0.0
-var _needle_vel: float = 0.0
+var _compass_needle_angle: float = 0.0
+var _compass_needle_vel: float = 0.0
+var _compass_needle_init: bool = false
+var _compass_prev_yaw: float = 0.0
 var _compass_pace_accum: float = 0.0
 var _compass_last_pos: Vector2 = Vector2.ZERO
 var _compass_last_platform: PhysicsBody3D = null
@@ -196,6 +198,9 @@ var _was_zooming_spyglass: bool = false
 var _lantern_flare_blend: float = 0.0
 var _lantern_signal_flash: float = 0.0
 var _lantern_signal_cd: float = 0.0
+var _lantern_halo_energy: float = 0.0
+var _barrel_smoke_timer: float = 0.0
+var _barrel_smoke: GPUParticles3D = null
 var _started_shanty: bool = false
 var _shanty_phase: float = 0.0
 var _last_shanty_audio_beat: float = -1.0
@@ -241,6 +246,10 @@ static var _clod_mat: StandardMaterial3D = null
 static var _splash_drop_mesh: ArrayMesh = null
 static var _splash_drop_mat: StandardMaterial3D = null
 static var _trumpet_ring_mesh: ArrayMesh = null
+static var _barrel_smoke_mesh: ArrayMesh = null
+static var _barrel_smoke_shader: Shader = null
+static var _barrel_smoke_mat: ShaderMaterial = null
+static var _barrel_smoke_proc: ParticleProcessMaterial = null
 
 
 func _init() -> void:
@@ -292,11 +301,16 @@ func apply_tool_modifiers(mods: Dictionary) -> void:
 		tool_variant_id = &""
 	_sync_tool_visual_state(fp_tool_node)
 	_sync_tool_visual_state(tp_tool_node)
+	if active_item == &"lantern":
+		_tick_lantern_flicker(0.0)
 
 
 func _exit_tree() -> void:
 	_clear_speaking_trumpet_fx(false)
 	_detach_captain_shanty_motes(false)
+	_detach_barrel_smoke(false)
+	_clear_tool_node_materials(fp_tool_node)
+	_clear_tool_node_materials(tp_tool_node)
 	if pawn != null and is_instance_valid(pawn):
 		if pawn.station_changed.is_connected(_on_pawn_action_state_changed):
 			pawn.station_changed.disconnect(_on_pawn_action_state_changed)
@@ -313,6 +327,7 @@ func _exit_tree() -> void:
 		set_playing_shanty(false)
 	treasure_map_texture = null
 	map_table = null
+	_lantern_halo_energy = 0.0
 	_active_inventories = maxi(0, _active_inventories - 1)
 	if _active_inventories == 0:
 		_clod_mesh = null
@@ -320,6 +335,12 @@ func _exit_tree() -> void:
 		_splash_drop_mesh = null
 		_splash_drop_mat = null
 		_trumpet_ring_mesh = null
+		if _barrel_smoke_mat != null:
+			_barrel_smoke_mat.shader = null
+		_barrel_smoke_mat = null
+		_barrel_smoke_shader = null
+		_barrel_smoke_mesh = null
+		_barrel_smoke_proc = null
 
 
 ## Explicitly bind references if constructing dynamically before tree entry.
@@ -387,12 +408,14 @@ func _connect_bindings() -> void:
 
 func _on_pawn_action_state_changed(_arg: Node3D) -> void:
 	_ensure_mounts()
+	_tick_barrel_smoke(0.0)
 	_tick_action_hands(0.0)
 	_sync_visibility()
 
 
 func _on_pawn_mode_changed(_mode: int) -> void:
 	_ensure_mounts()
+	_tick_barrel_smoke(0.0)
 	_tick_action_hands(0.0)
 	_sync_visibility()
 
@@ -504,6 +527,9 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 	active_item = item_id
 	_equip_dip = 0.0 if silent else 1.0
 	_reload_timer = 0.0
+	_barrel_smoke_timer = 0.0
+	if _barrel_smoke != null and is_instance_valid(_barrel_smoke):
+		_barrel_smoke.emitting = false
 	_primary_hold_time = 0.0
 	_heavy_fired_this_hold = false
 	if item_id != &"compass" and (_compass_pace_active or compass_paces != 0):
@@ -521,6 +547,13 @@ func equip(item_id: StringName, silent: bool = false) -> bool:
 		if not silent:
 			Audio.play_sfx(&"ui_tick", Vector3.INF, -5.0, 0.06)
 	_tick_viewmodel_pose(0.0)
+	if item_id == &"compass":
+		_compass_needle_init = false
+		_tick_compass(0.0)
+	elif item_id == &"lantern":
+		_tick_lantern_flicker(0.0)
+	else:
+		_lantern_halo_energy = 0.0
 	_tick_action_hands(0.0)
 	_sync_visibility()
 	item_equipped.emit(active_item)
@@ -555,10 +588,13 @@ func get_active_tool_node() -> Node3D:
 
 
 func _rebuild_tool_meshes() -> void:
+	_detach_barrel_smoke(true)
 	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		_clear_tool_node_materials(fp_tool_node)
 		fp_tool_node.queue_free()
 		fp_tool_node = null
 	if tp_tool_node != null and is_instance_valid(tp_tool_node):
+		_clear_tool_node_materials(tp_tool_node)
 		tp_tool_node.queue_free()
 		tp_tool_node = null
 
@@ -613,7 +649,8 @@ func _sync_tool_visual_state(node: Node3D) -> void:
 		&"compass":
 			var needle := node.get_node_or_null(^"Needle") as Node3D
 			if needle != null:
-				needle.rotation.y = _needle_angle
+				needle.rotation.y = _compass_needle_angle
+			ToolMeshes.set_compass_pin_mode(node, compass_pin_mode)
 	ToolMeshes.apply_tool_variant_visual(active_item, node, tool_variant_id)
 
 
@@ -660,6 +697,37 @@ func is_compass_pacing() -> bool:
 	return active_item == &"compass" and _secondary_held
 
 
+## Return the cached held-lantern atmospheric halo glow intensity (0.0 when doused or unequipped).
+func get_lantern_halo_energy() -> float:
+	return _lantern_halo_energy
+
+
+## Return the current damped harmonic magnetic compass needle yaw angle in radians.
+func get_compass_needle_angle() -> float:
+	return _compass_needle_angle
+
+
+## Return the current magnetic compass needle angular velocity in rad/s.
+func get_compass_needle_velocity() -> float:
+	return _compass_needle_vel
+
+
+## True while post-shot flintlock pistol or blunderbuss barrel smoke wisps are actively emitting.
+func is_firearm_barrel_smoking() -> bool:
+	return active_item == &"pistol" \
+		and _barrel_smoke_timer > 0.0 \
+		and _barrel_smoke != null \
+		and is_instance_valid(_barrel_smoke) \
+		and _barrel_smoke.emitting
+
+
+## Return the mounted FirearmBarrelSmoke GPUParticles3D emitter (or null if not yet spawned).
+func get_firearm_barrel_smoke() -> GPUParticles3D:
+	if _barrel_smoke != null and is_instance_valid(_barrel_smoke):
+		return _barrel_smoke
+	return null
+
+
 ## Resolve the active MapTableView gracefully without allocating.
 func _resolve_map_table() -> MapTableView:
 	if map_table != null and is_instance_valid(map_table):
@@ -704,11 +772,17 @@ func toggle_compass_pin_mode() -> bool:
 	if mtv == null or not mtv.has_active_pin():
 		var was_pin := compass_pin_mode
 		compass_pin_mode = false
+		if active_item == &"compass":
+			ToolMeshes.set_compass_pin_mode(fp_tool_node, false)
+			ToolMeshes.set_compass_pin_mode(tp_tool_node, false)
 		if was_pin:
 			compass_mode_changed.emit(false)
 		_start_swing(&"inspect", 0.26)
 		return false
 	compass_pin_mode = not compass_pin_mode
+	if active_item == &"compass":
+		ToolMeshes.set_compass_pin_mode(fp_tool_node, compass_pin_mode)
+		ToolMeshes.set_compass_pin_mode(tp_tool_node, compass_pin_mode)
 	Audio.play_sfx(&"ui_tick", Vector3.INF, -4.5, 0.05)
 	_start_swing(&"inspect", 0.26)
 	compass_mode_changed.emit(compass_pin_mode)
@@ -785,6 +859,13 @@ func use_primary() -> Variant:
 			if combat != null:
 				combat.equip_weapon(get_resolved_tool_id(active_item))
 				return combat.primary_attack()
+			if active_item == &"pistol":
+				var gun_id := get_resolved_tool_id(&"pistol")
+				_start_swing(gun_id, 0.46 if gun_id == &"blunderbuss" else 0.34)
+				_reload_dur = 1.85 if gun_id == &"blunderbuss" else 1.45
+				_reload_timer = _reload_dur
+				_start_barrel_smoke(gun_id)
+				return true
 			_start_swing(&"slash", 0.34)
 			return true
 		&"lantern":
@@ -896,16 +977,35 @@ func trigger_lantern_signal() -> bool:
 	return true
 
 
-## Toggle oil lantern flame & OmniLight3D on or off.
+## Explicitly light or douse the held oil lantern, syncing FlameHalo & OmniLight3D immediately.
+func set_lantern_lit(lit: bool) -> bool:
+	var changed := (lantern_lit != lit)
+	lantern_lit = lit
+	if not lantern_lit:
+		_lantern_flare_blend = 0.0
+		_lantern_signal_flash = 0.0
+		_lantern_halo_energy = 0.0
+	if active_item == &"lantern":
+		_sync_tool_visual_state(fp_tool_node)
+		_sync_tool_visual_state(tp_tool_node)
+		_tick_lantern_flicker(0.0)
+	if changed:
+		lantern_toggled.emit(lantern_lit)
+	return lantern_lit
+
+
+## Toggle oil lantern flame, FlameHalo, & OmniLight3D on or off.
 func toggle_lantern() -> bool:
 	lantern_lit = not lantern_lit
 	_use_cooldown = 0.20
 	if not lantern_lit:
 		_lantern_flare_blend = 0.0
 		_lantern_signal_flash = 0.0
+		_lantern_halo_energy = 0.0
 	if active_item == &"lantern":
 		_sync_tool_visual_state(fp_tool_node)
 		_sync_tool_visual_state(tp_tool_node)
+		_tick_lantern_flicker(0.0)
 	var pos := pawn.eye_position() if pawn != null else Vector3.INF
 	Audio.play_sfx(&"lantern_click", pos, -2.0)
 	_start_swing(&"click", 0.22)
@@ -1648,6 +1748,7 @@ func _process(delta: float) -> void:
 	_tick_compass(delta)
 	_tick_concertina(delta)
 	_tick_lantern_flicker(delta)
+	_tick_barrel_smoke(delta)
 	_tick_speaking_trumpet_fx(delta)
 	_tick_viewmodel_pose(delta)
 	_tick_action_hands(delta)
@@ -2131,16 +2232,51 @@ func _tick_compass(delta: float) -> void:
 		var dir_local := ref_node.global_transform.basis.orthonormalized().inverse() * target_dir_world
 		if Vector2(dir_local.x, dir_local.z).length_squared() > 0.0004:
 			target_angle = atan2(-dir_local.x, -dir_local.z)
-	# Damped magnetic spring physics for realistic fluid needle settling!
-	var err := wrapf(target_angle - _needle_angle, -PI, PI)
-	var dt := minf(delta, 0.05)
-	_needle_vel += (err * 42.0 - _needle_vel * 6.5) * dt
-	_needle_angle = wrapf(_needle_angle + _needle_vel * dt, -PI, PI)
+
+	# 2nd-order damped harmonic magnetic spring (k = 48.0, c = 6.2); snap on frame-0 / initial equip.
+	if delta <= 0.0 or not _compass_needle_init:
+		_compass_needle_angle = target_angle
+		_compass_needle_vel = 0.0
+		_compass_needle_init = true
+		_compass_prev_yaw = pawn.look_yaw
+	else:
+		var dt := minf(delta, 0.05)
+		var turn_dyaw := angle_difference(_compass_prev_yaw, pawn.look_yaw)
+		_compass_prev_yaw = pawn.look_yaw
+
+		# Gentle physical perturbation when sprinting or snapping camera turns quickly.
+		var perturb_accel := 0.0
+		var rv_c := pawn.get_relative_velocity()
+		var h_spd := Vector2(rv_c.x, rv_c.z).length()
+		if h_spd > 4.2 and pawn.is_grounded():
+			var sprint_w := clampf((h_spd - 4.2) / 3.0, 0.0, 1.0)
+			perturb_accel += sin(_bob_phase * 2.0) * 3.8 * sprint_w
+		var turn_rate := clampf(turn_dyaw / maxf(dt, 0.008), -12.0, 12.0)
+		if absf(turn_rate) > 1.2:
+			perturb_accel += clampf(-turn_rate * 0.45, -4.5, 4.5)
+
+		# Subtle Sea-of-Thieves storm magnetic interference when Weather.storminess > 0.55.
+		var storm_wobble := 0.0
+		if Weather != null and Weather.storminess > 0.55:
+			var storm_t := clampf((Weather.storminess - 0.55) / 0.45, 0.0, 1.0)
+			storm_wobble = (
+				sin(_clock * 3.7) * 0.18
+				+ cos(_clock * 7.1 + 1.3) * 0.11
+				+ sin(_clock * 11.9 - 0.7) * 0.06
+			) * storm_t
+
+		var desired_angle := wrapf(target_angle + storm_wobble, -PI, PI)
+		var err := wrapf(desired_angle - _compass_needle_angle, -PI, PI)
+		_compass_needle_vel += (err * 48.0 - _compass_needle_vel * 6.2 + perturb_accel) * dt
+		_compass_needle_angle = wrapf(_compass_needle_angle + _compass_needle_vel * dt, -PI, PI)
+
 	for n in [fp_tool_node, tp_tool_node]:
 		if n != null and is_instance_valid(n):
-			var needle := (n as Node3D).get_node_or_null(^"Needle") as Node3D
+			var comp_node := n as Node3D
+			var needle := comp_node.get_node_or_null(^"Needle") as Node3D
 			if needle != null:
-				needle.rotation.y = _needle_angle
+				needle.rotation.y = _compass_needle_angle
+			ToolMeshes.set_compass_pin_mode(comp_node, compass_pin_mode)
 
 
 func _tick_concertina(delta: float) -> void:
@@ -2188,15 +2324,39 @@ func _tick_lantern_flicker(delta: float = 0.0) -> void:
 	var want_flare := (active_item == &"lantern") and lantern_lit and _secondary_held
 	if delta > 0.0:
 		_lantern_flare_blend = lerpf(_lantern_flare_blend, 1.0 if want_flare else 0.0, 1.0 - exp(-8.5 * delta))
-	elif not want_flare:
-		_lantern_flare_blend = 0.0
+	else:
+		_lantern_flare_blend = 1.0 if want_flare else 0.0
+	var halo_tint := Color(1.0, 0.90, 0.68) if tool_variant_id == &"tool_storm_lantern" else Color(1.0, 0.72, 0.30)
 	if active_item != &"lantern" or not lantern_lit:
+		_lantern_halo_energy = 0.0
+		if active_item == &"lantern":
+			if fp_tool_node != null and is_instance_valid(fp_tool_node):
+				ToolMeshes.set_lantern_halo_style(fp_tool_node, 0.0, halo_tint, 0.24)
+			if tp_tool_node != null and is_instance_valid(tp_tool_node):
+				ToolMeshes.set_lantern_halo_style(tp_tool_node, 0.0, halo_tint, 0.42)
 		return
 	var flick := 0.93 + 0.07 * sin(_clock * 11.4) * cos(_clock * 7.3)
 	var base_energy := lerpf(2.4, 4.3, _lantern_flare_blend) * flick
 	var final_energy := lerpf(base_energy, 6.5, _lantern_signal_flash)
 	var final_range := lerpf(12.0, 22.0, maxf(_lantern_flare_blend, _lantern_signal_flash))
 	var flame_boost := 1.0 + _lantern_flare_blend * 0.24 + _lantern_signal_flash * 0.55
+
+	# Smooth atmospheric FlameHalo intensity driven by darkness + storminess + raised lantern flare.
+	var day_f := Weather.daylight() if Weather != null else 1.0
+	var storm_f := Weather.storminess if Weather != null else 0.0
+	var night := clampf(1.0 - day_f, 0.0, 1.0)
+	var atmos := clampf(night + storm_f * 0.35, 0.0, 1.25)
+	var target_halo := (0.12 + atmos * 0.72 + _lantern_flare_blend * 0.32 + _lantern_signal_flash * 0.45) * flick
+	if delta > 0.0:
+		_lantern_halo_energy = lerpf(_lantern_halo_energy, target_halo, 1.0 - exp(-10.0 * delta))
+	else:
+		_lantern_halo_energy = target_halo
+	var fp_halo_scale := lerpf(0.24, 0.32, clampf(_lantern_flare_blend * 0.75 + _lantern_signal_flash * 0.50, 0.0, 1.0))
+	if fp_tool_node != null and is_instance_valid(fp_tool_node):
+		ToolMeshes.set_lantern_halo_style(fp_tool_node, _lantern_halo_energy, halo_tint, fp_halo_scale)
+	if tp_tool_node != null and is_instance_valid(tp_tool_node):
+		ToolMeshes.set_lantern_halo_style(tp_tool_node, _lantern_halo_energy, halo_tint, 0.42)
+
 	var target_node: Node3D = fp_tool_node if (fp_tool_node != null and is_instance_valid(fp_tool_node)) else tp_tool_node
 	if target_node != null and is_instance_valid(target_node):
 		var light := target_node.get_node_or_null(^"LanternLight") as OmniLight3D
@@ -3123,10 +3283,12 @@ func _on_combat_attack_started(kind: StringName) -> void:
 		_start_swing(&"blunderbuss", 0.46)
 		_reload_dur = 1.85
 		_reload_timer = _reload_dur
+		_start_barrel_smoke(&"blunderbuss")
 	elif kind == &"pistol":
 		_start_swing(&"pistol", 0.34)
 		_reload_dur = 1.45
 		_reload_timer = _reload_dur
+		_start_barrel_smoke(&"pistol")
 	else:
 		_start_swing(kind, 0.50 if melee_weapon == &"boarding_axe" else 0.40)
 
@@ -3280,3 +3442,175 @@ static func _build_faceted_clod_mesh(
 	var am := st.commit()
 	am.surface_set_material(0, mat)
 	return am
+
+
+func _start_barrel_smoke(kind: StringName) -> void:
+	if active_item != &"pistol":
+		return
+	if pawn != null and is_instance_valid(pawn) and (pawn.dead or pawn.station != null):
+		return
+	_barrel_smoke_timer = minf(_reload_dur * 0.85, 1.35)
+	if fp_tool_node == null or not is_instance_valid(fp_tool_node):
+		return
+	if _barrel_smoke == null or not is_instance_valid(_barrel_smoke) or _barrel_smoke.get_parent() != fp_tool_node:
+		_detach_barrel_smoke(true)
+		_barrel_smoke_timer = minf(_reload_dur * 0.85, 1.35)
+		_ensure_barrel_smoke_assets()
+		var smoke := GPUParticles3D.new()
+		smoke.name = "FirearmBarrelSmoke"
+		smoke.amount = 10
+		smoke.lifetime = 0.75
+		smoke.randomness = 0.35
+		smoke.local_coords = false
+		smoke.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+		smoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		smoke.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		smoke.visibility_aabb = AABB(Vector3(-1.5, -0.5, -1.5), Vector3(3.0, 3.0, 3.0))
+		smoke.process_material = _barrel_smoke_proc
+		smoke.draw_pass_1 = _barrel_smoke_mesh
+		smoke.material_override = _barrel_smoke_mat
+		fp_tool_node.add_child(smoke)
+		_barrel_smoke = smoke
+	_barrel_smoke.position = Vector3(0.0, 0.076, -0.468) if kind == &"blunderbuss" else Vector3(0.0, 0.066, -0.332)
+	_barrel_smoke.visible = true
+	_barrel_smoke.emitting = true
+
+
+func _tick_barrel_smoke(delta: float) -> void:
+	var has_pawn := pawn != null and is_instance_valid(pawn)
+	var can_smoke := active_item == &"pistol" \
+		and fp_tool_node != null and is_instance_valid(fp_tool_node) \
+		and (not has_pawn or (
+			not pawn.dead
+			and pawn.station == null
+			and pawn.carried == null
+			and pawn.mode != Pawn.Mode.SWIM
+			and pawn.mode != Pawn.Mode.LADDER
+		))
+	if not can_smoke:
+		_barrel_smoke_timer = 0.0
+		if _barrel_smoke != null and is_instance_valid(_barrel_smoke):
+			_barrel_smoke.emitting = false
+		return
+	if _barrel_smoke_timer > 0.0:
+		_barrel_smoke_timer = maxf(0.0, _barrel_smoke_timer - maxf(delta, 0.0))
+		if _barrel_smoke != null and is_instance_valid(_barrel_smoke):
+			_barrel_smoke.emitting = (_barrel_smoke_timer > 0.0)
+	elif _barrel_smoke != null and is_instance_valid(_barrel_smoke) and _barrel_smoke.emitting:
+		_barrel_smoke.emitting = false
+
+
+func _detach_barrel_smoke(detach_from_parent: bool = true) -> void:
+	_barrel_smoke_timer = 0.0
+	if _barrel_smoke != null and is_instance_valid(_barrel_smoke):
+		_barrel_smoke.emitting = false
+		_barrel_smoke.visible = false
+		_barrel_smoke.draw_pass_1 = null
+		_barrel_smoke.process_material = null
+		_barrel_smoke.material_override = null
+		if detach_from_parent and _barrel_smoke.get_parent() != null:
+			_barrel_smoke.get_parent().remove_child(_barrel_smoke)
+		_barrel_smoke.queue_free()
+	_barrel_smoke = null
+
+
+static func _clear_tool_node_materials(node: Node3D) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	for child in node.find_children("*", "MeshInstance3D", true, false):
+		var mi := child as MeshInstance3D
+		if mi != null:
+			if mi.material_override is ShaderMaterial:
+				(mi.material_override as ShaderMaterial).shader = null
+			mi.material_override = null
+
+
+static func _ensure_barrel_smoke_assets() -> void:
+	if _barrel_smoke_mesh == null:
+		_barrel_smoke_mesh = _build_barrel_smoke_card_mesh()
+	if _barrel_smoke_shader == null:
+		_barrel_smoke_shader = _build_barrel_smoke_shader()
+	if _barrel_smoke_mat == null:
+		_barrel_smoke_mat = ShaderMaterial.new()
+		_barrel_smoke_mat.shader = _barrel_smoke_shader
+	if _barrel_smoke_proc == null:
+		var proc := ParticleProcessMaterial.new()
+		proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		proc.emission_sphere_radius = 0.012
+		proc.direction = Vector3(0.0, 1.0, -0.18)
+		proc.spread = 22.0
+		proc.initial_velocity_min = 0.14
+		proc.initial_velocity_max = 0.30
+		proc.gravity = Vector3(0.0, 0.38, 0.0)
+		proc.tangential_accel_min = -0.18
+		proc.tangential_accel_max = 0.18
+		proc.damping_min = 0.45
+		proc.damping_max = 0.85
+		proc.angle_min = -180.0
+		proc.angle_max = 180.0
+		proc.scale_min = 0.75
+		proc.scale_max = 1.25
+		_barrel_smoke_proc = proc
+
+
+static func _build_barrel_smoke_card_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := 0.048
+	var p0 := Vector3(-h, -h, 0.0)
+	var p1 := Vector3(h, -h, 0.0)
+	var p2 := Vector3(h, h, 0.0)
+	var p3 := Vector3(-h, h, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_barrel_smoke_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, depth_draw_never, cull_disabled, shadows_disabled;
+
+varying float v_age;
+varying float v_seed;
+
+void vertex() {
+	v_age = clamp(INSTANCE_CUSTOM.y, 0.0, 1.0);
+	v_seed = INSTANCE_CUSTOM.x;
+	float grow = mix(0.45, 1.85, pow(v_age, 0.70));
+	VERTEX *= grow;
+	float curl = sin(TIME * 4.4 + v_seed * 6.2831853 + v_age * 5.2) * 0.022 * v_age;
+	VERTEX.x += curl;
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float spin = v_seed * 6.2831853 + v_age * 2.6;
+	float cs = cos(spin);
+	float sn = sin(spin);
+	vec2 rq = vec2(q.x * cs - q.y * sn, q.x * sn + q.y * cs);
+	float r = length(q);
+	float edge = smoothstep(1.0, 0.16, r);
+	float wisp = 0.72 + 0.28 * sin(rq.x * 5.2 + v_age * 4.5 + TIME * 2.1) * cos(rq.y * 4.6 - v_age * 3.8);
+	float fade_in = smoothstep(0.0, 0.16, v_age);
+	float fade_out = pow(1.0 - v_age, 1.35);
+	float alpha = clamp(edge * edge * wisp * fade_in * fade_out * 0.56, 0.0, 1.0);
+	vec3 col_hot = vec3(0.88, 0.85, 0.80);
+	vec3 col_cool = vec3(0.68, 0.72, 0.76);
+	ALBEDO = mix(col_hot, col_cool, smoothstep(0.05, 0.85, v_age));
+	ALPHA = alpha;
+}
+"""
+	return sh
+

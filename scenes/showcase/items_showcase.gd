@@ -30,6 +30,7 @@ var _clock: float = 0.0
 
 
 func _ready() -> void:
+	var time_override := -1.0
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("shot="):
 			_shot = a.trim_prefix("shot=")
@@ -37,11 +38,13 @@ func _ready() -> void:
 			_wheel_mode = a.trim_prefix("wheel=")
 		elif a.begins_with("item="):
 			_fp_item = StringName(a.trim_prefix("item="))
+		elif a.begins_with("time="):
+			time_override = float(a.trim_prefix("time="))
 
 	Net.start_single_player()
 	Weather.day_length_seconds = 0.0
 	Weather.lightning_enabled = false
-	Weather.time_of_day = 15.8 if _shot == "tools" else 11.2
+	Weather.time_of_day = time_override if time_override >= 0.0 else (15.8 if _shot == "tools" else 11.2)
 	Weather.set_weather(0.10, 9.5, 0.45, 0.0, 0.36)
 	Sea.amp_scale = lerpf(Sea.AMP_CALM, Sea.AMP_STORM, 0.08)
 	Sea.time = 14.0

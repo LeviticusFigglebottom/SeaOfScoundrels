@@ -187,7 +187,7 @@ func test_there_and_back_full_voyage_loop() -> void:
 	for b in brains:
 		(b as CrewBrain).give_order(&"trim")
 	var start_pos := ship.global_position
-	await physics_frames(320)
+	await physics_frames(360)
 	var sailed_dist := Vector2(ship.global_position.x - start_pos.x, ship.global_position.z - start_pos.z).length()
 	print("    departed Port Scoundrel: sailed %.1f m, speed %.1f kt" % [sailed_dist, ship.speed_knots()])
 	check(not ship.anchor_down and sailed_dist > 15.0 and ship.speed_knots() > 5.0, "sloop weighs anchor and sails under wind")

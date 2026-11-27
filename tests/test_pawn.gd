@@ -862,3 +862,177 @@ func test_q1b_physics_priority_interpolation_and_station_zero_jitter() -> void:
 	p.board(deck, Vector3(0.0, 1.12, -2.0))
 	check_near(p.visual_offset_y, 0.0, 0.0001, "board clears visual_offset_y cleanly")
 	await _end()
+
+
+func test_q9a_surface_aware_footsteps_wading_landing_ladder_and_swim_audio() -> void:
+	_begin()
+	var saved_sea_amp := Sea.amp_scale
+	Net.start_single_player()
+
+	# 1. Standing completely idle on a rolling storm deck triggers 0 phantom footsteps.
+	var deck := _storm_deck(Vector3(750.0, 0.0, -750.0))
+	var idle_pawn := _pawn_on(deck, Vector3(1.2, 1.1, -3.5))
+	await physics_frames(15)
+	idle_pawn.reset_locomotion_sfx_counts()
+	await physics_frames(180)
+	var idle_counts := idle_pawn.get_locomotion_sfx_counts()
+	var idle_total := 0
+	for k in idle_counts:
+		idle_total += int(idle_counts[k])
+	check_eq(idle_total, 0, "idle pawn on rolling storm deck triggers 0 phantom footsteps (got %s)" % str(idle_counts))
+	check_eq(idle_pawn.get_last_locomotion_sfx(), &"", "idle pawn has no last locomotion SFX")
+	check_eq(idle_pawn.resolve_footstep_surface(), &"wood", "storm deck resolves wood surface")
+	# Returned counts dictionary must be a defensive copy.
+	idle_counts[&"footstep_wood"] = 99
+	check(idle_pawn.get_locomotion_sfx_counts().is_empty(), "get_locomotion_sfx_counts returns a duplicate")
+	idle_pawn.queue_free()
+	deck.queue_free()
+	await physics_frames(2)
+
+	# 2. Walking across a real Sloop's oak deck resolves &"wood" and triggers >= 2 &"footstep_wood".
+	Sea.amp_scale = 0.0
+	var sloop_scene: PackedScene = load("res://src/ship/sloop.tscn")
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	_root.add_child(sloop)
+	sloop.global_position = Vector3(-650.0, 0.0, -650.0)
+	await physics_frames(8)
+
+	var p: Pawn = PAWN.instantiate()
+	_root.add_child(p)
+	p.board(sloop, sloop.ship_point(Vector3(1.25, 1.14, 2.0)))
+	await physics_frames(10)
+	p.reset_locomotion_sfx_counts()
+	check_eq(p.resolve_footstep_surface(), &"wood", "Sloop oak deck resolves wood")
+	var fwd_deck := sloop.global_basis * Vector3(0.0, 0.0, -1.0)
+	fwd_deck.y = 0.0
+	p.wish_dir = fwd_deck.normalized()
+	await physics_frames(85)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(6)
+	var deck_counts := p.get_locomotion_sfx_counts()
+	var deck_wood := int(deck_counts.get(&"footstep_wood", 0))
+	check(deck_wood >= 2, "walking across Sloop oak deck triggers >= 2 footstep_wood (got %d, %s)" % [deck_wood, str(deck_counts)])
+	check_eq(p.get_last_locomotion_sfx(), &"footstep_wood", "last locomotion SFX on oak deck is footstep_wood")
+
+	# 3. Walking in a flooded Sloop hold (water_level = 0.35, below main deck) resolves &"water" & triggers &"footstep_water".
+	sloop.water_level = 0.35
+	p.board(sloop, sloop.ship_point(Vector3(0.95, -0.82, 2.5)))
+	await physics_frames(10)
+	p.reset_locomotion_sfx_counts()
+	check_eq(p.resolve_footstep_surface(), &"water", "flooded Sloop bilge hold resolves water")
+	var fwd_hold := sloop.global_basis * Vector3(0.0, 0.0, -1.0)
+	fwd_hold.y = 0.0
+	p.wish_dir = fwd_hold.normalized()
+	await physics_frames(85)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(6)
+	var hold_counts := p.get_locomotion_sfx_counts()
+	var hold_water := int(hold_counts.get(&"footstep_water", 0))
+	check(hold_water >= 2, "walking in flooded Sloop hold triggers >= 2 footstep_water (got %d, %s)" % [hold_water, str(hold_counts)])
+	check_eq(p.get_last_locomotion_sfx(), &"footstep_water", "last locomotion SFX in flooded hold is footstep_water")
+
+	# 4. Walking ashore on dry island ground (y > Sea.height + 2.0) resolves &"sand" & triggers &"footstep_sand".
+	var island_y := Sea.height(220.0, 220.0) + 12.0
+	var island_ground := _ground(Vector3(220.0, island_y, 220.0), Vector3(36.0, 1.0, 36.0))
+	island_ground.name = "TerrainBody"
+	p.teleport(Vector3(212.0, island_y + 0.06, 220.0))
+	await physics_frames(12)
+	p.reset_locomotion_sfx_counts()
+	check_eq(p.resolve_footstep_surface(), &"sand", "dry island ground resolves sand")
+	p.wish_dir = Vector3(1.0, 0.0, 0.0)
+	await physics_frames(85)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(6)
+	var sand_counts := p.get_locomotion_sfx_counts()
+	var sand_steps := int(sand_counts.get(&"footstep_sand", 0))
+	check(sand_steps >= 2, "walking ashore on dry island triggers >= 2 footstep_sand (got %d, %s)" % [sand_steps, str(sand_counts)])
+	check_eq(p.get_last_locomotion_sfx(), &"footstep_sand", "last locomotion SFX on island sand is footstep_sand")
+
+	# 4b. Static wooden pier ashore (no moving platform) resolves &"wood" by collider name.
+	var pier_body := _ground(Vector3(160.0, island_y, 220.0), Vector3(20.0, 1.0, 20.0))
+	pier_body.name = "OutpostPierDeck"
+	p.teleport(Vector3(155.0, island_y + 0.06, 220.0))
+	await physics_frames(12)
+	p.reset_locomotion_sfx_counts()
+	check_eq(p.resolve_footstep_surface(), &"wood", "static wooden pier collider resolves wood")
+	p.wish_dir = Vector3(1.0, 0.0, 0.0)
+	await physics_frames(65)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(6)
+	var pier_counts := p.get_locomotion_sfx_counts()
+	check(int(pier_counts.get(&"footstep_wood", 0)) >= 1,
+		"walking on static wooden pier triggers footstep_wood (got %s)" % str(pier_counts))
+
+	# 4c. Coastal shallow water wading ashore resolves &"water" & triggers &"footstep_water".
+	var shallow_y := Sea.height(260.0, 220.0) - 0.35
+	var seabed := _ground(Vector3(260.0, shallow_y, 220.0), Vector3(24.0, 1.0, 24.0))
+	seabed.name = "CoastalSeabed"
+	p.teleport(Vector3(254.0, shallow_y + 0.06, 220.0))
+	await physics_frames(12)
+	p.reset_locomotion_sfx_counts()
+	check_eq(p.resolve_footstep_surface(), &"water", "coastal ocean shallows resolve water")
+	p.wish_dir = Vector3(1.0, 0.0, 0.0)
+	await physics_frames(85)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(6)
+	var wade_counts := p.get_locomotion_sfx_counts()
+	check(int(wade_counts.get(&"footstep_water", 0)) >= 1,
+		"wading in coastal shallows triggers footstep_water (got %s)" % str(wade_counts))
+
+	# 5. Jumping and landing triggers &"landing" (>= 1) and surface SFX.
+	p.teleport(Vector3(220.0, island_y + 0.06, 220.0))
+	await physics_frames(12)
+	p.reset_locomotion_sfx_counts()
+	p.wish_jump = true
+	await physics_frames(3)
+	p.wish_jump = false
+	await physics_frames(75)
+	var land_counts := p.get_locomotion_sfx_counts()
+	var land_n := int(land_counts.get(&"landing", 0))
+	check(land_n >= 1, "jump and land triggers landing SFX count >= 1 (got %d, %s)" % [land_n, str(land_counts)])
+	check(int(land_counts.get(&"footstep_sand", 0)) >= 1, "landing on sand increments footstep_sand")
+
+	# 6. Climbing a Ladder triggers rhythmic ladder rung footsteps (footstep_wood and rope_creak).
+	var lad := Ladder.new()
+	lad.height = 4.5
+	lad.width = 0.9
+	lad.standoff = 0.4
+	_root.add_child(lad)
+	lad.global_position = Vector3(220.0, island_y, 214.0)
+	p.teleport(Vector3(220.0, island_y + 0.1, 214.5))
+	await physics_frames(4)
+	p.reset_locomotion_sfx_counts()
+	check(p.grab_ladder(lad), "pawn grabs ladder cleanly")
+	p.wish_dir = lad.into_dir()
+	await physics_frames(95)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(4)
+	var lad_counts := p.get_locomotion_sfx_counts()
+	var lad_wood := int(lad_counts.get(&"footstep_wood", 0))
+	var lad_creak := int(lad_counts.get(&"rope_creak", 0))
+	check(lad_wood >= 2, "climbing ladder triggers rhythmic footstep_wood rungs (got %d, %s)" % [lad_wood, str(lad_counts)])
+	check(lad_creak >= 1, "climbing ladder triggers alternating rope_creak every 3rd rung (got %d, %s)" % [lad_creak, str(lad_counts)])
+
+	# 7. Swimming forward in open water triggers &"splash_small" arm strokes.
+	var swim_y := Sea.height(420.0, 420.0) - 1.35
+	p.teleport(Vector3(420.0, swim_y, 420.0))
+	await physics_frames(15)
+	check_eq(p.mode, Pawn.Mode.SWIM, "pawn enters SWIM mode in deep open water")
+	p.reset_locomotion_sfx_counts()
+	p.wish_dir = Vector3(1.0, 0.0, 0.0)
+	await physics_frames(120)
+	p.wish_dir = Vector3.ZERO
+	await physics_frames(4)
+	var swim_counts := p.get_locomotion_sfx_counts()
+	var swim_splashes := int(swim_counts.get(&"splash_small", 0))
+	check(swim_splashes >= 2, "swimming forward in open water triggers >= 2 splash_small arm strokes (got %d, %s)" % [swim_splashes, str(swim_counts)])
+	check_eq(p.get_last_locomotion_sfx(), &"splash_small", "last locomotion SFX while swimming is splash_small")
+
+	print("    Q9A locomotion audio: idle=%d, deck_wood=%d, hold_water=%d, sand=%d, land=%d, ladder=%d/%d, swim=%d" % [
+		idle_total, deck_wood, hold_water, sand_steps, land_n, lad_wood, lad_creak, swim_splashes
+	])
+	Sea.amp_scale = saved_sea_amp
+	await _end()
+

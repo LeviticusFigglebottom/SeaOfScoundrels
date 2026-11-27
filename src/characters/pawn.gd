@@ -129,6 +129,13 @@ var _ladder_cooldown: float = 0.0
 var _prev_surface: float = 0.0
 var _have_prev_surface: bool = false
 var _keep_anchor: bool = false
+var _step_dist_accum: float = 0.0
+var _ladder_step_accum: float = 0.0
+var _ladder_rung_index: int = 0
+var _swim_stroke_accum: float = 0.0
+var _last_floor_surface_hint: String = ""
+var _locomotion_sfx_counts: Dictionary = {}
+var _last_locomotion_sfx: StringName = &""
 var _shape: CapsuleShape3D
 var _shape_node: CollisionShape3D
 var _visual: Node3D
@@ -137,6 +144,28 @@ var _col := KinematicCollision3D.new()
 const COYOTE_TIME := 0.12
 const JUMP_BUFFER := 0.14
 const LAND_SIGNAL_SPEED := 2.5
+
+const FOOTSTEP_STRIDE_CROUCH := 1.25
+const FOOTSTEP_STRIDE_WALK := 1.72
+const FOOTSTEP_STRIDE_SPRINT := 2.15
+const FOOTSTEP_VOL_CROUCH_DB := -14.5
+const FOOTSTEP_VOL_WALK_DB := -9.0
+const FOOTSTEP_VOL_SPRINT_DB := -5.5
+const FOOTSTEP_MIN_SPEED := 0.35
+const LANDING_VOL_MIN_DB := -6.5
+const LANDING_VOL_MAX_DB := -2.0
+const LADDER_RUNG_SPACING := 0.44
+const LADDER_WOOD_VOL_DB := -8.5
+const LADDER_CREAK_VOL_DB := -11.5
+const SWIM_STROKE_DIST := 1.85
+const SWIM_STROKE_MIN_SPEED := 0.45
+const SWIM_STROKE_VOL_DB := -10.5
+const LOCOMOTION_AUDIO_MAX_DIST := 24.0
+const LOCOMOTION_AUDIO_MAX_DIST_SQ := LOCOMOTION_AUDIO_MAX_DIST * LOCOMOTION_AUDIO_MAX_DIST
+const WOOD_SURFACE_KEYWORDS: Array[String] = [
+	"wood", "dock", "pier", "bridge", "deck", "tavern",
+	"stall", "warehouse", "watch", "wreck", "ship",
+]
 
 func _init() -> void:
 	# Always run after Ship / MockDeck (priority 0) so _carry_with_platform()
@@ -249,6 +278,10 @@ func board(body: PhysicsBody3D, local_feet: Vector3) -> void:
 	_set_platform(body)
 	velocity = Vector3.ZERO
 	_coyote = COYOTE_TIME
+	_step_dist_accum = 0.0
+	_ladder_step_accum = 0.0
+	_swim_stroke_accum = 0.0
+	_last_floor_surface_hint = ""
 	if not crouched and _headroom_blocked():
 		_crouch()
 	_reset_interpolation_safe()
@@ -274,6 +307,8 @@ func launch_from_cannon(launch_vel: Vector3) -> void:
 	_cannon_air_time = 0.0
 	_coyote = 0.0
 	_jump_buffer = 0.0
+	_step_dist_accum = 0.0
+	_last_floor_surface_hint = ""
 	_set_mode(Mode.WALK)
 
 ## Depth of the feet below the sea surface as far as movement is concerned.
@@ -295,6 +330,10 @@ func teleport(world_position: Vector3) -> void:
 	visual_offset_y = 0.0
 	platform_yaw_delta = 0.0
 	_prev_eye_offset_y = current_eye_height
+	_step_dist_accum = 0.0
+	_ladder_step_accum = 0.0
+	_swim_stroke_accum = 0.0
+	_last_floor_surface_hint = ""
 	if mode == Mode.LADDER or mode == Mode.SWIM:
 		_set_mode(Mode.WALK)
 	_reset_interpolation_safe()
@@ -416,12 +455,16 @@ func _refresh_platform() -> void:
 		var hit := _ray_down(radius + 0.5, LAYER_WORLD | LAYER_SHIP)
 		if not hit.is_empty():
 			found = rideable_of(hit.collider)
+			_last_floor_surface_hint = _extract_floor_hint(
+				hit.get("collider") as Object, null, int(hit.get("shape", -1)))
 		else:
 			var any := false
 			for i in get_slide_collision_count():
 				var c := get_slide_collision(i)
 				if c.get_normal().y > 0.3:
 					any = true
+					_last_floor_surface_hint = _extract_floor_hint(
+						c.get_collider(), c.get_collider_shape(), c.get_collider_shape_index())
 					found = rideable_of(c.get_collider())
 					if found != null:
 						break
@@ -496,18 +539,24 @@ func _tick_walk(delta: float) -> void:
 	if not jumping and not cannon_launched and (grounded or _coyote > 0.0) and vy <= 0.0:
 		_try_step_up(hv, delta)
 	var before := global_position
+	var plat_before: PhysicsBody3D = platform if (platform != null and is_instance_valid(platform)) else null
+	var local_before := plat_before.global_transform.affine_inverse() * before if plat_before != null else Vector3.ZERO
 	var fall_speed := -vy
 	move_and_slide()
 	if is_on_ceiling() and velocity.y > 0.0:
 		velocity.y = 0.0
+	_refresh_floor_hint_from_slides()
 	var was_cannon_landing := false
 	if cannon_launched and is_on_floor() and _cannon_air_time > 0.25:
 		cannon_launched = false
 		_cannon_air_time = 0.0
 		was_cannon_landing = true
+	var just_landed := false
 	if is_on_floor() and not grounded and fall_speed > LAND_SIGNAL_SPEED:
 		var impact := minf(fall_speed * 0.45, 7.5) if was_cannon_landing else fall_speed
 		landed.emit(impact)
+		_play_landing_audio(impact)
+		just_landed = true
 	# Smooth discrete stair step-downs / coaming drops without adding lag to smooth ramps.
 	var dy_step := global_position.y - before.y
 	if grounded and is_on_floor() and not jumping and not cannon_launched and vy <= 0.0 \
@@ -521,6 +570,16 @@ func _tick_walk(delta: float) -> void:
 			and global_position.distance_squared_to(before) < 0.0009:
 		velocity = Vector3.ZERO
 		_keep_anchor = true
+	var moved_horiz_m := 0.0
+	if not _keep_anchor and not just_landed:
+		if platform != null and platform == plat_before and is_instance_valid(platform):
+			var d_local := platform.global_transform.affine_inverse() * global_position - local_before
+			moved_horiz_m = Vector2(d_local.x, d_local.z).length()
+		else:
+			var d_world := global_position - before
+			moved_horiz_m = Vector2(d_world.x, d_world.z).length()
+	if not just_landed:
+		_tick_locomotion_audio(delta, moved_horiz_m)
 
 ## Step up onto ledges up to `step_height` (stairs, coamings, hatch rims).
 ## Lifts the body to the step's height; the normal move then carries it on.
@@ -611,6 +670,9 @@ func _enter_swim() -> void:
 	_cannon_air_time = 0.0
 	_set_platform(null)
 	_have_prev_surface = false
+	_step_dist_accum = 0.0
+	_swim_stroke_accum = 0.0
+	_last_floor_surface_hint = ""
 	if crouched:
 		crouched = false
 		_set_shape_height(stand_height)
@@ -655,6 +717,17 @@ func _tick_swim(delta: float) -> void:
 	var vy := move_toward(velocity.y, v_target, 26.0 * delta)
 	velocity = Vector3(hv.x, vy, hv.z)
 	move_and_slide()
+	if not dead and delta > 0.0:
+		var swim_horiz_speed := Vector2(velocity.x, velocity.z).length()
+		if swim_horiz_speed > SWIM_STROKE_MIN_SPEED:
+			_swim_stroke_accum += swim_horiz_speed * delta
+			if _swim_stroke_accum >= SWIM_STROKE_DIST:
+				_swim_stroke_accum = clampf(_swim_stroke_accum - SWIM_STROKE_DIST, 0.0, SWIM_STROKE_DIST * 0.5)
+				_record_locomotion_sfx(&"splash_small")
+				if _should_play_locomotion_audio():
+					Audio.play_sfx(&"splash_small", global_position, SWIM_STROKE_VOL_DB, 0.12)
+				if Ocean.current != null and Ocean.current.has_method(&"add_foam") and water_depth() < swim_float_depth + 0.35:
+					Ocean.current.add_foam(global_position, 0.92, 0.22)
 
 # ------------------------------------------------------------------ ladder
 
@@ -684,6 +757,9 @@ func grab_ladder(lad: Ladder) -> bool:
 	ladder = lad
 	_ladder_t = rung_y
 	_ladder_cooldown = 0.0
+	_ladder_step_accum = 0.0
+	_ladder_rung_index = 0
+	_step_dist_accum = 0.0
 	visual_offset_y = 0.0
 	platform_yaw_delta = 0.0
 	_prev_eye_offset_y = current_eye_height
@@ -738,6 +814,9 @@ func _mount_ladder(l: Ladder, local_pos: Vector3) -> void:
 	_cannon_air_time = 0.0
 	ladder = l
 	_ladder_t = local_pos.y
+	_ladder_step_accum = 0.0
+	_ladder_rung_index = 0
+	_step_dist_accum = 0.0
 	var ideal := Vector3(0.0, _ladder_t, l.standoff)
 	var world_before := global_position
 	_set_platform(l.get_platform())
@@ -752,6 +831,9 @@ func _mount_ladder(l: Ladder, local_pos: Vector3) -> void:
 func _leave_ladder(cooldown: float) -> void:
 	ladder = null
 	_ladder_cooldown = cooldown
+	_ladder_step_accum = 0.0
+	_ladder_rung_index = 0
+	_step_dist_accum = 0.0
 	_set_mode(Mode.WALK)
 
 func _tick_ladder(delta: float) -> void:
@@ -778,6 +860,18 @@ func _tick_ladder(delta: float) -> void:
 		return
 	global_position = xf * (Vector3(0.0, _ladder_t, ladder.standoff) + _ladder_off)
 	velocity = Vector3.ZERO
+	if absf(climb) > 0.0 and delta > 0.0:
+		_ladder_step_accum += absf(climb * ladder_speed * delta)
+		if _ladder_step_accum >= LADDER_RUNG_SPACING:
+			_ladder_step_accum = clampf(_ladder_step_accum - LADDER_RUNG_SPACING, 0.0, LADDER_RUNG_SPACING * 0.5)
+			_ladder_rung_index += 1
+			var is_creak := (_ladder_rung_index % 3) == 0
+			var rung_sfx := &"rope_creak" if is_creak else &"footstep_wood"
+			var rung_vol := LADDER_CREAK_VOL_DB if is_creak else LADDER_WOOD_VOL_DB
+			var rung_pitch := 0.08 if is_creak else 0.09
+			_record_locomotion_sfx(rung_sfx)
+			if _should_play_locomotion_audio():
+				Audio.play_sfx(rung_sfx, global_position, rung_vol, rung_pitch)
 	if climb < 0.0:
 		var let_go := _ladder_t <= -ladder.reach_below
 		if not let_go and Sea.depth(global_position) >= swim_float_depth:
@@ -787,6 +881,167 @@ func _tick_ladder(delta: float) -> void:
 			let_go = true
 		if let_go:
 			_leave_ladder(0.6)
+
+# ------------------------------------------------------- locomotion audio
+
+## Resolve the footstep surface category beneath the pawn: &"water", &"wood", or &"sand".
+func resolve_footstep_surface() -> StringName:
+	if water_depth() > 0.08:
+		return &"water"
+	var plat: PhysicsBody3D = platform if (platform != null and is_instance_valid(platform)) else null
+	if plat == null:
+		for i in get_slide_collision_count():
+			var c := get_slide_collision(i)
+			if c.get_normal().y > 0.3:
+				var found := rideable_of(c.get_collider())
+				if found != null:
+					plat = found
+					break
+	if plat != null:
+		if plat.is_inside_tree() and plat.has_method(&"is_brigantine"):
+			var local_pos := plat.global_transform.affine_inverse() * global_position
+			var wl_v: Variant = plat.get(&"water_level")
+			if local_pos.y < 0.35 and wl_v != null and float(wl_v) > 0.14:
+				return &"water"
+		return &"wood"
+	var hint := _last_floor_surface_hint
+	if hint.is_empty():
+		hint = _probe_floor_surface_hint()
+	if _surface_hint_is_wood(hint):
+		return &"wood"
+	return &"sand"
+
+func get_locomotion_sfx_counts() -> Dictionary:
+	return _locomotion_sfx_counts.duplicate()
+
+func get_last_locomotion_sfx() -> StringName:
+	return _last_locomotion_sfx
+
+func reset_locomotion_sfx_counts() -> void:
+	_locomotion_sfx_counts.clear()
+	_last_locomotion_sfx = &""
+	_step_dist_accum = 0.0
+	_ladder_step_accum = 0.0
+	_ladder_rung_index = 0
+	_swim_stroke_accum = 0.0
+
+static func _surface_to_footstep_sfx(surface: StringName) -> StringName:
+	if surface == &"water":
+		return &"footstep_water"
+	if surface == &"wood":
+		return &"footstep_wood"
+	return &"footstep_sand"
+
+static func _extract_floor_hint(collider: Object, shape_obj: Object = null, shape_idx: int = -1) -> String:
+	var parts := PackedStringArray()
+	if collider is Node:
+		parts.append((collider as Node).name)
+	var owner_obj: Object = shape_obj
+	if not (owner_obj is Node) and shape_idx >= 0 and collider is CollisionObject3D:
+		var co := collider as CollisionObject3D
+		var owner_id := co.shape_find_owner(shape_idx)
+		if co.get_shape_owners().has(owner_id):
+			owner_obj = co.shape_owner_get_owner(owner_id)
+	if owner_obj is Node:
+		parts.append((owner_obj as Node).name)
+	return " ".join(parts).to_lower()
+
+static func _surface_hint_is_wood(hint: String) -> bool:
+	if hint.is_empty():
+		return false
+	var lower := hint.to_lower()
+	for kw in WOOD_SURFACE_KEYWORDS:
+		if lower.contains(kw):
+			return true
+	return false
+
+func _refresh_floor_hint_from_slides() -> void:
+	for i in get_slide_collision_count():
+		var c := get_slide_collision(i)
+		if c.get_normal().y > 0.3:
+			_last_floor_surface_hint = _extract_floor_hint(
+				c.get_collider(), c.get_collider_shape(), c.get_collider_shape_index())
+			return
+
+func _probe_floor_surface_hint() -> String:
+	for i in get_slide_collision_count():
+		var c := get_slide_collision(i)
+		if c.get_normal().y > 0.3:
+			return _extract_floor_hint(
+				c.get_collider(), c.get_collider_shape(), c.get_collider_shape_index())
+	if is_inside_tree() and get_world_3d() != null:
+		var hit := _ray_down(radius + 0.5, LAYER_WORLD | LAYER_SHIP)
+		if not hit.is_empty():
+			return _extract_floor_hint(
+				hit.get("collider") as Object, null, int(hit.get("shape", -1)))
+	return ""
+
+func _is_player_controlled() -> bool:
+	if get_node_or_null(^"PlayerController") != null:
+		return true
+	for child in get_children():
+		if child is PlayerController:
+			return true
+	return false
+
+func _should_play_locomotion_audio() -> bool:
+	if not is_inside_tree():
+		return false
+	if _is_player_controlled():
+		return true
+	var vp := get_viewport()
+	if vp == null:
+		return true
+	var cam := vp.get_camera_3d()
+	if cam == null or not is_instance_valid(cam):
+		return true
+	return global_position.distance_squared_to(cam.global_position) <= LOCOMOTION_AUDIO_MAX_DIST_SQ
+
+func _record_locomotion_sfx(sfx_id: StringName, update_last: bool = true) -> void:
+	_locomotion_sfx_counts[sfx_id] = int(_locomotion_sfx_counts.get(sfx_id, 0)) + 1
+	if update_last:
+		_last_locomotion_sfx = sfx_id
+
+func _tick_locomotion_audio(delta: float, moved_horiz_m: float) -> void:
+	if dead or not is_on_floor() or delta <= 0.0 or moved_horiz_m <= 0.0:
+		return
+	var rel_speed := Vector2(velocity.x, velocity.z).length()
+	var actual_speed := moved_horiz_m / delta
+	if rel_speed <= FOOTSTEP_MIN_SPEED or actual_speed <= FOOTSTEP_MIN_SPEED:
+		return
+	_step_dist_accum += moved_horiz_m
+	var stride := FOOTSTEP_STRIDE_WALK
+	var vol_db := FOOTSTEP_VOL_WALK_DB
+	if crouched:
+		stride = FOOTSTEP_STRIDE_CROUCH
+		vol_db = FOOTSTEP_VOL_CROUCH_DB
+	elif wish_sprint:
+		stride = FOOTSTEP_STRIDE_SPRINT
+		vol_db = FOOTSTEP_VOL_SPRINT_DB
+	if _step_dist_accum >= stride:
+		_step_dist_accum = clampf(_step_dist_accum - stride, 0.0, stride * 0.5)
+		var surface := resolve_footstep_surface()
+		var sfx_id := _surface_to_footstep_sfx(surface)
+		_record_locomotion_sfx(sfx_id)
+		if _should_play_locomotion_audio():
+			Audio.play_sfx(sfx_id, global_position, vol_db, 0.09)
+		if surface == &"water" and water_depth() > 0.08 \
+				and Ocean.current != null and Ocean.current.has_method(&"add_foam"):
+			Ocean.current.add_foam(global_position, 0.72, 0.24)
+
+func _play_landing_audio(impact: float) -> void:
+	var surface := resolve_footstep_surface()
+	var sfx_id := _surface_to_footstep_sfx(surface)
+	var impact_t := clampf((impact - LAND_SIGNAL_SPEED) / 7.5, 0.0, 1.0)
+	var vol_db := lerpf(LANDING_VOL_MIN_DB, LANDING_VOL_MAX_DB, impact_t)
+	_record_locomotion_sfx(&"landing", false)
+	_record_locomotion_sfx(sfx_id, true)
+	_step_dist_accum = 0.0
+	if _should_play_locomotion_audio():
+		Audio.play_sfx(sfx_id, global_position, vol_db, 0.06)
+	if surface == &"water" and water_depth() > 0.08 \
+			and Ocean.current != null and Ocean.current.has_method(&"add_foam"):
+		Ocean.current.add_foam(global_position, 1.15, 0.42)
 
 # ----------------------------------------------------------------- station
 
@@ -998,6 +1253,9 @@ func _die() -> void:
 	dead = true
 	cannon_launched = false
 	_cannon_air_time = 0.0
+	_step_dist_accum = 0.0
+	_ladder_step_accum = 0.0
+	_swim_stroke_accum = 0.0
 	if station != null:
 		leave_station()
 	if carried != null:
@@ -1021,6 +1279,9 @@ func _set_mode(m: Mode) -> void:
 	if m == mode:
 		return
 	mode = m
+	_step_dist_accum = 0.0
+	_ladder_step_accum = 0.0
+	_swim_stroke_accum = 0.0
 	mode_changed.emit(mode)
 
 func _post_tick(delta: float) -> void:

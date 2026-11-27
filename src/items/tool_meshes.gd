@@ -115,13 +115,18 @@ static var _pbr_tex_cache: Dictionary = {}
 static var _fp_hand_mesh_cache: Dictionary = {}
 ## Lazy WeakRef cache of sculpted first-person hand StandardMaterial3Ds (zero shutdown leaks).
 static var _fp_hand_mat_cache: Dictionary = {}
+## Lazy WeakRef caches of shared held-lantern atmospheric halo mesh & shader (zero shutdown leaks).
+static var _lantern_halo_mesh: WeakRef = null
+static var _lantern_halo_shader: WeakRef = null
 
 
-## Clear cached shared PBR texture and first-person hand mesh caches cleanly on teardown.
+## Clear cached shared PBR texture, hand mesh, and lantern halo caches cleanly on teardown.
 static func clear_shared_cache() -> void:
 	_pbr_tex_cache.clear()
 	_fp_hand_mesh_cache.clear()
 	_fp_hand_mat_cache.clear()
+	_lantern_halo_mesh = null
+	_lantern_halo_shader = null
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -207,7 +212,7 @@ static func apply_map_texture(map_node: Node3D, tex: Texture2D) -> void:
 	mat.albedo_texture = tex
 
 
-## Toggle a Lantern node's flame mesh, glowing amber glass emission, and OmniLight3D.
+## Toggle a Lantern node's flame mesh, glowing amber glass emission, FlameHalo, and OmniLight3D.
 static func set_lantern_lit(lantern_node: Node3D, lit: bool) -> void:
 	if lantern_node == null:
 		return
@@ -218,6 +223,15 @@ static func set_lantern_lit(lantern_node: Node3D, lit: bool) -> void:
 	var flame := lantern_node.get_node_or_null(^"Flame") as Node3D
 	if flame != null:
 		flame.visible = lit
+	var halo := lantern_node.get_node_or_null(^"FlameHalo") as MeshInstance3D
+	if halo != null:
+		halo.visible = lit
+		if halo.material_override is ShaderMaterial:
+			var hmat := halo.material_override as ShaderMaterial
+			if not lit:
+				hmat.set_shader_parameter(&"halo_intensity", 0.0)
+			elif float(hmat.get_shader_parameter(&"halo_intensity")) <= 0.005:
+				hmat.set_shader_parameter(&"halo_intensity", 0.35)
 	var glass := lantern_node.get_node_or_null(^"GlassCore") as MeshInstance3D
 	if glass != null and glass.material_override is StandardMaterial3D:
 		var mat := glass.material_override as StandardMaterial3D
@@ -230,6 +244,59 @@ static func set_lantern_lit(lantern_node: Node3D, lit: bool) -> void:
 			mat.albedo_color = COL_GLASS_UNLIT
 			mat.emission_enabled = false
 			mat.emission_energy_multiplier = 0.0
+
+
+## Update a Lantern node's camera-facing additive FlameHalo shader uniforms and visibility.
+static func set_lantern_halo_style(
+	lantern_node: Node3D,
+	intensity: float,
+	tint_color: Color,
+	halo_scale: float = 0.28
+) -> void:
+	if lantern_node == null or not is_instance_valid(lantern_node):
+		return
+	var halo := lantern_node.get_node_or_null(^"FlameHalo") as MeshInstance3D
+	if halo == null:
+		return
+	var clamped_i := maxf(intensity, 0.0)
+	var clamped_s := clampf(halo_scale, 0.08, 1.50)
+	halo.visible = clamped_i > 0.005
+	if halo.material_override is ShaderMaterial:
+		var hmat := halo.material_override as ShaderMaterial
+		hmat.set_shader_parameter(&"halo_intensity", clamped_i)
+		hmat.set_shader_parameter(&"halo_color", tint_color)
+		hmat.set_shader_parameter(&"halo_scale", clamped_s)
+
+
+## Shift a Compass node's sculpted PinJewel center stud between True North (brushed crimson-brass)
+## and Chart Pin tracking mode (luminous emerald-gold).
+static func set_compass_pin_mode(compass_node: Node3D, pin_active: bool) -> void:
+	if compass_node == null or not is_instance_valid(compass_node):
+		return
+	var jewel := compass_node.get_node_or_null(^"Needle/PinJewel") as MeshInstance3D
+	if jewel == null:
+		jewel = compass_node.get_node_or_null(^"PinJewel") as MeshInstance3D
+	if jewel == null:
+		return
+	var mat := jewel.material_override as StandardMaterial3D
+	if mat == null:
+		mat = _make_mat(Color(0.68, 0.22, 0.16), 0.30, 0.45, Color.BLACK, 0.0, false, &"none")
+		jewel.material_override = mat
+	if pin_active:
+		mat.albedo_color = Color(0.28, 0.90, 0.52)
+		mat.roughness = 0.16
+		mat.metallic = 0.30
+		mat.emission_enabled = true
+		mat.emission = Color(0.42, 0.96, 0.56)
+		mat.emission_energy_multiplier = 2.4
+	else:
+		mat.albedo_color = Color(0.68, 0.22, 0.16)
+		mat.roughness = 0.30
+		mat.metallic = 0.45
+		mat.emission_enabled = false
+		mat.emission = Color(0.28, 0.08, 0.05)
+		mat.emission_energy_multiplier = 0.0
+	compass_node.set_meta(&"compass_pin_active", pin_active)
 
 
 ## Toggle the visible bilge water disc inside a Bucket node.
@@ -385,6 +452,10 @@ static func apply_tool_variant_visual(item_id: StringName, node: Node3D, variant
 					bands.material_override = _make_mat(Color(0.32, 0.34, 0.39), 0.20, 0.92)
 				else:
 					bands.material_override = _make_mat(COL_IRON, 0.46, 0.74)
+
+		&"lantern":
+			if variant_id == &"tool_storm_lantern":
+				applied = variant_id
 
 	node.set_meta(&"tool_variant_id", applied)
 
@@ -953,6 +1024,18 @@ static func _build_compass() -> Node3D:
 	], 10)
 	needle.add_child(_make_mesh_node("CenterPin", pin_mesh, _make_mat(COL_GOLD_BRIGHT, 0.28, 0.86)))
 
+	# Sculpted faceted cabochon cap jewel (zero primitives, per-instance material) showing pin-mode.
+	var jewel_mesh := _lathe_mesh([
+		Vector2(0.0, 0.0042),
+		Vector2(0.0058, 0.0044),
+		Vector2(0.0052, 0.0064),
+		Vector2(0.0032, 0.0080),
+		Vector2(0.0, 0.0088),
+	], 8)
+	var jewel_mat := _make_mat(Color(0.68, 0.22, 0.16), 0.30, 0.45, Color.BLACK, 0.0, false, &"none")
+	needle.add_child(_make_mesh_node("PinJewel", jewel_mesh, jewel_mat))
+	set_compass_pin_mode(root, false)
+
 	# Ultra-clear subtle curved watch crystal (low alpha & specular so dial never washes out).
 	var glass_mesh := _lathe_mesh([
 		Vector2(0.058, 0.016),
@@ -1113,6 +1196,22 @@ static func _build_lantern() -> Node3D:
 	flame_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	root.add_child(_make_mesh_node("Flame", flame_mesh, flame_mat))
 
+	# Camera-facing additive atmospheric glow halo centered on flame/glass core (zero primitives, zero textures).
+	var halo_mat := ShaderMaterial.new()
+	halo_mat.shader = _get_lantern_halo_shader()
+	halo_mat.set_shader_parameter(&"halo_intensity", 0.35)
+	halo_mat.set_shader_parameter(&"halo_scale", 0.28)
+	halo_mat.set_shader_parameter(&"halo_color", Color(1.0, 0.72, 0.30))
+	var halo := MeshInstance3D.new()
+	halo.name = "FlameHalo"
+	halo.mesh = _get_lantern_halo_mesh()
+	halo.material_override = halo_mat
+	halo.position = Vector3(0.0, -0.195, 0.0)
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	halo.extra_cull_margin = 0.50
+	root.add_child(halo)
+
 	# Real warm OmniLight3D illuminating dark holds, caves, and nights!
 	var light := OmniLight3D.new()
 	light.name = "LanternLight"
@@ -1124,6 +1223,72 @@ static func _build_lantern() -> Node3D:
 	light.shadow_enabled = false
 	root.add_child(light)
 	return root
+
+
+static func _get_lantern_halo_mesh() -> ArrayMesh:
+	if _lantern_halo_mesh != null:
+		var obj: Variant = _lantern_halo_mesh.get_ref()
+		if obj is ArrayMesh:
+			return obj as ArrayMesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	var built := st.commit()
+	_lantern_halo_mesh = weakref(built)
+	return built
+
+
+static func _get_lantern_halo_shader() -> Shader:
+	if _lantern_halo_shader != null:
+		var obj: Variant = _lantern_halo_shader.get_ref()
+		if obj is Shader:
+			return obj as Shader
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float halo_intensity = 0.35;
+uniform float halo_scale = 0.28;
+uniform vec3 halo_color : source_color = vec3(1.0, 0.72, 0.30);
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * halo_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge_mask = smoothstep(1.0, 0.72, r);
+	float core = exp(-r * r * 15.0) * 0.76;
+	float bloom = exp(-r * r * 3.8) * 0.42;
+	float glow = (core + bloom) * edge_mask;
+	vec3 col = mix(halo_color, vec3(1.0, 0.96, 0.84), clamp(core * 1.15, 0.0, 1.0));
+	ALBEDO = col * (glow * halo_intensity);
+}
+"""
+	_lantern_halo_shader = weakref(sh)
+	return sh
 
 
 ## 6. Held Treasure Map: wooden-roller parchment scroll with live ImageTexture.

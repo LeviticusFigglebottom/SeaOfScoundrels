@@ -3402,4 +3402,266 @@ func test_q6b_map_table_nautical_grid_course_ray_living_icons_and_painter() -> v
 	check(not is_instance_valid(mtv), "Q6B MapTableView tears down cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# Pass Q9B: Held-Lantern FlameHalo, Damped Compass Needle + PinJewel, Gunsmoke Wisps
+# ---------------------------------------------------------------------------
 
+func test_q9b_held_lantern_halo_damped_compass_needle_and_gunsmoke_wisps() -> void:
+	_begin()
+	ToolMeshes.clear_shared_cache()
+
+	# Verify zero raw QuadMesh/SphereMesh primitives in our modified item scripts.
+	var tm_src := FileAccess.get_file_as_string("res://src/items/tool_meshes.gd")
+	var inv_src := FileAccess.get_file_as_string("res://src/items/inventory.gd")
+	check(not tm_src.contains("QuadMesh.new") and not inv_src.contains("QuadMesh.new"),
+		"tool_meshes.gd and inventory.gd contain zero raw QuadMesh.new() primitives")
+	check(not tm_src.contains("SphereMesh.new") and not inv_src.contains("SphereMesh.new"),
+		"tool_meshes.gd and inventory.gd contain zero raw SphereMesh.new() primitives")
+
+	var rig := _make_player_pawn(Vector3(0.0, 2.0, 0.0))
+	var captain: Pawn = rig["pawn"]
+	var pc: PlayerController = rig["pc"]
+	var inv: Inventory = rig["inv"]
+	await physics_frames(2)
+
+	# Pause auto-process on captain/pc/inv so we drive deterministic 60 Hz steps cleanly.
+	captain.set_physics_process(false)
+	pc.set_process(false)
+	inv.set_process(false)
+	captain.look_yaw = 0.0
+	captain.look_pitch = 0.0
+	pc._process(1.0 / 60.0)
+
+	# ------------------------------------------------------------------
+	# 1. Held-Lantern Atmospheric Flame Halo
+	# ------------------------------------------------------------------
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	inv.equip(&"lantern", true)
+	inv.set_lantern_lit(true)
+
+	var fp_lan := inv.fp_tool_node
+	var tp_lan := inv.tp_tool_node
+	check(fp_lan != null, "equipped lantern builds fp_tool_node")
+	var fp_halo := fp_lan.get_node_or_null(^"FlameHalo") as MeshInstance3D if fp_lan != null else null
+	check(fp_halo != null, "held lantern mounts FlameHalo MeshInstance3D")
+	if fp_halo != null:
+		check_eq(fp_halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"FlameHalo disables shadow casting")
+		check(fp_halo.mesh is ArrayMesh and not (fp_halo.mesh is PrimitiveMesh),
+			"FlameHalo uses zero-primitive SurfaceTool ArrayMesh")
+		check_eq((fp_halo.mesh as ArrayMesh).get_faces().size(), 6,
+			"FlameHalo quad uses exact 2-triangle (6-vertex) ArrayMesh")
+		check(fp_halo.material_override is ShaderMaterial,
+			"FlameHalo uses lightweight zero-texture ShaderMaterial")
+		check(fp_halo.visible, "FlameHalo starts visible when lantern is lit")
+
+	# Verify per-instance ShaderMaterial isolation + shared static mesh & shader between FP & TP!
+	if tp_lan != null and fp_halo != null:
+		var tp_halo := tp_lan.get_node_or_null(^"FlameHalo") as MeshInstance3D
+		check(tp_halo != null, "third-person lantern also mounts FlameHalo")
+		if tp_halo != null:
+			check(tp_halo.mesh == fp_halo.mesh, "FP and TP lanterns share identical static halo ArrayMesh")
+			check(tp_halo.material_override != fp_halo.material_override,
+				"FP and TP lanterns use independent per-instance ShaderMaterials")
+			var fp_sm := fp_halo.material_override as ShaderMaterial
+			var tp_sm := tp_halo.material_override as ShaderMaterial
+			check(fp_sm.shader == tp_sm.shader, "FP and TP lanterns share identical static halo Shader")
+
+	# Midday (12.0) -> Midnight (23.0): halo energy rises sharply!
+	Weather.time_of_day = 12.0
+	for _i in 30:
+		inv._process(1.0 / 60.0)
+	var noon_halo := inv.get_lantern_halo_energy()
+	check(noon_halo > 0.05 and noon_halo < 0.25,
+		"midday lantern halo stays subtle and crisp (got %.3f)" % noon_halo)
+
+	Weather.time_of_day = 23.0
+	for _i in 45:
+		inv._process(1.0 / 60.0)
+	var midnight_halo := inv.get_lantern_halo_energy()
+	check(midnight_halo > noon_halo * 3.5 and midnight_halo > 0.65,
+		"midnight lantern halo rises sharply vs midday (noon=%.3f -> midnight=%.3f)" % [noon_halo, midnight_halo])
+
+	# Raising lantern (set_secondary_held(true)) boosts halo further!
+	inv.set_secondary_held(true)
+	for _i in 45:
+		inv._process(1.0 / 60.0)
+	var raised_halo := inv.get_lantern_halo_energy()
+	check(raised_halo > midnight_halo + 0.20,
+		"raising lantern boosts FlameHalo energy further (lowered=%.3f -> raised=%.3f)" % [midnight_halo, raised_halo])
+	if fp_halo != null and fp_halo.material_override is ShaderMaterial:
+		var fp_sc := float((fp_halo.material_override as ShaderMaterial).get_shader_parameter(&"halo_scale"))
+		check(fp_sc >= 0.24 and fp_sc <= 0.325,
+			"FP FlameHalo scale stays compact in 0.24..0.32 m (got %.3f)" % fp_sc)
+	if tp_lan != null:
+		var tp_halo2 := tp_lan.get_node_or_null(^"FlameHalo") as MeshInstance3D
+		if tp_halo2 != null and tp_halo2.material_override is ShaderMaterial:
+			var tp_sc := float((tp_halo2.material_override as ShaderMaterial).get_shader_parameter(&"halo_scale"))
+			check_near(tp_sc, 0.42, 0.01, "TP FlameHalo uses 0.42 m atmospheric world scale")
+
+	# Verify storm lantern variant tint vs standard brass amber tint.
+	inv.apply_tool_modifiers({"tool_variant_id": &"tool_storm_lantern"})
+	if fp_halo != null and fp_halo.material_override is ShaderMaterial:
+		var st_col: Color = (fp_halo.material_override as ShaderMaterial).get_shader_parameter(&"halo_color")
+		check(st_col.b > 0.60 and st_col.g > 0.85,
+			"tool_storm_lantern shifts FlameHalo tint to cool warm-white (got %s)" % str(st_col))
+	inv.apply_tool_modifiers({"tool_variant_id": &""})
+	if fp_halo != null and fp_halo.material_override is ShaderMaterial:
+		var br_col: Color = (fp_halo.material_override as ShaderMaterial).get_shader_parameter(&"halo_color")
+		check(br_col.b < 0.36 and br_col.r > 0.95,
+			"standard lantern restores warm brass-amber FlameHalo tint (got %s)" % str(br_col))
+	inv.set_secondary_held(false)
+
+	# Dousing lantern drops halo energy cleanly to 0.0 and hides FlameHalo!
+	inv.set_lantern_lit(false)
+	inv._process(1.0 / 60.0)
+	check_near(inv.get_lantern_halo_energy(), 0.0, 0.0001,
+		"dousing lantern via set_lantern_lit(false) drops halo energy cleanly to 0.0")
+	if fp_halo != null:
+		check(not fp_halo.visible, "dousing lantern hides FP FlameHalo")
+	if tp_lan != null:
+		var tp_halo3 := tp_lan.get_node_or_null(^"FlameHalo") as MeshInstance3D
+		if tp_halo3 != null:
+			check(not tp_halo3.visible, "dousing lantern hides TP FlameHalo")
+	inv.set_lantern_lit(true)
+
+	# ------------------------------------------------------------------
+	# 2. Damped Harmonic Magnetic Compass Needle Physics & PinJewel
+	# ------------------------------------------------------------------
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	captain.look_yaw = 0.0
+	pc._process(1.0 / 60.0)
+	inv.equip(&"compass", true)
+
+	var comp_fp := inv.fp_tool_node
+	check(comp_fp != null, "equipped compass builds fp_tool_node")
+	var jewel := comp_fp.get_node_or_null(^"Needle/PinJewel") as MeshInstance3D if comp_fp != null else null
+	check(jewel != null, "held compass Needle mounts sculpted PinJewel cap stud")
+	if jewel != null:
+		check(jewel.mesh is ArrayMesh and not (jewel.mesh is PrimitiveMesh),
+			"PinJewel uses sculpted SurfaceTool ArrayMesh (zero primitives)")
+		check(jewel.material_override is StandardMaterial3D,
+			"PinJewel has per-instance StandardMaterial3D")
+		var jmat0 := jewel.material_override as StandardMaterial3D
+		check(not jmat0.emission_enabled, "PinJewel starts in True North brushed crimson-brass mode")
+
+	# Frame-0 equip snaps cleanly with zero velocity.
+	check_near(inv.get_compass_needle_velocity(), 0.0, 0.001,
+		"initial compass equip snaps cleanly with zero needle velocity")
+
+	# Turn Captain abruptly by 1.4 rad -> measurable magnetic spring velocity (> 0.25 rad/s),
+	# then smoothly damps and settles within < 0.04 rad of target over 2.0 s!
+	captain.look_yaw = 1.4
+	pc._process(1.0 / 60.0)
+	var peak_vel := 0.0
+	for step in 120:
+		pc._process(1.0 / 60.0)
+		inv._process(1.0 / 60.0)
+		if step < 12:
+			peak_vel = maxf(peak_vel, absf(inv.get_compass_needle_velocity()))
+	check(peak_vel > 0.25,
+		"abrupt 1.4 rad turn imparts damped magnetic needle spring velocity (peak=%.3f rad/s)" % peak_vel)
+
+	var ref_comp := inv.get_active_tool_node()
+	var dir_loc := ref_comp.global_transform.basis.orthonormalized().inverse() * Vector3(0.0, 0.0, -1.0)
+	var settled_target := atan2(-dir_loc.x, -dir_loc.z)
+	var settle_err := absf(wrapf(inv.get_compass_needle_angle() - settled_target, -PI, PI))
+	check(settle_err < 0.04,
+		"magnetic compass needle damps and settles within < 0.04 rad over 2.0 s (err=%.4f rad)" % settle_err)
+	check(absf(inv.get_compass_needle_velocity()) < 0.12,
+		"magnetic compass needle velocity settles near 0 after 2.0 s (vel=%.4f rad/s)" % inv.get_compass_needle_velocity())
+
+	# Storm magnetic wobble activates gently when Weather.storminess > 0.55 while staying readable.
+	Weather.set_weather(0.92, 20.0, 0.0)
+	var storm_wobble_max := 0.0
+	for _s in 60:
+		pc._process(1.0 / 60.0)
+		inv._process(1.0 / 60.0)
+		storm_wobble_max = maxf(storm_wobble_max, absf(wrapf(inv.get_compass_needle_angle() - settled_target, -PI, PI)))
+	check(storm_wobble_max > 0.03 and storm_wobble_max < 0.55,
+		"storm magnetic wobble adds lively readable needle motion (max_dev=%.3f rad)" % storm_wobble_max)
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# toggle_compass_pin_mode() shifts PinJewel cleanly to luminous emerald-gold and back!
+	var mtv := MapTableView.new()
+	_root.add_child(mtv)
+	mtv.place_marker(Vector3(320.0, 0.0, -180.0))
+	inv.map_table = mtv
+	check(inv.toggle_compass_pin_mode(), "toggle_compass_pin_mode engages Chart Pin mode")
+	inv._process(1.0 / 60.0)
+	if jewel != null and jewel.material_override is StandardMaterial3D:
+		var jmat_pin := jewel.material_override as StandardMaterial3D
+		check(jmat_pin.emission_enabled and jmat_pin.emission_energy_multiplier >= 1.5
+			and jmat_pin.albedo_color.g > jmat_pin.albedo_color.r,
+			"PinJewel shifts to luminous emerald-gold in Chart Pin mode")
+	check(not inv.toggle_compass_pin_mode(), "second toggle_compass_pin_mode returns to True North")
+	inv._process(1.0 / 60.0)
+	if jewel != null and jewel.material_override is StandardMaterial3D:
+		var jmat_north := jewel.material_override as StandardMaterial3D
+		check(not jmat_north.emission_enabled and jmat_north.albedo_color.r > jmat_north.albedo_color.g,
+			"PinJewel returns cleanly to brushed crimson-brass in True North mode")
+	inv.map_table = null
+
+	# ------------------------------------------------------------------
+	# 3. Post-Shot Flintlock Pistol & Blunderbuss Barrel Smoke Wisps
+	# ------------------------------------------------------------------
+	inv.equip(&"pistol", true)
+	check(not inv.is_firearm_barrel_smoking(), "pistol does not smoke before firing")
+	check(inv.get_firearm_barrel_smoke() == null, "FirearmBarrelSmoke is constructed lazily on first shot")
+
+	check(bool(inv.use_primary()), "firing flintlock pistol via use_primary() succeeds")
+	check(inv.is_firearm_barrel_smoking(), "firing pistol activates is_firearm_barrel_smoking() == true during reload")
+	var smoke_gp := inv.get_firearm_barrel_smoke()
+	check(smoke_gp != null and smoke_gp.name == "FirearmBarrelSmoke",
+		"FirearmBarrelSmoke GPUParticles3D mounts lazily on first shot")
+	if smoke_gp != null:
+		check_eq(smoke_gp.amount, 10, "FirearmBarrelSmoke uses 10 lightweight particles")
+		check_near(smoke_gp.lifetime, 0.75, 0.01, "FirearmBarrelSmoke lifetime is 0.75 s")
+		check(smoke_gp.draw_pass_1 is ArrayMesh and not (smoke_gp.draw_pass_1 is PrimitiveMesh),
+			"FirearmBarrelSmoke uses zero-primitive 2-tri ArrayMesh card")
+		check_eq((smoke_gp.draw_pass_1 as ArrayMesh).get_faces().size(), 6,
+			"FirearmBarrelSmoke card has exact 2 triangles (6 vertices)")
+		check(smoke_gp.material_override is ShaderMaterial,
+			"FirearmBarrelSmoke uses zero-texture curling alpha ShaderMaterial")
+
+	# Still smoking mid-reload (0.4 s elapsed), then cleanly stops once smoke timer finishes (~1.35 s).
+	for _i in 24:
+		inv._process(1.0 / 60.0)
+	check(inv.is_firearm_barrel_smoking(), "pistol barrel continues smoking mid-reload (0.4 s)")
+	for _i in 75:
+		inv._process(1.0 / 60.0)
+	check(not inv.is_firearm_barrel_smoking(),
+		"pistol barrel smoke stops cleanly once smoke/reload timer finishes")
+
+	# Blunderbuss fires & smokes, then holstering to cutlass stops barrel smoke immediately!
+	inv.equip(&"blunderbuss", true)
+	inv._on_combat_attack_started(&"blunderbuss")
+	check(inv.is_firearm_barrel_smoking(), "blunderbuss activates barrel smoke wisps after firing")
+	inv.equip(&"cutlass", true)
+	check(not inv.is_firearm_barrel_smoking(),
+		"holstering/switching to another tool immediately stops barrel smoke")
+
+	# Re-fire pistol and verify dying stops barrel smoke cleanly!
+	inv.equip(&"pistol", true)
+	inv._on_combat_attack_started(&"pistol")
+	check(inv.is_firearm_barrel_smoking(), "pistol resumes smoking on next shot")
+	captain.dead = true
+	inv._process(1.0 / 60.0)
+	check(not inv.is_firearm_barrel_smoking(), "pawn death immediately halts firearm barrel smoke")
+	captain.dead = false
+
+	# ------------------------------------------------------------------
+	# 4. Clean Zero-Leak Teardown
+	# ------------------------------------------------------------------
+	await _end()
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._lantern_halo_mesh == null, "ToolMeshes.clear_shared_cache() nulls _lantern_halo_mesh")
+	check(ToolMeshes._lantern_halo_shader == null, "ToolMeshes.clear_shared_cache() nulls _lantern_halo_shader")
+	check(ToolMeshes._pbr_tex_cache.is_empty(), "ToolMeshes.clear_shared_cache() clears _pbr_tex_cache")
+	check(ToolMeshes._fp_hand_mesh_cache.is_empty(), "ToolMeshes.clear_shared_cache() clears _fp_hand_mesh_cache")
+	check(ToolMeshes._fp_hand_mat_cache.is_empty(), "ToolMeshes.clear_shared_cache() clears _fp_hand_mat_cache")
+	check(Inventory._barrel_smoke_mesh == null and Inventory._barrel_smoke_shader == null \
+		and Inventory._barrel_smoke_mat == null and Inventory._barrel_smoke_proc == null,
+		"Inventory releases all static FirearmBarrelSmoke resources cleanly with 0 leaks")
