@@ -1,5 +1,5 @@
 extends TestCase
-## Headless contract tests for sculpted 3D island landmarks (70 BC7 PBR GLB assets)
+## Headless contract tests for sculpted 3D island landmarks (74 BC7 PBR GLB assets)
 ## and batched MultiMesh `IslandDetails` ground foliage, highland cliff-ledge scrub,
 ## coastal details, living shore fauna, twilight lantern halos & steep-slope cliff buttresses across all 14 island archetypes.
 
@@ -126,6 +126,13 @@ const EXPEDITION_CRAFT_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_lava_gate.glb",
 ]
 
+const HAVEN_RELICS_LANDMARKS: Array[String] = [
+	"pirate_harbour_clock_belltower.glb",
+	"ancient_celestial_moon_dial.glb",
+	"coastal_buccaneer_grog_stall.glb",
+	"volcanic_obsidian_anchor_monolith.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -197,6 +204,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_sun_serpent_archway.glb": 1,
 	"coastal_shipwreck_barricade_camp.glb": 1,
 	"volcanic_obsidian_lava_gate.glb": 1,
+	"pirate_harbour_clock_belltower.glb": 1,
+	"ancient_celestial_moon_dial.glb": 1,
+	"coastal_buccaneer_grog_stall.glb": 1,
+	"volcanic_obsidian_anchor_monolith.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -257,6 +268,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_sun_serpent_archway.glb": ["Lantern_SunSerpent*"],
 	"coastal_shipwreck_barricade_camp.glb": ["Lantern_BarricadeCamp*"],
 	"volcanic_obsidian_lava_gate.glb": ["Lantern_LavaGate*"],
+	"pirate_harbour_clock_belltower.glb": ["Lantern_TideClock*"],
+	"ancient_celestial_moon_dial.glb": ["Lantern_MoonDial*"],
+	"coastal_buccaneer_grog_stall.glb": ["Lantern_GrogStall*"],
+	"volcanic_obsidian_anchor_monolith.glb": ["Lantern_VolcAnchor*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -319,6 +334,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"SunSerpent_",
 	"BarricadeCamp_",
 	"LavaGate_",
+	"TideClock_",
+	"MoonDial_",
+	"GrogStall_",
+	"VolcAnchor_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -461,7 +480,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(SEA_LORE_LANDMARKS)
 	all_landmarks.append_array(CORSAIR_RELICS_LANDMARKS)
 	all_landmarks.append_array(EXPEDITION_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 70, "expected 70 sculpted landmark GLBs")
+	all_landmarks.append_array(HAVEN_RELICS_LANDMARKS)
+	check_eq(all_landmarks.size(), 74, "expected 74 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -567,14 +587,14 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 
 		inst.free()
 
-	# Shared Landmark PBR Texture Deduplication contract across all 70 GLBs.
+	# Shared Landmark PBR Texture Deduplication contract across all 74 GLBs.
 	print("    shared landmark PBR textures: %d unique path(s) across %d GLBs (non-shared: %d)" % [
 		unique_pbr_paths.size(), all_landmarks.size(), non_shared_tex_errors.size()])
 	check(non_shared_tex_errors.is_empty(),
 		"every landmark textured material must resolve from %s (offenders: %s)" % [
 			SHARED_LANDMARK_TEX_PREFIX, ", ".join(non_shared_tex_errors.slice(0, 6))])
 	check_eq(unique_pbr_paths.size(), 30,
-		"expected strictly 30 unique shared landmark PBR texture paths across all 70 GLBs (got %d)" % unique_pbr_paths.size())
+		"expected strictly 30 unique shared landmark PBR texture paths across all 74 GLBs (got %d)" % unique_pbr_paths.size())
 
 
 func _collect_leaked_detail_caches() -> Array[String]:
@@ -874,7 +894,7 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 
 	# 2b. Wave I-11 Botanical Craft, Wave I-12 Coastal Micro-Craft, Wave I-14 Fauna & Halo Craft,
 	#     Wave I-15 Trail Masonry & Gaussian Halo Craft, Wave I-16 Botanical Wildflower Craft,
-	#     Wave I-17 Coastal Grass Plume Craft & Trail Pebble Hygiene assertions.
+	#     Wave I-17 Coastal Grass Plume Craft, Wave I-18 Jungle Fern Crosier Craft & Trail Pebble Hygiene assertions.
 	if cc_details != null:
 		var cc_grass_mmi := cc_details.get_node_or_null(^"GrassClumps") as MultiMeshInstance3D
 		var cc_fern_mmi := cc_details.get_node_or_null(^"JungleFerns") as MultiMeshInstance3D
@@ -955,6 +975,10 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 		print("    wave_i17 coastal grass plume tris: grass=%d" % grass_tris)
 		check(grass_tris >= 250,
 			"Wave I-17 GrassClumps mesh must have >= 250 tris (upgraded 32-blade / 7-plume sea-oat grass tussock, got %d)" % grass_tris)
+
+		print("    wave_i18 jungle fern crosier tris: fern=%d" % fern_tris)
+		check(fern_tris >= 400,
+			"Wave I-18 JungleFerns mesh must have >= 400 tris (upgraded 12-frond + 3 spiral fiddlehead crosiers rosette, got %d)" % fern_tris)
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1581,6 +1605,32 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(ec_glb),
 			"Wave I-17 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % ec_glb)
 
+	# 2h-9. Verify Wave I-18 (74-Landmark Haven-Relics Milestone) landmarks (pirate harbour clock belltower,
+	#       ancient celestial moon dial, coastal buccaneer grog stall & volcanic obsidian anchor monolith)
+	#       + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var tide_clock_total := 0
+	var moon_dial_total := 0
+	var grog_stall_total := 0
+	var volc_anchor_total := 0
+	for isl_i18 in all_islands:
+		tide_clock_total += isl_i18.find_children("TideClock_*", "Node3D", true, false).size()
+		moon_dial_total += isl_i18.find_children("MoonDial_*", "Node3D", true, false).size()
+		grog_stall_total += isl_i18.find_children("GrogStall_*", "Node3D", true, false).size()
+		volc_anchor_total += isl_i18.find_children("VolcAnchor_*", "Node3D", true, false).size()
+	print("    wave_i18 haven_relics landmarks: tide_clocks=%d moon_dials=%d grog_stalls=%d volc_anchors=%d lantern_halos=%d" % [
+		tide_clock_total, moon_dial_total, grog_stall_total, volc_anchor_total, total_lantern_halos])
+	check(tide_clock_total >= 4, "Wave I-18 spawns >= 4 TideClock_* landmarks (got %d)" % tide_clock_total)
+	check(moon_dial_total >= 4, "Wave I-18 spawns >= 4 MoonDial_* landmarks (got %d)" % moon_dial_total)
+	check(grog_stall_total >= 4, "Wave I-18 spawns >= 4 GrogStall_* landmarks (got %d)" % grog_stall_total)
+	check(volc_anchor_total >= 3, "Wave I-18 spawns >= 3 VolcAnchor_* landmarks (got %d)" % volc_anchor_total)
+	check(total_lantern_halos >= 200,
+		"Wave I-18 archipelago must batch >= 200 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for hr_glb in HAVEN_RELICS_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(hr_glb),
+			"Wave I-18 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % hr_glb)
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1623,10 +1673,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i17 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i18 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 266,
-		"grounding audit must inspect >= 266 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 285,
+		"grounding audit must inspect >= 285 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

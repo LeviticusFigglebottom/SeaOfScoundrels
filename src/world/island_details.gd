@@ -9,7 +9,7 @@ extends Node3D
 ## batched `MultiMeshInstance3D` draw calls (ZERO raw `PrimitiveMesh`es, shadowless,
 ## radius-scaled distance culling):
 ##   1. `GrassClumps`          — 32-blade slender 3-tuft swaying grass + 7 golden plumed sea-oat seed-stalks (`foliage_wind.gdshader`)
-##   2. `JungleFerns`          — 10-frond 2-tier pinnate serrated fern rosettes (`foliage_wind.gdshader`)
+##   2. `JungleFerns`          — 12-frond 2-tier pinnate serrated fern rosettes + 3 coiled fiddlehead crosiers (`foliage_wind.gdshader`)
 ##   3. `HibiscusShrubs`       — 18-leaf 3-tier tropical bushes crowned with 8 vivid 5-petal blossoms & 3 wildflower buds (`foliage_wind.gdshader`)
 ##   4. `CoastalDriftwood`     — gnarled silver-brown forked driftwood logs with root-claws, sea-kelp & barnacles aligned to coastline contours
 ##   5. `ShorePebblesShells`   — 5 beveled beach cobbles, fluted spiral shell & 5-arm coral sea star along wet/dry sand
@@ -963,11 +963,14 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("SmugglerHoist") or cname.begins_with("VolcForge") \
 			or cname.begins_with("KrakenShrine") or cname.begins_with("DragonMaw") \
 			or cname.begins_with("NavGazebo") or cname.begins_with("SunSerpent") \
-			or cname.begins_with("BarricadeCamp") or cname.begins_with("LavaGate"):
+			or cname.begins_with("BarricadeCamp") or cname.begins_with("LavaGate") \
+			or cname.begins_with("TideClock") or cname.begins_with("GrogStall") \
+			or cname.begins_with("VolcAnchor"):
 		return 5.0
 	if cname.begins_with("TreasureVault") or cname.begins_with("DriftwoodCamp") \
 			or cname.begins_with("BellShrine") or cname.begins_with("MirrorShrine") \
-			or cname.begins_with("BountyPost") or cname.begins_with("FishRack"):
+			or cname.begins_with("BountyPost") or cname.begins_with("FishRack") \
+			or cname.begins_with("MoonDial"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
@@ -3284,6 +3287,7 @@ static func _get_lantern_halo_material() -> StandardMaterial3D:
 		mat.no_depth_test = false
 		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 		mat.billboard_keep_scale = true
+		mat.disable_fog = true
 		_lantern_halo_mat = mat
 	return _lantern_halo_mat
 
@@ -3622,7 +3626,7 @@ static func _build_grass_mesh() -> ArrayMesh:
 	return st.commit()
 
 
-# ------------------------------------------------------------------ Mesh 2: 10-Frond 2-Tier Pinnate Serrated Fern Rosette
+# ------------------------------------------------------------------ Mesh 2: 12-Frond 2-Tier Pinnate Serrated Fern Rosette + 3 Spiral Fiddlehead Crosiers
 
 static func _build_fern_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -3639,21 +3643,31 @@ static func _build_fern_mesh() -> ArrayMesh:
 	var col_mid := Color(0.84, 0.93, 0.80, 1.0).srgb_to_linear()
 	var col_tip := Color(1.00, 1.00, 0.90, 1.0).srgb_to_linear()
 
-	# 10 graceful arching pinnate fronds in 2 tiers (6 lower spreading + 4 taller inner crown):
-	# [azimuth, reach, apex_y, tip_droop, max_pin_len, phase_01, bend_scale]
+	# Deeper shadowed dark-emerald ramp for the 2 low-splayed outer basal fronds grounding into slopes & trail edges.
+	var col_basal_rachis_lo := Color(0.26, 0.40, 0.28, 1.0).srgb_to_linear()
+	var col_basal_rachis_hi := Color(0.52, 0.66, 0.48, 1.0).srgb_to_linear()
+	var col_basal_base := Color(0.36, 0.54, 0.44, 1.0).srgb_to_linear()
+	var col_basal_mid := Color(0.64, 0.79, 0.68, 1.0).srgb_to_linear()
+	var col_basal_tip := Color(0.82, 0.92, 0.78, 1.0).srgb_to_linear()
+
+	# 12 graceful arching pinnate fronds (2 outer shadowed basal + 6 lower spreading + 4 taller inner crown):
+	# [azimuth, reach, apex_y, tip_droop, max_pin_len, phase_01, bend_scale, is_basal]
 	var fronds: Array[Array] = [
+		# Outer shadowed basal tier (2 low-splayed fronds filling the widest azimuthal gaps, y = 0.05..0.28 m)
+		[2.77, 1.08, 0.28, 0.19, 0.27, 0.30, 0.64, true],
+		[5.91, 1.03, 0.25, 0.17, 0.26, 0.79, 0.62, true],
 		# Lower spreading tier (6 fronds: reach 0.88..1.04 m, apex_y 0.40..0.50 m, droop 0.20..0.25 m)
-		[0.16, 1.02, 0.48, 0.24, 0.26, 0.04, 0.90],
-		[1.22, 0.92, 0.43, 0.21, 0.24, 0.21, 0.88],
-		[2.24, 1.04, 0.50, 0.25, 0.27, 0.38, 0.91],
-		[3.30, 0.90, 0.41, 0.20, 0.23, 0.55, 0.87],
-		[4.34, 1.00, 0.47, 0.23, 0.26, 0.72, 0.90],
-		[5.38, 0.88, 0.40, 0.21, 0.23, 0.88, 0.86],
+		[0.16, 1.02, 0.48, 0.24, 0.26, 0.04, 0.90, false],
+		[1.22, 0.92, 0.43, 0.21, 0.24, 0.21, 0.88, false],
+		[2.24, 1.04, 0.50, 0.25, 0.27, 0.38, 0.91, false],
+		[3.30, 0.90, 0.41, 0.20, 0.23, 0.55, 0.87, false],
+		[4.34, 1.00, 0.47, 0.23, 0.26, 0.72, 0.90, false],
+		[5.38, 0.88, 0.40, 0.21, 0.23, 0.88, 0.86, false],
 		# Upper taller arching inner crown tier (4 fronds: reach 0.68..0.80 m, apex_y 0.78..0.90 m, droop 0.16..0.20 m)
-		[0.68, 0.78, 0.88, 0.19, 0.21, 0.13, 0.94],
-		[1.88, 0.72, 0.82, 0.17, 0.20, 0.46, 0.92],
-		[3.68, 0.80, 0.90, 0.20, 0.22, 0.64, 0.94],
-		[5.02, 0.68, 0.78, 0.16, 0.19, 0.82, 0.91],
+		[0.68, 0.78, 0.88, 0.19, 0.21, 0.13, 0.94, false],
+		[1.88, 0.72, 0.82, 0.17, 0.20, 0.46, 0.92, false],
+		[3.68, 0.80, 0.90, 0.20, 0.22, 0.64, 0.94, false],
+		[5.02, 0.68, 0.78, 0.16, 0.19, 0.82, 0.91, false],
 	]
 
 	var rachis_segs := 5
@@ -3668,14 +3682,23 @@ static func _build_fern_mesh() -> ArrayMesh:
 		var max_pin_len: float = float(spec[4])
 		var phase_01: float = float(spec[5])
 		var bend_sc: float = float(spec[6])
+		var is_basal: bool = bool(spec[7])
 
 		var rad := Vector3(cos(az), 0.0, sin(az))
 		var side := Vector3(-sin(az), 0.0, cos(az))
-		var tip_lift := 1.07 if apex_y >= 0.70 else 1.05
+		var base_y := 0.05 if is_basal else 0.04
+		var root_ao := 0.64 if is_basal else 0.75
+		var edge_ao := 0.66 if is_basal else 0.76
+		var tip_lift := 0.95 if is_basal else (1.07 if apex_y >= 0.70 else 1.05)
+		var f_rachis_lo: Color = col_basal_rachis_lo if is_basal else col_rachis_lo
+		var f_rachis_hi: Color = col_basal_rachis_hi if is_basal else col_rachis_hi
+		var f_base: Color = col_basal_base if is_basal else col_base
+		var f_mid: Color = col_basal_mid if is_basal else col_mid
+		var f_tip: Color = col_basal_tip if is_basal else col_tip
 
 		var eval_spine := func(tv: float) -> Vector3:
 			var r_out := 0.04 + reach * pow(tv, 1.08)
-			var arch_y := 0.04 + apex_y * sin(tv * PI * 0.64) - droop * pow(tv, 2.3)
+			var arch_y := base_y + apex_y * sin(tv * PI * 0.64) - droop * pow(tv, 2.3)
 			return rad * r_out + Vector3(0.0, arch_y, 0.0)
 
 		# 1. Slender curved central rachis stem (5 tapered quads, half-width 0.016 -> 0.006 m = 10 tris/frond).
@@ -3691,9 +3714,9 @@ static func _build_fern_mesh() -> ArrayMesh:
 			var r_hw := lerpf(0.016, 0.006, frac)
 			r_left.append(ctr - side * r_hw)
 			r_right.append(ctr + side * r_hw)
-			var rc := col_rachis_lo.lerp(col_rachis_hi, smoothstep(0.0, 0.90, tv))
+			var rc := f_rachis_lo.lerp(f_rachis_hi, smoothstep(0.0, 0.90, tv))
 			r_cols.append(_scale_flora_linear(rc,
-				_flora_contact_ao_gain(ctr.y, tv, 0.75, tip_lift * 0.96, 0.44)))
+				_flora_contact_ao_gain(ctr.y, tv, root_ao, tip_lift * 0.96, 0.44)))
 
 		for s in rachis_segs:
 			var t0: float = r_ts[s]
@@ -3738,14 +3761,14 @@ static func _build_fern_mesh() -> ArrayMesh:
 				var p_a := p_mid + pin_perp * pin_hw + up_n * v_cup
 				var p_b := p_mid - pin_perp * pin_hw + up_n * v_cup
 
-				var c_frond := col_base.lerp(col_mid, smoothstep(0.0, 0.55, t_p)).lerp(col_tip, smoothstep(0.55, 1.0, t_p))
+				var c_frond := f_base.lerp(f_mid, smoothstep(0.0, 0.55, t_p)).lerp(f_tip, smoothstep(0.55, 1.0, t_p))
 				var c_pin_base := _scale_flora_linear(
 					Color(c_frond.r * 0.90, c_frond.g * 0.93, c_frond.b * 0.90, 1.0),
-					_flora_contact_ao_gain(p_base.y, t_p, 0.75, tip_lift, 0.44))
+					_flora_contact_ao_gain(p_base.y, t_p, root_ao, tip_lift, 0.44))
 				var c_pin_edge := _scale_flora_linear(c_frond,
-					_flora_contact_ao_gain(p_a.y, minf(1.0, t_p + 0.06), 0.76, tip_lift, 0.44))
-				var c_pin_tip := _scale_flora_linear(c_frond.lerp(col_tip, 0.45),
-					_flora_contact_ao_gain(p_tip.y, minf(1.0, t_p + 0.14), 0.76, tip_lift, 0.44))
+					_flora_contact_ao_gain(p_a.y, minf(1.0, t_p + 0.06), edge_ao, tip_lift, 0.44))
+				var c_pin_tip := _scale_flora_linear(c_frond.lerp(f_tip, 0.45),
+					_flora_contact_ao_gain(p_tip.y, minf(1.0, t_p + 0.14), edge_ao, tip_lift, 0.44))
 
 				var uv2_b := Vector2(t_p * bend_sc, phase_01)
 				var uv2_m := Vector2(minf(1.0, (t_p + 0.05) * bend_sc), phase_01)
@@ -3776,12 +3799,12 @@ static func _build_fern_mesh() -> ArrayMesh:
 		var tp_a := tp_mid + tp_perp * tp_hw + tp_up * tp_cup
 		var tp_b := tp_mid - tp_perp * tp_hw + tp_up * tp_cup
 
-		var c_tb := _scale_flora_linear(col_mid.lerp(col_tip, 0.65),
-			_flora_contact_ao_gain(tp_base.y, 0.85, 0.76, tip_lift, 0.44))
-		var c_tm := _scale_flora_linear(col_mid.lerp(col_tip, 0.85),
-			_flora_contact_ao_gain(tp_a.y, 0.93, 0.76, tip_lift, 0.44))
-		var c_tt := _scale_flora_linear(col_tip,
-			_flora_contact_ao_gain(tp_tip.y, 1.0, 0.76, tip_lift, 0.44))
+		var c_tb := _scale_flora_linear(f_mid.lerp(f_tip, 0.65),
+			_flora_contact_ao_gain(tp_base.y, 0.85, edge_ao, tip_lift, 0.44))
+		var c_tm := _scale_flora_linear(f_mid.lerp(f_tip, 0.85),
+			_flora_contact_ao_gain(tp_a.y, 0.93, edge_ao, tip_lift, 0.44))
+		var c_tt := _scale_flora_linear(f_tip,
+			_flora_contact_ao_gain(tp_tip.y, 1.0, edge_ao, tip_lift, 0.44))
 
 		var uv2_tb := Vector2(0.85 * bend_sc, phase_01)
 		var uv2_tm := Vector2(0.93 * bend_sc, phase_01)
@@ -3790,6 +3813,146 @@ static func _build_fern_mesh() -> ArrayMesh:
 			Vector2(0.5, 0.85), Vector2(0.5, 1.0), Vector2(0.25, 0.93), uv2_tb, uv2_tt, uv2_tm)
 		_add_foliage_tri(st, tp_base, tp_b, tp_tip, c_tb, c_tm, c_tt,
 			Vector2(0.5, 0.85), Vector2(0.75, 0.93), Vector2(0.5, 1.0), uv2_tb, uv2_tm, uv2_tt)
+
+	# 4. 3 sculptural spiral unfurling fiddlehead crosiers rising straight from the dark mossy center crown
+	#    (h = 0.25..0.38 m, UV2.x 0.05 -> 0.55 for gentle central sway, 60 tris/crosier = 180 tris).
+	#    Each crosier sweeps a continuous 4-sided symmetric beveled herbaceous stem into a 300-deg
+	#    logarithmic spring-chartreuse spiral scroll with plump rolled lateral cheeks & closed apex.
+	var col_crosier_root := _scale_flora_linear(Color(0.40, 0.54, 0.32, 1.0).srgb_to_linear(), 0.74)
+	var col_crosier_stem := _scale_flora_linear(Color(0.74, 0.86, 0.44, 1.0).srgb_to_linear(), 0.94)
+	var col_crosier_coil := _scale_flora_linear(Color(0.98, 1.00, 0.46, 1.0).srgb_to_linear(), 1.06)
+	var col_crosier_head := _scale_flora_linear(Color(1.00, 1.00, 0.52, 1.0).srgb_to_linear(), 1.075)
+	var col_crosier_head_in := _scale_flora_linear(Color(0.84, 0.90, 0.40, 1.0).srgb_to_linear(), 0.92)
+
+	# [azimuth, top_h, coil_r, root_r, lean_out, phase_01]
+	var crosiers: Array[Array] = [
+		[1.28, 0.376, 0.056, 0.032, 0.058, 0.17],  # Tallest unfurling spiral crosier (~0.38 m)
+		[3.02, 0.310, 0.050, 0.030, 0.052, 0.51],  # Medium spiral crosier (~0.31 m)
+		[5.65, 0.248, 0.045, 0.028, 0.046, 0.84],  # Compact emerging young fiddlehead (~0.25 m)
+	]
+	var spiral_r_in: Array[float] = [0.0122, 0.0135, 0.0140, 0.0128, 0.0108, 0.0085]
+	var spiral_r_lat: Array[float] = [0.0145, 0.0190, 0.0215, 0.0210, 0.0185, 0.0145]
+	var spiral_uv2x: Array[float] = [0.34, 0.43, 0.48, 0.51, 0.53, 0.55]
+
+	for cspec in crosiers:
+		var c_az: float = float(cspec[0])
+		var c_top_h: float = float(cspec[1])
+		var c_coil_r: float = float(cspec[2])
+		var c_root_r: float = float(cspec[3])
+		var c_lean: float = float(cspec[4])
+		var c_phase: float = float(cspec[5])
+
+		var c_rad := Vector3(cos(c_az), 0.0, sin(c_az))
+		var c_side := Vector3(-sin(c_az), 0.0, cos(c_az))
+		var c_scale := c_coil_r / 0.052
+		var c_center := c_rad * (c_root_r + c_lean + c_coil_r) + Vector3(0.0, c_top_h - c_coil_r, 0.0)
+
+		var c_pts: Array[Vector3] = []
+		var c_r_in: Array[float] = []
+		var c_r_lat: Array[float] = []
+		var c_uv2: Array[Vector2] = []
+		var c_col_out: Array[Color] = []
+		var c_col_lat: Array[Color] = []
+		var c_col_in: Array[Color] = []
+
+		# Station 0: rooted cleanly inside the dark mossy crown mound.
+		c_pts.append(c_rad * c_root_r + Vector3(0.0, 0.04, 0.0))
+		c_r_in.append(0.0155 * c_scale)
+		c_r_lat.append(0.0155 * c_scale)
+		c_uv2.append(Vector2(0.05, c_phase))
+		c_col_out.append(col_crosier_root)
+		c_col_lat.append(col_crosier_root)
+		c_col_in.append(col_crosier_root)
+
+		# Station 1: gently outward-curving herbaceous rising stem.
+		c_pts.append(c_rad * (c_root_r + c_lean * 0.44) + Vector3(0.0, lerpf(0.04, c_center.y, 0.52), 0.0))
+		c_r_in.append(0.0132 * c_scale)
+		c_r_lat.append(0.0138 * c_scale)
+		c_uv2.append(Vector2(0.19, c_phase))
+		c_col_out.append(col_crosier_stem)
+		c_col_lat.append(col_crosier_stem)
+		c_col_in.append(col_crosier_root.lerp(col_crosier_stem, 0.72))
+
+		# Stations 2..7: 6-station 300-deg logarithmic curled spring-chartreuse crosier head.
+		for k in 6:
+			var frac := float(k) / 5.0
+			var theta := frac * deg_to_rad(300.0)
+			var sr := c_coil_r * lerpf(1.00, 0.40, frac)
+			c_pts.append(c_center + (-c_rad * cos(theta) + Vector3.UP * sin(theta)) * sr)
+			c_r_in.append(spiral_r_in[k] * c_scale)
+			c_r_lat.append(spiral_r_lat[k] * c_scale)
+			c_uv2.append(Vector2(spiral_uv2x[k], c_phase))
+			var co := col_crosier_stem.lerp(col_crosier_coil, smoothstep(0.0, 0.45, frac)).lerp(
+				col_crosier_head, smoothstep(0.45, 1.0, frac))
+			var cl := col_crosier_stem.lerp(col_crosier_coil, smoothstep(0.0, 0.52, frac)).lerp(
+				col_crosier_head, smoothstep(0.55, 1.0, frac))
+			var ci := col_crosier_stem.lerp(col_crosier_head_in, smoothstep(0.0, 0.75, frac))
+			c_col_out.append(co)
+			c_col_lat.append(cl)
+			c_col_in.append(ci)
+
+		var n_pts := c_pts.size()
+		var c_tans: Array[Vector3] = []
+		var c_rings: Array[Array] = []
+		var c_ring_cols: Array[Array] = []
+		for i in n_pts:
+			var tan_v: Vector3
+			if i == 0:
+				tan_v = (c_pts[1] - c_pts[0]).normalized()
+			elif i == n_pts - 1:
+				tan_v = (c_pts[i] - c_pts[i - 1]).normalized()
+			else:
+				tan_v = ((c_pts[i] - c_pts[i - 1]).normalized() + (c_pts[i + 1] - c_pts[i]).normalized()).normalized()
+			c_tans.append(tan_v)
+			var out_n := c_side.cross(tan_v).normalized()
+			var p_i := c_pts[i]
+			var ri: float = c_r_in[i]
+			var rl: float = c_r_lat[i]
+			var ring_i: Array[Vector3] = [
+				p_i + out_n * ri,
+				p_i + c_side * rl,
+				p_i - out_n * ri,
+				p_i - c_side * rl,
+			]
+			var rcol_i: Array[Color] = [
+				c_col_out[i],
+				c_col_lat[i],
+				c_col_in[i],
+				c_col_lat[i],
+			]
+			c_rings.append(ring_i)
+			c_ring_cols.append(rcol_i)
+
+		for s in range(n_pts - 1):
+			var r0: Array = c_rings[s]
+			var r1: Array = c_rings[s + 1]
+			var rc0: Array = c_ring_cols[s]
+			var rc1: Array = c_ring_cols[s + 1]
+			var mid_ctr := (c_pts[s] + c_pts[s + 1]) * 0.5
+			var u0 := c_uv2[s]
+			var u1 := c_uv2[s + 1]
+			for side_i in 4:
+				var ni := (side_i + 1) % 4
+				_add_outward_quad_uv2(st,
+					r0[side_i] as Vector3, r1[side_i] as Vector3, r1[ni] as Vector3, r0[ni] as Vector3,
+					mid_ctr,
+					rc0[side_i] as Color, rc1[side_i] as Color, rc1[ni] as Color, rc0[ni] as Color,
+					u0, u1, u1, u0)
+
+		var tip_ring: Array = c_rings[n_pts - 1]
+		var tip_cols: Array = c_ring_cols[n_pts - 1]
+		var tip_p := c_pts[n_pts - 1]
+		var tip_tan := c_tans[n_pts - 1]
+		var tip_apex := tip_p + tip_tan * (0.011 * c_scale)
+		var tip_ref := tip_p - tip_tan * (0.008 * c_scale)
+		var tip_uv2 := c_uv2[n_pts - 1]
+		for side_i in 4:
+			var ni := (side_i + 1) % 4
+			_add_outward_tri_uv2(st,
+				tip_ring[side_i] as Vector3, tip_apex, tip_ring[ni] as Vector3,
+				tip_ref,
+				tip_cols[side_i] as Color, col_crosier_head, tip_cols[ni] as Color,
+				tip_uv2, tip_uv2, tip_uv2)
 
 	st.generate_normals()
 	return st.commit()
