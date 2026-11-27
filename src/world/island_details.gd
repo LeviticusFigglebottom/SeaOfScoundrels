@@ -18,7 +18,7 @@ extends Node3D
 ##   8. `CliffButtressesWide`  — optional wide stepped cliff ledges on medium/large non-volcanic islands (`r >= 75 m`)
 ##   9. `TrailSteppingStones`  - chiseled 10-sided coastal trail flagstones + 4 flanking cobbles/mortar wedges, 3 crevice moss cushions, terrace stair-slabs & curb stones
 ##  10. `IslandButterflies`    — animated sculpted tropical swallowtail butterflies fluttering above hibiscus glades & trails
-##  11. `ShoreCrabs`           — animated sculpted coastal tidepool crabs scuttling sideways along wet sandy beaches
+##  11. `ShoreCrabs`           - animated sculpted coastal tidepool crabs (10-sided scalloped carapace, 3D toothed pincers, 8 volumetric jointed legs, stalked orb eyes & feelers)
 ##  12. `LandmarkLanternHalos` — 1-DC twilight/night additive camera-facing Gaussian glow halos on `Glow_Lantern_*` lights (`0.000 ms` daytime GPU)
 
 const GROUP := &"island_details"
@@ -973,17 +973,19 @@ static func _prop_keepout_radius(cname: String) -> float:
 			or cname.begins_with("MoonDial") or cname.begins_with("BoatSlipway") \
 			or cname.begins_with("Ropewalk") or cname.begins_with("Careening") \
 			or cname.begins_with("Sailmaker") or cname.begins_with("CastawayCamp") \
-			or cname.begins_with("Cooperage") or cname.begins_with("NetPier"):
+			or cname.begins_with("Cooperage") or cname.begins_with("NetPier") \
+			or cname.begins_with("AnchorForge") or cname.begins_with("WyrmArch"):
 		return 4.8
 	if cname.begins_with("SmugglerHoard") or cname.begins_with("LookoutBell") \
 			or cname.begins_with("ObsidianVent") or cname.begins_with("CrowNestMast") \
 			or cname.begins_with("RumDistillery") or cname.begins_with("BasaltBrazier") \
-			or cname.begins_with("TidalCompass") or cname.begins_with("SerpentPortal"):
+			or cname.begins_with("TidalCompass") or cname.begins_with("SerpentPortal") \
+			or cname.begins_with("NautilusShrine"):
 		return 4.6
 	if cname.begins_with("AnchorMemorial"):
 		return 4.5
 	if cname.begins_with("PowderBunker") or cname.begins_with("CoralAltar") \
-			or cname.begins_with("AstralObelisk"):
+			or cname.begins_with("AstralObelisk") or cname.begins_with("SignalTripod"):
 		return 4.4
 	if cname.begins_with("BeachCampfire") or cname.begins_with("OutpostCampfire") \
 			or cname.begins_with("MossyBoulder") or cname.begins_with("ReefBeacon") \
@@ -5684,10 +5686,10 @@ static func _build_stepping_stone_mesh() -> ArrayMesh:
 	const RZ := 0.42
 
 	var col_skirt := Color(0.36, 0.36, 0.28, 1.0)
-	var col_side := Color(0.68, 0.64, 0.57, 1.0)
-	var col_bevel := Color(0.88, 0.85, 0.79, 1.0)
-	var col_top_edge := Color(0.96, 0.94, 0.89, 1.0)
-	var col_top := Color(1.00, 0.99, 0.95, 1.0)
+	var col_side := Color(0.64, 0.60, 0.52, 1.0)
+	var col_bevel := Color(0.80, 0.76, 0.69, 1.0)
+	var col_top_edge := Color(0.84, 0.80, 0.72, 1.0)
+	var col_top := Color(0.81, 0.77, 0.69, 1.0)
 
 	var bot_ring: Array[Vector3] = []
 	var mid_ring: Array[Vector3] = []
@@ -5744,9 +5746,9 @@ static func _build_stepping_stone_mesh() -> ArrayMesh:
 
 	# Two nestled 6-sided beveled companion cobbles (2 * 30 = 60 tris) tucked against opposite corners.
 	_append_trail_cobble(st, Vector3(0.48, 0.0, 0.26), 0.19, 0.16, 0.082, -0.17, 0.55,
-		Color(0.35, 0.35, 0.27, 1.0), Color(0.65, 0.60, 0.52, 1.0), Color(0.93, 0.89, 0.82, 1.0))
+		Color(0.35, 0.35, 0.27, 1.0), Color(0.61, 0.57, 0.49, 1.0), Color(0.82, 0.78, 0.70, 1.0))
 	_append_trail_cobble(st, Vector3(-0.44, 0.0, -0.24), 0.17, 0.14, 0.074, -0.17, 2.15,
-		Color(0.33, 0.34, 0.27, 1.0), Color(0.60, 0.58, 0.52, 1.0), Color(0.86, 0.84, 0.78, 1.0))
+		Color(0.33, 0.34, 0.27, 1.0), Color(0.57, 0.55, 0.48, 1.0), Color(0.77, 0.74, 0.67, 1.0))
 
 	# Two smaller 6-sided weathered mortar pebble wedges (2 * 30 = 60 tris) tucked into the
 	# remaining two opposite corners, deep-skirted to -0.16 m so steep trails never float.
@@ -5975,118 +5977,189 @@ static func _build_crab_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 68-tri sculpted coastal tidepool crab facing local -Z (scuttles sideways along +-X):
-	#   1. Hexagonal carapace with sculpted raised dorsal crest & notched frontal brow (20 tris)
-	#   2. Twin 3D volumetric double-fingered front pincer claws (16 tris: 8 per claw)
-	#   3. 8 articulated splayed walking legs — 4 pairs (24 tris: 3 per leg — femur + tibia + tarsus)
-	#   4. Twin thicker 3D stalked glossy dark eyes (8 tris: 4 per eye)
-	var col_rim := Color(0.72, 0.68, 0.64, 1.0)
-	var col_brow := Color(0.84, 0.80, 0.75, 1.0)
-	var col_top_front := Color(0.95, 0.93, 0.89, 1.0)
-	var col_top := Color(0.98, 0.96, 0.92, 1.0)
-	var col_crest := Color(1.00, 0.99, 0.96, 1.0)
-	var col_top_rear := Color(0.89, 0.86, 0.81, 1.0)
-	var col_arm := Color(0.83, 0.79, 0.74, 1.0)
-	var col_claw := Color(0.95, 0.91, 0.85, 1.0)
-	var col_claw_hi := Color(1.00, 0.97, 0.91, 1.0)
-	var col_claw_tip := Color(1.00, 0.98, 0.93, 1.0)
-	var col_leg_hip := Color(0.83, 0.79, 0.74, 1.0)
-	var col_leg_knee := Color(0.95, 0.91, 0.85, 1.0)
-	var col_leg_ankle := Color(0.78, 0.73, 0.68, 1.0)
-	var col_leg_foot := Color(0.54, 0.48, 0.44, 1.0)
-	var col_eye_stalk := Color(0.46, 0.40, 0.36, 1.0)
-	var col_eye_tip := Color(0.05, 0.05, 0.08, 1.0)
+	# 164-tri closed 3D volumetric coastal tidepool crab facing local -Z (+0 DC, 0.0 MB VRAM;
+	# scuttles sideways along +-X, feet grounded at y = 0.002 m, ~0.64 m leg-to-leg span):
+	#   1. Closed 3D 10-sided scalloped carapace (48 tris: 20 serrated bevel walls + 14 raised
+	#      dorsal H-groove shell ridge crest + 10 shaded ventral belly + 4 rear abdomen apron)
+	#   2. Twin closed 3D volumetric pincer claws (42 tris: 21 per claw - 6-tri prism arm,
+	#      7-tri plump coral-lit chela palm, 5-tri toothed upper finger & 3-tri lower finger)
+	#   3. 8 truly 3D volumetric jointed splayed walking legs (48 tris: 6 per leg - 2-face
+	#      ridged femur + 2-face angled tibia + 2-face pointed tarsus claw tip at y = 0.002 m)
+	#   4. Twin sculpted 3D stalked glossy-black orb eyes + pair of fine frontal feeler antennae
+	#      (26 tris: 2 x [3-tri stalk + 8-tri octahedral glossy-black orb] + 2 x 2-tri feelers)
+	var col_belly := Color(0.46, 0.41, 0.37, 1.0)
+	var col_apron := Color(0.58, 0.52, 0.47, 1.0)
+	var col_rim := Color(0.72, 0.67, 0.62, 1.0)
+	var col_brow := Color(0.84, 0.79, 0.73, 1.0)
+	var col_groove := Color(0.82, 0.77, 0.71, 1.0)
+	var col_top_front := Color(0.95, 0.92, 0.87, 1.0)
+	var col_top := Color(0.98, 0.96, 0.91, 1.0)
+	var col_crest := Color(1.00, 0.99, 0.95, 1.0)
+	var col_top_rear := Color(0.88, 0.84, 0.79, 1.0)
 
-	# 1. Hexagonal carapace with sculpted raised dorsal crest & notched frontal brow (20 tris).
-	var hex_xz: Array[Vector2] = [
-		Vector2( 0.092, -0.108),  # 0: front-right
-		Vector2( 0.160, -0.008),  # 1: right lateral spine
-		Vector2( 0.098,  0.112),  # 2: back-right
-		Vector2(-0.098,  0.112),  # 3: back-left
-		Vector2(-0.160, -0.008),  # 4: left lateral spine
-		Vector2(-0.092, -0.108),  # 5: front-left
+	var col_arm := Color(0.82, 0.77, 0.71, 1.0)
+	var col_claw := Color(0.96, 0.90, 0.82, 1.0)
+	var col_claw_coral := Color(1.00, 0.92, 0.82, 1.0)
+	var col_claw_bot := Color(0.62, 0.55, 0.49, 1.0)
+	var col_claw_tooth := Color(0.92, 0.87, 0.78, 1.0)
+	var col_claw_dark := Color(0.18, 0.14, 0.13, 1.0)
+
+	var col_leg_dark := Color(0.62, 0.56, 0.51, 1.0)
+	var col_leg_hip := Color(0.82, 0.77, 0.71, 1.0)
+	var col_leg_knee := Color(0.96, 0.92, 0.86, 1.0)
+	var col_leg_ankle := Color(0.78, 0.73, 0.67, 1.0)
+	var col_leg_foot := Color(0.36, 0.31, 0.28, 1.0)
+
+	var col_eye_stalk := Color(0.48, 0.41, 0.36, 1.0)
+	var col_eye_black := Color(0.03, 0.03, 0.05, 1.0)
+	var col_eye_glint := Color(0.14, 0.15, 0.19, 1.0)
+	var col_ant_base := Color(0.44, 0.36, 0.31, 1.0)
+	var col_ant_tip := Color(0.76, 0.68, 0.60, 1.0)
+
+	# 1. Closed 3D 10-sided scalloped carapace (48 tris).
+	# Perimeter ordered clockwise around +Y starting at the notched frontal brow (-Z):
+	#   0: frontal brow notch, 1/9: orbital spines, 2/8: anterolateral serrated teeth,
+	#   3/7: widest lateral spines, 4/6: posterolateral flanks, 5: rear carapace lip.
+	var rim_ring: Array[Vector3] = [
+		Vector3( 0.000, 0.080, -0.098),  # 0: notched frontal brow
+		Vector3( 0.072, 0.092, -0.116),  # 1: front-right orbital spine
+		Vector3( 0.138, 0.096, -0.076),  # 2: right anterolateral tooth
+		Vector3( 0.170, 0.094, -0.004),  # 3: right main lateral spine
+		Vector3( 0.116, 0.082,  0.092),  # 4: right posterolateral flank
+		Vector3( 0.000, 0.076,  0.120),  # 5: rear carapace margin
+		Vector3(-0.116, 0.082,  0.092),  # 6: left posterolateral flank
+		Vector3(-0.170, 0.094, -0.004),  # 7: left main lateral spine
+		Vector3(-0.138, 0.096, -0.076),  # 8: left anterolateral tooth
+		Vector3(-0.072, 0.092, -0.116),  # 9: front-left orbital spine
 	]
-	var bot_ring: Array[Vector3] = []
-	var top_ring: Array[Vector3] = []
-	var top_cols: Array[Color] = []
-	for k in 6:
-		var p: Vector2 = hex_xz[k]
-		var is_spine := (k == 1 or k == 4)
-		var is_front := (k == 0 or k == 5)
-		bot_ring.append(Vector3(p.x, 0.042, p.y))
-		var top_y := 0.130 if is_spine else (0.122 if is_front else 0.116)
-		var top_z := p.y * (0.78 if is_front else 0.72)
-		top_ring.append(Vector3(p.x * 0.72, top_y, top_z))
-		top_cols.append(col_top if is_spine else (col_top_front if is_front else col_top_rear))
+	var top_ring: Array[Vector3] = [
+		Vector3( 0.000, 0.122, -0.072),  # 0: brow ridge notch
+		Vector3( 0.054, 0.134, -0.084),  # 1: front-right dorsal brow
+		Vector3( 0.098, 0.138, -0.052),  # 2: right anterolateral shoulder
+		Vector3( 0.118, 0.136, -0.002),  # 3: right branchial shoulder
+		Vector3( 0.082, 0.124,  0.068),  # 4: right cardiac flank
+		Vector3( 0.000, 0.120,  0.088),  # 5: rear cardiac ridge
+		Vector3(-0.082, 0.124,  0.068),  # 6: left cardiac flank
+		Vector3(-0.118, 0.136, -0.002),  # 7: left branchial shoulder
+		Vector3(-0.098, 0.138, -0.052),  # 8: left anterolateral shoulder
+		Vector3(-0.054, 0.134, -0.084),  # 9: front-left dorsal brow
+	]
+	var rim_cols: Array[Color] = [
+		col_brow, col_rim, col_rim, col_rim, col_rim,
+		col_apron, col_rim, col_rim, col_rim, col_rim,
+	]
+	var top_cols: Array[Color] = [
+		col_brow, col_top_front, col_top, col_top, col_top_rear,
+		col_top_rear, col_top_rear, col_top, col_top, col_top_front,
+	]
+	var ref_body := Vector3(0.0, 0.084, 0.004)
+	var ref_dorsal := Vector3(0.0, 0.020, 0.000)
+	var ref_ventral := Vector3(0.0, 0.160, 0.006)
+	var belly_ctr := Vector3(0.0, 0.036, 0.006)
 
-	var brow_notch := Vector3(0.0, 0.106, -0.068)
-	var dorsal_crest := Vector3(0.0, 0.156, -0.006)
-	var ref_body := Vector3(0.0, 0.062, 0.0)
+	# 10 scalloped outer bevel walls (20 tris) + 10 shaded ventral belly closure tris (10 tris).
+	for k in 10:
+		var nk := (k + 1) % 10
+		_add_outward_quad(st, rim_ring[k], top_ring[k], top_ring[nk], rim_ring[nk], ref_body,
+			rim_cols[k], top_cols[k], top_cols[nk], rim_cols[nk])
+		_add_outward_tri(st, rim_ring[k], rim_ring[nk], belly_ctr, ref_ventral,
+			rim_cols[k], rim_cols[nk], col_belly)
 
-	# 5 non-front beveled carapace walls (10 tris) + 3-tri notched frontal brow wall (3 tris).
-	for k in 5:
-		var nk := k + 1
-		_add_outward_quad(st, bot_ring[k], top_ring[k], top_ring[nk], bot_ring[nk], ref_body,
-			col_rim, top_cols[k], top_cols[nk], col_rim)
-	_add_outward_tri(st, bot_ring[5], top_ring[5], brow_notch, ref_body, col_rim, top_cols[5], col_brow)
-	_add_outward_tri(st, bot_ring[5], brow_notch, bot_ring[0], ref_body, col_rim, col_brow, col_rim)
-	_add_outward_tri(st, bot_ring[0], brow_notch, top_ring[0], ref_body, col_rim, col_brow, top_cols[0])
+	# 14-tri raised dorsal H-groove shell ridge crest (twin branchial crests flanking central H-groove).
+	var ridge_r := Vector3( 0.048, 0.158, -0.006)
+	var ridge_l := Vector3(-0.048, 0.158, -0.006)
+	var h_groove := Vector3( 0.000, 0.141,  0.006)
+	_add_outward_tri(st, ridge_r, top_ring[1], top_ring[2], ref_dorsal, col_crest, top_cols[1], top_cols[2])
+	_add_outward_tri(st, ridge_r, top_ring[2], top_ring[3], ref_dorsal, col_crest, top_cols[2], top_cols[3])
+	_add_outward_tri(st, ridge_r, top_ring[3], top_ring[4], ref_dorsal, col_crest, top_cols[3], top_cols[4])
+	_add_outward_tri(st, ridge_l, top_ring[6], top_ring[7], ref_dorsal, col_crest, top_cols[6], top_cols[7])
+	_add_outward_tri(st, ridge_l, top_ring[7], top_ring[8], ref_dorsal, col_crest, top_cols[7], top_cols[8])
+	_add_outward_tri(st, ridge_l, top_ring[8], top_ring[9], ref_dorsal, col_crest, top_cols[8], top_cols[9])
+	_add_outward_tri(st, h_groove, ridge_r, top_ring[1], ref_dorsal, col_groove, col_crest, top_cols[1])
+	_add_outward_tri(st, h_groove, top_ring[1], top_ring[0], ref_dorsal, col_groove, top_cols[1], top_cols[0])
+	_add_outward_tri(st, h_groove, top_ring[0], top_ring[9], ref_dorsal, col_groove, top_cols[0], top_cols[9])
+	_add_outward_tri(st, h_groove, top_ring[9], ridge_l, ref_dorsal, col_groove, top_cols[9], col_crest)
+	_add_outward_tri(st, h_groove, top_ring[4], ridge_r, ref_dorsal, col_groove, top_cols[4], col_crest)
+	_add_outward_tri(st, h_groove, top_ring[5], top_ring[4], ref_dorsal, col_groove, top_cols[5], top_cols[4])
+	_add_outward_tri(st, h_groove, top_ring[6], top_ring[5], ref_dorsal, col_groove, top_cols[6], top_cols[5])
+	_add_outward_tri(st, h_groove, ridge_l, top_ring[6], ref_dorsal, col_groove, col_crest, top_cols[6])
 
-	# 7-tri sculpted raised dorsal dome fanning from `dorsal_crest` to all 7 top rim edges.
-	for k in 5:
-		var nk := k + 1
-		_add_outward_tri(st, dorsal_crest, top_ring[k], top_ring[nk], ref_body,
-			col_crest, top_cols[k], top_cols[nk])
-	_add_outward_tri(st, dorsal_crest, top_ring[5], brow_notch, ref_body, col_crest, top_cols[5], col_brow)
-	_add_outward_tri(st, dorsal_crest, brow_notch, top_ring[0], ref_body, col_crest, col_brow, top_cols[0])
+	# 4-tri closed 3D tucked rear abdomen apron beneath the posterior carapace lip.
+	var ap_r := Vector3( 0.058, 0.074, 0.092)
+	var ap_l := Vector3(-0.058, 0.074, 0.092)
+	var ap_tip := Vector3(0.000, 0.064, 0.138)
+	var ap_bot := Vector3(0.000, 0.042, 0.088)
+	var ap_ref := (ap_r + ap_l + ap_tip + ap_bot) * 0.25
+	_add_outward_tri(st, ap_l, ap_r, ap_tip, ap_ref, col_apron, col_apron, col_rim)
+	_add_outward_tri(st, ap_r, ap_tip, ap_bot, ap_ref, col_apron, col_rim, col_belly)
+	_add_outward_tri(st, ap_l, ap_bot, ap_tip, ap_ref, col_apron, col_belly, col_rim)
+	_add_outward_tri(st, ap_r, ap_l, ap_bot, ap_ref, col_apron, col_apron, col_belly)
 
-	# 2. Twin 3D volumetric double-fingered pincer claws in front (16 tris: 8 per claw).
+	# 2. Twin closed 3D volumetric pincer claws in front (42 tris: 21 per claw).
 	for side: float in [-1.0, 1.0]:
-		var sh_top := Vector3(side * 0.094, 0.086, -0.084)
-		var sh_out := Vector3(side * 0.132, 0.056, -0.050)
-		var sh_in := Vector3(side * 0.082, 0.056, -0.094)
-		var wrist := Vector3(side * 0.194, 0.106, -0.168)
+		# Shoulder ring deeply anchored inside the fronto-lateral carapace bevel.
+		var sh_top := Vector3(side * 0.084, 0.092, -0.076)
+		var sh_out := Vector3(side * 0.112, 0.068, -0.052)
+		var sh_in := Vector3(side * 0.068, 0.064, -0.082)
 
-		var palm_top := Vector3(side * 0.214, 0.160, -0.212)
-		var palm_out := Vector3(side * 0.236, 0.122, -0.218)
-		var palm_in := Vector3(side * 0.168, 0.120, -0.194)
-		var tip_up := Vector3(side * 0.094, 0.184, -0.278)
+		# 3-vertex wrist collar ring.
+		var wr_top := Vector3(side * 0.188, 0.118, -0.156)
+		var wr_out := Vector3(side * 0.208, 0.094, -0.152)
+		var wr_in := Vector3(side * 0.168, 0.088, -0.160)
 
-		var dact_out := Vector3(side * 0.212, 0.098, -0.198)
-		var dact_bot := Vector3(side * 0.184, 0.072, -0.202)
-		var dact_in := Vector3(side * 0.166, 0.104, -0.186)
-		var tip_lo := Vector3(side * 0.088, 0.118, -0.258)
+		# Plump 4-vertex rounded chela palm belly ring with warm coral sunlit crest.
+		var pm_top := Vector3(side * 0.202, 0.156, -0.210)
+		var pm_out := Vector3(side * 0.232, 0.118, -0.214)
+		var pm_bot := Vector3(side * 0.192, 0.078, -0.204)
+		var pm_in := Vector3(side * 0.162, 0.114, -0.194)
 
-		var arm_ref := Vector3(side * 0.090, 0.020, -0.060)
-		var palm_ref := Vector3(side * 0.165, 0.092, -0.206)
-		var inner_up_ref := Vector3(side * 0.200, 0.050, -0.260)
-		var dact_ref := Vector3(side * 0.165, 0.118, -0.192)
+		# Inner gripping tooth molar + hooked curved dark-tipped upper & lower pincer fingers.
+		var tooth_up := Vector3(side * 0.148, 0.126, -0.240)
+		var tip_up := Vector3(side * 0.092, 0.152, -0.278)
+		var tip_lo := Vector3(side * 0.096, 0.108, -0.264)
 
-		# 3D ridged arm (2 tris).
-		_add_outward_tri(st, sh_top, sh_out, wrist, arm_ref, col_rim, col_arm, col_claw)
-		_add_outward_tri(st, sh_in, sh_top, wrist, arm_ref, col_rim, col_arm, col_claw)
+		var arm_ref := (sh_top + sh_out + sh_in + wr_top + wr_out + wr_in) / 6.0
+		var wr_ctr := (wr_top + wr_out + wr_in) / 3.0
+		var pm_ctr := (pm_top + pm_out + pm_bot + pm_in) * 0.25
+		var palm_ref := (wr_ctr + pm_ctr) * 0.5
+		var up_ref := (pm_top + pm_out + pm_in + tooth_up + tip_up) / 5.0
+		var lo_ref := (pm_out + pm_in + pm_bot + tip_lo) * 0.25
 
-		# Volumetric palm + curved upper fixed finger (3 tris).
-		_add_outward_tri(st, wrist, palm_out, palm_top, palm_ref, col_claw, col_claw, col_claw_hi)
-		_add_outward_tri(st, palm_top, palm_out, tip_up, palm_ref, col_claw_hi, col_claw, col_claw_tip)
-		_add_outward_tri(st, palm_top, tip_up, palm_in, inner_up_ref, col_claw_hi, col_claw_tip, col_arm)
+		# 3D triangular-prism arm (6 tris).
+		_add_outward_quad(st, sh_top, sh_out, wr_out, wr_top, arm_ref, col_rim, col_arm, col_claw, col_claw)
+		_add_outward_quad(st, sh_out, sh_in, wr_in, wr_out, arm_ref, col_arm, col_belly, col_claw_bot, col_claw)
+		_add_outward_quad(st, sh_in, sh_top, wr_top, wr_in, arm_ref, col_belly, col_rim, col_claw, col_arm)
 
-		# Volumetric lower movable pincer dactylus (3 tris).
-		_add_outward_tri(st, wrist, dact_out, dact_bot, dact_ref, col_claw, col_arm, col_rim)
-		_add_outward_tri(st, dact_out, tip_lo, dact_bot, dact_ref, col_claw, col_claw_tip, col_rim)
-		_add_outward_tri(st, dact_out, dact_in, tip_lo, arm_ref, col_claw, col_arm, col_claw_tip)
+		# Closed 3-to-4 loft into plump rounded chela palm (7 tris).
+		_add_outward_quad(st, wr_top, wr_out, pm_out, pm_top, palm_ref,
+			col_claw, col_claw, col_claw, col_claw_coral)
+		_add_outward_tri(st, wr_out, pm_bot, pm_out, palm_ref, col_claw, col_claw_bot, col_claw)
+		_add_outward_tri(st, wr_out, wr_in, pm_bot, palm_ref, col_claw, col_arm, col_claw_bot)
+		_add_outward_tri(st, wr_in, pm_in, pm_bot, palm_ref, col_arm, col_arm, col_claw_bot)
+		_add_outward_quad(st, wr_in, wr_top, pm_top, pm_in, palm_ref,
+			col_arm, col_claw, col_claw_coral, col_arm)
 
-	# 3. 8 articulated splayed walking legs — 4 pairs (24 tris: 3 per leg).
+		# Solid 3D curved dark-tipped upper finger with inner gripping tooth notch (5 tris).
+		_add_outward_tri(st, pm_top, pm_out, tip_up, up_ref, col_claw_coral, col_claw, col_claw_dark)
+		_add_outward_tri(st, pm_in, pm_top, tip_up, up_ref, col_arm, col_claw_coral, col_claw_dark)
+		_add_outward_tri(st, pm_out, tooth_up, tip_up, up_ref, col_claw, col_claw_tooth, col_claw_dark)
+		_add_outward_tri(st, tooth_up, pm_in, tip_up, up_ref, col_claw_tooth, col_arm, col_claw_dark)
+		_add_outward_tri(st, pm_out, pm_in, tooth_up, up_ref, col_claw_bot, col_claw_bot, col_claw_tooth)
+
+		# Solid 3D curved dark-tipped lower movable pincer finger (3 tris).
+		_add_outward_tri(st, pm_out, pm_bot, tip_lo, lo_ref, col_claw, col_claw_bot, col_claw_dark)
+		_add_outward_tri(st, pm_bot, pm_in, tip_lo, lo_ref, col_claw_bot, col_arm, col_claw_dark)
+		_add_outward_tri(st, pm_in, pm_out, tip_lo, lo_ref, col_claw_bot, col_claw_bot, col_claw_dark)
+
+	# 3. 8 truly 3D volumetric jointed splayed walking legs - 4 pairs (48 tris: 6 per leg).
 	# [hip_x, hip_z, knee_x, knee_y, knee_z, ankle_x, ankle_y, ankle_z, foot_x, foot_z]
 	var leg_specs: Array[Array] = [
-		[0.130, -0.052, 0.228, 0.096, -0.104, 0.264, 0.050, -0.128, 0.286, -0.146],
-		[0.148, -0.008, 0.256, 0.104, -0.018, 0.294, 0.052, -0.024, 0.318, -0.028],
-		[0.142,  0.038, 0.246, 0.098,  0.066, 0.282, 0.048,  0.086, 0.304,  0.102],
-		[0.114,  0.082, 0.212, 0.086,  0.142, 0.244, 0.044,  0.172, 0.262,  0.194],
+		[0.092, -0.048, 0.228, 0.098, -0.104, 0.264, 0.050, -0.128, 0.286, -0.146],
+		[0.106, -0.006, 0.256, 0.106, -0.018, 0.294, 0.052, -0.024, 0.318, -0.028],
+		[0.100,  0.036, 0.246, 0.100,  0.066, 0.282, 0.048,  0.086, 0.304,  0.102],
+		[0.082,  0.074, 0.212, 0.088,  0.142, 0.244, 0.044,  0.172, 0.262,  0.194],
 	]
-	var leg_up_ref := Vector3(0.0, -0.60, 0.0)
 	for side: float in [-1.0, 1.0]:
-		var leg_side_ref := Vector3(-side * 0.20, -0.10, 0.0)
 		for lspec in leg_specs:
 			var hx: float = float(lspec[0])
 			var hz: float = float(lspec[1])
@@ -6099,31 +6172,90 @@ static func _build_crab_mesh() -> ArrayMesh:
 			var fx: float = float(lspec[8])
 			var fz: float = float(lspec[9])
 
-			var hip_a := Vector3(side * hx, 0.056, hz - 0.016)
-			var hip_b := Vector3(side * hx, 0.056, hz + 0.016)
-			var knee_top := Vector3(side * kx, ky, kz)
-			var knee_bot := Vector3(side * (kx - 0.022), ky - 0.024, kz)
-			var ankle_top := Vector3(side * ax, ay, az)
+			var hip_ctr := Vector3(side * hx, 0.070, hz)
+			var knee_j := Vector3(side * kx, ky, kz)
+			var ankle_j := Vector3(side * ax, ay, az)
 			var foot := Vector3(side * fx, 0.002, fz)
 
-			_add_outward_tri(st, hip_a, hip_b, knee_top, leg_up_ref, col_leg_hip, col_leg_hip, col_leg_knee)
-			_add_outward_tri(st, knee_top, knee_bot, ankle_top, leg_side_ref, col_leg_knee, col_leg_hip, col_leg_ankle)
-			_add_outward_tri(st, ankle_top, knee_bot, foot, leg_side_ref, col_leg_ankle, col_leg_hip, col_leg_foot)
+			var out_xz := Vector3(foot.x - hip_ctr.x, 0.0, foot.z - hip_ctr.z).normalized()
+			var leg_side := Vector3(-out_xz.z, 0.0, out_xz.x)
+			var dir_fem := (knee_j - hip_ctr).normalized()
+			var dir_tib := (ankle_j - knee_j).normalized()
 
-	# 4. Twin thicker 3D stalked glossy dark eyes on notched front brow (8 tris: 4 per eye).
+			# 2-face 3D ridged femur rooted inside the lower carapace flank, tapering smoothly into the knee (2 tris).
+			var hip_top := hip_ctr + Vector3(0.0, 0.015, 0.0)
+			var hip_f := hip_ctr - leg_side * 0.015 + Vector3(0.0, -0.010, 0.0)
+			var hip_b := hip_ctr + leg_side * 0.015 + Vector3(0.0, -0.010, 0.0)
+			var knee_end := knee_j.lerp(ankle_j, 0.42) - out_xz * 0.004
+			var fem_ref := (hip_f + hip_b + knee_end) / 3.0 + Vector3(0.0, -0.055, 0.0)
+			_add_outward_tri(st, hip_top, hip_f, knee_end, fem_ref, col_leg_hip, col_leg_dark, col_leg_knee)
+			_add_outward_tri(st, hip_top, knee_end, hip_b, fem_ref, col_leg_hip, col_leg_knee, col_leg_dark)
+
+			# 2-face 3D angled tibia overlapping the knee condyle flush with monotonic taper (2 tris).
+			var knee_base := knee_j - dir_fem * 0.014
+			var knee_top := knee_j + Vector3(0.0, 0.009, 0.0)
+			var knee_f := knee_base - leg_side * 0.0062 + Vector3(0.0, -0.010, 0.0)
+			var knee_b := knee_base + leg_side * 0.0062 + Vector3(0.0, -0.010, 0.0)
+			var ankle_end := ankle_j.lerp(foot, 0.48) - out_xz * 0.003
+			var tib_ref := (knee_f + knee_b + ankle_end) / 3.0 - out_xz * 0.055 + Vector3(0.0, -0.045, 0.0)
+			_add_outward_tri(st, knee_top, knee_f, ankle_end, tib_ref, col_leg_knee, col_leg_hip, col_leg_ankle)
+			_add_outward_tri(st, knee_top, ankle_end, knee_b, tib_ref, col_leg_knee, col_leg_ankle, col_leg_hip)
+
+			# 2-face 3D pointed tarsus claw tip meeting the ankle cuff flush & touching y = 0.002 m (2 tris).
+			var ankle_base := ankle_j - dir_tib * 0.014
+			var ankle_top := ankle_j + out_xz * 0.005 + Vector3(0.0, 0.004, 0.0)
+			var ankle_f := ankle_base - leg_side * 0.0036 - out_xz * 0.002
+			var ankle_b := ankle_base + leg_side * 0.0036 - out_xz * 0.002
+			var tar_ref := (ankle_f + ankle_b + foot) / 3.0 - out_xz * 0.055
+			_add_outward_tri(st, ankle_top, ankle_f, foot, tar_ref, col_leg_ankle, col_leg_dark, col_leg_foot)
+			_add_outward_tri(st, ankle_top, foot, ankle_b, tar_ref, col_leg_ankle, col_leg_foot, col_leg_dark)
+
+	# 4. Twin sculpted 3D stalked glossy-black orb eyes + pair of fine frontal feeler antennae (26 tris).
 	for side: float in [-1.0, 1.0]:
-		var eye_ring: Array[Vector3] = [
-			Vector3(side * 0.042, 0.110, -0.106),
-			Vector3(side * 0.055, 0.108, -0.092),
-			Vector3(side * 0.040, 0.114, -0.080),
-			Vector3(side * 0.028, 0.110, -0.094),
-		]
-		var eye_tip := Vector3(side * 0.046, 0.164, -0.112)
-		var eye_ref := Vector3(side * 0.041, 0.112, -0.093)
+		# 3-tri slender eyestalk anchored into the orbital brow notch (3 tris).
+		var eye_base := Vector3(side * 0.042, 0.102, -0.092)
+		var eye_ctr := Vector3(side * 0.050, 0.156, -0.112)
+		var stalk_dir := (eye_ctr - eye_base).normalized()
+		var stalk_u := stalk_dir.cross(Vector3.FORWARD).normalized()
+		var stalk_v := stalk_u.cross(stalk_dir).normalized()
+		var stalk_ring: Array[Vector3] = []
+		for k in 3:
+			var ang := float(k) / 3.0 * TAU + 0.52
+			stalk_ring.append(eye_base + (stalk_u * cos(ang) + stalk_v * sin(ang)) * 0.0075)
+		var stalk_ref := eye_base.lerp(eye_ctr, 0.35)
+		for k in 3:
+			var nk := (k + 1) % 3
+			_add_outward_tri(st, stalk_ring[k], stalk_ring[nk], eye_ctr, stalk_ref,
+				col_eye_stalk, col_eye_stalk, col_eye_stalk)
+
+		# 8-tri closed 3D octahedral glossy-black orb eye atop the stalk (8 tris).
+		var orb_r := 0.0145
+		var orb_h := 0.0130
+		var orb_eq: Array[Vector3] = []
+		for k in 4:
+			var ang := float(k) / 4.0 * TAU + PI * 0.25
+			orb_eq.append(eye_ctr + Vector3(side * cos(ang) * orb_r, 0.0, sin(ang) * orb_r))
+		var orb_top := eye_ctr + Vector3(0.0, orb_h, 0.0)
+		var orb_bot := eye_ctr + Vector3(0.0, -orb_h, 0.0)
 		for k in 4:
 			var nk := (k + 1) % 4
-			_add_outward_tri(st, eye_ring[k], eye_ring[nk], eye_tip, eye_ref,
-				col_eye_stalk, col_eye_stalk, col_eye_tip)
+			_add_outward_tri(st, orb_eq[k], orb_eq[nk], orb_top, eye_ctr,
+				col_eye_black, col_eye_black, col_eye_glint)
+			_add_outward_tri(st, orb_eq[nk], orb_eq[k], orb_bot, eye_ctr,
+				col_eye_black, col_eye_black, col_eye_black)
+
+		# 2-tri fine 3D V-ridged frontal feeler antenna arching forward cleanly between the eye stalks (2 tris).
+		var ant_base := Vector3(side * 0.016, 0.096, -0.088)
+		var ant_tip := Vector3(side * 0.050, 0.116, -0.174)
+		var ant_dir := (ant_tip - ant_base).normalized()
+		var ant_u := ant_dir.cross(Vector3.UP).normalized()
+		var ant_v := ant_u.cross(ant_dir).normalized()
+		var ant_top := ant_base + ant_v * 0.0045
+		var ant_a := ant_base - ant_u * 0.0040 - ant_v * 0.0025
+		var ant_b := ant_base + ant_u * 0.0040 - ant_v * 0.0025
+		var ant_ref := ant_base - ant_v * 0.025 + ant_dir * 0.020
+		_add_outward_tri(st, ant_top, ant_a, ant_tip, ant_ref, col_ant_base, col_ant_base, col_ant_tip)
+		_add_outward_tri(st, ant_b, ant_top, ant_tip, ant_ref, col_ant_base, col_ant_base, col_ant_tip)
 
 	st.generate_normals()
 	return st.commit()

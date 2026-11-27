@@ -161,6 +161,13 @@ const SOVEREIGN_CRAFT_LANDMARKS: Array[String] = [
 	"volcanic_obsidian_leviathan_spire.glb",
 ]
 
+const BUCCANEER_CRAFT_LANDMARKS: Array[String] = [
+	"pirate_blacksmith_anchor_forge.glb",
+	"ancient_abyssal_nautilus_shrine.glb",
+	"coastal_smuggler_signal_tripod.glb",
+	"volcanic_obsidian_wyrm_arch.glb",
+]
+
 const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"cliff_buttress_tall.glb": 1,
 	"cliff_buttress_wide.glb": 1,
@@ -252,6 +259,10 @@ const EXPECTED_MIN_COLLIDERS: Dictionary = {
 	"ancient_astral_tide_obelisk.glb": 1,
 	"coastal_buccaneer_net_mending_pier.glb": 1,
 	"volcanic_obsidian_leviathan_spire.glb": 1,
+	"pirate_blacksmith_anchor_forge.glb": 1,
+	"ancient_abyssal_nautilus_shrine.glb": 1,
+	"coastal_smuggler_signal_tripod.glb": 1,
+	"volcanic_obsidian_wyrm_arch.glb": 1,
 }
 
 const EXPECTED_LANTERN_EMPTIES: Dictionary = {
@@ -332,6 +343,10 @@ const EXPECTED_LANTERN_EMPTIES: Dictionary = {
 	"ancient_astral_tide_obelisk.glb": ["Lantern_AstralObelisk*"],
 	"coastal_buccaneer_net_mending_pier.glb": ["Lantern_NetPier*"],
 	"volcanic_obsidian_leviathan_spire.glb": ["Lantern_VolcSpire*"],
+	"pirate_blacksmith_anchor_forge.glb": ["Lantern_AnchorForge*"],
+	"ancient_abyssal_nautilus_shrine.glb": ["Lantern_NautilusShrine*"],
+	"coastal_smuggler_signal_tripod.glb": ["Lantern_SignalTripod*"],
+	"volcanic_obsidian_wyrm_arch.glb": ["Lantern_WyrmArch*"],
 }
 
 const GROUNDING_AUDIT_PREFIXES: Array[String] = [
@@ -414,6 +429,10 @@ const GROUNDING_AUDIT_PREFIXES: Array[String] = [
 	"AstralObelisk_",
 	"NetPier_",
 	"VolcSpire_",
+	"AnchorForge_",
+	"NautilusShrine_",
+	"SignalTripod_",
+	"WyrmArch_",
 ]
 
 const GROUND_COVER_LAYERS: Array[String] = [
@@ -561,7 +580,8 @@ func test_all_12_landmark_glbs_load_pbr_tangents_and_colliders() -> void:
 	all_landmarks.append_array(ARMADA_RELICS_LANDMARKS)
 	all_landmarks.append_array(PRIVATEER_CRAFT_LANDMARKS)
 	all_landmarks.append_array(SOVEREIGN_CRAFT_LANDMARKS)
-	check_eq(all_landmarks.size(), 90, "expected 90 sculpted landmark GLBs")
+	all_landmarks.append_array(BUCCANEER_CRAFT_LANDMARKS)
+	check_eq(all_landmarks.size(), 94, "expected 94 sculpted landmark GLBs")
 
 	var unique_pbr_paths := {}
 	var non_shared_tex_errors: Array[String] = []
@@ -1128,6 +1148,18 @@ func test_island_details_outpost_keepouts_wind_and_zero_leaks() -> void:
 			"Wave I-22 NetPier keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("NetPier_Shore"))
 		check(IslandDetailsCls._prop_keepout_radius("VolcSpire_Approach") >= 4.0,
 			"Wave I-22 VolcSpire keepout radius must be >= 4.0 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("VolcSpire_Approach"))
+
+		print("    wave_i23 articulated crab craft tris: crabs=%d" % crab_tris)
+		check(crab_tris >= 136,
+			"Wave I-23 ShoreCrabs mesh must have >= 136 tris (10-sided scalloped carapace + volumetric pincers + 8 jointed 3D legs + stalked orb eyes/antennae, got %d)" % crab_tris)
+		check(IslandDetailsCls._prop_keepout_radius("AnchorForge_Yard") >= 4.5,
+			"Wave I-23 AnchorForge keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("AnchorForge_Yard"))
+		check(IslandDetailsCls._prop_keepout_radius("NautilusShrine_Glade") >= 4.3,
+			"Wave I-23 NautilusShrine keepout radius must be >= 4.3 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("NautilusShrine_Glade"))
+		check(IslandDetailsCls._prop_keepout_radius("SignalTripod_Cove") >= 4.1,
+			"Wave I-23 SignalTripod keepout radius must be >= 4.1 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("SignalTripod_Cove"))
+		check(IslandDetailsCls._prop_keepout_radius("WyrmArch_Approach") >= 4.5,
+			"Wave I-23 WyrmArch keepout radius must be >= 4.5 m (got %.2f)" % IslandDetailsCls._prop_keepout_radius("WyrmArch_Approach"))
 
 		var cc_pebbles := cc_details.get_placed_pebble_positions()
 		var cc_trail_ctx := IslandDetailsCls._collect_trail_context(cutlass)
@@ -1884,6 +1916,36 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 		check(IslandLandmarks.MID_RANGE_FILES.has(sc_glb22),
 			"Wave I-22 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % sc_glb22)
 
+	# 2h-14. Verify Wave I-23 (94-Landmark Buccaneer-Craft) landmarks (pirate blacksmith anchor forge,
+	#        ancient abyssal nautilus shrine, coastal smuggler signal tripod & volcanic obsidian wyrm arch)
+	#        + MID_RANGE_FILES (VIS_RANGE_MID <= 300 m) & expanded twilight LandmarkLanternHalos!
+	var anchor_forge_total := 0
+	var nautilus_shrine_total := 0
+	var signal_tripod_total := 0
+	var wyrm_arch_total := 0
+	for isl_i23 in all_islands:
+		anchor_forge_total += isl_i23.find_children("AnchorForge_*", "Node3D", true, false).size()
+		nautilus_shrine_total += isl_i23.find_children("NautilusShrine_*", "Node3D", true, false).size()
+		signal_tripod_total += isl_i23.find_children("SignalTripod_*", "Node3D", true, false).size()
+		wyrm_arch_total += isl_i23.find_children("WyrmArch_*", "Node3D", true, false).size()
+	print("    wave_i23 buccaneer_craft landmarks: anchor_forges=%d nautilus_shrines=%d signal_tripods=%d wyrm_arches=%d lantern_halos=%d" % [
+		anchor_forge_total, nautilus_shrine_total, signal_tripod_total, wyrm_arch_total, total_lantern_halos])
+	check(anchor_forge_total >= 4, "Wave I-23 spawns >= 4 AnchorForge_* landmarks (got %d)" % anchor_forge_total)
+	check(nautilus_shrine_total >= 4, "Wave I-23 spawns >= 4 NautilusShrine_* landmarks (got %d)" % nautilus_shrine_total)
+	check(signal_tripod_total >= 4, "Wave I-23 spawns >= 4 SignalTripod_* landmarks (got %d)" % signal_tripod_total)
+	check(wyrm_arch_total >= 3, "Wave I-23 spawns >= 3 WyrmArch_* landmarks (got %d)" % wyrm_arch_total)
+	check(total_lantern_halos >= 300,
+		"Wave I-23 archipelago must batch >= 300 twilight LandmarkLanternHalos across 14 islands (got %d)" % total_lantern_halos)
+	check(IslandLandmarks.VIS_RANGE_MID <= 300.0,
+		"IslandLandmarks.VIS_RANGE_MID must be <= 300.0 m (got %.1f m)" % IslandLandmarks.VIS_RANGE_MID)
+	for bc_glb in BUCCANEER_CRAFT_LANDMARKS:
+		check(IslandLandmarks.MID_RANGE_FILES.has(bc_glb),
+			"Wave I-23 landmark %s must be registered in IslandLandmarks.MID_RANGE_FILES (<= 300 m offshore LOD cap)" % bc_glb)
+	check(IslandLandmarks.VIS_RANGE_COURTYARD <= 220.0 and IslandLandmarks.VIS_RANGE_COURTYARD >= 150.0,
+		"IslandLandmarks.VIS_RANGE_COURTYARD must be in [150, 220] m (got %.1f m)" % IslandLandmarks.VIS_RANGE_COURTYARD)
+	check(IslandLandmarks.COURTYARD_RANGE_FILES.size() >= 25,
+		"IslandLandmarks.COURTYARD_RANGE_FILES must cap >= 25 compact courtyard GLBs (got %d)" % IslandLandmarks.COURTYARD_RANGE_FILES.size())
+
 	# 2i. Automated 14-island landmark anti-float grounding audit!
 	var grounded_checked := 0
 	var floating_count := 0
@@ -1926,10 +1988,10 @@ func test_wave_i2_full_14_island_archipelago_trails_landmarks_pbr_and_zero_leaks
 					isl_g.island_id, lm_name, bb.position.y, max_ground_y, clearance])
 	if grounded_checked == 0:
 		worst_clearance = 0.0
-	print("    wave_i22 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
+	print("    wave_i23 grounding audit: %d landmarks checked, %d floating, worst_clearance=%+.2fm" % [
 		grounded_checked, floating_count, worst_clearance])
-	check(grounded_checked >= 360,
-		"grounding audit must inspect >= 360 land landmarks across 14 islands (got %d)" % grounded_checked)
+	check(grounded_checked >= 380,
+		"grounding audit must inspect >= 380 land landmarks across 14 islands (got %d)" % grounded_checked)
 	check_eq(floating_count, 0,
 		"all land landmarks must sit seated on/below terrain (aabb_min_y <= max_ground_y + 0.60; offenders: %s)" % [
 			", ".join(floating_offenders.slice(0, 6))])

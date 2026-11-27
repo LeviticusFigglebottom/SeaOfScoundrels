@@ -1,0 +1,89 @@
+[remap]
+
+importer="scene"
+importer_version=1
+type="PackedScene"
+uid="uid://brtqsfpkc4kt8"
+path="res://.godot/imported/coastal_smuggler_signal_tripod.glb-3eff83aefbc55098a9f7671ec00333cb.scn"
+
+[deps]
+
+source_file="res://assets/generated/landmarks/coastal_smuggler_signal_tripod.glb"
+dest_files=["res://.godot/imported/coastal_smuggler_signal_tripod.glb-3eff83aefbc55098a9f7671ec00333cb.scn"]
+
+[params]
+
+nodes/root_type=""
+nodes/root_name=""
+nodes/root_script=null
+mesh_library/use_node_names_as_mesh_names=false
+mesh_library/create_categories_from_hierarchy=false
+array_mesh/deduplicate_surfaces=true
+nodes/apply_root_scale=true
+nodes/root_scale=1.0
+nodes/import_as_skeleton_bones=false
+nodes/use_name_suffixes=true
+nodes/use_node_type_suffixes=true
+meshes/ensure_tangents=true
+meshes/generate_lods=true
+meshes/create_shadow_meshes=true
+meshes/light_baking=1
+meshes/lightmap_texel_size=0.2
+meshes/force_disable_compression=false
+skins/use_named_skins=true
+animation/import=true
+animation/fps=30
+animation/trimming=false
+animation/remove_immutable_tracks=true
+animation/import_rest_as_RESET=false
+import_script/path=""
+materials/extract=0
+materials/extract_format=0
+materials/extract_path=""
+_subresources={
+"materials": {
+"mat_foliage": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_foliage.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_foliage.tres"
+},
+"mat_landmark_brass": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_brass.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_brass.tres"
+},
+"mat_landmark_iron": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_iron.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_iron.tres"
+},
+"mat_landmark_limestone": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_limestone.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_limestone.tres"
+},
+"mat_landmark_limestone_moss": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_limestone_moss.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_limestone_moss.tres"
+},
+"mat_landmark_paint": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_paint.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_paint.tres"
+},
+"mat_landmark_rope": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_rope.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_rope.tres"
+},
+"mat_landmark_timber": {
+"use_external/enabled": true,
+"use_external/fallback_path": "res://assets/generated/landmarks/shared/mat_landmark_timber.tres",
+"use_external/path": "res://assets/generated/landmarks/shared/mat_landmark_timber.tres"
+}
+}
+}
+gltf/naming_version=2
+gltf/embedded_image_handling=2
+gltf/texture_map_mode=1
