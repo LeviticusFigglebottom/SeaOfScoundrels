@@ -1491,3 +1491,200 @@ func test_q21a_crew_dialogue_strict_ascii_and_living_world_callouts() -> void:
 	print("    Q21A verified: %d CrewDialogue lines strict ASCII, 6 living-world hooks + passive lightning/whale/dolphin/golden-hour clean" % total_lines_audited)
 
 
+func test_q28a_sculpted_shanty_eighth_notes_and_marine_wildlife_zero_primitives() -> void:
+	_begin()
+
+	# 1. Sculpted 39-tri golden eighth-note shanty particles across ToolMeshes, CrewBrain & Outpost!
+	var shared_note: Mesh = ToolMeshes.get_shanty_note_particle_mesh()
+	var crew_motes := CrewBrain._build_shanty_motes()
+	var bard_motes := Outpost._build_bard_shanty_motes()
+
+	check(shared_note != null and shared_note is ArrayMesh and not (shared_note is PrimitiveMesh),
+		"ToolMeshes.get_shanty_note_particle_mesh() returns non-primitive ArrayMesh")
+	check(crew_motes != null and crew_motes.name == "ShantyMotes" and crew_motes.amount == 8 and crew_motes.emitting,
+		"CrewBrain._build_shanty_motes() returns emitting 8-mote ShantyMotes GPUParticles3D")
+	check_near(crew_motes.lifetime, 1.45, 0.01, "ShantyMotes lifetime stays 1.45 s")
+	check_eq(crew_motes.transform_align, GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD,
+		"ShantyMotes uses TRANSFORM_ALIGN_Z_BILLBOARD")
+	check(bard_motes != null and bard_motes.name == "BardShantyMotes" and bard_motes.amount == 8 and bard_motes.emitting,
+		"Outpost._build_bard_shanty_motes() returns emitting 8-mote BardShantyMotes GPUParticles3D")
+	check_eq(bard_motes.transform_align, GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD,
+		"BardShantyMotes uses TRANSFORM_ALIGN_Z_BILLBOARD")
+
+	check(crew_motes.draw_pass_1 is ArrayMesh and not (crew_motes.draw_pass_1 is PrimitiveMesh),
+		"CrewBrain ShantyMotes draw_pass_1 is sculpted ArrayMesh (not PrimitiveMesh)")
+	check(bard_motes.draw_pass_1 is ArrayMesh and not (bard_motes.draw_pass_1 is PrimitiveMesh),
+		"Outpost BardShantyMotes draw_pass_1 is sculpted ArrayMesh (not PrimitiveMesh)")
+	check_eq(crew_motes.draw_pass_1.get_rid(), shared_note.get_rid(),
+		"CrewBrain ShantyMotes shares exact WeakRef-cached particle note RID with ToolMeshes")
+	check_eq(bard_motes.draw_pass_1.get_rid(), shared_note.get_rid(),
+		"Outpost BardShantyMotes shares exact WeakRef-cached particle note RID with ToolMeshes")
+
+	var note_mesh := crew_motes.draw_pass_1 as ArrayMesh
+	var note_tris := 0
+	var note_bad_normals := 0
+	var note_height_m := 0.0
+	if note_mesh != null:
+		check_eq(note_mesh.get_surface_count(), 1, "shanty note particle mesh has 1 surface")
+		var arr := note_mesh.surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+		check_eq(verts.size() % 3, 0, "shanty note vertex count is a multiple of 3")
+		note_tris = int(roundf(float(verts.size()) / 3.0))
+		check_eq(note_tris, 39, "shanty note particle mesh has exact 39 triangles (got %d)" % note_tris)
+		check_eq(norms.size(), verts.size(), "shanty note has 1 normal per vertex")
+		check_eq(cols.size(), verts.size(), "shanty note stores golden/ivory vertex colors per vertex")
+		for nv in norms:
+			if not nv.is_finite() or absf(nv.length() - 1.0) > 0.001 or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				note_bad_normals += 1
+		check_eq(note_bad_normals, 0, "all 39-tri shanty note normals are finite unit (0, 0, 1)")
+		note_height_m = note_mesh.get_aabb().size.y
+		check(note_height_m >= 0.14 and note_height_m <= 0.20,
+			"scaled shanty note particle height reads crisply at third-person distance (%.3f m)" % note_height_m)
+
+		var note_mat := note_mesh.surface_get_material(0) as StandardMaterial3D
+		check(note_mat != null, "shanty note particle mesh binds surface 0 StandardMaterial3D")
+		if note_mat != null:
+			check(note_mat.vertex_color_use_as_albedo and note_mat.vertex_color_is_srgb,
+				"shanty note surface material uses sRGB vertex colors")
+			check_eq(note_mat.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED,
+				"shanty note surface material is unshaded")
+			check_eq(note_mat.blend_mode, BaseMaterial3D.BLEND_MODE_ADD,
+				"shanty note surface material is additive")
+			check_eq(note_mat.transparency, BaseMaterial3D.TRANSPARENCY_ALPHA,
+				"shanty note surface material enables alpha transparency")
+			check_eq(note_mat.cull_mode, BaseMaterial3D.CULL_DISABLED,
+				"shanty note surface material disables backface culling")
+			check_eq(note_mat.depth_draw_mode, BaseMaterial3D.DEPTH_DRAW_DISABLED,
+				"shanty note surface material disables depth draw")
+			check(note_mat.albedo_texture == null,
+				"shanty note surface material allocates zero texture VRAM (albedo_texture == null)")
+		note_mat = null
+
+	crew_motes.emitting = false
+	crew_motes.visible = false
+	crew_motes.draw_pass_1 = null
+	crew_motes.process_material = null
+	crew_motes.free()
+	bard_motes.emitting = false
+	bard_motes.visible = false
+	bard_motes.draw_pass_1 = null
+	bard_motes.process_material = null
+	bard_motes.free()
+	note_mesh = null
+	shared_note = null
+
+	# 2. Zero-primitive 2-triangle ArrayMesh spray cards in DolphinPod & OceanWhale!
+	var verify_spray_card := func(gp: GPUParticles3D, expected_size: Vector2, expected_mat: Material, label: String) -> int:
+		check(gp != null, "%s GPUParticles3D exists" % label)
+		if gp == null:
+			return 0
+		check(gp.draw_pass_1 is ArrayMesh and not (gp.draw_pass_1 is PrimitiveMesh),
+			"%s draw_pass_1 is zero-primitive ArrayMesh card" % label)
+		var am := gp.draw_pass_1 as ArrayMesh
+		if am == null:
+			return 0
+		check_eq(am.get_surface_count(), 1, "%s spray card has 1 surface" % label)
+		var arr := am.surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+		var tris := int(roundf(float(verts.size()) / 3.0))
+		check_eq(tris, 2, "%s spray card has exact 2 triangles (got %d)" % [label, tris])
+		check_eq(norms.size(), 6, "%s spray card has 6 vertex normals" % label)
+		check_eq(uvs.size(), 6, "%s spray card has 6 vertex UVs" % label)
+		var bad_n := 0
+		for nv in norms:
+			if not nv.is_finite() or absf(nv.length() - 1.0) > 0.001 or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+				bad_n += 1
+		check_eq(bad_n, 0, "%s spray card normals are finite unit (0, 0, 1)" % label)
+		var bad_uv := 0
+		var uv_corners: Array[Vector2] = [Vector2(0.0, 1.0), Vector2(1.0, 1.0), Vector2(1.0, 0.0), Vector2(0.0, 0.0)]
+		for uv in uvs:
+			if not uv.is_finite() or uv.x < -0.001 or uv.x > 1.001 or uv.y < -0.001 or uv.y > 1.001:
+				bad_uv += 1
+		check_eq(bad_uv, 0, "%s spray card UVs are finite and within [0, 1]" % label)
+		for corner in uv_corners:
+			var found := false
+			for uv in uvs:
+				if uv.distance_to(corner) < 0.001:
+					found = true
+					break
+			check(found, "%s spray card contains corner UV %s" % [label, str(corner)])
+		var aabb := am.get_aabb()
+		check_near(aabb.size.x, expected_size.x, 0.002, "%s spray card width matches %.2f m" % [label, expected_size.x])
+		check_near(aabb.size.y, expected_size.y, 0.002, "%s spray card height matches %.2f m" % [label, expected_size.y])
+		check_near(aabb.get_center().length(), 0.0, 0.002, "%s spray card is centered at Vector3.ZERO" % label)
+		check(am.surface_get_material(0) == expected_mat and expected_mat != null,
+			"%s spray card binds shared spray material to surface 0" % label)
+		return tris
+
+	var pod := DolphinPod.spawn_alongside(_root, null, 2, 16.0)
+	var whale := OceanWhale.spawn_breach(_root, Vector3(0.0, 0.0, -40.0), 0.0)
+	await physics_frames(2)
+
+	var dolphin_sprays := pod.find_children("DolphinSplash_*", "GPUParticles3D", true, false)
+	check_eq(dolphin_sprays.size(), 2, "DolphinPod spawns 2 spray GPUParticles3D emitters")
+	var dolphin_card_tris := 0
+	for sp_node in dolphin_sprays:
+		dolphin_card_tris = verify_spray_card.call(
+			sp_node as GPUParticles3D, Vector2(0.26, 0.26), DolphinPod._spray_mat, "DolphinPod." + sp_node.name
+		)
+
+	var breach_spray := whale.get_node_or_null(^"BreachSpray") as GPUParticles3D
+	var splash_plume := whale.get_node_or_null(^"SplashPlume") as GPUParticles3D
+	var whale_card_tris: int = verify_spray_card.call(
+		breach_spray, Vector2(1.4, 1.4), OceanWhale._spray_mat, "OceanWhale.BreachSpray"
+	)
+	verify_spray_card.call(
+		splash_plume, Vector2(1.4, 1.4), OceanWhale._spray_mat, "OceanWhale.SplashPlume"
+	)
+
+	pod.queue_free()
+	whale.queue_free()
+	await physics_frames(2)
+	check_eq(DolphinPod._active_pods, 0, "DolphinPod active count returns to 0 after teardown")
+	check(DolphinPod._spray_quad == null and DolphinPod._spray_mat == null,
+		"DolphinPod clears _spray_quad and _spray_mat cleanly with zero leaks")
+	check_eq(OceanWhale._active_whales, 0, "OceanWhale active count returns to 0 after teardown")
+	check(OceanWhale._spray_quad == null and OceanWhale._spray_mat == null,
+		"OceanWhale clears _spray_quad and _spray_mat cleanly with zero leaks")
+
+	# 3. Source-file audit: 0 PrimitiveMesh.new( occurrences AND 0 non-ASCII characters across all 5 files!
+	var prim_re := RegEx.new()
+	prim_re.compile("\\b(QuadMesh|BoxMesh|SphereMesh|CylinderMesh|CapsuleMesh|PlaneMesh|PrismMesh|TorusMesh)\\s*\\.\\s*new\\s*\\(")
+	var audited_files: Array[String] = [
+		"res://src/crew/crew_brain.gd",
+		"res://src/world/outpost.gd",
+		"res://src/world/dolphin_pod.gd",
+		"res://src/world/ocean_whale.gd",
+		"res://src/items/tool_meshes.gd",
+	]
+	var total_prim_hits := 0
+	var total_non_ascii := 0
+	for fpath in audited_files:
+		check(FileAccess.file_exists(fpath), "audited source file exists: %s" % fpath)
+		var src := FileAccess.get_file_as_string(fpath)
+		check(src.length() > 0, "audited source file non-empty: %s" % fpath)
+		var hits := prim_re.search_all(src)
+		total_prim_hits += hits.size()
+		check_eq(hits.size(), 0, "%s has 0 PrimitiveMesh.new( occurrences (got %d)" % [fpath, hits.size()])
+		var file_non_ascii := 0
+		for ci in src.length():
+			if src.unicode_at(ci) >= 128:
+				file_non_ascii += 1
+		total_non_ascii += file_non_ascii
+		check_eq(file_non_ascii, 0, "%s has 0 non-ASCII characters (got %d)" % [fpath, file_non_ascii])
+
+	# 4. Clean teardown of WeakRef caches and scene root with zero leaks.
+	ToolMeshes.clear_shared_cache()
+	check(ToolMeshes._shanty_note_particle_mesh_ref == null,
+		"ToolMeshes.clear_shared_cache() clears _shanty_note_particle_mesh_ref")
+	check(ToolMeshes._shanty_note_particle_mat_ref == null,
+		"ToolMeshes.clear_shared_cache() clears _shanty_note_particle_mat_ref")
+	await _end()
+	print("    Q28A verified: ShantyNote=%d tris (%.3f m, 0 VRAM, shared RID across ToolMeshes/CrewBrain/Outpost) | DolphinCard=%d tris | WhaleCard=%d tris | Audit=%d files (%d PrimitiveMesh.new, %d non-ASCII)" % [
+		note_tris, note_height_m, dolphin_card_tris, whale_card_tris,
+		audited_files.size(), total_prim_hits, total_non_ascii
+	])

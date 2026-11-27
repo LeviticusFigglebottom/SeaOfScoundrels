@@ -55,12 +55,14 @@ var _plankton_colors := PackedColorArray()
 static var _active_underwaters: int = 0
 static var _plankton_mesh: ArrayMesh = null
 static var _plankton_mat: StandardMaterial3D = null
+static var _screen_quad_mesh_ref: WeakRef = null
 
 
-## Release statically cached sculpted plankton mesh & material cleanly.
+## Release statically cached sculpted plankton mesh, material, and screen quad ref cleanly.
 static func clear_shared_cache() -> void:
 	_plankton_mesh = null
 	_plankton_mat = null
+	_screen_quad_mesh_ref = null
 
 
 func _enter_tree() -> void:
@@ -85,6 +87,7 @@ func _release_local_refs() -> void:
 	_ocean = null
 	if _quad != null and is_instance_valid(_quad):
 		_quad.visible = false
+		_quad.mesh = null
 		_quad.material_override = null
 	_quad = null
 	if _plankton_motes_mmi != null and is_instance_valid(_plankton_motes_mmi):
@@ -108,11 +111,9 @@ func setup(ocean: Node3D) -> void:
 	material.render_priority = -10  # before the ocean surface
 	material.set_shader_parameter(&"detail_tex", DETAIL_TEX)
 	Sea.bind_material(material)
-	var quad := QuadMesh.new()
-	quad.size = Vector2(2, 2)
 	_quad = MeshInstance3D.new()
 	_quad.name = "ScreenPass"
-	_quad.mesh = quad
+	_quad.mesh = _get_screen_quad_mesh()
 	_quad.material_override = material
 	_quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_quad.custom_aabb = AABB(Vector3(-1e6, -1e6, -1e6), Vector3(2e6, 2e6, 2e6))
@@ -309,6 +310,36 @@ func _build_plankton_motes() -> void:
 	_plankton_motes_mmi.custom_aabb = AABB(Vector3(-10.0, -8.0, -10.0), Vector3(20.0, 16.0, 20.0))
 	_plankton_motes_mmi.visible = false
 	add_child(_plankton_motes_mmi)
+
+
+## WeakRef-cached zero-primitive 2-tri fullscreen quad spanning [-1..1] x [-1..1] at z = 0.
+static func _get_screen_quad_mesh() -> ArrayMesh:
+	if _screen_quad_mesh_ref != null:
+		var cached: Variant = _screen_quad_mesh_ref.get_ref()
+		if cached is ArrayMesh:
+			return cached as ArrayMesh
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nrm := Vector3(0.0, 0.0, 1.0)
+	var p_tl := Vector3(-1.0, 1.0, 0.0)
+	var p_tr := Vector3(1.0, 1.0, 0.0)
+	var p_br := Vector3(1.0, -1.0, 0.0)
+	var p_bl := Vector3(-1.0, -1.0, 0.0)
+	var uv_tl := Vector2(0.0, 0.0)
+	var uv_tr := Vector2(1.0, 0.0)
+	var uv_br := Vector2(1.0, 1.0)
+	var uv_bl := Vector2(0.0, 1.0)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_tr); st.add_vertex(p_tr)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+	st.set_normal(nrm); st.set_uv(uv_bl); st.add_vertex(p_bl)
+	var mesh := st.commit()
+	_screen_quad_mesh_ref = weakref(mesh)
+	return mesh
 
 
 static func _ensure_plankton_shared_assets() -> void:

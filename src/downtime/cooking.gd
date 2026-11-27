@@ -14,6 +14,7 @@ signal food_taken(item: Dictionary, pawn: Node)
 
 const COOK_TIME := 10.0
 const BURN_TIME := 18.0
+const COOK_READY_PULSE_DURATION := 0.85
 
 const SKILLET_CENTER := Vector3(-0.055, 0.678, -0.040)
 const FOOD_BASE_POS := Vector3(-0.055, 0.695, -0.040)
@@ -108,11 +109,13 @@ var _sizzle_positions: PackedVector3Array = PackedVector3Array()
 var _steam_tex: ImageTexture = null
 var _steam_mat: StandardMaterial3D = null
 var _steam_proc: ParticleProcessMaterial = null
-var _steam_quad: QuadMesh = null
+var _steam_quad: ArrayMesh = null
 var _steam_ramp: GradientTexture1D = null
 var _steam_scale_tex: CurveTexture = null
 
 var _anim_time: float = 0.0
+var _cook_ready_pulse: float = 0.0
+var _cook_ready_rise: float = 0.0
 var _food_base_yaw: float = 0.32
 var _in_physics_step: bool = false
 
@@ -130,13 +133,15 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_cook_ready_pulse = 0.0
+	_cook_ready_rise = 0.0
 	if _steam_particles != null and is_instance_valid(_steam_particles):
 		_steam_particles.emitting = false
 		_steam_particles.visible = false
 		_steam_particles.draw_pass_1 = null
 		_steam_particles.process_material = null
-	if _steam_quad != null:
-		_steam_quad.material = null
+	if _steam_quad != null and _steam_quad.get_surface_count() > 0:
+		_steam_quad.surface_set_material(0, null)
 	if _steam_mat != null:
 		_steam_mat.albedo_texture = null
 	if _steam_proc != null:
@@ -201,6 +206,11 @@ func get_sizzle_mode_color() -> Color:
 ## Return the latest local-space positions of the 14 rising skillet sizzle/aroma/ember motes.
 func get_sizzle_mote_positions() -> PackedVector3Array:
 	return _sizzle_positions
+
+
+## Return the current 0..1 sear-ready golden flourish pulse intensity.
+func get_cook_ready_pulse() -> float:
+	return _cook_ready_pulse
 
 
 func _food_base_pos() -> Vector3:
@@ -519,7 +529,7 @@ static func _build_galley_hearth_mesh() -> ArrayMesh:
 	)
 
 	# --- Stove firebox shell: solid rear/sides with recessed cast-iron panels ---
-	# Rear +X bulk wall (leaves x ∈ [-0.26, -0.02] open for recessed firebox cavity).
+	# Rear +X bulk wall (leaves x in [-0.26, -0.02] open for recessed firebox cavity).
 	_append_beveled_box(
 		iron_st, Vector3(0.12, 0.410, 0.0), Vector3(0.28, 0.432, 0.48), 0.010,
 		COL_IRON_HI, COL_IRON_MID, COL_IRON_DARK
@@ -527,7 +537,7 @@ static func _build_galley_hearth_mesh() -> ArrayMesh:
 	# Recessed decorative back-wall cast panel on +X.
 	_append_recessed_panel_x(iron_st, 0.260, 1.0, 0.25, 0.57, -0.18, 0.18, 0.016)
 
-	# Side cheeks flanking the firebox cavity (-Z and +Z walls, flush with ±0.135 arch edges).
+	# Side cheeks flanking the firebox cavity (-Z and +Z walls, flush with +/-0.135 arch edges).
 	_append_beveled_box(
 		iron_st, Vector3(-0.14, 0.410, -0.188), Vector3(0.24, 0.432, 0.104), 0.008,
 		COL_IRON_HI, COL_IRON_MID, COL_IRON_DARK
@@ -814,7 +824,7 @@ static func _build_skillet_mesh() -> ArrayMesh:
 		var rpos := pad_c + h_side * rs + h_dir * 0.014
 		_append_rivet_dome(copper_st, rpos, h_dir, 0.007, 0.005, COL_COPPER_HI)
 
-	# Sweeping forged iron handle strap angling gently upward (+16°) from skillet wall.
+	# Sweeping forged iron handle strap angling gently upward (+16 deg) from skillet wall.
 	var strap_pts: Array[Vector3] = [
 		h_dir * 0.202 + Vector3(0.0, 0.038, 0.0),
 		h_dir * 0.268 + Vector3(0.0, 0.062, 0.0),
@@ -997,9 +1007,7 @@ func _build_steam_particles() -> void:
 	_steam_mat.vertex_color_use_as_albedo = true
 	_steam_mat.albedo_texture = _steam_tex
 
-	_steam_quad = QuadMesh.new()
-	_steam_quad.size = Vector2(0.32, 0.32)
-	_steam_quad.material = _steam_mat
+	_steam_quad = _build_quad_card_mesh(Vector2(0.32, 0.32), _steam_mat)
 
 	var scale_curve := Curve.new()
 	scale_curve.add_point(Vector2(0.0, 0.48))
@@ -1054,6 +1062,35 @@ func _build_steam_particles() -> void:
 	_steam_particles.emitting = false
 	_steam_particles.visible = false
 	add_child(_steam_particles)
+
+
+## Zero-primitive 2-tri billboard quad card spanning [-w/2..w/2] x [-h/2..h/2] at z = 0.
+static func _build_quad_card_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	var nrm := Vector3(0.0, 0.0, 1.0)
+	var p_tl := Vector3(-hw, hh, 0.0)
+	var p_tr := Vector3(hw, hh, 0.0)
+	var p_br := Vector3(hw, -hh, 0.0)
+	var p_bl := Vector3(-hw, -hh, 0.0)
+	var uv_tl := Vector2(0.0, 0.0)
+	var uv_tr := Vector2(1.0, 0.0)
+	var uv_br := Vector2(1.0, 1.0)
+	var uv_bl := Vector2(0.0, 1.0)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_tr); st.add_vertex(p_tr)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+	st.set_normal(nrm); st.set_uv(uv_bl); st.add_vertex(p_bl)
+	var mesh := st.commit()
+	if mat != null and mesh.get_surface_count() > 0:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 static func _build_pan_fish_mesh() -> ArrayMesh:
@@ -1290,7 +1327,7 @@ static func _make_steam_puff_texture() -> ImageTexture:
 	var sz := 64
 	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
 	var half := float(sz - 1) * 0.5
-	# Soft multi-lobe radial gradient cloud puff — zero hard billboard edges.
+	# Soft multi-lobe radial gradient cloud puff -- zero hard billboard edges.
 	var lobes: Array[Vector3] = [
 		Vector3(0.0, 0.0, 0.86),
 		Vector3(-0.22, -0.08, 0.54),
@@ -1448,6 +1485,8 @@ func place_food(item: Dictionary) -> bool:
 	cooking_item = item.duplicate()
 	elapsed = 0.0
 	cook_state = &"raw"
+	_cook_ready_pulse = 0.0
+	_cook_ready_rise = 0.0
 	cooking_item["cooked_state"] = cook_state
 	if interactable != null:
 		interactable.prompt = "Take %s (cooking...)" % String(cooking_item.get("name", "Fish"))
@@ -1464,9 +1503,12 @@ func take_food(pawn: Node = null) -> Dictionary:
 	cooking_item = {}
 	elapsed = 0.0
 	cook_state = &"empty"
+	_cook_ready_pulse = 0.0
+	_cook_ready_rise = 0.0
 	if interactable != null:
 		interactable.prompt = "Cook fish or crab on pan"
 	_update_food_visual()
+	_update_hearth_flicker()
 	if pawn is Pawn:
 		var heal_amt := float(out.get("heal", 35.0))
 		if out["cooked_state"] == &"cooked":
@@ -1508,17 +1550,20 @@ func _update_hearth_flicker() -> void:
 	# Gentle dual-frequency firebox coal, warm hearth OmniLight3D, and additive HearthFireHalo flicker.
 	var active_cook := not cooking_item.is_empty()
 	var flick := sin(_anim_time * 5.7) * 0.55 + sin(_anim_time * 13.1 + 1.3) * 0.30 + cos(_anim_time * 2.9) * 0.15
+	var ready_swell := 0.25 * _cook_ready_pulse
 	if _coal_mat != null:
 		var base_em := 2.65 if active_cook else 2.25
-		_coal_mat.emission_energy_multiplier = base_em + flick * 0.38
+		_coal_mat.emission_energy_multiplier = base_em + flick * 0.38 + ready_swell * 1.4
 	if _hearth_light != null and is_instance_valid(_hearth_light):
 		var base_e := 0.50 if active_cook else 0.44
-		_hearth_light.light_energy = base_e + flick * 0.065
+		_hearth_light.light_energy = base_e + flick * 0.065 + ready_swell
 	if _hearth_halo_mat != null and _hearth_halo_mesh != null and is_instance_valid(_hearth_halo_mesh):
 		var base_g := 0.96 if active_cook else 0.78
-		var glow := clampf(base_g + flick * 0.16, 0.45, 1.25)
-		_hearth_halo_mat.albedo_color = Color(glow, glow * 0.93, glow * 0.82, 1.0)
-		var hs := (1.06 if active_cook else 0.96) + flick * 0.07
+		var glow := clampf(base_g + flick * 0.16 + ready_swell, 0.45, 1.50)
+		var g_green := lerpf(0.93, 0.96, _cook_ready_pulse)
+		var g_blue := lerpf(0.82, 0.76, _cook_ready_pulse)
+		_hearth_halo_mat.albedo_color = Color(glow, glow * g_green, glow * g_blue, 1.0)
+		var hs := (1.06 if active_cook else 0.96) + flick * 0.07 + ready_swell * 0.5
 		_hearth_halo_mesh.scale = Vector3(hs, hs, hs)
 
 
@@ -1544,12 +1589,13 @@ func _update_sizzle_motes() -> void:
 		_sizzle_mode_color = COL_SIZZLE_RAW
 	elif cook_state == &"cooked":
 		_sizzle_mode_color = COL_SIZZLE_COOKED
+		var ready_burst := 1.0 + 0.55 * _cook_ready_pulse
 		y_min = 0.04
 		y_max = 0.52
 		rise_speed = 0.48
 		rad_max = 0.165
-		scale_lo = 0.70
-		scale_hi = 1.08
+		scale_lo = 0.70 * ready_burst
+		scale_hi = 1.08 * ready_burst
 		wiggle_amp = 0.026
 		wiggle_freq = 3.1
 	else:
@@ -1563,8 +1609,9 @@ func _update_sizzle_motes() -> void:
 		wiggle_amp = 0.036
 		wiggle_freq = 8.4
 
+	var rise_extra := _cook_ready_rise if cook_state == &"cooked" else 0.0
 	for i in SIZZLE_MOTE_COUNT:
-		var u := fposmod(float(i) / float(SIZZLE_MOTE_COUNT) + _sizzle_phase_off[i] + _anim_time * rise_speed, 1.0)
+		var u := fposmod(float(i) / float(SIZZLE_MOTE_COUNT) + _sizzle_phase_off[i] + _anim_time * rise_speed + rise_extra, 1.0)
 		var y := lerpf(y_min, y_max, u)
 		var ang := _sizzle_angle_off[i] + _anim_time * _sizzle_spin_rate[i] + u * 2.4
 		var r := _sizzle_rad_frac[i] * rad_max * (0.45 + 0.55 * u)
@@ -1583,16 +1630,23 @@ func _update_sizzle_motes() -> void:
 			col = col.lerp(Color(1.0, 0.64, 0.12, col.a), 0.35 * flare)
 		elif cook_state == &"cooked":
 			var shimmer := 0.5 + 0.5 * sin(_anim_time * 5.2 + float(i) * 1.3)
-			col = col.lerp(Color(1.0, 0.94, 0.58, col.a), 0.28 * shimmer)
+			var gold_mix := clampf(0.28 * shimmer + 0.55 * _cook_ready_pulse, 0.0, 1.0)
+			col = col.lerp(Color(1.0, 0.94, 0.58, col.a), gold_mix)
 		col.a *= clampf(0.25 + 0.75 * env, 0.0, 1.0)
 		_sizzle_mm.set_instance_color(i, col)
 
 
 func step(delta: float) -> void:
+	var dt := maxf(delta, 0.0)
+	if _cook_ready_pulse > 0.0:
+		if cook_state == &"cooked":
+			_cook_ready_rise += dt * 0.48 * 0.55 * _cook_ready_pulse
+		_cook_ready_pulse = maxf(0.0, _cook_ready_pulse - dt / COOK_READY_PULSE_DURATION)
 	if not _in_physics_step:
 		_anim_time += delta
-		_update_hearth_flicker()
 	if not Net.is_host() or cooking_item.is_empty():
+		if not _in_physics_step:
+			_update_hearth_flicker()
 		return
 	elapsed += delta
 	var next_state := &"raw"
@@ -1610,15 +1664,22 @@ func step(delta: float) -> void:
 		if cook_state == &"cooked":
 			Game.post_notice("%s is golden and cooked!" % nm)
 			if prev_state == &"raw":
+				_cook_ready_pulse = 1.0
+				_cook_ready_rise = 0.0
 				var cue_pos := global_transform * _food_base_pos() if is_inside_tree() else global_position
 				Audio.play_sfx(&"lantern_click", cue_pos, -1.5, 0.04)
 		elif cook_state == &"burnt":
+			_cook_ready_pulse = 0.0
+			_cook_ready_rise = 0.0
 			Game.post_notice("%s has burnt on the stove!" % nm)
 		_update_food_visual()
+		if not _in_physics_step:
+			_update_hearth_flicker()
 		food_state_changed.emit(cook_state, cooking_item)
 	else:
 		_update_food_tint()
 		if not _in_physics_step:
+			_update_hearth_flicker()
 			_update_sizzle_motes()
 
 

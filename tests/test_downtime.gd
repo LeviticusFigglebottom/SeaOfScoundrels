@@ -241,8 +241,9 @@ func test_cooking_stove_sculpted_hearth_food_steam_and_teardown() -> void:
 
 	check(steam != null and steam is GPUParticles3D, "CookingSteam is a feathered billboard GPUParticles3D")
 	check(not steam.emitting and not steam.visible, "CookingSteam idle when stove is empty")
-	var steam_quad := steam.draw_pass_1 as QuadMesh
-	var steam_mat := (steam_quad.material as StandardMaterial3D) if steam_quad != null else null
+	var steam_quad := steam.draw_pass_1 as ArrayMesh
+	check(steam_quad != null and not (steam.draw_pass_1 is PrimitiveMesh), "CookingSteam uses zero-primitive ArrayMesh card")
+	var steam_mat := (steam_quad.surface_get_material(0) as StandardMaterial3D) if steam_quad != null and steam_quad.get_surface_count() > 0 else null
 	check(steam_mat != null and steam_mat.albedo_texture is ImageTexture, "CookingSteam uses procedural radial puff ImageTexture")
 
 	# 2. Verify ZERO raw primitives (BoxMesh/CylinderMesh/CapsuleMesh/SphereMesh/PrismMesh) anywhere under CookingStove.
@@ -521,6 +522,220 @@ func test_q12b_cooking_hearth_halo_sizzle_motes_and_fishing_ripples_night_lure()
 	check(not is_instance_valid(stove) and not is_instance_valid(halo) and not is_instance_valid(motes), "CookingStove + Q12B hearth halo & sizzle motes freed cleanly")
 	check(not is_instance_valid(bare_pan) and not is_instance_valid(tripod), "bare-pan and campfire-tripod stoves freed cleanly")
 	check(not is_instance_valid(rod) and not is_instance_valid(ripples) and not is_instance_valid(night_lure), "FishingLine + Q12B ripples & night lure halo freed cleanly")
+
+
+func test_q28b_zero_primitive_downtime_underwater_and_cook_ready_flare() -> void:
+	Net.start_single_player()
+	Underwater.clear_shared_cache()
+	var orphans_before := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+
+	# 1. Underwater.ScreenPass: WeakRef-cached 2-tri ArrayMesh spanning [-1..1] x [-1..1] at z = 0.
+	var uw_a := Underwater.new()
+	var uw_b := Underwater.new()
+	add_child(uw_a)
+	add_child(uw_b)
+	uw_a.setup(null)
+	uw_b.setup(null)
+
+	var pass_a := uw_a.get_node_or_null(^"ScreenPass") as MeshInstance3D
+	var pass_b := uw_b.get_node_or_null(^"ScreenPass") as MeshInstance3D
+	check(pass_a != null and pass_b != null, "Underwater instances mount ScreenPass MeshInstance3D")
+	var uw_tris := 0
+	if pass_a != null and pass_b != null:
+		check(pass_a.mesh is ArrayMesh and not (pass_a.mesh is PrimitiveMesh),
+			"Underwater.ScreenPass uses zero-primitive ArrayMesh")
+		check_eq(pass_a.mesh, pass_b.mesh, "Underwater.ScreenPass shares WeakRef-cached ArrayMesh instance")
+		check_eq(pass_a.mesh.get_rid(), pass_b.mesh.get_rid(),
+			"Underwater.ScreenPass shares cached ArrayMesh RID across instances")
+		var uw_arr := (pass_a.mesh as ArrayMesh).surface_get_arrays(0)
+		var uw_verts: PackedVector3Array = uw_arr[Mesh.ARRAY_VERTEX]
+		var uw_norms: PackedVector3Array = uw_arr[Mesh.ARRAY_NORMAL]
+		var uw_uvs: PackedVector2Array = uw_arr[Mesh.ARRAY_TEX_UV]
+		uw_tris = floori(float(uw_verts.size()) / 3.0)
+		check_eq(uw_tris, 2, "Underwater.ScreenPass has exact 2 triangles")
+		check_eq(uw_norms.size(), 6, "Underwater.ScreenPass has 6 vertex normals")
+		check_eq(uw_uvs.size(), 6, "Underwater.ScreenPass has 6 vertex UVs")
+		var min_v := Vector3(INF, INF, INF)
+		var max_v := Vector3(-INF, -INF, -INF)
+		var bad_z := 0
+		for v in uw_verts:
+			min_v = min_v.min(v)
+			max_v = max_v.max(v)
+			if absf(v.z) > 1e-5:
+				bad_z += 1
+		check_eq(bad_z, 0, "Underwater.ScreenPass vertices lie strictly at z = 0")
+		check(min_v.distance_to(Vector3(-1.0, -1.0, 0.0)) < 1e-5 and max_v.distance_to(Vector3(1.0, 1.0, 0.0)) < 1e-5,
+			"Underwater.ScreenPass spans exact [-1..1] x [-1..1] (got %s..%s)" % [str(min_v), str(max_v)])
+		var bad_norms := 0
+		for nv in uw_norms:
+			if not nv.is_finite() or absf(nv.length() - 1.0) > 0.002 or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+				bad_norms += 1
+		check_eq(bad_norms, 0, "Underwater.ScreenPass normals are finite unit (0, 0, 1)")
+		var min_uv := Vector2(INF, INF)
+		var max_uv := Vector2(-INF, -INF)
+		for uv in uw_uvs:
+			min_uv = min_uv.min(uv)
+			max_uv = max_uv.max(uv)
+		check(min_uv.distance_to(Vector2.ZERO) < 1e-5 and max_uv.distance_to(Vector2.ONE) < 1e-5,
+			"Underwater.ScreenPass UVs span exact [0..1] (got %s..%s)" % [str(min_uv), str(max_uv)])
+
+	remove_child(uw_a)
+	uw_a.free()
+	remove_child(uw_b)
+	uw_b.free()
+	check_eq(Underwater._active_underwaters, 0, "Underwater active refcount returns to 0")
+	check(Underwater._screen_quad_mesh_ref == null, "Underwater clears static _screen_quad_mesh_ref cleanly")
+
+	# 2. CookingStove: 2-tri zero-primitive steam card & Sear-Ready Golden Flourish pulse.
+	var stove := CookingStove.new()
+	add_child(stove)
+	var steam := stove.get_node_or_null(^"CookingSteam") as GPUParticles3D
+	var steam_am := (steam.draw_pass_1 as ArrayMesh) if steam != null else null
+	check(steam != null and steam_am != null and not (steam.draw_pass_1 is PrimitiveMesh),
+		"CookingStove steam draw_pass_1 is a zero-primitive ArrayMesh")
+	var steam_tris := 0
+	if steam_am != null:
+		var s_arr := steam_am.surface_get_arrays(0)
+		var s_verts: PackedVector3Array = s_arr[Mesh.ARRAY_VERTEX]
+		var s_norms: PackedVector3Array = s_arr[Mesh.ARRAY_NORMAL]
+		var s_uvs: PackedVector2Array = s_arr[Mesh.ARRAY_TEX_UV]
+		steam_tris = floori(float(s_verts.size()) / 3.0)
+		check_eq(steam_tris, 2, "CookingStove steam card has exact 2 triangles")
+		var s_min := Vector3(INF, INF, INF)
+		var s_max := Vector3(-INF, -INF, -INF)
+		for v in s_verts:
+			s_min = s_min.min(v)
+			s_max = s_max.max(v)
+		check(s_min.distance_to(Vector3(-0.16, -0.16, 0.0)) < 1e-5 and s_max.distance_to(Vector3(0.16, 0.16, 0.0)) < 1e-5,
+			"CookingStove steam card spans 0.32x0.32 (got %s..%s)" % [str(s_min), str(s_max)])
+		var s_bad_n := 0
+		for nv in s_norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+				s_bad_n += 1
+		check_eq(s_bad_n, 0, "CookingStove steam card normals are finite unit (0, 0, 1)")
+		check_eq(s_uvs.size(), 6, "CookingStove steam card carries 6 [0..1] UVs")
+		var s_mat := steam_am.surface_get_material(0) as StandardMaterial3D
+		check(s_mat != null and s_mat.albedo_texture is ImageTexture,
+			"CookingStove steam card surface 0 carries feathered ImageTexture material")
+
+	check_near(stove.get_cook_ready_pulse(), 0.0, 0.001, "cook_ready_pulse starts at 0.0 when stove is empty")
+	check(stove.place_food({"id": &"azure_snapper", "name": "Azure Snapper", "heal": 35.0}),
+		"place fish for sear-ready pulse test")
+	stove.step(1.0)
+	check_eq(stove.cook_state, &"raw", "fish remains raw at 1.0 s")
+	check_near(stove.get_cook_ready_pulse(), 0.0, 0.001, "cook_ready_pulse stays 0.0 while raw")
+
+	var hearth_light := stove.get_node_or_null(^"HearthLight") as OmniLight3D
+	stove.step(CookingStove.COOK_TIME)
+	check_eq(stove.cook_state, &"cooked", "fish transitions raw -> cooked")
+	check_near(stove.get_cook_ready_pulse(), 1.0, 0.001,
+		"raw -> cooked transition sets get_cook_ready_pulse() == 1.0")
+	var peak_energy := hearth_light.light_energy if hearth_light != null else 0.0
+
+	stove.step(0.425)
+	check_near(stove.get_cook_ready_pulse(), 0.5, 0.01,
+		"cook_ready_pulse decays halfway after 0.425 s (%.3f)" % stove.get_cook_ready_pulse())
+	stove.step(0.45)
+	check_near(stove.get_cook_ready_pulse(), 0.0, 0.001,
+		"cook_ready_pulse decays cleanly to 0.0 after 0.85 s")
+	var settled_energy := hearth_light.light_energy if hearth_light != null else 0.0
+	check(hearth_light != null and peak_energy > settled_energy + 0.08,
+		"sear-ready flourish swells HearthLight catch-light (peak=%.3f -> settled=%.3f)" % [peak_energy, settled_energy])
+
+	# Verify take_food() resets cook_ready_pulse immediately even mid-flourish.
+	stove.take_food()
+	check(stove.place_food({"id": &"reef_grouper", "name": "Reef Grouper", "heal": 45.0}),
+		"place second fish for take_food pulse reset check")
+	stove.step(CookingStove.COOK_TIME + 0.1)
+	check_near(stove.get_cook_ready_pulse(), 1.0, 0.001, "second cooked transition triggers pulse == 1.0")
+	stove.take_food()
+	check_near(stove.get_cook_ready_pulse(), 0.0, 0.001, "take_food() clears cook_ready_pulse cleanly to 0.0")
+
+	# 3. FishingLine: 2-tri zero-primitive splash card & Catch-Leap Water Surge.
+	var rod := FishingLine.new()
+	add_child(rod)
+	var splash := rod.get_node_or_null(^"FishingSplashParticles") as GPUParticles3D
+	var splash_am := (splash.draw_pass_1 as ArrayMesh) if splash != null else null
+	check(splash != null and splash_am != null and not (splash.draw_pass_1 is PrimitiveMesh),
+		"FishingLine splash draw_pass_1 is a zero-primitive ArrayMesh")
+	var splash_tris := 0
+	if splash_am != null:
+		var fl_arr := splash_am.surface_get_arrays(0)
+		var fl_verts: PackedVector3Array = fl_arr[Mesh.ARRAY_VERTEX]
+		var fl_norms: PackedVector3Array = fl_arr[Mesh.ARRAY_NORMAL]
+		var fl_uvs: PackedVector2Array = fl_arr[Mesh.ARRAY_TEX_UV]
+		splash_tris = floori(float(fl_verts.size()) / 3.0)
+		check_eq(splash_tris, 2, "FishingLine splash card has exact 2 triangles")
+		var f_min := Vector3(INF, INF, INF)
+		var f_max := Vector3(-INF, -INF, -INF)
+		for v in fl_verts:
+			f_min = f_min.min(v)
+			f_max = f_max.max(v)
+		check(f_min.distance_to(Vector3(-0.10, -0.15, 0.0)) < 1e-5 and f_max.distance_to(Vector3(0.10, 0.15, 0.0)) < 1e-5,
+			"FishingLine splash card spans 0.20x0.30 (got %s..%s)" % [str(f_min), str(f_max)])
+		var f_bad_n := 0
+		for nv in fl_norms:
+			if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+				f_bad_n += 1
+		check_eq(f_bad_n, 0, "FishingLine splash card normals are finite unit (0, 0, 1)")
+		check_eq(fl_uvs.size(), 6, "FishingLine splash card carries 6 [0..1] UVs")
+		var f_mat := splash_am.surface_get_material(0) as StandardMaterial3D
+		check(f_mat != null and f_mat.albedo_texture is ImageTexture,
+			"FishingLine splash card surface 0 carries droplet ImageTexture material")
+
+	check_eq(rod.get_catch_splash_count(), 0, "catch_splash_count starts at 0")
+	for catch_idx in 2:
+		check(rod.cast_line(Vector3.ZERO, Vector3.FORWARD, 8.0), "cast #%d succeeds" % (catch_idx + 1))
+		rod._bite_timer = 0.01
+		rod.step(0.05, Vector3.ZERO, false)
+		rod.fish_fighting = false
+		rod._fight_timer = 5.0
+		rod.distance_out = 1.25
+		rod.step(0.05, Vector3.ZERO, true)
+		check_eq(rod.get_catch_splash_count(), catch_idx + 1,
+			"catching fish #%d increments get_catch_splash_count()" % (catch_idx + 1))
+		check(splash != null and splash.emitting,
+			"catching fish #%d triggers FishingSplashParticles surge" % (catch_idx + 1))
+
+	# 4. Source-file audit: 0 PrimitiveMesh .new( occurrences & 0 non-ASCII chars across target scripts.
+	var prim_re := RegEx.new()
+	prim_re.compile("(QuadMesh|BoxMesh|SphereMesh|CylinderMesh|CapsuleMesh|PlaneMesh|PrismMesh|TorusMesh)\\s*\\.new\\(")
+	var audit_paths: Array[String] = [
+		"res://src/ocean/underwater.gd",
+		"res://src/ocean/crest_spray.gd",
+		"res://src/downtime/cooking.gd",
+		"res://src/downtime/fishing.gd",
+	]
+	var total_prim_hits := 0
+	var total_non_ascii := 0
+	for path in audit_paths:
+		var src := FileAccess.get_file_as_string(path)
+		check(src.length() > 200, "source file loads cleanly for audit: %s" % path)
+		var prim_matches := prim_re.search_all(src)
+		check_eq(prim_matches.size(), 0, "%s contains 0 PrimitiveMesh .new() calls" % path)
+		total_prim_hits += prim_matches.size()
+		var bad_ascii := 0
+		for ci in src.length():
+			if src.unicode_at(ci) >= 128:
+				bad_ascii += 1
+		check_eq(bad_ascii, 0, "%s contains 0 non-ASCII characters" % path)
+		total_non_ascii += bad_ascii
+
+	print("    Q28B zero-prim+downtime: ScreenPass=%d tris, SteamCard=%d tris, SplashCard=%d tris, catch_splashes=%d, audit_prims=%d, audit_non_ascii=%d" % [
+		uw_tris, steam_tris, splash_tris, rod.get_catch_splash_count(), total_prim_hits, total_non_ascii
+	])
+
+	# 5. Clean teardown with 0 leaks / 0 orphan nodes.
+	stove.queue_free()
+	rod.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	check(not is_instance_valid(stove) and not is_instance_valid(rod),
+		"Q28B CookingStove and FishingLine freed cleanly")
+	var orphans_after := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+	check(orphans_after <= orphans_before,
+		"Q28B teardown leaves 0 orphan nodes (before=%d, after=%d)" % [orphans_before, orphans_after])
+
 
 
 

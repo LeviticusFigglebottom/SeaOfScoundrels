@@ -1063,22 +1063,24 @@ static func _build_bard_shanty_motes() -> GPUParticles3D:
 	proc.gravity = Vector3(0.0, 0.18, 0.0)
 	proc.damping_min = 0.35
 	proc.damping_max = 0.65
-	proc.scale_min = 0.55
+	proc.angle_min = -12.0
+	proc.angle_max = 12.0
+	proc.scale_min = 0.65
 	proc.scale_max = 1.10
 	var sc_curve := Curve.new()
-	sc_curve.add_point(Vector2(0.0, 0.25))
+	sc_curve.add_point(Vector2(0.0, 0.35))
 	sc_curve.add_point(Vector2(0.28, 1.0))
-	sc_curve.add_point(Vector2(1.0, 0.05))
+	sc_curve.add_point(Vector2(1.0, 0.15))
 	var sc_tex := CurveTexture.new()
 	sc_tex.curve = sc_curve
 	proc.scale_curve = sc_tex
 	var grad := Gradient.new()
 	grad.offsets = PackedFloat32Array([0.0, 0.22, 0.68, 1.0])
 	grad.colors = PackedColorArray([
-		Color(1.0, 0.94, 0.68, 0.0),
-		Color(1.0, 0.85, 0.38, 0.78),
-		Color(1.0, 0.68, 0.22, 0.42),
-		Color(0.95, 0.50, 0.12, 0.0),
+		Color(1.0, 0.96, 0.80, 0.0),
+		Color(1.0, 0.88, 0.44, 0.88),
+		Color(0.98, 0.70, 0.24, 0.50),
+		Color(0.92, 0.48, 0.12, 0.0),
 	])
 	var ramp := GradientTexture1D.new()
 	ramp.width = 24
@@ -1086,47 +1088,7 @@ static func _build_bard_shanty_motes() -> GPUParticles3D:
 	proc.color_ramp = ramp
 	p.process_material = proc
 
-	var radial_grad := Gradient.new()
-	radial_grad.offsets = PackedFloat32Array([0.0, 0.38, 0.76, 1.0])
-	radial_grad.colors = PackedColorArray([
-		Color(1.0, 0.98, 0.86, 1.0),
-		Color(1.0, 0.88, 0.44, 0.68),
-		Color(1.0, 0.70, 0.24, 0.18),
-		Color(1.0, 0.55, 0.12, 0.0),
-	])
-	var mote_tex := GradientTexture2D.new()
-	mote_tex.width = 24
-	mote_tex.height = 24
-	mote_tex.fill = GradientTexture2D.FILL_RADIAL
-	mote_tex.fill_from = Vector2(0.5, 0.5)
-	mote_tex.fill_to = Vector2(0.5, 0.0)
-	mote_tex.gradient = radial_grad
-
-	# Zero-primitive sculpted 2-triangle billboard ArrayMesh card.
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var h := 0.055
-	var n := Vector3(0.0, 0.0, 1.0)
-	var v0 := Vector3(-h, -h, 0.0)
-	var v1 := Vector3(h, -h, 0.0)
-	var v2 := Vector3(h, h, 0.0)
-	var v3 := Vector3(-h, h, 0.0)
-	st.set_normal(n); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
-	st.set_normal(n); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
-	st.set_normal(n); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
-	st.set_normal(n); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
-	st.set_normal(n); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
-	st.set_normal(n); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
-	var card_mesh := st.commit()
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.vertex_color_use_as_albedo = true
-	mat.albedo_texture = mote_tex
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	card_mesh.surface_set_material(0, mat)
-	p.draw_pass_1 = card_mesh
+	p.draw_pass_1 = ToolMeshes.get_shanty_note_particle_mesh()
 	p.emitting = true
 	return p
 
@@ -1976,7 +1938,7 @@ static func _build_tavern_grog_keg_mesh() -> ArrayMesh:
 
 
 static func _build_beacon_halo_mesh() -> ArrayMesh:
-	# Faceted 1x subdivided crystal icosphere (80 tris, radius = 1.25 m) — zero raw SphereMesh!
+	# Faceted 1x subdivided crystal icosphere (80 tris, radius = 1.25 m) -- zero raw SphereMesh!
 	var phi := (1.0 + sqrt(5.0)) * 0.5
 	var raw_v: Array[Vector3] = [
 		Vector3(-1.0, phi, 0.0), Vector3(1.0, phi, 0.0), Vector3(-1.0, -phi, 0.0), Vector3(1.0, -phi, 0.0),

@@ -103,6 +103,8 @@ var _line_mat: StandardMaterial3D = null
 var _splash_particles: GPUParticles3D = null
 var _splash_tex: ImageTexture = null
 var _splash_mat: StandardMaterial3D = null
+var _splash_quad: ArrayMesh = null
+var _catch_splash_count: int = 0
 
 var _leaping_fish: MeshInstance3D = null
 var _fish_body_mat: StandardMaterial3D = null
@@ -141,6 +143,8 @@ func _exit_tree() -> void:
 		_splash_particles.visible = false
 		_splash_particles.draw_pass_1 = null
 		_splash_particles.process_material = null
+	if _splash_quad != null and _splash_quad.get_surface_count() > 0:
+		_splash_quad.surface_set_material(0, null)
 	if _line_mesh != null:
 		_line_mesh.clear_surfaces()
 	if _line_mesh_inst != null and is_instance_valid(_line_mesh_inst):
@@ -175,8 +179,11 @@ func _exit_tree() -> void:
 	_night_lure_mat = null
 	_night_lure_intensity = 0.0
 	_rod_mat = null
+	_splash_particles = null
 	_splash_tex = null
 	_splash_mat = null
+	_splash_quad = null
+	_catch_splash_count = 0
 	_fish_body_mat = null
 	_fish_eye_mat = null
 
@@ -199,6 +206,11 @@ func get_night_lure_intensity() -> float:
 ## Return the current horizontal expansion scale of the concentric water ripple rings.
 func get_ripple_scale() -> float:
 	return _ripple_scale
+
+
+## Return the total number of catch-leap water surge splashes triggered.
+func get_catch_splash_count() -> int:
+	return _catch_splash_count
 
 
 ## Return the world-space position of the flexing bamboo fishing rod's tip eyelet.
@@ -374,8 +386,9 @@ func step(delta: float, caster_pos: Vector3, reeling: bool) -> void:
 		cancel_cast()
 		_spawn_leaping_fish(caught, leap_origin, caster_pos + Vector3(0.0, 1.15, 0.0))
 		if Ocean.current != null:
-			Ocean.current.add_foam(leap_origin, 1.05, 0.75)
+			Ocean.current.add_foam(leap_origin, 1.85, 0.92)
 		_trigger_splash_burst(leap_origin)
+		_catch_splash_count += 1
 		Audio.play_sfx(&"splash_small", caster_pos)
 		Game.post_notice("Caught a %s!" % String(caught["name"]))
 		fish_caught.emit(caught)
@@ -1091,9 +1104,7 @@ func _build_splash_particles() -> void:
 	ramp.gradient = grad
 	proc.color_ramp = ramp
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.20, 0.30)
-	quad.material = _splash_mat
+	_splash_quad = _build_quad_card_mesh(Vector2(0.20, 0.30), _splash_mat)
 
 	_splash_particles = GPUParticles3D.new()
 	_splash_particles.name = "FishingSplashParticles"
@@ -1106,10 +1117,39 @@ func _build_splash_particles() -> void:
 	_splash_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_splash_particles.visibility_aabb = AABB(Vector3(-3.0, -1.5, -3.0), Vector3(6.0, 5.0, 6.0))
 	_splash_particles.process_material = proc
-	_splash_particles.draw_pass_1 = quad
+	_splash_particles.draw_pass_1 = _splash_quad
 	_splash_particles.emitting = false
 	_splash_particles.top_level = true
 	add_child(_splash_particles)
+
+
+## Zero-primitive 2-tri billboard quad card spanning [-w/2..w/2] x [-h/2..h/2] at z = 0.
+static func _build_quad_card_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	var nrm := Vector3(0.0, 0.0, 1.0)
+	var p_tl := Vector3(-hw, hh, 0.0)
+	var p_tr := Vector3(hw, hh, 0.0)
+	var p_br := Vector3(hw, -hh, 0.0)
+	var p_bl := Vector3(-hw, -hh, 0.0)
+	var uv_tl := Vector2(0.0, 0.0)
+	var uv_tr := Vector2(1.0, 0.0)
+	var uv_br := Vector2(1.0, 1.0)
+	var uv_bl := Vector2(0.0, 1.0)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_tr); st.add_vertex(p_tr)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+
+	st.set_normal(nrm); st.set_uv(uv_tl); st.add_vertex(p_tl)
+	st.set_normal(nrm); st.set_uv(uv_br); st.add_vertex(p_br)
+	st.set_normal(nrm); st.set_uv(uv_bl); st.add_vertex(p_bl)
+	var mesh := st.commit()
+	if mat != null and mesh.get_surface_count() > 0:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 func _trigger_splash_burst(world_pos: Vector3) -> void:

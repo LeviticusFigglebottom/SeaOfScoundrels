@@ -44,7 +44,7 @@ static var _fluke_mesh: ArrayMesh = null
 static var _whale_mat: StandardMaterial3D = null
 static var _spray_tex: ImageTexture = null
 static var _spray_mat: StandardMaterial3D = null
-static var _spray_quad: QuadMesh = null
+static var _spray_quad: ArrayMesh = null
 static var _curtain_mesh: ArrayMesh = null
 static var _curtain_mat: StandardMaterial3D = null
 static var _spout_puff_mesh: ArrayMesh = null
@@ -95,8 +95,8 @@ static func spawn_breach(parent: Node, world_pos: Vector3, heading_yaw: float = 
 
 ## Release all statically cached whale meshes, materials, and spray textures cleanly.
 static func clear_shared_cache() -> void:
-	if _spray_quad != null:
-		_spray_quad.material = null
+	if _spray_quad != null and _spray_quad.get_surface_count() > 0:
+		_spray_quad.surface_set_material(0, null)
 	if _spray_mat != null:
 		_spray_mat.albedo_texture = null
 	_body_mesh = null
@@ -686,9 +686,7 @@ static func _ensure_shared_assets() -> void:
 		_spray_mat.vertex_color_use_as_albedo = true
 		_spray_mat.albedo_texture = _spray_tex
 	if _spray_quad == null:
-		_spray_quad = QuadMesh.new()
-		_spray_quad.size = Vector2(1.4, 1.4)
-		_spray_quad.material = _spray_mat
+		_spray_quad = _build_quad_card_mesh(Vector2(1.4, 1.4), _spray_mat)
 	if _curtain_mat == null:
 		_curtain_mat = StandardMaterial3D.new()
 		_curtain_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -720,6 +718,28 @@ static func _ensure_shared_assets() -> void:
 		_flipper_r_mesh = _build_whale_flipper_mesh(1.0)
 	if _fluke_mesh == null:
 		_fluke_mesh = _build_whale_fluke_mesh()
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 static func _make_spray_puff_texture() -> ImageTexture:

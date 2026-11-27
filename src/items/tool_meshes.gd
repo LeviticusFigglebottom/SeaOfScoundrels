@@ -118,14 +118,16 @@ static var _fp_hand_mat_cache: Dictionary = {}
 ## Lazy WeakRef caches of shared held-lantern atmospheric halo mesh & shader (zero shutdown leaks).
 static var _lantern_halo_mesh: WeakRef = null
 static var _lantern_halo_shader: WeakRef = null
-## Lazy WeakRef caches of Q14A sculpted shanty notes, spyglass lens glint & cutlass blade gleam assets.
+## Lazy WeakRef caches of Q14A/Q28A sculpted shanty notes, spyglass lens glint & cutlass blade gleam assets.
 static var _shanty_note_mesh_ref: WeakRef = null
 static var _shanty_note_mat_ref: WeakRef = null
+static var _shanty_note_particle_mesh_ref: WeakRef = null
+static var _shanty_note_particle_mat_ref: WeakRef = null
 static var _spyglass_glint_mesh_ref: WeakRef = null
 static var _cutlass_gleam_mesh_ref: WeakRef = null
 
 
-## Clear cached shared PBR texture, hand mesh, lantern halo, and Q14A VFX caches cleanly on teardown.
+## Clear cached shared PBR texture, hand mesh, lantern halo, and Q14A/Q28A VFX caches cleanly on teardown.
 static func clear_shared_cache() -> void:
 	_pbr_tex_cache.clear()
 	_fp_hand_mesh_cache.clear()
@@ -134,6 +136,8 @@ static func clear_shared_cache() -> void:
 	_lantern_halo_shader = null
 	_shanty_note_mesh_ref = null
 	_shanty_note_mat_ref = null
+	_shanty_note_particle_mesh_ref = null
+	_shanty_note_particle_mat_ref = null
 	_spyglass_glint_mesh_ref = null
 	_cutlass_gleam_mesh_ref = null
 
@@ -3494,7 +3498,7 @@ static func _get_shanty_note_mesh() -> ArrayMesh:
 		var existing: Variant = _shanty_note_mesh_ref.get_ref()
 		if existing is ArrayMesh:
 			return existing as ArrayMesh
-	var built := _build_shanty_note_mesh()
+	var built := _build_shanty_note_mesh(1.0)
 	_shanty_note_mesh_ref = weakref(built)
 	return built
 
@@ -3513,6 +3517,39 @@ static func _get_shanty_note_mat() -> StandardMaterial3D:
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
 	_shanty_note_mat_ref = weakref(mat)
+	return mat
+
+
+## Return the WeakRef-cached scaled (~2.6x) 39-triangle sculpted golden eighth-note
+## ArrayMesh with a zero-VRAM unshaded additive sRGB StandardMaterial3D bound on surface 0
+## for AI crew, Captain, and Tavern Bard shanty GPUParticles3D emitters.
+static func get_shanty_note_particle_mesh() -> ArrayMesh:
+	if _shanty_note_particle_mesh_ref != null:
+		var existing: Variant = _shanty_note_particle_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_shanty_note_mesh(2.6)
+	built.surface_set_material(0, _get_shanty_note_particle_mat())
+	_shanty_note_particle_mesh_ref = weakref(built)
+	return built
+
+
+static func _get_shanty_note_particle_mat() -> StandardMaterial3D:
+	if _shanty_note_particle_mat_ref != null:
+		var existing: Variant = _shanty_note_particle_mat_ref.get_ref()
+		if existing is StandardMaterial3D:
+			return existing as StandardMaterial3D
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	mat.albedo_texture = null
+	_shanty_note_particle_mat_ref = weakref(mat)
 	return mat
 
 
@@ -3583,7 +3620,7 @@ static func _emit_xy_vfx_tri(
 ## Build a sculpted 39-triangle eighth-note musical flourish ArrayMesh:
 ## tilted oval notehead (24 tris) + vertical stem (6 tris) + curved pennant flag (9 tris),
 ## with exact finite (0, 0, 1) unit normals and warm gilded gold/ivory vertex colors.
-static func _build_shanty_note_mesh() -> ArrayMesh:
+static func _build_shanty_note_mesh(scale_factor: float = 1.0) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
@@ -3593,7 +3630,7 @@ static func _build_shanty_note_mesh() -> ArrayMesh:
 
 	# 1. Tilted oval notehead (8 inner core tris + 16 outer bevel ring tris = 24 tris).
 	const SEGS := 8
-	var hc := Vector3(-0.011, -0.020, 0.0)
+	var hc := Vector3(-0.011, -0.020, 0.0) * scale_factor
 	var tilt := deg_to_rad(24.0)
 	var ct := cos(tilt)
 	var sa := sin(tilt)
@@ -3603,10 +3640,10 @@ static func _build_shanty_note_mesh() -> ArrayMesh:
 		var ang := float(k) / float(SEGS) * TAU
 		var ca := cos(ang)
 		var sn := sin(ang)
-		var ix := ca * 0.0085
-		var iy := sn * 0.0058
-		var ox := ca * 0.0160
-		var oy := sn * 0.0112
+		var ix := ca * 0.0085 * scale_factor
+		var iy := sn * 0.0058 * scale_factor
+		var ox := ca * 0.0160 * scale_factor
+		var oy := sn * 0.0112 * scale_factor
 		in_ring.append(Vector3(hc.x + ix * ct - iy * sa, hc.y + ix * sa + iy * ct, 0.0))
 		out_ring.append(Vector3(hc.x + ox * ct - oy * sa, hc.y + ox * sa + oy * ct, 0.0))
 	for k in SEGS:
@@ -3617,10 +3654,10 @@ static func _build_shanty_note_mesh() -> ArrayMesh:
 
 	# 2. Tapered vertical stem rising from notehead right edge (3 quads = 6 tris).
 	var stem_rows: Array[Array] = [
-		[Vector3(0.0004, -0.017, 0.0), Vector3(0.0052, -0.017, 0.0), COL_GOLD_RIM],
-		[Vector3(0.0005, 0.000, 0.0), Vector3(0.0050, 0.000, 0.0), COL_GOLD_HI],
-		[Vector3(0.0006, 0.018, 0.0), Vector3(0.0048, 0.018, 0.0), COL_IVORY_GLOW],
-		[Vector3(0.0008, 0.036, 0.0), Vector3(0.0046, 0.036, 0.0), COL_GOLD_HI],
+		[Vector3(0.0004, -0.017, 0.0) * scale_factor, Vector3(0.0052, -0.017, 0.0) * scale_factor, COL_GOLD_RIM],
+		[Vector3(0.0005, 0.000, 0.0) * scale_factor, Vector3(0.0050, 0.000, 0.0) * scale_factor, COL_GOLD_HI],
+		[Vector3(0.0006, 0.018, 0.0) * scale_factor, Vector3(0.0048, 0.018, 0.0) * scale_factor, COL_IVORY_GLOW],
+		[Vector3(0.0008, 0.036, 0.0) * scale_factor, Vector3(0.0046, 0.036, 0.0) * scale_factor, COL_GOLD_HI],
 	]
 	for r in range(stem_rows.size() - 1):
 		var l0: Vector3 = stem_rows[r][0] as Vector3
@@ -3634,19 +3671,19 @@ static func _build_shanty_note_mesh() -> ArrayMesh:
 
 	# 3. Curved musical pennant flag sweeping from stem top into pointed flourish tail (9 tris).
 	var flag_top: Array[Vector3] = [
-		Vector3(0.0046, 0.036, 0.0),
-		Vector3(0.0145, 0.030, 0.0),
-		Vector3(0.0225, 0.020, 0.0),
-		Vector3(0.0255, 0.008, 0.0),
-		Vector3(0.0220, -0.003, 0.0),
-		Vector3(0.0135, -0.010, 0.0),
+		Vector3(0.0046, 0.036, 0.0) * scale_factor,
+		Vector3(0.0145, 0.030, 0.0) * scale_factor,
+		Vector3(0.0225, 0.020, 0.0) * scale_factor,
+		Vector3(0.0255, 0.008, 0.0) * scale_factor,
+		Vector3(0.0220, -0.003, 0.0) * scale_factor,
+		Vector3(0.0135, -0.010, 0.0) * scale_factor,
 	]
 	var flag_bot: Array[Vector3] = [
-		Vector3(0.0046, 0.026, 0.0),
-		Vector3(0.0115, 0.022, 0.0),
-		Vector3(0.0175, 0.014, 0.0),
-		Vector3(0.0205, 0.005, 0.0),
-		Vector3(0.0185, -0.003, 0.0),
+		Vector3(0.0046, 0.026, 0.0) * scale_factor,
+		Vector3(0.0115, 0.022, 0.0) * scale_factor,
+		Vector3(0.0175, 0.014, 0.0) * scale_factor,
+		Vector3(0.0205, 0.005, 0.0) * scale_factor,
+		Vector3(0.0185, -0.003, 0.0) * scale_factor,
 	]
 	var flag_cols: Array[Color] = [
 		COL_IVORY_GLOW,
