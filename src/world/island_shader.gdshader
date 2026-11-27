@@ -477,8 +477,9 @@ void fragment() {
 		// Fine embedded trail gravel & weathered sandstone chips.
 		col_path = mix(col_path, path_dirt_color * vec3(1.18, 1.12, 1.02), smoothstep(0.62, 0.88, pebble_n) * 0.34);
 
-		// Organic domain-warped stepping stones & coastal cobbles (evaluated ONLY on trail pixels < 115 m!).
-		float cobble_fade = smoothstep(115.0, 16.0, v_cam_dist);
+		// Organic domain-warped procedural stepping stones (fallback only when baked PBR terrain_dirt
+		// textures are disabled, avoiding mismatched Voronoi ghost-stamping over Pass Q3A pebbles & 3D flagstones!).
+		float cobble_fade = use_terrain_textures ? 0.0 : smoothstep(115.0, 16.0, v_cam_dist);
 		if (cobble_fade > 0.01) {
 			// Domain warp bends Voronoi borders into chiseled organic weathered stones!
 			vec2 cob_warp = vec2(fbm2(xz * 1.65) - 0.5, fbm2(xz * 1.65 + vec2(7.3, 4.1)) - 0.5) * 0.44;
@@ -693,13 +694,16 @@ void fragment() {
 		}
 		if (w_dirt > 0.06) {
 			vec3 da; vec3 dn_o;
-			// Calibrated for Pass Q3A baked stepping-stone trail PBR: real footstep scale (~5 m/tile) taking
-			// the lead cleanly (~78%) with zero double-layered stone overlap!
-			sample_stochastic_ground(tex_dirt_albedo, tex_dirt_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 1.16, 0.89, near_detail * 0.36, da, dn_o);
-			vec3 da_rich = pow(max(da, vec3(0.001)), vec3(1.07)) * mix(1.0, path_mortar_ao, 0.35);
-			float da_grit = clamp(dot(da, vec3(0.299, 0.587, 0.114)) * 1.38, 0.72, 1.20);
-			vec3 stone_with_grit = ground_col * mix(1.0, da_grit, 0.68);
-			vec3 trail_pbr = mix(da_rich, stone_with_grit, clamp(path_cobble_top * 0.24 + 0.08, 0.0, 0.34));
+			// Calibrated for Pass Q3A baked pebbled dirt trail PBR: real footstep scale (~5 m/tile) with
+			// subtle warm compacted-earth wear variation and zero conflicting flat Voronoi stencil overlap!
+			sample_stochastic_ground(tex_dirt_albedo, tex_dirt_normal, xz, terrain_tex_scale * 1.42, macro_n, brush_n, tex_nrm_str * 1.18, 0.89, near_detail * 0.44, da, dn_o);
+			vec3 da_rich = pow(max(da, vec3(0.001)), vec3(1.06));
+			float da_grit = clamp(dot(da, vec3(0.299, 0.587, 0.114)) * 1.38, 0.74, 1.18);
+			vec3 earth_wear = ground_col * mix(1.0, da_grit, 0.65);
+			vec3 trail_pbr = mix(da_rich, earth_wear, 0.14);
+			if (volc > 0.01) {
+				trail_pbr = mix(trail_pbr, trail_pbr * vec3(0.46, 0.42, 0.42), volc * 0.65);
+			}
 			tex_alb_acc += trail_pbr * w_dirt;
 			tex_nrm_acc += dn_o * w_dirt;
 			tex_w_acc += w_dirt;
@@ -753,12 +757,13 @@ void fragment() {
 	rough = mix(rough, mix(0.14, 0.30, grain_n * 0.5 + pebble_n * 0.5), wet_mask);
 	rough = mix(rough, mix(0.86, 0.64, sand_wave * 0.55 + micro_gloss * 0.45), t_dry_in * (1.0 - t_grass_in));
 	rough = mix(rough, mix(0.92, 0.56, micro_gloss * (1.0 - soil_pocket * 0.75)), t_grass_in);
-	rough = mix(rough, mix(0.94, 0.52, path_cobble_top * 0.80 + micro_gloss * 0.20), path_edge_w);
+	float dry_trail_stone = use_terrain_textures ? micro_gloss : (path_cobble_top * 0.80 + micro_gloss * 0.20);
+	rough = mix(rough, mix(0.95, 0.76, dry_trail_stone), path_edge_w);
 	rough = mix(rough, mix(0.95, 0.58, (1.0 - crevice_shade) * 0.55 + micro_gloss * 0.45), cliff_mask);
 	rough = mix(rough, mix(0.86, 0.64, micro_gloss), ledge_moss);
 
 	// Tropical storm rain-wetness & pooling puddles driven by global sea_amp_scale (100% 0.0 in calm/sunny weather!).
-	// Darkens porous soaked sand/cobbles/stone physically, flattens glassy rainwater puddles between raised cobbles,
+	// Darkens porous soaked sand/cobbles/stone physically, flattens glassy rainwater puddles between raised pebbles,
 	// and drops roughness so warm harbour lanterns, campfires & storm-sky Fresnel gleam authentically across wet ground!
 	float rain_wet = smoothstep(1.55, 2.25, sea_amp_scale) * smoothstep(-0.15, 0.45, h);
 	float rain_spec_boost = 0.0;
@@ -767,8 +772,9 @@ void fragment() {
 		float rain_puddle = smoothstep(0.45, 0.72, (1.0 - brush_n) * 0.58 + (1.0 - tussock_n) * 0.42) * flat_ground * (1.0 - t_grass_in * 0.58) * (1.0 - cliff_mask);
 		float soak_porous = clamp(path_edge_w * 0.92 + cliff_mask * 0.55 + (1.0 - t_grass_in) * 0.52 + rain_puddle * 0.42, 0.0, 1.0);
 		albedo *= mix(1.0, mix(0.85, 0.74, soak_porous), rain_wet);
-		// Rain-slicked rock & wet beach -> glistening puddles & damp cobblestones.
-		float storm_rough_target = mix(mix(0.44, 0.36, cliff_mask * (1.0 - crevice_shade * 0.5)), 0.22, clamp(path_edge_w * 0.65 + path_cobble_top * 0.35, 0.0, 1.0));
+		// Rain-slicked rock & wet beach -> glistening puddles & damp trail pebbles.
+		float wet_trail_w = clamp(path_edge_w * (0.72 + 0.28 * dry_trail_stone) + path_cobble_top * 0.35, 0.0, 1.0);
+		float storm_rough_target = mix(mix(0.44, 0.36, cliff_mask * (1.0 - crevice_shade * 0.5)), 0.22, wet_trail_w);
 		storm_rough_target = mix(storm_rough_target, 0.15, rain_puddle);
 		rough = mix(rough, min(rough, storm_rough_target), rain_wet * mix(0.76, 1.0, max(rain_puddle, path_edge_w * 0.85)));
 		final_n_world = normalize(mix(final_n_world, smooth_n, rain_puddle * rain_wet * 0.56));
@@ -783,7 +789,7 @@ void fragment() {
 	ALBEDO = albedo;
 	ROUGHNESS = clamp(rough, 0.12, 0.98);
 	METALLIC = 0.0;
-	SPECULAR = clamp(mix(mix(0.32, 0.42, path_cobble_top * 0.6 + (1.0 - rough) * 0.4), 0.58, wet_mask) + rain_spec_boost, 0.0, 0.64);
+	SPECULAR = clamp(mix(mix(0.28, 0.35, dry_trail_stone * 0.35 + (1.0 - rough) * 0.45), 0.58, wet_mask) + rain_spec_boost, 0.0, 0.64);
 	vec3 magma_col = mix(vec3(0.95, 0.18, 0.02), vec3(1.0, 0.56, 0.10), magma_core);
 	EMISSION = magma_col * magma_emit + aerial_col * (aerial_t * 0.075);
 	NORMAL = normalize((VIEW_MATRIX * vec4(final_n_world, 0.0)).xyz);
