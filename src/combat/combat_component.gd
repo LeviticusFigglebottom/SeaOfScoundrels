@@ -51,6 +51,18 @@ const COL_PARRY_STAR_CORE := Color(1.00, 0.99, 0.92, 1.0)
 const COL_PARRY_STAR_MID := Color(1.00, 0.86, 0.42, 1.0)
 const COL_PARRY_STAR_TIP := Color(0.00, 0.00, 0.00, 1.0)
 
+const GUN_MUZZLE_HALO_DURATION := 0.18
+const GUN_MUZZLE_HALO_PEAK_ENERGY := 1.75
+const GUN_MUZZLE_HALO_PISTOL_START_SCALE := 0.35
+const GUN_MUZZLE_HALO_PISTOL_END_SCALE := 0.85
+const GUN_MUZZLE_HALO_BLUNDER_START_SCALE := 0.48
+const GUN_MUZZLE_HALO_BLUNDER_END_SCALE := 1.15
+const GUN_MUZZLE_HALO_VISIBILITY_RANGE := 95.0
+const COL_GUN_MUZZLE_CORE := Color(1.00, 0.99, 0.92, 1.0)
+const COL_GUN_MUZZLE_INNER := Color(1.00, 0.86, 0.44, 1.0)
+const COL_GUN_MUZZLE_MID := Color(0.62, 0.28, 0.06, 1.0)
+const COL_GUN_MUZZLE_RIM := Color(0.00, 0.00, 0.00, 1.0)
+
 const WEAPONS := {
 	&"cutlass": {
 		"type": &"melee", "light_dmg": [18.0, 20.0, 28.0], "heavy_dmg": 44.0,
@@ -115,6 +127,7 @@ var _melee_sphere: SphereShape3D = SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
 var _active_vfx: Array[Node] = []
 var _slash_arcs: Array[Dictionary] = []
+var _gun_muzzle_halos: Array[Dictionary] = []
 var _parry_spark_mi: MeshInstance3D = null
 var _parry_spark_mat: StandardMaterial3D = null
 var _parry_spark_energy: float = 0.0
@@ -127,6 +140,7 @@ static var _flash_tex: GradientTexture2D = null
 static var _ember_tex: ImageTexture = null
 static var _slash_arc_mesh: ArrayMesh = null
 static var _parry_star_mesh: ArrayMesh = null
+static var _gun_muzzle_halo_mesh_ref: WeakRef = null
 
 
 func _init() -> void:
@@ -160,6 +174,7 @@ static func clear_shared_cache() -> void:
 	_ember_tex = null
 	_slash_arc_mesh = null
 	_parry_star_mesh = null
+	_gun_muzzle_halo_mesh_ref = null
 
 
 ## Alias for `clear_shared_cache()` releasing all statically cached CombatComponent VFX assets.
@@ -467,6 +482,7 @@ func _process(delta: float) -> void:
 			fp3.rotation_degrees += Vector3(9.5 * kick * tense, -7.0 * _recoil_sign * kick * tense, -11.0 * _recoil_sign * kick * tense)
 
 func _physics_process(delta: float) -> void:
+	step_gun_muzzle_halos(delta)
 	if pawn == null or pawn.dead:
 		return
 	_iframe_timer = maxf(0.0, _iframe_timer - delta)
@@ -778,7 +794,11 @@ func _fire_ranged(spec: Dictionary) -> bool:
 			hit_pos = _check_ranged_soft_targets(origin, dir, origin.distance_to(hit_pos), dmg, kb)
 		last_hit = hit_pos
 
-	_spawn_muzzle_puff(origin + base_dir * 0.6, Color(0.35, 0.95, 0.88, 0.85) if equipped_weapon == &"tide_staff" else Color(0.95, 0.88, 0.72, 0.78))
+	_spawn_muzzle_puff(
+		origin + base_dir * 0.6,
+		Color(0.35, 0.95, 0.88, 0.85) if equipped_weapon == &"tide_staff" else Color(0.95, 0.88, 0.72, 0.78),
+		equipped_weapon
+	)
 	ranged_fired.emit(equipped_weapon, origin, last_hit)
 	attack_started.emit(equipped_weapon)
 	return true
@@ -1030,17 +1050,28 @@ func _cleanup_vfx_node(fx_node: Node) -> void:
 		if child is GPUParticles3D:
 			var gp := child as GPUParticles3D
 			gp.emitting = false
-			if gp.draw_pass_1 is QuadMesh:
-				var qm := gp.draw_pass_1 as QuadMesh
-				if qm.material is StandardMaterial3D:
-					(qm.material as StandardMaterial3D).albedo_texture = null
-				qm.material = null
+			if gp.draw_pass_1 is ArrayMesh:
+				var am := gp.draw_pass_1 as ArrayMesh
+				if am.get_surface_count() > 0:
+					var sm := am.surface_get_material(0)
+					if sm is StandardMaterial3D:
+						(sm as StandardMaterial3D).albedo_texture = null
+					am.surface_set_material(0, null)
 			if gp.process_material is ParticleProcessMaterial:
 				var pm := gp.process_material as ParticleProcessMaterial
 				pm.color_ramp = null
 				pm.scale_curve = null
 			gp.draw_pass_1 = null
 			gp.process_material = null
+		elif child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			mi.visible = false
+			mi.material_override = null
+			mi.mesh = null
+			for hi in range(_gun_muzzle_halos.size() - 1, -1, -1):
+				if _gun_muzzle_halos[hi].get("node", null) == mi:
+					_gun_muzzle_halos[hi].clear()
+					_gun_muzzle_halos.remove_at(hi)
 	fx_node.queue_free()
 
 
@@ -1049,6 +1080,14 @@ func _cleanup_all_vfx() -> void:
 	_active_vfx.clear()
 	for fx in pending:
 		_cleanup_vfx_node(fx)
+	for entry in _gun_muzzle_halos:
+		var mi := entry.get("node", null) as MeshInstance3D
+		if mi != null and is_instance_valid(mi):
+			mi.visible = false
+			mi.material_override = null
+			mi.mesh = null
+		entry.clear()
+	_gun_muzzle_halos.clear()
 	var pending_arcs := _slash_arcs.duplicate()
 	_slash_arcs.clear()
 	for entry in pending_arcs:
@@ -1420,8 +1459,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	proc.color_ramp = ramp
 	sparks.process_material = proc
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.052, 0.36) if is_parry else (Vector2(0.044, 0.27) if is_heavy else Vector2(0.036, 0.20))
+	var spark_size := Vector2(0.052, 0.36) if is_parry else (Vector2(0.044, 0.27) if is_heavy else Vector2(0.036, 0.20))
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1430,8 +1468,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
 	mat.albedo_texture = _get_spark_texture()
-	quad.material = mat
-	sparks.draw_pass_1 = quad
+	sparks.draw_pass_1 = _build_quad_card_mesh(spark_size, mat)
 	fx_root.add_child(sparks)
 	sparks.restart()
 	sparks.emitting = true
@@ -1492,8 +1529,6 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	e_proc.color_ramp = e_ramp
 	embers.process_material = e_proc
 
-	var e_quad := QuadMesh.new()
-	e_quad.size = Vector2(0.085, 0.058)
 	var e_mat := StandardMaterial3D.new()
 	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1502,8 +1537,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	e_mat.vertex_color_use_as_albedo = true
 	e_mat.albedo_texture = _get_ember_texture()
-	e_quad.material = e_mat
-	embers.draw_pass_1 = e_quad
+	embers.draw_pass_1 = _build_quad_card_mesh(Vector2(0.085, 0.058), e_mat)
 	fx_root.add_child(embers)
 	embers.restart()
 	embers.emitting = true
@@ -1541,8 +1575,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	fproc.color_ramp = framp
 	flash.process_material = fproc
 
-	var fquad := QuadMesh.new()
-	fquad.size = Vector2(1.05, 1.05) if is_parry else (Vector2(0.58, 0.58) if is_heavy else Vector2(0.30, 0.30))
+	var flash_size := Vector2(1.05, 1.05) if is_parry else (Vector2(0.58, 0.58) if is_heavy else Vector2(0.30, 0.30))
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1551,8 +1584,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	fmat.vertex_color_use_as_albedo = true
 	fmat.albedo_texture = _get_flash_texture()
-	fquad.material = fmat
-	flash.draw_pass_1 = fquad
+	flash.draw_pass_1 = _build_quad_card_mesh(flash_size, fmat)
 	fx_root.add_child(flash)
 	flash.restart()
 	flash.emitting = true
@@ -1566,7 +1598,7 @@ func _spawn_clash_vfx(pos: Vector3, style: StringName = &"parried") -> void:
 	fx_root.add_child(cleanup)
 
 
-func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
+func _spawn_muzzle_puff(pos: Vector3, tint: Color, weapon_id: StringName = &"") -> void:
 	if not _can_spawn_vfx():
 		return
 	var host := pawn.get_parent() if pawn != null else null
@@ -1604,8 +1636,6 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	proc.color_ramp = mramp
 	p.process_material = proc
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.30, 0.30)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1613,11 +1643,53 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
 	mat.albedo_texture = _get_flash_texture()
-	quad.material = mat
-	p.draw_pass_1 = quad
+	p.draw_pass_1 = _build_quad_card_mesh(Vector2(0.30, 0.30), mat)
 	fx_root.add_child(p)
 	p.restart()
 	p.emitting = true
+
+	var resolved_weapon := weapon_id if weapon_id != &"" else equipped_weapon
+	if resolved_weapon != &"tide_staff":
+		var is_blunder := resolved_weapon == &"blunderbuss"
+		var start_scale := GUN_MUZZLE_HALO_BLUNDER_START_SCALE if is_blunder else GUN_MUZZLE_HALO_PISTOL_START_SCALE
+		var end_scale := GUN_MUZZLE_HALO_BLUNDER_END_SCALE if is_blunder else GUN_MUZZLE_HALO_PISTOL_END_SCALE
+		var halo_mat := StandardMaterial3D.new()
+		halo_mat.vertex_color_use_as_albedo = true
+		halo_mat.vertex_color_is_srgb = true
+		halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		halo_mat.billboard_keep_scale = true
+		halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		halo_mat.albedo_color = Color(
+			GUN_MUZZLE_HALO_PEAK_ENERGY,
+			GUN_MUZZLE_HALO_PEAK_ENERGY,
+			GUN_MUZZLE_HALO_PEAK_ENERGY,
+			1.0
+		)
+
+		var halo_mi := MeshInstance3D.new()
+		halo_mi.name = "GunMuzzleHalo"
+		halo_mi.mesh = _get_gun_muzzle_halo_mesh()
+		halo_mi.material_override = halo_mat
+		halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		halo_mi.visibility_range_end = GUN_MUZZLE_HALO_VISIBILITY_RANGE
+		halo_mi.extra_cull_margin = 1.2
+		halo_mi.scale = Vector3.ONE * start_scale
+		halo_mi.visible = true
+		fx_root.add_child(halo_mi)
+
+		_gun_muzzle_halos.append({
+			"node": halo_mi,
+			"mat": halo_mat,
+			"elapsed": 0.0,
+			"duration": GUN_MUZZLE_HALO_DURATION,
+			"start_scale": start_scale,
+			"end_scale": end_scale,
+			"energy": GUN_MUZZLE_HALO_PEAK_ENERGY,
+		})
 
 	_active_vfx.append(fx_root)
 	var cleanup := Timer.new()
@@ -1626,6 +1698,132 @@ func _spawn_muzzle_puff(pos: Vector3, tint: Color) -> void:
 	cleanup.autostart = true
 	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
 	fx_root.add_child(cleanup)
+
+
+## Return the most recently spawned active GunMuzzleHalo MeshInstance3D, or null.
+func get_active_gun_muzzle_halo() -> MeshInstance3D:
+	for i in range(_gun_muzzle_halos.size() - 1, -1, -1):
+		var mi := _gun_muzzle_halos[i].get("node", null) as MeshInstance3D
+		if mi != null and is_instance_valid(mi) and mi.visible:
+			return mi
+	return null
+
+
+## Return peak active GunMuzzleHalo additive bloom energy (0.0 when idle or faded).
+func get_gun_muzzle_halo_energy() -> float:
+	var peak := 0.0
+	for entry in _gun_muzzle_halos:
+		var mi := entry.get("node", null) as MeshInstance3D
+		if mi != null and is_instance_valid(mi) and mi.visible:
+			peak = maxf(peak, float(entry.get("energy", 0.0)))
+	return peak
+
+
+## Deterministically advance all active firearm GunMuzzleHalo expansion and fade curves.
+func step_gun_muzzle_halos(delta: float) -> void:
+	if _gun_muzzle_halos.is_empty():
+		return
+	var dt := maxf(delta, 0.0)
+	for i in range(_gun_muzzle_halos.size() - 1, -1, -1):
+		var entry: Dictionary = _gun_muzzle_halos[i]
+		var mi := entry.get("node", null) as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			entry.clear()
+			_gun_muzzle_halos.remove_at(i)
+			continue
+		var mat := entry.get("mat", null) as StandardMaterial3D
+		var dur := float(entry.get("duration", GUN_MUZZLE_HALO_DURATION))
+		var start_s := float(entry.get("start_scale", GUN_MUZZLE_HALO_PISTOL_START_SCALE))
+		var end_s := float(entry.get("end_scale", GUN_MUZZLE_HALO_PISTOL_END_SCALE))
+		var elapsed := float(entry.get("elapsed", 0.0)) + dt
+		entry["elapsed"] = elapsed
+		var u := clampf(elapsed / maxf(dur, 0.001), 0.0, 1.0)
+		if u >= 1.0:
+			mi.scale = Vector3.ONE * end_s
+			mi.visible = false
+			if mat != null:
+				mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+			entry["energy"] = 0.0
+			entry.clear()
+			_gun_muzzle_halos.remove_at(i)
+			continue
+		var expand_t := 1.0 - pow(1.0 - u, 2.0)
+		var decay := pow(1.0 - u, 1.6)
+		var cur_scale := lerpf(start_s, end_s, expand_t)
+		var cur_energy := GUN_MUZZLE_HALO_PEAK_ENERGY * decay
+		mi.visible = true
+		mi.scale = Vector3.ONE * cur_scale
+		if mat != null:
+			mat.albedo_color = Color(cur_energy, cur_energy, cur_energy, 1.0)
+		entry["energy"] = cur_energy
+
+
+static func _get_gun_muzzle_halo_mesh() -> ArrayMesh:
+	if _gun_muzzle_halo_mesh_ref != null:
+		var existing: Variant = _gun_muzzle_halo_mesh_ref.get_ref()
+		if existing is ArrayMesh:
+			return existing as ArrayMesh
+	var built := _build_gun_muzzle_halo_mesh()
+	_gun_muzzle_halo_mesh_ref = weakref(built)
+	return built
+
+
+static func _build_gun_muzzle_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri feathered radial incandescent powder-flash billboard ArrayMesh:
+	# 8 sectors x (1 inner fan tri + 2 mid ring tris + 3 outer skirt tris to 16-gon rim) = 48 tris.
+	# Concentric rings at INNER_R=0.22, MID_R=0.56, OUTER_R=1.0 -> pure Color(0, 0, 0, 1) rim,
+	# finite unit (0, 0, 1) normals, zero texture VRAM.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SECTORS := 8
+	const INNER_R := 0.22
+	const MID_R := 0.56
+	const OUTER_R := 1.0
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in SECTORS:
+		var a0 := TAU * float(i) / float(SECTORS)
+		var am := TAU * (float(i) + 0.5) / float(SECTORS)
+		var a1 := TAU * float(i + 1) / float(SECTORS)
+		var i0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var i1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var m0 := Vector3(cos(a0) * MID_R, sin(a0) * MID_R, 0.0)
+		var m1 := Vector3(cos(a1) * MID_R, sin(a1) * MID_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var om := Vector3(cos(am) * OUTER_R, sin(am) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner incandescent core wedge (8 tris).
+		_emit_parry_star_tri(st, ctr, COL_GUN_MUZZLE_CORE, i1, COL_GUN_MUZZLE_INNER, i0, COL_GUN_MUZZLE_INNER, FRONT_NORMAL)
+		# Golden-amber to fiery-ember mid band (16 tris).
+		_emit_parry_star_tri(st, i0, COL_GUN_MUZZLE_INNER, i1, COL_GUN_MUZZLE_INNER, m1, COL_GUN_MUZZLE_MID, FRONT_NORMAL)
+		_emit_parry_star_tri(st, i0, COL_GUN_MUZZLE_INNER, m1, COL_GUN_MUZZLE_MID, m0, COL_GUN_MUZZLE_MID, FRONT_NORMAL)
+		# Outer soft-feathered skirt fanning to 16-sided pure black rim (24 tris).
+		_emit_parry_star_tri(st, m0, COL_GUN_MUZZLE_MID, om, COL_GUN_MUZZLE_RIM, o0, COL_GUN_MUZZLE_RIM, FRONT_NORMAL)
+		_emit_parry_star_tri(st, m0, COL_GUN_MUZZLE_MID, m1, COL_GUN_MUZZLE_MID, om, COL_GUN_MUZZLE_RIM, FRONT_NORMAL)
+		_emit_parry_star_tri(st, m1, COL_GUN_MUZZLE_MID, o1, COL_GUN_MUZZLE_RIM, om, COL_GUN_MUZZLE_RIM, FRONT_NORMAL)
+	return st.commit()
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 # ==============================================================================

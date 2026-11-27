@@ -304,7 +304,7 @@ func test_ghost_ship_phase_shift_and_faction_emblems() -> void:
 	check(shift_to[0].x < -10.0, "Ghost Ship must relocate onto opposite (-X) flank (got x=%.1f)" % shift_to[0].x)
 	check(dist_to_island > mock_island.island_radius + 55.0, "phase destination must clear islands by > radius + 55 m (got %.1f m)" % dist_to_island)
 
-	# 3. Verify upgraded muzzle VFX uses feathered QuadMesh (no SphereMesh) and cleans up cleanly on _exit_tree().
+	# 3. Verify upgraded muzzle VFX uses feathered card mesh (no SphereMesh) and cleans up cleanly on _exit_tree().
 	var fx_ship := SLOOP_SCENE.instantiate() as Ship
 	fx_ship.enable_effects = true
 	_root.add_child(fx_ship)
@@ -315,9 +315,11 @@ func test_ghost_ship_phase_shift_and_faction_emblems() -> void:
 	check_eq(fx_ship._active_muzzle_vfx.size(), 1, "active muzzle VFX node tracked for cleanup")
 	var fx_root := fx_ship._active_muzzle_vfx[0]
 	var smoke_gp := fx_root.get_node_or_null(^"CannonSmoke") as GPUParticles3D
-	check(smoke_gp != null and smoke_gp.draw_pass_1 is QuadMesh, "cannon smoke uses billboarded QuadMesh instead of SphereMesh")
+	check(smoke_gp != null and (smoke_gp.draw_pass_1 is ArrayMesh or smoke_gp.draw_pass_1 is QuadMesh) and not (smoke_gp.draw_pass_1 is SphereMesh),
+		"cannon smoke uses billboarded card mesh instead of SphereMesh")
 	var flash_gp := fx_root.get_node_or_null(^"MuzzleFlashCore") as GPUParticles3D
-	check(flash_gp != null and flash_gp.draw_pass_1 is QuadMesh, "cannon muzzle flash spawns additive QuadMesh core")
+	check(flash_gp != null and (flash_gp.draw_pass_1 is ArrayMesh or flash_gp.draw_pass_1 is QuadMesh) and not (flash_gp.draw_pass_1 is SphereMesh),
+		"cannon muzzle flash spawns additive card mesh core")
 	fx_ship.queue_free()
 	if ball != null:
 		ball.queue_free()
@@ -376,14 +378,16 @@ func test_enemy_signature_combat_vfx_and_teardown() -> void:
 		var fb := keg_fx.get_node_or_null(^"FireballCore") as GPUParticles3D
 		var sm := keg_fx.get_node_or_null(^"GunpowderSmoke") as GPUParticles3D
 		var sp := keg_fx.get_node_or_null(^"EmberSparks") as GPUParticles3D
-		check(fb != null and fb.draw_pass_1 is QuadMesh, "FireballCore uses billboarded QuadMesh")
-		if fb != null and fb.draw_pass_1 is QuadMesh:
-			var fb_mat := (fb.draw_pass_1 as QuadMesh).material as StandardMaterial3D
+		check(fb != null and fb.draw_pass_1 is ArrayMesh and not (fb.draw_pass_1 is PrimitiveMesh),
+			"FireballCore uses zero-primitive billboarded ArrayMesh card")
+		if fb != null and fb.draw_pass_1 is ArrayMesh:
+			var fb_mat := (fb.draw_pass_1 as ArrayMesh).surface_get_material(0) as StandardMaterial3D
 			check(fb_mat != null and fb_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD, "FireballCore uses additive blend")
 			check(fb_mat != null and fb_mat.albedo_texture is ImageTexture, "FireballCore uses cached feathered ImageTexture")
-		check(sm != null and sm.draw_pass_1 is QuadMesh, "GunpowderSmoke uses feathered QuadMesh")
-		check(sp != null and sp.draw_pass_1 is QuadMesh and sp.transform_align == GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY,
-			"EmberSparks uses velocity-aligned QuadMesh streaks")
+		check(sm != null and sm.draw_pass_1 is ArrayMesh and not (sm.draw_pass_1 is PrimitiveMesh),
+			"GunpowderSmoke uses feathered zero-primitive ArrayMesh card")
+		check(sp != null and sp.draw_pass_1 is ArrayMesh and not (sp.draw_pass_1 is PrimitiveMesh) and sp.transform_align == GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY,
+			"EmberSparks uses velocity-aligned zero-primitive ArrayMesh streaks")
 	check(keg_layers >= 3, "KegExplosionVFX must contain at least 3 GPUParticles3D layers (got %d)" % keg_layers)
 	check(not keg_has_sphere, "KegExplosionVFX must contain zero raw SphereMesh primitives")
 	var trauma_near := pc.get_camera_trauma()
@@ -397,7 +401,7 @@ func test_enemy_signature_combat_vfx_and_teardown() -> void:
 	await physics_frames(105)
 	check(not is_instance_valid(keg_fx), "KegExplosionVFX self-frees cleanly after burst completes")
 
-	# 2. Tidecaller _summon_water_hazard() creates shader-driven TideHazard vortex (no CylinderMesh!)
+	# 2. Tidecaller _summon_water_hazard() creates shader-driven TideHazard vortex (no PrimitiveMesh!)
 	#    and erupts TideGeyserBurst on 1.1 s timeout, then cleans up with zero leaks.
 	var tc := EnemyBrain.spawn_enemy(&"tidecaller", Vector3(12.0, 5.05, -6.0), _root)
 	var tc_brain := tc.get_node(^"EnemyBrain") as EnemyBrain
@@ -407,13 +411,13 @@ func test_enemy_signature_combat_vfx_and_teardown() -> void:
 	var hazard := _root.get_node_or_null(^"TideHazard") as MeshInstance3D
 	check(hazard != null, "Tidecaller spawns TideHazard node on host")
 	if hazard != null:
-		check(hazard.mesh is QuadMesh and not (hazard.mesh is CylinderMesh),
-			"TideHazard uses ground-hugging QuadMesh rather than raw CylinderMesh")
+		check(hazard.mesh is ArrayMesh and not (hazard.mesh is PrimitiveMesh),
+			"TideHazard uses ground-hugging horizontal XZ ArrayMesh rather than raw PrimitiveMesh")
 		var hmat := hazard.material_override as ShaderMaterial
 		check(hmat != null and hmat.shader != null, "TideHazard uses inline coral-rune ShaderMaterial")
 		var mist := hazard.get_node_or_null(^"VortexMist") as GPUParticles3D
-		check(mist != null and mist.amount == 10 and mist.draw_pass_1 is QuadMesh,
-			"TideHazard includes bubbling rising mist GPUParticles3D (amount = 10)")
+		check(mist != null and mist.amount == 10 and mist.draw_pass_1 is ArrayMesh and not (mist.draw_pass_1 is PrimitiveMesh),
+			"TideHazard includes bubbling rising mist GPUParticles3D (amount = 10, zero-primitive card)")
 
 	# Advance halfway through 1.1 s telegraph and verify shader progress advances.
 	await physics_frames(30)
@@ -461,7 +465,8 @@ func test_enemy_signature_combat_vfx_and_teardown() -> void:
 	check(rally_ring != null, "Captain rally spawns CaptainRallyRing on host")
 	var start_scale := 0.0
 	if rally_ring != null:
-		check(rally_ring.mesh is QuadMesh, "CaptainRallyRing uses ground-hugging QuadMesh")
+		check(rally_ring.mesh is ArrayMesh and not (rally_ring.mesh is PrimitiveMesh),
+			"CaptainRallyRing uses ground-hugging horizontal XZ ArrayMesh")
 		var rmat := rally_ring.material_override as ShaderMaterial
 		check(rmat != null and rmat.shader != null, "CaptainRallyRing uses inline ShaderMaterial")
 		if rmat != null:
@@ -553,7 +558,7 @@ func test_clash_sparks_and_floating_combat_embers_teardown() -> void:
 			parry_streaks.amount if parry_streaks != null else 0, block_streaks.amount])
 	check(parry_embers != null and parry_embers.amount > block_embers.amount and parry_embers.lifetime >= 0.85,
 		"parried clash emits richer longer-lived CombatEmbers")
-	check(parry_star != null and parry_star.draw_pass_1 is QuadMesh and (parry_star.draw_pass_1 as QuadMesh).size.x >= 0.90,
+	check(parry_star != null and parry_star.draw_pass_1 is ArrayMesh and not (parry_star.draw_pass_1 is PrimitiveMesh) and (parry_star.draw_pass_1 as ArrayMesh).get_aabb().size.x >= 0.90,
 		"parried clash emits distinct large golden ParryStarburst")
 
 	# 3. 3rd-hit combo finisher also triggers heavy spark + floating ember burst.
@@ -2507,6 +2512,419 @@ func test_q26a_enemy_drowned_eye_halo_and_tidecaller_cast_aura() -> void:
 	check_eq(EnemyBrain._active_brains, 0, "all EnemyBrains exited cleanly with 0 leaks")
 	check(EnemyBrain._enemy_aura_halo_mesh == null,
 		"EnemyBrain clears shared _enemy_aura_halo_mesh automatically on teardown (0 leaks)")
+
+
+func _q29b_assert_quad_card(mesh: Mesh, label: String, expected_size: Vector2) -> int:
+	check(mesh != null and mesh is ArrayMesh and not (mesh is PrimitiveMesh),
+		"%s uses zero-primitive ArrayMesh card" % label)
+	if not (mesh is ArrayMesh):
+		return 0
+	var am := mesh as ArrayMesh
+	var arr := am.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+	var tris := floori(float(verts.size()) / 3.0)
+	check_eq(tris, 2, "%s card has exact 2 triangles (got %d)" % [label, tris])
+	check_eq(norms.size(), 6, "%s card has 6 vertex normals" % label)
+	check_eq(uvs.size(), 6, "%s card has 6 UVs" % label)
+	var bad_n := 0
+	var min_v := Vector3(INF, INF, INF)
+	var max_v := Vector3(-INF, -INF, -INF)
+	for vi in verts.size():
+		min_v = min_v.min(verts[vi])
+		max_v = max_v.max(verts[vi])
+		if not norms[vi].is_finite() or norms[vi].distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+			bad_n += 1
+	check_eq(bad_n, 0, "%s card normals are finite unit (0, 0, 1)" % label)
+	var hw := expected_size.x * 0.5
+	var hh := expected_size.y * 0.5
+	check(min_v.distance_to(Vector3(-hw, -hh, 0.0)) < 0.002 and max_v.distance_to(Vector3(hw, hh, 0.0)) < 0.002,
+		"%s card spans %.3fx%.3f centered XY (got %s..%s)" % [label, expected_size.x, expected_size.y, str(min_v), str(max_v)])
+	var bad_uv := 0
+	for uv in uvs:
+		if not uv.is_finite() or uv.x < -0.001 or uv.x > 1.001 or uv.y < -0.001 or uv.y > 1.001:
+			bad_uv += 1
+	check_eq(bad_uv, 0, "%s card UVs stay within [0..1]" % label)
+	check(am.surface_get_material(0) is StandardMaterial3D, "%s card binds StandardMaterial3D on surface 0" % label)
+	return tris
+
+
+static func _q29b_strip_gd_line_comment(line: String) -> String:
+	if line.strip_edges().begins_with("#"):
+		return ""
+	var in_single := false
+	var in_double := false
+	var escaped := false
+	for i in line.length():
+		var cp := line.unicode_at(i)
+		if escaped:
+			escaped = false
+			continue
+		if (in_single or in_double) and cp == 92:
+			escaped = true
+			continue
+		if cp == 34 and not in_single:
+			in_double = not in_double
+		elif cp == 39 and not in_double:
+			in_single = not in_single
+		elif cp == 35 and not in_single and not in_double:
+			return line.substr(0, i)
+	return line
+
+
+func test_q29b_combat_leviathan_zero_primitive_sweep_and_gun_muzzle_halo() -> void:
+	_begin()
+	_fast(false)
+	_ground()
+	CombatComponent.clear_shared_cache()
+	EnemyBrain.clear_shared_vfx_cache()
+	Leviathan.clear_shared_cache()
+
+	# ------------------------------------------------------------------
+	# 1. CombatComponent: 48-tri WeakRef GunMuzzleHalo + zero-primitive cards
+	# ------------------------------------------------------------------
+	var shooter_pair := _fighter(Vector3(0.0, 5.05, 0.0), &"player", 0.0)
+	var shooter_cc: CombatComponent = shooter_pair[1]
+	shooter_cc.enable_effects = true
+	shooter_cc.equip_weapon(&"pistol")
+	await physics_frames(2)
+
+	check(shooter_cc.get_active_gun_muzzle_halo() == null, "GunMuzzleHalo starts inactive before firing")
+	check_near(shooter_cc.get_gun_muzzle_halo_energy(), 0.0, 0.001, "GunMuzzleHalo energy starts at 0.0")
+
+	check(shooter_cc.primary_attack(), "Flintlock pistol primary_attack() fires cleanly")
+	var pistol_fx := _root.get_node_or_null(^"MuzzlePuffVFX") as Node3D
+	check(pistol_fx != null, "pistol shot spawns MuzzlePuffVFX on host")
+	var muzzle_puff := pistol_fx.get_node_or_null(^"MuzzlePuff") as GPUParticles3D if pistol_fx != null else null
+	var puff_tris := _q29b_assert_quad_card(muzzle_puff.draw_pass_1 if muzzle_puff != null else null,
+		"MuzzlePuff", Vector2(0.30, 0.30))
+
+	var pistol_halo := pistol_fx.get_node_or_null(^"GunMuzzleHalo") as MeshInstance3D if pistol_fx != null else null
+	check(pistol_halo != null and shooter_cc.get_active_gun_muzzle_halo() == pistol_halo,
+		"pistol shot mounts GunMuzzleHalo inside MuzzlePuffVFX and exposes get_active_gun_muzzle_halo()")
+	var halo_tris := 0
+	var pistol_mesh_ref: ArrayMesh = null
+	var p_scale_start := 0.0
+	var p_scale_mid := 0.0
+	var p_scale_end := 0.0
+	var p_energy_start := 0.0
+	var p_energy_mid := 0.0
+	var p_energy_end := 0.0
+	if pistol_halo != null:
+		check(pistol_halo.visible, "GunMuzzleHalo starts visible on firearm discharge")
+		p_scale_start = pistol_halo.scale.x
+		p_energy_start = shooter_cc.get_gun_muzzle_halo_energy()
+		check_near(p_scale_start, 0.35, 0.005, "pistol GunMuzzleHalo starts at scale 0.35 (got %.3f)" % p_scale_start)
+		check_near(p_energy_start, 1.75, 0.01, "pistol GunMuzzleHalo starts at energy 1.75 (got %.3f)" % p_energy_start)
+		check_eq(pistol_halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"GunMuzzleHalo disables shadows")
+		check_eq(pistol_halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"GunMuzzleHalo disables GI")
+
+		var hmat := pistol_halo.material_override as StandardMaterial3D
+		check(hmat != null and hmat.vertex_color_use_as_albedo and hmat.vertex_color_is_srgb
+			and hmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+			and hmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+			and hmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+			and hmat.billboard_keep_scale
+			and hmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+			and hmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+			and hmat.albedo_texture == null and hmat.normal_texture == null and hmat.roughness_texture == null,
+			"GunMuzzleHalo uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+
+		check(pistol_halo.mesh is ArrayMesh and not (pistol_halo.mesh is PrimitiveMesh),
+			"GunMuzzleHalo uses sculpted zero-primitive ArrayMesh")
+		pistol_mesh_ref = pistol_halo.mesh as ArrayMesh
+		if pistol_mesh_ref != null:
+			var arr := pistol_mesh_ref.surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			halo_tris = floori(float(verts.size()) / 3.0)
+			check_eq(halo_tris, 48, "GunMuzzleHalo has exact 48 triangles (got %d)" % halo_tris)
+			check_eq(norms.size(), verts.size(), "GunMuzzleHalo has normal per vertex")
+			check_eq(cols.size(), verts.size(), "GunMuzzleHalo has color per vertex")
+			var bad_hn := 0
+			var saw_ctr := false
+			var saw_inner := false
+			var saw_mid := false
+			var saw_outer_black := false
+			var max_r := 0.0
+			for vi in verts.size():
+				if not norms[vi].is_finite() or norms[vi].distance_to(Vector3(0.0, 0.0, 1.0)) > 0.002:
+					bad_hn += 1
+				var r := Vector2(verts[vi].x, verts[vi].y).length()
+				max_r = maxf(max_r, r)
+				var cv := cols[vi]
+				if r < 0.001:
+					if cv.r >= 0.95 and cv.g >= 0.95 and cv.b >= 0.90:
+						saw_ctr = true
+				elif absf(r - 0.22) < 0.005:
+					saw_inner = true
+				elif absf(r - 0.56) < 0.005:
+					saw_mid = true
+				elif absf(r - 1.0) < 0.005:
+					if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+						saw_outer_black = true
+			check_eq(bad_hn, 0, "GunMuzzleHalo normals are exact finite unit (0, 0, 1)")
+			check_near(max_r, 1.0, 0.005, "GunMuzzleHalo OUTER_R == 1.0 (got %.3f)" % max_r)
+			check(saw_ctr and saw_inner and saw_mid and saw_outer_black,
+				"GunMuzzleHalo grades bright core -> INNER_R(0.22) -> MID_R(0.56) -> Color(0,0,0,1) OUTER_R(1.0)")
+
+		# Deterministic physics-frame fade: 5 frames (~0.083 s) mid-flash, then past 0.18 s -> hidden & 0.0 energy!
+		await physics_frames(5)
+		p_scale_mid = pistol_halo.scale.x
+		p_energy_mid = shooter_cc.get_gun_muzzle_halo_energy()
+		check(pistol_halo.visible and p_scale_mid > 0.50 and p_scale_mid < 0.84,
+			"pistol GunMuzzleHalo expands smoothly mid-flash (%.3f -> %.3f)" % [p_scale_start, p_scale_mid])
+		check(p_energy_mid > 0.10 and p_energy_mid < 1.35,
+			"pistol GunMuzzleHalo energy decays smoothly mid-flash (%.3f -> %.3f)" % [p_energy_start, p_energy_mid])
+
+		await physics_frames(8)
+		p_scale_end = pistol_halo.scale.x
+		p_energy_end = shooter_cc.get_gun_muzzle_halo_energy()
+		check(not pistol_halo.visible, "pistol GunMuzzleHalo hides cleanly after 0.18 s")
+		check_near(p_scale_end, 0.85, 0.01, "pistol GunMuzzleHalo reaches end scale 0.85 (got %.3f)" % p_scale_end)
+		check_near(p_energy_end, 0.0, 0.001, "pistol GunMuzzleHalo fades energy to 0.0 after 0.18 s")
+		check(shooter_cc.get_active_gun_muzzle_halo() == null, "active GunMuzzleHalo getter returns null after fade")
+		if hmat != null:
+			check(hmat.albedo_color.is_equal_approx(Color(0.0, 0.0, 0.0, 1.0)),
+				"GunMuzzleHalo material albedo_color zeroes to black on hide")
+
+	# Blunderbuss shot uses wider 0.48 -> 1.15 expansion and reuses WeakRef-cached 48-tri ArrayMesh!
+	shooter_cc.equip_weapon(&"blunderbuss")
+	shooter_cc.state = CombatComponent.State.IDLE
+	check(shooter_cc.primary_attack(), "Blunderbuss primary_attack() fires cleanly")
+	var blunder_halo := shooter_cc.get_active_gun_muzzle_halo()
+	var b_scale_start := 0.0
+	var b_scale_end := 0.0
+	check(blunder_halo != null and blunder_halo.name == &"GunMuzzleHalo",
+		"Blunderbuss shot mounts GunMuzzleHalo cleanly")
+	if blunder_halo != null:
+		check_eq(blunder_halo.mesh, pistol_mesh_ref,
+			"GunMuzzleHalo shares WeakRef-cached 48-tri ArrayMesh across firearm shots")
+		b_scale_start = blunder_halo.scale.x
+		check_near(b_scale_start, 0.48, 0.005, "Blunderbuss GunMuzzleHalo starts at scale 0.48 (got %.3f)" % b_scale_start)
+		check_near(shooter_cc.get_gun_muzzle_halo_energy(), 1.75, 0.01, "Blunderbuss GunMuzzleHalo peaks at energy 1.75")
+		await physics_frames(12)
+		b_scale_end = blunder_halo.scale.x
+		check(not blunder_halo.visible and is_zero_approx(shooter_cc.get_gun_muzzle_halo_energy()),
+			"Blunderbuss GunMuzzleHalo hides cleanly with 0.0 energy after 0.18 s")
+		check_near(b_scale_end, 1.15, 0.01, "Blunderbuss GunMuzzleHalo expands to 1.15 (got %.3f)" % b_scale_end)
+
+	# Clash / ember / parry-starburst particle cards are all 2-tri zero-primitive ArrayMesh cards.
+	shooter_cc._spawn_clash_vfx(Vector3(0.0, 6.2, -1.2), &"parried")
+	var clash_fx := _root.get_node_or_null(^"ClashSparks") as Node3D
+	check(clash_fx != null, "CombatComponent spawns ClashSparks node")
+	if clash_fx != null:
+		var sp_gp := clash_fx.get_node_or_null(^"SparkStreaks") as GPUParticles3D
+		var em_gp := clash_fx.get_node_or_null(^"CombatEmbers") as GPUParticles3D
+		var st_gp := clash_fx.get_node_or_null(^"ParryStarburst") as GPUParticles3D
+		_q29b_assert_quad_card(sp_gp.draw_pass_1 if sp_gp != null else null, "SparkStreaks", Vector2(0.052, 0.36))
+		_q29b_assert_quad_card(em_gp.draw_pass_1 if em_gp != null else null, "CombatEmbers", Vector2(0.085, 0.058))
+		_q29b_assert_quad_card(st_gp.draw_pass_1 if st_gp != null else null, "ParryStarburst", Vector2(1.05, 1.05))
+
+	# Spawn a fresh active GunMuzzleHalo right before teardown to stress mid-flash cleanup!
+	shooter_cc.equip_weapon(&"pistol")
+	shooter_cc.state = CombatComponent.State.IDLE
+	check(shooter_cc.primary_attack(), "mid-flash teardown stress pistol shot fires cleanly")
+	var mid_flash_halo := shooter_cc.get_active_gun_muzzle_halo()
+	check(mid_flash_halo != null and mid_flash_halo.visible, "mid-flash GunMuzzleHalo is active before teardown")
+
+	# ------------------------------------------------------------------
+	# 2. EnemyBrain: Horizontal XZ TideHazard (4.4x4.4) + RallyRing (2x2) + Particle Cards
+	# ------------------------------------------------------------------
+	var tc_pawn := EnemyBrain.spawn_enemy(&"tidecaller", Vector3(8.0, 5.05, -4.0), _root)
+	var tc_brain := tc_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	tc_brain.aggro_range = 0.0
+	var cap_pawn := EnemyBrain.spawn_enemy(&"drowned_captain", Vector3(-8.0, 5.05, -4.0), _root)
+	var cap_brain := cap_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	cap_brain.aggro_range = 0.0
+	var pow_pawn := EnemyBrain.spawn_enemy(&"drowned_powder", Vector3(-12.0, 5.05, -4.0), _root)
+	var pow_brain := pow_pawn.get_node(^"EnemyBrain") as EnemyBrain
+	pow_brain.aggro_range = 0.0
+	await physics_frames(2)
+
+	tc_brain._summon_water_hazard(Vector3(8.0, 5.05, 0.0))
+	var hazard := _root.get_node_or_null(^"TideHazard") as MeshInstance3D
+	check(hazard != null and hazard.mesh is ArrayMesh and not (hazard.mesh is PrimitiveMesh),
+		"TideHazard uses zero-primitive horizontal XZ ArrayMesh")
+	var hazard_tris := 0
+	if hazard != null and hazard.mesh is ArrayMesh:
+		var h_arr := (hazard.mesh as ArrayMesh).surface_get_arrays(0)
+		var h_verts: PackedVector3Array = h_arr[Mesh.ARRAY_VERTEX]
+		var h_norms: PackedVector3Array = h_arr[Mesh.ARRAY_NORMAL]
+		var h_uvs: PackedVector2Array = h_arr[Mesh.ARRAY_TEX_UV]
+		hazard_tris = floori(float(h_verts.size()) / 3.0)
+		check_eq(hazard_tris, 2, "TideHazard horizontal XZ mesh has exact 2 triangles (got %d)" % hazard_tris)
+		check_eq(h_uvs.size(), 6, "TideHazard horizontal XZ mesh has 6 [0..1] UVs")
+		var h_min := Vector3(INF, INF, INF)
+		var h_max := Vector3(-INF, -INF, -INF)
+		var h_bad_n := 0
+		var h_bad_y := 0
+		for vi in h_verts.size():
+			h_min = h_min.min(h_verts[vi])
+			h_max = h_max.max(h_verts[vi])
+			if absf(h_verts[vi].y) > 0.0001:
+				h_bad_y += 1
+			if not h_norms[vi].is_finite() or h_norms[vi].distance_to(Vector3(0.0, 1.0, 0.0)) > 0.002:
+				h_bad_n += 1
+		check_eq(h_bad_y, 0, "TideHazard vertices lie strictly on horizontal y = 0.0 plane")
+		check_eq(h_bad_n, 0, "TideHazard normals are exact finite unit +Y (0, 1, 0)")
+		check(h_min.distance_to(Vector3(-2.2, 0.0, -2.2)) < 0.002 and h_max.distance_to(Vector3(2.2, 0.0, 2.2)) < 0.002,
+			"TideHazard spans exact 4.4x4.4 m XZ bounds (got %s..%s)" % [str(h_min), str(h_max)])
+		var mist := hazard.get_node_or_null(^"VortexMist") as GPUParticles3D
+		_q29b_assert_quad_card(mist.draw_pass_1 if mist != null else null, "VortexMist", Vector2(0.72, 0.72))
+
+	EnemyBrain._spawn_tide_geyser_burst(_root, Vector3(8.0, 5.05, 4.0), weakref(tc_brain))
+	var geyser := _root.get_node_or_null(^"TideGeyserBurst") as Node3D
+	check(geyser != null, "TideGeyserBurst spawns cleanly")
+	if geyser != null:
+		var g_col := geyser.get_node_or_null(^"GeyserFoamColumn") as GPUParticles3D
+		var g_drop := geyser.get_node_or_null(^"GeyserDroplets") as GPUParticles3D
+		var g_coral := geyser.get_node_or_null(^"CoralSparks") as GPUParticles3D
+		_q29b_assert_quad_card(g_col.draw_pass_1 if g_col != null else null, "GeyserFoamColumn", Vector2(1.35, 2.35))
+		_q29b_assert_quad_card(g_drop.draw_pass_1 if g_drop != null else null, "GeyserDroplets", Vector2(0.16, 0.68))
+		_q29b_assert_quad_card(g_coral.draw_pass_1 if g_coral != null else null, "CoralSparks", Vector2(0.13, 0.56))
+
+	pow_brain._spawn_keg_explosion_vfx(Vector3(-12.0, 5.05, 0.0))
+	var keg_fx := _root.get_node_or_null(^"KegExplosionVFX") as Node3D
+	check(keg_fx != null, "KegExplosionVFX spawns cleanly")
+	if keg_fx != null:
+		var k_fb := keg_fx.get_node_or_null(^"FireballCore") as GPUParticles3D
+		var k_sm := keg_fx.get_node_or_null(^"GunpowderSmoke") as GPUParticles3D
+		var k_sp := keg_fx.get_node_or_null(^"EmberSparks") as GPUParticles3D
+		_q29b_assert_quad_card(k_fb.draw_pass_1 if k_fb != null else null, "FireballCore", Vector2(2.6, 2.6))
+		_q29b_assert_quad_card(k_sm.draw_pass_1 if k_sm != null else null, "GunpowderSmoke", Vector2(2.05, 2.05))
+		_q29b_assert_quad_card(k_sp.draw_pass_1 if k_sp != null else null, "EmberSparks", Vector2(0.10, 0.48))
+
+	cap_brain._spawn_captain_rally_vfx(Vector3(-8.0, 5.05, 0.0))
+	var rally := _root.get_node_or_null(^"CaptainRallyRing") as MeshInstance3D
+	check(rally != null and rally.mesh is ArrayMesh and not (rally.mesh is PrimitiveMesh),
+		"CaptainRallyRing uses zero-primitive horizontal XZ ArrayMesh")
+	if rally != null and rally.mesh is ArrayMesh:
+		var r_arr := (rally.mesh as ArrayMesh).surface_get_arrays(0)
+		var r_verts: PackedVector3Array = r_arr[Mesh.ARRAY_VERTEX]
+		var r_norms: PackedVector3Array = r_arr[Mesh.ARRAY_NORMAL]
+		check_eq(floori(float(r_verts.size()) / 3.0), 2, "CaptainRallyRing has exact 2 triangles")
+		var r_min := Vector3(INF, INF, INF)
+		var r_max := Vector3(-INF, -INF, -INF)
+		var r_bad_n := 0
+		for vi in r_verts.size():
+			r_min = r_min.min(r_verts[vi])
+			r_max = r_max.max(r_verts[vi])
+			if not r_norms[vi].is_finite() or r_norms[vi].distance_to(Vector3(0.0, 1.0, 0.0)) > 0.002:
+				r_bad_n += 1
+		check_eq(r_bad_n, 0, "CaptainRallyRing normals are exact finite unit +Y (0, 1, 0)")
+		check(r_min.distance_to(Vector3(-1.0, 0.0, -1.0)) < 0.002 and r_max.distance_to(Vector3(1.0, 0.0, 1.0)) < 0.002,
+			"CaptainRallyRing spans exact 2.0x2.0 m XZ bounds (got %s..%s)" % [str(r_min), str(r_max)])
+
+	# ------------------------------------------------------------------
+	# 3. Leviathan: Zero-Primitive Spray Burst Card & Clean Teardown
+	# ------------------------------------------------------------------
+	var lev_ship := SLOOP_SCENE.instantiate() as Ship
+	lev_ship.enable_effects = false
+	_root.add_child(lev_ship)
+	lev_ship.global_position = Vector3(80.0, 0.0, 80.0)
+	var lev := Leviathan.new()
+	lev.target_ship = lev_ship
+	_root.add_child(lev)
+	await physics_frames(2)
+
+	lev._spawn_spray_burst(Vector3(80.0, 0.0, 80.0), 1.0, 18)
+	check(lev._active_bursts.size() >= 1, "Leviathan._spawn_spray_burst() tracks active spray burst")
+	var spray_tris := 0
+	if not lev._active_bursts.is_empty():
+		var burst: GPUParticles3D = lev._active_bursts[lev._active_bursts.size() - 1]
+		spray_tris = _q29b_assert_quad_card(burst.draw_pass_1, "LeviathanSprayBurst", Vector2(0.95, 1.65))
+		if burst.draw_pass_1 is ArrayMesh:
+			check_eq((burst.draw_pass_1 as ArrayMesh).surface_get_material(0), lev._spray_mat,
+				"LeviathanSprayBurst surface 0 shares Leviathan _spray_mat")
+		var count_before := lev.active_spray_burst_count()
+		lev._on_spray_burst_finished(burst)
+		check_eq(lev.active_spray_burst_count(), count_before - 1,
+			"_on_spray_burst_finished removes burst from _active_bursts")
+		check(burst.draw_pass_1 == null and burst.process_material == null,
+			"_on_spray_burst_finished releases draw_pass_1 and process_material cleanly")
+
+	# Spawn a live burst right before teardown to verify _exit_tree() releases refs cleanly.
+	lev._spawn_spray_burst(Vector3(82.0, 0.0, 80.0), 1.0, 14)
+	var live_burst: GPUParticles3D = lev._active_bursts[lev._active_bursts.size() - 1]
+
+	# ------------------------------------------------------------------
+	# 4. Source-File Audit across ALL files in src/combat/*.gd
+	# ------------------------------------------------------------------
+	var prim_re := RegEx.new()
+	prim_re.compile("\\b(QuadMesh|BoxMesh|SphereMesh|CylinderMesh|CapsuleMesh|PlaneMesh|PrismMesh|TorusMesh)\\s*\\.\\s*new\\s*\\(")
+	var combat_dir := DirAccess.open("res://src/combat")
+	check(combat_dir != null, "res://src/combat directory opens cleanly for Q29B audit")
+	var combat_files: Array[String] = []
+	if combat_dir != null:
+		combat_dir.list_dir_begin()
+		var fname := combat_dir.get_next()
+		while fname != "":
+			if not combat_dir.current_is_dir() and fname.ends_with(".gd"):
+				combat_files.append("res://src/combat/" + fname)
+			fname = combat_dir.get_next()
+		combat_dir.list_dir_end()
+	combat_files.sort()
+	check(combat_files.size() >= 10, "src/combat audit scanned >= 10 .gd scripts (got %d)" % combat_files.size())
+
+	var total_prim_hits := 0
+	var total_code_non_ascii := 0
+	var total_code_lines := 0
+	for fpath in combat_files:
+		var src := FileAccess.get_file_as_string(fpath)
+		check(src.length() > 100, "loaded combat script cleanly: %s" % fpath)
+		var prim_hits := prim_re.search_all(src)
+		total_prim_hits += prim_hits.size()
+		check_eq(prim_hits.size(), 0, "%s has 0 PrimitiveMesh .new( occurrences (got %d)" % [fpath, prim_hits.size()])
+		var lines := src.split("\n")
+		var file_code_non_ascii := 0
+		for line in lines:
+			var code_part := _q29b_strip_gd_line_comment(line)
+			if code_part.strip_edges() == "":
+				continue
+			total_code_lines += 1
+			for ci in code_part.length():
+				if code_part.unicode_at(ci) >= 128:
+					file_code_non_ascii += 1
+		total_code_non_ascii += file_code_non_ascii
+		check_eq(file_code_non_ascii, 0, "%s has 0 non-ASCII code characters (got %d)" % [fpath, file_code_non_ascii])
+
+	# Full-file (including comments) strict ASCII guard on all 3 Q29B owned combat scripts.
+	var q29b_owned: Array[String] = [
+		"res://src/combat/combat_component.gd",
+		"res://src/combat/enemy_brain.gd",
+		"res://src/combat/leviathan.gd",
+	]
+	for owned_path in q29b_owned:
+		var osrc := FileAccess.get_file_as_string(owned_path)
+		var owned_non_ascii := 0
+		for ci in osrc.length():
+			if osrc.unicode_at(ci) >= 128:
+				owned_non_ascii += 1
+		check_eq(owned_non_ascii, 0, "%s has 0 non-ASCII characters across entire file (got %d)" % [owned_path, owned_non_ascii])
+
+	# ------------------------------------------------------------------
+	# 5. Clean Teardown & ZERO Leaks
+	# ------------------------------------------------------------------
+	await _end()
+	check(not is_instance_valid(mid_flash_halo), "mid-flash GunMuzzleHalo freed cleanly on CombatComponent teardown")
+	check(not is_instance_valid(live_burst), "active LeviathanSprayBurst freed cleanly on Leviathan teardown")
+	check_eq(CombatComponent._active_combatants, 0, "all CombatComponents exited cleanly (0 leaks)")
+	check(CombatComponent._gun_muzzle_halo_mesh_ref == null,
+		"CombatComponent clears _gun_muzzle_halo_mesh_ref automatically on teardown (0 leaks)")
+	check_eq(EnemyBrain._active_brains, 0, "all EnemyBrains exited cleanly (0 leaks)")
+	check_eq(Leviathan._active_leviathans, 0, "all Leviathans exited cleanly (0 leaks)")
+
+	print("    Q29B combat+leviathan zero-prim: GunMuzzleHalo=%d tris (pistol sc %.2f->%.2f->%.2f e %.2f->%.2f->%.2f | blunder sc %.2f->%.2f) | MuzzleCard=%d tris | TideHazardXZ=%d tris | LeviathanSpray=%d tris | Audit=%d files/%d code lines (%d PrimitiveMesh.new, %d non-ASCII)" % [
+		halo_tris, p_scale_start, p_scale_mid, p_scale_end, p_energy_start, p_energy_mid, p_energy_end,
+		b_scale_start, b_scale_end, puff_tris, hazard_tris, spray_tris,
+		combat_files.size(), total_code_lines, total_prim_hits, total_code_non_ascii
+	])
+
 
 
 

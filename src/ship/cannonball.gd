@@ -135,16 +135,10 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
-	for fx in _spawned_vfx:
-		if fx != null and is_instance_valid(fx):
-			for child in fx.find_children("*", "GPUParticles3D", true, false):
-				var gp := child as GPUParticles3D
-				if gp != null:
-					gp.emitting = false
-					gp.draw_pass_1 = null
-					gp.process_material = null
-			fx.queue_free()
+	var pending_vfx := _spawned_vfx.duplicate()
 	_spawned_vfx.clear()
+	for fx in pending_vfx:
+		_cleanup_vfx_node(fx)
 	if _ball_mesh != null and is_instance_valid(_ball_mesh):
 		if _ball_mesh.mesh != null:
 			for si in _ball_mesh.mesh.get_surface_count():
@@ -999,8 +993,54 @@ func _attach_vfx(fx_root: Node3D, world_pos: Vector3, auto_free_sec: float) -> v
 	cleanup.wait_time = auto_free_sec
 	cleanup.one_shot = true
 	cleanup.autostart = true
-	cleanup.timeout.connect(fx_root.queue_free)
+	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
 	fx_root.add_child(cleanup)
+
+
+func _cleanup_vfx_node(fx_node: Node) -> void:
+	_spawned_vfx.erase(fx_node)
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	for child in fx_node.find_children("*", "GPUParticles3D", true, false):
+		var gp := child as GPUParticles3D
+		if gp != null:
+			gp.emitting = false
+			if gp.draw_pass_1 is ArrayMesh and gp.draw_pass_1 != _splinter_mesh:
+				var am := gp.draw_pass_1 as ArrayMesh
+				for si in am.get_surface_count():
+					var smat := am.surface_get_material(si)
+					if smat is StandardMaterial3D:
+						(smat as StandardMaterial3D).albedo_texture = null
+					am.surface_set_material(si, null)
+			if gp.process_material is ParticleProcessMaterial:
+				var pm := gp.process_material as ParticleProcessMaterial
+				pm.color_ramp = null
+				pm.scale_curve = null
+			gp.draw_pass_1 = null
+			gp.process_material = null
+	fx_node.queue_free()
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 static func _make_color_ramp(offsets: PackedFloat32Array, colors: PackedColorArray) -> GradientTexture1D:
@@ -1140,8 +1180,6 @@ func _spawn_splash_burst(pos: Vector3) -> bool:
 	)
 	col_p.process_material = col_proc
 
-	var col_quad := QuadMesh.new()
-	col_quad.size = Vector2(1.45, 2.05)
 	var col_mat := StandardMaterial3D.new()
 	col_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	col_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1149,7 +1187,7 @@ func _spawn_splash_burst(pos: Vector3) -> bool:
 	col_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	col_mat.vertex_color_use_as_albedo = true
 	col_mat.albedo_texture = _get_foam_puff_texture()
-	col_quad.material = col_mat
+	var col_quad := _build_quad_card_mesh(Vector2(1.45, 2.05), col_mat)
 	col_p.draw_pass_1 = col_quad
 	fx_root.add_child(col_p)
 	col_p.emitting = true
@@ -1184,8 +1222,6 @@ func _spawn_splash_burst(pos: Vector3) -> bool:
 	)
 	drop_p.process_material = drop_proc
 
-	var drop_quad := QuadMesh.new()
-	drop_quad.size = Vector2(0.18, 0.72)
 	var drop_mat := StandardMaterial3D.new()
 	drop_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	drop_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1193,8 +1229,7 @@ func _spawn_splash_burst(pos: Vector3) -> bool:
 	drop_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	drop_mat.vertex_color_use_as_albedo = true
 	drop_mat.albedo_texture = _get_streak_texture()
-	drop_quad.material = drop_mat
-	drop_p.draw_pass_1 = drop_quad
+	drop_p.draw_pass_1 = _build_quad_card_mesh(Vector2(0.18, 0.72), drop_mat)
 	fx_root.add_child(drop_p)
 	drop_p.emitting = true
 
@@ -1283,8 +1318,6 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 	)
 	embers.process_material = e_proc
 
-	var e_quad := QuadMesh.new()
-	e_quad.size = Vector2(0.085, 0.36)
 	var e_mat := StandardMaterial3D.new()
 	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1293,8 +1326,7 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	e_mat.vertex_color_use_as_albedo = true
 	e_mat.albedo_texture = _get_streak_texture()
-	e_quad.material = e_mat
-	embers.draw_pass_1 = e_quad
+	embers.draw_pass_1 = _build_quad_card_mesh(Vector2(0.085, 0.36), e_mat)
 	fx_root.add_child(embers)
 	embers.emitting = true
 
@@ -1317,8 +1349,6 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 	f_proc.scale_max = 1.45
 	f_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.45), Vector2(0.30, 1.35), Vector2(1.0, 0.15)])
 	flash.process_material = f_proc
-	var f_quad := QuadMesh.new()
-	f_quad.size = Vector2(1.35, 1.35)
 	var f_mat := StandardMaterial3D.new()
 	f_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	f_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1326,8 +1356,7 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 	f_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	f_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	f_mat.albedo_texture = _get_flash_texture()
-	f_quad.material = f_mat
-	flash.draw_pass_1 = f_quad
+	flash.draw_pass_1 = _build_quad_card_mesh(Vector2(1.35, 1.35), f_mat)
 	fx_root.add_child(flash)
 	flash.emitting = true
 
@@ -1360,8 +1389,6 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 		])
 	)
 	smoke.process_material = s_proc
-	var s_quad := QuadMesh.new()
-	s_quad.size = Vector2(1.15, 1.15)
 	var s_mat := StandardMaterial3D.new()
 	s_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	s_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1369,8 +1396,7 @@ func _spawn_splinter_burst(pos: Vector3, normal: Vector3) -> bool:
 	s_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	s_mat.vertex_color_use_as_albedo = true
 	s_mat.albedo_texture = _get_foam_puff_texture()
-	s_quad.material = s_mat
-	smoke.draw_pass_1 = s_quad
+	smoke.draw_pass_1 = _build_quad_card_mesh(Vector2(1.15, 1.15), s_mat)
 	fx_root.add_child(smoke)
 	smoke.emitting = true
 
@@ -1440,8 +1466,6 @@ func _spawn_dust_burst(pos: Vector3, normal: Vector3, tint: Color) -> bool:
 	)
 	p.process_material = proc
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.85, 0.85)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1449,8 +1473,7 @@ func _spawn_dust_burst(pos: Vector3, normal: Vector3, tint: Color) -> bool:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.vertex_color_use_as_albedo = true
 	mat.albedo_texture = _get_foam_puff_texture()
-	quad.material = mat
-	p.draw_pass_1 = quad
+	p.draw_pass_1 = _build_quad_card_mesh(Vector2(0.85, 0.85), mat)
 	fx_root.add_child(p)
 	p.emitting = true
 

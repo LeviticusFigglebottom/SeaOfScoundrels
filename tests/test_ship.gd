@@ -4912,3 +4912,333 @@ func test_q20a_supply_barrels_restock_feedback_and_stern_nocturnal_gilded_sheen(
 	HullCrest.clear_shared_cache()
 
 
+func _verify_q29a_quad_card(mesh: Mesh, expected_size: Vector2, label: String) -> void:
+	check(mesh != null and mesh is ArrayMesh and not (mesh is PrimitiveMesh),
+		"%s uses zero-primitive ArrayMesh card" % label)
+	var am := mesh as ArrayMesh
+	if am == null:
+		return
+	check_eq(am.get_surface_count(), 1, "%s has 1 surface" % label)
+	var arr := am.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+	var tris := floori(float(verts.size()) / 3.0)
+	check_eq(tris, 2, "%s has exact 2 triangles (got %d)" % [label, tris])
+	check_eq(norms.size(), 6, "%s has 6 vertex normals" % label)
+	check_eq(uvs.size(), 6, "%s has 6 vertex UVs" % label)
+	var min_v := Vector3(INF, INF, INF)
+	var max_v := Vector3(-INF, -INF, -INF)
+	var min_uv := Vector2(INF, INF)
+	var max_uv := Vector2(-INF, -INF)
+	for v: Vector3 in verts:
+		min_v = min_v.min(v)
+		max_v = max_v.max(v)
+	for uv: Vector2 in uvs:
+		min_uv = min_uv.min(uv)
+		max_uv = max_uv.max(uv)
+	var bad_n := 0
+	for nv: Vector3 in norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			bad_n += 1
+	check_eq(bad_n, 0, "%s assigns exact finite unit (0, 0, 1) normals" % label)
+	var hw := expected_size.x * 0.5
+	var hh := expected_size.y * 0.5
+	check(min_v.distance_to(Vector3(-hw, -hh, 0.0)) < 0.001 \
+			and max_v.distance_to(Vector3(hw, hh, 0.0)) < 0.001,
+		"%s spans exact centered XY bounds (got %s..%s)" % [label, str(min_v), str(max_v)])
+	check(min_uv.distance_to(Vector2(0.0, 0.0)) < 0.001 \
+			and max_uv.distance_to(Vector2(1.0, 1.0)) < 0.001,
+		"%s maps exact [0..1]x[0..1] UVs (got %s..%s)" % [label, str(min_uv), str(max_uv)])
+
+
+func test_q29a_naval_fort_zero_primitive_sweep_and_broadside_muzzle_halo() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.set_weather(0.0, 6.0, 0.0)
+	Ship.clear_shared_cache()
+	Cannonball.clear_shared_cache()
+	FortBattery.clear_shared_cache()
+
+	# ------------------------------------------------------------------
+	# 1. Source-file audit: 0 PrimitiveMesh.new( and 0 non-ASCII code chars
+	#    across ALL src/ship/*.gd files + src/world/fort_battery.gd
+	# ------------------------------------------------------------------
+	var audit_paths: Array[String] = []
+	var ship_dir := DirAccess.open("res://src/ship")
+	check(ship_dir != null, "DirAccess opens res://src/ship cleanly for Q29A source audit")
+	if ship_dir != null:
+		ship_dir.list_dir_begin()
+		var fname := ship_dir.get_next()
+		while not fname.is_empty():
+			if not ship_dir.current_is_dir() and fname.ends_with(".gd"):
+				audit_paths.append("res://src/ship/" + fname)
+			fname = ship_dir.get_next()
+		ship_dir.list_dir_end()
+	audit_paths.sort()
+	audit_paths.append("res://src/world/fort_battery.gd")
+	check(audit_paths.size() >= 13, "Q29A source audit covers all src/ship/*.gd + fort_battery.gd (%d files)" % audit_paths.size())
+
+	var prim_rx := RegEx.new()
+	prim_rx.compile("(QuadMesh|BoxMesh|SphereMesh|CylinderMesh|CapsuleMesh|PlaneMesh|PrismMesh|TorusMesh)\\.new\\(")
+	var total_prim_hits := 0
+	var total_code_non_ascii := 0
+	var target_any_non_ascii := 0
+	var strict_targets: Array[String] = [
+		"res://src/ship/ship.gd",
+		"res://src/ship/cannonball.gd",
+		"res://src/world/fort_battery.gd",
+	]
+	for path: String in audit_paths:
+		var src := FileAccess.get_file_as_string(path)
+		check(src.length() > 100, "loaded source %s for Q29A audit" % path)
+		var prim_matches := prim_rx.search_all(src)
+		total_prim_hits += prim_matches.size()
+		check_eq(prim_matches.size(), 0, "%s has 0 PrimitiveMesh.new( occurrences" % path)
+		var file_code_non_ascii := 0
+		var is_strict := strict_targets.has(path)
+		for line: String in src.split("\n"):
+			if is_strict:
+				for ci in line.length():
+					if line.unicode_at(ci) >= 128:
+						target_any_non_ascii += 1
+			var hash_idx := line.find("#")
+			var code_part := line if hash_idx < 0 else line.substr(0, hash_idx)
+			for ci in code_part.length():
+				if code_part.unicode_at(ci) >= 128:
+					file_code_non_ascii += 1
+		total_code_non_ascii += file_code_non_ascii
+		check_eq(file_code_non_ascii, 0, "%s has 0 non-ASCII (ord >= 128) code characters" % path)
+	check_eq(total_prim_hits, 0, "Q29A sweep leaves exact 0 PrimitiveMesh.new( across all ship & fort scripts")
+	check_eq(total_code_non_ascii, 0, "Q29A audit confirms 0 non-ASCII code characters across all ship & fort scripts")
+	check_eq(target_any_non_ascii, 0, "ship.gd, cannonball.gd, and fort_battery.gd are 100% pure ASCII")
+
+	# ------------------------------------------------------------------
+	# 2. Ship HoldWater 784-tri zero-primitive ArrayMesh + WeakRef sharing
+	#    and BowSprayPort / BowSprayStarboard 2-tri ArrayMesh cards
+	# ------------------------------------------------------------------
+	var orphans_before := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+
+	var sloop_a := SLOOP_SCENE.instantiate() as Ship
+	sloop_a.enable_effects = true
+	_root.add_child(sloop_a)
+	sloop_a.global_position = Vector3(0.0, 0.0, 0.0)
+
+	var sloop_b := SLOOP_SCENE.instantiate() as Ship
+	sloop_b.enable_effects = true
+	_root.add_child(sloop_b)
+	sloop_b.global_position = Vector3(0.0, 0.0, 48.0)
+
+	await physics_frames(2)
+
+	var hw_a := sloop_a.get_node_or_null(^"HoldWater") as MeshInstance3D
+	var hw_b := sloop_b.get_node_or_null(^"HoldWater") as MeshInstance3D
+	check(hw_a != null and hw_b != null, "both ships mount HoldWater MeshInstance3D")
+	check(hw_a.mesh is ArrayMesh and not (hw_a.mesh is PrimitiveMesh),
+		"HoldWater uses zero-primitive ArrayMesh (not PlaneMesh/PrimitiveMesh)")
+	check_eq(hw_a.mesh, hw_b.mesh, "HoldWater ArrayMesh is shared across ships via WeakRef")
+	check(Ship._hold_water_mesh_ref != null and Ship._hold_water_mesh_ref.get_ref() == hw_a.mesh,
+		"Ship._hold_water_mesh_ref caches live HoldWater ArrayMesh via WeakRef")
+
+	var hw_am := hw_a.mesh as ArrayMesh
+	var hw_arr := hw_am.surface_get_arrays(0)
+	var hw_verts: PackedVector3Array = hw_arr[Mesh.ARRAY_VERTEX]
+	var hw_norms: PackedVector3Array = hw_arr[Mesh.ARRAY_NORMAL]
+	var hw_uvs: PackedVector2Array = hw_arr[Mesh.ARRAY_TEX_UV]
+	var hw_tris := floori(float(hw_verts.size()) / 3.0)
+	check_eq(hw_tris, 784, "HoldWater has exact 14x28x2 = 784 triangles (got %d)" % hw_tris)
+	var hw_min := Vector3(INF, INF, INF)
+	var hw_max := Vector3(-INF, -INF, -INF)
+	var hw_uv_min := Vector2(INF, INF)
+	var hw_uv_max := Vector2(-INF, -INF)
+	var hw_bad_n := 0
+	for v: Vector3 in hw_verts:
+		hw_min = hw_min.min(v)
+		hw_max = hw_max.max(v)
+	for uv: Vector2 in hw_uvs:
+		hw_uv_min = hw_uv_min.min(uv)
+		hw_uv_max = hw_uv_max.max(uv)
+	for nv: Vector3 in hw_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 1.0, 0.0)) > 0.001:
+			hw_bad_n += 1
+	check_eq(hw_bad_n, 0, "HoldWater normals are all exact finite +Y (0, 1, 0)")
+	check(hw_min.distance_to(Vector3(-2.0, 0.0, -5.1)) < 0.001 \
+			and hw_max.distance_to(Vector3(2.0, 0.0, 5.1)) < 0.001,
+		"HoldWater spans exact x in [-2..2], z in [-5.1..5.1], y = 0 (got %s..%s)" % [str(hw_min), str(hw_max)])
+	check(hw_uv_min.distance_to(Vector2(0.0, 0.0)) < 0.001 \
+			and hw_uv_max.distance_to(Vector2(1.0, 1.0)) < 0.001,
+		"HoldWater maps exact [0..1]x[0..1] UVs matching HOLD_WATER_SHADER")
+
+	var spray_port := sloop_a.get_node_or_null(^"BowSprayPort") as GPUParticles3D
+	var spray_stbd := sloop_a.get_node_or_null(^"BowSprayStarboard") as GPUParticles3D
+	check(spray_port != null and spray_stbd != null, "Ship mounts BowSprayPort & BowSprayStarboard when enable_effects = true")
+	_verify_q29a_quad_card(spray_port.draw_pass_1, Vector2(0.28, 0.40), "Ship BowSprayPort draw_pass_1")
+	_verify_q29a_quad_card(spray_stbd.draw_pass_1, Vector2(0.28, 0.40), "Ship BowSprayStarboard draw_pass_1")
+
+	# Also confirm Cannonball & FortBattery static _build_quad_card_mesh helpers produce exact 2-tri cards.
+	var cb_card := Cannonball._build_quad_card_mesh(Vector2(1.45, 2.05), StandardMaterial3D.new())
+	_verify_q29a_quad_card(cb_card, Vector2(1.45, 2.05), "Cannonball _build_quad_card_mesh")
+	cb_card.surface_set_material(0, null)
+	cb_card = null
+
+	# ------------------------------------------------------------------
+	# 3. Broadside CannonMuzzleHalo (48-tri WeakRef additive billboard)
+	#    + deterministic physics-tick expansion 0.85 -> 2.15 & decay 1.85 -> 0.0
+	# ------------------------------------------------------------------
+	var port_ball := sloop_a.fire_cannon(&"port")
+	check(port_ball != null and is_instance_valid(port_ball), "Ship.fire_cannon(&'port') spawns Cannonball")
+	if port_ball != null:
+		port_ball.set_physics_process(false)
+
+	var fx_root := sloop_a.get_last_muzzle_vfx()
+	check(fx_root != null and is_instance_valid(fx_root) and fx_root.name == &"CannonMuzzleVFX",
+		"Ship.fire_cannon() exposes CannonMuzzleVFX via get_last_muzzle_vfx()")
+
+	var smoke_gp := fx_root.get_node_or_null(^"CannonSmoke") as GPUParticles3D
+	var flash_gp := fx_root.get_node_or_null(^"MuzzleFlashCore") as GPUParticles3D
+	var ember_gp := fx_root.get_node_or_null(^"MuzzleEmbers") as GPUParticles3D
+	check(smoke_gp != null and flash_gp != null and ember_gp != null,
+		"CannonMuzzleVFX mounts CannonSmoke, MuzzleFlashCore, and MuzzleEmbers GPUParticles3D")
+	_verify_q29a_quad_card(smoke_gp.draw_pass_1, Vector2(1.15, 1.15), "CannonSmoke draw_pass_1")
+	_verify_q29a_quad_card(flash_gp.draw_pass_1, Vector2(1.75, 1.75), "MuzzleFlashCore draw_pass_1")
+	_verify_q29a_quad_card(ember_gp.draw_pass_1, Vector2(0.09, 0.40), "MuzzleEmbers draw_pass_1")
+
+	var halo := fx_root.get_node_or_null(^"CannonMuzzleHalo") as MeshInstance3D
+	check(halo != null and halo.name == &"CannonMuzzleHalo",
+		"CannonMuzzleVFX mounts sculpted CannonMuzzleHalo MeshInstance3D")
+	check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+		"CannonMuzzleHalo uses zero-primitive ArrayMesh")
+	check(Ship._cannon_muzzle_halo_mesh_ref != null and Ship._cannon_muzzle_halo_mesh_ref.get_ref() == halo.mesh,
+		"Ship._cannon_muzzle_halo_mesh_ref caches CannonMuzzleHalo ArrayMesh via WeakRef")
+	check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"CannonMuzzleHalo disables shadows")
+	check_eq(halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"CannonMuzzleHalo disables GI")
+
+	var halo_am := halo.mesh as ArrayMesh
+	var halo_arr := halo_am.surface_get_arrays(0)
+	var halo_verts: PackedVector3Array = halo_arr[Mesh.ARRAY_VERTEX]
+	var halo_norms: PackedVector3Array = halo_arr[Mesh.ARRAY_NORMAL]
+	var halo_cols: PackedColorArray = halo_arr[Mesh.ARRAY_COLOR]
+	var halo_tris := floori(float(halo_verts.size()) / 3.0)
+	check_eq(halo_tris, 48, "CannonMuzzleHalo has exact 48 triangles (got %d)" % halo_tris)
+	var halo_bad_n := 0
+	for nv: Vector3 in halo_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			halo_bad_n += 1
+	check_eq(halo_bad_n, 0, "CannonMuzzleHalo normals are all finite unit (0, 0, 1)")
+	var halo_black_rim := 0
+	var halo_hot_core := 0
+	var halo_amber_mid := 0
+	for cv: Color in halo_cols:
+		if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			halo_black_rim += 1
+		elif cv.r >= 0.95 and cv.g >= 0.90 and cv.b >= 0.70:
+			halo_hot_core += 1
+		elif cv.r >= 0.95 and cv.g >= 0.45 and cv.g <= 0.70 and cv.b <= 0.25:
+			halo_amber_mid += 1
+	check(halo_hot_core >= 16 and halo_amber_mid >= 64 and halo_black_rim >= 48,
+		"CannonMuzzleHalo grades incandescent core (%d) -> warm amber mid (%d) -> pure black rim (%d)" % [
+			halo_hot_core, halo_amber_mid, halo_black_rim
+		])
+
+	var halo_mat := halo.material_override as StandardMaterial3D
+	check(halo_mat != null and halo_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and halo_mat.vertex_color_use_as_albedo and halo_mat.vertex_color_is_srgb
+		and halo_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and halo_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and halo_mat.billboard_keep_scale
+		and halo_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and halo_mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and halo_mat.albedo_texture == null and halo_mat.emission_texture == null
+		and halo_mat.normal_texture == null and halo_mat.roughness_texture == null,
+		"CannonMuzzleHalo uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+
+	# t = 0.0 immediately after firing: visible, scale == 0.85, energy == 1.85.
+	var s0 := halo.scale.x
+	var e0 := halo_mat.albedo_color.r
+	check(halo.visible, "CannonMuzzleHalo starts visible on cannon fire")
+	check_near(s0, 0.85, 0.01, "CannonMuzzleHalo starts at scale 0.85 (got %.3f)" % s0)
+	check_near(e0, 1.85, 0.01, "CannonMuzzleHalo ignites at energy 1.85 (got %.3f)" % e0)
+	check_near(sloop_a.get_last_muzzle_halo_energy(), 1.85, 0.01,
+		"get_last_muzzle_halo_energy() reports 1.85 at t = 0")
+
+	# Advance 6 physics frames (~0.10 s): expands smoothly and decays quadratically.
+	await physics_frames(6)
+	var s_mid := halo.scale.x
+	var e_mid := halo_mat.albedo_color.r
+	check(halo.visible, "CannonMuzzleHalo remains visible mid-flash at ~0.10 s")
+	check(s_mid > 1.35 and s_mid < 2.10, "CannonMuzzleHalo expands smoothly at ~0.10 s (scale=%.3f)" % s_mid)
+	check(e_mid > 0.25 and e_mid < 1.20, "CannonMuzzleHalo decays smoothly at ~0.10 s (energy=%.3f)" % e_mid)
+
+	# Advance 9 more physics frames (15 total = 0.25 s > 0.22 s): hits scale 2.15, energy 0.0, hidden!
+	await physics_frames(9)
+	var s_end := halo.scale.x
+	var e_end := halo_mat.albedo_color.r
+	check(not halo.visible, "CannonMuzzleHalo hides cleanly after 0.22 s")
+	check_near(s_end, 2.15, 0.01, "CannonMuzzleHalo settles at final scale 2.15 (got %.3f)" % s_end)
+	check_near(e_end, 0.0, 0.001, "CannonMuzzleHalo zeroes additive energy at 0.22 s (got %.4f)" % e_end)
+	check_near(sloop_a.get_last_muzzle_halo_energy(), 0.0, 0.001,
+		"get_last_muzzle_halo_energy() reports 0.0 once fade completes")
+
+	# Fire a second cannon to verify WeakRef mesh sharing between shots + deterministic step_muzzle_halos().
+	sloop_a.set_physics_process(false)
+	var stbd_ball := sloop_a.fire_cannon(&"starboard")
+	check(stbd_ball != null and is_instance_valid(stbd_ball), "Ship.fire_cannon(&'starboard') spawns second shot")
+	if stbd_ball != null:
+		stbd_ball.set_physics_process(false)
+	var fx_root_2 := sloop_a.get_last_muzzle_vfx()
+	var halo_2 := fx_root_2.get_node_or_null(^"CannonMuzzleHalo") as MeshInstance3D
+	check(halo_2 != null and halo_2.mesh == halo.mesh,
+		"second cannon fire shares WeakRef-cached 48-tri CannonMuzzleHalo ArrayMesh")
+	sloop_a.step_muzzle_halos(0.11)
+	var halo_2_mat := halo_2.material_override as StandardMaterial3D
+	check(halo_2.visible and is_equal_approx(halo_2.scale.x, lerpf(0.85, 2.15, 0.75))
+		and absf(halo_2_mat.albedo_color.r - 1.85 * 0.25) < 0.02,
+		"step_muzzle_halos(0.11) deterministically hits exact mid-curve scale %.3f and energy %.3f" % [
+			halo_2.scale.x, halo_2_mat.albedo_color.r
+		])
+	sloop_a.step_muzzle_halos(0.11)
+	check(not halo_2.visible and is_equal_approx(halo_2.scale.x, 2.15) and halo_2_mat.albedo_color.r <= 0.001,
+		"step_muzzle_halos(0.11) completes exact 0.22 s fade to hidden & 0.0 energy")
+
+	# ------------------------------------------------------------------
+	# 4. FortBattery PrimingFusePuff & SmolderPlume 2-tri ArrayMesh cards
+	# ------------------------------------------------------------------
+	var bat := FortBattery.new()
+	bat.enable_effects = true
+	_root.add_child(bat)
+	bat.global_position = Vector3(-40.0, 2.0, 0.0)
+	await physics_frames(2)
+
+	var fuse_gp := bat.find_child("PrimingFusePuff", true, false) as GPUParticles3D
+	var smolder_gp := bat.find_child("SmolderPlume", true, false) as GPUParticles3D
+	check(fuse_gp != null and smolder_gp != null,
+		"FortBattery mounts PrimingFusePuff & SmolderPlume GPUParticles3D when enable_effects = true")
+	_verify_q29a_quad_card(fuse_gp.draw_pass_1, Vector2(0.42, 0.42), "FortBattery PrimingFusePuff draw_pass_1")
+	_verify_q29a_quad_card(smolder_gp.draw_pass_1, Vector2(0.85, 0.85), "FortBattery SmolderPlume draw_pass_1")
+
+	print("    Q29A metrics: audited=%d files (0 prims, 0 non-ASCII code) | HoldWater=%d tris (WeakRef shared) | CannonMuzzleHalo=%d tris (scale %.2f->%.2f->%.2f, energy %.2f->%.2f->%.2f) | FortBattery cards=2x2 tris" % [
+		audit_paths.size(), hw_tris, halo_tris, s0, s_mid, s_end, e0, e_mid, e_end
+	])
+
+	# ------------------------------------------------------------------
+	# 5. Zero-leak teardown & static WeakRef cache audit
+	# ------------------------------------------------------------------
+	await _end()
+	check_eq(Ship._active_ship_count, 0, "Ship._active_ship_count returns to 0 on Q29A teardown")
+	check(Ship._hold_water_mesh_ref == null and Ship._cannon_muzzle_halo_mesh_ref == null,
+		"Ship releases WeakRef _hold_water_mesh_ref & _cannon_muzzle_halo_mesh_ref cleanly (0 leaks)")
+	check_eq(FortBattery._active_batteries, 0, "FortBattery._active_batteries returns to 0 on Q29A teardown")
+	check(FortBattery._smoke_puff_tex == null and FortBattery._halo_mesh == null,
+		"FortBattery releases static textures & meshes cleanly (0 leaks)")
+	var orphans_after := int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT))
+	check(orphans_after <= orphans_before,
+		"Q29A teardown leaks 0 orphan nodes (before=%d, after=%d)" % [orphans_before, orphans_after])
+	Ship.clear_shared_cache()
+	Cannonball.clear_shared_cache()
+	FortBattery.clear_shared_cache()
+
+
+

@@ -156,13 +156,11 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	if _fuse_particles != null and is_instance_valid(_fuse_particles):
-		_fuse_particles.emitting = false
-		_fuse_particles.draw_pass_1 = null
-		_fuse_particles.process_material = null
+		_clear_particle_pass_mesh(_fuse_particles)
+	_fuse_particles = null
 	if _smolder_particles != null and is_instance_valid(_smolder_particles):
-		_smolder_particles.emitting = false
-		_smolder_particles.draw_pass_1 = null
-		_smolder_particles.process_material = null
+		_clear_particle_pass_mesh(_smolder_particles)
+	_smolder_particles = null
 	if _fuse_orb != null and is_instance_valid(_fuse_orb):
 		_fuse_orb.material_override = null
 		_fuse_orb.mesh = null
@@ -187,16 +185,10 @@ func _exit_tree() -> void:
 			sm.material_override = null
 			sm.mesh = null
 	_shot_meshes.clear()
-	for fx in _spawned_vfx:
-		if fx != null and is_instance_valid(fx):
-			for child in fx.find_children("*", "GPUParticles3D", true, false):
-				var gp := child as GPUParticles3D
-				if gp != null:
-					gp.emitting = false
-					gp.draw_pass_1 = null
-					gp.process_material = null
-			fx.queue_free()
+	var pending_vfx := _spawned_vfx.duplicate()
 	_spawned_vfx.clear()
+	for fx in pending_vfx:
+		_cleanup_vfx_node(fx)
 	_oak_mat = null
 	_iron_mat = null
 	_fuse_mat = null
@@ -822,7 +814,7 @@ func _build_telegraph_and_smolder_vfx() -> void:
 	_muzzle_blast_halo_mi.visible = false
 	_barrel_pivot.add_child(_muzzle_blast_halo_mi)
 
-	if DisplayServer.get_name() == "headless":
+	if not enable_effects:
 		return
 
 	# Crackling amber priming-fuse warning smoke & ember spout.
@@ -853,8 +845,6 @@ func _build_telegraph_and_smolder_vfx() -> void:
 		])
 	)
 	_fuse_particles.process_material = fp
-	var f_quad := QuadMesh.new()
-	f_quad.size = Vector2(0.42, 0.42)
 	var f_mat := StandardMaterial3D.new()
 	f_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	f_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -862,8 +852,7 @@ func _build_telegraph_and_smolder_vfx() -> void:
 	f_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	f_mat.vertex_color_use_as_albedo = true
 	f_mat.albedo_texture = _get_smoke_puff_texture()
-	f_quad.material = f_mat
-	_fuse_particles.draw_pass_1 = f_quad
+	_fuse_particles.draw_pass_1 = _build_quad_card_mesh(Vector2(0.42, 0.42), f_mat)
 	_barrel_pivot.add_child(_fuse_particles)
 
 	# Dark smoldering smoke plume emitted once the battery is destroyed/silenced.
@@ -871,7 +860,7 @@ func _build_telegraph_and_smolder_vfx() -> void:
 	_smolder_particles.name = "SmolderPlume"
 	_smolder_particles.amount = 18
 	_smolder_particles.lifetime = 1.85
-	_smolder_particles.emitting = destroyed and enable_effects
+	_smolder_particles.emitting = destroyed and _effects_enabled()
 	_smolder_particles.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
 	_smolder_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_smolder_particles.position = Vector3(0.0, 0.72, -0.10)
@@ -894,10 +883,7 @@ func _build_telegraph_and_smolder_vfx() -> void:
 		])
 	)
 	_smolder_particles.process_material = sp
-	var s_quad := QuadMesh.new()
-	s_quad.size = Vector2(0.85, 0.85)
-	s_quad.material = f_mat
-	_smolder_particles.draw_pass_1 = s_quad
+	_smolder_particles.draw_pass_1 = _build_quad_card_mesh(Vector2(0.85, 0.85), f_mat)
 	_base_pivot.add_child(_smolder_particles)
 
 
@@ -1233,8 +1219,6 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 		])
 	)
 	smoke.process_material = s_proc
-	var s_quad := QuadMesh.new()
-	s_quad.size = Vector2(1.45, 1.45)
 	var s_mat := StandardMaterial3D.new()
 	s_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	s_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1242,8 +1226,7 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 	s_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	s_mat.vertex_color_use_as_albedo = true
 	s_mat.albedo_texture = _get_smoke_puff_texture()
-	s_quad.material = s_mat
-	smoke.draw_pass_1 = s_quad
+	smoke.draw_pass_1 = _build_quad_card_mesh(Vector2(1.45, 1.45), s_mat)
 	fx_root.add_child(smoke)
 	smoke.emitting = true
 
@@ -1266,8 +1249,6 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 	f_proc.scale_max = 1.85
 	f_proc.scale_curve = _make_scale_curve([Vector2(0.0, 0.65), Vector2(0.28, 1.35), Vector2(1.0, 0.12)])
 	flash.process_material = f_proc
-	var f_quad := QuadMesh.new()
-	f_quad.size = Vector2(1.65, 1.65)
 	var f_mat := StandardMaterial3D.new()
 	f_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	f_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1275,8 +1256,7 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 	f_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	f_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	f_mat.albedo_texture = _get_flash_radial_texture()
-	f_quad.material = f_mat
-	flash.draw_pass_1 = f_quad
+	flash.draw_pass_1 = _build_quad_card_mesh(Vector2(1.65, 1.65), f_mat)
 	fx_root.add_child(flash)
 	flash.emitting = true
 
@@ -1309,8 +1289,6 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 		])
 	)
 	sparks.process_material = e_proc
-	var e_quad := QuadMesh.new()
-	e_quad.size = Vector2(0.08, 0.34)
 	var e_mat := StandardMaterial3D.new()
 	e_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	e_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1319,8 +1297,7 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 	e_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	e_mat.vertex_color_use_as_albedo = true
 	e_mat.albedo_texture = _get_spark_streak_texture()
-	e_quad.material = e_mat
-	sparks.draw_pass_1 = e_quad
+	sparks.draw_pass_1 = _build_quad_card_mesh(Vector2(0.08, 0.34), e_mat)
 	fx_root.add_child(sparks)
 	sparks.emitting = true
 
@@ -1328,8 +1305,58 @@ func _spawn_muzzle_vfx(pos: Vector3, dir: Vector3) -> void:
 	cleanup.wait_time = 1.45
 	cleanup.one_shot = true
 	cleanup.autostart = true
-	cleanup.timeout.connect(fx_root.queue_free)
+	cleanup.timeout.connect(_cleanup_vfx_node.bind(fx_root))
 	fx_root.add_child(cleanup)
+
+
+func _cleanup_vfx_node(fx_node: Node) -> void:
+	_spawned_vfx.erase(fx_node)
+	if fx_node == null or not is_instance_valid(fx_node):
+		return
+	for child in fx_node.find_children("*", "GPUParticles3D", true, false):
+		var gp := child as GPUParticles3D
+		if gp != null:
+			_clear_particle_pass_mesh(gp)
+	fx_node.queue_free()
+
+
+static func _clear_particle_pass_mesh(gp: GPUParticles3D) -> void:
+	gp.emitting = false
+	if gp.draw_pass_1 is ArrayMesh:
+		var am := gp.draw_pass_1 as ArrayMesh
+		for si in am.get_surface_count():
+			var smat := am.surface_get_material(si)
+			if smat is StandardMaterial3D:
+				(smat as StandardMaterial3D).albedo_texture = null
+			am.surface_set_material(si, null)
+	if gp.process_material is ParticleProcessMaterial:
+		var pm := gp.process_material as ParticleProcessMaterial
+		pm.color_ramp = null
+		pm.scale_curve = null
+	gp.draw_pass_1 = null
+	gp.process_material = null
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 func _prune_finished_vfx() -> void:

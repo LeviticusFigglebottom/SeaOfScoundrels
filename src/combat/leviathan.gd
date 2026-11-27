@@ -275,10 +275,7 @@ func _notification(what: int) -> void:
 func _release_local_refs() -> void:
 	for p in _active_bursts:
 		if p != null and is_instance_valid(p):
-			p.emitting = false
-			p.visible = false
-			p.draw_pass_1 = null
-			p.process_material = null
+			_release_spray_burst_refs(p)
 			if p.get_parent() == self:
 				remove_child(p)
 			p.queue_free()
@@ -308,7 +305,9 @@ func _release_local_refs() -> void:
 	if _ink_mesh != null and is_instance_valid(_ink_mesh):
 		_ink_mesh.material_override = null
 		_ink_mesh = null
-	_spray_mat = null
+	if _spray_mat != null:
+		_spray_mat.albedo_texture = null
+		_spray_mat = null
 	_spray_tex = null
 	_fin_mat = null
 	_sucker_mat = null
@@ -1035,7 +1034,7 @@ func _build_tentacles() -> void:
 
 
 ## Build a multi-surface sculpted ArrayMesh for tentacle segment `seg_idx`:
-##   Surface 0: muscular organic hide (seamless 360° smooth normals + mottled vertex color)
+##   Surface 0: muscular organic hide (seamless 360-deg smooth normals + mottled vertex color)
 ##   Surface 1: raised jagged dorsal spine fin ridges along +Z
 ##   Surface 2: staggered twin rows of cupped lavender-coral sucker discs along -Z
 func _build_tentacle_segment_mesh(seg_idx: int) -> ArrayMesh:
@@ -1878,7 +1877,7 @@ func _spawn_spray_burst(world_pos: Vector3, intensity: float = 1.0, amount: int 
 		var oldest := _active_bursts[0]
 		_active_bursts.remove_at(0)
 		if oldest != null and is_instance_valid(oldest):
-			oldest.emitting = false
+			_release_spray_burst_refs(oldest)
 			oldest.queue_free()
 
 	var p := GPUParticles3D.new()
@@ -1919,10 +1918,7 @@ func _spawn_spray_burst(world_pos: Vector3, intensity: float = 1.0, amount: int 
 	)
 	p.process_material = proc
 
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.95 * intensity, 1.65 * intensity)
-	quad.material = _spray_mat
-	p.draw_pass_1 = quad
+	p.draw_pass_1 = _build_quad_card_mesh(Vector2(0.95 * intensity, 1.65 * intensity), _spray_mat)
 
 	add_child(p)
 	p.global_position = world_pos + Vector3(0.0, 0.15, 0.0)
@@ -1936,7 +1932,47 @@ func _on_spray_burst_finished(p: GPUParticles3D) -> void:
 	if idx >= 0:
 		_active_bursts.remove_at(idx)
 	if p != null and is_instance_valid(p):
+		_release_spray_burst_refs(p)
 		p.queue_free()
+
+
+static func _release_spray_burst_refs(p: GPUParticles3D) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	p.emitting = false
+	p.visible = false
+	if p.draw_pass_1 is ArrayMesh:
+		var am := p.draw_pass_1 as ArrayMesh
+		if am.get_surface_count() > 0:
+			am.surface_set_material(0, null)
+	if p.process_material is ParticleProcessMaterial:
+		var pm := p.process_material as ParticleProcessMaterial
+		pm.color_ramp = null
+		pm.scale_curve = null
+	p.draw_pass_1 = null
+	p.process_material = null
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 static func _make_color_ramp(offsets: PackedFloat32Array, colors: PackedColorArray) -> GradientTexture1D:
@@ -1960,7 +1996,7 @@ static func _make_scale_curve(points: Array[Vector2]) -> CurveTexture:
 
 # ------------------------------------------------------------------ geometry primitives
 
-## Emit a closed smooth loft from ring position/color grids with seamless 360° vertex normals.
+## Emit a closed smooth loft from ring position/color grids with seamless 360-deg vertex normals.
 static func _emit_smooth_loft(
 	st: SurfaceTool,
 	grid: Array,
@@ -2083,15 +2119,15 @@ static func _append_dorsal_fin(st: SurfaceTool, root_pos: Vector3, fin_h: float,
 	var mid_crest := root_pos + Vector3(0.0, fin_h * 0.18, depth * 0.72)
 	var tip := root_pos + Vector3(0.0, -fin_h * 0.22, depth)
 
-	# Right (+X) faces — CW viewed from +X.
+	# Right (+X) faces -- CW viewed from +X.
 	_emit_flat_tri(st, top_r, COL_FIN_ROOT, bot_r, COL_FIN_ROOT, mid_crest, COL_FIN_EDGE)
 	_emit_flat_tri(st, mid_crest, COL_FIN_EDGE, bot_r, COL_FIN_ROOT, tip, COL_FIN_EDGE)
-	# Left (-X) faces — CW viewed from -X.
+	# Left (-X) faces -- CW viewed from -X.
 	_emit_flat_tri(st, top_l, COL_FIN_ROOT, mid_crest, COL_FIN_EDGE, bot_l, COL_FIN_ROOT)
 	_emit_flat_tri(st, mid_crest, COL_FIN_EDGE, tip, COL_FIN_EDGE, bot_l, COL_FIN_ROOT)
-	# Upper leading bevel — CW viewed from +Y/+Z.
+	# Upper leading bevel -- CW viewed from +Y/+Z.
 	_emit_flat_tri(st, top_l, COL_FIN_ROOT, top_r, COL_FIN_ROOT, mid_crest, COL_FIN_EDGE)
-	# Lower trailing bevel — CW viewed from -Y/+Z.
+	# Lower trailing bevel -- CW viewed from -Y/+Z.
 	_emit_flat_tri(st, bot_l, COL_FIN_ROOT, tip, COL_FIN_EDGE, bot_r, COL_FIN_ROOT)
 
 
@@ -2104,10 +2140,10 @@ static func _append_crown_crest_fin(st: SurfaceTool, base_pos: Vector3, height: 
 	var apex := base_pos + Vector3(0.0, height, back_len * 0.28)
 	var spur := base_pos + Vector3(0.0, height * 0.42, back_len * 0.82)
 
-	# Right (+X) side — CW viewed from +X.
+	# Right (+X) side -- CW viewed from +X.
 	_emit_flat_tri(st, apex, COL_FIN_EDGE, fr, COL_FIN_ROOT, br, COL_FIN_ROOT)
 	_emit_flat_tri(st, apex, COL_FIN_EDGE, br, COL_FIN_ROOT, spur, COL_FIN_EDGE)
-	# Left (-X) side — CW viewed from -X.
+	# Left (-X) side -- CW viewed from -X.
 	_emit_flat_tri(st, apex, COL_FIN_EDGE, bl, COL_FIN_ROOT, fl, COL_FIN_ROOT)
 	_emit_flat_tri(st, apex, COL_FIN_EDGE, spur, COL_FIN_EDGE, bl, COL_FIN_ROOT)
 	# Leading arch (-Z/+Y).

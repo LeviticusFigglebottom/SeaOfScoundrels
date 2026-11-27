@@ -687,10 +687,7 @@ func _summon_water_hazard(at: Vector3) -> void:
 	var hazard := MeshInstance3D.new()
 	hazard.name = "TideHazard"
 	hazard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var quad := QuadMesh.new()
-	quad.orientation = PlaneMesh.FACE_Y
-	quad.size = Vector2(4.4, 4.4)
-	hazard.mesh = quad
+	hazard.mesh = _build_xz_quad_mesh(Vector2(4.4, 4.4))
 
 	var mat := ShaderMaterial.new()
 	mat.shader = _get_tide_vortex_shader()
@@ -735,8 +732,6 @@ func _summon_water_hazard(at: Vector3) -> void:
 		)
 		mist.process_material = m_proc
 
-		var m_quad := QuadMesh.new()
-		m_quad.size = Vector2(0.72, 0.72)
 		var m_mat := StandardMaterial3D.new()
 		m_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		m_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -745,8 +740,7 @@ func _summon_water_hazard(at: Vector3) -> void:
 		m_mat.vertex_color_use_as_albedo = true
 		m_mat.render_priority = 2
 		m_mat.albedo_texture = _get_smoke_puff_texture()
-		m_quad.material = m_mat
-		mist.draw_pass_1 = m_quad
+		mist.draw_pass_1 = _build_quad_card_mesh(Vector2(0.72, 0.72), m_mat)
 		hazard.add_child(mist)
 
 	host.add_child(hazard)
@@ -810,6 +804,17 @@ static func _release_vfx_resources(node: Node) -> void:
 	if node is GPUParticles3D:
 		var gp := node as GPUParticles3D
 		gp.emitting = false
+		if gp.draw_pass_1 is ArrayMesh and gp.draw_pass_1 != _barrel_shard_mesh:
+			var am := gp.draw_pass_1 as ArrayMesh
+			if am.get_surface_count() > 0:
+				var sm := am.surface_get_material(0)
+				if sm is StandardMaterial3D:
+					(sm as StandardMaterial3D).albedo_texture = null
+				am.surface_set_material(0, null)
+		if gp.process_material is ParticleProcessMaterial:
+			var pm := gp.process_material as ParticleProcessMaterial
+			pm.color_ramp = null
+			pm.scale_curve = null
 		gp.material_override = null
 		gp.draw_pass_1 = null
 		gp.process_material = null
@@ -857,6 +862,50 @@ static func _make_scale_curve(points: Array[Vector2]) -> CurveTexture:
 	var tex := CurveTexture.new()
 	tex.curve = curve
 	return tex
+
+
+static func _build_quad_card_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hh := size.y * 0.5
+	const NORM := Vector3(0.0, 0.0, 1.0)
+	var v0 := Vector3(-hw, -hh, 0.0)
+	var v1 := Vector3(hw, -hh, 0.0)
+	var v2 := Vector3(hw, hh, 0.0)
+	var v3 := Vector3(-hw, hh, 0.0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v1)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v0)
+	st.set_normal(NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v3)
+	st.set_normal(NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v2)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
+
+
+static func _build_xz_quad_mesh(size: Vector2, mat: Material = null) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hw := size.x * 0.5
+	var hd := size.y * 0.5
+	const UP_NORM := Vector3(0.0, 1.0, 0.0)
+	var v0 := Vector3(-hw, 0.0, -hd)
+	var v1 := Vector3(hw, 0.0, -hd)
+	var v2 := Vector3(hw, 0.0, hd)
+	var v3 := Vector3(-hw, 0.0, hd)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v0)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(v1)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v2)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(v0)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(1.0, 1.0)); st.add_vertex(v2)
+	st.set_normal(UP_NORM); st.set_uv(Vector2(0.0, 1.0)); st.add_vertex(v3)
+	var mesh := st.commit()
+	if mat != null:
+		mesh.surface_set_material(0, mat)
+	return mesh
 
 
 static func _get_fireball_texture() -> ImageTexture:
@@ -1027,8 +1076,6 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	)
 	fireball.process_material = fb_proc
 
-	var fb_quad := QuadMesh.new()
-	fb_quad.size = Vector2(2.6, 2.6)
 	var fb_mat := StandardMaterial3D.new()
 	fb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fb_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1038,8 +1085,7 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	fb_mat.vertex_color_use_as_albedo = true
 	fb_mat.render_priority = 3
 	fb_mat.albedo_texture = _get_fireball_texture()
-	fb_quad.material = fb_mat
-	fireball.draw_pass_1 = fb_quad
+	fireball.draw_pass_1 = _build_quad_card_mesh(Vector2(2.6, 2.6), fb_mat)
 	fx_root.add_child(fireball)
 
 	# Layer 2: Billowing gunpowder mushroom smoke plume (1.45 s, scale 0.6 -> 3.0).
@@ -1082,8 +1128,6 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	)
 	smoke.process_material = sm_proc
 
-	var sm_quad := QuadMesh.new()
-	sm_quad.size = Vector2(2.05, 2.05)
 	var sm_mat := StandardMaterial3D.new()
 	sm_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	sm_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1092,8 +1136,7 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	sm_mat.vertex_color_use_as_albedo = true
 	sm_mat.render_priority = 1
 	sm_mat.albedo_texture = _get_smoke_puff_texture()
-	sm_quad.material = sm_mat
-	smoke.draw_pass_1 = sm_quad
+	smoke.draw_pass_1 = _build_quad_card_mesh(Vector2(2.05, 2.05), sm_mat)
 	fx_root.add_child(smoke)
 
 	# Layer 3A: Velocity-aligned golden ember spark streaks scattering radially (0.75 s).
@@ -1131,8 +1174,6 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	)
 	sparks.process_material = sp_proc
 
-	var sp_quad := QuadMesh.new()
-	sp_quad.size = Vector2(0.10, 0.48)
 	var sp_mat := StandardMaterial3D.new()
 	sp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	sp_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1142,8 +1183,7 @@ func _spawn_keg_explosion_vfx(blast_pos: Vector3) -> void:
 	sp_mat.vertex_color_use_as_albedo = true
 	sp_mat.render_priority = 3
 	sp_mat.albedo_texture = _get_streak_texture()
-	sp_quad.material = sp_mat
-	sparks.draw_pass_1 = sp_quad
+	sparks.draw_pass_1 = _build_quad_card_mesh(Vector2(0.10, 0.48), sp_mat)
 	fx_root.add_child(sparks)
 
 	# Layer 3B: Tumbling charred wooden keg barrel staves flying radially with gravity (0.75 s).
@@ -1388,8 +1428,6 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	)
 	col_p.process_material = col_proc
 
-	var col_quad := QuadMesh.new()
-	col_quad.size = Vector2(1.35, 2.35)
 	var col_mat := StandardMaterial3D.new()
 	col_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	col_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1398,8 +1436,7 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	col_mat.vertex_color_use_as_albedo = true
 	col_mat.render_priority = 2
 	col_mat.albedo_texture = _get_smoke_puff_texture()
-	col_quad.material = col_mat
-	col_p.draw_pass_1 = col_quad
+	col_p.draw_pass_1 = _build_quad_card_mesh(Vector2(1.35, 2.35), col_mat)
 	fx_root.add_child(col_p)
 
 	# 2. Outward-arcing sparkling water droplet streaks (0.85 s).
@@ -1438,8 +1475,6 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	)
 	drops.process_material = d_proc
 
-	var d_quad := QuadMesh.new()
-	d_quad.size = Vector2(0.16, 0.68)
 	var d_mat := StandardMaterial3D.new()
 	d_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	d_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1448,8 +1483,7 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	d_mat.vertex_color_use_as_albedo = true
 	d_mat.render_priority = 2
 	d_mat.albedo_texture = _get_streak_texture()
-	d_quad.material = d_mat
-	drops.draw_pass_1 = d_quad
+	drops.draw_pass_1 = _build_quad_card_mesh(Vector2(0.16, 0.68), d_mat)
 	fx_root.add_child(drops)
 
 	# 3. Bioluminescent cyan coral-rune sparks erupting outward (0.80 s).
@@ -1485,8 +1519,6 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	)
 	coral.process_material = c_proc
 
-	var c_quad := QuadMesh.new()
-	c_quad.size = Vector2(0.13, 0.56)
 	var c_mat := StandardMaterial3D.new()
 	c_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	c_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
@@ -1496,8 +1528,7 @@ static func _spawn_tide_geyser_burst(host: Node, p_pos: Vector3, brain_ref: Weak
 	c_mat.vertex_color_use_as_albedo = true
 	c_mat.render_priority = 3
 	c_mat.albedo_texture = _get_streak_texture()
-	c_quad.material = c_mat
-	coral.draw_pass_1 = c_quad
+	coral.draw_pass_1 = _build_quad_card_mesh(Vector2(0.13, 0.56), c_mat)
 	fx_root.add_child(coral)
 
 	host.add_child(fx_root)
@@ -1524,10 +1555,7 @@ func _spawn_captain_rally_vfx(at: Vector3) -> void:
 	var ring := MeshInstance3D.new()
 	ring.name = "CaptainRallyRing"
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var quad := QuadMesh.new()
-	quad.orientation = PlaneMesh.FACE_Y
-	quad.size = Vector2(2.0, 2.0)
-	ring.mesh = quad
+	ring.mesh = _build_xz_quad_mesh(Vector2(2.0, 2.0))
 
 	var is_corsair := archetype == &"rival_captain" or (combat != null and combat.faction == &"corsair")
 	var tint_outer := Color(0.96, 0.24, 0.14) if is_corsair else Color(0.10, 0.88, 0.64)
