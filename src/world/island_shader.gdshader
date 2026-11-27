@@ -400,7 +400,15 @@ void fragment() {
 	float t_grass_in = smoothstep(2.34, 2.94, h_org + turf_height_bias);
 
 	vec3 col_deep = deep_seabed_color * mix(0.84, 1.16, brush_n);
-	vec3 col_shallow = shallow_seabed_color * mix(0.90, 1.10, ripple_n * 0.55 + brush_n * 0.45);
+	// Living tropical coral-sand seabed (-10..0 m): tidal current sand ripples, bleached coral rubble
+	// pockets & subtle olive-teal seagrass beds beneath Pass Q11A CoralReef / ReefAtmosphere!
+	float seabed_rip = smoothstep(0.16, 0.84, sin(wind_uv.y * 2.4 + dune_drift * 5.2 + cross_warp * 3.8) * 0.5 + 0.5);
+	float seagrass_bed = smoothstep(0.56, 0.86, (1.0 - tussock_n) * 0.55 + brush_n * 0.45) * smoothstep(-0.6, -2.0, h) * smoothstep(-9.0, -4.0, h) * (1.0 - volc * 0.85);
+	vec3 col_shallow = shallow_seabed_color * mix(0.86, 1.12, seabed_rip * 0.56 + brush_n * 0.44);
+	col_shallow = mix(col_shallow, shallow_seabed_color * vec3(0.76, 0.78, 0.72), shingle_patch * 0.34);
+	col_shallow = mix(col_shallow, vec3(0.95, 0.93, 0.84), shell_speck * 0.30);
+	col_shallow = mix(col_shallow, vec3(0.24, 0.44, 0.34), seagrass_bed * 0.42);
+	col_shallow = mix(col_shallow, col_shallow * vec3(0.52, 0.50, 0.52), volc * 0.55);
 
 	// Wet shoreline sand: rich warm golden-amber damp swash sand with subtle sea-foam edge & washed shingle.
 	float shore_foam_band = smoothstep(-0.20, 0.12, h) * smoothstep(0.56, 0.18, h + (brush_n - 0.5) * 0.16);
@@ -592,11 +600,13 @@ void fragment() {
 	// Preserve vertex crevice AO / tint cleanly.
 	vec3 albedo = mix(ground_col, cliff_base, cliff_mask) * COLOR.rgb;
 
-	// --- Procedural Micro-Normal Relief (Sand Ripples + Grass Turf + Cobble Bevels + Cliff Cracks) ---
+	// --- Procedural Micro-Normal Relief (Sand Ripples + Reef Seabed + Grass Turf + Cobble Bevels + Cliff Cracks) ---
 	float near_detail = smoothstep(72.0, 8.0, v_cam_dist);
 	float ripple_slope = cos(sand_ripple_phase);
-	vec3 beach_n = normalize(smooth_n + vec3(-0.62, 0.0, 0.78) * (ripple_slope * 0.068 * beach_band)
-		+ vec3(sand_micro - 0.5, 0.0, pebble_n - 0.5) * (0.20 * near_detail * t_wet_in));
+	float seabed_near = smoothstep(-10.5, -2.5, h) * (1.0 - t_wet_in) * near_detail;
+	float seabed_rip_slope = cos(wind_uv.y * 2.4 + dune_drift * 5.2 + cross_warp * 3.8);
+	vec3 beach_n = normalize(smooth_n + vec3(-0.62, 0.0, 0.78) * (ripple_slope * 0.068 * beach_band + seabed_rip_slope * 0.14 * seabed_near)
+		+ vec3(sand_micro - 0.5, 0.0, pebble_n - 0.5) * (0.20 * near_detail * max(t_wet_in, seabed_near)));
 	vec3 grass_n = normalize(smooth_n + vec3(meadow_tuft - 0.5, 0.0, tussock_n - 0.5) * (0.32 * t_grass_in)
 		+ vec3(pebble_n - 0.5, 0.0, grain_n - 0.5) * (0.22 * near_detail * t_grass_in));
 	vec3 ground_n = normalize(mix(beach_n, grass_n, t_grass_in) + path_cobble_nrm);
@@ -631,7 +641,9 @@ void fragment() {
 		float tex_nrm_str = terrain_tex_normal_strength * pbr_nrm_fade;
 		bool far_cliff = v_cam_dist > 170.0;
 		float g_vis = 1.0 - cliff_mask;
-		float w_sand = g_vis * t_wet_in * (1.0 - t_grass_in) * (1.0 - path_edge_w);
+		// Extend tactile rippled sand PBR cleanly onto near underwater CoralReef seabeds (< 78 m, 0 cost offshore!).
+		float reef_seabed_tex = smoothstep(-10.5, -2.5, h) * (1.0 - t_wet_in) * smoothstep(78.0, 22.0, v_cam_dist);
+		float w_sand = g_vis * clamp(t_wet_in + reef_seabed_tex, 0.0, 1.0) * (1.0 - t_grass_in) * (1.0 - path_edge_w);
 		float w_grass = g_vis * t_grass_in * (1.0 - path_edge_w);
 		float w_dirt = g_vis * path_edge_w;
 		float w_cliff_norm = cliff_mask * (1.0 - ledge_moss * 0.85) * (1.0 - volc * 0.86);
@@ -645,13 +657,16 @@ void fragment() {
 
 		if (w_sand > 0.06) {
 			vec3 sa; vec3 sn_o;
-			// Calibrated for Pass Q3A 1024x1024 shell-flecked sand PBR: crisp natural grain & golden wet swash!
-			float sand_nrm_k = mix(0.24, 0.88, t_dry_in);
+			// Calibrated for Pass Q3A 1024x1024 shell-flecked sand PBR: crisp natural grain, golden wet swash
+			// AND rippled coral-sand seabed relief beneath Pass Q11A ReefAtmosphere!
+			float sand_nrm_k = mix(mix(0.84, 0.24, t_wet_in), 0.88, t_dry_in);
 			sample_stochastic_ground(tex_sand_albedo, tex_sand_normal, xz, terrain_tex_scale * 1.68, macro_n, brush_n, tex_nrm_str * sand_nrm_k, 0.24, near_detail * 0.58, sa, sn_o);
 			vec3 sa_pop = pow(max(sa, vec3(0.001)), vec3(1.06)) * vec3(1.03, 1.01, 0.98);
+			vec3 reef_pbr = mix(ground_col, sa_pop * mix(vec3(0.56, 0.68, 0.64), vec3(0.82, 0.88, 0.78), t_shallow), 0.74);
 			vec3 wet_pbr = mix(col_wet, sa_pop * vec3(0.68, 0.56, 0.38), 0.54);
 			vec3 dry_pbr = mix(col_dry, sa_pop, 0.80);
-			tex_alb_acc += mix(wet_pbr, dry_pbr, t_dry_in) * w_sand;
+			vec3 shore_pbr = mix(reef_pbr, wet_pbr, t_wet_in);
+			tex_alb_acc += mix(shore_pbr, dry_pbr, t_dry_in) * w_sand;
 			tex_nrm_acc += sn_o * w_sand;
 			tex_w_acc += w_sand;
 		}
