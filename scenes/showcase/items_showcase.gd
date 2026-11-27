@@ -9,6 +9,8 @@ extends Node3D
 ##   shot=tools|map_table|hud       (default tools)
 ##   wheel=item|crew|none           (for shot=hud, default item)
 ##   item=compass|map|lantern|...   (held FP tool for shot=hud, default compass)
+##   banner=outpost|island|threat   (optional LocationBanner shimmer preview for shot=hud)
+##   menu=shipwright                (optional ShipwrightMenu golden flash preview for shot=hud)
 
 const SKY_RIG: PackedScene = preload("res://src/sky/sky_rig.tscn")
 const OCEAN_SCENE: PackedScene = preload("res://src/ocean/ocean.tscn")
@@ -18,6 +20,8 @@ const PAWN_SCENE: PackedScene = preload("res://src/characters/pawn.tscn")
 var _shot: String = "tools"
 var _wheel_mode: String = "item"
 var _fp_item: StringName = &"compass"
+var _banner_style: String = ""
+var _menu_mode: String = ""
 
 var _cam: Camera3D = null
 var _ship: Ship = null
@@ -38,6 +42,10 @@ func _ready() -> void:
 			_wheel_mode = a.trim_prefix("wheel=")
 		elif a.begins_with("item="):
 			_fp_item = StringName(a.trim_prefix("item="))
+		elif a.begins_with("banner="):
+			_banner_style = a.trim_prefix("banner=").to_lower()
+		elif a.begins_with("menu="):
+			_menu_mode = a.trim_prefix("menu=").to_lower()
 		elif a.begins_with("time="):
 			time_override = float(a.trim_prefix("time="))
 
@@ -257,6 +265,24 @@ func _setup_hud_shot(sky: Node) -> void:
 	elif _wheel_mode == "crew":
 		_hud.open_command_wheel()
 		_hud.command_wheel.set_hover_index(1, false)
+
+	if _banner_style != "":
+		var b_style := StringName(_banner_style)
+		var b_title := "EMISSARY GRADE V" if b_style == &"outpost" else ("SOVEREIGN'S BASTION" if b_style == &"threat" else "CUTLASS CAY")
+		var b_sub := "Gilded Compass -- 2.50x Payout Mastery!" if b_style == &"outpost" else ("Grand Citadel -- Tier IV Sea Fortress" if b_style == &"threat" else "Uncharted Treasure Cay")
+		var banner := LocationBanner.new()
+		banner.name = "ShowcaseLocationBanner"
+		add_child(banner)
+		banner.show_location(b_title, b_sub, b_style, 4.0)
+		banner.step_banner(0.32)
+
+	if _menu_mode == "shipwright":
+		var sm := ShipwrightMenu.new()
+		sm.name = "ShowcaseShipwrightMenu"
+		add_child(sm)
+		sm.bind(null, null, _ship, pc, null, _inventory)
+		sm.open_menu(ShipwrightMenu.TAB_SHIPWRIGHT)
+		sm.cycle_ship_name()
 
 
 func _process(delta: float) -> void:

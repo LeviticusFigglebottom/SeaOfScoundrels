@@ -1,5 +1,5 @@
 extends Node3D
-## Sea of Scoundrels — Full Playable Vertical Slice Main Scene.
+## Sea of Scoundrels -- Full Playable Vertical Slice Main Scene.
 ##
 ## Assembles SkyRig, Ocean, 14-island Archipelago, Sloop/Brigantine Ship with
 ## live MapTableView, CookingStove & FishingLine, first-person Captain Pawn +
@@ -631,6 +631,36 @@ func _sync_emissary_visuals() -> void:
 		hud.set_emissary_status(comp, grade, mult)
 
 
+static func _emissary_flare_color(company_id: StringName) -> Color:
+	var fallback: Array = ShipEmissaryFlag.COMPANY_AURA_COLORS[&"gilded_compass"]
+	var pal: Array = ShipEmissaryFlag.COMPANY_AURA_COLORS.get(company_id, fallback)
+	if not pal.is_empty() and pal[0] is Color:
+		return pal[0] as Color
+	return Color(1.00, 0.84, 0.28, 1.0)
+
+
+func _on_emissary_grade_changed(company_id: StringName, new_grade: int, _multiplier: float) -> void:
+	_sync_emissary_visuals()
+	if new_grade < EmissaryLedger.MAX_GRADE or not Net.is_host():
+		return
+	var company_label := EmissaryLedger.company_short_name(company_id)
+	if player_ship != null and is_instance_valid(player_ship):
+		var flare_col := _emissary_flare_color(company_id)
+		_launch_victory_flare(player_ship.global_position + Vector3(0.0, 3.8, 0.0), flare_col)
+	if Audio != null:
+		Audio.play_stinger(&"victory")
+	if location_banner != null and is_instance_valid(location_banner):
+		location_banner.show_location(
+			"EMISSARY GRADE V",
+			"%s -- 2.50x Payout Mastery!" % company_label,
+			&"outpost",
+			3.5
+		)
+	for br in crew_brains:
+		if br != null and is_instance_valid(br) and br.has_method(&"notify_emissary_grade_v"):
+			br.notify_emissary_grade_v(company_label)
+
+
 func _mount_player_rowboat(target_ship: Ship) -> void:
 	if target_ship == null or not is_instance_valid(target_ship):
 		return
@@ -1226,12 +1256,10 @@ func _wire_world_signals() -> void:
 	voyage_manager.voyage_stage_changed.connect(_on_voyage_stage_changed)
 	voyage_manager.voyage_completed.connect(_on_voyage_completed)
 	if voyage_manager.emissary != null:
-		voyage_manager.emissary.flag_raised.connect(func(_c: StringName, _g: int) -> void:
+		voyage_manager.emissary.flag_raised.connect(func(_company_id: StringName) -> void:
 			_sync_emissary_visuals()
 		)
-		voyage_manager.emissary.grade_changed.connect(func(_c: StringName, _o: int, _n: int) -> void:
-			_sync_emissary_visuals()
-		)
+		voyage_manager.emissary.grade_changed.connect(_on_emissary_grade_changed)
 		voyage_manager.emissary.flag_lowered.connect(func(_c: StringName, _g: int, _gold: int, _ren: int) -> void:
 			_sync_emissary_visuals()
 		)
@@ -2157,6 +2185,16 @@ func _check_fort_vault_unlock(bastion: Node3D, vault: Node3D) -> void:
 	if vault.has_method(&"open_vault"):
 		if bool(vault.call(&"open_vault")):
 			_launch_victory_flare(bastion.global_position + Vector3(0.0, 8.5, 0.0), Color(0.28, 0.96, 0.68))
+			if location_banner != null and is_instance_valid(location_banner):
+				location_banner.show_location(
+					"FORT VAULT UNLOCKED",
+					"Ironwatch Treasury Open -- Claim the Hoard!",
+					&"outpost",
+					3.4
+				)
+			for br in crew_brains:
+				if br != null and is_instance_valid(br) and br.has_method(&"notify_fort_vault_opened"):
+					br.notify_fort_vault_opened()
 
 
 static func _collect_bastion_batteries(bastion: Node3D) -> Array[FortBattery]:
@@ -2779,7 +2817,7 @@ func _on_fishing_interacted(pawn: Node) -> void:
 			_fishing_pawn = p
 			if fishing_interactable != null:
 				fishing_interactable.prompt = "Stow fishing line (hold LMB to reel)"
-			Game.post_notice("Line cast off the stern — hold LMB to reel when it bites!")
+			Game.post_notice("Line cast off the stern -- hold LMB to reel when it bites!")
 	else:
 		fishing_line.cancel_cast()
 		_fishing_pawn = null
@@ -3026,7 +3064,7 @@ func _on_net_peer_left(peer_id: int) -> void:
 				pp.leave_station()
 			pp.queue_free()
 	_restore_ai_crewmate(peer_id)
-	Game.post_notice("Co-op crewmate departed — AI crew resumed station.")
+	Game.post_notice("Co-op crewmate departed -- AI crew resumed station.")
 
 
 func _yield_one_ai_crewmate(peer_id: int) -> void:
@@ -4671,7 +4709,7 @@ static func _character_visual_of(p: Pawn) -> CharacterVisual:
 
 
 # ==============================================================================
-# Wave 32 — First-Launch Title Menu, Live Preview, Maiden Voyage & Naval Skirmish
+# Wave 32 -- First-Launch Title Menu, Live Preview, Maiden Voyage & Naval Skirmish
 # ==============================================================================
 
 func _enter_title_menu(page: TitleMenu.Page = TitleMenu.Page.LANDING) -> void:

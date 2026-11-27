@@ -2,8 +2,8 @@ class_name VoyageComposer
 extends RefCounted
 ## Modular voyage composer and authored Story Voyage library.
 ##
-## Procedural voyages are assembled from four interlocking parts — Hook, Site,
-## Complication, and Payoff — across 7 distinct voyage shapes, with strict
+## Procedural voyages are assembled from four interlocking parts -- Hook, Site,
+## Complication, and Payoff -- across 7 distinct voyage shapes, with strict
 ## anti-repetition history (never repeating the same shape or target island
 ## back-to-back) and deterministic seeding support.
 
@@ -330,11 +330,11 @@ func get_story_voyage(chapter: int, archipelago_source: Variant = []) -> Diction
 				"hook": {
 					"kind": &"treasure_map",
 					"title": "The Salt-King's Torn Chart",
-					"briefing": "Archivist Morwenna hands you a water-stained chart to %s. The Salt-King's ciphered Ledger Coffer lies buried near %s — guarded by Drowned deckhands." % [cay_name, landmark],
+					"briefing": "Archivist Morwenna hands you a water-stained chart to %s. The Salt-King's ciphered Ledger Coffer lies buried near %s -- guarded by Drowned deckhands." % [cay_name, landmark],
 					"clues": [
 						"Set sail from %s on the chart's bearing to %s." % [port_name, cay_name],
 						"Look for the red cross beside %s, watch for Drowned guards, and dig." % landmark,
-						"Watch the horizon on the sail back — a Drowned sloop patrols these waters.",
+						"Watch the horizon on the sail back -- a Drowned sloop patrols these waters.",
 					],
 					"landmark": landmark,
 				},
@@ -515,7 +515,7 @@ func get_story_voyage(chapter: int, archipelago_source: Variant = []) -> Diction
 					"title": "Warrant of the Sunken Crown",
 					"briefing": "The Salt-King's flagship garrison has fortified %s. Silence the batteries at %s, break three Drowned waves, claim the Vault Key, and outrun the Ghost Ship on the dash home." % [fort_name, landmark],
 					"clues": [
-						"Approach %s cautiously — shore batteries guard the anchorage." % fort_name,
+						"Approach %s cautiously -- shore batteries guard the anchorage." % fort_name,
 						"Break three garrison waves and slay the Fort Commander for the Vault Key.",
 						"Expect a spectral Ghost Ship on the voyage back to %s." % port_name,
 					],
@@ -731,7 +731,7 @@ func _build_drowned_bounty(diff: int, origin_id: StringName, target: Dictionary)
 		"target_position": target["position"],
 		"hook": {
 			"kind": &"bounty_poster",
-			"title": "Iron Tide Warrant — %s" % captain,
+			"title": "Iron Tide Warrant -- %s" % captain,
 			"briefing": "%s and a Drowned crew were sighted encamped near %s on %s. Claim the Captain's Skull." % [captain, landmark, tname],
 			"clues": ["Target camp spotted near %s on %s." % [landmark, tname]],
 			"landmark": landmark,
@@ -903,7 +903,7 @@ func _build_fort_siege(diff: int, origin_id: StringName, target: Dictionary) -> 
 		"target_position": target["position"],
 		"hook": {
 			"kind": &"war_letter",
-			"title": "Iron Tide Siege Orders — %s" % tname,
+			"title": "Iron Tide Siege Orders -- %s" % tname,
 			"briefing": "Drowned signal flares burn over %s. Silence the fort batteries at %s, break %d waves, seize the Vault Key, and raid the armoury." % [tname, landmark, waves],
 			"clues": ["Watch the battery firing arcs around %s." % landmark, "The Fort Warden carries the Vault Key on the final wave."],
 			"landmark": landmark,
@@ -965,7 +965,7 @@ func _build_open_sea_hunt(diff: int, origin_id: StringName, anchor: Dictionary) 
 		"target_position": sea_pos,
 		"hook": {
 			"kind": &"sea_sighting",
-			"title": "Lookout Report — %s" % prey_name,
+			"title": "Lookout Report -- %s" % prey_name,
 			"briefing": "Merchants spotted a %s prowling the deep channel off %s. Sink it and fish its floating salvage from the waves." % [prey_name, aname],
 			"clues": ["Last seen patrolling 240 m off %s." % aname],
 			"landmark": "Open Channel off %s" % aname,
@@ -984,7 +984,7 @@ func _build_open_sea_hunt(diff: int, origin_id: StringName, anchor: Dictionary) 
 		},
 		"complication": {
 			"kind": &"ghost_ambush" if is_ghost else &"rival_intercept",
-			"description": "The %s trades broadsides in open swell — watch your waterline and bail fast." % prey_name,
+			"description": "The %s trades broadsides in open swell -- watch your waterline and bail fast." % prey_name,
 			"trigger": &"on_arrival",
 			"time_limit_sec": 0.0,
 			"threat_archetype": prey_kind,

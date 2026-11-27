@@ -44,6 +44,11 @@ const SHAPE_LABELS := {
 	&"open_sea_hunt": "Open-Sea Hunt",
 }
 
+const STATUS_FLASH_DURATION := 0.90
+const STATUS_REST_BG := Color(0.90, 0.84, 0.70, 0.96)
+const STATUS_GOLD_BG := Color(0.99, 0.92, 0.62, 0.99)
+const STATUS_WARN_BG := Color(0.96, 0.78, 0.72, 0.99)
+
 var is_open: bool = false
 var active_tab: StringName = TAB_VOYAGES
 var selected_ship_class: StringName = &"sloop"
@@ -69,7 +74,12 @@ var _backdrop: ColorRect = null
 var _tab_buttons: Dictionary = {}  # StringName -> Button
 var _tab_pages: Dictionary = {}    # StringName -> Control
 var _gold_header_label: Label = null
+var _status_panel: PanelContainer = null
+var _status_stylebox: StyleBoxFlat = null
 var _status_label: Label = null
+var _status_flash_time: float = 0.0
+var _status_flash_duration: float = STATUS_FLASH_DURATION
+var _status_flash_kind: StringName = &""
 
 # Dynamic tab content roots
 var _voyage_list_box: VBoxContainer = null
@@ -94,6 +104,47 @@ func _ready() -> void:
 			selected_ranged_weapon = saved_ranged
 	_build_ui()
 	_backdrop.visible = false
+
+
+func _exit_tree() -> void:
+	_status_flash_time = 0.0
+	_status_flash_kind = &""
+	_status_stylebox = null
+	_status_panel = null
+	_status_label = null
+	_theme = null
+	_tab_buttons.clear()
+	_tab_pages.clear()
+	_crew_brains.clear()
+
+
+func _process(delta: float) -> void:
+	step_feedback(delta)
+
+
+## Advance the footer confirmation flash timer deterministically (called from `_process` and tests).
+func step_feedback(delta: float) -> void:
+	if _status_flash_time <= 0.0:
+		return
+	var dt := maxf(delta, 0.0)
+	_status_flash_time = maxf(_status_flash_time - dt, 0.0)
+	if _status_flash_time <= 0.0001:
+		_status_flash_time = 0.0
+		_status_flash_kind = &""
+	_apply_status_flash_visuals()
+
+
+## Return the footer confirmation flash intensity in 0..1 (ease-out cubic decay).
+func get_status_flash_strength() -> float:
+	if _status_flash_time <= 0.0 or _status_flash_kind == &"" or _status_flash_duration <= 0.0:
+		return 0.0
+	var remain_ratio := clampf(_status_flash_time / _status_flash_duration, 0.0, 1.0)
+	return remain_ratio * remain_ratio * remain_ratio
+
+
+## Return the active footer flash kind (&"gold", &"warn", or &"" when idle).
+func get_status_flash_kind() -> StringName:
+	return _status_flash_kind if _status_flash_time > 0.0 else &""
 
 
 ## Bind live gameplay systems so accepting voyages, buying sidegrades, and changing
@@ -152,6 +203,7 @@ func close_menu() -> void:
 	if not is_open:
 		return
 	is_open = false
+	_reset_status_flash()
 	if _backdrop != null:
 		_backdrop.visible = false
 	if player_controller != null and is_instance_valid(player_controller):
@@ -198,6 +250,7 @@ func accept_voyage(voyage: Dictionary) -> bool:
 	sync_voyage_charts(voyage)
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.0)
 	_set_status("Accepted voyage: %s" % String(voyage.get("title", "Voyage")))
+	_trigger_status_flash(&"gold")
 	voyage_accepted.emit(voyage_manager.active_voyage)
 	refresh()
 	return true
@@ -219,6 +272,7 @@ func raise_emissary_flag(company_id: StringName) -> bool:
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.0)
 	var cname := EmissaryLedger.company_short_name(company_id)
 	_set_status("Raised %s Emissary flag (Grade I)." % cname)
+	_trigger_status_flash(&"gold")
 	if Game != null:
 		Game.post_notice("Raised %s Emissary Flag (Grade I)!" % cname)
 	emissary_changed.emit(company_id, grade)
@@ -248,6 +302,7 @@ func lower_emissary_flag() -> Dictionary:
 	var bonus_g := int(res.get("bonus_gold", 0))
 	var bonus_r := int(res.get("bonus_renown", 0))
 	_set_status("Lowered %s Emissary flag (+%dg, +%d renown)." % [cname, bonus_g, bonus_r])
+	_trigger_status_flash(&"gold")
 	if Game != null:
 		Game.post_notice("Lowered %s Emissary Flag (+%d gold, +%d renown)!" % [cname, bonus_g, bonus_r])
 	emissary_changed.emit(&"", 0)
@@ -268,6 +323,7 @@ func buy_trade_commodity(commodity_id: StringName) -> Dictionary:
 	if not bool(res.get("ok", false)):
 		var reason := String(res.get("reason", "Cannot purchase trade crate."))
 		_set_status(reason)
+		_trigger_status_flash(&"warn")
 		Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 		return res
 
@@ -279,6 +335,7 @@ func buy_trade_commodity(commodity_id: StringName) -> Dictionary:
 	var dest_name := String(res.get("best_dest_name", "another port"))
 	var cost := int(res.get("cost", 0))
 	_set_status("Loaded %s (-%dg). Sail to %s for top profit!" % [crate_name, cost, dest_name])
+	_trigger_status_flash(&"gold")
 	if Game != null:
 		Game.post_notice("Bought %s (-%dg) - haul to %s for high demand!" % [crate_name, cost, dest_name])
 	commodity_purchased.emit(commodity_id, cost, item_node)
@@ -356,9 +413,13 @@ func sync_voyage_charts(voyage: Dictionary) -> void:
 ## Immediately applies modifiers & cosmetics to the active Ship and CrewBrains, and saves!
 func buy_or_equip_unlock(unlock_id: StringName) -> Dictionary:
 	if Game == null or Game.profile == null:
+		_set_status("No captain profile.")
+		_trigger_status_flash(&"warn")
 		return {"ok": false, "reason": "No captain profile."}
 	var entry := Economy.get_unlock(unlock_id)
 	if entry.is_empty():
+		_set_status("Unknown fitting.")
+		_trigger_status_flash(&"warn")
 		return {"ok": false, "reason": "Unknown fitting."}
 
 	var purchased := false
@@ -367,6 +428,7 @@ func buy_or_equip_unlock(unlock_id: StringName) -> Dictionary:
 		if not bool(buy_res.get("ok", false)):
 			var reason := String(buy_res.get("reason", "Cannot purchase."))
 			_set_status(reason)
+			_trigger_status_flash(&"warn")
 			Audio.play_sfx(&"ui_back", Vector3.INF, -3.0)
 			return buy_res
 		purchased = true
@@ -374,7 +436,10 @@ func buy_or_equip_unlock(unlock_id: StringName) -> Dictionary:
 
 	var slot: StringName = entry["slot"]
 	if not Economy.equip_loadout(Game.profile, slot, unlock_id):
-		return {"ok": false, "reason": "Could not equip %s." % String(unlock_id)}
+		var equip_reason := "Could not equip %s." % String(unlock_id)
+		_set_status(equip_reason)
+		_trigger_status_flash(&"warn")
+		return {"ok": false, "reason": equip_reason}
 
 	var applied_mods := apply_economy_to_ship(ship, Game.profile, _crew_brains, world_director, inventory)
 	Game.save()
@@ -386,6 +451,7 @@ func buy_or_equip_unlock(unlock_id: StringName) -> Dictionary:
 	else:
 		Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 		_set_status("Equipped: %s." % nm)
+	_trigger_status_flash(&"gold")
 	loadout_changed.emit(slot, unlock_id)
 	refresh()
 	return {
@@ -407,6 +473,7 @@ func select_ship_class(cls: StringName) -> void:
 		Game.save()
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	_set_status("Ship class selected: %s" % String(cls).capitalize())
+	_trigger_status_flash(&"gold")
 	ship_class_selected.emit(cls)
 	refresh()
 
@@ -429,6 +496,7 @@ func select_armory_loadout(melee_id: StringName, ranged_id: StringName) -> void:
 		ToolMeshes.get_display_name(selected_melee_weapon),
 		ToolMeshes.get_display_name(selected_ranged_weapon),
 	])
+	_trigger_status_flash(&"gold")
 	armory_loadout_changed.emit(selected_melee_weapon, selected_ranged_weapon)
 	refresh()
 
@@ -452,6 +520,7 @@ func cycle_ship_name() -> String:
 				np.set_ship_name(next_name)
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	_set_status("Ship christened: %s" % next_name)
+	_trigger_status_flash(&"gold")
 	ship_name_changed.emit(next_name)
 	refresh()
 	return next_name
@@ -468,6 +537,7 @@ func apply_quality_preset(level: int) -> void:
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	var names := ["Low", "Medium", "High"]
 	_set_status("Quality preset set to %s." % names[lv])
+	_trigger_status_flash(&"gold")
 	settings_changed.emit()
 	refresh()
 
@@ -494,6 +564,7 @@ func reset_keybindings() -> void:
 		user_settings.save()
 	Audio.play_sfx(&"ui_select", Vector3.INF, -2.5)
 	_set_status("Key bindings restored to defaults.")
+	_trigger_status_flash(&"gold")
 	settings_changed.emit()
 	refresh()
 
@@ -733,13 +804,20 @@ func _build_ui() -> void:
 	_log_box = _make_scroll_page(body_holder, "CaptainsLogPage", TAB_LOG)
 	_settings_box = _make_scroll_page(body_holder, "SettingsPage", TAB_SETTINGS)
 
-	# Footer status bar
+	# Footer status bar (framed parchment strip with confirmation flash)
+	_status_panel = PanelContainer.new()
+	_status_panel.name = "MenuStatusPanel"
+	_status_stylebox = HudIcons.make_parchment_box(STATUS_REST_BG, HudIcons.COL_INK_SOFT, 2, 6, 12, 6)
+	_status_panel.add_theme_stylebox_override("panel", _status_stylebox)
+	root_v.add_child(_status_panel)
+
 	_status_label = Label.new()
 	_status_label.name = "MenuStatusLabel"
 	_status_label.text = "Select a charter, refit your hull, or adjust sea settings."
+	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_label.add_theme_font_size_override("font_size", 14)
 	_status_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT)
-	root_v.add_child(_status_label)
+	_status_panel.add_child(_status_label)
 
 
 func _make_scroll_page(parent: Control, node_name: String, tab_id: StringName) -> VBoxContainer:
@@ -1405,6 +1483,8 @@ func _rebuild_settings_tab() -> void:
 			user_settings.data["head_bob_enabled"] = not reduced
 			user_settings.apply_all(scene_root)
 			user_settings.save()
+		_set_status("Head-bob comfort setting saved.")
+		_trigger_status_flash(&"gold")
 		settings_changed.emit()
 	)
 	av.add_child(bob_chk)
@@ -1417,6 +1497,8 @@ func _rebuild_settings_tab() -> void:
 		if user_settings != null:
 			user_settings.data["subtitles_enabled"] = enabled
 			user_settings.save()
+		_set_status("Subtitle display setting saved.")
+		_trigger_status_flash(&"gold")
 		settings_changed.emit()
 	)
 	av.add_child(sub_chk)
@@ -1429,6 +1511,8 @@ func _rebuild_settings_tab() -> void:
 		if user_settings != null:
 			user_settings.data["high_contrast_prompts"] = enabled
 			user_settings.save()
+		_set_status("Prompt contrast setting saved.")
+		_trigger_status_flash(&"gold")
 		settings_changed.emit()
 	)
 	av.add_child(hc_chk)
@@ -1645,16 +1729,62 @@ func _rebuild_log_tab() -> void:
 # ==============================================================================
 
 func _set_status(msg: String) -> void:
-	if _status_label != null:
+	if _status_label != null and is_instance_valid(_status_label):
 		_status_label.text = _to_ascii(msg)
 
 
+func _trigger_status_flash(kind: StringName) -> void:
+	if kind != &"gold" and kind != &"warn":
+		_reset_status_flash()
+		return
+	_status_flash_kind = kind
+	_status_flash_time = maxf(_status_flash_duration, 0.01)
+	_apply_status_flash_visuals()
+
+
+func _reset_status_flash() -> void:
+	_status_flash_time = 0.0
+	_status_flash_kind = &""
+	_apply_status_flash_visuals()
+
+
+func _apply_status_flash_visuals() -> void:
+	var strength := get_status_flash_strength()
+	var peak_bg := STATUS_REST_BG
+	var peak_border := HudIcons.COL_INK_SOFT
+	var peak_text := HudIcons.COL_INK_SOFT
+	if strength > 0.0:
+		if _status_flash_kind == &"gold":
+			peak_bg = STATUS_GOLD_BG
+			peak_border = HudIcons.COL_GOLD
+			peak_text = HudIcons.COL_INK
+		elif _status_flash_kind == &"warn":
+			peak_bg = STATUS_WARN_BG
+			peak_border = HudIcons.COL_CRIMSON
+			peak_text = HudIcons.COL_CRIMSON
+
+	if _status_stylebox != null:
+		_status_stylebox.bg_color = STATUS_REST_BG.lerp(peak_bg, strength)
+		_status_stylebox.border_color = HudIcons.COL_INK_SOFT.lerp(peak_border, strength)
+	if _status_panel != null and is_instance_valid(_status_panel):
+		_status_panel.queue_redraw()
+	if _status_label != null and is_instance_valid(_status_label):
+		_status_label.add_theme_color_override("font_color", HudIcons.COL_INK_SOFT.lerp(peak_text, strength))
+
+
 static func _to_ascii(text: String) -> String:
-	var out := text.replace(char(0x2014), "--").replace(char(0x2013), "-")
-	out = out.replace(char(0x00B7), "|").replace(char(0x2022), "*")
-	out = out.replace(char(0x2018), "'").replace(char(0x2019), "'")
-	out = out.replace(char(0x201C), "\"").replace(char(0x201D), "\"")
-	out = out.replace(char(0x2026), "...")
+	if text == "":
+		return ""
+	var mapped := text.replace(char(0x2014), "--").replace(char(0x2013), "-")
+	mapped = mapped.replace(char(0x00B7), "|").replace(char(0x2022), "*")
+	mapped = mapped.replace(char(0x2018), "'").replace(char(0x2019), "'")
+	mapped = mapped.replace(char(0x201C), "\"").replace(char(0x201D), "\"")
+	mapped = mapped.replace(char(0x2026), "...")
+	var out := ""
+	for i in mapped.length():
+		var code := mapped.unicode_at(i)
+		if code == 10 or (code >= 32 and code < 128):
+			out += char(code)
 	return out
 
 

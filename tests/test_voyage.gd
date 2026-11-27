@@ -1278,7 +1278,7 @@ func test_fort_vault_sculpted_gate_locking_swing_and_teardown() -> void:
 	check_eq(it.prompt, "Open Ironwatch Fort Vault", "unlocked FortVault prompt updates to Open")
 	check(bool(vault.call(&"is_blocking")), "FortVault still blocks until open_vault() runs")
 
-	# 3. Verify open_vault() disables collision, emits vault_opened exactly once, and swings gates ±108°.
+	# 3. Verify open_vault() disables collision, emits vault_opened exactly once, and swings gates +/-108 deg.
 	var opened_count := [0]
 	vault.connect(&"vault_opened", func(_v: Node, _opener: Node) -> void: opened_count[0] += 1)
 	check(bool(vault.call(&"open_vault")), "open_vault() returns true on first call")
@@ -1352,7 +1352,7 @@ func test_fort_vault_siege_battery_unlock_flow_and_main_zero_primitives() -> voi
 	await get_tree().process_frame
 	check(not is_instance_valid(holder), "siege vault test nodes tear down cleanly")
 
-	# Verify scenes/main.gd contains zero raw primitive meshes and exposes Wave 13D–16D showcase shots & FlotsamCluster wiring.
+	# Verify scenes/main.gd contains zero raw primitive meshes and exposes Wave 13D-16D showcase shots & FlotsamCluster wiring.
 	var main_src := FileAccess.get_file_as_string("res://scenes/main.gd")
 	check(main_src.length() > 1000, "loaded scenes/main.gd source cleanly")
 	for prim: String in ["BoxMesh.new", "SphereMesh.new", "CylinderMesh.new", "CapsuleMesh.new", "PrismMesh.new"]:
@@ -3532,3 +3532,379 @@ func test_q17b_victory_flare_message_bottle_and_dig_site_atmosphere() -> void:
 	TreasureCatalog.clear_mesh_cache()
 	Carryable.clear_shared_glint_cache()
 	_restore_weather()
+
+
+static func _q22a_collect_gd_files(dir_path: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var da := DirAccess.open(dir_path)
+	if da == null:
+		return out
+	da.list_dir_begin()
+	var entry := da.get_next()
+	var subdirs: Array[String] = []
+	var files: Array[String] = []
+	while entry != "":
+		if not entry.begins_with("."):
+			var full := dir_path.path_join(entry)
+			if da.current_is_dir():
+				subdirs.append(full)
+			elif entry.ends_with(".gd"):
+				files.append(full)
+		entry = da.get_next()
+	da.list_dir_end()
+	files.sort()
+	subdirs.sort()
+	for f: String in files:
+		out.append(f)
+	for sd: String in subdirs:
+		out.append_array(_q22a_collect_gd_files(sd))
+	return out
+
+
+static func _q22a_strip_gd_line_comment(line: String) -> String:
+	if line.strip_edges().begins_with("#"):
+		return ""
+	var in_single := false
+	var in_double := false
+	var escaped := false
+	for i in line.length():
+		var cp := line.unicode_at(i)
+		if escaped:
+			escaped = false
+			continue
+		if (in_single or in_double) and cp == 92:  # '\\'
+			escaped = true
+			continue
+		if cp == 34 and not in_single:  # '"'
+			in_double = not in_double
+		elif cp == 39 and not in_double:  # '\''
+			in_single = not in_single
+		elif cp == 35 and not in_single and not in_double:  # '#'
+			return line.substr(0, i)
+	return line
+
+
+static func _q22a_first_non_ascii_cp(text: String) -> int:
+	for i in text.length():
+		var cp := text.unicode_at(i)
+		if cp >= 128:
+			return cp
+	return -1
+
+
+func test_q22a_strict_ascii_repo_guard_and_emissary_fort_vault_celebrations() -> void:
+	_save_weather()
+	Net.start_single_player()
+	var lightning_conns_before := Weather.lightning_struck.get_connections().size()
+
+	# ------------------------------------------------------------------
+	# 1. Automated strict-ASCII repo guard
+	# ------------------------------------------------------------------
+	var full_strict_files: Array[String] = [
+		"res://src/voyage/voyage_composer.gd",
+		"res://src/voyage/voyage_manager.gd",
+		"res://src/voyage/world_director.gd",
+		"res://scenes/main.gd",
+	]
+	var full_strict_lines := 0
+	var full_strict_violations := 0
+	for path: String in full_strict_files:
+		var src := FileAccess.get_file_as_string(path)
+		check(src.length() > 100, "loaded strict-ASCII target '%s'" % path)
+		var lines := src.split("\n")
+		full_strict_lines += lines.size()
+		for li in lines.size():
+			var bad_cp := _q22a_first_non_ascii_cp(lines[li])
+			if bad_cp >= 0:
+				full_strict_violations += 1
+				check(false, "non-ASCII U+%04X found in %s:%d" % [bad_cp, path, li + 1])
+	check_eq(full_strict_violations, 0,
+		"all 4 Q22A target scripts have 0 non-ASCII characters across %d lines" % full_strict_lines)
+
+	var scan_dirs: Array[String] = [
+		"res://src/ui",
+		"res://src/core",
+		"res://src/crew",
+		"res://src/voyage",
+	]
+	var scanned_files := 0
+	var scanned_code_lines := 0
+	var code_violations := 0
+	for dir_path: String in scan_dirs:
+		var gd_files := _q22a_collect_gd_files(dir_path)
+		check(gd_files.size() > 0, "directory '%s' contains .gd scripts to scan" % dir_path)
+		for fpath: String in gd_files:
+			scanned_files += 1
+			var fsrc := FileAccess.get_file_as_string(fpath)
+			var flines := fsrc.split("\n")
+			for li in flines.size():
+				var code_part := _q22a_strip_gd_line_comment(flines[li])
+				if code_part.strip_edges() == "":
+					continue
+				scanned_code_lines += 1
+				var bad_cp := _q22a_first_non_ascii_cp(code_part)
+				if bad_cp >= 0:
+					code_violations += 1
+					check(false, "non-ASCII U+%04X in code at %s:%d" % [bad_cp, fpath, li + 1])
+	check(scanned_files >= 20, "strict-ASCII repo guard scanned >= 20 scripts (got %d)" % scanned_files)
+	check_eq(code_violations, 0,
+		"0 non-ASCII characters across %d non-comment code lines in %d scripts" % [
+			scanned_code_lines, scanned_files])
+
+	# ------------------------------------------------------------------
+	# 2. EmissaryLedger signal arity & main.gd wiring guard
+	# ------------------------------------------------------------------
+	var probe_ledger := EmissaryLedger.new()
+	var flag_raised_arity := -1
+	var grade_changed_arity := -1
+	for sig_info in probe_ledger.get_signal_list():
+		var sd: Dictionary = sig_info as Dictionary
+		var sname := StringName(sd.get("name", &""))
+		if sname == &"flag_raised":
+			flag_raised_arity = (sd.get("args", []) as Array).size()
+		elif sname == &"grade_changed":
+			grade_changed_arity = (sd.get("args", []) as Array).size()
+	check_eq(flag_raised_arity, 1, "EmissaryLedger.flag_raised has exact 1-argument arity")
+	check_eq(grade_changed_arity, 3, "EmissaryLedger.grade_changed has exact 3-argument arity")
+
+	var raised_log: Array[StringName] = []
+	var grade_log: Array[Dictionary] = []
+	probe_ledger.flag_raised.connect(func(company_id: StringName) -> void:
+		raised_log.append(company_id)
+	)
+	probe_ledger.grade_changed.connect(func(company_id: StringName, new_grade: int, mult: float) -> void:
+		grade_log.append({"company": company_id, "grade": new_grade, "mult": mult})
+	)
+	check(probe_ledger.raise_flag(&"gilded_compass"), "EmissaryLedger.raise_flag succeeds")
+	check_eq(raised_log.size(), 1, "flag_raised emits once with 1 arg")
+	check_eq(raised_log[0], &"gilded_compass", "flag_raised passes exact company_id")
+	check_eq(probe_ledger.add_progress(760.0, &"gilded_compass"), EmissaryLedger.MAX_GRADE,
+		"EmissaryLedger climbs cleanly to Grade V")
+	check(not grade_log.is_empty(), "grade_changed emitted during climb")
+	var last_ev: Dictionary = grade_log[grade_log.size() - 1]
+	check_eq(last_ev["company"], &"gilded_compass", "Grade V signal carries gilded_compass")
+	check_eq(int(last_ev["grade"]), 5, "Grade V signal carries new_grade == 5")
+	check_near(float(last_ev["mult"]), 2.5, 0.001, "Grade V signal carries float multiplier 2.5")
+
+	var main_src := FileAccess.get_file_as_string("res://scenes/main.gd")
+	check(not main_src.contains("flag_raised.connect(func(_c: StringName, _g: int)"),
+		"scenes/main.gd fixed legacy 2-arg flag_raised lambda bug")
+	check(not main_src.contains("grade_changed.connect(func(_c: StringName, _o: int, _n: int)"),
+		"scenes/main.gd fixed legacy 3-int grade_changed lambda bug")
+	check(main_src.contains("flag_raised.connect(func(_company_id: StringName) -> void:"),
+		"scenes/main.gd connects flag_raised with 1-arg StringName handler")
+	check(main_src.contains("grade_changed.connect(_on_emissary_grade_changed)"),
+		"scenes/main.gd connects grade_changed to _on_emissary_grade_changed")
+
+	# Verify canonical company flare tints match ShipEmissaryFlag.COMPANY_AURA_COLORS[cid][0].
+	var main_gd: GDScript = preload("res://scenes/main.gd")
+	for cid: StringName in EmissaryLedger.VALID_COMPANIES:
+		var expected_col: Color = (ShipEmissaryFlag.COMPANY_AURA_COLORS[cid] as Array)[0] as Color
+		var got_col: Color = main_gd.call(&"_emissary_flare_color", cid) as Color
+		check(got_col.is_equal_approx(expected_col),
+			"main._emissary_flare_color(%s) matches ShipEmissaryFlag.COMPANY_AURA_COLORS primary tint" % String(cid))
+
+	# ------------------------------------------------------------------
+	# 3. Live main.gd _on_emissary_grade_changed + CrewBrain + LocationBanner + VictoryFlare
+	# ------------------------------------------------------------------
+	var holder := Node3D.new()
+	holder.name = "Q22ATestHolder"
+	add_child(holder)
+
+	var entities := Node3D.new()
+	entities.name = "Entities"
+	holder.add_child(entities)
+
+	var sloop_scene: PackedScene = preload("res://src/ship/sloop.tscn")
+	var pawn_scene: PackedScene = preload("res://src/characters/pawn.tscn")
+	var sloop := sloop_scene.instantiate() as Ship
+	sloop.enable_effects = false
+	sloop.start_anchored = true
+	holder.add_child(sloop)
+
+	var vm := VoyageManager.new()
+	vm.post_notices = false
+	holder.add_child(vm)
+
+	var banner := LocationBanner.new()
+	holder.add_child(banner)
+
+	await physics_frames(4)
+
+	var p_a := pawn_scene.instantiate() as Pawn
+	holder.add_child(p_a)
+	p_a.board(sloop, Vector3(-1.35, 1.12, 1.35))
+	var brain_a := CrewBrain.new()
+	brain_a.setup(sloop, null, &"helmsman")
+	brain_a.hold_fire = true
+	p_a.add_child(brain_a)
+
+	var p_b := pawn_scene.instantiate() as Pawn
+	holder.add_child(p_b)
+	p_b.board(sloop, Vector3(0.0, 1.12, -3.05))
+	var brain_b := CrewBrain.new()
+	brain_b.setup(sloop, null, &"lookout")
+	brain_b.hold_fire = true
+	p_b.add_child(brain_b)
+
+	await physics_frames(2)
+
+	var spoken: Array[Dictionary] = []
+	for br: CrewBrain in [brain_a, brain_b]:
+		br.callout_spoken.connect(func(speaker: String, txt: String, cat: StringName) -> void:
+			spoken.append({"speaker": speaker, "text": txt, "cat": cat})
+		)
+
+	# Keep main_inst off-tree so _ready() doesn't spawn the full archipelago; free() explicitly below.
+	var main_inst := main_gd.new() as Node3D
+	main_inst.set(&"_entities_root", entities)
+	main_inst.set(&"player_ship", sloop)
+	main_inst.set(&"voyage_manager", vm)
+	main_inst.set(&"location_banner", banner)
+	var test_brains: Array[CrewBrain] = [brain_a, brain_b]
+	main_inst.set(&"crew_brains", test_brains)
+
+	var flag_raised_cb := func(_company_id: StringName) -> void:
+		main_inst.call(&"_sync_emissary_visuals")
+	var grade_changed_cb := Callable(main_inst, &"_on_emissary_grade_changed")
+	vm.emissary.flag_raised.connect(flag_raised_cb)
+	vm.emissary.grade_changed.connect(grade_changed_cb)
+
+	# Grade I..IV must sync visuals without firing Grade V celebration!
+	check(vm.emissary.raise_flag(&"gilded_compass"), "raise gilded_compass on live VoyageManager")
+	var sflag := sloop.get_node_or_null(^"ShipEmissaryFlag") as ShipEmissaryFlag
+	check(sflag != null and sflag.emissary_grade == 1 and sflag.active_company == &"gilded_compass",
+		"1-arg flag_raised signal synced ShipEmissaryFlag to Grade I")
+	vm.emissary.add_progress(480.0, &"gilded_compass")  # Grade IV
+	check_eq(sflag.emissary_grade, 4, "grade_changed synced ShipEmissaryFlag cleanly to Grade IV")
+	check_eq(entities.get_child_count(), 0, "no VictoryFlare launches before Grade V")
+	check(not banner.is_banner_active(), "no Grade V banner displays before Grade V")
+
+	# Reaching Grade V launches gold VictoryFlare, shows EMISSARY GRADE V banner, and triggers crew callout!
+	vm.emissary.add_progress(280.0, &"gilded_compass")  # 760.0 -> Grade V!
+	check_eq(sflag.emissary_grade, 5, "ShipEmissaryFlag synced to Grade V")
+	check_eq(entities.get_child_count(), 1, "Grade V launches celebratory VictoryFlare above player_ship")
+	var gold_flare := entities.get_child(0) as VictoryFlare
+	var expected_gold: Color = (ShipEmissaryFlag.COMPANY_AURA_COLORS[&"gilded_compass"] as Array)[0] as Color
+	check(gold_flare != null and gold_flare.accent_color.is_equal_approx(expected_gold),
+		"Gilded Compass Grade V VictoryFlare uses canonical gold primary aura tint")
+	check(banner.is_banner_active(), "Grade V activates LocationBanner")
+	check_eq(banner.get_current_title(), "EMISSARY GRADE V", "Grade V banner title matches")
+	check_eq(banner.get_current_subtitle(), "Gilded Compass -- 2.50x Payout Mastery!",
+		"Grade V banner subtitle is strict-ASCII and company-specific")
+	check_eq(banner.get_current_style(), &"outpost", "Grade V banner uses outpost prestige style")
+
+	var emissary_callouts: Array[Dictionary] = []
+	for ev: Dictionary in spoken:
+		if ev["cat"] == &"emissary_grade_v":
+			emissary_callouts.append(ev)
+	check_eq(emissary_callouts.size(), 1,
+		"exactly 1 crewmate celebrates Grade V (sibling suppressed by shared cooldown)")
+	if not emissary_callouts.is_empty():
+		var line_txt := String(emissary_callouts[0]["text"])
+		check(line_txt.contains("Gilded Compass"),
+			"Grade V crew callout mentions Gilded Compass ('%s')" % line_txt)
+		check_eq(_q22a_first_non_ascii_cp(line_txt), -1,
+			"Grade V crew callout is 100% strict ASCII")
+
+	# Verify Sunken Archive (turquoise) & Iron Tide (crimson-amber) Grade V flare colors live!
+	banner.clear_banner()
+	main_inst.call(&"_on_emissary_grade_changed", &"sunken_archive", 5, 2.5)
+	var arch_flare := entities.get_child(entities.get_child_count() - 1) as VictoryFlare
+	var expected_turq: Color = (ShipEmissaryFlag.COMPANY_AURA_COLORS[&"sunken_archive"] as Array)[0] as Color
+	check(arch_flare != null and arch_flare.accent_color.is_equal_approx(expected_turq),
+		"Sunken Archive Grade V VictoryFlare uses canonical turquoise aura tint")
+	check_eq(banner.get_current_subtitle(), "Sunken Archive -- 2.50x Payout Mastery!",
+		"Sunken Archive Grade V banner subtitle matches")
+
+	banner.clear_banner()
+	main_inst.call(&"_on_emissary_grade_changed", &"iron_tide", 5, 2.5)
+	var tide_flare := entities.get_child(entities.get_child_count() - 1) as VictoryFlare
+	var expected_crimson: Color = (ShipEmissaryFlag.COMPANY_AURA_COLORS[&"iron_tide"] as Array)[0] as Color
+	check(tide_flare != null and tide_flare.accent_color.is_equal_approx(expected_crimson),
+		"Iron Tide Grade V VictoryFlare uses canonical blazing crimson-amber aura tint")
+	check_eq(banner.get_current_subtitle(), "Iron Tide -- 2.50x Payout Mastery!",
+		"Iron Tide Grade V banner subtitle matches")
+
+	# ------------------------------------------------------------------
+	# 4. Live main.gd _check_fort_vault_unlock celebration & crew callout
+	# ------------------------------------------------------------------
+	banner.clear_banner()
+	var bastion := Node3D.new()
+	bastion.name = "IronwatchBastion"
+	bastion.position = Vector3(36.0, 0.0, -28.0)
+	holder.add_child(bastion)
+
+	var vault_gd: GDScript = preload("res://src/world/fort_vault.gd")
+	var vault := vault_gd.new() as Node3D
+	vault.name = "FortVault"
+	bastion.add_child(vault)
+
+	var bat := FortBattery.new()
+	bat.enable_effects = false
+	bat.siege_active = true
+	bastion.add_child(bat)
+	vault.call(&"set_siege_cleared", false)
+
+	var flares_before_vault := entities.get_child_count()
+	bat.take_damage(200.0)
+	check(bat.destroyed, "fort battery silenced before vault unlock")
+	main_inst.call(&"_check_fort_vault_unlock", bastion, vault)
+	check(bool(vault.get(&"is_open")) and not bool(vault.call(&"is_blocking")),
+		"_check_fort_vault_unlock opens FortVault and disables gate blocker")
+	check_eq(entities.get_child_count(), flares_before_vault + 1,
+		"_check_fort_vault_unlock launches emerald VictoryFlare over bastion")
+	var vault_flare := entities.get_child(entities.get_child_count() - 1) as VictoryFlare
+	check(vault_flare != null and vault_flare.accent_color.is_equal_approx(Color(0.28, 0.96, 0.68)),
+		"Fort Vault VictoryFlare uses emerald treasury tint")
+	check(banner.is_banner_active(), "Fort Vault unlock displays LocationBanner")
+	check_eq(banner.get_current_title(), "FORT VAULT UNLOCKED", "Fort Vault banner title matches")
+	check_eq(banner.get_current_subtitle(), "Ironwatch Treasury Open -- Claim the Hoard!",
+		"Fort Vault banner subtitle matches")
+	check_eq(banner.get_current_style(), &"outpost", "Fort Vault banner uses outpost style")
+
+	var vault_callouts: Array[Dictionary] = []
+	for ev: Dictionary in spoken:
+		if ev["cat"] == &"fort_vault_opened":
+			vault_callouts.append(ev)
+	check_eq(vault_callouts.size(), 1,
+		"exactly 1 crewmate celebrates Fort Vault unlock (sibling suppressed by shared cooldown)")
+	if not vault_callouts.is_empty():
+		check_eq(_q22a_first_non_ascii_cp(String(vault_callouts[0]["text"])), -1,
+			"Fort Vault crew callout is 100% strict ASCII")
+
+	print("    Q22A metrics: strict_files=%d (%d lines, 0 violations) | repo_scan=%d files (%d code lines, 0 violations) | flares=%d | callouts=%d" % [
+		full_strict_files.size(), full_strict_lines, scanned_files, scanned_code_lines,
+		entities.get_child_count(), emissary_callouts.size() + vault_callouts.size()])
+
+	# ------------------------------------------------------------------
+	# 5. Clean zero-leak teardown!
+	# ------------------------------------------------------------------
+	if vm.emissary.flag_raised.is_connected(flag_raised_cb):
+		vm.emissary.flag_raised.disconnect(flag_raised_cb)
+	if vm.emissary.grade_changed.is_connected(grade_changed_cb):
+		vm.emissary.grade_changed.disconnect(grade_changed_cb)
+	var empty_brains: Array[CrewBrain] = []
+	main_inst.set(&"crew_brains", empty_brains)
+	main_inst.set(&"_entities_root", null)
+	main_inst.set(&"player_ship", null)
+	main_inst.set(&"voyage_manager", null)
+	main_inst.set(&"location_banner", null)
+	main_inst.free()
+
+	holder.queue_free()
+	await physics_frames(4)
+	check(not is_instance_valid(holder), "Q22A test holder freed cleanly")
+	check_eq(Weather.lightning_struck.get_connections().size(), lightning_conns_before,
+		"CrewBrain Weather.lightning_struck connections restored cleanly (0 signal leaks)")
+	check_eq(VictoryFlare._active_flares, 0, "VictoryFlare._active_flares == 0 after Q22A teardown")
+	check_eq(ShipEmissaryFlag._active_instances, 0, "ShipEmissaryFlag._active_instances == 0 after Q22A teardown")
+
+	ShipEmissaryFlag.clear_shared_cache()
+	VictoryFlare.clear_shared_cache()
+	FortVault.clear_shared_cache()
+	FortBattery.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+	Carryable.clear_shared_glint_cache()
+	_restore_weather()
+

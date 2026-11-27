@@ -13,11 +13,26 @@ signal banner_shown(title: String, subtitle: String, style: StringName)
 const FADE_IN_SECONDS := 0.45
 const FADE_OUT_SECONDS := 0.65
 const DEFAULT_HOLD_SECONDS := 3.2
+const SHIMMER_DURATION := 1.15
 const MAX_QUEUE_SIZE := 2
 const VALID_STYLES: Array[StringName] = [&"island", &"outpost", &"threat"]
 
-const BANNER_TOP_Y := 74.0
-const BANNER_BOTTOM_Y := 166.0
+const SFX_OUTPOST := &"ship_bell"
+const SFX_ISLAND := &"ui_open"
+const SFX_THREAT := &"thunder_far"
+const SFX_OUTPOST_DB := -7.0
+const SFX_ISLAND_DB := -5.0
+const SFX_THREAT_DB := -6.5
+
+const BANNER_TOP_Y := 86.0
+const BANNER_BOTTOM_Y := 178.0
+
+## Set to false in quiet/headless tests to suppress 2D arrival audio cues.
+var play_audio: bool = true
+## Most recent manifest-verified arrival SFX played (persists until reset_audio_stats()).
+var last_arrival_sfx: StringName = &""
+## Cumulative arrival SFX cues played across activated banners (reset only via reset_audio_stats()).
+var arrival_sfx_count: int = 0
 
 var _root: Control = null
 var _art: _BannerArt = null
@@ -31,6 +46,7 @@ var _elapsed: float = 0.0
 var _alpha: float = 0.0
 var _slide_progress: float = 0.0
 var _rule_reveal: float = 0.0
+var _shimmer_progress: float = 0.0
 var _queue: Array[Dictionary] = []
 
 
@@ -42,6 +58,8 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	clear_banner()
+	if _art != null and is_instance_valid(_art):
+		_art._font = null
 
 
 func _process(delta: float) -> void:
@@ -107,6 +125,44 @@ func show_location(
 	return true
 
 
+## Return the manifest-verified 2D arrival SFX id for a banner visual style.
+static func arrival_sfx_for_style(style: StringName) -> StringName:
+	match style:
+		&"outpost":
+			return SFX_OUTPOST
+		&"threat":
+			return SFX_THREAT
+		_:
+			return SFX_ISLAND
+
+
+static func _arrival_sfx_volume_db(style: StringName) -> float:
+	match style:
+		&"outpost":
+			return SFX_OUTPOST_DB
+		&"threat":
+			return SFX_THREAT_DB
+		_:
+			return SFX_ISLAND_DB
+
+
+## Explicitly reset arrival SFX telemetry counters back to initial idle values.
+func reset_audio_stats() -> void:
+	last_arrival_sfx = &""
+	arrival_sfx_count = 0
+
+
+func _play_arrival_sfx(style: StringName) -> void:
+	if not play_audio:
+		return
+	var sfx_id := arrival_sfx_for_style(style)
+	if sfx_id == &"" or Audio == null or not Audio.has_sound(sfx_id):
+		return
+	Audio.play_sfx(sfx_id, Vector3.INF, _arrival_sfx_volume_db(style))
+	last_arrival_sfx = sfx_id
+	arrival_sfx_count += 1
+
+
 func _activate_entry(title: String, subtitle: String, style: StringName, hold_seconds: float) -> void:
 	_active = true
 	_current_title = title
@@ -117,6 +173,8 @@ func _activate_entry(title: String, subtitle: String, style: StringName, hold_se
 	_alpha = 0.0
 	_slide_progress = 0.0
 	_rule_reveal = 0.0
+	_shimmer_progress = 0.0
+	_play_arrival_sfx(_current_style)
 	_sync_art()
 	banner_shown.emit(_current_title, _current_subtitle, _current_style)
 
@@ -138,20 +196,24 @@ func step_banner(delta: float) -> void:
 	var hold_end := FADE_IN_SECONDS + _hold_seconds
 	var total_dur := hold_end + FADE_OUT_SECONDS
 
+	var shimmer_next := 1.0 if _elapsed >= SHIMMER_DURATION - 0.0001 else clampf(_elapsed / SHIMMER_DURATION, 0.0, 1.0)
 	if _elapsed < FADE_IN_SECONDS:
 		var t := clampf(_elapsed / FADE_IN_SECONDS, 0.0, 1.0)
 		_alpha = t * t * (3.0 - 2.0 * t)
 		_slide_progress = 1.0 - pow(1.0 - t, 3.0)
 		_rule_reveal = _slide_progress
+		_shimmer_progress = shimmer_next
 	elif _elapsed < hold_end:
 		_alpha = 1.0
 		_slide_progress = 1.0
 		_rule_reveal = 1.0
+		_shimmer_progress = shimmer_next
 	elif _elapsed < total_dur:
 		var t := clampf((_elapsed - hold_end) / FADE_OUT_SECONDS, 0.0, 1.0)
 		_alpha = 1.0 - (t * t * (3.0 - 2.0 * t))
 		_slide_progress = 1.0 + t * 0.25
 		_rule_reveal = 1.0
+		_shimmer_progress = shimmer_next
 	else:
 		if not _queue.is_empty():
 			var next_entry: Dictionary = _queue.pop_front()
@@ -169,6 +231,8 @@ func step_banner(delta: float) -> void:
 		_alpha = 0.0
 		_slide_progress = 0.0
 		_rule_reveal = 0.0
+		_shimmer_progress = 0.0
+		_art.shimmer_progress = 0.0
 		_art.visible = false
 		return
 
@@ -184,6 +248,7 @@ func _sync_art() -> void:
 	_art.alpha = _alpha
 	_art.slide_progress = _slide_progress
 	_art.rule_reveal = _rule_reveal
+	_art.shimmer_progress = _shimmer_progress
 	_art.visible = _active
 	_art.queue_redraw()
 
@@ -213,6 +278,11 @@ func get_current_alpha() -> float:
 	return _alpha if _active else 0.0
 
 
+## Return the arrival gilded shimmer sweep progress in 0..1 across SHIMMER_DURATION.
+func get_shimmer_progress() -> float:
+	return _shimmer_progress if _active else 0.0
+
+
 ## Return the number of queued pending banners waiting behind the active card.
 func get_queued_count() -> int:
 	return _queue.size()
@@ -240,9 +310,11 @@ func clear_banner() -> void:
 	_alpha = 0.0
 	_slide_progress = 0.0
 	_rule_reveal = 0.0
+	_shimmer_progress = 0.0
 	if _art != null and is_instance_valid(_art):
 		_art.visible = false
 		_art.alpha = 0.0
+		_art.shimmer_progress = 0.0
 		_art.title_text = ""
 		_art.subtitle_text = ""
 		_art.queue_redraw()
@@ -349,6 +421,7 @@ class _BannerArt:
 	var alpha: float = 0.0
 	var slide_progress: float = 1.0
 	var rule_reveal: float = 1.0
+	var shimmer_progress: float = 0.0
 	var _font: Font = null
 
 
@@ -368,6 +441,9 @@ class _BannerArt:
 					"subtitle": Color(1.0, 0.90, 0.62, 0.96),
 					"gem": Color(1.0, 0.94, 0.68, 1.0),
 					"shadow": Color(0.05, 0.03, 0.01, 0.86),
+					"shimmer_hi": Color(1.0, 0.96, 0.74, 0.96),
+					"shimmer_halo": Color(1.0, 0.86, 0.42, 0.48),
+					"shimmer_core": Color(1.0, 0.99, 0.92, 1.0),
 				}
 			&"threat":
 				return {
@@ -379,6 +455,9 @@ class _BannerArt:
 					"subtitle": Color(0.24, 0.94, 0.86, 0.96),
 					"gem": Color(0.96, 0.36, 0.28, 1.0),
 					"shadow": Color(0.03, 0.01, 0.02, 0.92),
+					"shimmer_hi": Color(0.38, 0.98, 0.90, 0.96),
+					"shimmer_halo": Color(0.98, 0.34, 0.26, 0.52),
+					"shimmer_core": Color(0.86, 1.0, 0.97, 1.0),
 				}
 			_:
 				return {
@@ -390,6 +469,9 @@ class _BannerArt:
 					"subtitle": Color(0.95, 0.84, 0.56, 0.95),
 					"gem": Color(0.96, 0.82, 0.42, 1.0),
 					"shadow": Color(0.05, 0.03, 0.01, 0.88),
+					"shimmer_hi": Color(1.0, 0.94, 0.68, 0.95),
+					"shimmer_halo": Color(0.96, 0.80, 0.38, 0.46),
+					"shimmer_core": Color(1.0, 0.98, 0.88, 1.0),
 				}
 
 
@@ -467,8 +549,60 @@ class _BannerArt:
 			# Accent diamond dots flanking the star.
 			_draw_diamond(Vector2(cx - star_gap - 12.0, rule_y), 3.0, _col_a(col_trim, 0.92))
 			_draw_diamond(Vector2(cx + star_gap + 12.0, rule_y), 3.0, _col_a(col_trim, 0.92))
-		_draw_compass_star(Vector2(cx, rule_y), 11.5 * lerpf(0.65, 1.0, reveal),
+		var star_radius := 11.5 * lerpf(0.65, 1.0, reveal)
+		_draw_compass_star(Vector2(cx, rule_y), star_radius,
 			_col_a(col_fil, 0.98), _col_a(col_trim, 0.92), _col_a(col_gem, 0.98))
+
+		# 4b. Arrival sweeping gilded shimmer across divider wings & compass star sunburst flare.
+		if shimmer_progress > 0.0 and shimmer_progress < 1.0:
+			var col_shim_hi: Color = pal["shimmer_hi"]
+			var col_shim_halo: Color = pal["shimmer_halo"]
+			var col_shim_core: Color = pal["shimmer_core"]
+			var wing_bell := sin(shimmer_progress * PI)
+			if rule_span > star_gap + 12.0 and wing_bell > 0.004:
+				var gleam_dist := lerpf(star_gap, rule_span, shimmer_progress)
+				var tip_taper := lerpf(1.0, 0.46, shimmer_progress)
+				var gleam_half_len := clampf((rule_span - star_gap) * 0.16, 12.0, 32.0) * tip_taper
+				var gleam_half_h := 3.2 * tip_taper
+				var wing_min_x := star_gap + 2.0
+				var wing_max_x := rule_span - 2.0
+				for side: float in [-1.0, 1.0]:
+					var gx := cx + side * gleam_dist
+					var lo := (cx - wing_max_x) if side < 0.0 else (cx + wing_min_x)
+					var hi := (cx - wing_min_x) if side < 0.0 else (cx + wing_max_x)
+					var left_x := clampf(gx - gleam_half_len, lo, hi)
+					var right_x := clampf(gx + gleam_half_len, lo, hi)
+					if right_x - left_x > 2.0:
+						var mid_x := (left_x + right_x) * 0.5
+						var half_span := (right_x - left_x) * 0.5
+						_draw_gleam_diamond(
+							Vector2(mid_x, rule_y),
+							half_span * 1.28,
+							gleam_half_h * 1.65,
+							_col_a(col_shim_halo, wing_bell)
+						)
+						_draw_gleam_diamond(
+							Vector2(mid_x, rule_y),
+							half_span,
+							gleam_half_h,
+							_col_a(col_shim_hi, 0.90 * wing_bell)
+						)
+						_draw_diamond(
+							Vector2(mid_x, rule_y),
+							(2.2 + 0.9 * wing_bell) * tip_taper,
+							_col_a(col_shim_core, 0.95 * wing_bell)
+						)
+
+			var star_flare := exp(-pow((shimmer_progress - 0.18) / 0.16, 2.0))
+			if star_flare > 0.008:
+				_draw_star_sunburst_gleam(
+					Vector2(cx, rule_y),
+					star_radius,
+					star_flare,
+					_col_a(col_shim_hi, 0.94 * star_flare),
+					_col_a(col_shim_halo, 0.80 * star_flare),
+					_col_a(col_shim_core, 0.98 * star_flare)
+				)
 
 		# 5. Bold uppercase Location Title with crisp warm dark drop shadow.
 		var title_y := (cy - 4.0) if subtitle_text != "" else (cy + 5.0)
@@ -612,3 +746,45 @@ class _BannerArt:
 			center + Vector2(-radius * 1.15, 0.0),
 		])
 		draw_colored_polygon(pts, col)
+
+
+	func _draw_gleam_diamond(center: Vector2, half_len: float, half_h: float, col: Color) -> void:
+		if col.a <= 0.002 or half_len <= 0.5 or half_h <= 0.2:
+			return
+		var pts := PackedVector2Array([
+			center + Vector2(-half_len, 0.0),
+			center + Vector2(0.0, -half_h),
+			center + Vector2(half_len, 0.0),
+			center + Vector2(0.0, half_h),
+		])
+		draw_colored_polygon(pts, col)
+
+
+	func _draw_star_sunburst_gleam(
+		center: Vector2,
+		radius: float,
+		flare: float,
+		col_hi: Color,
+		col_halo: Color,
+		col_core: Color
+	) -> void:
+		if col_hi.a <= 0.002:
+			return
+		# Soft radial warm halo + glowing inner jewel aura.
+		draw_circle(center, radius * (0.72 + 0.36 * flare), Color(col_halo.r, col_halo.g, col_halo.b, col_halo.a * 0.55))
+		draw_circle(center, radius * (0.42 + 0.22 * flare), col_halo)
+
+		# Crisp 4-ray cardinal sunburst cross.
+		var ray_len := radius * (1.28 + 0.52 * flare)
+		var ray_half_w := radius * (0.14 + 0.08 * flare)
+		_draw_gleam_diamond(center, ray_len, ray_half_w, col_hi)
+		_draw_gleam_diamond(center, ray_half_w, ray_len, col_hi)
+
+		# Shorter diagonal glint cross for an 8-point painterly star flare.
+		var diag_len := radius * (0.78 + 0.28 * flare) * 0.7071
+		var diag_w := 1.45 + 0.65 * flare
+		draw_line(center + Vector2(-diag_len, -diag_len), center + Vector2(diag_len, diag_len), col_hi, diag_w, true)
+		draw_line(center + Vector2(-diag_len, diag_len), center + Vector2(diag_len, -diag_len), col_hi, diag_w, true)
+
+		# Bright center gleam jewel.
+		draw_circle(center, radius * (0.24 + 0.14 * flare), col_core)

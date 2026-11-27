@@ -340,7 +340,7 @@ func record_ship_wreck(world_pos: Vector3, cargo_items: Array,
 
 	var port_label := String(last_outpost_id).replace("_", " ").capitalize()
 	if post_notices and Game != null:
-		Game.post_notice("Ship lost! Salvage buoy marked (%d gold recoverable) — ship restored at %s." % [
+		Game.post_notice("Ship lost! Salvage buoy marked (%d gold recoverable) -- ship restored at %s." % [
 			salvaged_value, port_label])
 	return wreck
 
@@ -572,7 +572,7 @@ func _trigger_rival_ship(heading_dir: Vector3, ship_node: Node, force_corsair: b
 	elif cargo_value_aboard >= 700:
 		archetype = &"drowned_sloop_raider"
 	var label := "Corsair Rival Sloop" if archetype == &"corsair_sloop" else "Drowned Sloop"
-	var msg := "Sail on the horizon — %s bearing %s (%d m)!" % [label, bearing, roundi(dist)]
+	var msg := "Sail on the horizon -- %s bearing %s (%d m)!" % [label, bearing, roundi(dist)]
 
 	var evt := _register_event(&"rival_ship", spawn_pos, 240.0, {
 		"archetype": archetype,
@@ -590,7 +590,7 @@ func _trigger_ghost_ship(heading_dir: Vector3) -> Dictionary:
 	var offset := _forward_arc_offset(heading_dir, dist, 1.25)
 	var spawn_pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
 	var bearing := compass_bearing(player_ship_pos, spawn_pos)
-	var msg := "Pale sea-fire on the horizon — Ghost Ship bearing %s (%d m)!" % [bearing, roundi(dist)]
+	var msg := "Pale sea-fire on the horizon -- Ghost Ship bearing %s (%d m)!" % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"ghost_ship", spawn_pos, 260.0, {
 		"bearing": bearing,
@@ -609,7 +609,7 @@ func _trigger_leviathan(heading_dir: Vector3, ship_node: Node) -> Dictionary:
 	var offset := _forward_arc_offset(heading_dir, dist, 0.65)
 	var center := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
 	var bearing := compass_bearing(player_ship_pos, center)
-	var msg := "The sea boils ink-black ahead — Abyssal Leviathan stirring bearing %s (%d m)!" % [bearing, roundi(dist)]
+	var msg := "The sea boils ink-black ahead -- Abyssal Leviathan stirring bearing %s (%d m)!" % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"leviathan", center, 300.0, {
 		"bearing": bearing,
@@ -626,7 +626,7 @@ func _trigger_leviathan(heading_dir: Vector3, ship_node: Node) -> Dictionary:
 func _trigger_fort_siege(fort_pos: Vector3) -> Dictionary:
 	var dist := Vector2(fort_pos.x - player_ship_pos.x, fort_pos.z - player_ship_pos.z).length()
 	var bearing := compass_bearing(player_ship_pos, fort_pos)
-	var msg := "Signal brazier lit over the sea fort — Fort Siege active bearing %s (%d m)!" % [bearing, roundi(dist)]
+	var msg := "Signal brazier lit over the sea fort -- Fort Siege active bearing %s (%d m)!" % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"fort_siege", fort_pos, 420.0, {
 		"bearing": bearing,
@@ -645,7 +645,7 @@ func _trigger_castaway(heading_dir: Vector3) -> Dictionary:
 	var offset := _forward_arc_offset(heading_dir, dist, 0.55)
 	var pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
 	var bearing := compass_bearing(player_ship_pos, pos)
-	var msg := "Distress lantern waving on a raft — Castaway sighting bearing %s (%d m)." % [bearing, roundi(dist)]
+	var msg := "Distress lantern waving on a raft -- Castaway sighting bearing %s (%d m)." % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"castaway", pos, 220.0, {
 		"bearing": bearing,
@@ -668,7 +668,7 @@ func _trigger_storm_cell(heading_dir: Vector3) -> Dictionary:
 	var drift_speed := _rng.randf_range(4.5, 8.5)
 	var velocity := Vector3(sin(cross_angle), 0.0, -cos(cross_angle)) * drift_speed
 	var bearing := compass_bearing(player_ship_pos, center)
-	var msg := "Dark squall building ahead — storm cell bearing %s (%d m)!" % [bearing, roundi(dist)]
+	var msg := "Dark squall building ahead -- storm cell bearing %s (%d m)!" % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"storm_cell", center, 210.0, {
 		"radius": radius,
@@ -691,7 +691,7 @@ func _trigger_flotsam(heading_dir: Vector3) -> Dictionary:
 	var pos := Vector3(player_ship_pos.x + offset.x, 0.0, player_ship_pos.z + offset.z)
 	var count := _rng.randi_range(2, 5)
 	var bearing := compass_bearing(player_ship_pos, pos)
-	var msg := "Flotsam barrels bobbing off the bow — bearing %s (%d m)." % [bearing, roundi(dist)]
+	var msg := "Flotsam barrels bobbing off the bow -- bearing %s (%d m)." % [bearing, roundi(dist)]
 
 	var evt := _register_event(&"flotsam_barrels", pos, 180.0, {
 		"count": count,
@@ -770,7 +770,7 @@ func _trigger_shark_pack(swimmer_pos: Vector3) -> Dictionary:
 	var center := Vector3(swimmer_pos.x + sin(az) * dist, 0.0, swimmer_pos.z - cos(az) * dist)
 	var count := _rng.randi_range(2, 4)
 	var bearing := compass_bearing(swimmer_pos, center)
-	var msg := "Dorsal fins cutting the swell — shark pack bearing %s!" % bearing
+	var msg := "Dorsal fins cutting the swell -- shark pack bearing %s!" % bearing
 
 	var evt := _register_event(&"shark_pack", center, 95.0, {
 		"count": count,

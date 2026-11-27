@@ -68,7 +68,7 @@ func tick(delta: float) -> void:
 			abandon_voyage("Charter deadline expired.")
 		elif not _late_warned and elapsed_seconds > limit:
 			_late_warned = true
-			_notice("Charter clock ran out — express bonus lost! Deliver soon before the bill voids.")
+			_notice("Charter clock ran out -- express bonus lost! Deliver soon before the bill voids.")
 
 
 func has_active_voyage() -> bool:
@@ -133,7 +133,7 @@ func start_voyage(voyage: Dictionary) -> bool:
 	var objective := get_current_objective()
 	voyage_started.emit(active_voyage)
 	voyage_stage_changed.emit(current_stage_index, objective)
-	_notice("Voyage begun: %s — %s" % [String(active_voyage.get("title", "Voyage")), objective])
+	_notice("Voyage begun: %s -- %s" % [String(active_voyage.get("title", "Voyage")), objective])
 	return true
 
 
@@ -195,7 +195,7 @@ func notify_clue_solved(_clue_index: int = -1) -> void:
 	var req := maxi(1, int(st.get("required_count", 1)))
 	stage_progress += 1
 	if stage_progress >= req:
-		_notice("Riddle solved — the dig site is revealed!")
+		_notice("Riddle solved -- the dig site is revealed!")
 		_advance_stage()
 	else:
 		_notice("Riddle clue %d of %d solved!" % [stage_progress, req])

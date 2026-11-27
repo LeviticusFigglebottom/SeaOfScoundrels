@@ -1217,3 +1217,215 @@ func test_q21b_radial_wheel_hover_pop_animation_and_tick_sfx() -> void:
 	check(not is_instance_valid(wheel), "Q21B RadialWheel frees cleanly with 0 leaks")
 
 
+# ---------------------------------------------------------------------------
+# 10. Q22B: LocationBanner Arrival Chimes & Shimmer + Shipwright Confirm Flash
+# ---------------------------------------------------------------------------
+
+func test_q22b_location_banner_arrival_chimes_shimmer_and_shipwright_confirm_flash() -> void:
+	# 1. Verify manifest-registered arrival SFX mappings for all 3 LocationBanner styles.
+	check_eq(LocationBanner.arrival_sfx_for_style(&"outpost"), &"ship_bell",
+		"outpost banner maps to &'ship_bell'")
+	check_eq(LocationBanner.arrival_sfx_for_style(&"island"), &"ui_open",
+		"island banner maps to &'ui_open'")
+	check_eq(LocationBanner.arrival_sfx_for_style(&"threat"), &"thunder_far",
+		"threat banner maps to &'thunder_far'")
+	check(Audio.has_sound(&"ship_bell"), "Audio manifest registers &'ship_bell'")
+	check(Audio.has_sound(&"ui_open"), "Audio manifest registers &'ui_open'")
+	check(Audio.has_sound(&"thunder_far"), "Audio manifest registers &'thunder_far'")
+
+	var banner := LocationBanner.new()
+	add_child(banner)
+	banner.set_process(false)
+	await get_tree().process_frame
+
+	for c_node in banner.find_children("*", "Control", true, false):
+		var ctrl := c_node as Control
+		check_eq(ctrl.mouse_filter, Control.MOUSE_FILTER_IGNORE,
+			"Q22B LocationBanner control '%s' uses MOUSE_FILTER_IGNORE" % ctrl.name)
+
+	check(banner.play_audio, "LocationBanner defaults play_audio = true")
+	check_eq(banner.last_arrival_sfx, &"", "LocationBanner starts with empty last_arrival_sfx")
+	check_eq(banner.arrival_sfx_count, 0, "LocationBanner starts with arrival_sfx_count = 0")
+	check_near(banner.get_shimmer_progress(), 0.0, 0.001, "idle shimmer progress is 0.0")
+
+	# Outpost arrival -> &'ship_bell' + shimmer sweep 0.0 -> mid -> 1.0 across 1.15 s!
+	check(banner.show_location("Port Scoundrel", "Outpost Harbour -- Safe Anchorage", &"outpost", 2.5),
+		"show_location activates outpost banner")
+	check_eq(banner.last_arrival_sfx, &"ship_bell", "outpost arrival plays &'ship_bell'")
+	check_eq(banner.arrival_sfx_count, 1, "arrival_sfx_count increments to 1")
+	check_near(banner.get_shimmer_progress(), 0.0, 0.001, "shimmer starts at 0.0 on activation")
+
+	# Step near star sunburst flare peak (~0.18 * 1.15 s) and exercise _draw().
+	banner.step_banner(0.21)
+	var flare_prog := banner.get_shimmer_progress()
+	check(flare_prog > 0.14 and flare_prog < 0.24,
+		"shimmer advances smoothly through compass-star sunburst peak (got %.3f)" % flare_prog)
+	await get_tree().process_frame
+
+	# Step to exact midpoint (0.575 s of 1.15 s -> 0.50) and exercise wing gleam _draw().
+	banner.step_banner(0.365)
+	check_near(banner.get_shimmer_progress(), 0.50, 0.01,
+		"shimmer hits 0.50 at 0.575 s midpoint (got %.3f)" % banner.get_shimmer_progress())
+	await get_tree().process_frame
+
+	# Step to 1.15 s completion and confirm clamp at 1.0 while still holding!
+	banner.step_banner(0.575)
+	check_near(banner.get_shimmer_progress(), 1.0, 0.005,
+		"shimmer reaches 1.0 at SHIMMER_DURATION (1.15 s)")
+	banner.step_banner(0.35)
+	check_near(banner.get_shimmer_progress(), 1.0, 0.005,
+		"shimmer remains clamped at 1.0 after 1.15 s while holding")
+	banner.clear_banner()
+	check(not banner.is_banner_active(), "clear_banner deactivates outpost banner cleanly")
+	check_near(banner.get_shimmer_progress(), 0.0, 0.001, "clear_banner resets shimmer progress to 0.0")
+
+	# Island arrival -> &'ui_open' + shimmer draw.
+	check(banner.show_location("Cutlass Cay", "Uncharted Treasure Cay", &"island", 1.8),
+		"show_location activates island banner")
+	check_eq(banner.last_arrival_sfx, &"ui_open", "island arrival plays &'ui_open'")
+	check_eq(banner.arrival_sfx_count, 2, "arrival_sfx_count increments to 2")
+	banner.step_banner(0.42)
+	check(banner.get_shimmer_progress() > 0.30 and banner.get_shimmer_progress() < 0.45,
+		"island banner shimmer advances cleanly (got %.3f)" % banner.get_shimmer_progress())
+	await get_tree().process_frame
+	banner.clear_banner()
+
+	# Threat arrival -> &'thunder_far' + seafoam-crimson shimmer draw.
+	check(banner.show_location("Sovereign's Bastion", "Grand Citadel -- Tier IV Sea Fortress", &"threat", 1.8),
+		"show_location activates threat banner")
+	check_eq(banner.last_arrival_sfx, &"thunder_far", "threat arrival plays &'thunder_far'")
+	check_eq(banner.arrival_sfx_count, 3, "arrival_sfx_count increments to 3")
+	banner.step_banner(0.46)
+	check(banner.get_shimmer_progress() > 0.35 and banner.get_shimmer_progress() < 0.50,
+		"threat banner shimmer advances cleanly (got %.3f)" % banner.get_shimmer_progress())
+	await get_tree().process_frame
+	banner.clear_banner()
+
+	# play_audio = false suppresses audio cleanly without incrementing arrival_sfx_count!
+	banner.play_audio = false
+	check(banner.show_location("Barnacle Haven", "Outpost Harbour -- Safe Anchorage", &"outpost", 1.5),
+		"show_location succeeds while play_audio = false")
+	check_eq(banner.arrival_sfx_count, 3, "play_audio = false suppresses arrival SFX count increment")
+	check_eq(banner.last_arrival_sfx, &"thunder_far", "play_audio = false leaves last_arrival_sfx untouched")
+	banner.clear_banner()
+	banner.reset_audio_stats()
+	check_eq(banner.arrival_sfx_count, 0, "reset_audio_stats zeroes arrival_sfx_count")
+	check_eq(banner.last_arrival_sfx, &"", "reset_audio_stats clears last_arrival_sfx")
+
+	# 2. ShipwrightMenu framed parchment status strip & smooth gold/warn confirmation flash!
+	var saved_profile: Profile = Game.profile
+	var test_prof := Profile.new()
+	test_prof.data["gold"] = 50
+	test_prof.data["ship_class"] = "sloop"
+	Game.profile = test_prof
+
+	var sw := ShipwrightMenu.new()
+	add_child(sw)
+	await get_tree().process_frame
+	sw.set_process(false)
+	sw.open_menu(ShipwrightMenu.TAB_SHIPWRIGHT)
+	await get_tree().process_frame
+
+	var status_panel := sw.find_child("MenuStatusPanel", true, false) as PanelContainer
+	var status_lbl := sw.find_child("MenuStatusLabel", true, false) as Label
+	check(status_panel != null and status_lbl != null,
+		"ShipwrightMenu mounts framed MenuStatusPanel and MenuStatusLabel")
+	if status_panel != null and status_lbl != null:
+		check_eq(status_lbl.get_parent(), status_panel, "MenuStatusLabel sits inside MenuStatusPanel")
+	var sb_ref: StyleBoxFlat = status_panel.get_theme_stylebox("panel") as StyleBoxFlat if status_panel != null else null
+	check(sb_ref != null, "MenuStatusPanel uses a pre-built reusable StyleBoxFlat")
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "status flash starts idle at 0.0")
+	check_eq(sw.get_status_flash_kind(), &"", "status flash kind starts idle as &''")
+
+	# Successful equip -> &'gold' flash (1.0 -> mid -> 0.0 over 0.90 s with zero StyleBox reallocation)!
+	var equip_res := sw.buy_or_equip_unlock(&"hull_standard")
+	check(bool(equip_res.get("ok", false)), "equipping owned hull_standard succeeds")
+	check_eq(sw.get_status_flash_kind(), &"gold", "successful equip triggers &'gold' confirmation flash")
+	check_near(sw.get_status_flash_strength(), 1.0, 0.005, "gold flash starts at peak strength 1.0")
+	if sb_ref != null:
+		check(sb_ref.bg_color.is_equal_approx(ShipwrightMenu.STATUS_GOLD_BG),
+			"gold flash peaks at glowing gilded parchment background")
+		check(sb_ref.border_color.is_equal_approx(HudIcons.COL_GOLD),
+			"gold flash peaks at HudIcons.COL_GOLD border")
+
+	sw.step_feedback(0.25)
+	var mid_gold_str := sw.get_status_flash_strength()
+	check(mid_gold_str > 0.15 and mid_gold_str < 0.70,
+		"step_feedback(0.25) smoothly eases gold flash strength downward (got %.3f)" % mid_gold_str)
+	check_eq(sw.get_status_flash_kind(), &"gold", "gold flash kind persists mid-decay")
+	if status_panel != null and sb_ref != null:
+		check_eq(status_panel.get_theme_stylebox("panel"), sb_ref,
+			"step_feedback mutates existing StyleBoxFlat in-place (0 per-frame allocations)")
+
+	sw.step_feedback(0.65)
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "gold flash decays cleanly to 0.0 at 0.90 s")
+	check_eq(sw.get_status_flash_kind(), &"", "gold flash kind clears to &'' when settled")
+	if sb_ref != null:
+		check(sb_ref.bg_color.is_equal_approx(ShipwrightMenu.STATUS_REST_BG),
+			"status panel returns to resting parchment background after flash")
+		check(sb_ref.border_color.is_equal_approx(HudIcons.COL_INK_SOFT),
+			"status panel returns to HudIcons.COL_INK_SOFT border after flash")
+
+	# Successful ship christening -> &'gold' flash!
+	var new_ship_name := sw.cycle_ship_name()
+	check(new_ship_name != "" and _is_strict_ascii(new_ship_name), "cycle_ship_name returns strict-ASCII name")
+	check_eq(sw.get_status_flash_kind(), &"gold", "cycle_ship_name triggers &'gold' flash")
+	check_near(sw.get_status_flash_strength(), 1.0, 0.005, "christen flash peaks at 1.0")
+	sw.step_feedback(0.90)
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "christen flash settles cleanly to 0.0")
+
+	# Successful quality preset -> &'gold' flash!
+	sw.apply_quality_preset(1)
+	check_eq(sw.get_status_flash_kind(), &"gold", "apply_quality_preset triggers &'gold' flash")
+	check_near(sw.get_status_flash_strength(), 1.0, 0.005, "quality preset flash peaks at 1.0")
+	sw.step_feedback(0.90)
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "quality preset flash settles cleanly to 0.0")
+
+	# Insufficient-gold purchase failure -> &'warn' coral-crimson flash!
+	var fail_res := sw.buy_or_equip_unlock(&"tool_gilded_spyglass")
+	check(not bool(fail_res.get("ok", true)), "unaffordable unlock purchase fails cleanly with 50 gold")
+	check_eq(sw.get_status_flash_kind(), &"warn", "insufficient-gold failure triggers &'warn' flash")
+	check_near(sw.get_status_flash_strength(), 1.0, 0.005, "warn flash peaks at 1.0")
+	if sb_ref != null:
+		check(sb_ref.bg_color.is_equal_approx(ShipwrightMenu.STATUS_WARN_BG),
+			"warn flash peaks at warm coral-parchment background")
+		check(sb_ref.border_color.is_equal_approx(HudIcons.COL_CRIMSON),
+			"warn flash peaks at HudIcons.COL_CRIMSON border")
+	if status_lbl != null:
+		check(_is_strict_ascii(status_lbl.text) and status_lbl.text != "",
+			"warn status text '%s' is non-empty strict ASCII" % status_lbl.text)
+
+	sw.step_feedback(0.30)
+	var mid_warn_str := sw.get_status_flash_strength()
+	check(mid_warn_str > 0.15 and mid_warn_str < 0.65,
+		"step_feedback(0.30) smoothly eases warn flash downward (got %.3f)" % mid_warn_str)
+	check_eq(sw.get_status_flash_kind(), &"warn", "warn flash kind persists mid-decay")
+	sw.step_feedback(0.60)
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "warn flash decays cleanly to 0.0 at 0.90 s")
+	check_eq(sw.get_status_flash_kind(), &"", "warn flash clears cleanly to &''")
+
+	# Sufficient-gold purchase -> &'gold' flash!
+	test_prof.data["gold"] = 500
+	var buy_ok := sw.buy_or_equip_unlock(&"tool_gilded_spyglass")
+	check(bool(buy_ok.get("ok", false)) and bool(buy_ok.get("purchased", false)),
+		"purchasing tool_gilded_spyglass with 500 gold succeeds")
+	check_eq(sw.get_status_flash_kind(), &"gold", "successful purchase triggers &'gold' flash")
+	check_near(sw.get_status_flash_strength(), 1.0, 0.005, "purchase gold flash peaks at 1.0")
+
+	# Strict ASCII verification across EVERY Label, Button & status widget in ShipwrightMenu!
+	var checked_sw := _check_tree_strict_ascii(sw, "Q22B_ShipwrightMenu")
+	check(checked_sw >= 35, "verified 100%% strict ASCII across Q22B ShipwrightMenu (checked %d)" % checked_sw)
+
+	# 3. Clean zero-leak teardown!
+	sw.close_menu()
+	check_near(sw.get_status_flash_strength(), 0.0, 0.001, "close_menu resets status flash cleanly")
+	Game.profile = saved_profile
+	Game.save()
+	sw.queue_free()
+	banner.queue_free()
+	await physics_frames(3)
+	check(not is_instance_valid(sw) and not is_instance_valid(banner),
+		"Q22B ShipwrightMenu and LocationBanner free cleanly with 0 leaks")
+
+
+
