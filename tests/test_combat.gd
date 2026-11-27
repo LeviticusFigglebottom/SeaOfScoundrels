@@ -1964,4 +1964,286 @@ func test_q19b_combat_3d_parry_and_block_clash_spark_star() -> void:
 		"CombatComponent.clear_shared_cache() releases _parry_star_mesh & all static caches cleanly (0 leaks)")
 
 
+func test_q23a_ghost_ship_spectral_wake_motes_phase_ring_and_ascii() -> void:
+	_begin()
+	_fast(false)
+	Ship.clear_shared_cache()
+
+	# 1. Strict-ASCII source guard on src/combat/ai_ship_brain.gd + Vulkan RD MultiMesh teardown guard on ship.gd.
+	var ai_src := FileAccess.get_file_as_string("res://src/combat/ai_ship_brain.gd")
+	check(ai_src.length() > 500, "ai_ship_brain.gd source loads cleanly for Q23A ASCII audit")
+	var non_ascii_count := 0
+	for ci in ai_src.length():
+		if ai_src.unicode_at(ci) >= 128:
+			non_ascii_count += 1
+	check_eq(non_ascii_count, 0, "src/combat/ai_ship_brain.gd must contain 0 non-ASCII characters (got %d)" % non_ascii_count)
+	check(ai_src.contains("Ghost ship vanished into the mist -- watch the opposite beam!"),
+		"ai_ship_brain.gd uses strict-ASCII '--' notice string")
+
+	var ship_src := FileAccess.get_file_as_string("res://src/ship/ship.gd")
+	check(not ship_src.contains("_spectral_wake_motes_mm.mesh = null")
+		and not ship_src.contains("_spectral_wake_motes_mm.instance_count = 0"),
+		"ship.gd must NOT mutate SpectralWakeMotes MultiMesh .mesh or .instance_count on teardown (Vulkan RD rule)")
+	check(ship_src.contains("_spectral_wake_motes_mmi.visible = false")
+		and ship_src.contains("_spectral_wake_motes_mmi.material_override = null")
+		and ship_src.contains("_spectral_wake_motes_mmi.multimesh = null"),
+		"ship.gd tears down SpectralWakeMotes cleanly via visible=false, material_override=null, multimesh=null")
+
+	# 2. Spawn player, drowned, corsair, and two ghost ships to verify isolation & static sharing.
+	var player_ship := SLOOP_SCENE.instantiate() as Ship
+	player_ship.enable_effects = false
+	player_ship.faction = &"player"
+	_root.add_child(player_ship)
+	player_ship.global_position = Vector3(0.0, 0.0, 0.0)
+
+	var drowned := AIShipBrain.spawn_enemy_sloop(&"drowned_sloop", Vector3(-60.0, 0.0, 0.0), _root, player_ship)
+	drowned.enable_effects = false
+	var corsair := AIShipBrain.spawn_enemy_sloop(&"corsair_sloop", Vector3(0.0, 0.0, -70.0), _root, player_ship)
+	corsair.enable_effects = false
+	var ghost := AIShipBrain.spawn_enemy_sloop(&"ghost_ship", Vector3(58.0, 0.0, 0.0), _root, player_ship)
+	ghost.enable_effects = false
+	var ghost_b := AIShipBrain.spawn_enemy_sloop(&"ghost_ship", Vector3(110.0, 0.0, -40.0), _root, player_ship)
+	ghost_b.enable_effects = false
+	await physics_frames(3)
+
+	ghost.set_process(false)
+	ghost.set_physics_process(false)
+	ghost_b.set_process(false)
+	ghost_b.set_physics_process(false)
+	var brain := ghost.get_node(^"AIShipBrain") as AIShipBrain
+	brain.set_physics_process(false)
+	var brain_b := ghost_b.get_node(^"AIShipBrain") as AIShipBrain
+	brain_b.set_physics_process(false)
+
+	# Non-ghost ships must NOT allocate or activate SpectralWakeMotes / SpectralPhaseRing!
+	check(player_ship.get_spectral_wake_motes() == null and player_ship.get_spectral_phase_ring() == null,
+		"player ship has zero SpectralWakeMotes / SpectralPhaseRing nodes")
+	check(drowned.get_spectral_wake_motes() == null and drowned.get_spectral_phase_ring() == null,
+		"drowned ship has zero SpectralWakeMotes / SpectralPhaseRing nodes")
+	check(corsair.get_spectral_wake_motes() == null and corsair.get_spectral_phase_ring() == null,
+		"corsair ship has zero SpectralWakeMotes / SpectralPhaseRing nodes")
+	player_ship.trigger_spectral_phase_ring(1.0)
+	check(player_ship.get_spectral_phase_ring() == null and is_zero_approx(player_ship.get_spectral_phase_ring_energy()),
+		"trigger_spectral_phase_ring() is a strict no-op on non-ghost ships")
+
+	# 3. Audit Ghost Ship SpectralWakeMotes (24 instances x 8-tri sculpted ArrayMesh = 192 tris, 0 primitives).
+	var motes := ghost.get_spectral_wake_motes()
+	var motes_b := ghost_b.get_spectral_wake_motes()
+	check(motes != null and motes.name == &"SpectralWakeMotes",
+		"ghost ship mounts SpectralWakeMotes and exposes get_spectral_wake_motes()")
+	check(motes_b != null, "second ghost ship mounts SpectralWakeMotes")
+	if motes == null or motes_b == null:
+		await _end()
+		return
+
+	check(motes.visible, "SpectralWakeMotes is visible on a solid Ghost Ship")
+	check_eq(motes.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"SpectralWakeMotes disables shadow casting")
+	check_eq(motes.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"SpectralWakeMotes disables GI")
+	check_near(motes.visibility_range_end, 420.0, 0.01,
+		"SpectralWakeMotes sets visibility_range_end == 420.0 m")
+
+	var mm := motes.multimesh
+	var mm_b := motes_b.multimesh
+	check(mm != null and mm.instance_count == 24 and mm.use_colors,
+		"SpectralWakeMotes uses 24 colored MultiMesh instances")
+	check(mm != null and mm.mesh is ArrayMesh and not (mm.mesh is PrimitiveMesh),
+		"SpectralWakeMotes uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(mm != null and mm_b != null and mm.mesh == mm_b.mesh and mm.mesh == Ship._spectral_mote_mesh,
+		"Ghost Ships share statically cached _spectral_mote_mesh")
+
+	var mote_am := mm.mesh as ArrayMesh
+	var mote_arr := mote_am.surface_get_arrays(0)
+	var mote_verts: PackedVector3Array = mote_arr[Mesh.ARRAY_VERTEX]
+	var mote_norms: PackedVector3Array = mote_arr[Mesh.ARRAY_NORMAL]
+	var mote_tris := floori(float(mote_verts.size()) / 3.0)
+	check_eq(mote_tris, 8, "SpectralWakeMotes octahedron has exact 8 triangles (24 x 8 = 192 tris, got %d)" % mote_tris)
+	var mote_bad_norms := 0
+	for nv: Vector3 in mote_norms:
+		if not nv.is_finite() or absf(nv.length() - 1.0) > 0.002:
+			mote_bad_norms += 1
+	check_eq(mote_bad_norms, 0, "SpectralWakeMotes octahedron has finite unit outward normals on every vertex")
+
+	var mmat := motes.material_override as StandardMaterial3D
+	check(mmat != null and mmat == motes_b.material_override and mmat == Ship._spectral_mote_mat,
+		"Ghost Ships share static _spectral_mote_mat")
+	check(mmat != null and mmat.vertex_color_use_as_albedo and mmat.vertex_color_is_srgb
+		and mmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and mmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and mmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and mmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and mmat.albedo_texture == null and mmat.normal_texture == null and mmat.roughness_texture == null,
+		"SpectralWakeMotes uses zero-VRAM unshaded additive sRGB StandardMaterial3D")
+
+	# Verify flank spatial envelope scaled by hull_scale, deterministic aft/upward drift, and phase/flare reactivity.
+	var hs := ghost.hull_scale
+	var pos_before := ghost.get_spectral_wake_mote_positions()
+	check_eq(pos_before.size(), 24, "get_spectral_wake_mote_positions() returns all 24 flank soul-ember positions")
+	var port_count := 0
+	var stbd_count := 0
+	var bounds_ok := true
+	for i in pos_before.size():
+		var p := pos_before[i]
+		if p.x < 0.0:
+			port_count += 1
+		else:
+			stbd_count += 1
+		var ax := absf(p.x) / hs
+		var ay := p.y / hs
+		var az := p.z / hs
+		if ax < 2.19 or ax > 4.21 or ay < 0.19 or ay > 5.51 or az < -5.51 or az > 7.51:
+			bounds_ok = false
+	check(bounds_ok and port_count == 12 and stbd_count == 12,
+		"all 24 SpectralWakeMotes populate port/starboard hull flanks scaled by hull_scale (12/12)")
+	if DisplayServer.get_name() != "headless" and pos_before.size() > 0:
+		check(mm.get_instance_transform(0).origin.distance_to(pos_before[0]) < 0.001,
+			"GPU MultiMesh transform matches cached SpectralWakeMotes position")
+
+	ghost.step_spectral_vfx(0.45)
+	var pos_after := ghost.get_spectral_wake_mote_positions()
+	var moved_count := 0
+	var total_disp := 0.0
+	for i in pos_after.size():
+		var d := pos_after[i].distance_to(pos_before[i])
+		if d > 0.05:
+			moved_count += 1
+		total_disp += d
+	var avg_disp := total_disp / maxf(float(pos_after.size()), 1.0)
+	check(moved_count == 24 and avg_disp > 0.35,
+		"step_spectral_vfx(0.45) visibly spirals & drifts all 24 motes (avg_disp=%.2f m)" % avg_disp)
+
+	# Reactivity to set_spectral_phase(1.0, 0.0) vs flare (1.0, 1.5) vs dissolved (0.0, 1.5) -> restored (1.0, 0.0).
+	ghost.set_spectral_phase(1.0, 0.0)
+	var base_cols := ghost.get_spectral_wake_mote_colors()
+	check_eq(base_cols.size(), 24, "get_spectral_wake_mote_colors() returns all 24 additive colors")
+	var base_lum_sum := 0.0
+	for c: Color in base_cols:
+		base_lum_sum += c.r + c.g + c.b
+	ghost.set_spectral_phase(1.0, 1.5)
+	check(motes.visible, "SpectralWakeMotes remains visible during phase flare at alpha=1.0")
+	var flare_cols := ghost.get_spectral_wake_mote_colors()
+	var flare_lum_sum := 0.0
+	for c: Color in flare_cols:
+		flare_lum_sum += c.r + c.g + c.b
+	check(flare_lum_sum > base_lum_sum * 1.55,
+		"SpectralWakeMotes pulses markedly brighter during _spectral_flare (%.2f vs %.2f)" % [flare_lum_sum, base_lum_sum])
+
+	ghost.set_spectral_phase(0.0, 1.5)
+	check(not motes.visible, "set_spectral_phase(0.0, 1.5) hides SpectralWakeMotes when phase <= 0.02")
+	ghost.set_spectral_phase(1.0, 0.0)
+	check(motes.visible, "set_spectral_phase(1.0, 0.0) restores SpectralWakeMotes visibility cleanly")
+
+	# Switching faction away from ghost hides spectral VFX cleanly.
+	ghost_b.faction = &"player"
+	check(not motes_b.visible, "switching faction away from &'ghost' immediately hides SpectralWakeMotes")
+
+	# 4. Audit Ghost Ship SpectralPhaseRing (176-tri concentric 2-ring aqua-emerald waterline vortex halo).
+	var ring := ghost.get_spectral_phase_ring()
+	var ring_b := ghost_b.get_spectral_phase_ring()
+	check(ring != null and ring.name == &"SpectralPhaseRing",
+		"ghost ship mounts SpectralPhaseRing and exposes get_spectral_phase_ring()")
+	if ring == null:
+		await _end()
+		return
+
+	check(not ring.visible and is_zero_approx(ghost.get_spectral_phase_ring_energy()),
+		"SpectralPhaseRing starts strictly hidden with 0.0 energy when inactive")
+	check_eq(ring.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+		"SpectralPhaseRing disables shadow casting")
+	check_eq(ring.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+		"SpectralPhaseRing disables GI")
+	check_near(ring.visibility_range_end, 420.0, 0.01,
+		"SpectralPhaseRing sets visibility_range_end == 420.0 m")
+	check(ring.mesh is ArrayMesh and not (ring.mesh is PrimitiveMesh),
+		"SpectralPhaseRing uses sculpted ArrayMesh (zero PrimitiveMesh)")
+	check(ring_b != null and ring.mesh == ring_b.mesh and ring.mesh == Ship._spectral_phase_ring_mesh,
+		"Ghost Ships share static _spectral_phase_ring_mesh")
+	check(ring.material_override != ring_b.material_override,
+		"each Ghost Ship uses an isolated per-instance SpectralPhaseRing StandardMaterial3D")
+
+	var ring_am := ring.mesh as ArrayMesh
+	var ring_arr := ring_am.surface_get_arrays(0)
+	var ring_verts: PackedVector3Array = ring_arr[Mesh.ARRAY_VERTEX]
+	var ring_norms: PackedVector3Array = ring_arr[Mesh.ARRAY_NORMAL]
+	var ring_cols: PackedColorArray = ring_arr[Mesh.ARRAY_COLOR]
+	var ring_tris := floori(float(ring_verts.size()) / 3.0)
+	check_eq(ring_tris, 176, "SpectralPhaseRing has exact 176 triangles (22 segs x 2 rings, got %d)" % ring_tris)
+	var ring_bad_norms := 0
+	for nv: Vector3 in ring_norms:
+		if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+			ring_bad_norms += 1
+	check_eq(ring_bad_norms, 0, "SpectralPhaseRing assigns finite unit (0, 1, 0) normal to every vertex")
+	var ring_black_rim := 0
+	var ring_aqua_ridge := 0
+	for cv: Color in ring_cols:
+		if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			ring_black_rim += 1
+		elif cv.g > cv.r and cv.g >= 0.55 and cv.b >= 0.40:
+			ring_aqua_ridge += 1
+	check(ring_black_rim >= 176 and ring_aqua_ridge >= 176,
+		"SpectralPhaseRing feathers bright aqua-emerald ridges smoothly to pure black zero-rim edges")
+
+	var rmat := ring.material_override as StandardMaterial3D
+	check(rmat != null and rmat.vertex_color_use_as_albedo and rmat.vertex_color_is_srgb
+		and rmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and rmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and rmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and rmat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and rmat.albedo_texture == null and rmat.normal_texture == null and rmat.roughness_texture == null,
+		"SpectralPhaseRing uses zero-VRAM unshaded additive sRGB StandardMaterial3D")
+
+	# AIShipBrain.trigger_phase_shift() launches SpectralPhaseRing (scale 0.85 -> 3.65, +48 deg, energy 1.65 -> 0.0 over 1.35 s).
+	check(brain.trigger_phase_shift(), "AIShipBrain.trigger_phase_shift() triggers dissolve cleanly")
+	var ring_e0 := ghost.get_spectral_phase_ring_energy()
+	var ring_s0 := ring.scale.x
+	var ring_r0 := ring.rotation.y
+	check(ring.visible, "trigger_phase_shift() activates SpectralPhaseRing immediately")
+	check(ring_e0 > 1.2 and absf(ring_e0 - 1.65) < 0.02,
+		"SpectralPhaseRing launches at peak energy ~1.65 (> 1.2, got %.3f)" % ring_e0)
+	check_near(ring_s0, 0.85, 0.01, "SpectralPhaseRing starts at scale 0.85 (got %.3f)" % ring_s0)
+
+	ghost.step_spectral_vfx(0.55)
+	var ring_e1 := ghost.get_spectral_phase_ring_energy()
+	var ring_s1 := ring.scale.x
+	var ring_r1 := ring.rotation.y
+	check(ring.visible and ring_s1 > 2.3 and ring_r1 > ring_r0 + deg_to_rad(15.0)
+		and ring_e1 > 0.25 and ring_e1 < ring_e0,
+		"SpectralPhaseRing expands, rotates, and decays smoothly mid-burst (scale=%.2f, rot=%.1f deg, energy=%.3f)" % [
+			ring_s1, rad_to_deg(ring_r1), ring_e1])
+
+	ghost.step_spectral_vfx(0.65)
+	var ring_e2 := ghost.get_spectral_phase_ring_energy()
+	var ring_s2 := ring.scale.x
+	var ring_r2 := ring.rotation.y
+	check(ring.visible and ring_s2 >= 3.55 and ring_s2 <= 3.66
+		and ring_r2 >= deg_to_rad(40.0) and ring_e2 > 0.0 and ring_e2 < ring_e1,
+		"SpectralPhaseRing approaches 3.65 scale (~16 m wide) and +48 deg rotation at 1.20 s (scale=%.2f, rot=%.1f deg)" % [
+			ring_s2, rad_to_deg(ring_r2)])
+
+	ghost.step_spectral_vfx(0.20)
+	check(not ring.visible and is_zero_approx(ghost.get_spectral_phase_ring_energy()),
+		"SpectralPhaseRing decays cleanly to 0.0 energy / strictly hidden after 1.35 s")
+	check(rmat.albedo_color.r <= 0.001 and rmat.albedo_color.g <= 0.001 and rmat.albedo_color.b <= 0.001,
+		"SpectralPhaseRing zeroes additive albedo on idle")
+
+	# AIShipBrain._execute_phase_teleport() also triggers SpectralPhaseRing on materialization!
+	brain._execute_phase_teleport()
+	check(ring.visible and ghost.get_spectral_phase_ring_energy() >= 1.60,
+		"AIShipBrain._execute_phase_teleport() fires SpectralPhaseRing on materialization (energy=%.3f)" % ghost.get_spectral_phase_ring_energy())
+
+	print("    Q23A Ghost SpectralVFX: motes=%dx%d=%d tris (avg_disp=%.2f m, flare=%.2fx) | ring=%d tris scale=%.2f->%.2f rot=+%.1f deg energy=%.2f->%.2f->0.0 | ai_ship_brain non-ASCII=%d" % [
+		mm.instance_count, mote_tris, mm.instance_count * mote_tris, avg_disp,
+		flare_lum_sum / maxf(base_lum_sum, 0.001), ring_tris, ring_s0, ring_s2,
+		rad_to_deg(ring_r2), ring_e0, ring_e1, non_ascii_count])
+
+	# 5. Clean teardown & ZERO ObjectDB/resource leaks!
+	await _end()
+	check_eq(Ship._active_ship_count, 0, "all ships exited cleanly with 0 leaks")
+	check(Ship._spectral_mote_mesh == null and Ship._spectral_mote_mat == null
+		and Ship._spectral_phase_ring_mesh == null,
+		"Ship releases _spectral_mote_mesh, _spectral_mote_mat, and _spectral_phase_ring_mesh automatically (0 leaks)")
+
+
+
 

@@ -47,6 +47,22 @@ const MIN_BUNTING_ROPE_CLEARANCE := 4.75
 const TAVERN_KEG_HEAL := 35.0
 const SIGN_TEX_W := 256
 const SIGN_TEX_H := 160
+const PIER_BELL_RIPPLE_DURATION := 0.72
+const PIER_BELL_RIPPLE_START_SCALE := 0.30
+const PIER_BELL_RIPPLE_END_SCALE := 2.40
+const PIER_BELL_RIPPLE_PEAK_ENERGY := 1.35
+const PIER_BELL_RIPPLE_VISIBILITY_RANGE := 140.0
+const TAVERN_KEG_HALO_DAY_ENERGY := 0.22
+const TAVERN_KEG_HALO_NIGHT_ENERGY := 0.58
+const TAVERN_KEG_HALO_FLARE_ENERGY := 1.38
+const TAVERN_KEG_HALO_FLARE_DURATION := 0.85
+const TAVERN_KEG_HALO_BASE_SCALE := 1.0
+const TAVERN_KEG_HALO_FLARE_SCALE := 1.48
+const TAVERN_KEG_HALO_VISIBILITY_RANGE := 120.0
+const COL_BELL_RIPPLE_RIDGE := Color(0.95, 0.76, 0.36, 1.0)
+const COL_KEG_HALO_CORE := Color(1.00, 0.94, 0.68, 1.0)
+const COL_KEG_HALO_MID := Color(0.42, 0.24, 0.06, 1.0)
+const COL_HALO_EDGE_BLACK := Color(0.0, 0.0, 0.0, 1.0)
 
 # Painterly maritime bunting palette (authored in sRGB).
 const BUNTING_PALETTE: Array[Color] = [
@@ -90,7 +106,7 @@ const COL_BELL_VERDIGRIS := Color(0.36, 0.48, 0.34)
 
 const TAVERN_TOASTS: Array[String] = [
 	"To fair winds and full holds! (+35 HP)",
-	"Raise a mug to Port Scoundrel — may the Kraken take the hindmost! (+35 HP)",
+	"Raise a mug to Port Scoundrel -- may the Kraken take the hindmost! (+35 HP)",
 	"Warm grog for salt-chilled bones! Drink up, Captain! (+35 HP)",
 	"Here's to calm seas, stout planks, and gold by the chestful! (+35 HP)",
 	"May your compass stay true and your powder stay dry! (+35 HP)",
@@ -116,6 +132,8 @@ static var _pier_bell_frame_mesh: ArrayMesh = null
 static var _pier_bell_cup_mesh: ArrayMesh = null
 static var _pier_bell_iron_mat: StandardMaterial3D = null
 static var _pier_bell_bronze_mat: StandardMaterial3D = null
+static var _pier_bell_ripple_mesh: ArrayMesh = null
+static var _tavern_keg_halo_mesh: ArrayMesh = null
 static var _outpost_halo_mesh: ArrayMesh = null
 static var _outpost_halo_shader: Shader = null
 static var _campfire_flame_mesh: ArrayMesh = null
@@ -178,6 +196,15 @@ var _pier_bell_frame_mi: MeshInstance3D = null
 var _pier_bell_cup_mi: MeshInstance3D = null
 var _pier_bell_angle: float = 0.0
 var _pier_bell_vel: float = 0.0
+var _pier_bell_ripple_mi: MeshInstance3D = null
+var _pier_bell_ripple_mat: StandardMaterial3D = null
+var _pier_bell_ripple_timer: float = 0.0
+var _pier_bell_ripple_energy: float = 0.0
+var _tavern_keg_halo_mi: MeshInstance3D = null
+var _tavern_keg_halo_mat: StandardMaterial3D = null
+var _tavern_keg_flare_timer: float = 0.0
+var _tavern_keg_halo_energy: float = 0.0
+var _outpost_feedback_clock: float = 0.0
 
 
 func _init() -> void:
@@ -240,7 +267,101 @@ func _process(delta: float) -> void:
 			_pier_bell_vel = 0.0
 			pier_bell_pivot.rotation.x = 0.0
 
+	step_outpost_feedback(delta)
 	step_harbour_atmosphere(delta, _resolve_visitor_world_pos())
+
+
+## Deterministically advance tactile Outpost PierBellRippleRing & TavernKegHalo VFX.
+func step_outpost_feedback(delta: float) -> void:
+	var dt := maxf(0.0, delta)
+	_outpost_feedback_clock += dt
+	if _pier_bell_ripple_timer > 0.0:
+		_pier_bell_ripple_timer = maxf(0.0, _pier_bell_ripple_timer - dt)
+	if _tavern_keg_flare_timer > 0.0:
+		_tavern_keg_flare_timer = maxf(0.0, _tavern_keg_flare_timer - dt)
+	_sync_outpost_feedback_visuals()
+
+
+func _sync_outpost_feedback_visuals() -> void:
+	if _pier_bell_ripple_timer > 0.0:
+		var u := 1.0 - clampf(_pier_bell_ripple_timer / PIER_BELL_RIPPLE_DURATION, 0.0, 1.0)
+		var rem := 1.0 - u
+		var ease_out := 1.0 - rem * rem
+		var ring_sc := lerpf(PIER_BELL_RIPPLE_START_SCALE, PIER_BELL_RIPPLE_END_SCALE, ease_out)
+		_pier_bell_ripple_energy = PIER_BELL_RIPPLE_PEAK_ENERGY * rem * rem
+		var bronze_tint := Color(1.00, 0.90, 0.56).lerp(Color(0.92, 0.62, 0.22), u)
+		if _pier_bell_ripple_mi != null and is_instance_valid(_pier_bell_ripple_mi):
+			_pier_bell_ripple_mi.visible = true
+			_pier_bell_ripple_mi.scale = Vector3.ONE * ring_sc
+		if _pier_bell_ripple_mat != null:
+			_pier_bell_ripple_mat.albedo_color = Color(
+				bronze_tint.r * _pier_bell_ripple_energy,
+				bronze_tint.g * _pier_bell_ripple_energy,
+				bronze_tint.b * _pier_bell_ripple_energy,
+				1.0
+			)
+	else:
+		_pier_bell_ripple_timer = 0.0
+		_pier_bell_ripple_energy = 0.0
+		if _pier_bell_ripple_mi != null and is_instance_valid(_pier_bell_ripple_mi):
+			_pier_bell_ripple_mi.visible = false
+			_pier_bell_ripple_mi.scale = Vector3.ONE * PIER_BELL_RIPPLE_START_SCALE
+		if _pier_bell_ripple_mat != null:
+			_pier_bell_ripple_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	if _tavern_keg_halo_mi != null and is_instance_valid(_tavern_keg_halo_mi):
+		var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+		var night := clampf(1.0 - daylight, 0.0, 1.0)
+		var storm := clampf(Weather.storminess, 0.0, 1.0) if Weather != null else 0.0
+		var warmth_mix := clampf(night + storm * 0.35, 0.0, 1.0)
+		var simmer_pulse := 0.96 + 0.04 * sin(_outpost_feedback_clock * 3.1)
+		var base_e := lerpf(TAVERN_KEG_HALO_DAY_ENERGY, TAVERN_KEG_HALO_NIGHT_ENERGY, warmth_mix) * simmer_pulse
+		var energy := base_e
+		var halo_sc := TAVERN_KEG_HALO_BASE_SCALE
+		var tint := Color(1.00, 0.72, 0.24)
+		if _tavern_keg_flare_timer > 0.0:
+			var fu := 1.0 - clampf(_tavern_keg_flare_timer / TAVERN_KEG_HALO_FLARE_DURATION, 0.0, 1.0)
+			var frem := 1.0 - fu
+			var flare_curve := frem * frem
+			energy = lerpf(base_e, TAVERN_KEG_HALO_FLARE_ENERGY, flare_curve)
+			halo_sc = lerpf(TAVERN_KEG_HALO_BASE_SCALE, TAVERN_KEG_HALO_FLARE_SCALE, sin(fu * PI))
+			tint = tint.lerp(Color(1.00, 0.88, 0.42), flare_curve)
+		_tavern_keg_halo_energy = energy
+		_tavern_keg_halo_mi.visible = energy > 0.005
+		_tavern_keg_halo_mi.scale = Vector3.ONE * halo_sc
+		if _tavern_keg_halo_mat != null:
+			_tavern_keg_halo_mat.albedo_color = Color(
+				tint.r * energy,
+				tint.g * energy,
+				tint.b * energy,
+				1.0
+			)
+	else:
+		_tavern_keg_halo_energy = 0.0
+
+
+## Return the sculpted 96-tri expanding gilded-bronze PierBellRippleRing MeshInstance3D, or null.
+func get_pier_bell_ripple_ring() -> MeshInstance3D:
+	if _pier_bell_ripple_mi != null and is_instance_valid(_pier_bell_ripple_mi):
+		return _pier_bell_ripple_mi
+	return null
+
+
+## Return the current additive energy of PierBellRippleRing (0.0 at rest; 1.35 -> 0.0 on ring).
+func get_pier_bell_ripple_energy() -> float:
+	return _pier_bell_ripple_energy
+
+
+## Return the sculpted 48-tri warm golden-amber TavernKegHalo MeshInstance3D, or null.
+func get_tavern_keg_halo() -> MeshInstance3D:
+	if _tavern_keg_halo_mi != null and is_instance_valid(_tavern_keg_halo_mi):
+		return _tavern_keg_halo_mi
+	return null
+
+
+## Return the current additive glow energy of TavernKegHalo (0.22 day -> 0.58 night; 1.38 on toast).
+func get_tavern_keg_halo_energy() -> float:
+	return _tavern_keg_halo_energy
 
 
 ## Deterministically advance harbour lantern halos, campfire flames & embers,
@@ -594,8 +715,11 @@ func _exit_tree() -> void:
 		_tavern_sign_face_mi,
 		_pier_bell_frame_mi,
 		_pier_bell_cup_mi,
+		_pier_bell_ripple_mi,
+		_tavern_keg_halo_mi,
 	]:
 		if mi != null and is_instance_valid(mi):
+			mi.visible = false
 			mi.material_override = null
 			mi.mesh = null
 	_tavern_sign_bracket_mi = null
@@ -603,6 +727,14 @@ func _exit_tree() -> void:
 	_tavern_sign_face_mi = null
 	_pier_bell_frame_mi = null
 	_pier_bell_cup_mi = null
+	_pier_bell_ripple_mi = null
+	_pier_bell_ripple_mat = null
+	_pier_bell_ripple_timer = 0.0
+	_pier_bell_ripple_energy = 0.0
+	_tavern_keg_halo_mi = null
+	_tavern_keg_halo_mat = null
+	_tavern_keg_flare_timer = 0.0
+	_tavern_keg_halo_energy = 0.0
 	tavern_sign_node = null
 	tavern_sign_pivot = null
 	_tavern_sign_light = null
@@ -648,6 +780,8 @@ static func clear_shared_cache() -> void:
 	_pier_bell_cup_mesh = null
 	_pier_bell_iron_mat = null
 	_pier_bell_bronze_mat = null
+	_pier_bell_ripple_mesh = null
+	_tavern_keg_halo_mesh = null
 	_outpost_halo_mesh = null
 	_outpost_halo_shader = null
 	_campfire_flame_mesh = null
@@ -836,6 +970,7 @@ func build_outpost_structures(p_dock_yaw: float, rng: RandomNumberGenerator,
 		toggle_tavern_bard_shanty(p)
 	)
 	tavern_bard_node.add_child(tavern_bard_interactable)
+	step_outpost_feedback(0.0)
 	step_harbour_atmosphere(0.0)
 
 
@@ -863,12 +998,15 @@ func toggle_tavern_bard_shanty(_pawn: Node = null) -> bool:
 
 
 ## Toll the sculpted seaward harbour pier fog-bell, impulse its damped harmonic
-## pendulum swing, play spatial bronze chime audio, post a harbour greeting, and emit `pier_bell_rung`.
+## pendulum swing, expand the gilded-bronze PierBellRippleRing, play spatial
+## bronze chime audio, post a harbour greeting, and emit `pier_bell_rung`.
 func ring_pier_bell(pawn: Node = null) -> void:
 	_pier_bell_vel += 9.2
 	if pier_bell_pivot != null and is_instance_valid(pier_bell_pivot):
 		_pier_bell_angle = clampf(_pier_bell_angle + 0.04, -0.78, 0.78)
 		pier_bell_pivot.rotation.x = _pier_bell_angle
+	_pier_bell_ripple_timer = PIER_BELL_RIPPLE_DURATION
+	_sync_outpost_feedback_visuals()
 	var sfx_pos := global_position
 	if pier_bell_node != null and is_instance_valid(pier_bell_node) and pier_bell_node.is_inside_tree():
 		sfx_pos = pier_bell_node.global_position
@@ -1128,6 +1266,8 @@ func _on_tavern_keg_interacted(pawn: Node) -> void:
 		return
 	if pawn is Pawn:
 		(pawn as Pawn).heal(TAVERN_KEG_HEAL)
+	_tavern_keg_flare_timer = TAVERN_KEG_HALO_FLARE_DURATION
+	_sync_outpost_feedback_visuals()
 	var sfx_pos := global_position
 	if tavern_keg_interactable != null and is_instance_valid(tavern_keg_interactable) and tavern_keg_interactable.is_inside_tree():
 		sfx_pos = tavern_keg_interactable.global_position
@@ -1222,6 +1362,30 @@ func _build_tavern_grog_keg(keg_xform: Transform3D, prop_body: StaticBody3D, pro
 	keg_mi.material_override = _keg_mat
 	tavern_keg_node.add_child(keg_mi)
 
+	# Sculpted 48-tri warm golden-amber TavernKegHalo simmering over the brass tap & foaming mug.
+	_tavern_keg_halo_mat = StandardMaterial3D.new()
+	_tavern_keg_halo_mat.vertex_color_use_as_albedo = true
+	_tavern_keg_halo_mat.vertex_color_is_srgb = true
+	_tavern_keg_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_tavern_keg_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_tavern_keg_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_tavern_keg_halo_mat.billboard_keep_scale = true
+	_tavern_keg_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_tavern_keg_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tavern_keg_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_tavern_keg_halo_mi = MeshInstance3D.new()
+	_tavern_keg_halo_mi.name = "TavernKegHalo"
+	_tavern_keg_halo_mi.mesh = _tavern_keg_halo_mesh
+	_tavern_keg_halo_mi.material_override = _tavern_keg_halo_mat
+	_tavern_keg_halo_mi.position = Vector3(0.04, 1.12, -0.34)
+	_tavern_keg_halo_mi.scale = Vector3.ONE * TAVERN_KEG_HALO_BASE_SCALE
+	_tavern_keg_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tavern_keg_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_tavern_keg_halo_mi.visibility_range_end = TAVERN_KEG_HALO_VISIBILITY_RANGE
+	_tavern_keg_halo_mi.extra_cull_margin = 1.6
+	tavern_keg_node.add_child(_tavern_keg_halo_mi)
+
 	# Solid low-profile collider so captains walk neatly up to the tap without clipping through.
 	if prop_body != null:
 		var cs := CollisionShape3D.new()
@@ -1315,6 +1479,29 @@ func _build_pier_fog_bell(bell_xform: Transform3D, props_root: Node3D) -> void:
 	_pier_bell_cup_mi.mesh = _pier_bell_cup_mesh
 	_pier_bell_cup_mi.material_override = _pier_bell_bronze_mat
 	pier_bell_pivot.add_child(_pier_bell_cup_mi)
+
+	# Sculpted 96-tri expanding gilded-bronze acoustic ring mounted at bell cup sound-bow height (hidden at rest).
+	_pier_bell_ripple_mat = StandardMaterial3D.new()
+	_pier_bell_ripple_mat.vertex_color_use_as_albedo = true
+	_pier_bell_ripple_mat.vertex_color_is_srgb = true
+	_pier_bell_ripple_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_pier_bell_ripple_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_pier_bell_ripple_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_pier_bell_ripple_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_pier_bell_ripple_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_pier_bell_ripple_mi = MeshInstance3D.new()
+	_pier_bell_ripple_mi.name = "PierBellRippleRing"
+	_pier_bell_ripple_mi.mesh = _pier_bell_ripple_mesh
+	_pier_bell_ripple_mi.material_override = _pier_bell_ripple_mat
+	_pier_bell_ripple_mi.position = Vector3(0.0, 0.28, 0.0)
+	_pier_bell_ripple_mi.scale = Vector3.ONE * PIER_BELL_RIPPLE_START_SCALE
+	_pier_bell_ripple_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_pier_bell_ripple_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_pier_bell_ripple_mi.visibility_range_end = PIER_BELL_RIPPLE_VISIBILITY_RANGE
+	_pier_bell_ripple_mi.extra_cull_margin = 2.6
+	_pier_bell_ripple_mi.visible = false
+	pier_bell_node.add_child(_pier_bell_ripple_mi)
 
 	pier_bell_interactable = Interactable.create("Ring harbour fog-bell", 0.72)
 	pier_bell_interactable.name = "PierFogBellInteractable"
@@ -1591,6 +1778,10 @@ static func _ensure_shared_outpost_assets() -> void:
 		_pier_bell_frame_mesh = _build_pier_bell_frame_mesh()
 	if _pier_bell_cup_mesh == null:
 		_pier_bell_cup_mesh = _build_pier_bell_cup_mesh()
+	if _pier_bell_ripple_mesh == null:
+		_pier_bell_ripple_mesh = _build_pier_bell_ripple_mesh()
+	if _tavern_keg_halo_mesh == null:
+		_tavern_keg_halo_mesh = _build_tavern_keg_halo_mesh()
 
 	if _outpost_halo_mesh == null:
 		_outpost_halo_mesh = _build_outpost_halo_quad()
@@ -2375,6 +2566,118 @@ static func _build_pier_bell_cup_mesh() -> ArrayMesh:
 		0.028, 0.008, 8, 5, COL_SIGN_BRASS_HI, COL_SIGN_BRASS_LO)
 
 	st.generate_normals()
+	return st.commit()
+
+
+static func _build_pier_bell_ripple_mesh() -> ArrayMesh:
+	# Exact 96-tri flat annular gilded-bronze acoustic ripple ring (24 radial segs x 2 tapered half-ribbons).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SEGS := 24
+	const R_IN := 0.22
+	const R_MID := 0.36
+	const R_OUT := 0.50
+	const UP_NORMAL := Vector3(0.0, 1.0, 0.0)
+	for i in SEGS:
+		var a0 := TAU * float(i) / float(SEGS)
+		var a1 := TAU * float(i + 1) / float(SEGS)
+		var c0 := cos(a0)
+		var s0 := sin(a0)
+		var c1 := cos(a1)
+		var s1 := sin(a1)
+		var in0 := Vector3(c0 * R_IN, 0.0, s0 * R_IN)
+		var in1 := Vector3(c1 * R_IN, 0.0, s1 * R_IN)
+		var m0 := Vector3(c0 * R_MID, 0.0, s0 * R_MID)
+		var m1 := Vector3(c1 * R_MID, 0.0, s1 * R_MID)
+		var o0 := Vector3(c0 * R_OUT, 0.0, s0 * R_OUT)
+		var o1 := Vector3(c1 * R_OUT, 0.0, s1 * R_OUT)
+		# Inner half-ribbon (black inner rim -> warm gilded bronze ridge, 2 tris/seg).
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(in1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m1)
+		# Outer half-ribbon (warm gilded bronze ridge -> black outer rim, 2 tris/seg).
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_BELL_RIPPLE_RIDGE)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o1)
+	return st.commit()
+
+
+static func _build_tavern_keg_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge soft-feathered golden-amber billboard halo (INNER_R=0.14, OUTER_R=0.60)
+	# with subdued mid-ring luminance (<= 0.45) fading seamlessly to pure Color(0, 0, 0, 1) rim.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.14
+	const OUTER_R := 0.60
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner golden-honey core wedge (16 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_MID)
+		st.add_vertex(m0)
+		# Outer soft-feathered amber skirt fading to pure black rim (32 tris).
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_KEG_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_EDGE_BLACK)
+		st.add_vertex(o0)
 	return st.commit()
 
 

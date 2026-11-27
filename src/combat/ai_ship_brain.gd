@@ -106,6 +106,7 @@ func trigger_phase_shift() -> bool:
 	_phase_elapsed = 0.0
 	_phase_ring_stamped = false
 	ship.set_spectral_phase(1.0, 1.4)
+	ship.trigger_spectral_phase_ring(1.0)
 	if Ocean.current != null:
 		Ocean.current.add_foam(ship.global_position, 9.0, 1.0)
 	Audio.play_sfx(&"thunder_near", ship.global_position, -6.0)
@@ -236,10 +237,11 @@ func _execute_phase_teleport() -> void:
 	ship.linear_velocity = broadside_fwd * 6.5
 	ship.angular_velocity = Vector3.ZERO
 	ship.set_spectral_phase(0.0, 1.6)
+	ship.trigger_spectral_phase_ring(1.0)
 
 	_stamp_phase_foam_ring(new_pos, 9.5)
 	Audio.play_sfx(&"thunder_near", new_pos, -5.0)
-	Game.post_notice("Ghost ship vanished into the mist — watch the opposite beam!")
+	Game.post_notice("Ghost ship vanished into the mist -- watch the opposite beam!")
 	phase_shifted.emit(old_pos, new_pos)
 
 	_phase_state = &"fading_in"

@@ -69,6 +69,14 @@ const ANCHOR_SPLASH_START_SCALE := 0.65
 const ANCHOR_SPLASH_END_SCALE := 3.40
 const ANCHOR_SPLASH_PEAK_ENERGY := 1.25
 const ANCHOR_SPLASH_VISIBILITY_RANGE := 220.0
+const SPECTRAL_MOTE_COUNT := 24
+const SPECTRAL_MOTE_VISIBILITY_RANGE := 420.0
+const SPECTRAL_PHASE_RING_DURATION := 1.35
+const SPECTRAL_PHASE_RING_START_SCALE := 0.85
+const SPECTRAL_PHASE_RING_END_SCALE := 3.65
+const SPECTRAL_PHASE_RING_PEAK_ENERGY := 1.65
+const SPECTRAL_PHASE_RING_ROTATE_DEG := 48.0
+const SPECTRAL_PHASE_RING_VISIBILITY_RANGE := 420.0
 const CANNON_ORDNANCE_CYCLE: Array[StringName] = [&"iron", &"chainshot", &"firebomb", &"anchorball", &"ballastball", &"flare"]
 const CANNON_ORDNANCE_LABELS := {
 	&"iron": "Iron",
@@ -159,6 +167,8 @@ var cannon_radius_modifier: float = 1.0
 	set(v):
 		faction = v
 		_refresh_boarding_ladder_prompts()
+		if faction != &"ghost":
+			_hide_spectral_vfx()
 ## Optional starting anchor state.
 @export var start_anchored: bool = false
 ## Build lights and particle emitters (set false only if a micro-benchmark wants bare physics).
@@ -271,6 +281,24 @@ var _ghost_hull_mats: Array[ShaderMaterial] = []
 var _spectral_phase: float = 1.0
 var _spectral_flare: float = 0.0
 var _wisp_time: float = 0.0
+var _spectral_wake_motes_mmi: MultiMeshInstance3D = null
+var _spectral_wake_motes_mm: MultiMesh = null
+var _spectral_mote_time: float = 0.0
+var _spectral_mote_phase: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_side: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_radius: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_z_off: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_speed: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_spiral_freq: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_scale: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_tint: PackedFloat32Array = PackedFloat32Array()
+var _spectral_mote_positions: PackedVector3Array = PackedVector3Array()
+var _spectral_mote_colors: PackedColorArray = PackedColorArray()
+var _spectral_phase_ring_mi: MeshInstance3D = null
+var _spectral_phase_ring_mat: StandardMaterial3D = null
+var _spectral_phase_ring_timer: float = 0.0
+var _spectral_phase_ring_energy: float = 0.0
+var _spectral_phase_ring_intensity: float = 1.0
 
 var _bow_spray_port: GPUParticles3D = null
 var _bow_spray_starboard: GPUParticles3D = null
@@ -328,6 +356,9 @@ static var _crows_nest_rungs_sloop: ArrayMesh = null
 static var _crows_nest_rungs_brig: ArrayMesh = null
 static var _crows_nest_rungs_mat: StandardMaterial3D = null
 static var _curse_ring_mesh: ArrayMesh = null
+static var _spectral_mote_mesh: ArrayMesh = null
+static var _spectral_mote_mat: StandardMaterial3D = null
+static var _spectral_phase_ring_mesh: ArrayMesh = null
 
 
 ## Release all statically cached Ship textures, shaders, meshes, and materials cleanly.
@@ -354,6 +385,9 @@ static func clear_shared_cache() -> void:
 	_crows_nest_rungs_brig = null
 	_crows_nest_rungs_mat = null
 	_curse_ring_mesh = null
+	_spectral_mote_mesh = null
+	_spectral_mote_mat = null
+	_spectral_phase_ring_mesh = null
 
 
 ## True when this vessel is a two-masted Brigantine.
@@ -510,6 +544,31 @@ func _exit_tree() -> void:
 	_anchor_splash_mat = null
 	_anchor_splash_timer = 0.0
 	_anchor_splash_energy = 0.0
+	if _spectral_wake_motes_mmi != null and is_instance_valid(_spectral_wake_motes_mmi):
+		_spectral_wake_motes_mmi.visible = false
+		_spectral_wake_motes_mmi.material_override = null
+		_spectral_wake_motes_mmi.multimesh = null
+	_spectral_wake_motes_mmi = null
+	_spectral_wake_motes_mm = null
+	_spectral_mote_phase.clear()
+	_spectral_mote_side.clear()
+	_spectral_mote_radius.clear()
+	_spectral_mote_z_off.clear()
+	_spectral_mote_speed.clear()
+	_spectral_mote_spiral_freq.clear()
+	_spectral_mote_scale.clear()
+	_spectral_mote_tint.clear()
+	_spectral_mote_positions.clear()
+	_spectral_mote_colors.clear()
+	if _spectral_phase_ring_mi != null and is_instance_valid(_spectral_phase_ring_mi):
+		_spectral_phase_ring_mi.visible = false
+		_spectral_phase_ring_mi.material_override = null
+		_spectral_phase_ring_mi.mesh = null
+	_spectral_phase_ring_mi = null
+	_spectral_phase_ring_mat = null
+	_spectral_phase_ring_timer = 0.0
+	_spectral_phase_ring_energy = 0.0
+	_spectral_phase_ring_intensity = 1.0
 	if _crows_nest_rungs_mi != null and is_instance_valid(_crows_nest_rungs_mi):
 		_crows_nest_rungs_mi.material_override = null
 		_crows_nest_rungs_mi.mesh = null
@@ -2383,6 +2442,405 @@ static func _emit_flat_annulus_ribbon(
 		st.add_vertex(o1)
 
 
+func _spectral_phase_ring_base_local_pos() -> Vector3:
+	return ship_point(Vector3(0.0, 0.14, 0.0))
+
+
+func _ensure_spectral_vfx() -> void:
+	if faction != &"ghost":
+		return
+	var hs := maxf(hull_scale, 0.25)
+	if _spectral_wake_motes_mmi == null or not is_instance_valid(_spectral_wake_motes_mmi):
+		_spectral_mote_phase.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_side.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_radius.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_z_off.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_speed.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_spiral_freq.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_scale.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_tint.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_positions.resize(SPECTRAL_MOTE_COUNT)
+		_spectral_mote_colors.resize(SPECTRAL_MOTE_COUNT)
+
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 0x60575001
+		for i in SPECTRAL_MOTE_COUNT:
+			var frac := (float(i) + 0.5) / float(SPECTRAL_MOTE_COUNT)
+			_spectral_mote_phase[i] = fposmod(frac + rng.randf_range(-0.02, 0.02), 1.0)
+			_spectral_mote_side[i] = -1.0 if (i % 2 == 0) else 1.0
+			_spectral_mote_radius[i] = rng.randf_range(2.48, 3.92)
+			_spectral_mote_z_off[i] = rng.randf_range(-0.45, 0.45)
+			_spectral_mote_speed[i] = rng.randf_range(0.18, 0.30)
+			_spectral_mote_spiral_freq[i] = rng.randf_range(2.2, 4.1)
+			_spectral_mote_scale[i] = rng.randf_range(0.72, 1.36)
+			_spectral_mote_tint[i] = rng.randf()
+			_spectral_mote_positions[i] = Vector3.ZERO
+			_spectral_mote_colors[i] = Color(0.24, 0.96, 0.92, 1.0)
+
+		_spectral_wake_motes_mm = MultiMesh.new()
+		_spectral_wake_motes_mm.transform_format = MultiMesh.TRANSFORM_3D
+		_spectral_wake_motes_mm.use_colors = true
+		_spectral_wake_motes_mm.use_custom_data = false
+		_spectral_wake_motes_mm.mesh = _get_spectral_mote_mesh()
+		_spectral_wake_motes_mm.instance_count = SPECTRAL_MOTE_COUNT
+		for i in SPECTRAL_MOTE_COUNT:
+			_spectral_wake_motes_mm.set_instance_transform(i, Transform3D.IDENTITY)
+			_spectral_wake_motes_mm.set_instance_color(i, Color(0.24, 0.96, 0.92, 1.0))
+
+		_spectral_wake_motes_mmi = MultiMeshInstance3D.new()
+		_spectral_wake_motes_mmi.name = "SpectralWakeMotes"
+		_spectral_wake_motes_mmi.multimesh = _spectral_wake_motes_mm
+		_spectral_wake_motes_mmi.material_override = _get_spectral_mote_mat()
+		_spectral_wake_motes_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_spectral_wake_motes_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_spectral_wake_motes_mmi.visibility_range_end = SPECTRAL_MOTE_VISIBILITY_RANGE
+		_spectral_wake_motes_mmi.extra_cull_margin = 4.0 * maxf(hs, 1.0)
+		var ext_x := 5.5 * hs
+		var ext_y := 7.0 * hs
+		var ext_z := 9.0 * hs
+		_spectral_wake_motes_mmi.custom_aabb = AABB(
+			Vector3(-ext_x, -0.5 * hs, -ext_z),
+			Vector3(ext_x * 2.0, ext_y, ext_z * 2.0)
+		)
+		_spectral_wake_motes_mmi.visible = false
+		add_child(_spectral_wake_motes_mmi)
+
+	if _spectral_phase_ring_mi == null or not is_instance_valid(_spectral_phase_ring_mi):
+		_spectral_phase_ring_mat = _make_tactile_ring_material()
+		_spectral_phase_ring_mat.render_priority = 2
+		_spectral_phase_ring_mi = MeshInstance3D.new()
+		_spectral_phase_ring_mi.name = "SpectralPhaseRing"
+		_spectral_phase_ring_mi.mesh = _get_spectral_phase_ring_mesh()
+		_spectral_phase_ring_mi.material_override = _spectral_phase_ring_mat
+		_spectral_phase_ring_mi.position = _spectral_phase_ring_base_local_pos()
+		_spectral_phase_ring_mi.scale = Vector3.ONE * SPECTRAL_PHASE_RING_START_SCALE
+		_spectral_phase_ring_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_spectral_phase_ring_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		_spectral_phase_ring_mi.visibility_range_end = SPECTRAL_PHASE_RING_VISIBILITY_RANGE
+		_spectral_phase_ring_mi.extra_cull_margin = 10.0
+		_spectral_phase_ring_mi.visible = false
+		add_child(_spectral_phase_ring_mi)
+
+
+func _hide_spectral_vfx() -> void:
+	if _spectral_wake_motes_mmi != null and is_instance_valid(_spectral_wake_motes_mmi):
+		_spectral_wake_motes_mmi.visible = false
+	_spectral_phase_ring_timer = 0.0
+	_spectral_phase_ring_energy = 0.0
+	if _spectral_phase_ring_mi != null and is_instance_valid(_spectral_phase_ring_mi):
+		_spectral_phase_ring_mi.visible = false
+		_spectral_phase_ring_mi.scale = Vector3.ONE * SPECTRAL_PHASE_RING_START_SCALE
+		_spectral_phase_ring_mi.rotation = Vector3.ZERO
+	if _spectral_phase_ring_mat != null:
+		_spectral_phase_ring_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
+## Return the sculpted 24-instance Ghost Ship SpectralWakeMotes MultiMeshInstance3D, or null on non-ghost ships.
+func get_spectral_wake_motes() -> MultiMeshInstance3D:
+	if _spectral_wake_motes_mmi != null and is_instance_valid(_spectral_wake_motes_mmi):
+		return _spectral_wake_motes_mmi
+	return null
+
+
+## Return a copy of the 24 cached local-space SpectralWakeMotes positions (headless-safe introspection).
+func get_spectral_wake_mote_positions() -> PackedVector3Array:
+	return _spectral_mote_positions.duplicate()
+
+
+## Return a copy of the 24 cached additive SpectralWakeMotes instance colors (headless-safe introspection).
+func get_spectral_wake_mote_colors() -> PackedColorArray:
+	return _spectral_mote_colors.duplicate()
+
+
+## Return the sculpted 176-tri Ghost Ship SpectralPhaseRing MeshInstance3D, or null on non-ghost ships.
+func get_spectral_phase_ring() -> MeshInstance3D:
+	if _spectral_phase_ring_mi != null and is_instance_valid(_spectral_phase_ring_mi):
+		return _spectral_phase_ring_mi
+	return null
+
+
+## Return the current additive vortex glow energy of SpectralPhaseRing (0.0 when idle; 1.65 -> 0.0 on phase shift).
+func get_spectral_phase_ring_energy() -> float:
+	return _spectral_phase_ring_energy
+
+
+## Trigger the expanding 176-tri aqua-emerald waterline SpectralPhaseRing vortex halo on Ghost Ships.
+func trigger_spectral_phase_ring(intensity: float = 1.0) -> void:
+	if faction != &"ghost":
+		return
+	_ensure_spectral_vfx()
+	_spectral_phase_ring_intensity = clampf(intensity, 0.1, 2.0)
+	_spectral_phase_ring_timer = SPECTRAL_PHASE_RING_DURATION
+	_sync_spectral_phase_ring()
+
+
+## Deterministically advance Ghost Ship SpectralWakeMotes and SpectralPhaseRing VFX by `delta` seconds.
+func step_spectral_vfx(delta: float) -> void:
+	if faction != &"ghost":
+		_hide_spectral_vfx()
+		return
+	var dt := maxf(delta, 0.0)
+	_sync_spectral_wake_motes(dt)
+	if _spectral_phase_ring_timer > 0.0:
+		_spectral_phase_ring_timer = maxf(0.0, _spectral_phase_ring_timer - dt)
+		if _spectral_phase_ring_timer <= 0.0001:
+			_spectral_phase_ring_timer = 0.0
+	_sync_spectral_phase_ring()
+
+
+func _sync_spectral_wake_motes(dt: float) -> void:
+	if _spectral_wake_motes_mmi == null or not is_instance_valid(_spectral_wake_motes_mmi) \
+			or _spectral_wake_motes_mm == null:
+		return
+	if faction != &"ghost" or _spectral_phase <= 0.02:
+		_spectral_wake_motes_mmi.visible = false
+		return
+
+	_spectral_wake_motes_mmi.visible = true
+	var hs := maxf(hull_scale, 0.25)
+	var flare_norm := clampf(_spectral_flare, 0.0, 2.0)
+	var speed_boost := 1.0 + flare_norm * 0.65
+	var flare_scale := 1.0 + flare_norm * 0.32
+	var flare_lum := 0.95 + flare_norm * 0.85
+	var hot_mix := clampf(flare_norm * 0.28, 0.0, 0.50)
+	_spectral_mote_time = fmod(_spectral_mote_time + dt, 10000.0)
+
+	const COL_AQUA := Color(0.20, 0.96, 0.94, 1.0)
+	const COL_SEAFOAM := Color(0.42, 1.00, 0.80, 1.0)
+	const COL_FLARE := Color(0.84, 1.00, 0.98, 1.0)
+
+	var mm := _spectral_wake_motes_mm
+	var count := mini(SPECTRAL_MOTE_COUNT, _spectral_mote_phase.size())
+	for i in count:
+		var u := fposmod(_spectral_mote_phase[i] + dt * _spectral_mote_speed[i] * speed_boost, 1.0)
+		_spectral_mote_phase[i] = u
+
+		var ang := _spectral_mote_time * _spectral_mote_spiral_freq[i] + float(i) * 1.17
+		var radial := clampf(_spectral_mote_radius[i] + sin(ang) * 0.26, 2.2, 4.2)
+		var lx := _spectral_mote_side[i] * radial * hs
+		var ly := clampf(lerpf(0.35, 5.30, u) + cos(ang * 0.85) * 0.15, 0.2, 5.5) * hs
+		var lz := clampf(lerpf(-5.30, 7.30, u) + _spectral_mote_z_off[i] * 0.40, -5.5, 7.5) * hs
+		var pos := Vector3(lx, ly, lz)
+		_spectral_mote_positions[i] = pos
+
+		var life_env := clampf(sin(u * PI) * 1.35, 0.0, 1.0)
+		var sc := _spectral_mote_scale[i] * hs * lerpf(0.38, 1.0, life_env) * flare_scale
+		var rot := Basis.from_euler(Vector3(ang * 0.55, ang * 0.90, ang * 0.35))
+		mm.set_instance_transform(i, Transform3D(rot.scaled(Vector3(sc, sc, sc)), pos))
+
+		var base_col := COL_AQUA.lerp(COL_SEAFOAM, _spectral_mote_tint[i]).lerp(COL_FLARE, hot_mix)
+		var twinkle := 0.72 + 0.28 * sin(_spectral_mote_time * 4.4 + float(i) * 1.93)
+		var lum := flare_lum * _spectral_phase * life_env * twinkle
+		var inst_col := Color(base_col.r * lum, base_col.g * lum, base_col.b * lum, 1.0)
+		_spectral_mote_colors[i] = inst_col
+		mm.set_instance_color(i, inst_col)
+
+
+func _sync_spectral_phase_ring() -> void:
+	if _spectral_phase_ring_timer > 0.0001 and faction == &"ghost":
+		var u := 1.0 - clampf(_spectral_phase_ring_timer / SPECTRAL_PHASE_RING_DURATION, 0.0, 1.0)
+		var rem := clampf(1.0 - u, 0.0, 1.0)
+		var expand := 1.0 - rem * rem
+		var ring_sc := lerpf(SPECTRAL_PHASE_RING_START_SCALE, SPECTRAL_PHASE_RING_END_SCALE, expand)
+		var rot_y := deg_to_rad(SPECTRAL_PHASE_RING_ROTATE_DEG) * u
+		_spectral_phase_ring_energy = SPECTRAL_PHASE_RING_PEAK_ENERGY * _spectral_phase_ring_intensity * rem * rem
+		var ring_tint := Color(0.72, 1.00, 0.94).lerp(Color(0.24, 0.92, 0.76), u)
+		if _spectral_phase_ring_mi != null and is_instance_valid(_spectral_phase_ring_mi):
+			var base_pos := _spectral_phase_ring_base_local_pos()
+			var aligned_pos := base_pos
+			if is_inside_tree():
+				var world_ctr := global_transform * base_pos
+				var sea_y := Sea.height(world_ctr.x, world_ctr.z)
+				if absf(global_position.y - sea_y) < 4.5:
+					var water_local := global_transform.affine_inverse() * Vector3(
+						world_ctr.x,
+						sea_y + 0.48 * hull_scale,
+						world_ctr.z
+					)
+					aligned_pos.y = clampf(
+						water_local.y,
+						base_pos.y - 1.6 * hull_scale,
+						base_pos.y + 1.6 * hull_scale
+					)
+			_spectral_phase_ring_mi.visible = true
+			_spectral_phase_ring_mi.position = aligned_pos
+			_spectral_phase_ring_mi.rotation = Vector3(0.0, rot_y, 0.0)
+			_spectral_phase_ring_mi.scale = Vector3.ONE * ring_sc
+		if _spectral_phase_ring_mat != null:
+			_spectral_phase_ring_mat.albedo_color = Color(
+				ring_tint.r * _spectral_phase_ring_energy,
+				ring_tint.g * _spectral_phase_ring_energy,
+				ring_tint.b * _spectral_phase_ring_energy,
+				1.0
+			)
+	else:
+		_spectral_phase_ring_timer = 0.0
+		_spectral_phase_ring_energy = 0.0
+		if _spectral_phase_ring_mi != null and is_instance_valid(_spectral_phase_ring_mi):
+			_spectral_phase_ring_mi.visible = false
+			_spectral_phase_ring_mi.scale = Vector3.ONE * SPECTRAL_PHASE_RING_START_SCALE
+			_spectral_phase_ring_mi.rotation = Vector3.ZERO
+		if _spectral_phase_ring_mat != null:
+			_spectral_phase_ring_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
+static func _get_spectral_mote_mesh() -> ArrayMesh:
+	if _spectral_mote_mesh != null:
+		return _spectral_mote_mesh
+	# Exact 8-tri sculpted faceted diamond octahedron soul-ember (zero PrimitiveMesh).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const R_EQ := 0.11
+	const R_TOP := 0.21
+	const COL_TIP := Color(0.88, 1.00, 0.98, 1.0)
+	const COL_EQ := Color(0.32, 0.96, 0.92, 1.0)
+	var top := Vector3(0.0, R_TOP, 0.0)
+	var bot := Vector3(0.0, -R_TOP, 0.0)
+	var ring: Array[Vector3] = [
+		Vector3(R_EQ, 0.0, 0.0),
+		Vector3(0.0, 0.0, R_EQ),
+		Vector3(-R_EQ, 0.0, 0.0),
+		Vector3(0.0, 0.0, -R_EQ),
+	]
+	for k in 4:
+		var nk := (k + 1) % 4
+		_emit_outward_octa_tri(st, top, ring[k], ring[nk], COL_TIP, COL_EQ, COL_EQ)
+		_emit_outward_octa_tri(st, bot, ring[nk], ring[k], COL_TIP, COL_EQ, COL_EQ)
+	_spectral_mote_mesh = st.commit()
+	return _spectral_mote_mesh
+
+
+static func _get_spectral_mote_mat() -> StandardMaterial3D:
+	if _spectral_mote_mat != null:
+		return _spectral_mote_mat
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color.WHITE
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.render_priority = 2
+	_spectral_mote_mat = mat
+	return _spectral_mote_mat
+
+
+static func _emit_outward_octa_tri(
+	st: SurfaceTool,
+	a: Vector3,
+	b: Vector3,
+	c: Vector3,
+	ca: Color,
+	cb: Color,
+	cc: Color
+) -> void:
+	var n := (c - a).cross(b - a)
+	if n.length_squared() < 1e-12:
+		return
+	var centroid := (a + b + c) / 3.0
+	if n.dot(centroid) < 0.0:
+		var tv := b
+		b = c
+		c = tv
+		var tc := cb
+		cb = cc
+		cc = tc
+		n = -n
+	var n_unit := n.normalized()
+	st.set_normal(n_unit)
+	st.set_color(ca)
+	st.add_vertex(a)
+	st.set_normal(n_unit)
+	st.set_color(cb)
+	st.add_vertex(b)
+	st.set_normal(n_unit)
+	st.set_color(cc)
+	st.add_vertex(c)
+
+
+static func _get_spectral_phase_ring_mesh() -> ArrayMesh:
+	if _spectral_phase_ring_mesh != null:
+		return _spectral_phase_ring_mesh
+	# Exact 176-tri concentric 2-ring horizontal aqua-emerald vortex halo (22 radial segs x 2 tapered ribbons).
+	# Outer radius 3.10 m clears the hull beam immediately and expands to ~22.6 m diameter at end scale 3.65.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_emit_spectral_vortex_ribbon(st, 22, 1.15, 1.65, 2.12, Color(0.45, 1.00, 0.94, 1.0), 4.0, 0.14)
+	_emit_spectral_vortex_ribbon(st, 22, 2.02, 2.58, 3.10, Color(0.16, 0.96, 0.78, 1.0), 3.0, 0.18)
+	_spectral_phase_ring_mesh = st.commit()
+	return _spectral_phase_ring_mesh
+
+
+static func _emit_spectral_vortex_ribbon(
+	st: SurfaceTool,
+	segs: int,
+	r_in: float,
+	r_mid: float,
+	r_out: float,
+	col_ridge: Color,
+	arm_freq: float,
+	arm_mod: float
+) -> void:
+	const UP_NORMAL := Vector3(0.0, 1.0, 0.0)
+	const COL_EDGE := Color(0.0, 0.0, 0.0, 1.0)
+	for i in segs:
+		var a0 := TAU * float(i) / float(segs)
+		var a1 := TAU * float(i + 1) / float(segs)
+		var c0 := cos(a0)
+		var s0 := sin(a0)
+		var c1 := cos(a1)
+		var s1 := sin(a1)
+		var in0 := Vector3(c0 * r_in, 0.0, s0 * r_in)
+		var in1 := Vector3(c1 * r_in, 0.0, s1 * r_in)
+		var m0 := Vector3(c0 * r_mid, 0.0, s0 * r_mid)
+		var m1 := Vector3(c1 * r_mid, 0.0, s1 * r_mid)
+		var o0 := Vector3(c0 * r_out, 0.0, s0 * r_out)
+		var o1 := Vector3(c1 * r_out, 0.0, s1 * r_out)
+		var mod0 := 1.0 - arm_mod + arm_mod * (0.5 + 0.5 * sin(a0 * arm_freq))
+		var mod1 := 1.0 - arm_mod + arm_mod * (0.5 + 0.5 * sin(a1 * arm_freq))
+		var cm0 := Color(col_ridge.r * mod0, col_ridge.g * mod0, col_ridge.b * mod0, 1.0)
+		var cm1 := Color(col_ridge.r * mod1, col_ridge.g * mod1, col_ridge.b * mod1, 1.0)
+		# Inner half-ribbon (pure black inner rim -> bright aqua-emerald ridge, 2 tris per segment)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm1)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm0)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(in1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm1)
+		st.add_vertex(m1)
+		# Outer half-ribbon (bright aqua-emerald ridge -> pure black outer rim, 2 tris per segment)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm0)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm0)
+		st.add_vertex(m0)
+		st.set_normal(UP_NORMAL)
+		st.set_color(cm1)
+		st.add_vertex(m1)
+		st.set_normal(UP_NORMAL)
+		st.set_color(COL_EDGE)
+		st.add_vertex(o1)
+
+
 func _setup_ship_nameplate() -> void:
 	if faction != &"player" or not ResourceLoader.exists(SHIP_NAMEPLATE_PATH):
 		return
@@ -3155,6 +3613,8 @@ func set_spectral_phase(alpha: float, flare: float = 0.0) -> void:
 	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"set_spectral_alpha"):
 		hull_crest.call(&"set_spectral_alpha", _spectral_phase)
 	visible = _spectral_phase > 0.02
+	if faction == &"ghost":
+		_sync_spectral_wake_motes(0.0)
 
 
 func _apply_current_livery() -> void:
@@ -3242,6 +3702,12 @@ func _apply_current_livery() -> void:
 
 	if hull_crest != null and is_instance_valid(hull_crest) and hull_crest.has_method(&"apply_emblem"):
 		hull_crest.call(&"apply_emblem", emblem_mode, eff_glow)
+
+	if is_ghost:
+		_ensure_spectral_vfx()
+		step_spectral_vfx(0.0)
+	else:
+		_hide_spectral_vfx()
 
 	var need_hull_livery := (
 		is_ghost
@@ -5267,6 +5733,8 @@ func _process(delta: float) -> void:
 	_update_lod()
 	_update_visuals(delta)
 	step_tactile_vfx(delta)
+	if faction == &"ghost":
+		step_spectral_vfx(delta)
 	_update_wake(delta)
 
 

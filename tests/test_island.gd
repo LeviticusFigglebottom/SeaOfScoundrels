@@ -2896,3 +2896,330 @@ func test_q15b_waterfall_rainbow_fumarole_magma_halo_and_emissary_prestige_motes
 		"ShipEmissaryFlag releases _mote_mesh with 0 leaks")
 
 	Weather.apply_state(saved_weather)
+
+
+static func _q23b_collect_gd_files(dir_path: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var da := DirAccess.open(dir_path)
+	if da == null:
+		return out
+	da.list_dir_begin()
+	var entry := da.get_next()
+	var subdirs: Array[String] = []
+	var files: Array[String] = []
+	while entry != "":
+		if not entry.begins_with("."):
+			var full := dir_path.path_join(entry)
+			if da.current_is_dir():
+				subdirs.append(full)
+			elif entry.ends_with(".gd"):
+				files.append(full)
+		entry = da.get_next()
+	da.list_dir_end()
+	files.sort()
+	subdirs.sort()
+	for f: String in files:
+		out.append(f)
+	for sd: String in subdirs:
+		out.append_array(_q23b_collect_gd_files(sd))
+	return out
+
+
+static func _q23b_strip_gd_line_comment(line: String) -> String:
+	if line.strip_edges().begins_with("#"):
+		return ""
+	var in_single := false
+	var in_double := false
+	var escaped := false
+	for i in line.length():
+		var cp := line.unicode_at(i)
+		if escaped:
+			escaped = false
+			continue
+		if (in_single or in_double) and cp == 92:  # '\\'
+			escaped = true
+			continue
+		if cp == 34 and not in_single:  # '"'
+			in_double = not in_double
+		elif cp == 39 and not in_double:  # '\''
+			in_single = not in_single
+		elif cp == 35 and not in_single and not in_double:  # '#'
+			return line.substr(0, i)
+	return line
+
+
+static func _q23b_first_non_ascii_cp(text: String) -> int:
+	for i in text.length():
+		var cp := text.unicode_at(i)
+		if cp >= 128:
+			return cp
+	return -1
+
+
+func test_q23b_outpost_pier_bell_ripple_tavern_keg_halo_and_full_src_ascii() -> void:
+	_init_host()
+	var saved_weather := Weather.get_state()
+	Weather.day_length_seconds = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# 1. Strict-ASCII code-line guard across ALL of res://src/world/ + explicit Outpost checks!
+	var world_files := _q23b_collect_gd_files("res://src/world")
+	check(world_files.size() >= 15, "res://src/world contains .gd files to scan (got %d)" % world_files.size())
+	var scanned_code_lines := 0
+	var non_ascii_violations := 0
+	for fpath: String in world_files:
+		var fsrc := FileAccess.get_file_as_string(fpath)
+		var flines := fsrc.split("\n")
+		for li in flines.size():
+			var code_part := _q23b_strip_gd_line_comment(flines[li])
+			if code_part.strip_edges() == "":
+				continue
+			scanned_code_lines += 1
+			var bad_cp := _q23b_first_non_ascii_cp(code_part)
+			if bad_cp >= 0:
+				non_ascii_violations += 1
+				check(false, "non-ASCII U+%04X found in code line %s:%d" % [bad_cp, fpath, li + 1])
+	check_eq(non_ascii_violations, 0,
+		"all %d src/world/*.gd scripts (%d code lines) contain 0 non-ASCII characters" % [
+			world_files.size(), scanned_code_lines
+		])
+
+	var outpost_src := FileAccess.get_file_as_string("res://src/world/outpost.gd")
+	check(outpost_src.length() > 1000, "loaded src/world/outpost.gd cleanly")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not outpost_src.contains(bad_prim), "outpost.gd contains zero %s calls" % bad_prim)
+	for ti in Outpost.TAVERN_TOASTS.size():
+		var toast_txt := Outpost.TAVERN_TOASTS[ti]
+		check_eq(_q23b_first_non_ascii_cp(toast_txt), -1,
+			"Outpost.TAVERN_TOASTS[%d] is 100%% strict ASCII" % ti)
+	check(Outpost.TAVERN_TOASTS[1] == "Raise a mug to Port Scoundrel -- may the Kraken take the hindmost! (+35 HP)",
+		"Outpost.TAVERN_TOASTS[1] uses strict-ASCII '--' instead of em-dash")
+
+	# 2. Build two Outposts to verify shared static ArrayMeshes & isolated per-instance materials.
+	var holder := Node3D.new()
+	add_child(holder)
+	var op_specs: Array[Dictionary] = []
+	for spec: Dictionary in Archipelago.ISLAND_SPECS:
+		if spec.get("archetype") == &"outpost":
+			op_specs.append(spec)
+			if op_specs.size() == 2:
+				break
+	check_eq(op_specs.size(), 2, "Archipelago.ISLAND_SPECS contains at least 2 outpost specs")
+	var op0: Outpost = IslandGenerator.build_island(op_specs[0]) as Outpost if op_specs.size() >= 1 else null
+	var op1: Outpost = IslandGenerator.build_island(op_specs[1]) as Outpost if op_specs.size() >= 2 else null
+	check(op0 != null and op1 != null, "Port Scoundrel & Barnacle Haven build cleanly as Outposts")
+	if op0 == null or op1 == null:
+		if op0 != null:
+			op0.free()
+		if op1 != null:
+			op1.free()
+		holder.queue_free()
+		await physics_frames(2)
+		Weather.apply_state(saved_weather)
+		return
+	holder.add_child(op0)
+	holder.add_child(op1)
+	op0.set_process(false)
+	op1.set_process(false)
+	await physics_frames(2)
+
+	# 3. Verify PierBellRippleRing (96 tris, zero PrimitiveMesh, hidden at rest, flares & expands on ring).
+	var ring0 := op0.get_pier_bell_ripple_ring()
+	var ring1 := op1.get_pier_bell_ripple_ring()
+	check(ring0 != null and ring0.name == "PierBellRippleRing",
+		"Outpost mounts PierBellRippleRing MeshInstance3D via get_pier_bell_ripple_ring()")
+	var bell_ring_tris := 0
+	var bell_ring_bad_normals := 0
+	var bell_ring_has_black_edge := false
+	var bell_ring_has_ridge := false
+	if ring0 != null and ring1 != null:
+		check_eq(ring0.get_parent(), op0.pier_bell_node,
+			"PierBellRippleRing mounts directly on pier_bell_node")
+		check(ring0.position.y >= 0.20 and ring0.position.y <= 0.42,
+			"PierBellRippleRing sits at bronze bell cup height (y=%.2f m)" % ring0.position.y)
+		check_eq(ring0.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"PierBellRippleRing disables shadow casting")
+		check_eq(ring0.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"PierBellRippleRing disables GI mode")
+		check(ring0.mesh is ArrayMesh and not (ring0.mesh is PrimitiveMesh),
+			"PierBellRippleRing uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(ring0.mesh, ring1.mesh,
+			"Outposts share statically cached 96-tri _pier_bell_ripple_mesh")
+		check(ring0.material_override != ring1.material_override,
+			"distinct Outposts use isolated per-instance PierBellRippleRing materials")
+
+		if ring0.mesh is ArrayMesh:
+			var arr := (ring0.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			bell_ring_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3.UP) > 0.001:
+					bell_ring_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					bell_ring_has_black_edge = true
+				if cv.r >= 0.85 and cv.g >= 0.65 and cv.b >= 0.25:
+					bell_ring_has_ridge = true
+		check_eq(bell_ring_tris, 96, "PierBellRippleRing builds exact 96-tri annular acoustic ring")
+		check_eq(bell_ring_bad_normals, 0, "PierBellRippleRing normals are 100% finite (0, 1, 0) unit vectors")
+		check(bell_ring_has_black_edge and bell_ring_has_ridge,
+			"PierBellRippleRing feathers gilded-bronze ridge to pure black inner/outer rims")
+
+		var rmat := ring0.material_override as StandardMaterial3D
+		check(rmat != null and rmat.vertex_color_use_as_albedo and rmat.vertex_color_is_srgb \
+				and rmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and rmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and rmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and rmat.cull_mode == BaseMaterial3D.CULL_DISABLED \
+				and rmat.albedo_texture == null,
+			"PierBellRippleRing uses zero-VRAM unshaded additive sRGB StandardMaterial3D")
+
+	check(ring0 != null and not ring0.visible and is_equal_approx(op0.get_pier_bell_ripple_energy(), 0.0),
+		"PierBellRippleRing stays hidden at 0.0 energy while at rest")
+
+	op0.pier_bell_interactable.interact(null)
+	var ring_peak_e := op0.get_pier_bell_ripple_energy()
+	var ring_start_sc := ring0.scale.x if ring0 != null else 0.0
+	check(ring0 != null and ring0.visible and ring_peak_e > 1.20 and ring_peak_e <= 1.40,
+		"Ringing pier fog-bell flares PierBellRippleRing > 1.2 (got %.3f)" % ring_peak_e)
+	check_near(ring_start_sc, Outpost.PIER_BELL_RIPPLE_START_SCALE, 0.02,
+		"PierBellRippleRing starts expanding from 0.30 m scale")
+	check(ring1 != null and not ring1.visible and is_equal_approx(op1.get_pier_bell_ripple_energy(), 0.0),
+		"Ringing op0 fog-bell does not flare idle op1 PierBellRippleRing")
+
+	op0.step_outpost_feedback(0.36)
+	var ring_mid_e := op0.get_pier_bell_ripple_energy()
+	var ring_mid_sc := ring0.scale.x if ring0 != null else 0.0
+	check(ring0 != null and ring0.visible and ring_mid_e > 0.15 and ring_mid_e < ring_peak_e * 0.55,
+		"PierBellRippleRing decays smoothly mid-toll (%.3f -> %.3f)" % [ring_peak_e, ring_mid_e])
+	check(ring_mid_sc > 1.50 and ring_mid_sc < Outpost.PIER_BELL_RIPPLE_END_SCALE,
+		"PierBellRippleRing expands cleanly toward 2.40 m (mid_scale=%.2f m)" % ring_mid_sc)
+
+	op0.step_outpost_feedback(0.42)
+	check_near(op0.get_pier_bell_ripple_energy(), 0.0, 0.0001,
+		"PierBellRippleRing decays cleanly to 0.0 energy after 0.72 s")
+	check(ring0 != null and not ring0.visible, "PierBellRippleRing hides cleanly once ripple finishes")
+
+	# 4. Verify TavernKegHalo (48 tris, zero PrimitiveMesh, smooth feathering, day/night + toast flare).
+	var keg_halo0 := op0.get_tavern_keg_halo()
+	var keg_halo1 := op1.get_tavern_keg_halo()
+	check(keg_halo0 != null and keg_halo0.name == "TavernKegHalo",
+		"Outpost mounts TavernKegHalo MeshInstance3D via get_tavern_keg_halo()")
+	var keg_halo_tris := 0
+	var keg_halo_bad_normals := 0
+	var keg_halo_has_core := false
+	var keg_halo_has_black_rim := false
+	var keg_halo_mid_max_lum := 0.0
+	var keg_halo_max_r := 0.0
+	if keg_halo0 != null and keg_halo1 != null:
+		check_eq(keg_halo0.get_parent(), op0.tavern_keg_node,
+			"TavernKegHalo mounts directly over tavern_keg_node tap/mug")
+		check_eq(keg_halo0.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"TavernKegHalo disables shadow casting")
+		check_eq(keg_halo0.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"TavernKegHalo disables GI mode")
+		check(keg_halo0.mesh is ArrayMesh and not (keg_halo0.mesh is PrimitiveMesh),
+			"TavernKegHalo uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		check_eq(keg_halo0.mesh, keg_halo1.mesh,
+			"Outposts share statically cached 48-tri _tavern_keg_halo_mesh")
+		check(keg_halo0.material_override != keg_halo1.material_override,
+			"distinct Outposts use isolated per-instance TavernKegHalo materials")
+
+		if keg_halo0.mesh is ArrayMesh:
+			var arr := (keg_halo0.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			keg_halo_tris = floori(float(verts.size()) / 3.0)
+			for vi in verts.size():
+				var v := verts[vi]
+				var nv := norms[vi]
+				var cv := cols[vi]
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					keg_halo_bad_normals += 1
+				var rad := Vector2(v.x, v.y).length()
+				keg_halo_max_r = maxf(keg_halo_max_r, rad)
+				if rad < 0.01 and cv.r >= 0.95 and cv.g >= 0.88:
+					keg_halo_has_core = true
+				elif rad >= 0.10 and rad <= 0.20:
+					var mid_lum := maxf(cv.r, maxf(cv.g, cv.b))
+					keg_halo_mid_max_lum = maxf(keg_halo_mid_max_lum, mid_lum)
+				elif rad >= 0.55 and cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+					keg_halo_has_black_rim = true
+		check_eq(keg_halo_tris, 48, "TavernKegHalo builds exact 48-tri 16-wedge billboard disc")
+		check_eq(keg_halo_bad_normals, 0, "TavernKegHalo normals are 100% finite (0, 0, 1) unit vectors")
+		check(keg_halo_has_core and keg_halo_has_black_rim,
+			"TavernKegHalo feathers warm golden-honey core to pure Color(0, 0, 0, 1) rim")
+		check(keg_halo_max_r >= 0.56 and keg_halo_max_r <= 0.62,
+			"TavernKegHalo outer radius sits in smooth 0.56..0.62 band (got %.2f)" % keg_halo_max_r)
+		check(keg_halo_mid_max_lum > 0.05 and keg_halo_mid_max_lum <= 0.45,
+			"TavernKegHalo mid-ring stays softly feathered <= 0.45 to prevent hard rims (got %.2f)" % keg_halo_mid_max_lum)
+
+		var kmat := keg_halo0.material_override as StandardMaterial3D
+		check(kmat != null and kmat.vertex_color_use_as_albedo and kmat.vertex_color_is_srgb \
+				and kmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and kmat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and kmat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and kmat.billboard_keep_scale \
+				and kmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and kmat.cull_mode == BaseMaterial3D.CULL_DISABLED \
+				and kmat.albedo_texture == null,
+			"TavernKegHalo uses zero-VRAM additive unshaded scale-preserving billboard sRGB material")
+
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	op0.step_outpost_feedback(0.0)
+	var keg_day_e := op0.get_tavern_keg_halo_energy()
+	check(keg_halo0 != null and keg_halo0.visible and keg_day_e >= 0.18 and keg_day_e <= 0.26,
+		"TavernKegHalo simmers softly golden-amber in daylight ~0.22 (got %.3f)" % keg_day_e)
+
+	Weather.time_of_day = 0.5
+	op0.step_outpost_feedback(0.0)
+	var keg_night_e := op0.get_tavern_keg_halo_energy()
+	check(keg_night_e > keg_day_e * 2.0 and keg_night_e >= 0.50 and keg_night_e <= 0.64,
+		"TavernKegHalo warms brightly at dusk/night ~0.58 (day=%.3f -> night=%.3f)" % [keg_day_e, keg_night_e])
+
+	Weather.time_of_day = 12.0
+	op0.step_outpost_feedback(0.0)
+	op1.step_outpost_feedback(0.0)
+	op0.tavern_keg_interactable.interact(null)
+	var keg_flare_e := op0.get_tavern_keg_halo_energy()
+	check(keg_flare_e > 1.25 and keg_flare_e <= 1.42,
+		"Drinking a grog toast flares TavernKegHalo > 1.25 (got %.3f)" % keg_flare_e)
+	check(op1.get_tavern_keg_halo_energy() <= 0.26,
+		"Toast flare on op0 leaves idle op1 TavernKegHalo at simmering daylight base")
+
+	op0.step_outpost_feedback(0.425)
+	var keg_mid_e := op0.get_tavern_keg_halo_energy()
+	var keg_mid_sc := keg_halo0.scale.x if keg_halo0 != null else 0.0
+	check(keg_mid_e > keg_day_e + 0.10 and keg_mid_e < keg_flare_e * 0.70,
+		"TavernKegHalo decays smoothly mid-toast (%.3f -> %.3f)" % [keg_flare_e, keg_mid_e])
+	check(keg_mid_sc >= 1.40 and keg_mid_sc <= 1.49,
+		"TavernKegHalo swells warmly to ~1.48 scale during toast flare (got %.2f)" % keg_mid_sc)
+
+	op0.step_outpost_feedback(0.50)
+	var keg_post_e := op0.get_tavern_keg_halo_energy()
+	var keg_post_sc := keg_halo0.scale.x if keg_halo0 != null else 0.0
+	check(keg_post_e >= 0.18 and keg_post_e <= 0.26,
+		"TavernKegHalo settles back cleanly to daylight simmer after 0.85 s (got %.3f)" % keg_post_e)
+	check_near(keg_post_sc, 1.0, 0.02, "TavernKegHalo settles cleanly back to 1.0 base scale")
+
+	print("    Q23B outpost feedback & ASCII: src/world=%d files (%d code lines, 0 non-ASCII), PierBellRipple=%d tris (%.2f->%.2f->0.0, sc %.2f->%.2f), TavernKegHalo=%d tris (day=%.2f night=%.2f toast=%.2f->%.2f)" % [
+		world_files.size(), scanned_code_lines,
+		bell_ring_tris, ring_peak_e, ring_mid_e, ring_start_sc, ring_mid_sc,
+		keg_halo_tris, keg_day_e, keg_night_e, keg_flare_e, keg_post_e,
+	])
+
+	# 5. Clean zero-leak teardown releases all new static caches!
+	holder.queue_free()
+	await physics_frames(3)
+	check_eq(Outpost._active_outposts, 0, "Outpost._active_outposts == 0 after Q23B teardown")
+	check(Outpost._pier_bell_ripple_mesh == null and Outpost._tavern_keg_halo_mesh == null,
+		"Outpost releases _pier_bell_ripple_mesh and _tavern_keg_halo_mesh with 0 leaks")
+	Weather.apply_state(saved_weather)

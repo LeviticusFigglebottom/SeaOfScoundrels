@@ -835,10 +835,16 @@ func test_reef_fish_school_single_dc_orbit_scatter_and_teardown() -> void:
 	_root.add_child(school2)
 	await physics_frames(1)
 
-	# 2. Verify strictly 1 MultiMeshInstance3D draw call, zero raw primitives, sRGB material & distance cull.
+	# 2. Verify strictly 1 visible MultiMeshInstance3D draw call while cruising (ScatterBubbleBurst stays hidden),
+	#    zero raw primitives, sRGB material & distance cull.
 	var mmis := school.find_children("*", "MultiMeshInstance3D", true, false)
 	var mis := school.find_children("*", "MeshInstance3D", true, false)
-	check_eq(mmis.size(), 1, "ReefFishSchool renders in strictly 1 MultiMeshInstance3D draw call")
+	var visible_mmis := 0
+	for n in mmis:
+		if (n as MultiMeshInstance3D).visible:
+			visible_mmis += 1
+	check_eq(visible_mmis, 1, "ReefFishSchool renders in strictly 1 visible MultiMeshInstance3D draw call while cruising")
+	check_eq(mmis.size(), 2, "ReefFishSchool owns FishSchoolMultiMesh plus preallocated hidden ScatterBubbleBurst")
 	check_eq(mis.size(), 0, "ReefFishSchool adds zero extra MeshInstance3D draw calls")
 
 	var mmi := school.get_multimesh_instance()
@@ -4072,4 +4078,200 @@ func test_q18b_merchant_sale_halo_island_crab_telegraph_and_reef_eel_ambush_vfx(
 		"ReefEel releases all static caches including _eye_glint_mesh, _bubble_mesh & _bubble_mat (0 leaks)")
 
 
+func test_q23b_reef_fish_nocturnal_biolum_and_scatter_bubbles() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
 
+	# 1. Static source hygiene: zero PrimitiveMeshes & strict Godot 4.8 Vulkan MultiMesh teardown!
+	var fish_src := FileAccess.get_file_as_string("res://src/world/reef_fish.gd")
+	check(fish_src.length() > 1000, "loaded src/world/reef_fish.gd cleanly")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not fish_src.contains(bad_prim), "reef_fish.gd contains zero %s calls" % bad_prim)
+	check(not fish_src.contains(".multimesh.mesh = null") and not fish_src.contains("mm.mesh = null") \
+			and not fish_src.contains("bmm.mesh = null") and not fish_src.contains(".instance_count = 0"),
+		"reef_fish.gd follows Godot 4.8 Vulkan rule (never nulls mesh or zeros instance_count on MultiMesh)")
+	check(fish_src.contains("_bubbles_mmi.visible = false") and fish_src.contains("_bubbles_mmi.multimesh = null"),
+		"reef_fish.gd hides and detaches ScatterBubbleBurst cleanly on teardown")
+
+	# 2. Spawn two ReefFishSchools (including a shallow shelf school stressing y <= -0.35 m clamp!).
+	var school_a := ReefFishSchool.new()
+	school_a.name = "ReefFishQ23B_A"
+	school_a.position = Vector3(14.0, -1.35, 10.0)
+	school_a.min_depth_y = -2.2
+	school_a.max_depth_y = -1.05
+	school_a.fish_count = 22
+	school_a.seed_val = 2301
+
+	var school_b := ReefFishSchool.new()
+	school_b.name = "ReefFishQ23B_B"
+	school_b.position = Vector3(-18.0, -2.8, 12.0)
+	school_b.fish_count = 20
+	school_b.seed_val = 2302
+
+	_root.add_child(school_a)
+	_root.add_child(school_b)
+	school_a.set_physics_process(false)
+	school_b.set_physics_process(false)
+	await physics_frames(1)
+
+	# 3. Verify nocturnal bioluminescent flank/tail sheen on _fish_mat (daylight ~0.0 -> midnight >= 0.35).
+	var fish_mmi := school_a.get_multimesh_instance()
+	var fish_mat := fish_mmi.material_override as StandardMaterial3D if fish_mmi != null else null
+	check(fish_mat != null and fish_mat.emission_enabled,
+		"ReefFishSchool _fish_mat enables nocturnal bioluminescence emission")
+	if fish_mat != null:
+		check(fish_mat.emission.is_equal_approx(Color(0.18, 0.88, 0.92)),
+			"ReefFishSchool _fish_mat uses aqua-cyan bioluminescent tint (0.18, 0.88, 0.92)")
+
+	Weather.time_of_day = 12.0
+	school_a.step_school(0.05)
+	var day_biolum := school_a.get_biolum_energy()
+	check(day_biolum < 0.01, "ReefFishSchool daylight biolum_energy stays ~0.0 (got %.3f)" % day_biolum)
+	if fish_mat != null:
+		check(fish_mat.emission_energy_multiplier < 0.01,
+			"ReefFishSchool _fish_mat emission_energy_multiplier stays ~0.0 in bright daylight")
+
+	Weather.time_of_day = 0.5
+	school_a.step_school(0.05)
+	var night_biolum := school_a.get_biolum_energy()
+	check(night_biolum >= 0.35 and night_biolum <= 0.44,
+		"ReefFishSchool midnight biolum_energy rises to ~0.42 (got %.3f)" % night_biolum)
+	if fish_mat != null:
+		check_near(fish_mat.emission_energy_multiplier, night_biolum, 0.002,
+			"ReefFishSchool _fish_mat emission_energy_multiplier tracks midnight biolum_energy")
+
+	Weather.time_of_day = 12.0
+	school_a.step_school(0.05)
+	check(school_a.get_biolum_energy() < 0.01,
+		"ReefFishSchool biolum_energy returns cleanly to ~0.0 in daylight")
+
+	# 4. Verify ScatterBubbleBurst geometry (12 instances x 12-tri sculpted ArrayMesh, zero primitives, 0 VRAM).
+	var bub_a := school_a.get_scatter_bubbles()
+	var bub_b := school_b.get_scatter_bubbles()
+	check(bub_a != null and bub_a.name == "ScatterBubbleBurst",
+		"ReefFishSchool mounts ScatterBubbleBurst via get_scatter_bubbles()")
+	var bub_tris := 0
+	var bub_bad_normals := 0
+	if bub_a != null and bub_b != null:
+		check_eq(bub_a.get_parent(), school_a, "ScatterBubbleBurst mounts directly under ReefFishSchool")
+		check_eq(bub_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"ScatterBubbleBurst disables shadow casting")
+		check_eq(bub_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"ScatterBubbleBurst disables GI mode")
+		check(bub_a.visibility_range_end > 0.0 and bub_a.visibility_range_end <= 80.0,
+			"ScatterBubbleBurst respects visibility range <= 80 m (got %.1f)" % bub_a.visibility_range_end)
+
+		var bmm_a := bub_a.multimesh
+		var bmm_b := bub_b.multimesh
+		check(bmm_a != null and bmm_a.instance_count == 12 and bmm_a.use_colors,
+			"ScatterBubbleBurst allocates exact 12 per-instance colored micro-bubbles")
+		check(bmm_a != null and bmm_a.mesh is ArrayMesh and not (bmm_a.mesh is PrimitiveMesh),
+			"ScatterBubbleBurst uses sculpted ArrayMesh (zero SphereMesh)")
+		if bmm_a != null and bmm_b != null:
+			check_eq(bmm_a.mesh, bmm_b.mesh, "ReefFishSchools share statically cached 12-tri _bubble_mesh")
+			check_eq(bub_a.material_override, bub_b.material_override,
+				"ReefFishSchools share statically cached _bubble_mat")
+		if bmm_a != null and bmm_a.mesh is ArrayMesh:
+			var arr := (bmm_a.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			bub_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					bub_bad_normals += 1
+		check_eq(bub_tris, 12, "sculpted 6-sided scatter micro-bubble has exact 12 triangles")
+		check_eq(bub_bad_normals, 0, "all ScatterBubbleBurst bubble normals are finite unit vectors")
+
+		var bmat := bub_a.material_override as StandardMaterial3D
+		check(bmat != null and bmat.vertex_color_use_as_albedo and bmat.vertex_color_is_srgb \
+				and bmat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and bmat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and bmat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and bmat.albedo_texture == null,
+			"ScatterBubbleBurst uses zero-VRAM unshaded translucent sRGB StandardMaterial3D")
+
+	# 5. Strictly hidden during calm cruising; bursts cleanly on swimmer scatter with 0.65 s cooldown!
+	check(bub_a != null and not bub_a.visible and is_equal_approx(school_a.get_scatter_bubble_active_ratio(), 0.0),
+		"ScatterBubbleBurst stays strictly hidden during calm cruising")
+	for _calm in 4:
+		school_a.step_school(0.20)
+	check(bub_a != null and not bub_a.visible and is_equal_approx(school_a.get_scatter_bubble_active_ratio(), 0.0),
+		"ScatterBubbleBurst remains hidden across calm cruising steps")
+
+	var fish_pts := school_a.get_fish_world_positions()
+	check(fish_pts.size() >= 1, "school_a exposes fish world positions")
+	var swimmer_threat := fish_pts[0] + Vector3(0.15, 0.0, 0.15)
+	school_a.step_school(0.05, swimmer_threat)
+	var peak_ratio := school_a.get_scatter_bubble_active_ratio()
+	check(bub_a != null and bub_a.visible and peak_ratio >= 0.95,
+		"Swimmer entering SCATTER_RADIUS triggers ScatterBubbleBurst immediately (ratio=%.3f)" % peak_ratio)
+	check(bub_b != null and not bub_b.visible and is_equal_approx(school_b.get_scatter_bubble_active_ratio(), 0.0),
+		"Scatter on school_a leaves calm school_b ScatterBubbleBurst hidden")
+
+	var bp0 := school_a.get_scatter_bubble_world_positions()
+	check_eq(bp0.size(), 12, "get_scatter_bubble_world_positions() returns all 12 bubbles")
+
+	# Re-step inside 0.65 s cooldown with threat still present -> must NOT spam-reset burst!
+	school_a.step_school(0.25, swimmer_threat)
+	var mid_ratio := school_a.get_scatter_bubble_active_ratio()
+	check(bub_a != null and bub_a.visible and mid_ratio < peak_ratio - 0.15 and mid_ratio > 0.50,
+		"ScatterBubbleBurst respects 0.65 s rate-limit cooldown without spamming (%.3f -> %.3f)" % [
+			peak_ratio, mid_ratio
+		])
+	var bp1 := school_a.get_scatter_bubble_world_positions()
+	var rose_count := 0
+	var wobble_moved := 0
+	for i in 12:
+		if bp1[i].y > bp0[i].y + 0.08:
+			rose_count += 1
+		if Vector2(bp1[i].x - bp0[i].x, bp1[i].z - bp0[i].z).length() > 0.005:
+			wobble_moved += 1
+	check_eq(rose_count, 12, "all 12 scatter bubbles rise upward cleanly over 0.25 s")
+	check(wobble_moved >= 10, "scatter bubbles drift with helical lateral wobble (%d/12)" % wobble_moved)
+
+	# Advance across remaining burst lifetime (~1.3 s total without threat) checking strict y <= -0.35 m clamp!
+	var max_world_bub_y := -INF
+	for p in bp0:
+		max_world_bub_y = maxf(max_world_bub_y, p.y)
+	for p in bp1:
+		max_world_bub_y = maxf(max_world_bub_y, p.y)
+	for _step in 5:
+		school_a.step_school(0.16)
+		if bub_a != null and bub_a.visible:
+			for p in school_a.get_scatter_bubble_world_positions():
+				max_world_bub_y = maxf(max_world_bub_y, p.y)
+	check(max_world_bub_y <= -0.35 + 0.001,
+		"every active ScatterBubbleBurst bubble stays strictly submerged y <= -0.35 m (max_y=%.3f)" % max_world_bub_y)
+
+	# Step past 1.3 s total elapsed -> fades cleanly back to hidden!
+	school_a.step_school(0.30)
+	check(bub_a != null and not bub_a.visible and is_equal_approx(school_a.get_scatter_bubble_active_ratio(), 0.0),
+		"ScatterBubbleBurst fades cleanly back to hidden after 1.3 s")
+
+	# Verify a real swimming Pawn entering SCATTER_RADIUS triggers school_b via _find_nearby_swimmer()!
+	var fish_b_pts := school_b.get_fish_world_positions()
+	var swimmer := _spawn_pawn(fish_b_pts[0] + Vector3(0.0, -0.6, 0.2), &"player")
+	await physics_frames(1)
+	var detected_threat := school_b._find_nearby_swimmer()
+	check(detected_threat.is_finite(), "ReefFishSchool._find_nearby_swimmer() detects nearby swimming Pawn")
+	school_b.step_school(0.05, detected_threat)
+	check(bub_b != null and bub_b.visible and school_b.get_scatter_bubble_active_ratio() >= 0.95,
+		"Swimming Pawn within SCATTER_RADIUS triggers ScatterBubbleBurst on school_b")
+	swimmer.queue_free()
+
+	print("    Q23B reef fish polish: biolum=%.2f->%.2f, ScatterBubbleBurst=12x%d tris (ratio %.2f->%.2f->0.0, max_y=%.2f)" % [
+		day_biolum, night_biolum, bub_tris, peak_ratio, mid_ratio, max_world_bub_y,
+	])
+
+	# 6. Full Vulkan-safe zero-leak teardown releases ALL static caches cleanly to null!
+	await _end()
+	check_eq(ReefFishSchool._active_schools, 0, "ReefFishSchool._active_schools == 0 after Q23B teardown")
+	check(ReefFishSchool._fish_mesh == null and ReefFishSchool._fish_mat == null \
+			and ReefFishSchool._bubble_mesh == null and ReefFishSchool._bubble_mat == null,
+		"ReefFishSchool releases _fish_mesh, _fish_mat, _bubble_mesh & _bubble_mat cleanly (0 leaks)")

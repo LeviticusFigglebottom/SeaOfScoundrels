@@ -124,6 +124,9 @@ func _ready() -> void:
 		_ship.apply_livery(Color(0.32, 0.38, 0.34), Color(0.18, 0.55, 0.42), Color(0.16, 0.95, 0.62))
 	elif liv == "ghost":
 		_ship.apply_livery(Color(0.45, 0.92, 0.88), Color(0.35, 0.95, 0.9), Color(0.25, 0.98, 0.85))
+		if String(_args.get("phase_ring", "0")) == "1":
+			_ship.trigger_spectral_phase_ring(1.0)
+			_ship.step_spectral_vfx(0.28)
 	elif liv == "corsair":
 		_ship.apply_livery(Color(0.22, 0.16, 0.16), Color(0.84, 0.18, 0.14), Color(0.0, 0.0, 0.0))
 
