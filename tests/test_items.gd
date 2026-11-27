@@ -152,6 +152,7 @@ func test_inventory_equip_compass_spyglass_lantern_and_map() -> void:
 	check_eq(inv.active_item, seen[0], "next_item wraps cleanly back to start")
 
 	# Equipping cutlass & pistol updates CombatComponent.
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
 	inv.equip(&"pistol", true)
 	check_eq(cc.equipped_weapon, &"pistol", "equipping pistol syncs CombatComponent")
 	inv.equip(&"cutlass", true)
@@ -3643,7 +3644,8 @@ func test_q9b_held_lantern_halo_damped_compass_needle_and_gunsmoke_wisps() -> vo
 	check(not inv.is_firearm_barrel_smoking(),
 		"holstering/switching to another tool immediately stops barrel smoke")
 
-	# Re-fire pistol and verify dying stops barrel smoke cleanly!
+	# Re-fire pistol (restore default pistol loadout) and verify dying stops barrel smoke cleanly!
+	inv.set_weapon_loadout(&"cutlass", &"pistol")
 	inv.equip(&"pistol", true)
 	inv._on_combat_attack_started(&"pistol")
 	check(inv.is_firearm_barrel_smoking(), "pistol resumes smoking on next shot")

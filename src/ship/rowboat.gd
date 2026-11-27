@@ -111,10 +111,14 @@ var _fittings_brass_mi: MeshInstance3D = null
 var _lantern_glass_mi: MeshInstance3D = null
 var _lantern_glass_mat: StandardMaterial3D = null
 var _lantern_light: OmniLight3D = null
+var _lantern_halo_mi: MeshInstance3D = null
+var _lantern_halo_mat: ShaderMaterial = null
 var _port_oar_pivot: Node3D = null
 var _port_oar_mi: MeshInstance3D = null
 var _starboard_oar_pivot: Node3D = null
 var _starboard_oar_mi: MeshInstance3D = null
+var _port_oar_splash: GPUParticles3D = null
+var _stbd_oar_splash: GPUParticles3D = null
 var _slings_mi: MeshInstance3D = null
 
 # Runtime buoyancy, rowing & cargo state
@@ -132,6 +136,15 @@ var _driven_this_tick: bool = false
 var _turn_driven_this_tick: bool = false
 var _oar_sfx_cooldown: float = 0.0
 var _foam_accum: float = 0.0
+var _lantern_clock: float = 0.0
+var _last_lantern_halo_energy: float = 0.0
+var _port_oar_in_water: bool = false
+var _stbd_oar_in_water: bool = false
+var _port_splash_timer: float = 0.0
+var _stbd_splash_timer: float = 0.0
+var _port_splash_cd: float = 0.0
+var _stbd_splash_cd: float = 0.0
+var _oar_splash_count: int = 0
 
 var _ray_params: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.new()
 var _ray_result: Variant = ClassDB.instantiate(&"PhysicsIntersectRayResult3D") if ClassDB.class_exists(&"PhysicsIntersectRayResult3D") else null
@@ -144,6 +157,12 @@ static var _trim_oak_mesh: ArrayMesh = null
 static var _fittings_iron_mesh: ArrayMesh = null
 static var _fittings_brass_mesh: ArrayMesh = null
 static var _lantern_glass_mesh: ArrayMesh = null
+static var _lantern_halo_mesh: ArrayMesh = null
+static var _lantern_halo_shader: Shader = null
+static var _oar_splash_mesh: ArrayMesh = null
+static var _oar_splash_shader: Shader = null
+static var _oar_splash_mat: ShaderMaterial = null
+static var _oar_splash_proc: ParticleProcessMaterial = null
 static var _oar_mesh: ArrayMesh = null
 static var _slings_mesh: ArrayMesh = null
 static var _oak_mat: StandardMaterial3D = null
@@ -158,11 +177,19 @@ static func clear_shared_cache() -> void:
 		if mat != null:
 			mat.normal_texture = null
 			mat.roughness_texture = null
+	if _oar_splash_mat != null:
+		_oar_splash_mat.shader = null
 	_hull_oak_mesh = null
 	_trim_oak_mesh = null
 	_fittings_iron_mesh = null
 	_fittings_brass_mesh = null
 	_lantern_glass_mesh = null
+	_lantern_halo_mesh = null
+	_lantern_halo_shader = null
+	_oar_splash_mesh = null
+	_oar_splash_shader = null
+	_oar_splash_mat = null
+	_oar_splash_proc = null
 	_oar_mesh = null
 	_slings_mesh = null
 	_oak_mat = null
@@ -215,27 +242,40 @@ func _exit_tree() -> void:
 
 	for mi: MeshInstance3D in [
 		_hull_oak_mi, _trim_oak_mi, _fittings_iron_mi, _fittings_brass_mi,
-		_lantern_glass_mi, _port_oar_mi, _starboard_oar_mi, _slings_mi
+		_lantern_glass_mi, _lantern_halo_mi, _port_oar_mi, _starboard_oar_mi, _slings_mi
 	]:
 		if mi != null and is_instance_valid(mi):
 			mi.material_override = null
 			mi.mesh = null
+	for gp: GPUParticles3D in [_port_oar_splash, _stbd_oar_splash]:
+		if gp != null and is_instance_valid(gp):
+			gp.emitting = false
+			gp.draw_pass_1 = null
+			gp.process_material = null
+			gp.material_override = null
 	if _lantern_glass_mat != null:
 		_lantern_glass_mat.normal_texture = null
 		_lantern_glass_mat.roughness_texture = null
 		_lantern_glass_mat = null
+	if _lantern_halo_mat != null:
+		_lantern_halo_mat.shader = null
+		_lantern_halo_mat = null
 	_hull_oak_mi = null
 	_trim_oak_mi = null
 	_fittings_iron_mi = null
 	_fittings_brass_mi = null
 	_lantern_glass_mi = null
+	_lantern_halo_mi = null
 	_lantern_light = null
 	_port_oar_pivot = null
 	_port_oar_mi = null
 	_starboard_oar_pivot = null
 	_starboard_oar_mi = null
+	_port_oar_splash = null
+	_stbd_oar_splash = null
 	_slings_mi = null
 	_visual_root = null
+	_last_lantern_halo_energy = 0.0
 	oar_station = null
 	dock_interactable = null
 	cargo_interactable = null
@@ -268,6 +308,22 @@ func get_cargo_count() -> int:
 	return _cargo.size()
 
 
+## Current cached stern lantern atmospheric halo intensity (0.0 when doused).
+func get_lantern_halo_energy() -> float:
+	return _last_lantern_halo_energy
+
+
+## True when the zero-primitive additive stern LanternHalo billboard is mounted.
+func has_lantern_halo() -> bool:
+	return _lantern_halo_mi != null and is_instance_valid(_lantern_halo_mi) \
+		and _lantern_halo_mi.mesh is ArrayMesh and not (_lantern_halo_mi.mesh is PrimitiveMesh)
+
+
+## Total oar-dip sea spray & blade foam bursts triggered while rowing this dinghy.
+func get_oar_splash_count() -> int:
+	return _oar_splash_count
+
+
 ## Total sculpted triangle count across all MeshInstance3D nodes in this Rowboat.
 func get_triangle_count() -> int:
 	var tris := 0
@@ -286,7 +342,7 @@ func get_triangle_count() -> int:
 	return tris
 
 
-## Toggle the sculpted stern brass boat lantern (glass emission + warm OmniLight3D).
+## Toggle the sculpted stern brass boat lantern (glass emission, atmospheric halo & warm OmniLight3D).
 func set_lantern_lit(on: bool) -> void:
 	lantern_lit = on
 	if _lantern_light != null and is_instance_valid(_lantern_light):
@@ -296,6 +352,39 @@ func set_lantern_lit(on: bool) -> void:
 		_lantern_glass_mat.emission = Color(1.0, 0.72, 0.28)
 		_lantern_glass_mat.emission_energy_multiplier = 2.8 if on else 0.0
 		_lantern_glass_mat.albedo_color = COL_GLASS_LIT if on else COL_GLASS_DIM
+	_update_lantern_halo(0.0)
+
+
+func _update_lantern_halo(dt: float) -> void:
+	if dt > 0.0:
+		_lantern_clock += dt
+	if not lantern_lit:
+		_last_lantern_halo_energy = 0.0
+		if _lantern_halo_mi != null and is_instance_valid(_lantern_halo_mi):
+			_lantern_halo_mi.visible = false
+		if _lantern_halo_mat != null:
+			_lantern_halo_mat.set_shader_parameter(&"halo_intensity", 0.0)
+		return
+
+	var day_f := Weather.daylight() if Weather != null else 1.0
+	var storm_f := Weather.storminess if Weather != null else 0.0
+	var night := clampf(1.0 - day_f, 0.0, 1.0)
+	var atmos_raw := night + storm_f * 0.35
+	var base_e := lerpf(0.16, 1.10, clampf(atmos_raw, 0.0, 1.0))
+	var storm_night_boost := clampf((atmos_raw - 1.0) / 0.35, 0.0, 1.0) * 0.15
+	var flick := 0.95 + 0.05 * sin(_lantern_clock * 9.8) * cos(_lantern_clock * 6.3)
+	var target_e := (base_e + storm_night_boost) * flick
+	if dt > 0.0:
+		_last_lantern_halo_energy = lerpf(_last_lantern_halo_energy, target_e, 1.0 - exp(-10.0 * dt))
+	else:
+		_last_lantern_halo_energy = target_e
+
+	if _lantern_light != null and is_instance_valid(_lantern_light):
+		_lantern_light.light_energy = 1.65 * flick
+	if _lantern_halo_mi != null and is_instance_valid(_lantern_halo_mi):
+		_lantern_halo_mi.visible = true
+	if _lantern_halo_mat != null:
+		_lantern_halo_mat.set_shader_parameter(&"halo_intensity", _last_lantern_halo_energy)
 
 
 ## Unscaled ship-local stern dock offset for `target_ship` (Sloop or Brigantine).
@@ -579,12 +668,14 @@ func step_physics(delta: float) -> void:
 			_sync_docked_transform()
 			if lantern_lit != mother_ship.lanterns_lit:
 				set_lantern_lit(mother_ship.lanterns_lit)
+		_update_lantern_halo(dt)
 		_update_oar_visuals(dt, true)
 		_sync_stowed_cargo()
 		return
 
 	if Net.is_host():
 		_step_launched_physics(dt)
+	_update_lantern_halo(dt)
 	_update_oar_visuals(dt, false)
 	_sync_stowed_cargo()
 
@@ -807,6 +898,7 @@ func _update_oar_visuals(dt: float, stowed: bool) -> void:
 		else:
 			_port_oar_pivot.rotation = _port_oar_pivot.rotation.lerp(p_tgt, k)
 			_starboard_oar_pivot.rotation = _starboard_oar_pivot.rotation.lerp(s_tgt, k)
+		_update_oar_splashes(dt, true)
 		return
 
 	var p_act := clampf(absf(_port_oar_effort), 0.0, 1.0)
@@ -823,6 +915,77 @@ func _update_oar_visuals(dt: float, stowed: bool) -> void:
 
 	_port_oar_pivot.rotation = _port_oar_pivot.rotation.lerp(Vector3(p_feather, p_sweep, p_dip), k)
 	_starboard_oar_pivot.rotation = _starboard_oar_pivot.rotation.lerp(Vector3(s_feather, s_sweep, s_dip), k)
+	_update_oar_splashes(dt, false)
+
+
+func _update_oar_splashes(dt: float, stowed: bool) -> void:
+	if stowed or state != State.LAUNCHED:
+		_port_oar_in_water = false
+		_stbd_oar_in_water = false
+		_port_splash_timer = 0.0
+		_stbd_splash_timer = 0.0
+		_port_splash_cd = 0.0
+		_stbd_splash_cd = 0.0
+		if _port_oar_splash != null and is_instance_valid(_port_oar_splash):
+			_port_oar_splash.emitting = false
+		if _stbd_oar_splash != null and is_instance_valid(_stbd_oar_splash):
+			_stbd_oar_splash.emitting = false
+		return
+
+	if dt > 0.0:
+		_port_splash_cd = maxf(0.0, _port_splash_cd - dt)
+		_stbd_splash_cd = maxf(0.0, _stbd_splash_cd - dt)
+		_port_splash_timer = maxf(0.0, _port_splash_timer - dt)
+		_stbd_splash_timer = maxf(0.0, _stbd_splash_timer - dt)
+
+	var port_active := absf(_port_oar_effort) > 0.25
+	var port_in := port_active and cos(_port_oar_phase) >= 0.25
+	if port_in and not _port_oar_in_water and _port_splash_cd <= 0.0:
+		_trigger_oar_splash(true)
+	_port_oar_in_water = port_in
+
+	var stbd_active := absf(_stbd_oar_effort) > 0.25
+	var stbd_in := stbd_active and cos(_stbd_oar_phase) >= 0.25
+	if stbd_in and not _stbd_oar_in_water and _stbd_splash_cd <= 0.0:
+		_trigger_oar_splash(false)
+	_stbd_oar_in_water = stbd_in
+
+	if _port_oar_splash != null and is_instance_valid(_port_oar_splash):
+		_port_oar_splash.emitting = _port_splash_timer > 0.0
+	if _stbd_oar_splash != null and is_instance_valid(_stbd_oar_splash):
+		_stbd_oar_splash.emitting = _stbd_splash_timer > 0.0
+
+
+func _trigger_oar_splash(is_port: bool) -> void:
+	var blade_w := _compute_oar_blade_world_pos(is_port)
+	var sea_y := Sea.height(blade_w.x, blade_w.z) if Sea != null else global_position.y
+	blade_w.y = sea_y + 0.04
+
+	if Ocean.current != null and is_instance_valid(Ocean.current):
+		Ocean.current.add_foam(blade_w, 0.95, 0.42)
+
+	var gp: GPUParticles3D = _port_oar_splash if is_port else _stbd_oar_splash
+	if gp != null and is_instance_valid(gp):
+		if is_inside_tree():
+			gp.global_position = blade_w
+		else:
+			gp.position = Vector3(-1.95 if is_port else 1.95, 0.04, 0.05)
+		gp.emitting = true
+
+	if is_port:
+		_port_splash_timer = 0.22
+		_port_splash_cd = 0.28
+	else:
+		_stbd_splash_timer = 0.22
+		_stbd_splash_cd = 0.28
+	_oar_splash_count += 1
+
+
+func _compute_oar_blade_world_pos(is_port: bool) -> Vector3:
+	var mi: MeshInstance3D = _port_oar_mi if is_port else _starboard_oar_mi
+	if mi != null and is_instance_valid(mi) and mi.is_inside_tree():
+		return mi.to_global(Vector3(1.50, 0.0, 0.0))
+	return global_transform * Vector3((-1.95 if is_port else 1.95) * visual_scale, 0.04, 0.05 * visual_scale)
 
 
 # ==============================================================================
@@ -945,6 +1108,24 @@ func _build_visuals() -> void:
 	_lantern_light.visible = lantern_lit
 	_visual_root.add_child(_lantern_light)
 
+	_lantern_halo_mat = ShaderMaterial.new()
+	_lantern_halo_mat.shader = _lantern_halo_shader
+	_lantern_halo_mat.set_shader_parameter(&"halo_intensity", 0.0)
+	_lantern_halo_mat.set_shader_parameter(&"halo_scale", 0.72 * visual_scale)
+	_lantern_halo_mat.set_shader_parameter(&"halo_color", Color(1.0, 0.74, 0.30))
+	_lantern_halo_mat.set_shader_parameter(&"halo_phase", float(get_instance_id() % 97) * 0.29)
+
+	_lantern_halo_mi = MeshInstance3D.new()
+	_lantern_halo_mi.name = "LanternHalo"
+	_lantern_halo_mi.position = Vector3(0.0, 0.80, 1.72)
+	_lantern_halo_mi.mesh = _lantern_halo_mesh
+	_lantern_halo_mi.material_override = _lantern_halo_mat
+	_lantern_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_lantern_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_lantern_halo_mi.extra_cull_margin = 1.0 * visual_scale
+	_lantern_halo_mi.visible = lantern_lit
+	_visual_root.add_child(_lantern_halo_mi)
+
 	_port_oar_pivot = Node3D.new()
 	_port_oar_pivot.name = "PortOarPivot"
 	_port_oar_pivot.position = Vector3(-0.72, 0.64, 0.05)
@@ -969,12 +1150,38 @@ func _build_visuals() -> void:
 	_starboard_oar_mi.material_override = _oak_mat
 	_starboard_oar_pivot.add_child(_starboard_oar_mi)
 
+	_port_oar_splash = _make_oar_splash_emitter("PortOarSplash", Vector3(-1.95, 0.04, 0.05))
+	_visual_root.add_child(_port_oar_splash)
+	_stbd_oar_splash = _make_oar_splash_emitter("StbdOarSplash", Vector3(1.95, 0.04, 0.05))
+	_visual_root.add_child(_stbd_oar_splash)
+
 	_slings_mi = MeshInstance3D.new()
 	_slings_mi.name = "DavitHoistSlings"
 	_slings_mi.mesh = _slings_mesh
 	_slings_mi.material_override = _rope_mat
 	_slings_mi.visible = (state == State.DOCKED)
 	_visual_root.add_child(_slings_mi)
+
+
+static func _make_oar_splash_emitter(node_name: String, local_pos: Vector3) -> GPUParticles3D:
+	var gp := GPUParticles3D.new()
+	gp.name = node_name
+	gp.position = local_pos
+	gp.amount = 14
+	gp.lifetime = 0.48
+	gp.one_shot = false
+	gp.explosiveness = 0.65
+	gp.randomness = 0.35
+	gp.local_coords = false
+	gp.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD
+	gp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	gp.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	gp.visibility_aabb = AABB(Vector3(-2.0, -0.8, -2.0), Vector3(4.0, 2.8, 4.0))
+	gp.process_material = _oar_splash_proc
+	gp.draw_pass_1 = _oar_splash_mesh
+	gp.material_override = _oar_splash_mat
+	gp.emitting = false
+	return gp
 
 
 static func _load_pbr_tex(path: String) -> Texture2D:
@@ -1038,10 +1245,147 @@ static func _ensure_shared_assets() -> void:
 		_fittings_brass_mesh = _build_fittings_brass_mesh()
 	if _lantern_glass_mesh == null:
 		_lantern_glass_mesh = _build_lantern_glass_mesh()
+	if _lantern_halo_mesh == null:
+		_lantern_halo_mesh = _build_lantern_halo_quad()
+	if _lantern_halo_shader == null:
+		_lantern_halo_shader = _build_lantern_halo_shader()
+	if _oar_splash_mesh == null:
+		_oar_splash_mesh = _build_oar_splash_card_mesh()
+	if _oar_splash_shader == null:
+		_oar_splash_shader = _build_oar_splash_shader()
+	if _oar_splash_mat == null:
+		_oar_splash_mat = ShaderMaterial.new()
+		_oar_splash_mat.shader = _oar_splash_shader
+	if _oar_splash_proc == null:
+		var proc := ParticleProcessMaterial.new()
+		proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		proc.emission_sphere_radius = 0.14
+		proc.direction = Vector3(0.0, 1.0, 0.25)
+		proc.spread = 42.0
+		proc.initial_velocity_min = 1.4
+		proc.initial_velocity_max = 2.9
+		proc.gravity = Vector3(0.0, -7.8, 0.0)
+		proc.damping_min = 0.4
+		proc.damping_max = 0.9
+		proc.scale_min = 0.65
+		proc.scale_max = 1.30
+		_oar_splash_proc = proc
 	if _oar_mesh == null:
 		_oar_mesh = _build_oar_mesh()
 	if _slings_mesh == null:
 		_slings_mesh = _build_slings_mesh()
+
+
+static func _build_lantern_halo_quad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_lantern_halo_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float halo_intensity = 0.0;
+uniform float halo_scale = 0.72;
+uniform vec3 halo_color : source_color = vec3(1.0, 0.74, 0.30);
+uniform float halo_phase = 0.0;
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * halo_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge_mask = smoothstep(1.0, 0.72, r);
+	float shimmer = 0.94 + 0.06 * sin(TIME * 6.8 + halo_phase) * cos(TIME * 4.3 - halo_phase * 0.7);
+	float core = exp(-r * r * 14.5) * 0.76;
+	float bloom = exp(-r * r * 3.8) * 0.42;
+	float glow = (core + bloom) * edge_mask * shimmer;
+	vec3 col = mix(halo_color, vec3(1.0, 0.96, 0.84), clamp(core * 1.15, 0.0, 1.0));
+	ALBEDO = col * (glow * halo_intensity);
+}
+"""
+	return sh
+
+
+static func _build_oar_splash_card_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var h := 0.068
+	var p0 := Vector3(-h, -h, 0.0)
+	var p1 := Vector3(h, -h, 0.0)
+	var p2 := Vector3(h, h, 0.0)
+	var p3 := Vector3(-h, h, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_oar_splash_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, depth_draw_never, cull_disabled, shadows_disabled;
+
+varying float v_age;
+varying float v_seed;
+
+void vertex() {
+	v_age = clamp(INSTANCE_CUSTOM.y, 0.0, 1.0);
+	v_seed = INSTANCE_CUSTOM.x;
+	float sc = mix(0.60, 1.35, sin(v_age * 3.14159265) * 0.70 + v_age * 0.30);
+	VERTEX *= sc;
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float drop = smoothstep(1.0, 0.22, r);
+	float core = smoothstep(0.65, 0.0, r);
+	float fade_in = smoothstep(0.0, 0.14, v_age);
+	float fade_out = pow(1.0 - v_age, 1.45);
+	float alpha = clamp((drop * 0.72 + core * 0.28) * fade_in * fade_out * 0.78, 0.0, 1.0);
+	vec3 foam_col = mix(vec3(0.76, 0.92, 0.96), vec3(0.96, 0.99, 1.0), core);
+	ALBEDO = foam_col;
+	ALPHA = alpha;
+}
+"""
+	return sh
 
 
 # ==============================================================================

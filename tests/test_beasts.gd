@@ -1713,9 +1713,142 @@ func test_q8b_seabird_flock_ship_slipstream_escort_and_return() -> void:
 	await _end()
 
 
+func test_q10b_shipwreck_bubbles_dive_halo_and_castaway_night_beacon() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	ToolMeshes.clear_shared_cache()
 
+	# 1. Static source guard: zero raw PrimitiveMesh allocations in shipwreck & castaway scripts.
+	var wreck_src := FileAccess.get_file_as_string("res://src/world/sunken_shipwreck.gd")
+	var raft_src := FileAccess.get_file_as_string("res://src/world/castaway_raft.gd")
+	for bad_prim: String in ["QuadMesh.new", "BoxMesh.new", "SphereMesh.new", "CylinderMesh.new"]:
+		check(not wreck_src.contains(bad_prim), "sunken_shipwreck.gd contains zero %s calls" % bad_prim)
+		check(not raft_src.contains(bad_prim), "castaway_raft.gd contains zero %s calls" % bad_prim)
 
+	# 2. SunkenShipwreck rising 12-tri underwater air-bubble streams + 2.4 m UnderwaterDiveHalo.
+	var wreck := SunkenShipwreck.spawn_at(_root, Vector3(48.0, 0.0, -48.0), 10801)
+	await physics_frames(2)
 
+	check(wreck.has_bubble_streams(), "SunkenShipwreck mounts rising WreckBubbleStreams GPUParticles3D")
+	var bubbles := wreck.get_bubble_stream_node()
+	check(bubbles != null and bubbles.name == "WreckBubbleStreams",
+		"get_bubble_stream_node() returns WreckBubbleStreams GPUParticles3D")
+	if bubbles != null:
+		check_eq(bubbles.amount, 24, "WreckBubbleStreams emits 24 rising air bubbles")
+		check_near(bubbles.lifetime, 2.6, 0.01, "WreckBubbleStreams lifetime is 2.6 s")
+		check_eq(bubbles.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"WreckBubbleStreams disables shadow casting")
+		check(bubbles.draw_pass_1 is ArrayMesh and not (bubbles.draw_pass_1 is PrimitiveMesh),
+			"WreckBubbleStreams draw_pass_1 uses sculpted ArrayMesh (zero SphereMesh)")
+		if bubbles.draw_pass_1 is ArrayMesh:
+			check_eq((bubbles.draw_pass_1 as ArrayMesh).get_faces().size(), 36,
+				"sculpted faceted bubble ArrayMesh has exact 12 triangles (36 face vertices)")
+		var bmat := bubbles.material_override as StandardMaterial3D
+		check(bmat != null and bmat.rim_enabled and bmat.emission_enabled,
+			"WreckBubbleStreams uses rim-shimmering translucent pearl-cyan StandardMaterial3D")
+		if bmat != null:
+			check(bmat.albedo_texture == null and bmat.normal_texture == null and bmat.roughness_texture == null,
+				"WreckBubbleStreams bubble material allocates 0 extra VRAM textures")
+		var bproc := bubbles.process_material as ParticleProcessMaterial
+		check(bproc != null and bproc.scale_curve == null and bproc.color_ramp == null,
+			"WreckBubbleStreams avoids CurveTexture/GradientTexture1D leak risks")
+		check(bubbles.emitting, "WreckBubbleStreams stays active in headless when no camera exists")
 
+	# Verify <= 95 m camera distance gate for WreckBubbleStreams.
+	var cam := Camera3D.new()
+	_root.add_child(cam)
+	cam.current = true
+	cam.global_position = wreck.global_position + Vector3(140.0, 12.0, 0.0)
+	wreck.step_buoyancy(0.05)
+	if bubbles != null:
+		check(not bubbles.emitting, "WreckBubbleStreams pauses beyond 95 m camera cull range")
+	cam.global_position = wreck.global_position + Vector3(45.0, 6.0, 0.0)
+	wreck.step_buoyancy(0.05)
+	if bubbles != null:
+		check(bubbles.emitting, "WreckBubbleStreams resumes cleanly within 95 m of active camera")
 
+	# Verify UnderwaterDiveHalo zero-primitive 2-tri billboard + turquoise-amber ShaderMaterial.
+	var dive_halo := wreck.get_dive_beacon_halo_node()
+	check(dive_halo != null and dive_halo.name == "UnderwaterDiveHalo",
+		"SunkenShipwreck mounts UnderwaterDiveHalo MeshInstance3D")
+	if dive_halo != null:
+		check_eq(dive_halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"UnderwaterDiveHalo disables shadow casting")
+		check_eq(dive_halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"UnderwaterDiveHalo disables GI mode")
+		check(dive_halo.mesh is ArrayMesh and not (dive_halo.mesh is PrimitiveMesh),
+			"UnderwaterDiveHalo uses zero-primitive SurfaceTool ArrayMesh")
+		if dive_halo.mesh is ArrayMesh:
+			check_eq((dive_halo.mesh as ArrayMesh).get_faces().size(), 6,
+				"UnderwaterDiveHalo quad has exact 2 triangles (6 face vertices)")
+		var hmat := dive_halo.material_override as ShaderMaterial
+		check(hmat != null and hmat.shader != null, "UnderwaterDiveHalo uses zero-texture additive ShaderMaterial")
+		if hmat != null:
+			check_near(float(hmat.get_shader_parameter(&"halo_scale")), 2.4, 0.01,
+				"UnderwaterDiveHalo uses 2.4 m underwater cabin beacon scale")
+			check(float(hmat.get_shader_parameter(&"halo_intensity")) > 0.5,
+				"UnderwaterDiveHalo glows visibly while cabin treasure remains")
+		check(dive_halo.visible, "UnderwaterDiveHalo is visible within 120 m while uncleared")
 
+	var wreck_prims := 0
+	for n in wreck.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi != null and mi.mesh is PrimitiveMesh:
+			wreck_prims += 1
+	check_eq(wreck_prims, 0, "SunkenShipwreck hierarchy contains zero raw PrimitiveMeshes")
+
+	# 3. CastawayRaft Q9B ToolMeshes distress lantern halo: midday -> midnight (> 3x) -> storm night!
+	var raft := CastawayRaft.new()
+	raft.auto_buoyancy = false
+	_root.add_child(raft)
+	raft.set_process(false)
+	await physics_frames(2)
+
+	check(raft.lantern_node != null, "CastawayRaft hangs ToolMeshes SignalLantern")
+	var raft_halo := raft.lantern_node.get_node_or_null(^"FlameHalo") as MeshInstance3D if raft.lantern_node != null else null
+	check(raft_halo != null and raft_halo.mesh is ArrayMesh and not (raft_halo.mesh is PrimitiveMesh),
+		"CastawayRaft distress lantern exposes zero-primitive ToolMeshes FlameHalo")
+
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	raft._process(1.0 / 60.0)
+	var noon_e := raft.get_signal_halo_energy()
+	check(noon_e >= 0.16 and noon_e <= 0.26,
+		"CastawayRaft midday distress halo stays crisp and subtle (got %.3f)" % noon_e)
+
+	Weather.time_of_day = 23.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	raft._process(1.0 / 60.0)
+	var night_e := raft.get_signal_halo_energy()
+	check(night_e > noon_e * 3.0 and night_e >= 1.05,
+		"CastawayRaft night distress halo exceeds 3x midday (noon=%.3f -> night=%.3f)" % [noon_e, night_e])
+
+	Weather.time_of_day = 23.0
+	Weather.set_weather(1.0, 14.0, 0.0)
+	raft._process(1.0 / 60.0)
+	var storm_e := raft.get_signal_halo_energy()
+	check(storm_e > night_e and storm_e >= 1.24,
+		"CastawayRaft storm-night distress halo intensifies further (night=%.3f -> storm=%.3f)" % [night_e, storm_e])
+
+	if raft_halo != null and raft_halo.material_override is ShaderMaterial:
+		var rmat := raft_halo.material_override as ShaderMaterial
+		check_near(float(rmat.get_shader_parameter(&"halo_scale")), 1.35, 0.01,
+			"CastawayRaft distress lantern halo uses 1.35 m sea-horizon scale")
+		check_near(float(rmat.get_shader_parameter(&"halo_intensity")), storm_e, 0.001,
+			"CastawayRaft FlameHalo uniform matches get_signal_halo_energy()")
+
+	print("    Q10B shipwreck bubbles/dive halo + castaway beacon: noon=%.3f, night=%.3f (%.1fx), storm=%.3f" % [
+		noon_e, night_e, night_e / maxf(noon_e, 0.001), storm_e
+	])
+
+	# 4. Clean zero-leak teardown!
+	await _end()
+	SunkenShipwreck.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+	ToolMeshes.clear_shared_cache()
+	check_eq(SunkenShipwreck._active_wrecks, 0, "SunkenShipwreck._active_wrecks == 0 after Q10B teardown")
+	check(SunkenShipwreck._bubble_mesh == null and SunkenShipwreck._bubble_mat == null \
+			and SunkenShipwreck._bubble_proc == null and SunkenShipwreck._dive_halo_mesh == null \
+			and SunkenShipwreck._dive_halo_shader == null,
+		"SunkenShipwreck releases all bubble & dive halo static caches cleanly with zero leaks")

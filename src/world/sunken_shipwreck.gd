@@ -27,6 +27,8 @@ const LIST_PITCH_DEG := -18.0
 const HULL_PIVOT_OFFSET_Y := -0.35
 const GLOW_CULL_DIST := 120.0
 const GLOW_CULL_DIST_SQ := GLOW_CULL_DIST * GLOW_CULL_DIST
+const BUBBLE_CULL_DIST := 95.0
+const BUBBLE_CULL_DIST_SQ := BUBBLE_CULL_DIST * BUBBLE_CULL_DIST
 
 const TEX_HULL_NORMAL := "res://assets/generated/textures/ship_oak_normal.png"
 const TEX_HULL_ROUGH := "res://assets/generated/textures/ship_oak_rough.png"
@@ -81,6 +83,11 @@ static var _hull_mesh: ArrayMesh = null
 static var _hull_mat: StandardMaterial3D = null
 static var _accent_mat: StandardMaterial3D = null
 static var _glow_mat: StandardMaterial3D = null
+static var _bubble_mesh: ArrayMesh = null
+static var _bubble_mat: StandardMaterial3D = null
+static var _bubble_proc: ParticleProcessMaterial = null
+static var _dive_halo_mesh: ArrayMesh = null
+static var _dive_halo_shader: Shader = null
 static var _pbr_tex_cache: Dictionary = {}  # String path -> WeakRef(Texture2D)
 
 @export var seed_val: int = 1
@@ -96,6 +103,9 @@ var _hull_mi: MeshInstance3D = null
 var _hull_collider: StaticBody3D = null
 var _gull_flock: SeabirdFlock = null
 var _cabin_light: OmniLight3D = null
+var _bubble_streams: GPUParticles3D = null
+var _dive_halo_mi: MeshInstance3D = null
+var _dive_halo_mat: ShaderMaterial = null
 var _loot_spawned: bool = false
 var _cleared: bool = false
 var _looted_ids: Dictionary = {}  # int instance_id -> true
@@ -120,7 +130,7 @@ static func spawn_at(parent: Node, world_pos: Vector3, p_seed: int = 1) -> Sunke
 
 ## Release all statically cached wreck meshes, PBR materials, and WeakRef textures cleanly.
 static func clear_shared_cache() -> void:
-	for mat: StandardMaterial3D in [_hull_mat, _accent_mat, _glow_mat]:
+	for mat: StandardMaterial3D in [_hull_mat, _accent_mat, _glow_mat, _bubble_mat]:
 		if mat != null:
 			mat.albedo_texture = null
 			mat.normal_texture = null
@@ -129,6 +139,11 @@ static func clear_shared_cache() -> void:
 	_hull_mat = null
 	_accent_mat = null
 	_glow_mat = null
+	_bubble_mesh = null
+	_bubble_mat = null
+	_bubble_proc = null
+	_dive_halo_mesh = null
+	_dive_halo_shader = null
 	_pbr_tex_cache.clear()
 
 
@@ -289,6 +304,22 @@ func get_cabin_light() -> OmniLight3D:
 	return _cabin_light
 
 
+## True when the rising underwater WreckBubbleStreams GPUParticles3D emitter is mounted.
+func has_bubble_streams() -> bool:
+	return _bubble_streams != null and is_instance_valid(_bubble_streams) \
+		and _bubble_streams.draw_pass_1 is ArrayMesh and not (_bubble_streams.draw_pass_1 is PrimitiveMesh)
+
+
+## Return the rising underwater WreckBubbleStreams GPUParticles3D emitter.
+func get_bubble_stream_node() -> GPUParticles3D:
+	return _bubble_streams
+
+
+## Return the underwater cabin treasure UnderwaterDiveHalo MeshInstance3D billboard.
+func get_dive_beacon_halo_node() -> MeshInstance3D:
+	return _dive_halo_mi
+
+
 ## Return total sculpted triangle count across the shared hull ArrayMesh.
 func get_triangle_count() -> int:
 	_ensure_shared_assets()
@@ -365,17 +396,29 @@ func _on_loot_picked_up(_actor: Node, item: Carryable) -> void:
 
 
 func _update_cabin_light() -> void:
-	if _cabin_light == null or not is_instance_valid(_cabin_light):
-		return
-	if _cleared or (_loot_spawned and get_remaining_loot_count() == 0):
-		_cabin_light.visible = false
-		return
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() and get_viewport() != null else null
-	if cam != null and global_position.distance_squared_to(cam.global_position) > GLOW_CULL_DIST_SQ:
-		_cabin_light.visible = false
-		return
-	_cabin_light.visible = true
-	_cabin_light.light_energy = 1.40 + sin(_bob_clock * 2.3) * 0.24 + sin(_bob_clock * 4.9) * 0.09
+	var cam_dist_sq := global_position.distance_squared_to(cam.global_position) if cam != null else 0.0
+
+	# Distance-gated rising underwater air-bubble streams (<= 95 m, or active in headless when no camera exists).
+	var bubbles_active := (cam == null) or (cam_dist_sq <= BUBBLE_CULL_DIST_SQ)
+	if _bubble_streams != null and is_instance_valid(_bubble_streams):
+		_bubble_streams.emitting = bubbles_active
+		_bubble_streams.visible = bubbles_active
+
+	var beacon_active := not (_cleared or (_loot_spawned and get_remaining_loot_count() == 0)) \
+		and ((cam == null) or (cam_dist_sq <= GLOW_CULL_DIST_SQ))
+
+	var shimmer := 1.40 + sin(_bob_clock * 2.3) * 0.24 + sin(_bob_clock * 4.9) * 0.09
+	if _cabin_light != null and is_instance_valid(_cabin_light):
+		_cabin_light.visible = beacon_active
+		if beacon_active:
+			_cabin_light.light_energy = shimmer
+
+	if _dive_halo_mi != null and is_instance_valid(_dive_halo_mi):
+		_dive_halo_mi.visible = beacon_active
+	if _dive_halo_mat != null:
+		var halo_i := (0.86 + sin(_bob_clock * 1.9) * 0.14) if beacon_active else 0.0
+		_dive_halo_mat.set_shader_parameter(&"halo_intensity", halo_i)
 
 
 func _build_hierarchy() -> void:
@@ -407,6 +450,45 @@ func _build_hierarchy() -> void:
 	_cabin_light.omni_attenuation = 1.4
 	_cabin_light.shadow_enabled = false
 	_hull_pivot.add_child(_cabin_light)
+
+	# Soft underwater turquoise-amber additive billboard dive beacon halo centered in the sunken hold.
+	_dive_halo_mat = ShaderMaterial.new()
+	_dive_halo_mat.shader = _dive_halo_shader
+	_dive_halo_mat.set_shader_parameter(&"halo_intensity", 0.86)
+	_dive_halo_mat.set_shader_parameter(&"halo_scale", 2.4)
+	_dive_halo_mat.set_shader_parameter(&"halo_color", Color(0.18, 0.88, 0.84))
+	_dive_halo_mat.set_shader_parameter(&"core_color", Color(1.0, 0.84, 0.44))
+	_dive_halo_mat.set_shader_parameter(&"halo_phase", float(absi(seed_val) % 100) * 0.37)
+
+	_dive_halo_mi = MeshInstance3D.new()
+	_dive_halo_mi.name = "UnderwaterDiveHalo"
+	_dive_halo_mi.position = Vector3(-0.35, -1.65, -2.55)
+	_dive_halo_mi.mesh = _dive_halo_mesh
+	_dive_halo_mi.material_override = _dive_halo_mat
+	_dive_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_dive_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_dive_halo_mi.extra_cull_margin = 2.0
+	_dive_halo_mi.visibility_range_end = GLOW_CULL_DIST
+	_hull_pivot.add_child(_dive_halo_mi)
+
+	# Distance-gated rising underwater air-bubble streams escaping upward from the breached hull.
+	var bubble_pos := _hull_pivot.transform * Vector3(-0.35, -1.75, -2.35)
+	_bubble_streams = GPUParticles3D.new()
+	_bubble_streams.name = "WreckBubbleStreams"
+	_bubble_streams.position = bubble_pos
+	_bubble_streams.amount = 24
+	_bubble_streams.lifetime = 2.6
+	_bubble_streams.preprocess = 0.8
+	_bubble_streams.randomness = 0.35
+	_bubble_streams.local_coords = false
+	_bubble_streams.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_bubble_streams.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_bubble_streams.visibility_aabb = AABB(Vector3(-3.5, -1.0, -3.5), Vector3(7.0, 9.0, 7.0))
+	_bubble_streams.process_material = _bubble_proc
+	_bubble_streams.draw_pass_1 = _bubble_mesh
+	_bubble_streams.material_override = _bubble_mat
+	_bubble_streams.emitting = true
+	add_child(_bubble_streams)
 
 	_build_hull_collider()
 
@@ -457,11 +539,24 @@ func _release_refs() -> void:
 				_hull_mi.set_surface_override_material(si, null)
 		_hull_mi.mesh = null
 		_hull_mi.material_override = null
+	if _bubble_streams != null and is_instance_valid(_bubble_streams):
+		_bubble_streams.emitting = false
+		_bubble_streams.draw_pass_1 = null
+		_bubble_streams.process_material = null
+		_bubble_streams.material_override = null
+	if _dive_halo_mi != null and is_instance_valid(_dive_halo_mi):
+		_dive_halo_mi.material_override = null
+		_dive_halo_mi.mesh = null
+	if _dive_halo_mat != null:
+		_dive_halo_mat.shader = null
+		_dive_halo_mat = null
 	_hull_mi = null
 	_hull_collider = null
 	_hull_pivot = null
 	_gull_flock = null
 	_cabin_light = null
+	_bubble_streams = null
+	_dive_halo_mi = null
 
 
 # ==============================================================================
@@ -546,8 +641,125 @@ static func _ensure_shared_assets() -> void:
 		_glow_mat.emission_enabled = true
 		_glow_mat.emission = Color(0.18, 0.78, 0.72)
 		_glow_mat.emission_energy_multiplier = 1.65
+	if _bubble_mat == null:
+		_bubble_mat = StandardMaterial3D.new()
+		_bubble_mat.vertex_color_use_as_albedo = true
+		_bubble_mat.vertex_color_is_srgb = true
+		_bubble_mat.albedo_color = Color(0.80, 0.97, 1.0, 0.56)
+		_bubble_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_bubble_mat.roughness = 0.08
+		_bubble_mat.metallic = 0.12
+		_bubble_mat.rim_enabled = true
+		_bubble_mat.rim = 0.85
+		_bubble_mat.rim_tint = 0.35
+		_bubble_mat.emission_enabled = true
+		_bubble_mat.emission = Color(0.36, 0.88, 0.94)
+		_bubble_mat.emission_energy_multiplier = 0.65
+	if _bubble_mesh == null:
+		_bubble_mesh = _build_bubble_mesh()
+	if _bubble_proc == null:
+		var proc := ParticleProcessMaterial.new()
+		proc.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		proc.emission_box_extents = Vector3(1.15, 0.35, 1.85)
+		proc.direction = Vector3.UP
+		proc.spread = 18.0
+		proc.initial_velocity_min = 1.6
+		proc.initial_velocity_max = 2.8
+		proc.gravity = Vector3(0.0, 0.35, 0.0)
+		proc.damping_min = 0.45
+		proc.damping_max = 0.85
+		proc.tangential_accel_min = -0.25
+		proc.tangential_accel_max = 0.25
+		proc.scale_min = 0.65
+		proc.scale_max = 1.45
+		_bubble_proc = proc
+	if _dive_halo_mesh == null:
+		_dive_halo_mesh = _build_dive_halo_quad()
+	if _dive_halo_shader == null:
+		_dive_halo_shader = _build_dive_halo_shader()
 	if _hull_mesh == null:
 		_hull_mesh = _build_hull_mesh()
+
+
+static func _build_bubble_mesh() -> ArrayMesh:
+	# Sculpted 12-triangle faceted oblate hexagonal bipyramid underwater air bubble (zero SphereMesh).
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SIDES := 6
+	const R_EQ := 0.075
+	const R_POLE := 0.068
+	var top := Vector3(0.0, R_POLE, 0.0)
+	var bot := Vector3(0.0, -R_POLE, 0.0)
+	var ring: Array[Vector3] = []
+	for s in SIDES:
+		var a := TAU * float(s) / float(SIDES)
+		ring.append(Vector3(cos(a) * R_EQ, 0.0, sin(a) * R_EQ))
+	var col_top := Color(0.94, 0.99, 1.0)
+	var col_eq := Color(0.76, 0.95, 1.0)
+	var col_bot := Color(0.56, 0.88, 0.96)
+	for s in SIDES:
+		var s1 := (s + 1) % SIDES
+		_emit_outward_tri(st, ring[s], ring[s1], top, Vector3.ZERO, col_eq, col_eq, col_top)
+		_emit_outward_tri(st, ring[s1], ring[s], bot, Vector3.ZERO, col_eq, col_eq, col_bot)
+	return st.commit()
+
+
+static func _build_dive_halo_quad() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var p0 := Vector3(-0.5, -0.5, 0.0)
+	var p1 := Vector3(0.5, -0.5, 0.0)
+	var p2 := Vector3(0.5, 0.5, 0.0)
+	var p3 := Vector3(-0.5, 0.5, 0.0)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(p1)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(p0)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(p2)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(p3)
+	st.generate_normals()
+	return st.commit()
+
+
+static func _build_dive_halo_shader() -> Shader:
+	var sh := Shader.new()
+	sh.code = """shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform float halo_intensity = 0.86;
+uniform float halo_scale = 2.4;
+uniform vec3 halo_color : source_color = vec3(0.18, 0.88, 0.84);
+uniform vec3 core_color : source_color = vec3(1.0, 0.84, 0.44);
+uniform float halo_phase = 0.0;
+
+void vertex() {
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
+		vec4(INV_VIEW_MATRIX[0].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[1].xyz * halo_scale, 0.0),
+		vec4(INV_VIEW_MATRIX[2].xyz * halo_scale, 0.0),
+		MODEL_MATRIX[3]
+	);
+}
+
+void fragment() {
+	vec2 q = UV * 2.0 - 1.0;
+	float r = length(q);
+	float edge_mask = smoothstep(1.0, 0.70, r);
+	float undulate = 0.90 + 0.10 * sin(TIME * 2.4 + halo_phase + q.y * 2.2) * cos(TIME * 1.7 - halo_phase * 0.6 + q.x * 1.8);
+	float core = exp(-r * r * 12.0) * 0.72;
+	float bloom = exp(-r * r * 3.2) * 0.48;
+	float glow = (core + bloom) * edge_mask * undulate;
+	vec3 col = mix(halo_color, core_color, clamp(core * 1.15, 0.0, 1.0));
+	ALBEDO = col * (glow * halo_intensity);
+}
+"""
+	return sh
 
 
 static func _count_mesh_tris(am: ArrayMesh) -> int:

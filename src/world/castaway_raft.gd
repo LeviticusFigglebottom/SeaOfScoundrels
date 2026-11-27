@@ -45,6 +45,7 @@ var _lantern_pivot: Node3D = null
 var _castaway_holder: Node3D = null
 var _lantern_light: OmniLight3D = null
 var _lantern_flame: Node3D = null
+var _last_signal_halo_energy: float = 0.0
 var _rng := RandomNumberGenerator.new()
 var _clock: float = 0.0
 var _wave_timer: float = 0.8
@@ -58,6 +59,7 @@ func _ready() -> void:
 	add_to_group(&"castaway_rafts")
 	if not _built:
 		_build_raft()
+	_tick_pennant_and_lantern()
 
 
 func _exit_tree() -> void:
@@ -66,9 +68,17 @@ func _exit_tree() -> void:
 			rescue_interactable.interacted.disconnect(_on_rescue_interacted)
 	if castaway_driver != null and is_instance_valid(castaway_driver):
 		castaway_driver.bind(null, null)
+	if lantern_node != null and is_instance_valid(lantern_node):
+		var halo := lantern_node.get_node_or_null(^"FlameHalo") as MeshInstance3D
+		if halo != null:
+			if halo.material_override is ShaderMaterial:
+				(halo.material_override as ShaderMaterial).shader = null
+			halo.material_override = null
+			halo.mesh = null
 	_driver_bound = false
 	_lantern_light = null
 	_lantern_flame = null
+	_last_signal_halo_energy = 0.0
 
 
 func _process(delta: float) -> void:
@@ -81,6 +91,11 @@ func _process(delta: float) -> void:
 ## Return the active rescue Interactable for HUD/world wiring & tests.
 func get_rescue_interactable() -> Interactable:
 	return rescue_interactable
+
+
+## Return current cached night-distress signal lantern halo intensity.
+func get_signal_halo_energy() -> float:
+	return _last_signal_halo_energy
 
 
 # ==============================================================================
@@ -478,6 +493,18 @@ func _tick_pennant_and_lantern() -> void:
 		_lantern_light.light_energy = 2.8 * flick
 	if _lantern_flame != null and is_instance_valid(_lantern_flame):
 		_lantern_flame.scale = Vector3(1.0, 0.90 + 0.16 * sin(_clock * 14.2), 1.0)
+
+	var day_f := Weather.daylight() if Weather != null else 1.0
+	var storm_f := Weather.storminess if Weather != null else 0.0
+	var night := clampf(1.0 - day_f, 0.0, 1.0)
+	var atmos_raw := night + storm_f * 0.35
+	var base_halo := lerpf(0.22, 1.30, clampf(atmos_raw, 0.0, 1.0))
+	var storm_night_boost := clampf((atmos_raw - 1.0) / 0.35, 0.0, 1.0) * 0.18
+	var sway_flick := 0.94 + 0.06 * sin(_clock * 10.6) * cos(_clock * 6.9)
+	var halo_energy := (base_halo + storm_night_boost) * sway_flick
+	_last_signal_halo_energy = halo_energy
+	if lantern_node != null and is_instance_valid(lantern_node):
+		ToolMeshes.set_lantern_halo_style(lantern_node, halo_energy, Color(1.0, 0.72, 0.28), 1.35)
 
 
 func _tick_castaway_animation(delta: float) -> void:

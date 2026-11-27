@@ -101,12 +101,16 @@ func test_rowboat_sculpted_geometry_pbr_and_zero_primitives() -> void:
 				for nv in norms:
 					if not nv.is_finite() or nv.length_squared() < 0.5:
 						bad_norms += 1
-		var mat := mi.material_override as StandardMaterial3D
-		check(mat != null, "MeshInstance3D '%s' has PBR StandardMaterial3D override" % mi.name)
-		if mat != null:
-			if not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
-					or not mat.uv1_triplanar or mat.uv1_world_triplanar:
-				bad_mats += 1
+		if mi.name == "LanternHalo":
+			var smat := mi.material_override as ShaderMaterial
+			check(smat != null and smat.shader != null, "LanternHalo uses zero-texture additive ShaderMaterial")
+		else:
+			var mat := mi.material_override as StandardMaterial3D
+			check(mat != null, "MeshInstance3D '%s' has PBR StandardMaterial3D override" % mi.name)
+			if mat != null:
+				if not mat.vertex_color_use_as_albedo or not mat.vertex_color_is_srgb \
+						or not mat.uv1_triplanar or mat.uv1_world_triplanar:
+					bad_mats += 1
 
 	check(mesh_count >= 7, "Rowboat builds multi-material sculpted mesh assembly (got %d)" % mesh_count)
 	check_eq(prim_count, 0, "Rowboat must contain ZERO PrimitiveMeshes")
@@ -470,3 +474,130 @@ func test_rowboat_stern_docking_launch_oar_rowing_cargo_and_crew_callouts() -> v
 	check(Rowboat._hull_oak_mesh == null and Rowboat._trim_oak_mesh == null and Rowboat._oar_mesh == null \
 		and Rowboat._oak_mat == null and Rowboat._pbr_tex_cache.is_empty(),
 		"Rowboat.clear_shared_cache() leaves zero cached meshes, materials, or WeakRef textures")
+
+
+func test_q10b_rowboat_lantern_halo_and_oar_splash_bursts() -> void:
+	_begin()
+
+	# 1. Static source guard: zero raw PrimitiveMesh allocations in rowboat.gd.
+	var rb_src := FileAccess.get_file_as_string("res://src/ship/rowboat.gd")
+	for bad_prim: String in ["QuadMesh.new", "BoxMesh.new", "SphereMesh.new", "CylinderMesh.new"]:
+		check(not rb_src.contains(bad_prim), "rowboat.gd contains zero %s calls" % bad_prim)
+
+	var rb := Rowboat.new()
+	rb.name = "Q10BRowboat"
+	_root.add_child(rb)
+	rb.set_physics_process(false)
+	await physics_frames(2)
+
+	# 2. Verify zero-primitive additive stern LanternHalo & reusable Port/StbdOarSplash emitters.
+	check(rb.has_lantern_halo(), "Rowboat mounts stern LanternHalo billboard")
+	var halo := rb.get_node_or_null(^"RowboatVisualRoot/LanternHalo") as MeshInstance3D
+	check(halo != null, "RowboatVisualRoot mounts LanternHalo MeshInstance3D")
+	if halo != null:
+		check_eq(halo.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"LanternHalo disables shadow casting")
+		check_eq(halo.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"LanternHalo disables GI mode")
+		check(halo.mesh is ArrayMesh and not (halo.mesh is PrimitiveMesh),
+			"LanternHalo uses zero-primitive SurfaceTool ArrayMesh")
+		if halo.mesh is ArrayMesh:
+			check_eq((halo.mesh as ArrayMesh).get_faces().size(), 6,
+				"LanternHalo quad uses exact 2 triangles (6 face vertices)")
+		var hmat := halo.material_override as ShaderMaterial
+		check(hmat != null and hmat.shader != null, "LanternHalo uses zero-texture additive ShaderMaterial")
+		if hmat != null:
+			check_near(float(hmat.get_shader_parameter(&"halo_scale")), 0.72, 0.01,
+				"LanternHalo uses 0.72 m halo_scale")
+
+	var port_sp := rb.get_node_or_null(^"RowboatVisualRoot/PortOarSplash") as GPUParticles3D
+	var stbd_sp := rb.get_node_or_null(^"RowboatVisualRoot/StbdOarSplash") as GPUParticles3D
+	check(port_sp != null and stbd_sp != null, "Rowboat mounts reusable PortOarSplash & StbdOarSplash GPUParticles3D")
+	for sp: GPUParticles3D in [port_sp, stbd_sp]:
+		if sp == null:
+			continue
+		check(not sp.one_shot, "%s keeps one_shot = false for timer-gated bursts" % sp.name)
+		check_eq(sp.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"%s disables shadow casting" % sp.name)
+		check(sp.draw_pass_1 is ArrayMesh and not (sp.draw_pass_1 is PrimitiveMesh),
+			"%s draw_pass_1 uses zero-primitive 2-tri ArrayMesh" % sp.name)
+		if sp.draw_pass_1 is ArrayMesh:
+			check_eq((sp.draw_pass_1 as ArrayMesh).get_faces().size(), 6,
+				"%s droplet card has exact 2 triangles (6 face vertices)" % sp.name)
+		check(sp.material_override is ShaderMaterial, "%s uses zero-texture alpha ShaderMaterial" % sp.name)
+		var sp_proc := sp.process_material as ParticleProcessMaterial
+		check(sp_proc != null and sp_proc.scale_curve == null and sp_proc.color_ramp == null,
+			"%s avoids CurveTexture/GradientTexture1D leak risks" % sp.name)
+
+	# 3. Verify smooth daylight -> midnight (> 3x) -> storm night halo intensity + douse toggle!
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	for _i in 40:
+		rb.step_physics(1.0 / 60.0)
+	var noon_e := rb.get_lantern_halo_energy()
+	check(noon_e >= 0.12 and noon_e <= 0.22,
+		"Rowboat midday stern lantern halo stays crisp and subtle (got %.3f)" % noon_e)
+
+	Weather.time_of_day = 23.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	for _i in 45:
+		rb.step_physics(1.0 / 60.0)
+	var night_e := rb.get_lantern_halo_energy()
+	check(night_e > noon_e * 3.0 and night_e >= 0.95,
+		"Rowboat midnight stern lantern halo exceeds 3x midday (noon=%.3f -> night=%.3f)" % [noon_e, night_e])
+
+	Weather.time_of_day = 23.0
+	Weather.set_weather(1.0, 14.0, 0.0)
+	for _i in 45:
+		rb.step_physics(1.0 / 60.0)
+	var storm_e := rb.get_lantern_halo_energy()
+	check(storm_e > night_e and storm_e >= 1.12,
+		"Rowboat storm-night stern lantern halo rises further (night=%.3f -> storm=%.3f)" % [night_e, storm_e])
+
+	rb.set_lantern_lit(false)
+	check_near(rb.get_lantern_halo_energy(), 0.0, 0.0001,
+		"set_lantern_lit(false) drops LanternHalo energy cleanly to 0.0")
+	check(halo != null and not halo.visible, "set_lantern_lit(false) hides LanternHalo cleanly")
+
+	rb.set_lantern_lit(true)
+	check(rb.get_lantern_halo_energy() > 0.90 and halo != null and halo.visible,
+		"set_lantern_lit(true) restores LanternHalo glow & visibility cleanly")
+
+	# 4. Launch rowboat and drive forward rowing strokes -> oar-dip splashes & droplet bursts!
+	check_eq(rb.get_oar_splash_count(), 0, "Docked rowboat starts with 0 oar splashes")
+	check(rb.launch(), "Rowboat launches onto open sea cleanly")
+	var saw_port_emitting := false
+	var saw_stbd_emitting := false
+	for _i in 90:
+		rb.oar_station.drive(Vector2(0.0, 1.0), false, false, 1.0 / 60.0)
+		rb.step_physics(1.0 / 60.0)
+		if port_sp != null and port_sp.emitting:
+			saw_port_emitting = true
+		if stbd_sp != null and stbd_sp.emitting:
+			saw_stbd_emitting = true
+
+	var splash_cnt := rb.get_oar_splash_count()
+	check(splash_cnt >= 2,
+		"Forward rowing strokes trigger >= 2 oar-dip splashes (got %d)" % splash_cnt)
+	check(saw_port_emitting and saw_stbd_emitting,
+		"Both PortOarSplash and StbdOarSplash emit droplet bursts on oar dips")
+
+	# Once rowing stops, timer-gated emitters settle back to emitting = false cleanly.
+	for _i in 24:
+		rb.step_physics(1.0 / 60.0)
+	if port_sp != null and stbd_sp != null:
+		check(not port_sp.emitting and not stbd_sp.emitting,
+			"Oar splash emitters stop emitting cleanly once rowing pauses")
+
+	print("    Q10B rowboat halo & oar splashes: noon=%.3f, night=%.3f (%.1fx), storm=%.3f, splashes=%d" % [
+		noon_e, night_e, night_e / maxf(noon_e, 0.001), storm_e, splash_cnt
+	])
+
+	# 5. Clean zero-leak teardown!
+	await _end()
+	check_eq(Rowboat._active_instances, 0, "Rowboat _active_instances == 0 after Q10B teardown")
+	check(Rowboat._lantern_halo_mesh == null and Rowboat._lantern_halo_shader == null \
+		and Rowboat._oar_splash_mesh == null and Rowboat._oar_splash_shader == null \
+		and Rowboat._oar_splash_mat == null and Rowboat._oar_splash_proc == null,
+		"Rowboat clears all lantern halo & oar splash static caches cleanly with zero leaks")
+
