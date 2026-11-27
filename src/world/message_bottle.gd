@@ -37,6 +37,13 @@ const COL_GLASS_BELLY := Color(0.14, 0.74, 0.56, 0.54)
 const COL_GLASS_SHOULDER := Color(0.10, 0.62, 0.48, 0.64)
 const COL_GLASS_THICK := Color(0.06, 0.44, 0.36, 0.78)
 const COL_GLASS_LIP := Color(0.24, 0.84, 0.66, 0.74)
+const COL_SEA_HALO_CORE := Color(0.76, 1.00, 0.92, 1.0)
+const COL_SEA_HALO_MID := Color(0.14, 0.68, 0.54, 1.0)
+const COL_SEA_HALO_RIM := Color(0.00, 0.00, 0.00, 1.0)
+const SEA_HALO_POS := Vector3(0.0, 0.24, 0.0)
+const SEA_HALO_VISIBILITY_RANGE := GLINT_CULL_DIST + 20.0
+const SEA_HALO_DAY_ENERGY := 0.24
+const SEA_HALO_NIGHT_ENERGY := 0.86
 
 @export var clue_id: StringName = &""
 @export var target_island_id: String = ""
@@ -51,6 +58,9 @@ var _visual_root: Node3D = null
 var _opaque_mi: MeshInstance3D = null
 var _glass_mi: MeshInstance3D = null
 var _glint_mi: MeshInstance3D = null
+var _sea_halo_mi: MeshInstance3D = null
+var _sea_halo_mat: StandardMaterial3D = null
+var _sea_halo_energy: float = 0.0
 var _clock: float = 0.0
 var _glint_phase: float = 0.0
 
@@ -60,6 +70,7 @@ static var _active_bottles: int = 0
 static var _opaque_mesh: ArrayMesh = null
 static var _glass_mesh: ArrayMesh = null
 static var _glint_mesh: ArrayMesh = null
+static var _sea_halo_mesh: ArrayMesh = null
 static var _opaque_mat: StandardMaterial3D = null
 static var _metal_mat: StandardMaterial3D = null
 static var _glass_mat: StandardMaterial3D = null
@@ -83,19 +94,25 @@ func _ready() -> void:
 	add_child(interactable)
 	if collected:
 		_apply_collected_visuals()
+	else:
+		step_atmosphere(0.0)
 
 
 func _exit_tree() -> void:
 	if interactable != null and is_instance_valid(interactable):
 		if interactable.interacted.is_connected(_on_interacted):
 			interactable.interacted.disconnect(_on_interacted)
-	for mi: MeshInstance3D in [_opaque_mi, _glass_mi, _glint_mi]:
+	for mi: MeshInstance3D in [_opaque_mi, _glass_mi, _glint_mi, _sea_halo_mi]:
 		if mi != null and is_instance_valid(mi):
+			mi.visible = false
 			mi.material_override = null
 			mi.mesh = null
 	_opaque_mi = null
 	_glass_mi = null
 	_glint_mi = null
+	_sea_halo_mi = null
+	_sea_halo_mat = null
+	_sea_halo_energy = 0.0
 	_visual_root = null
 	_active_bottles = maxi(0, _active_bottles - 1)
 	if _active_bottles == 0:
@@ -109,11 +126,22 @@ static func clear_shared_cache() -> void:
 	_opaque_mesh = null
 	_glass_mesh = null
 	_glint_mesh = null
+	_sea_halo_mesh = null
 	_opaque_mat = null
 	_metal_mat = null
 	_glass_mat = null
 	_glint_tex = null
 	_glint_mat = null
+
+
+## Return the twilight sea-glass BottleSeaHalo MeshInstance3D mounted under BottleVisual.
+func get_sea_halo_node() -> MeshInstance3D:
+	return _sea_halo_mi
+
+
+## Return current BottleSeaHalo additive energy (0.0 when collected or culled).
+func get_sea_halo_energy() -> float:
+	return _sea_halo_energy
 
 
 ## Normalized clue payload emitted when a player inspects and collects the bottle.
@@ -151,25 +179,67 @@ func _apply_collected_visuals() -> void:
 		_visual_root.visible = false
 	if _glint_mi != null and is_instance_valid(_glint_mi):
 		_glint_mi.visible = false
+	if _sea_halo_mi != null and is_instance_valid(_sea_halo_mi):
+		_sea_halo_mi.visible = false
+	if _sea_halo_mat != null:
+		_sea_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	_sea_halo_energy = 0.0
 	set_process(false)
 
 
 func _process(delta: float) -> void:
-	if collected or _glint_mi == null:
+	step_atmosphere(delta)
+
+
+## Deterministically advance sunlit glass glint & twilight sea-glass beach halo.
+func step_atmosphere(delta: float) -> void:
+	if collected:
+		if _glint_mi != null and is_instance_valid(_glint_mi):
+			_glint_mi.visible = false
+		if _sea_halo_mi != null and is_instance_valid(_sea_halo_mi):
+			_sea_halo_mi.visible = false
+		if _sea_halo_mat != null:
+			_sea_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		_sea_halo_energy = 0.0
 		return
-	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+
+	var cam := get_viewport().get_camera_3d() if (is_inside_tree() and get_viewport() != null) else null
 	if cam != null:
 		var dist_sq := global_position.distance_squared_to(cam.global_position)
 		if dist_sq > GLINT_CULL_DIST * GLINT_CULL_DIST:
-			_glint_mi.visible = false
+			if _glint_mi != null and is_instance_valid(_glint_mi):
+				_glint_mi.visible = false
+			if _sea_halo_mi != null and is_instance_valid(_sea_halo_mi):
+				_sea_halo_mi.visible = false
+			_sea_halo_energy = 0.0
 			return
-	_glint_mi.visible = true
-	_clock += delta
-	# Gentle sunlit glass twinkle pulse every ~2.4 s.
-	var wave := 0.5 + 0.5 * sin(_clock * 2.6 + _glint_phase)
-	var sparkle := 0.38 + 0.72 * pow(wave, 3.0)
-	_glint_mi.scale = Vector3.ONE * sparkle
-	_glint_mi.rotation.y = _clock * 0.55 + _glint_phase
+
+	_clock += maxf(delta, 0.0)
+
+	if _glint_mi != null and is_instance_valid(_glint_mi):
+		_glint_mi.visible = true
+		# Gentle sunlit glass twinkle pulse every ~2.4 s.
+		var wave := 0.5 + 0.5 * sin(_clock * 2.6 + _glint_phase)
+		var sparkle := 0.38 + 0.72 * pow(wave, 3.0)
+		_glint_mi.scale = Vector3.ONE * sparkle
+		_glint_mi.rotation.y = _clock * 0.55 + _glint_phase
+
+	if _sea_halo_mi != null and is_instance_valid(_sea_halo_mi):
+		var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+		var night := clampf(1.0 - daylight, 0.0, 1.0)
+		var shimmer := 0.92 + 0.08 * sin(_clock * 1.9 + _glint_phase)
+		_sea_halo_energy = lerpf(SEA_HALO_DAY_ENERGY, SEA_HALO_NIGHT_ENERGY, night) * shimmer
+		var halo_scale := lerpf(0.84, 1.24, night) * (0.96 + 0.04 * sin(_clock * 1.9 + _glint_phase))
+		_sea_halo_mi.visible = true
+		_sea_halo_mi.scale = Vector3.ONE * halo_scale
+		if _sea_halo_mat != null:
+			var tint := Color(0.86, 1.00, 0.95).lerp(Color(0.62, 1.00, 0.86), night)
+			_sea_halo_mat.albedo_color = Color(
+				tint.r * _sea_halo_energy,
+				tint.g * _sea_halo_energy,
+				tint.b * _sea_halo_energy,
+				1.0
+			)
 
 
 # ==============================================================================
@@ -202,6 +272,28 @@ func _build_visual() -> void:
 	_glint_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_glint_mi.position = tilt * Vector3(0.052, 0.255, 0.044)
 	_visual_root.add_child(_glint_mi)
+
+	_sea_halo_mat = StandardMaterial3D.new()
+	_sea_halo_mat.vertex_color_use_as_albedo = true
+	_sea_halo_mat.vertex_color_is_srgb = true
+	_sea_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_sea_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_sea_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_sea_halo_mat.billboard_keep_scale = true
+	_sea_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_sea_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_sea_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_sea_halo_mi = MeshInstance3D.new()
+	_sea_halo_mi.name = "BottleSeaHalo"
+	_sea_halo_mi.position = SEA_HALO_POS
+	_sea_halo_mi.mesh = _sea_halo_mesh
+	_sea_halo_mi.material_override = _sea_halo_mat
+	_sea_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sea_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_sea_halo_mi.visibility_range_end = SEA_HALO_VISIBILITY_RANGE
+	_sea_halo_mi.extra_cull_margin = 1.0
+	_visual_root.add_child(_sea_halo_mi)
 
 
 static func _bottle_tilt_transform() -> Transform3D:
@@ -258,6 +350,8 @@ static func _ensure_shared_assets() -> void:
 		_glass_mesh = _build_glass_mesh()
 	if _glint_mesh == null:
 		_glint_mesh = _build_glint_mesh()
+	if _sea_halo_mesh == null:
+		_sea_halo_mesh = _build_sea_halo_mesh()
 
 
 static func _build_opaque_mesh() -> ArrayMesh:
@@ -401,6 +495,55 @@ static func _build_glint_mesh() -> ArrayMesh:
 		_emit_uv_tri(st, bot_l, Vector2(0.0, 1.0), bot_r, Vector2(1.0, 1.0), top_r, Vector2(1.0, 0.0))
 		_emit_uv_tri(st, bot_l, Vector2(0.0, 1.0), top_r, Vector2(1.0, 0.0), top_l, Vector2(0.0, 0.0))
 	st.generate_normals()
+	return st.commit()
+
+
+static func _build_sea_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial-gradient sea-glass halo disc: pale aqua-emerald core
+	# -> softly feathered sea-glass mid -> pure Color(0, 0, 0, 1) black rim, finite unit (0, 0, 1) normals.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.56
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner aqua-emerald core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered sea-glass skirt fading to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_SEA_HALO_RIM)
+		st.add_vertex(o0)
 	return st.commit()
 
 

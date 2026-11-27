@@ -20,6 +20,11 @@ const RISE_DRAG := 3.6
 const APEX_LIGHT_ENERGY := 6.5
 const APEX_LIGHT_RANGE := 38.0
 const TRAIL_MAX_POINTS := 18
+const HALO_VISIBILITY_RANGE := 900.0
+const TAIL_HALO_POS := Vector3(0.0, -0.22, 0.0)
+const STARBURST_HALO_START_SCALE := 1.2
+const STARBURST_HALO_END_SCALE := 11.5
+const STARBURST_HALO_PEAK_ENERGY := 1.75
 
 # Painterly nautical brass, crimson lacquer & incandescent spark palette (sRGB).
 const COL_BRASS_HI := Color(0.95, 0.78, 0.30)
@@ -29,12 +34,16 @@ const COL_CRIMSON_HI := Color(0.88, 0.20, 0.16)
 const COL_CRIMSON_DARK := Color(0.54, 0.10, 0.08)
 const COL_IRON_BAND := Color(0.22, 0.23, 0.27)
 const COL_FUSE_GLOW := Color(1.0, 0.88, 0.42)
+const COL_HALO_CORE := Color(1.00, 1.00, 0.98, 1.0)
+const COL_HALO_MID := Color(0.46, 0.44, 0.40, 1.0)
+const COL_HALO_RIM := Color(0.00, 0.00, 0.00, 1.0)
 
 # Statically cached zero-primitive procedural ArrayMeshes & materials shared across flares.
 static var _active_flares: int = 0
 static var _rocket_mesh: ArrayMesh = null
 static var _star_mesh: ArrayMesh = null
 static var _diamond_mesh: ArrayMesh = null
+static var _halo_mesh: ArrayMesh = null
 static var _rocket_mat: StandardMaterial3D = null
 static var _spark_mat: StandardMaterial3D = null
 static var _trail_mat: StandardMaterial3D = null
@@ -51,6 +60,11 @@ var apex_position: Vector3 = Vector3.ZERO
 
 var _rocket_root: Node3D = null
 var _rocket_mi: MeshInstance3D = null
+var _tail_halo_mi: MeshInstance3D = null
+var _tail_halo_mat: StandardMaterial3D = null
+var _starburst_halo_mi: MeshInstance3D = null
+var _starburst_halo_mat: StandardMaterial3D = null
+var _starburst_halo_energy: float = 0.0
 var _trail_mi: MeshInstance3D = null
 var _trail_imm: ImmediateMesh = null
 var _star_burst: GPUParticles3D = null
@@ -81,6 +95,7 @@ static func clear_shared_cache() -> void:
 	_rocket_mesh = null
 	_star_mesh = null
 	_diamond_mesh = null
+	_halo_mesh = null
 	_rocket_mat = null
 	_spark_mat = null
 	_trail_mat = null
@@ -104,6 +119,14 @@ func _exit_tree() -> void:
 	if _rocket_mi != null and is_instance_valid(_rocket_mi):
 		_rocket_mi.mesh = null
 		_rocket_mi.material_override = null
+	if _tail_halo_mi != null and is_instance_valid(_tail_halo_mi):
+		_tail_halo_mi.visible = false
+		_tail_halo_mi.mesh = null
+		_tail_halo_mi.material_override = null
+	if _starburst_halo_mi != null and is_instance_valid(_starburst_halo_mi):
+		_starburst_halo_mi.visible = false
+		_starburst_halo_mi.mesh = null
+		_starburst_halo_mi.material_override = null
 	if _trail_imm != null:
 		_trail_imm.clear_surfaces()
 	if _trail_mi != null and is_instance_valid(_trail_mi):
@@ -123,6 +146,11 @@ func _exit_tree() -> void:
 	_trail_points.clear()
 	_rocket_root = null
 	_rocket_mi = null
+	_tail_halo_mi = null
+	_tail_halo_mat = null
+	_starburst_halo_mi = null
+	_starburst_halo_mat = null
+	_starburst_halo_energy = 0.0
 	_trail_mi = null
 	_trail_imm = null
 	_star_burst = null
@@ -160,6 +188,7 @@ func step_flare(delta: float) -> void:
 			position = cur_w
 		if _rocket_root != null and is_instance_valid(_rocket_root):
 			_rocket_root.rotation = Vector3(sin(spiral_ang) * 0.08, elapsed * 6.4, -cos(spiral_ang) * 0.08)
+		_update_tail_halo(elapsed)
 		if _apex_light != null and is_instance_valid(_apex_light):
 			_apex_light.light_energy = 1.65 + sin(elapsed * 28.0) * 0.25
 			_apex_light.omni_range = 10.5
@@ -173,15 +202,21 @@ func step_flare(delta: float) -> void:
 	elif state == State.BURST:
 		burst_elapsed += dt
 		var u := clampf(burst_elapsed / BURST_DURATION, 0.0, 1.0)
+		var decay := pow(1.0 - u, 1.85)
 		if _apex_light != null and is_instance_valid(_apex_light):
-			var decay := pow(1.0 - u, 1.85)
 			_apex_light.light_energy = APEX_LIGHT_ENERGY * decay
 			_apex_light.omni_range = APEX_LIGHT_RANGE
+		_update_starburst_halo(u, decay)
 		if burst_elapsed >= BURST_DURATION:
 			state = State.DONE
 			if _apex_light != null and is_instance_valid(_apex_light):
 				_apex_light.light_energy = 0.0
 				_apex_light.visible = false
+			_starburst_halo_energy = 0.0
+			if _starburst_halo_mi != null and is_instance_valid(_starburst_halo_mi):
+				_starburst_halo_mi.visible = false
+			if _starburst_halo_mat != null:
+				_starburst_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 			if auto_despawn:
 				queue_free()
 
@@ -212,6 +247,21 @@ func get_rocket_triangle_count() -> int:
 	return _count_mesh_tris(_rocket_mesh)
 
 
+## Return the incandescent sputtering RocketTailHalo MeshInstance3D mounted under RocketRoot.
+func get_tail_halo_node() -> MeshInstance3D:
+	return _tail_halo_mi
+
+
+## Return the expanding celebratory FlareStarburstHalo MeshInstance3D mounted under VictoryFlare.
+func get_starburst_halo_node() -> MeshInstance3D:
+	return _starburst_halo_mi
+
+
+## Return current FlareStarburstHalo additive energy (0.0 while rising or done; peaks ~1.75 on burst).
+func get_starburst_halo_energy() -> float:
+	return _starburst_halo_energy
+
+
 static func _count_mesh_tris(m: ArrayMesh) -> int:
 	if m == null:
 		return 0
@@ -237,6 +287,10 @@ func _detonate_burst() -> void:
 
 	if _rocket_root != null and is_instance_valid(_rocket_root):
 		_rocket_root.visible = false
+	if _tail_halo_mi != null and is_instance_valid(_tail_halo_mi):
+		_tail_halo_mi.visible = false
+	if _tail_halo_mat != null:
+		_tail_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 	if _trail_imm != null:
 		_trail_imm.clear_surfaces()
 	if _trail_mi != null and is_instance_valid(_trail_mi):
@@ -247,6 +301,8 @@ func _detonate_burst() -> void:
 		_apex_light.light_color = accent_color.lerp(Color(1.0, 0.92, 0.68), 0.45)
 		_apex_light.light_energy = APEX_LIGHT_ENERGY
 		_apex_light.omni_range = APEX_LIGHT_RANGE
+
+	_update_starburst_halo(0.0, 1.0)
 
 	if _star_burst != null and is_instance_valid(_star_burst):
 		_star_burst.visible = true
@@ -261,6 +317,61 @@ func _detonate_burst() -> void:
 	burst_detonated.emit(apex_position)
 
 
+func _update_tail_halo(t: float) -> void:
+	if _tail_halo_mi == null or not is_instance_valid(_tail_halo_mi):
+		return
+	var sputter := clampf(0.5 + 0.5 * (sin(t * 29.0) * 0.65 + cos(t * 47.0) * 0.35), 0.0, 1.0)
+	var tail_scale := lerpf(0.65, 0.95, sputter)
+	var tail_energy := lerpf(0.88, 1.28, sputter)
+	var tail_tint := Color(1.0, 0.82, 0.36).lerp(accent_color, 0.35)
+	_tail_halo_mi.visible = true
+	_tail_halo_mi.scale = Vector3.ONE * tail_scale
+	if _tail_halo_mat != null:
+		_tail_halo_mat.albedo_color = Color(
+			tail_tint.r * tail_energy,
+			tail_tint.g * tail_energy,
+			tail_tint.b * tail_energy,
+			1.0
+		)
+
+
+func _update_starburst_halo(u: float, decay: float) -> void:
+	_starburst_halo_energy = maxf(0.0, STARBURST_HALO_PEAK_ENERGY * decay)
+	if _starburst_halo_mi == null or not is_instance_valid(_starburst_halo_mi):
+		return
+	if _starburst_halo_energy <= 0.001 or u >= 1.0:
+		_starburst_halo_energy = 0.0
+		_starburst_halo_mi.visible = false
+		if _starburst_halo_mat != null:
+			_starburst_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+	var expand := 1.0 - pow(1.0 - u, 2.0)
+	var cur_scale := lerpf(STARBURST_HALO_START_SCALE, STARBURST_HALO_END_SCALE, expand)
+	_starburst_halo_mi.visible = true
+	_starburst_halo_mi.scale = Vector3.ONE * cur_scale
+	if _starburst_halo_mat != null:
+		_starburst_halo_mat.albedo_color = Color(
+			accent_color.r * _starburst_halo_energy,
+			accent_color.g * _starburst_halo_energy,
+			accent_color.b * _starburst_halo_energy,
+			1.0
+		)
+
+
+static func _make_halo_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.billboard_keep_scale = true
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	return mat
+
+
 func _build_nodes() -> void:
 	# 1. Sculpted Brass Mariner's Signal Rocket visual.
 	_rocket_root = Node3D.new()
@@ -273,6 +384,36 @@ func _build_nodes() -> void:
 	_rocket_mi.material_override = _rocket_mat
 	_rocket_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_rocket_root.add_child(_rocket_mi)
+
+	# 1b. Incandescent sputtering RocketTailHalo beneath the fuse nozzle while RISING.
+	_tail_halo_mat = _make_halo_material()
+	_tail_halo_mi = MeshInstance3D.new()
+	_tail_halo_mi.name = "RocketTailHalo"
+	_tail_halo_mi.position = TAIL_HALO_POS
+	_tail_halo_mi.mesh = _halo_mesh
+	_tail_halo_mi.material_override = _tail_halo_mat
+	_tail_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_tail_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_tail_halo_mi.visibility_range_end = HALO_VISIBILITY_RANGE
+	_tail_halo_mi.extra_cull_margin = 1.5
+	_rocket_root.add_child(_tail_halo_mi)
+	_update_tail_halo(0.0)
+
+	# 1c. Expanding celebratory FlareStarburstHalo (hidden while RISING, blossoms on detonation).
+	_starburst_halo_mat = _make_halo_material()
+	_starburst_halo_mi = MeshInstance3D.new()
+	_starburst_halo_mi.name = "FlareStarburstHalo"
+	_starburst_halo_mi.position = Vector3.ZERO
+	_starburst_halo_mi.scale = Vector3.ONE * STARBURST_HALO_START_SCALE
+	_starburst_halo_mi.mesh = _halo_mesh
+	_starburst_halo_mi.material_override = _starburst_halo_mat
+	_starburst_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_starburst_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_starburst_halo_mi.visibility_range_end = HALO_VISIBILITY_RANGE
+	_starburst_halo_mi.extra_cull_margin = 6.0
+	_starburst_halo_mi.visible = false
+	_starburst_halo_energy = 0.0
+	add_child(_starburst_halo_mi)
 
 	# 2. Additive golden-crimson rising spark ribbon (`ImmediateMesh`, zero primitives).
 	_trail_imm = ImmediateMesh.new()
@@ -475,6 +616,58 @@ static func _ensure_shared_assets() -> void:
 		_star_mesh = _build_star_spark_mesh()
 	if _diamond_mesh == null:
 		_diamond_mesh = _build_diamond_spark_mesh()
+	if _halo_mesh == null:
+		_halo_mesh = _build_halo_mesh()
+
+
+static func _build_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial-gradient billboard disc (diameter 1.0 m -> scale = world meters)
+	# grading incandescent white core -> feathered mid -> pure Color(0, 0, 0, 1) black rim
+	# with exact finite unit (0, 0, 1) normals for zero box/circle edge under additive blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner incandescent core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		# Outer feathered skirt quad fading to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
 
 
 static func _build_rocket_mesh() -> ArrayMesh:

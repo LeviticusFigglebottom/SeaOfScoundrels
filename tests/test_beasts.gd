@@ -3114,3 +3114,502 @@ func test_q16b_sea_mermaid_ripples_conch_halo_and_manta_wingtip_bubbles() -> voi
 			and MantaRay._bubble_mesh == null and MantaRay._bubble_mat == null,
 		"MantaRay releases all static meshes & materials including _bubble_mesh & _bubble_mat (0 leaks)")
 
+
+func test_q17a_megalodon_and_leviathan_boss_halos_spray_and_vortex_motes() -> void:
+	_begin()
+	Sea.amp_scale = 0.0
+	Sea.time = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+
+	# 1. Static source guards: zero raw PrimitiveMesh allocations on megalodon.gd & Vulkan-safe teardown on both!
+	var mega_src := FileAccess.get_file_as_string("res://src/combat/megalodon.gd")
+	var lev_src := FileAccess.get_file_as_string("res://src/combat/leviathan.gd")
+	for bad_prim: String in [
+		"BoxMesh.new", "SphereMesh.new", "CylinderMesh.new",
+		"QuadMesh.new", "CapsuleMesh.new", "PrismMesh.new",
+	]:
+		check(not mega_src.contains(bad_prim), "megalodon.gd contains zero %s calls" % bad_prim)
+	for src_pair: Array in [[mega_src, "megalodon.gd"], [lev_src, "leviathan.gd"]]:
+		var txt := String(src_pair[0])
+		var fname := String(src_pair[1])
+		check(not txt.contains("multimesh.mesh = null") and not txt.contains("mm.mesh = null"),
+			"%s follows Godot 4.8 Vulkan rule (never nulls .mesh on a live MultiMesh)" % fname)
+	check(not mega_src.contains("drops.mesh = null"),
+		"megalodon.gd follows Godot 4.8 Vulkan rule (never nulls .mesh on a live CPUParticles3D)")
+
+	# 2. AncientMegalodon: 2x48-tri PredatorEyeHalos & 20x12-tri DorsalWakeSpray!
+	var dummy_ship := Node3D.new()
+	dummy_ship.name = "Q17ADummyShip"
+	_root.add_child(dummy_ship)
+	dummy_ship.global_position = Vector3.ZERO
+
+	var mega_a := AncientMegalodon.spawn_near_ship(_root, dummy_ship, Vector3(40.0, 0.0, -35.0))
+	var mega_b := AncientMegalodon.spawn_near_ship(_root, null, Vector3(-40.0, 0.0, -35.0))
+	mega_a.enable_effects = false
+	mega_b.enable_effects = false
+	mega_a.set_physics_process(false)
+	mega_b.set_physics_process(false)
+
+	var m_halos_a := mega_a.get_predator_eye_halos()
+	var m_halos_b := mega_b.get_predator_eye_halos()
+	check_eq(m_halos_a.size(), 2, "AncientMegalodon mounts 2 PredatorEyeHalos via get_predator_eye_halos()")
+	check_eq(m_halos_b.size(), 2, "second AncientMegalodon mounts 2 PredatorEyeHalos")
+
+	var mega_halo_tris := 0
+	var mega_halo_bad_normals := 0
+	var mega_halo_has_core := false
+	var mega_halo_has_black_rim := false
+	if m_halos_a.size() == 2 and m_halos_b.size() == 2:
+		var hl := m_halos_a[0]
+		var hr := m_halos_a[1]
+		check_eq(hl.name, "PredatorEyeHaloL", "left Megalodon halo named PredatorEyeHaloL")
+		check_eq(hr.name, "PredatorEyeHaloR", "right Megalodon halo named PredatorEyeHaloR")
+		check_eq(hl.get_parent(), mega_a._visual_root, "PredatorEyeHaloL mounts inside _visual_root")
+		check_eq(hr.get_parent(), mega_a._visual_root, "PredatorEyeHaloR mounts inside _visual_root")
+		check(hl.position.x < -1.4 and hr.position.x > 1.4 and is_equal_approx(hl.position.x, -hr.position.x),
+			"PredatorEyeHalos mount symmetrically over sculpted left/right eyes (+/- X)")
+		check(hl.position.distance_to(AncientMegalodon.EYE_HALO_POS_L) < 0.001,
+			"PredatorEyeHaloL matches sculpted left eye offset")
+		check(hr.position.distance_to(AncientMegalodon.EYE_HALO_POS_R) < 0.001,
+			"PredatorEyeHaloR matches sculpted right eye offset")
+		check_eq(hl.mesh, hr.mesh, "left and right PredatorEyeHalos share static _eye_halo_mesh")
+		check_eq(hl.mesh, m_halos_b[0].mesh, "AncientMegalodons share statically cached _eye_halo_mesh")
+		check_eq(hl.material_override, hr.material_override,
+			"left and right PredatorEyeHalos share per-instance material")
+		check(hl.material_override != m_halos_b[0].material_override,
+			"distinct AncientMegalodons use isolated per-instance halo materials")
+		for hmi: MeshInstance3D in m_halos_a:
+			check_eq(hmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s disables shadow casting" % hmi.name)
+			check_eq(hmi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+				"%s disables GI mode" % hmi.name)
+			check_near(hmi.visibility_range_end, 260.0, 0.05,
+				"%s sets visibility_range_end = 260.0 m" % hmi.name)
+			check(hmi.mesh is ArrayMesh and not (hmi.mesh is PrimitiveMesh),
+				"%s uses sculpted ArrayMesh (zero PrimitiveMesh)" % hmi.name)
+
+		if hl.mesh is ArrayMesh:
+			var arr := (hl.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			mega_halo_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					mega_halo_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					mega_halo_has_black_rim = true
+				if cv.r >= 0.95 and cv.g >= 0.90 and cv.b >= 0.50:
+					mega_halo_has_core = true
+		check_eq(mega_halo_tris, 48, "PredatorEyeHalo mesh has exact 48 triangles (16 radial wedges)")
+		check_eq(mega_halo_bad_normals, 0, "PredatorEyeHalo normals are all finite (0, 0, 1) unit vectors")
+		check(mega_halo_has_core and mega_halo_has_black_rim,
+			"PredatorEyeHalo fades from incandescent gold-white core to pure Color(0, 0, 0, 1) rim")
+
+		var mh_mat := hl.material_override as StandardMaterial3D
+		check(mh_mat != null and mh_mat.vertex_color_use_as_albedo and mh_mat.vertex_color_is_srgb \
+				and mh_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and mh_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and mh_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and mh_mat.billboard_keep_scale \
+				and mh_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and mh_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"PredatorEyeHalos use unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+		if mh_mat != null:
+			check(mh_mat.albedo_texture == null and mh_mat.normal_texture == null and mh_mat.roughness_texture == null,
+				"PredatorEyeHalos allocate 0 extra VRAM textures")
+
+	# Verify Megalodon calm midday -> night -> WINDUP -> CHARGE & showcase eye halo escalation!
+	mega_a.state = AncientMegalodon.State.CIRCLE
+	mega_a._state_timer = 10.0
+	mega_a._hit_flash = 0.0
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	mega_a.step_ai(0.0)
+	var m_noon_e := mega_a.get_eye_halo_energy()
+	var m_noon_s := m_halos_a[0].scale.x if m_halos_a.size() > 0 else 0.0
+
+	Weather.time_of_day = 0.5
+	mega_a.step_ai(0.0)
+	var m_night_e := mega_a.get_eye_halo_energy()
+	var m_night_s := m_halos_a[0].scale.x if m_halos_a.size() > 0 else 0.0
+
+	Weather.time_of_day = 12.0
+	mega_a.state = AncientMegalodon.State.WINDUP
+	mega_a._state_timer = AncientMegalodon.CHARGE_WINDUP * 0.35
+	mega_a.step_ai(0.0)
+	var m_windup_e := mega_a.get_eye_halo_energy()
+	var m_windup_s := m_halos_a[0].scale.x if m_halos_a.size() > 0 else 0.0
+
+	mega_a.state = AncientMegalodon.State.CHARGE
+	mega_a._state_timer = AncientMegalodon.CHARGE_TIMEOUT
+	mega_a.step_ai(0.0)
+	var m_charge_e := mega_a.get_eye_halo_energy()
+	var m_charge_s := m_halos_a[0].scale.x if m_halos_a.size() > 0 else 0.0
+
+	check(m_noon_e >= 0.30 and m_noon_e <= 0.45 and m_noon_s >= 0.38 and m_noon_s <= 0.46,
+		"Megalodon midday calm halo stays subtle amber (e=%.3f, s=%.2f m)" % [m_noon_e, m_noon_s])
+	check(m_night_e > m_noon_e * 1.9 and m_night_e >= 0.78 and m_night_s >= 0.54,
+		"Megalodon night circling halo blazes eerie amber (e=%.3f, s=%.2f m)" % [m_night_e, m_night_s])
+	check(m_windup_e > m_night_e and m_windup_s > m_night_s,
+		"Megalodon WINDUP halo intensifies beyond night circling (e=%.3f, s=%.2f m)" % [m_windup_e, m_windup_s])
+	check(m_charge_e > m_windup_e and m_charge_e >= 1.32 and m_charge_s >= 0.72,
+		"Megalodon CHARGE halo surges fiercely molten (e=%.3f, s=%.2f m)" % [m_charge_e, m_charge_s])
+
+	# Verify DorsalWakeSpray MultiMesh (20x12-tri sculpted droplets, 0 primitives, 0 VRAM textures).
+	var spray_a := mega_a.get_dorsal_wake_spray_node()
+	var spray_b := mega_b.get_dorsal_wake_spray_node()
+	check(spray_a != null and spray_a.name == "DorsalWakeSpray",
+		"AncientMegalodon mounts DorsalWakeSpray MultiMeshInstance3D via get_dorsal_wake_spray_node()")
+
+	var mega_drop_tris := 0
+	var mega_drop_bad_normals := 0
+	if spray_a != null:
+		check_eq(spray_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"DorsalWakeSpray disables shadow casting")
+		check_eq(spray_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"DorsalWakeSpray disables GI mode")
+		check_near(spray_a.visibility_range_end, 220.0, 0.05,
+			"DorsalWakeSpray sets visibility_range_end = 220.0 m")
+		var dmm := spray_a.multimesh
+		check(dmm != null and dmm.instance_count == 20 and dmm.use_colors,
+			"DorsalWakeSpray configures 20 per-instance colored droplets")
+		check(dmm != null and dmm.mesh is ArrayMesh and not (dmm.mesh is PrimitiveMesh),
+			"DorsalWakeSpray uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if spray_b != null and spray_b.multimesh != null and dmm != null:
+			check_eq(dmm.mesh, spray_b.multimesh.mesh,
+				"AncientMegalodons share statically cached 12-tri _wake_spray_mesh")
+		if dmm != null and dmm.mesh is ArrayMesh:
+			var arr := (dmm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			mega_drop_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					mega_drop_bad_normals += 1
+		check_eq(mega_drop_tris, 12, "sculpted DorsalWakeSpray droplet mesh has exact 12 triangles")
+		check_eq(mega_drop_bad_normals, 0, "all DorsalWakeSpray droplet normals are finite unit vectors")
+
+		var ds_mat := spray_a.material_override as StandardMaterial3D
+		check(ds_mat != null and ds_mat.vertex_color_use_as_albedo and ds_mat.vertex_color_is_srgb \
+				and ds_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and ds_mat.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA \
+				and ds_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED,
+			"DorsalWakeSpray uses unshaded translucent sRGB depth-draw-disabled StandardMaterial3D")
+		if ds_mat != null:
+			check(ds_mat.albedo_texture == null and ds_mat.normal_texture == null and ds_mat.roughness_texture == null,
+				"DorsalWakeSpray allocates 0 extra VRAM textures")
+
+	# Verify DorsalWakeSpray ballistic advancement in CIRCLE & ~2.2x height/width surge in CHARGE!
+	mega_a.state = AncientMegalodon.State.CIRCLE
+	mega_a._state_timer = 10.0
+	mega_a.step_ai(0.0)
+	check(spray_a != null and spray_a.visible, "DorsalWakeSpray is active and visible while circling")
+	var sp_circle_0 := mega_a.get_dorsal_spray_positions()
+	check_eq(sp_circle_0.size(), 20, "get_dorsal_spray_positions() returns all 20 droplet positions")
+
+	mega_a.step_ai(0.12)
+	var sp_circle_1 := mega_a.get_dorsal_spray_positions()
+	var sp_moved := 0
+	var circle_max_y := -INF
+	var circle_max_x := 0.0
+	for i in 20:
+		if sp_circle_1[i].distance_to(sp_circle_0[i]) > 0.15:
+			sp_moved += 1
+		circle_max_y = maxf(circle_max_y, sp_circle_1[i].y)
+		circle_max_x = maxf(circle_max_x, absf(sp_circle_1[i].x))
+	check_eq(sp_moved, 20, "all 20 DorsalWakeSpray droplets advance along ballistic arcs on step_ai(0.12)")
+
+	# Switch to CHARGE on identical droplet ages and verify ~2.2x taller & wider parabolic spray surge!
+	mega_a.state = AncientMegalodon.State.CHARGE
+	mega_a._state_timer = AncientMegalodon.CHARGE_TIMEOUT
+	mega_a.step_ai(0.0)
+	var sp_charge := mega_a.get_dorsal_spray_positions()
+	var charge_max_y := -INF
+	var charge_max_x := 0.0
+	for p in sp_charge:
+		charge_max_y = maxf(charge_max_y, p.y)
+		charge_max_x = maxf(charge_max_x, absf(p.x))
+	check(charge_max_y > circle_max_y + 0.55 and charge_max_x > circle_max_x * 1.55,
+		"DorsalWakeSpray surges taller & wider on CHARGE (y %.2f->%.2f, |x| %.2f->%.2f)" % [
+			circle_max_y, charge_max_y, circle_max_x, charge_max_x
+		])
+
+	# Verify force_pose_for_showcase() primes blazing eyes & dramatic active 20-droplet dorsal spray!
+	mega_b.force_pose_for_showcase(0.85, 1.0)
+	check(mega_b.get_eye_halo_energy() >= 1.35,
+		"force_pose_for_showcase() surges PredatorEyeHalos fiercely (e=%.3f)" % mega_b.get_eye_halo_energy())
+	check(spray_b != null and spray_b.visible,
+		"force_pose_for_showcase() activates DorsalWakeSpray immediately")
+	var sp_show := mega_b.get_dorsal_spray_positions()
+	var show_max_y := -INF
+	for p in sp_show:
+		show_max_y = maxf(show_max_y, p.y)
+	check(show_max_y > 2.5, "showcase DorsalWakeSpray arcs high above dorsal base (max_y=%.2f m)" % show_max_y)
+
+	# Verify DEFEATED hides DorsalWakeSpray and smoothly fades PredatorEyeHalos to 0.0 / hidden!
+	mega_a.dead = true
+	mega_a.state = AncientMegalodon.State.DEFEATED
+	mega_a.sink_and_free()
+	mega_a.step_ai(0.6)
+	check(spray_a != null and not spray_a.visible, "DorsalWakeSpray hides cleanly when Megalodon is DEFEATED")
+	var m_defeat_mid_e := mega_a.get_eye_halo_energy()
+	check(m_defeat_mid_e < m_charge_e * 0.65,
+		"PredatorEyeHalos fade smoothly while sinking (mid_e=%.3f)" % m_defeat_mid_e)
+	mega_a.step_ai(2.2)  # past 0.65 * SINK_DURATION (~2.47 s) but before 3.8 s queue_free
+	check(is_instance_valid(mega_a), "sinking Megalodon still valid right after eye halo fade-out")
+	check_near(mega_a.get_eye_halo_energy(), 0.0, 0.0001,
+		"PredatorEyeHalos reach 0.0 energy once defeated Megalodon submerges")
+	check(m_halos_a.size() == 2 and not m_halos_a[0].visible and not m_halos_a[1].visible,
+		"PredatorEyeHalos hide cleanly once defeated Megalodon submerges")
+
+	# 3. Leviathan: 2x48-tri AbyssalEyeHalos & 24x8-tri spiraling VortexBiolumMotes!
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	var lev_a := Leviathan.new()
+	lev_a.position = Vector3(-90.0, 0.0, -90.0)
+	_root.add_child(lev_a)
+	lev_a.set_physics_process(false)
+
+	var lev_b := Leviathan.new()
+	lev_b.position = Vector3(90.0, 0.0, -90.0)
+	_root.add_child(lev_b)
+	lev_b.set_physics_process(false)
+
+	var l_halos_a := lev_a.get_abyssal_eye_halos()
+	var l_halos_b := lev_b.get_abyssal_eye_halos()
+	check_eq(l_halos_a.size(), 2, "Leviathan mounts 2 AbyssalEyeHalos via get_abyssal_eye_halos()")
+	check_eq(l_halos_b.size(), 2, "second Leviathan mounts 2 AbyssalEyeHalos")
+
+	var lev_halo_tris := 0
+	var lev_halo_bad_normals := 0
+	var lev_halo_has_core := false
+	var lev_halo_has_black_rim := false
+	if l_halos_a.size() == 2 and l_halos_b.size() == 2:
+		var ahl := l_halos_a[0]
+		var ahr := l_halos_a[1]
+		check_eq(ahl.name, "AbyssalEyeHaloL", "left Leviathan halo named AbyssalEyeHaloL")
+		check_eq(ahr.name, "AbyssalEyeHaloR", "right Leviathan halo named AbyssalEyeHaloR")
+		check_eq(ahl.get_parent(), lev_a.get_crown_node(), "AbyssalEyeHaloL mounts inside _crown_root")
+		check_eq(ahr.get_parent(), lev_a.get_crown_node(), "AbyssalEyeHaloR mounts inside _crown_root")
+		check(ahl.position.x < -1.0 and ahr.position.x > 1.0 and is_equal_approx(ahl.position.x, -ahr.position.x),
+			"AbyssalEyeHalos mount symmetrically over sculpted left/right crown eyes (+/- X)")
+		check_eq(ahl.mesh, ahr.mesh, "left and right AbyssalEyeHalos share static _eye_halo_mesh")
+		check_eq(ahl.mesh, l_halos_b[0].mesh, "Leviathans share statically cached _eye_halo_mesh")
+		check_eq(ahl.material_override, ahr.material_override,
+			"left and right AbyssalEyeHalos share per-instance material")
+		check(ahl.material_override != l_halos_b[0].material_override,
+			"distinct Leviathans use isolated per-instance halo materials")
+		for hmi: MeshInstance3D in l_halos_a:
+			check_eq(hmi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+				"%s disables shadow casting" % hmi.name)
+			check_eq(hmi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+				"%s disables GI mode" % hmi.name)
+			check_near(hmi.visibility_range_end, 300.0, 0.05,
+				"%s sets visibility_range_end = 300.0 m" % hmi.name)
+			check(hmi.mesh is ArrayMesh and not (hmi.mesh is PrimitiveMesh),
+				"%s uses sculpted ArrayMesh (zero PrimitiveMesh)" % hmi.name)
+
+		if ahl.mesh is ArrayMesh:
+			var arr := (ahl.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+			lev_halo_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+					lev_halo_bad_normals += 1
+			for cv in cols:
+				if cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001 and cv.a >= 0.99:
+					lev_halo_has_black_rim = true
+				if cv.r >= 0.95 and cv.g >= 0.88 and cv.b >= 0.50:
+					lev_halo_has_core = true
+		check_eq(lev_halo_tris, 48, "AbyssalEyeHalo mesh has exact 48 triangles (16 radial wedges)")
+		check_eq(lev_halo_bad_normals, 0, "AbyssalEyeHalo normals are all finite (0, 0, 1) unit vectors")
+		check(lev_halo_has_core and lev_halo_has_black_rim,
+			"AbyssalEyeHalo fades from incandescent amber-white core to pure Color(0, 0, 0, 1) rim")
+
+		var lh_mat := ahl.material_override as StandardMaterial3D
+		check(lh_mat != null and lh_mat.vertex_color_use_as_albedo and lh_mat.vertex_color_is_srgb \
+				and lh_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and lh_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and lh_mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED \
+				and lh_mat.billboard_keep_scale \
+				and lh_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and lh_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"AbyssalEyeHalos use unshaded additive scale-preserving billboard sRGB StandardMaterial3D")
+		if lh_mat != null:
+			check(lh_mat.albedo_texture == null and lh_mat.normal_texture == null and lh_mat.roughness_texture == null,
+				"AbyssalEyeHalos allocate 0 extra VRAM textures")
+
+	# Verify Leviathan calm daylight -> night -> tentacle slam windup rage escalation!
+	lev_a._emerge_progress = 1.0
+	for ti in Leviathan.TENTACLE_COUNT:
+		lev_a._tentacles[ti]["slam_cd"] = 6.0
+		lev_a._tentacles[ti]["slam_anim"] = 0.0
+
+	Weather.time_of_day = 12.0
+	Weather.set_weather(0.0, 8.0, 0.0)
+	lev_a._update_visual_positions(0.0)
+	var l_noon_e := lev_a.get_abyssal_eye_halo_energy()
+
+	Weather.time_of_day = 0.5
+	lev_a._update_visual_positions(0.0)
+	var l_night_e := lev_a.get_abyssal_eye_halo_energy()
+
+	Weather.time_of_day = 12.0
+	lev_a._tentacles[0]["slam_cd"] = 0.12
+	lev_a._update_visual_positions(0.0)
+	var l_rage_e := lev_a.get_abyssal_eye_halo_energy()
+
+	check(l_noon_e >= 0.44 and l_noon_e <= 0.60,
+		"Leviathan calm daylight eye halo glows near ~0.52 (got %.3f)" % l_noon_e)
+	check(l_night_e > l_noon_e * 1.8 and l_night_e >= 0.96,
+		"Leviathan night eye halo flares near ~1.05 (noon=%.3f -> night=%.3f)" % [l_noon_e, l_night_e])
+	check(l_rage_e > l_night_e and l_rage_e >= 1.42,
+		"Leviathan slam-windup rage eye halo blazes near ~1.55 (night=%.3f -> rage=%.3f)" % [l_night_e, l_rage_e])
+
+	# Verify VortexBiolumMotes MultiMesh (24x8-tri octahedron spores, 0 primitives, 0 VRAM textures).
+	var motes_a := lev_a.get_vortex_motes_node()
+	var motes_b := lev_b.get_vortex_motes_node()
+	check(motes_a != null and motes_a.name == "VortexBiolumMotes",
+		"Leviathan mounts VortexBiolumMotes MultiMeshInstance3D via get_vortex_motes_node()")
+
+	var mote_tris := 0
+	var mote_bad_normals := 0
+	if motes_a != null:
+		check_eq(motes_a.get_parent(), lev_a, "VortexBiolumMotes mounts directly under Leviathan")
+		check_eq(motes_a.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			"VortexBiolumMotes disables shadow casting")
+		check_eq(motes_a.gi_mode, GeometryInstance3D.GI_MODE_DISABLED,
+			"VortexBiolumMotes disables GI mode")
+		check_near(motes_a.visibility_range_end, 260.0, 0.05,
+			"VortexBiolumMotes sets visibility_range_end = 260.0 m")
+		var vmm := motes_a.multimesh
+		check(vmm != null and vmm.instance_count == 24 and vmm.use_colors,
+			"VortexBiolumMotes configures 24 per-instance colored abyssal spores")
+		check(vmm != null and vmm.mesh is ArrayMesh and not (vmm.mesh is PrimitiveMesh),
+			"VortexBiolumMotes uses sculpted ArrayMesh (zero PrimitiveMesh)")
+		if motes_b != null and motes_b.multimesh != null and vmm != null:
+			check_eq(vmm.mesh, motes_b.multimesh.mesh,
+				"Leviathans share statically cached 8-tri _vortex_mote_mesh")
+			check_eq(motes_a.material_override, motes_b.material_override,
+				"Leviathans share statically cached _vortex_mote_mat")
+		if vmm != null and vmm.mesh is ArrayMesh:
+			var arr := (vmm.mesh as ArrayMesh).surface_get_arrays(0)
+			var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			mote_tris = floori(float(verts.size()) / 3.0)
+			for nv in norms:
+				if not nv.is_finite() or nv.length_squared() < 0.5:
+					mote_bad_normals += 1
+		check_eq(mote_tris, 8, "sculpted VortexBiolumMotes diamond octahedron mesh has exact 8 triangles")
+		check_eq(mote_bad_normals, 0, "all VortexBiolumMotes normals are finite unit vectors")
+
+		var vm_mat := motes_a.material_override as StandardMaterial3D
+		check(vm_mat != null and vm_mat.vertex_color_use_as_albedo and vm_mat.vertex_color_is_srgb \
+				and vm_mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED \
+				and vm_mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD \
+				and vm_mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED \
+				and vm_mat.cull_mode == BaseMaterial3D.CULL_DISABLED,
+			"VortexBiolumMotes uses unshaded additive sRGB double-sided depth-draw-disabled material")
+		if vm_mat != null:
+			check(vm_mat.albedo_texture == null and vm_mat.normal_texture == null and vm_mat.roughness_texture == null,
+				"VortexBiolumMotes allocates 0 extra VRAM textures")
+
+	# Verify upward spiraling vortex kinematics strictly inside perimeter r = 5.5..17.5 m & y = 0.25..5.4 m!
+	for ti in Leviathan.TENTACLE_COUNT:
+		lev_a._tentacles[ti]["slam_cd"] = 6.0
+	lev_a._update_visual_positions(0.0)
+	var mp0 := lev_a.get_vortex_mote_positions()
+	check_eq(mp0.size(), 24, "get_vortex_mote_positions() returns all 24 vortex spore positions")
+
+	lev_a._clock += 0.25
+	lev_a._update_visual_positions(0.25)
+	var mp1 := lev_a.get_vortex_mote_positions()
+	var mote_rose := 0
+	var mote_rotated := 0
+	var mote_min_r := INF
+	var mote_max_r := 0.0
+	var mote_min_y := INF
+	var mote_max_y := -INF
+	var calm_travel := 0.0
+	for i in 24:
+		var p0 := mp0[i]
+		var p1 := mp1[i]
+		var r1 := Vector2(p1.x, p1.z).length()
+		mote_min_r = minf(mote_min_r, r1)
+		mote_max_r = maxf(mote_max_r, r1)
+		mote_min_y = minf(mote_min_y, p1.y)
+		mote_max_y = maxf(mote_max_y, p1.y)
+		if p1.y > p0.y + 0.10:
+			mote_rose += 1
+		var ang0 := atan2(p0.z, p0.x)
+		var ang1 := atan2(p1.z, p1.x)
+		if absf(wrapf(ang1 - ang0, -PI, PI)) > 0.05:
+			mote_rotated += 1
+		calm_travel += Vector2(p1.x - p0.x, p1.z - p0.z).length()
+
+	check(mote_rose >= 16, "VortexBiolumMotes spiral upward continuously (rose=%d / 24)" % mote_rose)
+	check_eq(mote_rotated, 24, "all 24 VortexBiolumMotes swirl azimuthally around the ink vortex")
+	check(mote_min_r >= 5.49 and mote_max_r <= 17.51,
+		"all VortexBiolumMotes keep clear of ship deck in r=5.5..17.5 m (got %.2f..%.2f m)" % [mote_min_r, mote_max_r])
+	check(mote_min_y >= 0.24 and mote_max_y <= 5.41,
+		"all VortexBiolumMotes stay within y=0.25..5.4 m band (got %.2f..%.2f m)" % [mote_min_y, mote_max_y])
+
+	# Verify tentacle slam windup rage accelerates vortex swirling!
+	lev_a._tentacles[0]["slam_cd"] = 0.12
+	var mp_pre_rage := lev_a.get_vortex_mote_positions()
+	lev_a._clock += 0.25
+	lev_a._update_visual_positions(0.25)
+	var mp_post_rage := lev_a.get_vortex_mote_positions()
+	var rage_travel := 0.0
+	for i in 24:
+		rage_travel += Vector2(mp_post_rage[i].x - mp_pre_rage[i].x, mp_post_rage[i].z - mp_pre_rage[i].z).length()
+	check(rage_travel > calm_travel * 1.6,
+		"VortexBiolumMotes accelerate during tentacle slam windup rage (%.2f -> %.2f m)" % [calm_travel, rage_travel])
+
+	# Verify clean retreat/defeat fade & hide on both AbyssalEyeHalos & VortexBiolumMotes!
+	var pre_defeat_l_e := lev_a.get_abyssal_eye_halo_energy()
+	lev_a._on_defeated()
+	lev_a._retreat_progress = 0.50
+	lev_a._update_retreat(0.05)
+	check(lev_a.get_abyssal_eye_halo_energy() < pre_defeat_l_e * 0.50,
+		"AbyssalEyeHalos fade smoothly during defeat retreat (%.3f -> %.3f)" % [
+			pre_defeat_l_e, lev_a.get_abyssal_eye_halo_energy()
+		])
+	lev_a._retreat_progress = 0.98
+	lev_a._update_retreat(0.05)
+	check_near(lev_a.get_abyssal_eye_halo_energy(), 0.0, 0.0001,
+		"AbyssalEyeHalos reach 0.0 energy on retreat completion")
+	check(l_halos_a.size() == 2 and not l_halos_a[0].visible and not l_halos_a[1].visible,
+		"AbyssalEyeHalos hide cleanly on retreat completion")
+	check(motes_a != null and not motes_a.visible,
+		"VortexBiolumMotes hide cleanly on defeat retreat completion")
+
+	print("    Q17A apex sea-bosses: MegaHalos=2x%d tris (%.2f->%.2f->%.2f->%.2f), DorsalWakeSpray=20x%d tris (y %.2f->%.2f), LevHalos=2x%d tris (%.2f->%.2f->%.2f), VortexMotes=24x%d tris (r %.1f..%.1f)" % [
+		mega_halo_tris, m_noon_e, m_night_e, m_windup_e, m_charge_e,
+		mega_drop_tris, circle_max_y, charge_max_y,
+		lev_halo_tris, l_noon_e, l_night_e, l_rage_e,
+		mote_tris, mote_min_r, mote_max_r,
+	])
+
+	# 4. Full Vulkan-safe zero-leak teardown releases ALL static caches cleanly to null!
+	await _end()
+	TreasureCatalog.clear_mesh_cache()
+	check_eq(AncientMegalodon._active_megas, 0, "AncientMegalodon._active_megas == 0 after Q17A teardown")
+	check(AncientMegalodon._mesh_cache.is_empty() \
+			and AncientMegalodon._hide_mat == null and AncientMegalodon._scar_mat == null \
+			and AncientMegalodon._eye_mat == null and AncientMegalodon._splash_mat == null \
+			and AncientMegalodon._eye_halo_mesh == null and AncientMegalodon._wake_spray_mesh == null \
+			and AncientMegalodon._wake_spray_mat == null,
+		"AncientMegalodon releases all static caches including _eye_halo_mesh, _wake_spray_mesh & _wake_spray_mat (0 leaks)")
+	check_eq(Leviathan._active_leviathans, 0, "Leviathan._active_leviathans == 0 after Q17A teardown")
+	check(Leviathan._eye_rim_mesh == null and Leviathan._eye_iris_mesh == null \
+			and Leviathan._eye_pupil_mesh == null and Leviathan._eye_halo_mesh == null \
+			and Leviathan._vortex_mote_mesh == null and Leviathan._vortex_mote_mat == null,
+		"Leviathan releases all static caches including _eye_halo_mesh, _vortex_mote_mesh & _vortex_mote_mat (0 leaks)")
+
+

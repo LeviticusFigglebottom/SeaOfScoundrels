@@ -78,6 +78,20 @@ const COL_SCAR_IDLE := Color(0.14, 0.88, 0.92)
 const COL_SCAR_CHARGE := Color(0.72, 1.0, 0.98)
 const COL_SCAR_HIT := Color(1.0, 0.24, 0.50)
 
+# Q17A blazing PredatorEyeHalos & fin-slice DorsalWakeSpray constants (sRGB).
+const COL_EYE_HALO_CORE := Color(1.0, 0.94, 0.56, 1.0)
+const COL_EYE_HALO_MID := Color(0.46, 0.28, 0.03, 1.0)
+const COL_EYE_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
+const COL_WAKE_SPRAY_TOP := Color(0.96, 1.00, 1.00, 1.0)
+const COL_WAKE_SPRAY_MID := Color(0.76, 0.96, 0.99, 1.0)
+const COL_WAKE_SPRAY_BOT := Color(0.46, 0.86, 0.94, 1.0)
+
+const EYE_HALO_POS_L := Vector3(-1.68, 0.73, -4.75)
+const EYE_HALO_POS_R := Vector3(1.68, 0.73, -4.75)
+const EYE_HALO_VISIBILITY_END := 260.0
+const WAKE_SPRAY_COUNT := 20
+const WAKE_SPRAY_VISIBILITY_END := 220.0
+
 # Colossal 16 m torso longitudinal loft stations (-Z snout tip .. +Z tail socket).
 # Row: [z, y_center, rx, ry_top, ry_bot, mouth_recess, brow_sculpt]
 const BODY_STATIONS: Array[Array] = [
@@ -116,6 +130,9 @@ static var _hide_mat: StandardMaterial3D = null
 static var _scar_mat: StandardMaterial3D = null
 static var _eye_mat: StandardMaterial3D = null
 static var _splash_mat: StandardMaterial3D = null
+static var _eye_halo_mesh: ArrayMesh = null
+static var _wake_spray_mesh: ArrayMesh = null
+static var _wake_spray_mat: StandardMaterial3D = null
 
 @export var max_health: float = MAX_HEALTH
 @export var enable_effects: bool = true
@@ -154,6 +171,11 @@ var _visual_root: Node3D = null
 var _body_mi: MeshInstance3D = null
 var _scar_mi: MeshInstance3D = null
 var _eyes_mi: MeshInstance3D = null
+var _eye_halo_l: MeshInstance3D = null
+var _eye_halo_r: MeshInstance3D = null
+var _inst_eye_halo_mat: StandardMaterial3D = null
+var _eye_halo_energy: float = 0.0
+var _wake_spray_mmi: MultiMeshInstance3D = null
 var _jaw_pivot: Node3D = null
 var _jaw_mi: MeshInstance3D = null
 var _tail_mid_pivot: Node3D = null
@@ -163,6 +185,14 @@ var _tail_fin_pivot: Node3D = null
 var _tail_fin_mi: MeshInstance3D = null
 var _inst_scar_mat: StandardMaterial3D = null
 var _active_vfx: Array[Dictionary] = []
+
+# Preallocated per-droplet buffers for DorsalWakeSpray (zero per-frame heap allocations).
+var _spray_origin: PackedVector3Array = PackedVector3Array()
+var _spray_vel: PackedVector3Array = PackedVector3Array()
+var _spray_pos: PackedVector3Array = PackedVector3Array()
+var _spray_age: PackedFloat32Array = PackedFloat32Array()
+var _spray_lifetime: PackedFloat32Array = PackedFloat32Array()
+var _spray_scale: PackedFloat32Array = PackedFloat32Array()
 
 
 ## Spawn an Ancient Megalodon near `ship` (at `spawn_pos` if finite, else at CIRCLE_RADIUS).
@@ -211,6 +241,9 @@ static func clear_shared_cache() -> void:
 	_scar_mat = null
 	_eye_mat = null
 	_splash_mat = null
+	_eye_halo_mesh = null
+	_wake_spray_mesh = null
+	_wake_spray_mat = null
 
 
 func _enter_tree() -> void:
@@ -238,9 +271,23 @@ func _ready() -> void:
 	_build_hitbox()
 	_update_articulation(0.0, 0.0, 0.0)
 	_update_scar_material(0.0)
+	_update_eye_halos()
+	_update_dorsal_wake_spray(0.0)
 
 
 func _exit_tree() -> void:
+	_release_local_refs()
+	_active_megas = maxi(0, _active_megas - 1)
+	if _active_megas == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+
+
+func _release_local_refs() -> void:
 	_cleanup_all_vfx()
 	for mi: MeshInstance3D in [
 		_body_mi, _scar_mi, _eyes_mi, _jaw_mi,
@@ -249,9 +296,23 @@ func _exit_tree() -> void:
 		if mi != null and is_instance_valid(mi):
 			mi.mesh = null
 			mi.material_override = null
+	for halo_mi: MeshInstance3D in [_eye_halo_l, _eye_halo_r]:
+		if halo_mi != null and is_instance_valid(halo_mi):
+			halo_mi.visible = false
+			halo_mi.mesh = null
+			halo_mi.material_override = null
+	if _wake_spray_mmi != null and is_instance_valid(_wake_spray_mmi):
+		_wake_spray_mmi.visible = false
+		_wake_spray_mmi.material_override = null
+		_wake_spray_mmi.multimesh = null
 	_body_mi = null
 	_scar_mi = null
 	_eyes_mi = null
+	_eye_halo_l = null
+	_eye_halo_r = null
+	_inst_eye_halo_mat = null
+	_eye_halo_energy = 0.0
+	_wake_spray_mmi = null
 	_jaw_mi = null
 	_tail_mid_mi = null
 	_tail_mid_scar_mi = null
@@ -263,9 +324,6 @@ func _exit_tree() -> void:
 	_hitbox = null
 	_hitbox_shape = null
 	_inst_scar_mat = null
-	_active_megas = maxi(0, _active_megas - 1)
-	if _active_megas == 0:
-		clear_shared_cache()
 
 
 func _build_hitbox() -> void:
@@ -317,6 +375,39 @@ func _build_visuals() -> void:
 	_eyes_mi.material_override = _eye_mat
 	_visual_root.add_child(_eyes_mi)
 
+	# 3b. Blazing additive amber-gold predator eye glare halos (2 x 48-tri billboards).
+	_inst_eye_halo_mat = StandardMaterial3D.new()
+	_inst_eye_halo_mat.vertex_color_use_as_albedo = true
+	_inst_eye_halo_mat.vertex_color_is_srgb = true
+	_inst_eye_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_inst_eye_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_inst_eye_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_inst_eye_halo_mat.billboard_keep_scale = true
+	_inst_eye_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_inst_eye_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_inst_eye_halo_mat.render_priority = 2
+	_inst_eye_halo_mat.albedo_color = Color(0.38, 0.38, 0.38, 1.0)
+
+	_eye_halo_l = MeshInstance3D.new()
+	_eye_halo_l.name = "PredatorEyeHaloL"
+	_eye_halo_l.position = EYE_HALO_POS_L
+	_eye_halo_l.mesh = _eye_halo_mesh
+	_eye_halo_l.material_override = _inst_eye_halo_mat
+	_eye_halo_l.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_eye_halo_l.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_eye_halo_l.visibility_range_end = EYE_HALO_VISIBILITY_END
+	_visual_root.add_child(_eye_halo_l)
+
+	_eye_halo_r = MeshInstance3D.new()
+	_eye_halo_r.name = "PredatorEyeHaloR"
+	_eye_halo_r.position = EYE_HALO_POS_R
+	_eye_halo_r.mesh = _eye_halo_mesh
+	_eye_halo_r.material_override = _inst_eye_halo_mat
+	_eye_halo_r.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_eye_halo_r.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_eye_halo_r.visibility_range_end = EYE_HALO_VISIBILITY_END
+	_visual_root.add_child(_eye_halo_r)
+
 	# 4. Hinged colossal lower mandible with triple rows of serrated ivory teeth & crimson gullet.
 	_jaw_pivot = Node3D.new()
 	_jaw_pivot.name = "JawPivot"
@@ -358,6 +449,9 @@ func _build_visuals() -> void:
 	_tail_fin_mi.mesh = _mesh_cache["tail_fin"] as ArrayMesh
 	_tail_fin_mi.material_override = _hide_mat
 	_tail_fin_pivot.add_child(_tail_fin_mi)
+
+	# 7. Fin-slice DorsalWakeSpray (20 x 12-tri parabolic sea-spray droplets).
+	_build_dorsal_wake_spray()
 
 
 # ------------------------------------------------------------------ Public API & Combat
@@ -401,6 +495,9 @@ func force_pose_for_showcase(jaw_open: float = 0.85, scar_glow: float = 1.0) -> 
 	if _inst_scar_mat != null:
 		_inst_scar_mat.emission = COL_SCAR_IDLE.lerp(COL_SCAR_CHARGE, clampf(_showcase_scar * 0.75, 0.0, 1.0))
 		_inst_scar_mat.emission_energy_multiplier = lerpf(1.4, 7.6, clampf(_showcase_scar, 0.0, 1.0))
+	_update_eye_halos()
+	_prime_dorsal_wake_spray()
+	_update_dorsal_wake_spray(0.0)
 	if Ocean.current != null:
 		var surf := Sea.height(global_position.x, global_position.z)
 		var ring_ctr := Vector3(global_position.x, surf, global_position.z)
@@ -433,6 +530,31 @@ func get_scar_emission_energy() -> float:
 	return _inst_scar_mat.emission_energy_multiplier if _inst_scar_mat != null else 0.0
 
 
+## Return the pair of sculpted additive predator eye glare halo MeshInstance3Ds.
+func get_predator_eye_halos() -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if _eye_halo_l != null and is_instance_valid(_eye_halo_l):
+		out.append(_eye_halo_l)
+	if _eye_halo_r != null and is_instance_valid(_eye_halo_r):
+		out.append(_eye_halo_r)
+	return out
+
+
+## Return the current brightness energy of PredatorEyeHalos (0.0 when defeated/hidden).
+func get_eye_halo_energy() -> float:
+	return _eye_halo_energy
+
+
+## Return the MultiMeshInstance3D rendering parabolic fin-slice DorsalWakeSpray droplets.
+func get_dorsal_wake_spray_node() -> MultiMeshInstance3D:
+	return _wake_spray_mmi
+
+
+## Return the current local-space positions of all 20 DorsalWakeSpray droplets.
+func get_dorsal_spray_positions() -> PackedVector3Array:
+	return _spray_pos.duplicate()
+
+
 # ------------------------------------------------------------------ AI Simulation
 
 func _physics_process(delta: float) -> void:
@@ -456,6 +578,8 @@ func step_ai(delta: float) -> void:
 			sink_and_free()
 		_step_sink(delta)
 		_update_scar_material(delta)
+		_update_eye_halos()
+		_update_dorsal_wake_spray(delta)
 		return
 
 	var yaw_delta := 0.0
@@ -599,6 +723,8 @@ func step_ai(delta: float) -> void:
 
 	_update_articulation(delta, yaw_delta, vertical_vel)
 	_update_scar_material(delta)
+	_update_eye_halos()
+	_update_dorsal_wake_spray(delta)
 
 
 func _has_live_ship() -> bool:
@@ -879,6 +1005,233 @@ func _update_scar_material(_delta: float) -> void:
 	_inst_scar_mat.emission_energy_multiplier = energy
 
 
+func _update_eye_halos() -> void:
+	if _eye_halo_l == null or _eye_halo_r == null or _inst_eye_halo_mat == null:
+		return
+	if not is_instance_valid(_eye_halo_l) or not is_instance_valid(_eye_halo_r):
+		return
+
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var storm := 0.0
+	if Weather != null:
+		storm = clampf(
+			Weather.local_storminess(global_position) if is_inside_tree() else Weather.storminess,
+			0.0,
+			1.0
+		)
+	var dusk_night := clampf(maxf(night, storm * 0.45), 0.0, 1.0)
+
+	var pulse := 0.97 + 0.03 * sin(_clock * 3.8)
+	var energy := lerpf(0.38, 0.85, dusk_night) * pulse
+	var halo_scale := lerpf(0.42, 0.58, dusk_night)
+	var tint := Color(1.0, 0.94, 0.78).lerp(Color(1.0, 0.82, 0.46), dusk_night)
+
+	if _showcase_forced:
+		var sc_t := clampf(_showcase_scar, 0.0, 1.0)
+		energy = lerpf(0.85, 1.46, sc_t)
+		halo_scale = lerpf(0.58, 0.76, sc_t)
+		tint = Color(1.0, 0.58, 0.26)
+	else:
+		match state:
+			State.EMERGE:
+				var em_t := clampf(_emerge_elapsed / EMERGE_DURATION, 0.0, 1.0)
+				energy *= lerpf(0.45, 1.0, em_t)
+				halo_scale *= lerpf(0.76, 1.0, em_t)
+			State.WINDUP:
+				var w_t := clampf(1.0 - _state_timer / CHARGE_WINDUP, 0.0, 1.0)
+				var throb := 0.96 + 0.04 * sin(_clock * lerpf(9.0, 18.0, w_t))
+				energy = lerpf(maxf(energy, 1.04), 1.42, smoothstep(0.0, 1.0, w_t)) * throb
+				halo_scale = lerpf(maxf(halo_scale, 0.64), 0.74, w_t)
+				tint = tint.lerp(Color(1.0, 0.54, 0.24), 0.50 + 0.45 * w_t)
+			State.CHARGE:
+				var surge := 0.96 + 0.04 * sin(_clock * 16.0)
+				energy = (1.45 + dusk_night * 0.12) * surge
+				halo_scale = 0.76 + dusk_night * 0.04
+				tint = Color(1.0, 0.50, 0.22)
+			State.STAGGERED:
+				var flicker := 0.78 + 0.22 * absf(sin(_clock * 12.0))
+				energy = maxf(0.32, energy * 0.68) * flicker
+				halo_scale *= 0.86
+				tint = Color(1.0, 0.42, 0.36)
+			State.RETREAT:
+				energy *= 0.82
+				halo_scale *= 0.92
+			State.DEFEATED:
+				var fade := clampf(1.0 - _sink_timer / (SINK_DURATION * 0.65), 0.0, 1.0)
+				energy *= fade * fade
+				halo_scale *= lerpf(0.35, 1.0, fade)
+				if fade <= 0.02:
+					energy = 0.0
+
+	if _hit_flash > 0.01 and state != State.DEFEATED:
+		tint = tint.lerp(Color(1.0, 0.30, 0.40), _hit_flash * 0.75)
+		energy = maxf(energy, lerpf(energy, 1.50, _hit_flash * 0.6))
+
+	var show_halos := energy > 0.005 and not (dead and _sink_timer >= SINK_DURATION * 0.65)
+	if not show_halos:
+		energy = 0.0
+	_eye_halo_energy = energy
+	_eye_halo_l.visible = show_halos
+	_eye_halo_r.visible = show_halos
+	if show_halos:
+		var sv := Vector3(halo_scale, halo_scale, halo_scale)
+		_eye_halo_l.scale = sv
+		_eye_halo_r.scale = sv
+		_inst_eye_halo_mat.albedo_color = Color(
+			tint.r * energy,
+			tint.g * energy,
+			tint.b * energy,
+			1.0
+		)
+	else:
+		_inst_eye_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+
+func _build_dorsal_wake_spray() -> void:
+	_spray_origin.resize(WAKE_SPRAY_COUNT)
+	_spray_vel.resize(WAKE_SPRAY_COUNT)
+	_spray_pos.resize(WAKE_SPRAY_COUNT)
+	_spray_age.resize(WAKE_SPRAY_COUNT)
+	_spray_lifetime.resize(WAKE_SPRAY_COUNT)
+	_spray_scale.resize(WAKE_SPRAY_COUNT)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x5E4A17A1 + (_spawn_serial * 7919)
+	for i in WAKE_SPRAY_COUNT:
+		var side := -1.0 if (i % 2 == 0) else 1.0
+		if i < 14:
+			# 14 droplets peeling outward & aft from the base of the towering 2.8 m dorsal fin.
+			var slot := float(floori(float(i) * 0.5)) / 6.0
+			_spray_origin[i] = Vector3(
+				side * lerpf(0.32, 0.48, slot),
+				lerpf(1.58, 2.08, slot * 0.8),
+				lerpf(-1.45, -0.35, slot)
+			)
+			_spray_vel[i] = Vector3(
+				side * rng.randf_range(1.15, 2.15),
+				rng.randf_range(2.65, 3.95),
+				rng.randf_range(2.85, 4.65)
+			)
+			_spray_lifetime[i] = rng.randf_range(0.62, 0.94)
+		else:
+			# 6 droplets peeling outward & aft from the armored snout prow.
+			var slot := float(floori(float(i - 14) * 0.5)) / 2.0
+			_spray_origin[i] = Vector3(
+				side * lerpf(0.86, 1.38, slot),
+				lerpf(0.76, 1.14, slot),
+				lerpf(-6.20, -4.85, slot)
+			)
+			_spray_vel[i] = Vector3(
+				side * rng.randf_range(1.30, 2.20),
+				rng.randf_range(2.20, 3.30),
+				rng.randf_range(3.10, 4.80)
+			)
+			_spray_lifetime[i] = rng.randf_range(0.58, 0.88)
+		_spray_scale[i] = rng.randf_range(0.62, 1.24)
+		_spray_pos[i] = _spray_origin[i]
+	_prime_dorsal_wake_spray()
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _wake_spray_mesh
+	mm.instance_count = WAKE_SPRAY_COUNT
+	for i in WAKE_SPRAY_COUNT:
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+		mm.set_instance_color(i, Color(0.95, 0.99, 1.0, 0.0))
+
+	_wake_spray_mmi = MultiMeshInstance3D.new()
+	_wake_spray_mmi.name = "DorsalWakeSpray"
+	_wake_spray_mmi.multimesh = mm
+	_wake_spray_mmi.material_override = _wake_spray_mat
+	_wake_spray_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_wake_spray_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_wake_spray_mmi.visibility_range_end = WAKE_SPRAY_VISIBILITY_END
+	_wake_spray_mmi.custom_aabb = AABB(Vector3(-9.0, -3.0, -9.0), Vector3(18.0, 12.0, 18.0))
+	_visual_root.add_child(_wake_spray_mmi)
+
+
+func _prime_dorsal_wake_spray() -> void:
+	for i in WAKE_SPRAY_COUNT:
+		var frac := lerpf(0.08, 0.88, (float(i) + 0.35) / float(WAKE_SPRAY_COUNT))
+		_spray_age[i] = frac * _spray_lifetime[i]
+
+
+func _update_dorsal_wake_spray(delta: float) -> void:
+	if _wake_spray_mmi == null or not is_instance_valid(_wake_spray_mmi):
+		return
+	var mm := _wake_spray_mmi.multimesh
+	if mm == null or _spray_origin.size() != WAKE_SPRAY_COUNT:
+		return
+
+	var hide_spray := dead or state == State.DEFEATED \
+		or (not _showcase_forced and state == State.EMERGE and _emerge_elapsed < EMERGE_DURATION * 0.25)
+	if hide_spray:
+		_wake_spray_mmi.visible = false
+		return
+	_wake_spray_mmi.visible = true
+
+	var surge := 1.0
+	if _showcase_forced or state == State.CHARGE:
+		surge = 2.2
+	elif state == State.WINDUP:
+		var w_t := clampf(1.0 - _state_timer / CHARGE_WINDUP, 0.0, 1.0)
+		surge = lerpf(1.25, 1.85, w_t)
+	elif state == State.STAGGERED:
+		surge = 1.60
+	elif state == State.RETREAT:
+		surge = 1.15
+
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var spray_r := lerpf(0.95, 0.72, night)
+	var spray_g := lerpf(0.99, 0.96, night)
+	var spray_b := 1.00
+	var surge_norm := clampf((surge - 1.0) / 1.2, 0.0, 1.0)
+	var speed_mult := lerpf(1.0, 1.35, surge_norm)
+	var aft_mult := lerpf(1.0, 1.55, surge_norm)
+	var size_boost := lerpf(1.0, 1.38, surge_norm)
+
+	for i in WAKE_SPRAY_COUNT:
+		var life := _spray_lifetime[i]
+		var age := _spray_age[i]
+		if delta > 0.0:
+			age = fposmod(age + delta * speed_mult, life)
+			_spray_age[i] = age
+		var u := clampf(age / life, 0.0, 1.0)
+
+		var orig := _spray_origin[i]
+		var base_v := _spray_vel[i]
+		var vx := base_v.x * surge
+		var vy0 := base_v.y * surge
+		var vz := base_v.z * aft_mult
+		var grav := (2.15 * vy0) / life
+
+		var px := orig.x + vx * age
+		var py := orig.y + vy0 * age - 0.5 * grav * age * age
+		var pz := orig.z + vz * age
+		var pos := Vector3(px, py, pz)
+		_spray_pos[i] = pos
+
+		var fade_in := smoothstep(0.0, 0.12, u)
+		var fade_out := 1.0 - smoothstep(0.68, 1.0, u)
+		var env := clampf(fade_in * fade_out, 0.0, 1.0)
+		var sc := _spray_scale[i] * lerpf(0.32, 1.0, env) * size_boost
+
+		var vel := Vector3(vx, vy0 - grav * age, vz)
+		var up_dir := vel.normalized() if vel.length_squared() > 1e-6 else Vector3.UP
+		var ref_v := Vector3.RIGHT if absf(up_dir.x) < 0.85 else Vector3.FORWARD
+		var x_axis := up_dir.cross(ref_v).normalized()
+		var z_axis := x_axis.cross(up_dir).normalized()
+		var b := Basis(x_axis * sc, up_dir * (sc * 1.45), z_axis * sc)
+		mm.set_instance_transform(i, Transform3D(b, pos))
+
+		var alpha := clampf(0.86 * env, 0.0, 0.90)
+		mm.set_instance_color(i, Color(spray_r, spray_g, spray_b, alpha))
+
+
 # ------------------------------------------------------------------ Zero-Primitive VFX & Camera Trauma
 
 func _spawn_water_burst(world_pos: Vector3, scale_mult: float = 1.0) -> void:
@@ -967,7 +1320,7 @@ func _free_vfx_entry(e: Dictionary) -> void:
 	var drops := e.get("drops") as CPUParticles3D
 	if drops != null and is_instance_valid(drops):
 		drops.emitting = false
-		drops.mesh = null
+		drops.visible = false
 		drops.material_override = null
 	var ring := e.get("ring") as MeshInstance3D
 	if ring != null and is_instance_valid(ring):
@@ -1052,6 +1405,22 @@ static func _ensure_shared_assets() -> void:
 		_splash_mat.vertex_color_is_srgb = true
 		_splash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		_splash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	if _wake_spray_mat == null:
+		_wake_spray_mat = StandardMaterial3D.new()
+		_wake_spray_mat.albedo_color = Color(0.96, 1.00, 1.00, 0.88)
+		_wake_spray_mat.vertex_color_use_as_albedo = true
+		_wake_spray_mat.vertex_color_is_srgb = true
+		_wake_spray_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_wake_spray_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_wake_spray_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_wake_spray_mat.cull_mode = BaseMaterial3D.CULL_BACK
+
+	if _eye_halo_mesh == null:
+		_eye_halo_mesh = _build_eye_halo_mesh()
+
+	if _wake_spray_mesh == null:
+		_wake_spray_mesh = _build_wake_spray_mesh()
 
 	if _mesh_cache.is_empty():
 		_mesh_cache["body"] = _build_body_mesh()
@@ -2126,6 +2495,79 @@ static func _build_foam_ring_mesh() -> ArrayMesh:
 			ref_in, c_base, c_crest, c_crest, c_base)
 		_add_outward_quad(st, crest_ring[i], outer_bot[i], outer_bot[ni], crest_ring[ni],
 			ref_in, c_crest, c_outer, c_outer, c_crest)
+	st.generate_normals()
+	return st.commit()
+
+
+## Sculpted 48-tri 16-wedge radial-gradient billboard disc for PredatorEyeHalos (0 primitives).
+## Incandescent gold-white core -> warm molten amber mid -> pure Color(0, 0, 0, 1) black rim.
+static func _build_eye_halo_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.12
+	const OUTER_R := 0.54
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o1)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o0)
+
+	return st.commit()
+
+
+## Sculpted 12-tri 6-sided teardrop/bipyramid sea-spray droplet for DorsalWakeSpray (0 primitives).
+static func _build_wake_spray_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const SIDES := 6
+	var top := Vector3(0.0, 0.28, 0.0)
+	var bot := Vector3(0.0, -0.18, 0.0)
+	var ring: Array[Vector3] = []
+	for i in SIDES:
+		var a := float(i) / float(SIDES) * TAU
+		var r := 0.15 + 0.015 * sin(float(i) * 2.1)
+		ring.append(Vector3(cos(a) * r, -0.02, sin(a) * r))
+	for i in SIDES:
+		var ni := (i + 1) % SIDES
+		_add_outward_tri(st, top, ring[i], ring[ni], Vector3.ZERO,
+			COL_WAKE_SPRAY_TOP, COL_WAKE_SPRAY_MID, COL_WAKE_SPRAY_MID)
+		_add_outward_tri(st, bot, ring[ni], ring[i], Vector3.ZERO,
+			COL_WAKE_SPRAY_BOT, COL_WAKE_SPRAY_MID, COL_WAKE_SPRAY_MID)
 	st.generate_normals()
 	return st.commit()
 

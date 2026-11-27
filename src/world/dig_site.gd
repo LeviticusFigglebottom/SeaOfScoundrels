@@ -16,6 +16,14 @@ const CHEST_PREVIEW_SCENE: PackedScene = preload("res://assets/generated/props/c
 const DIG_RADIUS := 2.4
 const REQUIRED_DIGS := 3
 const GROUP := &"dig_sites"
+const GOLD_HALO_POS := Vector3(0.0, 0.42, 0.0)
+const GOLD_HALO_VISIBILITY_RANGE := 90.0
+const UNEARTH_BURST_DURATION := 1.35
+const UNEARTH_BURST_PEAK_ENERGY := 1.45
+const UNEARTH_BURST_PEAK_SCALE := 1.45
+const COL_HALO_CORE := Color(1.00, 0.96, 0.62, 1.0)
+const COL_HALO_MID := Color(0.96, 0.58, 0.14, 1.0)
+const COL_HALO_RIM := Color(0.00, 0.00, 0.00, 1.0)
 
 ## Treasure catalogue ID spawned on unearthing (configurable by voyages).
 @export var treasure_id: StringName = &"wayfarer_chest"
@@ -30,19 +38,26 @@ static var _clod_mesh: ArrayMesh = null
 static var _clod_mat: StandardMaterial3D = null
 static var _sparkle_mesh: ArrayMesh = null
 static var _sparkle_mat: StandardMaterial3D = null
+static var _gold_halo_mesh: ArrayMesh = null
 
 var _mound_node: Node3D = null
 var _chest_preview: Node3D = null
 var _dirt_particles: CPUParticles3D = null
 var _gold_particles: CPUParticles3D = null
+var _gold_halo_mi: MeshInstance3D = null
+var _gold_halo_mat: StandardMaterial3D = null
+var _gold_halo_energy: float = 0.0
+var _halo_clock: float = 0.0
+var _unearth_burst_elapsed: float = -1.0
 
 
-## Release statically cached sculpted earth clod & gold sparkle particle assets cleanly.
+## Release statically cached sculpted earth clod, gold sparkle & unearthed halo assets cleanly.
 static func clear_shared_cache() -> void:
 	_clod_mesh = null
 	_clod_mat = null
 	_sparkle_mesh = null
 	_sparkle_mat = null
+	_gold_halo_mesh = null
 
 
 func _enter_tree() -> void:
@@ -54,10 +69,17 @@ func _exit_tree() -> void:
 	for p: CPUParticles3D in [_dirt_particles, _gold_particles]:
 		if p != null and is_instance_valid(p):
 			p.emitting = false
-			p.mesh = null
+			p.visible = false
 			p.material_override = null
+	if _gold_halo_mi != null and is_instance_valid(_gold_halo_mi):
+		_gold_halo_mi.visible = false
+		_gold_halo_mi.material_override = null
+		_gold_halo_mi.set_mesh(null)
 	_dirt_particles = null
 	_gold_particles = null
+	_gold_halo_mi = null
+	_gold_halo_mat = null
+	_gold_halo_energy = 0.0
 	_active_dig_sites = maxi(0, _active_dig_sites - 1)
 	if _active_dig_sites == 0:
 		clear_shared_cache()
@@ -66,7 +88,83 @@ func _exit_tree() -> void:
 func _ready() -> void:
 	_build_visuals()
 	_build_particles()
+	_build_gold_halo()
 	_build_interactable()
+
+
+func _process(delta: float) -> void:
+	if dig_count == 0 and not is_unearthed:
+		return
+	step_halo(delta)
+
+
+## Return the buried-treasure UnearthedGoldHalo MeshInstance3D mounted over the sand pit.
+func get_unearthed_halo_node() -> MeshInstance3D:
+	return _gold_halo_mi
+
+
+## Return current UnearthedGoldHalo additive energy (0.0 untouched or after burst decay).
+func get_unearthed_halo_energy() -> float:
+	return _gold_halo_energy
+
+
+## Deterministically advance UnearthedGoldHalo cracking-pit gleam & unearthing burst decay.
+func step_halo(delta: float) -> void:
+	if _gold_halo_mi == null or not is_instance_valid(_gold_halo_mi):
+		_gold_halo_energy = 0.0
+		return
+	var dt := maxf(delta, 0.0)
+	if is_unearthed:
+		if _unearth_burst_elapsed < 0.0:
+			_gold_halo_energy = 0.0
+			_gold_halo_mi.visible = false
+			if _gold_halo_mat != null:
+				_gold_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+			return
+		_unearth_burst_elapsed += dt
+		var u := clampf(_unearth_burst_elapsed / UNEARTH_BURST_DURATION, 0.0, 1.0)
+		if u >= 1.0:
+			_gold_halo_energy = 0.0
+			_gold_halo_mi.visible = false
+			if _gold_halo_mat != null:
+				_gold_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+			return
+		var decay := pow(1.0 - u, 1.75)
+		_gold_halo_energy = UNEARTH_BURST_PEAK_ENERGY * decay
+		var burst_scale := lerpf(UNEARTH_BURST_PEAK_SCALE, 1.80, 1.0 - pow(1.0 - u, 2.0))
+		_gold_halo_mi.visible = true
+		_gold_halo_mi.scale = Vector3.ONE * burst_scale
+		if _gold_halo_mat != null:
+			_gold_halo_mat.albedo_color = Color(
+				_gold_halo_energy,
+				0.96 * _gold_halo_energy,
+				0.80 * _gold_halo_energy,
+				1.0
+			)
+		return
+
+	if dig_count <= 0:
+		_gold_halo_energy = 0.0
+		_gold_halo_mi.visible = false
+		if _gold_halo_mat != null:
+			_gold_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+		return
+
+	_halo_clock += dt
+	var pulse := 1.0 + 0.06 * sin(_halo_clock * 3.2)
+	var scale_pulse := 1.0 + 0.04 * sin(_halo_clock * 3.2)
+	var base_energy := 0.36 if dig_count == 1 else 0.72
+	var base_scale := 0.55 if dig_count == 1 else 0.85
+	_gold_halo_energy = base_energy * pulse
+	_gold_halo_mi.visible = true
+	_gold_halo_mi.scale = Vector3.ONE * (base_scale * scale_pulse)
+	if _gold_halo_mat != null:
+		_gold_halo_mat.albedo_color = Color(
+			_gold_halo_energy,
+			0.94 * _gold_halo_energy,
+			0.78 * _gold_halo_energy,
+			1.0
+		)
 
 
 func _build_visuals() -> void:
@@ -82,6 +180,37 @@ func _build_visuals() -> void:
 		_chest_preview.rotation = Vector3(0.08, 0.35, -0.06)
 		_chest_preview.visible = false
 		add_child(_chest_preview)
+
+
+func _build_gold_halo() -> void:
+	if _gold_halo_mi != null:
+		return
+	_ensure_particle_assets()
+
+	_gold_halo_mat = StandardMaterial3D.new()
+	_gold_halo_mat.vertex_color_use_as_albedo = true
+	_gold_halo_mat.vertex_color_is_srgb = true
+	_gold_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_gold_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_gold_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_gold_halo_mat.billboard_keep_scale = true
+	_gold_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_gold_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_gold_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+
+	_gold_halo_mi = MeshInstance3D.new()
+	_gold_halo_mi.name = "UnearthedGoldHalo"
+	_gold_halo_mi.position = GOLD_HALO_POS
+	_gold_halo_mi.scale = Vector3.ONE * 0.55
+	_gold_halo_mi.mesh = _gold_halo_mesh
+	_gold_halo_mi.material_override = _gold_halo_mat
+	_gold_halo_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_gold_halo_mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_gold_halo_mi.visibility_range_end = GOLD_HALO_VISIBILITY_RANGE
+	_gold_halo_mi.extra_cull_margin = 1.5
+	_gold_halo_mi.visible = false
+	_gold_halo_energy = 0.0
+	add_child(_gold_halo_mi)
 
 
 func _build_particles() -> void:
@@ -155,6 +284,58 @@ static func _ensure_particle_assets() -> void:
 		_clod_mesh = _build_earth_clod_mesh()
 	if _sparkle_mesh == null:
 		_sparkle_mesh = _build_gold_sparkle_mesh()
+	if _gold_halo_mesh == null:
+		_gold_halo_mesh = _build_gold_halo_mesh()
+
+
+static func _build_gold_halo_mesh() -> ArrayMesh:
+	# Exact 48-tri 16-wedge radial-gradient doubloon-gold billboard disc (diameter 1.0 m)
+	# grading sunlit gold core -> warm amber mid -> pure Color(0, 0, 0, 1) black rim,
+	# with exact finite unit (0, 0, 1) normals for zero hard edge under additive blend.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.22
+	const OUTER_R := 0.50
+	const FRONT_NORMAL := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+		# Inner doubloon-gold core wedge (16 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		# Outer warm-amber skirt fading cleanly to pure black (32 tris)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(FRONT_NORMAL)
+		st.set_color(COL_HALO_RIM)
+		st.add_vertex(o0)
+	return st.commit()
 
 
 static func _build_earth_clod_mesh() -> ArrayMesh:
@@ -311,6 +492,7 @@ func dig(world_pos: Vector3, digger: Node = null) -> Dictionary:
 			Audio.play_sfx(&"chest_thump", global_position, -6.0)
 		if interactable != null:
 			interactable.prompt = "Unearth treasure (1 left)" if remaining == 1 else "Dig for treasure (%d left)" % remaining
+		step_halo(0.0)
 		dug.emit(dig_count, remaining, digger)
 		return {
 			"hit": true,
@@ -343,6 +525,8 @@ func dig(world_pos: Vector3, digger: Node = null) -> Dictionary:
 	if _gold_particles != null:
 		_gold_particles.restart()
 		_gold_particles.emitting = true
+	_unearth_burst_elapsed = 0.0
+	step_halo(0.0)
 	dug.emit(dig_count, 0, digger)
 	unearthed.emit(chest)
 

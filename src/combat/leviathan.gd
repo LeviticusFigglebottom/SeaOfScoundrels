@@ -41,6 +41,21 @@ const COL_VEIN_HIT := Color(1.0, 0.44, 0.64)
 const COL_EYE_AMBER := Color(1.0, 0.72, 0.14)
 const COL_EYE_AQUA := Color(0.16, 0.96, 0.88)
 
+# Q17A AbyssalEyeHalos & swirling VortexBiolumMotes constants (sRGB).
+const COL_EYE_HALO_CORE := Color(1.0, 0.92, 0.56, 1.0)
+const COL_EYE_HALO_MID := Color(0.26, 0.54, 0.48, 1.0)
+const COL_EYE_HALO_RIM := Color(0.0, 0.0, 0.0, 1.0)
+const COL_MOTE_CORE := Color(0.84, 1.00, 0.98, 1.0)
+const COL_MOTE_EDGE := Color(0.10, 0.92, 0.94, 1.0)
+
+const EYE_HALO_VISIBILITY_END := 300.0
+const VORTEX_MOTE_COUNT := 24
+const VORTEX_MOTE_MIN_R := 5.5
+const VORTEX_MOTE_MAX_R := 17.5
+const VORTEX_MOTE_MIN_Y := 0.25
+const VORTEX_MOTE_MAX_Y := 5.4
+const VORTEX_MOTE_VISIBILITY_END := 260.0
+
 const VEIN_IDLE_ENERGY_BASE := 1.45
 
 # Wave-conformal swirling abyssal ink pool with bioluminescent filaments and ship-hold cutout.
@@ -175,11 +190,17 @@ var _crown_root: Node3D = null
 var _crown_vein_mat: StandardMaterial3D = null
 var _eye_iris_mat: StandardMaterial3D = null
 var _eye_rim_mat: StandardMaterial3D = null
+var _eye_halo_l: MeshInstance3D = null
+var _eye_halo_r: MeshInstance3D = null
+var _eye_halo_mat: StandardMaterial3D = null
+var _abyssal_eye_halo_energy: float = 0.0
+var _eye_halo_retreat_base: float = 0.52
 var _crown_emerge_sprayed: bool = false
 var _crown_retreat_start_y: float = 0.0
 
 var _ink_mesh: MeshInstance3D = null
 var _ink_mat: ShaderMaterial = null
+var _vortex_motes_mmi: MultiMeshInstance3D = null
 
 var _fin_mat: StandardMaterial3D = null
 var _sucker_mat: StandardMaterial3D = null
@@ -190,17 +211,33 @@ var _seg_vein_meshes: Array[ArrayMesh] = []
 var _eye_meshes: Array[MeshInstance3D] = []
 var _active_bursts: Array[GPUParticles3D] = []
 
+# Preallocated VortexBiolumMotes buffers (zero per-frame heap allocations).
+var _mote_angle: PackedFloat32Array = PackedFloat32Array()
+var _mote_radius: PackedFloat32Array = PackedFloat32Array()
+var _mote_height_phase: PackedFloat32Array = PackedFloat32Array()
+var _mote_rise_speed: PackedFloat32Array = PackedFloat32Array()
+var _mote_ang_speed: PackedFloat32Array = PackedFloat32Array()
+var _mote_scale: PackedFloat32Array = PackedFloat32Array()
+var _mote_twinkle_phase: PackedFloat32Array = PackedFloat32Array()
+var _mote_pos: PackedVector3Array = PackedVector3Array()
+
 static var _active_leviathans: int = 0
 static var _eye_rim_mesh: ArrayMesh = null
 static var _eye_iris_mesh: ArrayMesh = null
 static var _eye_pupil_mesh: ArrayMesh = null
+static var _eye_halo_mesh: ArrayMesh = null
+static var _vortex_mote_mesh: ArrayMesh = null
+static var _vortex_mote_mat: StandardMaterial3D = null
 
 
-## Release statically cached sculpted Leviathan eye meshes cleanly.
+## Release statically cached sculpted Leviathan eye, halo & vortex mote caches cleanly.
 static func clear_shared_cache() -> void:
 	_eye_rim_mesh = null
 	_eye_iris_mesh = null
 	_eye_pupil_mesh = null
+	_eye_halo_mesh = null
+	_vortex_mote_mesh = null
+	_vortex_mote_mat = null
 
 
 func _enter_tree() -> void:
@@ -215,6 +252,7 @@ func _ready() -> void:
 	_center = Vector3(global_position.x, 0.0, global_position.z)
 	_build_shared_assets()
 	_build_ink_pool()
+	_build_vortex_motes()
 	_build_crown()
 	_build_tentacles()
 	_update_visual_positions(0.0)
@@ -223,6 +261,18 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	_release_local_refs()
+	_active_leviathans = maxi(0, _active_leviathans - 1)
+	if _active_leviathans == 0:
+		clear_shared_cache()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_release_local_refs()
+
+
+func _release_local_refs() -> void:
 	for p in _active_bursts:
 		if p != null and is_instance_valid(p):
 			p.emitting = false
@@ -238,6 +288,20 @@ func _exit_tree() -> void:
 			emi.mesh = null
 			emi.material_override = null
 	_eye_meshes.clear()
+	for hmi: MeshInstance3D in [_eye_halo_l, _eye_halo_r]:
+		if hmi != null and is_instance_valid(hmi):
+			hmi.visible = false
+			hmi.mesh = null
+			hmi.material_override = null
+	_eye_halo_l = null
+	_eye_halo_r = null
+	_eye_halo_mat = null
+	_abyssal_eye_halo_energy = 0.0
+	if _vortex_motes_mmi != null and is_instance_valid(_vortex_motes_mmi):
+		_vortex_motes_mmi.visible = false
+		_vortex_motes_mmi.material_override = null
+		_vortex_motes_mmi.multimesh = null
+	_vortex_motes_mmi = null
 	if _ink_mat != null:
 		_ink_mat.set_shader_parameter(&"foam_tex", null)
 		_ink_mat = null
@@ -253,9 +317,6 @@ func _exit_tree() -> void:
 	_eye_rim_mat = null
 	_seg_body_meshes.clear()
 	_seg_vein_meshes.clear()
-	_active_leviathans = maxi(0, _active_leviathans - 1)
-	if _active_leviathans == 0:
-		clear_shared_cache()
 
 
 ## Return 0..1 telegraph/windup intensity for tentacle `index`.
@@ -291,6 +352,31 @@ func get_ink_pool_node() -> MeshInstance3D:
 ## Return the count of currently active spray burst particle nodes.
 func active_spray_burst_count() -> int:
 	return _active_bursts.size()
+
+
+## Return the pair of sculpted additive abyssal eye glare halo MeshInstance3Ds.
+func get_abyssal_eye_halos() -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if _eye_halo_l != null and is_instance_valid(_eye_halo_l):
+		out.append(_eye_halo_l)
+	if _eye_halo_r != null and is_instance_valid(_eye_halo_r):
+		out.append(_eye_halo_r)
+	return out
+
+
+## Return the current brightness energy of AbyssalEyeHalos (0.0 when retreating/hidden).
+func get_abyssal_eye_halo_energy() -> float:
+	return _abyssal_eye_halo_energy
+
+
+## Return the MultiMeshInstance3D rendering swirling VortexBiolumMotes spores.
+func get_vortex_motes_node() -> MultiMeshInstance3D:
+	return _vortex_motes_mmi
+
+
+## Return the current local-space positions of all 24 swirling VortexBiolumMotes spores.
+func get_vortex_mote_positions() -> PackedVector3Array:
+	return _mote_pos.duplicate()
 
 
 ## Apply damage to a specific tentacle (or the nearest living tentacle if index < 0).
@@ -489,6 +575,7 @@ func _update_visual_positions(delta: float) -> void:
 
 	_update_crown(delta, emerge_ease, max_rage)
 	_update_ink_pool(emerge_ease, max_rage)
+	_update_vortex_motes(delta, emerge_ease, max_rage)
 
 
 func _step_sinking_tentacle(t: Dictionary, delta: float) -> void:
@@ -591,8 +678,52 @@ func _update_crown(delta: float, emerge_ease: float, rage: float) -> void:
 		_crown_vein_mat.emission = COL_VEIN_IDLE.lerp(COL_VEIN_TELEGRAPH, clampf(rage, 0.0, 1.0))
 		_crown_vein_mat.emission_energy_multiplier = 1.65 + sin(_clock * 2.3) * 0.35 + rage * 4.4
 
+	# Pulse additive amber-aqua AbyssalEyeHalos with nocturnal darkness & tentacle slam rage.
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var storm := 0.0
+	if Weather != null:
+		storm = clampf(
+			Weather.local_storminess(global_position) if is_inside_tree() else Weather.storminess,
+			0.0,
+			1.0
+		)
+	var dark_fac := clampf(maxf(night, storm * 0.45), 0.0, 1.0)
+	var emerge_fac := lerpf(0.75, 1.0, emerge_ease)
+	var calm_e := lerpf(0.52, 1.05, dark_fac) * (0.97 + 0.03 * sin(_clock * 2.8))
+	var rage_t := smoothstep(0.0, 1.0, clampf(rage, 0.0, 1.0))
+	var rage_throb := 1.0 + 0.04 * sin(_clock * 14.0) * rage_t
+	var halo_e := lerpf(calm_e, 1.55 + dark_fac * 0.14, rage_t) * rage_throb * emerge_fac
+	var halo_s := lerpf(lerpf(0.68, 0.88, dark_fac), 1.12 + dark_fac * 0.06, rage_t)
+	var halo_tint := Color(1.0, 0.90, 0.62).lerp(Color(0.86, 0.98, 0.84), dark_fac * 0.35)
+	halo_tint = halo_tint.lerp(Color(0.78, 1.0, 0.90), rage_t * 0.55)
+	_apply_abyssal_eye_halos(halo_e, halo_s, halo_tint)
+
 	if Ocean.current != null:
 		Ocean.current.add_foam(Vector3(crown_xz.x, surf, crown_xz.y), 4.2, 0.68)
+
+
+func _apply_abyssal_eye_halos(energy: float, halo_scale: float, tint: Color) -> void:
+	if _eye_halo_l == null or _eye_halo_r == null or _eye_halo_mat == null:
+		return
+	if not is_instance_valid(_eye_halo_l) or not is_instance_valid(_eye_halo_r):
+		return
+	var show_halos := energy > 0.005
+	_abyssal_eye_halo_energy = energy if show_halos else 0.0
+	_eye_halo_l.visible = show_halos
+	_eye_halo_r.visible = show_halos
+	if show_halos:
+		var sv := Vector3(halo_scale, halo_scale, halo_scale)
+		_eye_halo_l.scale = sv
+		_eye_halo_r.scale = sv
+		_eye_halo_mat.albedo_color = Color(
+			tint.r * _abyssal_eye_halo_energy,
+			tint.g * _abyssal_eye_halo_energy,
+			tint.b * _abyssal_eye_halo_energy,
+			1.0
+		)
+	else:
+		_eye_halo_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
 
 
 func _update_ink_pool(emerge_ease: float, rage: float) -> void:
@@ -628,6 +759,56 @@ func _update_ink_pool(emerge_ease: float, rage: float) -> void:
 			Ocean.current.add_foam(Vector3(fx, Sea.height(fx, fz), fz), 3.8, 0.55)
 
 
+func _update_vortex_motes(delta: float, alpha_mult: float, rage: float) -> void:
+	if _vortex_motes_mmi == null or not is_instance_valid(_vortex_motes_mmi):
+		return
+	var mm := _vortex_motes_mmi.multimesh
+	if mm == null or _mote_pos.size() != VORTEX_MOTE_COUNT:
+		return
+	if alpha_mult <= 0.01:
+		_vortex_motes_mmi.visible = false
+		return
+	_vortex_motes_mmi.visible = true
+
+	var rage_clamped := clampf(rage, 0.0, 1.0)
+	var swirl_boost := 1.0 + rage_clamped * 1.45
+	var rise_boost := 1.0 + rage_clamped * 1.25
+	var daylight := clampf(Weather.daylight(), 0.0, 1.0) if Weather != null else 1.0
+	var night := clampf(1.0 - daylight, 0.0, 1.0)
+	var bright_mult := (lerpf(0.68, 1.25, night) + rage_clamped * 0.85) * alpha_mult
+	var tint := COL_VEIN_IDLE.lerp(COL_VEIN_TELEGRAPH, rage_clamped * 0.85)
+
+	for i in VORTEX_MOTE_COUNT:
+		var ang := _mote_angle[i]
+		var h_phase := _mote_height_phase[i]
+		if delta > 0.0:
+			ang = wrapf(ang + _mote_ang_speed[i] * swirl_boost * delta, -PI, PI)
+			_mote_angle[i] = ang
+			h_phase = fposmod(h_phase + _mote_rise_speed[i] * rise_boost * delta, 1.0)
+			_mote_height_phase[i] = h_phase
+
+		var wobble := sin(_clock * 1.8 + _mote_twinkle_phase[i]) * 0.45
+		var rad := clampf(_mote_radius[i] + wobble - h_phase * 0.65, VORTEX_MOTE_MIN_R, VORTEX_MOTE_MAX_R)
+		var lx := cos(ang) * rad
+		var lz := sin(ang) * rad
+		var surf := Sea.height(_center.x + lx, _center.z + lz) if Sea != null else 0.0
+		var ly := surf + lerpf(VORTEX_MOTE_MIN_Y, VORTEX_MOTE_MAX_Y, h_phase)
+		var pos := Vector3(lx, ly, lz)
+		_mote_pos[i] = pos
+
+		var fade_in := smoothstep(0.0, 0.14, h_phase)
+		var fade_out := 1.0 - smoothstep(0.76, 1.0, h_phase)
+		var env := clampf(fade_in * fade_out, 0.0, 1.0)
+		var sc := _mote_scale[i] * lerpf(0.32, 1.0, env) * (1.0 + rage_clamped * 0.35)
+		var spin := ang * 1.4 + _clock * 2.2
+		var mb := Basis(Vector3.UP, spin) * Basis.from_scale(Vector3(sc, sc * 1.35, sc))
+		mm.set_instance_transform(i, Transform3D(mb, pos))
+
+		var twinkle := 0.80 + 0.20 * sin(_clock * 6.5 + _mote_twinkle_phase[i])
+		var glow := bright_mult * env * twinkle
+		mm.set_instance_color(i, Color(tint.r * glow, tint.g * glow, tint.b * glow, 1.0))
+
+
 func _update_retreat(delta: float) -> void:
 	var ease_t := lerpf(_retreat_progress, smoothstep(0.0, 1.0, _retreat_progress), 0.45)
 	for t in _tentacles:
@@ -654,11 +835,16 @@ func _update_retreat(delta: float) -> void:
 		_ink_mat.set_shader_parameter(&"rage_pulse", 0.0)
 		_ink_mat.set_shader_parameter(&"swirl_clock", _clock)
 
+	var halo_fade := fade * fade if fade > 0.04 else 0.0
+	_apply_abyssal_eye_halos(_eye_halo_retreat_base * halo_fade, lerpf(0.35, 0.85, fade), Color(0.86, 0.96, 0.82))
+	_update_vortex_motes(delta, fade * fade, 0.0)
+
 
 func _on_defeated() -> void:
 	_defeated = true
 	active = false
 	_retreat_progress = 0.0
+	_eye_halo_retreat_base = maxf(_abyssal_eye_halo_energy, 0.52)
 	var salvage: Array = []
 	var parent := get_parent()
 	if parent != null:
@@ -1042,6 +1228,8 @@ func _build_crown() -> void:
 		_eye_iris_mesh = _build_eye_iris_dome_mesh()
 	if _eye_pupil_mesh == null:
 		_eye_pupil_mesh = _build_eye_slit_pupil_mesh()
+	if _eye_halo_mesh == null:
+		_eye_halo_mesh = _build_eye_halo_mesh()
 
 	_eye_iris_mat = StandardMaterial3D.new()
 	_eye_iris_mat.albedo_color = Color.WHITE
@@ -1065,6 +1253,18 @@ func _build_crown() -> void:
 	_eye_rim_mat.emission_enabled = true
 	_eye_rim_mat.emission = COL_EYE_AQUA
 	_eye_rim_mat.emission_energy_multiplier = 1.4
+
+	_eye_halo_mat = StandardMaterial3D.new()
+	_eye_halo_mat.vertex_color_use_as_albedo = true
+	_eye_halo_mat.vertex_color_is_srgb = true
+	_eye_halo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_eye_halo_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_eye_halo_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_eye_halo_mat.billboard_keep_scale = true
+	_eye_halo_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_eye_halo_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_eye_halo_mat.render_priority = 2
+	_eye_halo_mat.albedo_color = Color(0.52, 0.52, 0.52, 1.0)
 
 	var pupil_mat := StandardMaterial3D.new()
 	pupil_mat.albedo_color = Color.WHITE
@@ -1107,6 +1307,21 @@ func _build_crown() -> void:
 		pupil_inst.material_override = pupil_mat
 		eye_pivot.add_child(pupil_inst)
 		_eye_meshes.append(pupil_inst)
+
+		# Additive 48-tri amber-aqua predator glare halo mounted right over the eye surface.
+		var halo_inst := MeshInstance3D.new()
+		halo_inst.name = "AbyssalEyeHaloL" if side_i == 0 else "AbyssalEyeHaloR"
+		halo_inst.position = eye_pivot.transform * Vector3(0.0, 0.0, -0.35)
+		halo_inst.mesh = _eye_halo_mesh
+		halo_inst.material_override = _eye_halo_mat
+		halo_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		halo_inst.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		halo_inst.visibility_range_end = EYE_HALO_VISIBILITY_END
+		_crown_root.add_child(halo_inst)
+		if side_i == 0:
+			_eye_halo_l = halo_inst
+		else:
+			_eye_halo_r = halo_inst
 
 	# 5. Glowing cyan-aqua temple veins sweeping back behind the eyes.
 	_crown_vein_mat = _make_vein_material()
@@ -1284,6 +1499,57 @@ static func _build_eye_slit_pupil_mesh() -> ArrayMesh:
 	return st.commit()
 
 
+## Sculpted 48-tri 16-wedge radial-gradient billboard disc for AbyssalEyeHalos (0 primitives).
+## Incandescent amber-white core -> deep feathered amber-aqua mid -> pure Color(0, 0, 0, 1) black rim.
+static func _build_eye_halo_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const WEDGES := 16
+	const INNER_R := 0.24
+	const OUTER_R := 1.00
+	var n := Vector3(0.0, 0.0, 1.0)
+	var ctr := Vector3.ZERO
+	for i in WEDGES:
+		var a0 := TAU * float(i) / float(WEDGES)
+		var a1 := TAU * float(i + 1) / float(WEDGES)
+		var m0 := Vector3(cos(a0) * INNER_R, sin(a0) * INNER_R, 0.0)
+		var m1 := Vector3(cos(a1) * INNER_R, sin(a1) * INNER_R, 0.0)
+		var o0 := Vector3(cos(a0) * OUTER_R, sin(a0) * OUTER_R, 0.0)
+		var o1 := Vector3(cos(a1) * OUTER_R, sin(a1) * OUTER_R, 0.0)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_CORE)
+		st.add_vertex(ctr)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o1)
+
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_MID)
+		st.add_vertex(m0)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o1)
+		st.set_normal(n)
+		st.set_color(COL_EYE_HALO_RIM)
+		st.add_vertex(o0)
+
+	return st.commit()
+
+
 static func _emit_eye_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3,
 		ref_center: Vector3, ca: Color, cb: Color, cc: Color, cd: Color) -> void:
 	_emit_eye_tri(st, a, b, c, ref_center, ca, cb, cc)
@@ -1451,6 +1717,90 @@ func _build_ink_pool() -> void:
 	var aabb_ext := INK_POOL_RADIUS + 2.0
 	_ink_mesh.custom_aabb = AABB(Vector3(-aabb_ext, -12.0, -aabb_ext), Vector3(aabb_ext * 2.0, 24.0, aabb_ext * 2.0))
 	add_child(_ink_mesh)
+
+
+func _build_vortex_motes() -> void:
+	if _vortex_mote_mesh == null:
+		_vortex_mote_mesh = _build_vortex_mote_mesh()
+	if _vortex_mote_mat == null:
+		_vortex_mote_mat = StandardMaterial3D.new()
+		_vortex_mote_mat.albedo_color = Color.WHITE
+		_vortex_mote_mat.vertex_color_use_as_albedo = true
+		_vortex_mote_mat.vertex_color_is_srgb = true
+		_vortex_mote_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_vortex_mote_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		_vortex_mote_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_vortex_mote_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_vortex_mote_mat.render_priority = 2
+
+	_mote_angle.resize(VORTEX_MOTE_COUNT)
+	_mote_radius.resize(VORTEX_MOTE_COUNT)
+	_mote_height_phase.resize(VORTEX_MOTE_COUNT)
+	_mote_rise_speed.resize(VORTEX_MOTE_COUNT)
+	_mote_ang_speed.resize(VORTEX_MOTE_COUNT)
+	_mote_scale.resize(VORTEX_MOTE_COUNT)
+	_mote_twinkle_phase.resize(VORTEX_MOTE_COUNT)
+	_mote_pos.resize(VORTEX_MOTE_COUNT)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x1E71A7A1
+	for i in VORTEX_MOTE_COUNT:
+		var frac := float(i) / float(VORTEX_MOTE_COUNT)
+		_mote_angle[i] = wrapf(frac * TAU + rng.randf_range(-0.18, 0.18), -PI, PI)
+		_mote_radius[i] = rng.randf_range(VORTEX_MOTE_MIN_R + 0.9, VORTEX_MOTE_MAX_R - 0.8)
+		_mote_height_phase[i] = fposmod(frac * 3.0 + rng.randf_range(0.0, 0.25), 1.0)
+		_mote_rise_speed[i] = rng.randf_range(0.18, 0.34)
+		_mote_ang_speed[i] = rng.randf_range(0.42, 0.78)
+		_mote_scale[i] = rng.randf_range(0.72, 1.38)
+		_mote_twinkle_phase[i] = rng.randf() * TAU
+		_mote_pos[i] = Vector3(
+			cos(_mote_angle[i]) * _mote_radius[i],
+			lerpf(VORTEX_MOTE_MIN_Y, VORTEX_MOTE_MAX_Y, _mote_height_phase[i]),
+			sin(_mote_angle[i]) * _mote_radius[i]
+		)
+
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = false
+	mm.mesh = _vortex_mote_mesh
+	mm.instance_count = VORTEX_MOTE_COUNT
+	for i in VORTEX_MOTE_COUNT:
+		mm.set_instance_transform(i, Transform3D.IDENTITY)
+		mm.set_instance_color(i, Color(0.10, 0.92, 0.94, 1.0))
+
+	_vortex_motes_mmi = MultiMeshInstance3D.new()
+	_vortex_motes_mmi.name = "VortexBiolumMotes"
+	_vortex_motes_mmi.multimesh = mm
+	_vortex_motes_mmi.material_override = _vortex_mote_mat
+	_vortex_motes_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_vortex_motes_mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_vortex_motes_mmi.visibility_range_end = VORTEX_MOTE_VISIBILITY_END
+	var m_ext := VORTEX_MOTE_MAX_R + 2.5
+	_vortex_motes_mmi.custom_aabb = AABB(Vector3(-m_ext, -4.0, -m_ext), Vector3(m_ext * 2.0, 14.0, m_ext * 2.0))
+	add_child(_vortex_motes_mmi)
+
+
+## Sculpted exact 8-tri faceted diamond octahedron spore for VortexBiolumMotes (0 primitives).
+static func _build_vortex_mote_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	const R_EQ := 0.14
+	const R_TOP := 0.24
+	var top := Vector3(0.0, R_TOP, 0.0)
+	var bot := Vector3(0.0, -R_TOP, 0.0)
+	var ring: Array[Vector3] = [
+		Vector3(R_EQ, 0.0, 0.0),
+		Vector3(0.0, 0.0, R_EQ),
+		Vector3(-R_EQ, 0.0, 0.0),
+		Vector3(0.0, 0.0, -R_EQ),
+	]
+	for k in 4:
+		var nk := (k + 1) % 4
+		_emit_eye_tri(st, top, ring[k], ring[nk], Vector3.ZERO, COL_MOTE_CORE, COL_MOTE_EDGE, COL_MOTE_EDGE)
+		_emit_eye_tri(st, bot, ring[nk], ring[k], Vector3.ZERO, COL_MOTE_CORE, COL_MOTE_EDGE, COL_MOTE_EDGE)
+	st.generate_normals()
+	return st.commit()
 
 
 static func _build_disc_mesh(radius: float, angular_segs: int, radial_rings: int) -> ArrayMesh:

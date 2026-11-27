@@ -3218,3 +3218,317 @@ func test_q16a_world_event_cloud_sky_lightning_and_storm_belly_flash() -> void:
 		"WorldEventCloud releases all static caches including _lightning_mesh and _flash_halo_mesh (0 leaks)")
 	WorldEventCloud.clear_shared_cache()
 	_restore_weather()
+
+
+# ---------------------------------------------------------------------------
+# 13. Q17B: VictoryFlare Halos, MessageBottle Sea-Glass Halo & DigSite Gold Halo
+# ---------------------------------------------------------------------------
+
+func _check_q17b_halo_mesh(mesh: Mesh, label: String, expect_tris: int = 48) -> int:
+	check(mesh is ArrayMesh and not (mesh is PrimitiveMesh),
+		"%s uses sculpted ArrayMesh (zero PrimitiveMesh)" % label)
+	var am := mesh as ArrayMesh
+	if am == null:
+		return 0
+	var tris := _count_mesh_triangles(am)
+	check_eq(tris, expect_tris, "%s has exact %d triangles (16 radial wedges)" % [label, expect_tris])
+	var arr := am.surface_get_arrays(0)
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var cols: PackedColorArray = arr[Mesh.ARRAY_COLOR]
+	var bad_norms := 0
+	for nv: Vector3 in norms:
+		if not nv.is_finite() or nv.distance_to(Vector3(0.0, 0.0, 1.0)) > 0.001:
+			bad_norms += 1
+	check_eq(bad_norms, 0, "%s assigns exact finite unit (0, 0, 1) normal to every vertex" % label)
+	var bright_core := 0
+	var black_rim := 0
+	for cv: Color in cols:
+		if maxf(cv.r, maxf(cv.g, cv.b)) >= 0.90:
+			bright_core += 1
+		elif cv.r <= 0.001 and cv.g <= 0.001 and cv.b <= 0.001:
+			black_rim += 1
+	check(bright_core > 0 and black_rim > 0,
+		"%s grades glowing core -> pure Color(0, 0, 0, 1) black rim" % label)
+	return tris
+
+
+func _check_q17b_halo_material(mi: MeshInstance3D, label: String, expect_vis_range: float) -> StandardMaterial3D:
+	check_eq(mi.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s disables shadow casting" % label)
+	check_eq(mi.gi_mode, GeometryInstance3D.GI_MODE_DISABLED, "%s disables GI" % label)
+	check_near(mi.visibility_range_end, expect_vis_range, 0.01,
+		"%s visibility_range_end == %.1f" % [label, expect_vis_range])
+	var mat := mi.material_override as StandardMaterial3D
+	check(mat != null and mat.vertex_color_use_as_albedo and mat.vertex_color_is_srgb
+		and mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED
+		and mat.blend_mode == BaseMaterial3D.BLEND_MODE_ADD
+		and mat.billboard_mode == BaseMaterial3D.BILLBOARD_ENABLED
+		and mat.billboard_keep_scale
+		and mat.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED
+		and mat.cull_mode == BaseMaterial3D.CULL_DISABLED
+		and mat.albedo_texture == null and mat.normal_texture == null and mat.roughness_texture == null,
+		"%s uses zero-VRAM unshaded additive scale-preserving billboard sRGB StandardMaterial3D" % label)
+	return mat
+
+
+func test_q17b_victory_flare_message_bottle_and_dig_site_atmosphere() -> void:
+	_save_weather()
+	Net.start_single_player()
+	VictoryFlare.clear_shared_cache()
+	MessageBottle.clear_shared_cache()
+	DigSite.clear_shared_cache()
+	TreasureCatalog.clear_mesh_cache()
+	Carryable.clear_shared_glint_cache()
+
+	# ------------------------------------------------------------------
+	# 0. Static Vulkan CPUParticles3D teardown source-guard on dig_site.gd
+	# ------------------------------------------------------------------
+	var dig_src := FileAccess.get_file_as_string("res://src/world/dig_site.gd")
+	check(dig_src != "", "dig_site.gd readable for Vulkan teardown source guard")
+	check(not dig_src.contains("p.mesh = null")
+		and not dig_src.contains("_dirt_particles.mesh = null")
+		and not dig_src.contains("_gold_particles.mesh = null")
+		and not dig_src.contains(".mesh = null"),
+		"dig_site.gd follows Godot 4.8 Vulkan rule (never assigns .mesh = null on CPUParticles3D)")
+	check(dig_src.contains("p.visible = false"),
+		"dig_site.gd cleanly hides CPUParticles3D with p.visible = false on teardown")
+
+	var holder := Node3D.new()
+	holder.name = "Q17BAtmosphereHolder"
+	add_child(holder)
+
+	# ------------------------------------------------------------------
+	# 1. VictoryFlare: RocketTailHalo (RISING) & FlareStarburstHalo (BURST)
+	# ------------------------------------------------------------------
+	var flare_accent := Color(0.28, 0.96, 0.72)
+	var flare := VictoryFlare.launch(holder, Vector3(0.0, 2.0, 0.0), flare_accent)
+	flare.auto_despawn = false
+	flare.set_physics_process(false)
+	var flare_b := VictoryFlare.launch(holder, Vector3(8.0, 2.0, 0.0), Color(1.0, 0.84, 0.28))
+	flare_b.auto_despawn = false
+	flare_b.set_physics_process(false)
+
+	var tail_halo := flare.get_tail_halo_node()
+	var burst_halo := flare.get_starburst_halo_node()
+	check(tail_halo != null and tail_halo == flare.get_node_or_null(^"RocketRoot/RocketTailHalo"),
+		"VictoryFlare mounts RocketTailHalo under RocketRoot and exposes get_tail_halo_node()")
+	check(burst_halo != null and burst_halo == flare.get_node_or_null(^"FlareStarburstHalo"),
+		"VictoryFlare mounts FlareStarburstHalo under VictoryFlare and exposes get_starburst_halo_node()")
+	check(tail_halo.position.is_equal_approx(Vector3(0.0, -0.22, 0.0)),
+		"RocketTailHalo mounted at (0.0, -0.22, 0.0)")
+
+	var flare_halo_tris := _check_q17b_halo_mesh(tail_halo.mesh, "VictoryFlare RocketTailHalo", 48)
+	_check_q17b_halo_mesh(burst_halo.mesh, "VictoryFlare FlareStarburstHalo", 48)
+	check_eq(tail_halo.mesh, burst_halo.mesh, "RocketTailHalo & FlareStarburstHalo share static _halo_mesh")
+	check_eq(tail_halo.mesh, flare_b.get_tail_halo_node().mesh, "VictoryFlares share static _halo_mesh")
+	_check_q17b_halo_material(tail_halo, "VictoryFlare RocketTailHalo", 900.0)
+	var burst_mat := _check_q17b_halo_material(burst_halo, "VictoryFlare FlareStarburstHalo", 900.0)
+
+	# During RISING: RocketTailHalo active & sputtering in 0.65..0.95 m; FlareStarburstHalo hidden!
+	check(tail_halo.visible, "RocketTailHalo visible while RISING")
+	check(tail_halo.scale.x >= 0.64 and tail_halo.scale.x <= 0.96,
+		"RocketTailHalo initial scale within 0.65..0.95 m (got %.3f)" % tail_halo.scale.x)
+	check(not burst_halo.visible and flare.get_starburst_halo_energy() == 0.0,
+		"FlareStarburstHalo hidden with 0.0 energy while RISING")
+
+	var tail_min_s := 99.0
+	var tail_max_s := 0.0
+	for _r in 8:
+		flare.step_flare(0.10)
+		tail_min_s = minf(tail_min_s, tail_halo.scale.x)
+		tail_max_s = maxf(tail_max_s, tail_halo.scale.x)
+	check(tail_min_s >= 0.64 and tail_max_s <= 0.96 and (tail_max_s - tail_min_s) > 0.05,
+		"RocketTailHalo sputters organically within 0.65..0.95 m while RISING (%.3f..%.3f)" % [tail_min_s, tail_max_s])
+	check(not burst_halo.visible and flare.get_starburst_halo_energy() == 0.0,
+		"FlareStarburstHalo stays hidden throughout RISING")
+
+	# Step across apex detonation -> RocketTailHalo hides; FlareStarburstHalo blossoms at peak ~1.75!
+	flare.step_flare(0.60)
+	check_eq(flare.state, VictoryFlare.State.BURST, "VictoryFlare reaches State.BURST at apex")
+	check(not tail_halo.visible, "RocketTailHalo hides cleanly on apex detonation")
+	check(burst_halo.visible, "FlareStarburstHalo activates cleanly on apex detonation")
+	var burst_peak_e := flare.get_starburst_halo_energy()
+	var burst_start_s := burst_halo.scale.x
+	check_near(burst_peak_e, 1.75, 0.02, "FlareStarburstHalo peaks near 1.75 on detonation (got %.3f)" % burst_peak_e)
+	check_near(burst_start_s, 1.2, 0.05, "FlareStarburstHalo starts near 1.2 m on detonation (got %.3f)" % burst_start_s)
+	if burst_mat != null:
+		check(burst_mat.albedo_color.g > burst_mat.albedo_color.r * 2.0,
+			"FlareStarburstHalo tints cleanly in flare accent_color")
+
+	# Mid-burst: expands dramatically toward 11.5 m while decaying smoothly via pow(1 - u, 1.85)!
+	flare.step_flare(VictoryFlare.BURST_DURATION * 0.5)
+	var burst_mid_e := flare.get_starburst_halo_energy()
+	var burst_mid_s := burst_halo.scale.x
+	var expect_mid_e := 1.75 * pow(0.5, 1.85)
+	check_near(burst_mid_e, expect_mid_e, 0.03,
+		"FlareStarburstHalo decays via pow(1-u, 1.85) at mid-burst (got %.3f, expected %.3f)" % [burst_mid_e, expect_mid_e])
+	check(burst_mid_s > 6.0 and burst_mid_s <= 11.5,
+		"FlareStarburstHalo expands broadly mid-burst (scale=%.2f m)" % burst_mid_s)
+
+	# End of BURST -> DONE: decays cleanly to 0.0 & hidden!
+	flare.step_flare(VictoryFlare.BURST_DURATION * 0.6)
+	check_eq(flare.state, VictoryFlare.State.DONE, "VictoryFlare reaches State.DONE cleanly")
+	check_near(flare.get_starburst_halo_energy(), 0.0, 0.0001, "FlareStarburstHalo decays cleanly to 0.0")
+	check(not burst_halo.visible, "FlareStarburstHalo hides cleanly upon DONE")
+
+	# ------------------------------------------------------------------
+	# 2. MessageBottle: Twilight Sea-Glass BottleSeaHalo
+	# ------------------------------------------------------------------
+	Weather.time_of_day = 12.0  # Bright midday
+	var bottle_a := MessageBottle.new()
+	bottle_a.clue_id = &"q17b_clue_a"
+	bottle_a.target_island_id = "cutlass_cay"
+	bottle_a.target_island_name = "Cutlass Cay"
+	bottle_a.position = Vector3(0.0, 0.5, 0.0)
+	holder.add_child(bottle_a)
+	bottle_a.set_process(false)
+
+	var bottle_b := MessageBottle.new()
+	bottle_b.clue_id = &"q17b_clue_b"
+	bottle_b.position = Vector3(4.0, 0.5, 0.0)
+	holder.add_child(bottle_b)
+	bottle_b.set_process(false)
+
+	var sea_halo := bottle_a.get_sea_halo_node()
+	check(sea_halo != null and sea_halo == bottle_a.get_node_or_null(^"BottleVisual/BottleSeaHalo"),
+		"MessageBottle mounts BottleSeaHalo inside BottleVisual and exposes get_sea_halo_node()")
+	check(sea_halo.position.is_equal_approx(Vector3(0.0, 0.24, 0.0)),
+		"BottleSeaHalo mounted at (0.0, 0.24, 0.0)")
+
+	var bottle_halo_tris := _check_q17b_halo_mesh(sea_halo.mesh, "MessageBottle BottleSeaHalo", 48)
+	check_eq(sea_halo.mesh, bottle_b.get_sea_halo_node().mesh, "MessageBottles share static _sea_halo_mesh")
+	_check_q17b_halo_material(sea_halo, "MessageBottle BottleSeaHalo", MessageBottle.GLINT_CULL_DIST + 20.0)
+
+	# Midday (~0.24) < Twilight/Night (~0.86) energy boost!
+	Weather.time_of_day = 12.0
+	bottle_a.step_atmosphere(0.05)
+	var noon_e := bottle_a.get_sea_halo_energy()
+	check(sea_halo.visible and noon_e >= 0.18 and noon_e <= 0.30,
+		"BottleSeaHalo shimmers gently near 0.24 at midday (got %.3f)" % noon_e)
+
+	Weather.time_of_day = 23.5  # Deep night
+	bottle_a.step_atmosphere(0.05)
+	var night_e := bottle_a.get_sea_halo_energy()
+	check(sea_halo.visible and night_e >= 0.75 and night_e <= 0.96,
+		"BottleSeaHalo brightens warmly near 0.86 at night (got %.3f)" % night_e)
+	check(night_e > noon_e * 2.5,
+		"BottleSeaHalo night beacon energy clearly exceeds midday shimmer (%.3f -> %.3f)" % [noon_e, night_e])
+
+	# Camera distance gating (> GLINT_CULL_DIST hides halo; <= GLINT_CULL_DIST restores).
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.current = true
+	cam.global_position = Vector3(0.0, 4.0, MessageBottle.GLINT_CULL_DIST + 15.0)
+	bottle_a.step_atmosphere(0.05)
+	check(not sea_halo.visible and bottle_a.get_sea_halo_energy() == 0.0,
+		"BottleSeaHalo distance-culls cleanly beyond GLINT_CULL_DIST")
+	cam.global_position = Vector3(0.0, 2.0, 12.0)
+	bottle_a.step_atmosphere(0.05)
+	check(sea_halo.visible and bottle_a.get_sea_halo_energy() > 0.70,
+		"BottleSeaHalo restores cleanly within GLINT_CULL_DIST")
+	cam.current = false
+	cam.queue_free()
+
+	# collect() immediately hides BottleSeaHalo & drops energy to 0.0!
+	check(bottle_a.collect(null), "MessageBottle.collect() succeeds")
+	check(not sea_halo.visible and bottle_a.get_sea_halo_energy() == 0.0,
+		"MessageBottle.collect() immediately hides BottleSeaHalo with 0.0 energy")
+
+	# ------------------------------------------------------------------
+	# 3. DigSite: Buried-Treasure UnearthedGoldHalo
+	# ------------------------------------------------------------------
+	var site_a := DigSite.new()
+	site_a.treasure_id = &"wayfarer_chest"
+	site_a.position = Vector3(12.0, 0.0, 0.0)
+	holder.add_child(site_a)
+	site_a.set_process(false)
+
+	var site_b := DigSite.new()
+	site_b.position = Vector3(20.0, 0.0, 0.0)
+	holder.add_child(site_b)
+	site_b.set_process(false)
+
+	var gold_halo := site_a.get_unearthed_halo_node()
+	check(gold_halo != null and gold_halo == site_a.get_node_or_null(^"UnearthedGoldHalo"),
+		"DigSite mounts UnearthedGoldHalo and exposes get_unearthed_halo_node()")
+	check(gold_halo.position.is_equal_approx(Vector3(0.0, 0.42, 0.0)),
+		"UnearthedGoldHalo mounted at (0.0, 0.42, 0.0)")
+
+	var dig_halo_tris := _check_q17b_halo_mesh(gold_halo.mesh, "DigSite UnearthedGoldHalo", 48)
+	check_eq(gold_halo.mesh, site_b.get_unearthed_halo_node().mesh, "DigSites share static _gold_halo_mesh")
+	_check_q17b_halo_material(gold_halo, "DigSite UnearthedGoldHalo", 90.0)
+
+	# Untouched (dig_count == 0): hidden & energy == 0.0!
+	check(not gold_halo.visible and site_a.get_unearthed_halo_energy() == 0.0,
+		"UnearthedGoldHalo starts hidden with 0.0 energy when untouched (dig_count=0)")
+
+	# Dig 1 -> gleams softly (~0.36 energy, ~0.55 m scale).
+	var d1 := site_a.dig(site_a.global_position)
+	check(bool(d1.get("hit", false)) and site_a.dig_count == 1, "DigSite dig #1 succeeds")
+	var e1 := site_a.get_unearthed_halo_energy()
+	var s1 := gold_halo.scale.x
+	check(gold_halo.visible and e1 >= 0.30 and e1 <= 0.42,
+		"UnearthedGoldHalo gleams softly at dig_count=1 (energy=%.3f)" % e1)
+	check_near(s1, 0.55, 0.04, "UnearthedGoldHalo scale ~0.55 m at dig_count=1 (got %.3f)" % s1)
+
+	# Dig 2 -> grows brighter & broader (~0.72 energy, ~0.85 m scale).
+	var d2 := site_a.dig(site_a.global_position)
+	check(bool(d2.get("hit", false)) and site_a.dig_count == 2, "DigSite dig #2 succeeds")
+	var e2 := site_a.get_unearthed_halo_energy()
+	var s2 := gold_halo.scale.x
+	check(gold_halo.visible and e2 >= 0.64 and e2 <= 0.80 and e2 > e1 * 1.7,
+		"UnearthedGoldHalo grows brighter at dig_count=2 (%.3f -> %.3f)" % [e1, e2])
+	check(s2 >= 0.80 and s2 <= 0.90 and s2 > s1 + 0.20,
+		"UnearthedGoldHalo expands cleanly at dig_count=2 (%.3f -> %.3f m)" % [s1, s2])
+
+	# Dig 3 (unearth!) -> triumphant golden burst (~1.45 energy, ~1.45 m scale) decaying over 1.35 s!
+	var d3 := site_a.dig(site_a.global_position)
+	check(bool(d3.get("unearthed", false)) and site_a.is_unearthed, "DigSite dig #3 unearths treasure")
+	var e3 := site_a.get_unearthed_halo_energy()
+	var s3 := gold_halo.scale.x
+	check(gold_halo.visible and e3 >= 1.38 and e3 <= 1.52,
+		"UnearthedGoldHalo surges near 1.45 on unearthing (got %.3f)" % e3)
+	check_near(s3, 1.45, 0.05, "UnearthedGoldHalo bursts to ~1.45 m scale on unearthing (got %.3f)" % s3)
+
+	# Mid-decay via step_halo(0.60) -> strictly decaying and still visible.
+	site_a.step_halo(0.60)
+	var e_mid := site_a.get_unearthed_halo_energy()
+	check(gold_halo.visible and e_mid > 0.15 and e_mid < e3 * 0.70,
+		"UnearthedGoldHalo decays smoothly mid-burst via step_halo() (%.3f -> %.3f)" % [e3, e_mid])
+
+	# Past 1.35 s -> returns cleanly to 0.0 & hidden!
+	site_a.step_halo(0.85)
+	check_near(site_a.get_unearthed_halo_energy(), 0.0, 0.0001,
+		"UnearthedGoldHalo decays cleanly to 0.0 after 1.35 s")
+	check(not gold_halo.visible, "UnearthedGoldHalo hides cleanly once unearthing burst finishes")
+
+	print("    Q17B metrics: VictoryFlare=%d tris (burst E=%.2f->%.2f->0, S=%.1f->%.1fm) | MessageBottle=%d tris (day=%.2f->night=%.2f) | DigSite=%d tris (E=%.2f->%.2f->%.2f->0)" % [
+		flare_halo_tris, burst_peak_e, burst_mid_e, burst_start_s, burst_mid_s,
+		bottle_halo_tris, noon_e, night_e,
+		dig_halo_tris, e1, e2, e3])
+
+	# ------------------------------------------------------------------
+	# 4. Zero-leak teardown across all three systems!
+	# ------------------------------------------------------------------
+	holder.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	check_eq(VictoryFlare._active_flares, 0, "VictoryFlare._active_flares == 0 after Q17B teardown")
+	check(VictoryFlare._halo_mesh == null and VictoryFlare._rocket_mesh == null
+		and VictoryFlare._star_mesh == null and VictoryFlare._diamond_mesh == null,
+		"VictoryFlare releases all static caches including _halo_mesh (0 leaks)")
+
+	check_eq(MessageBottle._active_bottles, 0, "MessageBottle._active_bottles == 0 after Q17B teardown")
+	check(MessageBottle._sea_halo_mesh == null and MessageBottle._opaque_mesh == null
+		and MessageBottle._glass_mesh == null and MessageBottle._glint_mesh == null,
+		"MessageBottle releases all static caches including _sea_halo_mesh (0 leaks)")
+
+	check_eq(DigSite._active_dig_sites, 0, "DigSite._active_dig_sites == 0 after Q17B teardown")
+	check(DigSite._gold_halo_mesh == null and DigSite._clod_mesh == null and DigSite._clod_mat == null
+		and DigSite._sparkle_mesh == null and DigSite._sparkle_mat == null,
+		"DigSite releases all static caches including _gold_halo_mesh (0 leaks)")
+
+	TreasureCatalog.clear_mesh_cache()
+	Carryable.clear_shared_glint_cache()
+	_restore_weather()
