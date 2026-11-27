@@ -12,6 +12,7 @@ global uniform vec3 sun_dir;
 global uniform vec3 sun_color;
 global uniform vec3 ambient_color;
 global uniform vec3 sky_horizon_color;
+global uniform float sea_amp_scale;
 
 uniform float flow_speed = 1.45;
 uniform vec3 water_color : source_color = vec3(0.06, 0.56, 0.66);
@@ -87,25 +88,29 @@ void fragment() {
 	float night_gate = clamp(max(smoothstep(0.02, -0.10, L.y), smoothstep(0.068, 0.024, hor_lum)), 0.0, 1.0);
 	float day_gate = (1.0 - night_gate) * smoothstep(-0.02, 0.12, L.y);
 	float golden_hour = (1.0 - night_gate) * smoothstep(-0.02, 0.05, L.y) * smoothstep(0.26, 0.07, L.y);
-	// Sample live CloudShadowBake so overcast rainstorms naturally mood-darken cascades while
-	// sunlit cloud-breaks flash with dazzling turquoise-and-gold foam!
+	// Sample live CloudShadowBake + global sea_amp_scale so overcast rainstorms naturally mood-darken
+	// & surge storm-swollen cascades (100% 0.0 in calm/sunny/sunset/moonlit scenes!), while sunlit
+	// cloud-breaks flash with dazzling turquoise-and-gold foam!
 	float sun_sh = cloud_light(v_world_pos.xz);
-	float sun_vis = smoothstep(0.26, 0.84, sun_sh);
+	float storm_env = smoothstep(1.55, 2.25, sea_amp_scale);
+	float sun_vis = smoothstep(0.26, 0.84, sun_sh) * (1.0 - storm_env * 0.86);
 	float ndotl = clamp(dot(n_lit, L) * 0.5 + 0.5, 0.0, 1.0);
 	float ndotv = clamp(abs(dot(n_lit, V)), 0.0, 1.0);
 	float rim = pow(clamp(1.0 - ndotv, 0.0, 1.0), 2.3);
 	float back_scatter = pow(clamp(dot(-V, L) * 0.5 + 0.5, 0.0, 1.0), 2.8) * (1.0 - foam_mask * 0.55) * day_gate * sun_vis;
 	vec3 H = normalize(L + V);
 	float sparkle = pow(clamp(dot(n_lit, H), 0.0, 1.0), 48.0) * (0.45 + 0.55 * n_fine) * day_gate * sun_vis;
+	// Swollen rainstorm runoff gently boosts turbulent whitewater foam ribbons during downpours.
+	foam_mask = clamp(foam_mask + storm_env * 0.16 * (0.45 + 0.55 * n_mid), 0.0, 1.0);
 
-	vec3 direct_sun = sun_color * (0.22 + 0.86 * ndotl) * mix(0.32, 1.0, sun_sh);
+	vec3 direct_sun = sun_color * (0.22 + 0.86 * ndotl) * mix(0.32, 1.0, sun_sh) * (1.0 - storm_env * 0.52);
 	vec3 light_term = max(ambient_color * mix(0.76, 0.90, sun_vis) + direct_sun, vec3(0.05, 0.08, 0.13));
 	// Preserve jewel deep emerald-teal water core even under warm amber-rose sunset skies (never muddy beige!),
 	// deepen overcast stormy cascades to brooding slate-teal, and keep moonlit night silvery-indigo.
-	float storm_dim = (1.0 - night_gate) * (1.0 - sun_vis);
-	vec3 storm_water = vec3(0.04, 0.18, 0.24);
+	float storm_dim = clamp(max((1.0 - night_gate) * (1.0 - sun_vis), (1.0 - night_gate) * storm_env * 0.92), 0.0, 1.0);
+	vec3 storm_water = vec3(0.05, 0.13, 0.16);
 	vec3 night_water = vec3(0.035, 0.068, 0.115);
-	vec3 core_tod = mix(water_core, storm_water, storm_dim * 0.72);
+	vec3 core_tod = mix(water_core, storm_water, storm_dim * 0.84);
 	core_tod = mix(core_tod, night_water, night_gate * 0.88);
 	float sunset_warm = golden_hour * clamp(0.45 + (sun_color.r - sun_color.b) * 1.4, 0.0, 1.0) * mix(0.45, 1.0, sun_vis);
 	// At golden sunset, neutralize magenta-brown mud in the shadowed water core with cool zenith-teal depth
@@ -119,7 +124,7 @@ void fragment() {
 	vec3 night_foam_light = mix(light_term, vec3(lt_lum) * vec3(0.86, 0.95, 1.12), 0.68);
 	vec3 foam_light_eff = mix(light_term * 1.14, night_foam_light * 1.18, night_gate);
 	vec3 foam_tod_tint = mix(mix(foam_color, vec3(1.00, 0.88, 0.68), sunset_warm * 0.86), vec3(0.78, 0.87, 0.96), night_gate * 0.82);
-	foam_tod_tint = mix(foam_tod_tint, vec3(0.56, 0.64, 0.70), storm_dim * 0.52);
+	foam_tod_tint = mix(foam_tod_tint, vec3(0.58, 0.65, 0.68), storm_dim * 0.62);
 	float moon_glint = pow(clamp(dot(n_lit, H), 0.0, 1.0), 36.0) * (0.45 + 0.55 * n_fine) * night_gate * sun_vis;
 	vec3 lit_foam = foam_tod_tint * (foam_light_eff + sun_color * ((rim * 0.48 + sunset_warm * 0.65) * sun_vis) + vec3(0.45, 0.58, 0.76) * (rim * 0.16 * night_gate));
 	// Delicate sunlit mist-prism iridescence near aerated plunge curtain (UV.y 0.56..0.94, pairs w/ Pass Q15 rainbow!).
